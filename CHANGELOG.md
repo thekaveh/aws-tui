@@ -7,6 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-14
+
+### Added
+
+- **Crash modal + unhandled-exception capture (M6 T1).** Top-level
+  Textual `App._handle_exception` override writes a dump to
+  `~/.cache/aws-tui/crash/<ts>.txt` containing the full traceback,
+  up to the last 1000 lines of the JSON log, and up to the last 100
+  user actions (ring buffer on the `App`). The composition root
+  hands the resulting `CrashReport` to a `CrashVM` facade whose async
+  `ask()` resolves to `CrashChoice.CONTINUE / VIEW_TRACE / QUIT`.
+  `CrashModal` widget renders the short trace + dump path + three
+  buttons; the `continue` button is disabled when the last user
+  action was not in the read-only allowlist
+  (`SAFE_CONTINUE_ACTIONS`) per spec §7.10. `main()` re-raises the
+  original exception after the app has torn down so stack traces
+  aren't swallowed silently. Snapshot tests across all four themes.
+- **Transfer-journal resume modal (M6 T2).** `ResumeVM` holds the
+  unfinished `TransferJournalEntry` rows surfaced by
+  `TransferJournal.find_unfinished()` on startup; async `ask()`
+  returns `ResumeAction.RESUME_ALL / ABORT_ALL / DECIDE_EACH /
+  KEEP_FOR_LATER`. `ResumeModal` renders one row per entry with
+  the spec §7.6 summary format. `composition.apply_resume_decision`
+  routes `ABORT_ALL` through `AwsSession.client("s3")` to call
+  `AbortMultipartUpload` per `upload_id`, marks the journal
+  aborted, and purges the file. `DECIDE_EACH` folds to
+  `KEEP_FOR_LATER` per plan §M6 T2. Snapshot tests per theme.
+- **First-run flow (M6 T3).** `FirstRunVM` async facade with three
+  actions (`ADD_AWS / ADD_S3_COMPAT / SKIP`). `FirstRunModal`
+  welcome screen with three buttons; companion `S3CompatFormModal`
+  collects the five fields needed for an s3-compatible connection
+  (secret rendered with `password=True`). `composition`-level
+  helpers: `needs_first_run` (true when both config + AWS
+  auto-discovery are empty per spec §6.4 Flow 5),
+  `run_aws_configure_sso` (blocking subprocess to `aws configure
+  sso`), `add_s3_compat_connection` (writes a `static`-credentials
+  entry to `ConfigStore`). Snapshot tests per theme.
+
+### Documentation (M6 T4)
+
+- README polished with the full features list, install +
+  development-workflow recipes, quickstart (including the first-run
+  modal walkthrough), and a file-locations table.
+- Every `docs/*.md` page rewritten or substantially expanded:
+  - `architecture.md` — five-layer breakdown, composition-root
+    responsibilities, messaging + lifecycle, testing-pyramid totals,
+    where-to-start reading order.
+  - `keybindings.md` — full action-id table, customization via
+    `[keybindings]` with fallback lists and disable-by-empty-list.
+  - `theming.md` — built-in matrix, loader stacking rules,
+    Carbon palette tokens, snapshot-test note.
+  - `connections.md` — TOML schema with three real connections,
+    credential-source preference order, auto-discovery + SSO cache
+    probe semantics, vendor-quirk checklist, MPU lifecycle rule.
+  - `adding-a-service.md` — Service protocol template,
+    EC2Service pattern, layer-rule cheat sheet for service modules.
+- `docs/cookbook.md` (new) — four end-to-end recipes: connect to a
+  local MinIO (with macOS Keychain), switch theme on the fly,
+  customize a keybinding, resume after a crash.
+- `docs/recording-todo.md` (new) — explicit list of six
+  asciinema / PNG artifacts the maintainer needs to record manually
+  (a subagent cannot drive a real terminal), with copy-pasteable
+  recipes and embed locations.
+
+### Testing
+
+- **Unit tier (+49 tests).** `tests/unit/vm/chrome/test_crash.py`,
+  `test_resume.py`, `test_first_run.py` (VMs);
+  `tests/unit/ui/test_crash_modal.py`, `test_resume_modal.py`,
+  `test_first_run_modal.py` (widgets);
+  `tests/unit/infra/test_crash_dump.py` (infra);
+  `tests/unit/test_composition_resume.py`,
+  `test_composition_first_run.py` (composition helpers).
+- **Snapshot tier (+12 goldens).** 3 new modals (crash, resume,
+  first-run) × 4 themes, all pinned to (120, 40).
+
+### Watch-outs captured
+
+- Textual's `App._handle_exception` is sync + fatal, so we write
+  the dump there and re-raise from `main()` rather than try to push
+  the crash modal from inside the failing render path. The CrashVM
+  / CrashModal pair is still in the public composition for tests and
+  future recovery flows; an explicit `App.show_crash_modal(report)`
+  method drives the modal when the runtime is still healthy.
+- `DECIDE_EACH` and `RESUME_ALL` on the resume modal are recorded
+  as no-ops in v0.7.0: per-entry sub-modal + TransferVM resume
+  scaffolding lands in a follow-up. Journals stay on disk so users
+  don't lose state.
+
 ## [0.6.0] - 2026-06-14
 
 ### Added
@@ -341,7 +430,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial project scaffold (M0): public GitHub repo, MIT license, VMx submodule, uv-managed dependencies, src-layout, hello-world Textual `AwsTuiApp` with `q`-to-quit, CI matrix on macos-14 / ubuntu-22.04 across Python 3.11–3.13.
 - Full design spec at `docs/superpowers/specs/2026-06-13-aws-tui-design.md`.
 
-[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/thekaveh/aws-tui/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/thekaveh/aws-tui/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/thekaveh/aws-tui/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/thekaveh/aws-tui/compare/v0.3.0...v0.4.0

@@ -13,10 +13,10 @@ def test_package_imports() -> None:
 
 
 def test_version_is_set() -> None:
-    """``__version__`` is exposed at the package root and matches v0.6.0."""
+    """``__version__`` is exposed at the package root and matches v0.7.0."""
     from aws_tui import __version__
 
-    assert __version__ == "0.6.0"
+    assert __version__ == "0.7.0"
 
 
 def test_app_class_is_exposed() -> None:
@@ -25,4 +25,4 @@ def test_app_class_is_exposed() -> None:
 
     assert AwsTuiApp.__name__ == "AwsTuiApp"
     assert AwsTuiApp.TITLE == "aws-tui"
-    assert AwsTuiApp.SUB_TITLE == "v0.6.0"
+    assert AwsTuiApp.SUB_TITLE == "v0.7.0"
