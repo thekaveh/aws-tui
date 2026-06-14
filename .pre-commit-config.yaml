@@ -6,8 +6,9 @@ repos:
     rev: v4.6.0
     hooks:
       - id: end-of-file-fixer
+        exclude: "tests/snapshot/__snapshots__/"
       - id: trailing-whitespace
-        exclude: "\\.md$"
+        exclude: "\\.md$|tests/snapshot/__snapshots__/"
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
