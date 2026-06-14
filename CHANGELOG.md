@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-14
+
+### Added
+
+- **UI layer (M5).** Full Textual widget tree binding to the M3 + M4
+  VM hierarchy:
+  - `ui/actions.py` — `ActionRegistry` mapping action id ->
+    callable (sync or async).
+  - `ui/bindings.py` — `BindingResolver` bridging `KeymapStore` to
+    Textual's `Binding` list with dotted action ids translated to
+    Textual action method names.
+  - `ui/widgets/_subscriber.py` — `HubSubscriberMixin` that
+    subscribes a widget to its VM's hub messages and dispatches
+    `PropertyChangedMessage` filtered by `sender_object`.
+  - Chrome widgets: `StatusBar`, `HintLegend`, `ToastStack` + `Toast`,
+    `ServicesMenu` + `ServiceItemView`. Each constructor takes the
+    bound VM + hub; CSS classes mirror VM flags so themes can tint
+    selectively.
+  - File-manager widgets: `Pane` (Breadcrumb + ColumnHeader + body
+    + footer; entry rows with `-selected` / `-marked` / `-dir`
+    classes; placeholder body for each `PaneState`) and `DualPane`
+    (horizontal split with `-focused` class swap).
+  - Overlay screens: `CommandPalette` (ModalScreen), `ConfirmModal`
+    (ModalScreen with `-danger` class), `QuickLook` (ModalScreen
+    streaming up-to-64KB), `TransfersTray` (rebuilds rows on every
+    `transfers` property change).
+- **Themes.** All four built-in `.tcss` files filled per spec §4.5:
+  - Carbon (default) — near-monochrome, ice-blue accent, three-tier
+    text hierarchy.
+  - Voidline — neon cyan + magenta on near-black with double-line
+    borders.
+  - Lattice — mint-teal + lavender on deep teal with round borders.
+  - Amber CRT — retro phosphor, single-color accent with thick
+    borders.
+  Each theme defines 14 palette tokens and styles every common
+  widget class. `ThemeStore.load(name)` keeps working unchanged.
+- **App composition root.**
+  - `src/aws_tui/composition.py` — `AppContext` + `build_app_context`
+    wire infra (`ConfigStore`, `LogSink`, `KeymapStore`, `ThemeStore`,
+    `ConnectionResolver`, `AwsSession`, `TransferJournal`),
+    `ServiceRegistry` with `S3Service` registered, `RootVM`, plus
+    the four overlay VMs (`CommandPaletteVM`, `ConfirmationVM`,
+    `QuickLookVM`, `TransfersVM`) + the shared `MessageHub` and
+    dispatcher.
+  - `src/aws_tui/app.py` — real composition root replacing the M0
+    hello-world. Constructs the VM tree in `on_mount`, applies the
+    theme via `stylesheet.add_source`, mounts the chrome + content
+    host, and runs a graceful shutdown sequence (cancel transfers,
+    close aioboto3 clients, flush log sink, dispose VMs).
+
+### Testing
+
+- **Unit tier (+47 tests).** New `tests/unit/ui/` suite covers
+  `ActionRegistry`, `BindingResolver`, themes parsing, and smoke
+  tests for every chrome + file-manager + overlay widget driven
+  through `App.run_test()` Pilot.
+- **Snapshot tier (32 goldens).** New `tests/snapshot/` runs
+  `pytest-textual-snapshot` against full-app harnesses for main
+  screen + 4 modal screens x 4 themes plus pane-state placeholders.
+  Pinned to `(120, 40)` terminal and Python 3.12 / Ubuntu only.
+- **E2E tier (5 journeys).** `tests/e2e/test_journeys.py` covers
+  silent SSO, copy across panes, connection switch orchestration,
+  resume-from-journal scan, and delete cancel spy.
+
+### Layer rules
+
+- Composition root (`composition.py`) and Textual app (`app.py`)
+  live at the top of `src/aws_tui/` (not under any of the five
+  layer dirs), so `scripts/check-layers.sh` does not need to be
+  exempted — it only walks the five layer folders.
+
+### Watch-outs captured
+
+- `_context` attribute name on an `App` subclass collides with
+  Textual's internal `App._context`; rename to e.g. `_app_ctx`.
+- `_shutdown` method name on an `App` subclass collides with
+  Textual's `App._shutdown` lifecycle hook; rename to e.g.
+  `_aws_tui_shutdown`.
+- Snapshot `.raw` files are excluded from the `end-of-file-fixer`
+  and `trailing-whitespace` pre-commit hooks since they're
+  byte-exact match targets.
+
+### CI
+
+- New `snapshot` job (ubuntu-22.04 / py3.12) running
+  `tests/snapshot`.
+- New `e2e` job (ubuntu-22.04 / py3.12) running `tests/e2e`.
+
 ## [0.5.0] - 2026-06-14
 
 ### Added
@@ -253,7 +341,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial project scaffold (M0): public GitHub repo, MIT license, VMx submodule, uv-managed dependencies, src-layout, hello-world Textual `AwsTuiApp` with `q`-to-quit, CI matrix on macos-14 / ubuntu-22.04 across Python 3.11–3.13.
 - Full design spec at `docs/superpowers/specs/2026-06-13-aws-tui-design.md`.
 
-[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/thekaveh/aws-tui/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/thekaveh/aws-tui/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/thekaveh/aws-tui/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/thekaveh/aws-tui/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/thekaveh/aws-tui/compare/v0.0.1...v0.2.0
