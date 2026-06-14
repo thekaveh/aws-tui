@@ -96,17 +96,23 @@ class S3Service:
         *,
         aws_session: AwsSession,
         transfer_journal: TransferJournal,
-        hub: MessageHub[Message],
+        hub: MessageHub[Message] | None = None,
         dispatcher: Dispatcher,
         local_root: Path | None = None,
         s3_fs_factory: S3FsFactory | None = None,
     ) -> None:
         self._aws_session: AwsSession = aws_session
         self._journal: TransferJournal = transfer_journal
-        self._hub: MessageHub[Message] = hub
+        self._hub: MessageHub[Message] | None = hub
         self._dispatcher: Dispatcher = dispatcher
         self._local_root: Path | None = local_root
         self._s3_fs_factory: S3FsFactory | None = s3_fs_factory
+
+    def bind_hub(self, hub: MessageHub[Message]) -> None:
+        """Late-wire the hub (used when the service is registered before
+        :class:`RootVM` has constructed its hub).
+        """
+        self._hub = hub
 
     # ── Service protocol ────────────────────────────────────────────────────
 
@@ -121,25 +127,30 @@ class S3Service:
         ``construct()`` after the swap; callers needing to populate
         listings must subsequently ``await dual.setup()``.
         """
+        if self._hub is None:
+            raise RuntimeError(
+                "S3Service.build_vm called before bind_hub — wire the RootVM hub first"
+            )
+        hub = self._hub
         s3_provider = self._make_s3_provider(connection)
         local_provider = LocalFS(root=self._local_root) if self._local_root else LocalFS()
 
         left = PaneVM(
             provider=s3_provider,
-            hub=self._hub,
+            hub=hub,
             dispatcher=self._dispatcher,
             id_prefix="pane.s3",
         )
         right = PaneVM(
             provider=local_provider,
-            hub=self._hub,
+            hub=hub,
             dispatcher=self._dispatcher,
             id_prefix="pane.local",
         )
         return DualPaneVM(
             left=left,
             right=right,
-            hub=self._hub,
+            hub=hub,
             dispatcher=self._dispatcher,
             transfer_journal=self._journal,
         )
