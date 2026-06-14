@@ -7,7 +7,11 @@ stays focused on the Textual side (compose, mounting, action handlers).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import logging
+from collections import deque
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
@@ -16,13 +20,18 @@ from textual.containers import Container, Horizontal
 from textual.widgets import Static
 
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
+from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.services_menu import ServicesMenu
 from aws_tui.ui.widgets.status_bar import StatusBar
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.version import __version__
+from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
+
+_ACTION_RING_SIZE = 100
 
 
 class AwsTuiApp(App[None]):
@@ -52,6 +61,15 @@ class AwsTuiApp(App[None]):
         )
         # Register handlers for the action ids the BindingResolver advertises.
         self._actions.register("app.quit", self._handle_quit)
+        # Action ring buffer feeds the crash dump per spec §7.10. Each entry
+        # is a short ISO-timestamped action id string; we keep the most
+        # recent ``_ACTION_RING_SIZE`` to bound memory.
+        self._action_ring: deque[str] = deque(maxlen=_ACTION_RING_SIZE)
+        self._last_action_id: str | None = None
+        # Populated by ``_handle_exception`` when Textual surfaces an
+        # unhandled exception so ``main()`` can print the dump path and
+        # re-raise after the app has torn down.
+        self._crash_report: CrashReport | None = None
 
     @property
     def app_ctx(self) -> AppContext:
@@ -98,6 +116,98 @@ class AwsTuiApp(App[None]):
     def _handle_quit(self) -> None:
         self.exit()
 
+    # ── Crash handling ─────────────────────────────────────────────────────
+
+    def record_action(self, action_id: str) -> None:
+        """Record an action id in the ring buffer and track it as the latest.
+
+        Called by the input router / action invokers so the crash modal can
+        decide whether ``continue`` is safe and the dump can include the
+        last 100 user actions per spec §7.10.
+        """
+        ts = datetime.now(UTC).isoformat()
+        self._action_ring.append(f"{ts} {action_id}")
+        self._last_action_id = action_id
+
+    @property
+    def last_action_id(self) -> str | None:
+        return self._last_action_id
+
+    def _build_crash_report(self, exc: BaseException) -> CrashReport:
+        """Write the dump and assemble the matching :class:`CrashReport`.
+
+        Side effects: a new file under ``~/.cache/aws-tui/crash/`` and an
+        ``ERROR``-level log line tagged ``crash.captured``. Always
+        succeeds (falls back to a side-channel path if the write fails).
+        """
+        ctx = self._app_ctx
+        dump = CrashDump(base_dir=ctx.log_sink.path.parent.parent / "crash")
+        log_path = ctx.log_sink.path
+        try:
+            dump_path = dump.write(
+                exc=exc,
+                log_path=log_path,
+                action_ring=list(self._action_ring),
+            )
+        except Exception:
+            dump_path = log_path.parent / "crash-fallback.txt"
+        last_id = self._last_action_id
+        report = CrashReport(
+            timestamp=datetime.now(UTC),
+            exception_type=type(exc).__name__,
+            exception_message=str(exc) or repr(exc),
+            traceback_short=CrashDump.short_traceback(exc),
+            dump_path=dump_path,
+            can_continue=CrashReport.is_safe_to_continue(last_id),
+            last_action_id=last_id,
+        )
+        with contextlib.suppress(Exception):
+            logging.getLogger("aws_tui").error(
+                "crash.captured",
+                extra={
+                    "json_fields": {
+                        "exception_type": report.exception_type,
+                        "dump_path": str(report.dump_path),
+                        "last_action_id": report.last_action_id,
+                    }
+                },
+            )
+        return report
+
+    def _handle_exception(self, error: Exception) -> None:
+        """Override Textual's fatal handler to write a crash dump first.
+
+        We still defer to the upstream behavior (which sets ``_return_code``
+        and tears down) — the dump and report are the only thing we add
+        before the app exits.
+        """
+        try:
+            self._crash_report = self._build_crash_report(error)
+        finally:
+            super()._handle_exception(error)
+
+    async def show_crash_modal(self, report: CrashReport) -> CrashChoice:
+        """Push the crash modal for ``report`` and await the user's choice.
+
+        Public so tests and recovery flows can drive the modal without
+        also having to raise an exception. Mostly used from
+        :func:`run_with_crash_capture`.
+        """
+        ctx = self._app_ctx
+        crash_vm = CrashVM(report, hub=ctx.hub, dispatcher=ctx.dispatcher)
+        crash_vm.construct()
+        try:
+            ask_task = asyncio.create_task(crash_vm.ask())
+            await self.push_screen(CrashModal(crash_vm, hub=ctx.hub))
+            return await ask_task
+        finally:
+            crash_vm.dispose()
+
+    @property
+    def crash_report(self) -> CrashReport | None:
+        """The last crash report captured via ``_handle_exception``."""
+        return self._crash_report
+
     async def _aws_tui_shutdown(self) -> None:
         """Graceful shutdown per spec sec 5.4.
 
@@ -121,8 +231,45 @@ class AwsTuiApp(App[None]):
 
 
 def main() -> None:
-    """Run the Textual app. Invoked by ``aws-tui`` console script and ``python -m aws_tui``."""
-    AwsTuiApp().run()
+    """Run the Textual app with unhandled-exception capture.
+
+    Invoked by the ``aws-tui`` console script and ``python -m aws_tui``.
+    If the app surfaces an unhandled exception, ``_handle_exception``
+    writes a crash dump under ``~/.cache/aws-tui/crash/`` and the
+    saved :class:`CrashReport` is printed here before the exception is
+    re-raised so the user knows where the dump landed.
+    """
+    app = AwsTuiApp()
+    try:
+        app.run()
+    except BaseException as exc:
+        report = app.crash_report
+        if report is None:
+            report = app._build_crash_report(exc)
+        # Print to stderr (after Textual has restored the terminal).
+        import sys
+
+        print(
+            "\naws-tui crashed.\n"
+            f"  {report.exception_type}: {report.exception_message}\n"
+            f"  dump: {report.dump_path}\n",
+            file=sys.stderr,
+        )
+        raise
+    else:
+        # Normal exit; crash report would be set only if `_handle_exception`
+        # fired and Textual swallowed the exception (it does this when
+        # rendering a fatal panel).
+        report = app.crash_report
+        if report is not None:
+            import sys
+
+            print(
+                "\naws-tui crashed.\n"
+                f"  {report.exception_type}: {report.exception_message}\n"
+                f"  dump: {report.dump_path}\n",
+                file=sys.stderr,
+            )
 
 
 if __name__ == "__main__":
