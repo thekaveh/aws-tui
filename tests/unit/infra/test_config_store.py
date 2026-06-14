@@ -16,7 +16,7 @@ from aws_tui.infra.config_store import (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def config_path(tmp_path: Path) -> Path:
     return tmp_path / "config.toml"
 

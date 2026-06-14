@@ -32,7 +32,7 @@ def _write_aws_files(
     return aws_config, aws_credentials
 
 
-@pytest.fixture()
+@pytest.fixture
 def store(tmp_path: Path) -> ConfigStore:
     return ConfigStore(path=tmp_path / "config.toml")
 
@@ -79,7 +79,7 @@ class TestList:
         cfg, creds = _write_aws_files(
             tmp_path,
             credentials_body=(
-                "[only-here]\n" "aws_access_key_id = AKIA\naws_secret_access_key = secret\n"
+                "[only-here]\naws_access_key_id = AKIA\naws_secret_access_key = secret\n"
             ),
         )
         resolver = ConnectionResolver(
@@ -246,8 +246,7 @@ class TestS3CompatibleCredentialDispatch:
         cfg, creds = _write_aws_files(
             tmp_path,
             credentials_body=(
-                "[shared]\naws_access_key_id = AKIA-SHARED\n"
-                "aws_secret_access_key = sharedsecret\n"
+                "[shared]\naws_access_key_id = AKIA-SHARED\naws_secret_access_key = sharedsecret\n"
             ),
         )
         store.add_connection(

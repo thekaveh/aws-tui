@@ -11,7 +11,7 @@ import pytest
 from aws_tui.infra.log_sink import LogSink
 
 
-@pytest.fixture()
+@pytest.fixture
 def sink(tmp_path: Path) -> Iterator[LogSink]:
     s = LogSink(base_dir=tmp_path)
     yield s
