@@ -102,10 +102,40 @@ class AwsTuiApp(App[None]):
         except Exception:
             ctx.log_sink.error("theme.load.failed", name=ctx.initial_theme)
 
-        # Show a placeholder until a connection is selected.
-        with contextlib.suppress(Exception):
-            host = self.query_one("#content-host", Container)
-            host.mount(Static("no service selected", id="content-placeholder"))
+        # Pick the initial connection — respect config's defaults.connection if
+        # set, else fall back to the first auto-discovered profile. With no
+        # connections at all, leave the screen unwired (a follow-up wires the
+        # first-run modal here).
+        try:
+            cfg = ctx.config_store.load()
+        except Exception:
+            cfg = None
+        connections = ctx.connection_resolver.list()
+        initial_conn = None
+        if cfg is not None and cfg.defaults.connection:
+            initial_conn = next(
+                (c for c in connections if c.name == cfg.defaults.connection),
+                None,
+            )
+        if initial_conn is None and connections:
+            initial_conn = connections[0]
+
+        if initial_conn is not None:
+            auth_state = ctx.aws_session.probe_token(initial_conn).state
+            await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
+            with contextlib.suppress(Exception):
+                await ctx.root_vm.switch_service("s3")
+        else:
+            with contextlib.suppress(Exception):
+                host = self.query_one("#content-host", Container)
+                host.mount(
+                    Static(
+                        "no AWS profile or S3-compatible connection found.\n"
+                        "configure one in ~/.config/aws-tui/config.toml or "
+                        "run `aws configure` then relaunch.",
+                        id="content-placeholder",
+                    )
+                )
 
     # ── Action handlers ────────────────────────────────────────────────────
 
