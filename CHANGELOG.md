@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-14
+
+### Added
+
+- **VM file-manager layer (M4).** First-class dual-pane Norton Commander
+  viewmodels under `src/aws_tui/vm/file_manager/`, all wrapping VMx
+  primitives via the facade pattern and free of Textual / boto3 / aws_tui.ui
+  imports:
+  - `vm/file_manager/entry_vm.py` — `EntryVM` facade over a
+    `ComponentVMOf[EntryState]` with `toggle_select_command` and
+    `toggle_mark_command` plus `set_selected` / `set_marked` setters used
+    by `PaneVM` to drive cursor moves and select-all batches.
+  - `vm/file_manager/pane_vm.py` — `PaneVM` facade over a
+    `CompositeVM<EntryVM-inner>` with reactive `PaneViewModel` projection
+    (breadcrumb, state, cursor, filter, summary). Async `setup()` /
+    `navigate_to(path)` / `refresh()` re-run `provider.list()`; sync
+    LOADING → IDLE/error state transitions around the awaitable work.
+    Provider errors map per spec §7.7: `NotFoundError` at root → `EMPTY`,
+    `PermissionDeniedError` → `FORBIDDEN`, `ProviderUnreachableError` →
+    `UNREACHABLE`, other `ProviderError` → `ERROR` with `error_text`.
+    `set_auth_required()` is the externally-driven `AUTH_REQUIRED`
+    transition `RootVM` will invoke after observing
+    `AuthExpiredMessage`. Commands cover open/ascend/refresh, cursor
+    moves, multi-select (`toggle_select` enters multi-select mode if not
+    already), `enter_multiselect`, `exit_multiselect`, `select_all`,
+    `clear_selection`, `set_filter`. Async ops also expose
+    `delete_marked`, `make_directory`, `rename_cursor`.
+  - `vm/file_manager/dual_pane_vm.py` — `DualPaneVM` holding two
+    `PaneVM`s + a `TransferJournal`. `copy_across` / `move_across` route
+    through `domain.CrossFsCopy` / `CrossFsMove`, bridging per-chunk
+    `TransferProgress` callbacks to `TransferProgressMessage` envelopes
+    on the hub so `TransfersVM` and the chrome status bar can render
+    aggregate progress. `switch_focus_command` toggles the focused pane;
+    relay commands signal `*_requested` property-changed messages, the
+    async methods do the actual work.
+  - `vm/file_manager/transfer_vm.py` + `transfers_vm.py` — `TransferVM`
+    facade over `ComponentVMOf[TransferModel]` with cancel/retry relay
+    commands gated on state; `TransfersVM` holds a `CompositeVM` of inner
+    VMs plus a subscription to `TransferProgressMessage` on the hub.
+    Unknown transfer ids auto-register as placeholders so progress
+    messages from direct `CrossFsCopy` callers don't get dropped. Exposes
+    `active` / `finished` derived collections, `active_count`, and
+    `total_bytes_done` / `total_bytes_total` totals the status bar
+    consumes. `cancel_all_command` flips every active / pending transfer
+    to `CANCELLED`.
+- **First concrete service: S3.** `src/aws_tui/services/s3/service.py`
+  implements the `Service` protocol from `vm.services_protocol`. The
+  `supports()` predicate accepts both `aws` and `s3-compatible`
+  connection kinds; `build_vm(connection)` composes a fresh
+  `DualPaneVM(left=PaneVM(S3FS), right=PaneVM(LocalFS))` each call. An
+  optional `s3_fs_factory` test hook replaces the real `S3FS` with an
+  `InMemoryFS` for unit-level integration tests so no AWS calls leak
+  out. `bind_hub(hub)` late-wires the `RootVM` `MessageHub` since the
+  service is registered before `RootVM` has a hub.
+
+### Testing
+
+- **PaneVM capability contracts.** Hand-rolled selectable / filterable /
+  pageable contract suite at
+  `tests/unit/vm/file_manager/test_pane_vm_contracts.py` — VMx doesn't
+  ship a Python `vmx.testing.conformance` package; this is the
+  equivalent that pins the invariants any future PaneVM refactor must
+  uphold.
+- **M4 integration test.** `tests/unit/vm/file_manager/test_m4_integration.py`
+  composes the full stack (RootVM ← ServiceRegistry ← S3Service) and
+  drives switch_connection → switch_service('s3'), asserting a real
+  `DualPaneVM` lands in `ContentHostVM.current` and is properly
+  disposed on subsequent service / connection swaps.
+
 ## [0.4.0] - 2026-06-14
 
 ### Added
