@@ -1,0 +1,47 @@
+# pre-commit hooks. Install with:  uv run pre-commit install
+# Run on all files:                uv run pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        exclude: "\\.md$"
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.0
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - textual>=0.79
+          - boto3>=1.34
+          - botocore>=1.34
+        args: ["--config-file=pyproject.toml"]
+        files: ^src/
+
+  - repo: https://github.com/ComPWA/taplo-pre-commit
+    rev: v0.9.3
+    hooks:
+      - id: taplo-format
+      - id: taplo-lint
+        # Override the hook's default `--default-schema-catalogs` arg: as of
+        # 2026-06 the schemastore.org catalog URL that taplo v0.9.x fetches no
+        # longer returns a catalog payload (it returns the catalog *schema*),
+        # which makes taplo error out with a decode failure. Schema validation
+        # is also disabled in .taplo.toml as a belt-and-braces measure.
+        args: []

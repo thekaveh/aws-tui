@@ -107,17 +107,19 @@ extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
 select = [
-  "E", "F", "W",        # pycodestyle + pyflakes
-  "I",                  # isort
-  "B",                  # bugbear
-  "UP",                 # pyupgrade
-  "TID",                # tidy-imports (layer enforcement)
-  "RUF",                # ruff-specific
-  "SIM",                # simplify
-  "PT",                 # pytest style
-  "PTH",                # pathlib usage
+  "E",
+  "F",
+  "W",   # pycodestyle + pyflakes
+  "I",   # isort
+  "B",   # bugbear
+  "UP",  # pyupgrade
+  "TID", # tidy-imports (layer enforcement)
+  "RUF", # ruff-specific
+  "SIM", # simplify
+  "PT",  # pytest style
+  "PTH", # pathlib usage
 ]
-ignore = ["E501"]       # line length handled by formatter
+ignore = ["E501"] # line length handled by formatter
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["B011", "S101"]

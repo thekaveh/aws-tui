@@ -1,0 +1,11 @@
+# taplo (TOML formatter / linter) config.
+# See https://taplo.tamasfe.dev/configuration/file.html
+#
+# We disable remote schema validation because the upstream Taplo schema-catalog
+# format used by `taplo lint --default-schema-catalogs` (taplo v0.9.x) is
+# incompatible with the current https://taplo.tamasfe.dev/schema_index.json,
+# which makes `taplo-lint` fail with a catalog-decode error.
+# Formatting (`taplo-format`) is unaffected and still runs in pre-commit.
+
+[schema]
+enabled = false
