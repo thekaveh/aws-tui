@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a new capability or improvement
+title: "[feat] "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Focus on the user need, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution (optional)
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Approximate scope
+      options:
+        - small (single VM / widget)
+        - medium (new modal / flow)
+        - large (new service)
+        - extra-large (architectural)

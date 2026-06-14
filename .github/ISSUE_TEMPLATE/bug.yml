@@ -1,0 +1,49 @@
+name: Bug report
+description: Something broke or behaves unexpectedly
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Concise summary of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Numbered list of keystrokes / actions.
+      placeholder: |
+        1. Launch with `aws-tui`
+        2. Select connection `minio-local`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: aws-tui version
+      description: Output of `aws-tui --version` (when implemented) or the commit SHA.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / terminal
+      description: e.g. macOS 14.5 / iTerm2 3.5.0
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: From `~/.cache/aws-tui/log/aws-tui.log` (redact sensitive content).
+      render: shell

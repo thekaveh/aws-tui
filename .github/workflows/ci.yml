@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: unit (${{ matrix.os }} / py${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-22.04]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: install Python ${{ matrix.python }}
+        run: uv python install ${{ matrix.python }}
+      - name: sync
+        run: uv sync --python ${{ matrix.python }}
+      - name: pytest (unit tier)
+        run: uv run --python ${{ matrix.python }} pytest tests/unit -v
+
+  lint-type:
+    name: lint + type
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: install Python 3.12
+        run: uv python install 3.12
+      - name: sync
+        run: uv sync --python 3.12
+      - name: ruff
+        run: uv run ruff check .
+      - name: ruff format check
+        run: uv run ruff format --check .
+      - name: mypy
+        run: uv run mypy
+
+  pkg:
+    name: package build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: install Python 3.12
+        run: uv python install 3.12
+      - name: sync
+        run: uv sync --python 3.12
+      - name: build wheel + sdist
+        run: uv build
+      - name: twine check
+        run: uv run twine check dist/*
+      - name: upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
