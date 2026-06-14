@@ -793,6 +793,7 @@ exclude_lines = [
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
 select = [
@@ -811,10 +812,10 @@ ignore = ["E501"]       # line length handled by formatter
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["B011", "S101"]
 
-# Layer enforcement via flake8-tidy-imports banned-modules.
-# Refined per-folder in M1+ as imports actually appear.
-[tool.ruff.lint.flake8-tidy-imports.banned-modules]
-# placeholder; populated incrementally as layers are added.
+# Layer enforcement (View → VM → Service → Domain → Infra) via
+# flake8-tidy-imports is wired in M1, once real cross-layer imports
+# appear. No placeholder block here — ruff's TOML schema rejects an
+# empty [tool.ruff.lint.flake8-tidy-imports.*] table.
 
 [tool.ruff.format]
 quote-style = "double"
@@ -834,41 +835,14 @@ strict_optional = true
 disallow_untyped_defs = false
 ```
 
-- [ ] **Step 3: Generate `uv.lock`**
+- [ ] **Step 3: Pre-create `src/aws_tui/version.py`** (required by hatchling)
+
+Hatchling resolves `dynamic = ["version"]` eagerly during `uv sync` (it installs the workspace project itself in editable mode and needs the version up front). Create the version file before syncing — it's the single source of truth `[tool.hatch.version]` points at, so Task 8 won't re-write it.
 
 Run:
 ```bash
-cd /Users/kaveh/repos/aws-tui && uv sync
+mkdir -p /Users/kaveh/repos/aws-tui/src/aws_tui
 ```
-
-Expected: creates `uv.lock`, sets up `.venv/`, installs all deps including local VMx from `vendor/vmx/langs/python`. Final line resembles `Installed N packages in Ns`.
-
-- [ ] **Step 4: Confirm VMx resolves from the submodule path**
-
-Run:
-```bash
-cd /Users/kaveh/repos/aws-tui && uv pip list | grep -i vmx
-```
-
-Expected: shows `vmx <version>` (the version from the v2.4.0 tag).
-
-- [ ] **Step 5: Sanity-import VMx and reactivex**
-
-Run:
-```bash
-cd /Users/kaveh/repos/aws-tui && uv run python -c "import vmx; import reactivex; print(vmx.__file__)"
-```
-
-Expected: prints a path under `vendor/vmx/langs/python/src/vmx/__init__.py` (or equivalent VMx Python layout).
-
----
-
-## Task 8: Create the source layer stubs
-
-**Files:**
-- Create: 16 `__init__.py` files + 4 `py.typed` markers + 1 `.gitkeep`
-
-- [ ] **Step 1: Write `src/aws_tui/version.py`**
 
 Create `/Users/kaveh/repos/aws-tui/src/aws_tui/version.py`:
 
@@ -881,6 +855,50 @@ hatchling reads it via the `[tool.hatch.version]` config in pyproject.toml.
 
 __version__ = "0.0.1"
 ```
+
+- [ ] **Step 4: Generate `uv.lock`**
+
+Run:
+```bash
+cd /Users/kaveh/repos/aws-tui && uv sync
+```
+
+Expected: creates `uv.lock`, sets up `.venv/`, installs all deps including local VMx from `vendor/vmx/langs/python`. Final line resembles `Installed N packages in Ns`.
+
+- [ ] **Step 5: Confirm VMx resolves from the submodule path**
+
+Run:
+```bash
+cd /Users/kaveh/repos/aws-tui && uv pip list | grep -i vmx
+```
+
+Expected: shows `vmx <version>` (the version from the v2.4.0 tag).
+
+- [ ] **Step 6: Sanity-import VMx and reactivex**
+
+Run:
+```bash
+cd /Users/kaveh/repos/aws-tui && uv run python -c "import vmx; import reactivex; print(vmx.__file__)"
+```
+
+Expected: prints a path under `.venv/lib/python3.12/site-packages/vmx/__init__.py` and the import succeeds. (Because `[tool.uv.sources]` sets `editable = false`, uv builds a wheel from the submodule and installs it under `.venv`. Provenance is recorded in `uv.lock` as `source = { directory = "vendor/vmx/langs/python" }` — that's the authoritative check that VMx came from the submodule, not PyPI. Confirm via `uv pip show vmx | head -3` showing `Version: 2.4.0`.)
+
+---
+
+## Task 8: Create the source layer stubs
+
+**Files:**
+- Create: 16 `__init__.py` files + 4 `py.typed` markers + 1 `.gitkeep`
+
+- [ ] **Step 1: Confirm `src/aws_tui/version.py` exists from Task 7**
+
+The version file was pre-created in Task 7 Step 3 (hatchling needed it for `uv sync`). Verify it's still there with the expected content:
+
+```bash
+cat /Users/kaveh/repos/aws-tui/src/aws_tui/version.py
+```
+
+Expected: the file exists and contains `__version__ = "0.0.1"`. If missing, recreate per Task 7 Step 3.
 
 - [ ] **Step 2: Write `src/aws_tui/__init__.py`**
 
@@ -999,8 +1017,10 @@ the services menu, dual-pane file manager, hint legend, and status bar.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.widgets import Static
 
 from aws_tui.version import __version__
@@ -1012,7 +1032,7 @@ class AwsTuiApp(App[None]):
     TITLE = "aws-tui"
     SUB_TITLE = f"v{__version__}"
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "Quit", show=True),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
