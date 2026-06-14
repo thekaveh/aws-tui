@@ -1,1 +1,357 @@
-/* voidline theme — filled in M5 */
+/*
+ * Voidline — neon cyan + magenta on near-black.
+ *
+ * Heavy double-line borders, powerline-style chips with bg fills,
+ * sparkline in status bar (rendered programmatically — not via CSS).
+ *
+ * Palette per spec §4.5.
+ */
+
+$bg:           #050810;
+$bg-elev:      #0a1020;
+$bg-sel:       #1b2a4a;
+$text:         #d9e1ec;
+$text-muted:   #7a8c9e;
+$text-dim:     #4a5a6e;
+$accent:       #00d4ff;
+$accent-soft:  #80eaff;
+$accent-hot:   #ff3df8;
+$success:      #00ff9c;
+$warning:      #ffd24d;
+$danger:       #ff3b5c;
+$rule-dim:     #1a2238;
+$rule-accent:  #00d4ff;
+
+Screen {
+    background: $bg;
+    color: $text;
+}
+
+StatusBar {
+    height: 1;
+    background: $bg-elev;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+StatusBar > .status-name {
+    color: $accent;
+    text-style: bold;
+}
+
+StatusBar > .status-conn {
+    color: $accent-soft;
+}
+
+StatusBar > .status-region {
+    color: $text-muted;
+}
+
+StatusBar > .status-auth-ok {
+    color: $success;
+}
+
+StatusBar > .status-auth-warn {
+    color: $warning;
+}
+
+StatusBar > .status-auth-err {
+    color: $danger;
+}
+
+StatusBar > .status-transfers {
+    color: $accent-hot;
+}
+
+ServicesMenu {
+    width: 16;
+    background: $bg;
+    color: $text-muted;
+    border-right: double $accent;
+    padding: 0 1;
+}
+
+ServicesMenu > .service-item {
+    color: $text-muted;
+    height: 1;
+}
+
+ServicesMenu > .service-item.-selected {
+    color: $bg;
+    background: $accent;
+    text-style: bold;
+}
+
+ServicesMenu > .service-item.-focused {
+    color: $accent;
+    text-style: bold;
+}
+
+ServicesMenu > .service-item.-dimmed {
+    color: $text-dim;
+}
+
+ServicesMenu > .title {
+    color: $accent-hot;
+    text-style: bold;
+}
+
+Pane {
+    background: $bg;
+    color: $text;
+    border: double $rule-dim;
+}
+
+Pane.-focused {
+    border: double $accent;
+}
+
+Pane > Breadcrumb {
+    height: 1;
+    background: $bg-elev;
+    color: $accent;
+    padding: 0 1;
+    text-style: bold;
+}
+
+Pane > ColumnHeader {
+    height: 1;
+    color: $accent-hot;
+    text-style: bold;
+}
+
+Pane > .entry-row {
+    color: $text;
+    height: 1;
+}
+
+Pane > .entry-row.-selected {
+    background: $accent;
+    color: $bg;
+    text-style: bold;
+}
+
+Pane > .entry-row.-marked {
+    color: $accent-hot;
+}
+
+Pane > .entry-row.-dir {
+    text-style: bold;
+}
+
+Pane > PaneFooter {
+    height: 1;
+    background: $bg-elev;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+Pane > .pane-placeholder {
+    color: $text-muted;
+    content-align: center middle;
+}
+
+Pane > .pane-placeholder.-error {
+    color: $danger;
+}
+
+Pane > .pane-placeholder.-warning {
+    color: $warning;
+}
+
+DualPane {
+    height: 1fr;
+}
+
+HintLegend {
+    height: 1;
+    background: $bg-elev;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+HintLegend > .key {
+    color: $bg;
+    background: $accent;
+    text-style: bold;
+}
+
+HintLegend > .label {
+    color: $accent-soft;
+}
+
+CommandPalette {
+    align: center top;
+    background: $bg 70%;
+}
+
+CommandPalette > .palette-prompt {
+    color: $accent-hot;
+    text-style: bold;
+}
+
+CommandPalette > Input {
+    background: $bg-elev;
+    color: $accent-soft;
+    border: double $accent;
+}
+
+CommandPalette > .palette-list {
+    background: $bg-elev;
+    color: $text;
+    border: double $accent;
+}
+
+CommandPalette > .palette-list > .palette-item {
+    color: $text;
+    height: 1;
+}
+
+CommandPalette > .palette-list > .palette-item.-selected {
+    background: $accent;
+    color: $bg;
+    text-style: bold;
+}
+
+CommandPalette > .palette-list > .palette-item > .palette-category {
+    color: $accent-hot;
+}
+
+ConfirmModal {
+    align: center middle;
+    background: $bg 70%;
+}
+
+ConfirmModal > Container {
+    background: $bg-elev;
+    color: $text;
+    border: double $accent;
+    padding: 1 2;
+    width: 60;
+    height: auto;
+}
+
+ConfirmModal > Container > .modal-title {
+    color: $accent;
+    text-style: bold;
+}
+
+ConfirmModal.-danger > Container {
+    border: double $danger;
+}
+
+ConfirmModal.-danger > Container > .modal-title {
+    color: $danger;
+    text-style: bold;
+}
+
+ConfirmModal > Container > .modal-body {
+    color: $text;
+}
+
+ConfirmModal > Container > .modal-footer > Button {
+    margin: 0 1;
+}
+
+QuickLook {
+    align: center middle;
+    background: $bg 70%;
+}
+
+QuickLook > Container {
+    background: $bg-elev;
+    color: $text;
+    border: double $accent;
+    padding: 1 2;
+    width: 80%;
+    height: 80%;
+}
+
+QuickLook > Container > .quicklook-title {
+    color: $accent;
+    text-style: bold;
+}
+
+QuickLook > Container > .quicklook-body {
+    color: $text;
+}
+
+ToastStack {
+    layer: notifications;
+    dock: top;
+    align: right top;
+    width: 50;
+    height: auto;
+    background: transparent;
+}
+
+Toast {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin: 0 0 1 0;
+    background: $bg-elev;
+    color: $text;
+    border-left: thick $accent;
+}
+
+Toast.-info {
+    border-left: thick $accent;
+}
+
+Toast.-success {
+    border-left: thick $success;
+}
+
+Toast.-warning {
+    border-left: thick $warning;
+    color: $warning;
+}
+
+Toast.-error {
+    border-left: thick $danger;
+    color: $danger;
+}
+
+TransfersTray {
+    dock: bottom;
+    height: 10;
+    background: $bg-elev;
+    color: $text;
+    border-top: double $accent;
+    padding: 0 1;
+}
+
+TransfersTray > .tray-title {
+    color: $accent;
+    text-style: bold;
+}
+
+TransferRow {
+    height: 1;
+    color: $text;
+}
+
+TransferRow.-running {
+    color: $accent-soft;
+}
+
+TransferRow.-completed {
+    color: $success;
+}
+
+TransferRow.-failed {
+    color: $danger;
+}
+
+TransferRow.-cancelled {
+    color: $text-dim;
+}
+
+ProgressBar.-accent > .bar--bar {
+    color: $accent;
+}
+
+ProgressBar.-success > .bar--bar {
+    color: $success;
+}
