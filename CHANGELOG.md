@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-14
+
+### Added
+
+- **VM shell layer (M3).** Full application shell under `src/aws_tui/vm/`,
+  all VMx-backed and free of Textual / boto3 imports:
+  - `vm/messages.py` — six immutable hub message envelopes
+    (`ConnectionChangedMessage`, `ThemeChangedMessage`,
+    `AuthExpiredMessage`, `TransferProgressMessage`,
+    `KeymapChangedMessage`, `FocusChangedMessage`) that satisfy VMx's
+    `Message` protocol via `sender_name` + `sender_object`.
+  - `vm/chrome/toast_vm.py` + `toast_stack_vm.py` — single-toast facade
+    + stack with asyncio auto-dismiss timers for non-sticky toasts;
+    dispose cancels all pending timers.
+  - `vm/chrome/status_bar_vm.py` — reactive top-row status strip with
+    derived `connection_label`, `region`, `auth_indicator`, and
+    humanized `transfers_summary`; subscribes to
+    `ConnectionChangedMessage` + `TransferProgressMessage` on the hub.
+  - `vm/chrome/hint_legend_vm.py` — context-sensitive bottom chip row;
+    swaps action chips on `FocusChangedMessage`, re-resolves through
+    `KeymapStore` on `KeymapChangedMessage`, surfaces always-visible
+    `: cmd` and `? help` fallbacks.
+  - `vm/chrome/command_palette_vm.py` — fuzzy-filterable palette with
+    a subsequence-span scorer (label substring > tight subsequence >
+    keyword), Open/Close/Move/ExecuteSelected commands, and async
+    palette-action support.
+  - `vm/chrome/confirm_vm.py` — async `ask(request) -> bool` shim
+    backed by an `asyncio.Future` (deliberately not
+    `vmx.notifications` — the latter's notification-hub indirection is
+    overkill for a single-modal use case).
+  - `vm/chrome/quick_look_vm.py` — modal preview with Open/Close,
+    bounded `scroll_offset`, and `find_query`; the body stream
+    (`AsyncIterator[bytes]`) lives on `QuickLookContent` so file-I/O
+    stays in the view layer.
+  - `vm/services_protocol.py` — `Service` Protocol +
+    `ServiceDescriptor` + `ServiceRegistry` + `ServiceNotFound`.
+    Lives in `vm/` (not `services/`) so the VM layer can reach the
+    protocol without violating the layer-rule check.
+  - `vm/services_menu_vm.py` — left-rail service picker; filters the
+    registry by `Service.supports(connection)` and reactively
+    rebuilds on `ConnectionChangedMessage`.
+  - `vm/content_host_vm.py` — child-swap host; `set_content(vm,
+    service_id)` synchronously disposes the previous content via
+    VMx's depth-first cascade and constructs the new one. Re-setting
+    the same `service_id` is a no-op per spec §5.4.
+  - `vm/chrome/chrome_vm.py` — facade aggregate of HintLegendVM +
+    StatusBarVM + ToastStackVM.
+  - `vm/root_vm.py` — top of the tree. Owns the `MessageHub` for the
+    session, the three child aggregates, and the orchestration
+    surface (`switch_connection_with`, `switch_service`,
+    `switch_theme`, `focus`, `shutdown`).
+- **VMx familiarization cheatsheet** at
+  `docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md` captures
+  the actual VMx Python API, the builder-pattern requirement, and the
+  facade pattern aws-tui adopts for every VM.
+- **Unit tier (121 new vm/ tests).** Each Task ships its own
+  TDD-first test file plus a full M3 integration test
+  (`test_m3_integration.py`) that exercises a 2-service registry,
+  asserts dispose / build counts during switches, and verifies hub
+  propagation end-to-end.
+
+### Changed
+
+- `services/__init__.py` re-exports `Service` / `ServiceRegistry` /
+  `ServiceDescriptor` / `ServiceNotFound` from
+  `aws_tui.vm.services_protocol` so the `services/` subtree can write
+  `from aws_tui.services import ServiceRegistry` without breaking the
+  vm/ → services/ layer-rule.
+- M3 plan revised in-flight to document the actual VMx API
+  (builder-pattern instantiation, no static `.builder()` on
+  `AggregateVM3`, `.children(factory)` on composites, etc.).
+
 ## [0.3.0] - 2026-06-14
 
 ### Added
@@ -112,7 +184,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial project scaffold (M0): public GitHub repo, MIT license, VMx submodule, uv-managed dependencies, src-layout, hello-world Textual `AwsTuiApp` with `q`-to-quit, CI matrix on macos-14 / ubuntu-22.04 across Python 3.11–3.13.
 - Full design spec at `docs/superpowers/specs/2026-06-13-aws-tui-design.md`.
 
-[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/thekaveh/aws-tui/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/thekaveh/aws-tui/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/thekaveh/aws-tui/compare/v0.0.1...v0.2.0
 [0.0.1]: https://github.com/thekaveh/aws-tui/releases/tag/v0.0.1
