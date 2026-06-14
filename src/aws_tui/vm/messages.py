@@ -1,0 +1,139 @@
+"""Custom hub message envelopes for the aws-tui VM layer.
+
+VMx's :class:`vmx.messages.protocols.Message` is a structural Protocol — any
+class that exposes ``sender_name: str`` and ``sender_object: object`` satisfies
+it. These envelopes are immutable, slot-backed dataclasses that publish on the
+shared :class:`vmx.MessageHub` so reactive subscribers (status bar, chrome,
+toasts, hint legend) can react without hard references between VMs.
+
+The envelopes carry plain infra types (:class:`Connection`, :class:`TokenState`)
+to keep the VM layer free of Textual / boto3 imports.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from aws_tui.infra.aws_session import TokenState
+from aws_tui.infra.connection_resolver import Connection
+
+#: Reason values for ``AuthExpiredMessage``.
+AuthExpiredReason = Literal["expired", "missing", "load_error"]
+
+#: State values for ``TransferProgressMessage`` — mirrors the §7.5 state machine.
+TransferState = Literal["pending", "running", "paused", "completed", "failed", "cancelled"]
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionChangedMessage:
+    """Published by ``RootVM`` after a successful connection switch.
+
+    Subscribers: :class:`ServicesMenuVM`, :class:`StatusBarVM`, every service
+    content VM, the active :class:`ContentHostVM` swap orchestrator.
+    """
+
+    connection: Connection
+    auth_state: TokenState
+    sender_name: str = "root"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class ThemeChangedMessage:
+    """Published by ``RootVM`` when the active theme changes.
+
+    Subscribers: the view layer (re-applies ``.tcss``).
+    """
+
+    name: str
+    sender_name: str = "root"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class AuthExpiredMessage:
+    """Published by ``infra.AwsSession`` when a 401-equivalent or stale SSO
+    token is detected.
+
+    Subscribers: :class:`ToastStackVM` (soft toast "press a to sso-login"),
+    the failing pane (renders "auth needed" placeholder).
+    """
+
+    connection_name: str
+    reason: AuthExpiredReason
+    sender_name: str = "aws_session"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class TransferProgressMessage:
+    """Published by ``domain.CrossFsCopy`` / ``CrossFsMove`` workers.
+
+    Subscribers: :class:`TransferVM` (per-transfer detail),
+    :class:`StatusBarVM` (aggregate counter).
+    """
+
+    transfer_id: str
+    bytes_transferred: int
+    bytes_total: int | None
+    state: TransferState
+    sender_name: str = "transfers"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class KeymapChangedMessage:
+    """Published by ``infra.KeymapStore`` after a runtime rebind.
+
+    Subscribers: :class:`HintLegendVM` (re-derives chip labels), the view
+    layer's input router.
+    """
+
+    action: str
+    new_keys: tuple[str, ...]
+    sender_name: str = "keymap_store"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class FocusChangedMessage:
+    """Published by the view layer (via ``RootVM``) whenever focus moves to a
+    different VM.
+
+    Subscribers: :class:`HintLegendVM` (swaps the action chips).
+    """
+
+    focused_vm_id: str
+    sender_name: str = "root"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+__all__ = [
+    "AuthExpiredMessage",
+    "AuthExpiredReason",
+    "ConnectionChangedMessage",
+    "FocusChangedMessage",
+    "KeymapChangedMessage",
+    "ThemeChangedMessage",
+    "TransferProgressMessage",
+    "TransferState",
+]
