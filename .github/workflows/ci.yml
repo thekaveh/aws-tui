@@ -54,6 +54,8 @@ jobs:
         run: uv run ruff format --check .
       - name: mypy
         run: uv run mypy
+      - name: layer rules
+        run: ./scripts/check-layers.sh
 
   pkg:
     name: package build
