@@ -34,6 +34,23 @@ jobs:
       - name: pytest (unit tier)
         run: uv run --python ${{ matrix.python }} pytest tests/unit -v
 
+  integration:
+    name: integration (MinIO testcontainer)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: install Python 3.12
+        run: uv python install 3.12
+      - name: sync
+        run: uv sync --python 3.12
+      - name: pytest (integration tier)
+        run: uv run pytest -m integration -v
+
   lint-type:
     name: lint + type
     runs-on: ubuntu-22.04
