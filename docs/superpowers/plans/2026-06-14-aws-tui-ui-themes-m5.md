@@ -204,6 +204,28 @@ Add `e2e` job to ci.yml.
 
 ---
 
+## Layer-rule decision (implementation-time revision)
+
+Per the M5 task brief's "Critical: Layer-rule update needed", Option A
+was chosen: `src/aws_tui/app.py` stays thin (composition root for
+Textual) and `src/aws_tui/composition.py` is the cross-layer wiring
+module. Both live at the top of `src/aws_tui/` — neither under
+`{infra,domain,vm,services,ui}/` — so `scripts/check-layers.sh` (which
+only walks the five layer directories) does not flag their cross-layer
+imports. No script changes required.
+
+`composition.AppContext` is the bag of pre-wired refs; `AwsTuiApp`
+accepts an optional `AppContext` so tests inject pre-wired state
+instead of touching `~/.config/aws-tui`.
+
+**Naming watch-out**: the original `_context` attribute name on
+`AwsTuiApp` collides with Textual's internal `App._context` — symptom
+was an indefinite hang inside `App.run_test()`. Likewise `_shutdown`
+collides with `App._shutdown` (the lifecycle hook Textual calls during
+fixture teardown). Both were renamed to `_app_ctx` and
+`_aws_tui_shutdown` respectively. Avoid `_context` and `_shutdown` as
+attribute names on any future `App` subclass.
+
 ## Watch-outs
 
 - **Layer rules**: `ui/` may NOT import `boto3`, `aioboto3`, `botocore`, `aws_tui.infra.aws_session`, `aws_tui.infra.connection_resolver`. Anything UI needs from those is passed via VM construction or via app composition layer. The `app.py` composition lives at the top — it may import from any layer. Update `scripts/check-layers.sh` exemption for `app.py` if needed.

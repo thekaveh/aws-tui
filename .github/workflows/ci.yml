@@ -68,6 +68,23 @@ jobs:
       - name: pytest (snapshot tier)
         run: uv run pytest tests/snapshot -v
 
+  e2e:
+    name: e2e (5 user journeys)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: install Python 3.12
+        run: uv python install 3.12
+      - name: sync
+        run: uv sync --python 3.12
+      - name: pytest (e2e tier)
+        run: uv run pytest tests/e2e -v
+
   lint-type:
     name: lint + type
     runs-on: ubuntu-22.04
