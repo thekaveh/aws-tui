@@ -4,7 +4,7 @@
 
 **Goal:** Land the entire `vm/` layer except `vm/file_manager/` (that's M4). Build the application shell — root, services menu, content host, chrome (hint legend + status bar + toast stack), and overlays (command palette, confirmation, quick look). All VMx-based, pure viewmodels, NO Textual imports allowed (enforced by `./scripts/check-layers.sh`).
 
-**Architecture:** All VMs derive from VMx primitives (`ComponentVM`, `CompositeVM`, `AggregateVM2..6`). Commands via `RelayCommand`. Reactive properties via VMx's observable system + `DerivedProperty<T>`. Custom messages for `ConnectionChanged`, `ThemeChanged`, `AuthExpired`, `TransferProgress`, `KeymapChanged`. Lifecycle: `RootVM.construct()` cascades depth-first; service switch swaps `ContentHostVM`'s child via `dispose` + `construct`; `RootVM.dispose()` on app exit (preceded by async drain — but the drain itself is owned by infra in M1, not us).
+**Architecture:** All VMs **wrap** VMx primitives (`ComponentVM`, `CompositeVM`, `AggregateVM2..6`) as `_inner` facades — VMx VMs are not subclassable; they are built via immutable fluent builders (see Task 1 cheatsheet for the facade pattern). Commands via `RelayCommand`. Reactive properties published via `MessageHub.send(PropertyChangedMessage.create(self, name, "prop"))`. Derived state via `DerivedProperty` from `BehaviorSubject` sources. Custom messages for `ConnectionChanged`, `ThemeChanged`, `AuthExpired`, `TransferProgress`, `KeymapChanged`, `FocusChanged` — implemented as `@dataclass(frozen=True, slots=True)` with `sender_name: str` + `sender_object` property to satisfy the `Message` protocol. Lifecycle: `RootVM.construct()` cascades depth-first (synchronously); service switch swaps `ContentHostVM`'s child via `dispose` + `construct`; `RootVM.dispose()` on app exit (preceded by async drain — but the drain itself is owned by infra in M1, not us).
 
 **Tech Stack:** VMx (already installed via submodule + path dep). Pure Python — no Textual, no boto3.
 
@@ -406,13 +406,18 @@ Push, watch CI (all jobs green: unit matrix + integration MinIO + lint+type + pk
 
 ---
 
-## Watch-outs (M3-specific)
+## Watch-outs (M3-specific) — UPDATED 2026-06-14 after VMx spike
 
-- **VMx is the unknown.** Task 1 is mandatory before any other coding. If the VMx API doesn't match the patterns I assumed (e.g., `AggregateVM3` doesn't exist or has a different ctor), update the plan in flight — commit the plan revisions as you go, just like M0 did.
+- **VMx VMs are NOT subclassable.** They are built via immutable fluent builders. Every "ViewModel" in our M3 plan is a facade class that holds a VMx instance as `self._inner` and forwards lifecycle. See `docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md` §10 for the pattern.
+- **`AggregateVM3.builder()` does NOT exist as a static method.** Use `AggregateVMBuilder3()` constructor directly (or its alias `AggregateVM3Builder()`). All AggregateVMN builders are instantiated, not obtained via a static factory.
+- **`CompositeVM` builder method is `.children(factory)`** — NOT `.children_factory(factory)` and the factory is REQUIRED (pass `lambda: ()` for empty composites).
+- **`CompositeVM.builder()` has no `.with_null_services()` shortcut** — only `ComponentVMBuilder`/`ComponentVMOfBuilder`/`ReadonlyComponentVMOfBuilder` do. Pass `NULL_MESSAGE_HUB, NULL_DISPATCHER` explicitly for composites.
+- **`DerivedProperty.value` raises `RuntimeError` until a source emits.** Use `reactivex.subject.BehaviorSubject` (carries initial value) as sources, NOT plain `Subject`.
+- **Custom messages** satisfy the `Message` protocol via `sender_name: str` (default field) and a `sender_object: object` property. They are NOT subclassed from a VMx message base.
+- **Service protocol moves to `vm/services_protocol.py`** (not `services/base.py`) so `vm/` can stay free of `aws_tui.services` imports. `ServiceRegistry` also lives in `vm/services_protocol.py`. The `services/` layer imports the protocol from `aws_tui.vm.services_protocol`. This is the cleaner direction; documented in the M3 plan revision commit.
 - **No Textual imports in `vm/`.** Layer rules grep will fail CI.
-- **Reactive properties** in VMx are typically published via the hub. Read VMx's tests to confirm the exact pattern (whether properties are observable directly via `subject` or you have to publish manually).
-- **Async ConfirmationVM.ask**: return a `Future`-like that resolves on user choice. VMx's notifications subpackage may already do this.
-- **Don't reinvent `DerivedProperty`** — use VMx's built-in.
-- **`StatusBarVM` test fakes**: pass in a fake `MessageHub` and inject messages; don't construct a full `AwsSession`.
+- **Async `ConfirmationVM.ask`**: simplest implementation is an `asyncio.Future[bool]` that the confirm/cancel commands resolve. Skip `vmx.notifications` for this — that subpackage's `NotificationHub` is overkill for our single-modal use case.
+- **`StatusBarVM` test fakes**: pass in a `MessageHub()` and call its `send()` directly; don't construct `AwsSession`.
+- **`ComponentVM[T]` is NOT a generic.** Use plain `ComponentVM` and store our own state on the facade. `ComponentVMOf[M]` is the generic-modeled variant; we use it only where a single canonical model fits (e.g. `ToastModel` for an individual toast).
 
 This plan deliberately leaves `vm/file_manager/` (DualPaneVM, PaneVM, EntryVM) and the S3 service composition to M4.
