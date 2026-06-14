@@ -11,7 +11,10 @@ import pytest
 from tests.snapshot.apps.modals import (
     CommandPaletteApp,
     ConfirmModalApp,
+    CrashModalApp,
+    FirstRunModalApp,
     QuickLookApp,
+    ResumeModalApp,
     TransfersTrayApp,
 )
 from tests.snapshot.conftest import TERMINAL_SIZE, THEMES
@@ -35,3 +38,18 @@ def test_quick_look(theme: str, snap_compare) -> None:
 @pytest.mark.parametrize("theme", THEMES)
 def test_transfers_tray(theme: str, snap_compare) -> None:
     assert snap_compare(TransfersTrayApp(theme=theme), terminal_size=TERMINAL_SIZE)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_crash_modal(theme: str, snap_compare) -> None:
+    assert snap_compare(CrashModalApp(theme=theme), terminal_size=TERMINAL_SIZE)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_resume_modal(theme: str, snap_compare) -> None:
+    assert snap_compare(ResumeModalApp(theme=theme), terminal_size=TERMINAL_SIZE)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_first_run_modal(theme: str, snap_compare) -> None:
+    assert snap_compare(FirstRunModalApp(theme=theme), terminal_size=TERMINAL_SIZE)
