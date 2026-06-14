@@ -1,0 +1,65 @@
+# macOS
+.DS_Store
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code / superpowers session state (transient; specs and plans under docs/ stay tracked)
+.superpowers/
+.claude/local/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+share/python-wheels/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+.hypothesis/
+htmlcov/
+coverage.xml
+*.cover
+*.py,cover
+
+# mypy / ruff / type checkers
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+
+# aws-tui local runtime state (per-user; never committed)
+~/.config/aws-tui/
+~/.cache/aws-tui/
+
+# Local environment overrides
+.env
+.env.local
