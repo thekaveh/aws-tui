@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **App launch was visually blank** because `app.py.on_mount` never invoked
+  `RootVM.switch_connection_with` / `switch_service`; widgets had no
+  PropertyChangedMessage to render against. `on_mount` now resolves the
+  initial connection (config defaults → first auto-discovered AWS profile),
+  probes SSO state, awaits both switches, and mounts a `DualPane` widget
+  into the content host. With no connection available, the content host
+  shows a clear "configure one and relaunch" message.
+- **Main-screen layout repairs**: `StatusBar`'s Statics had no width
+  constraint and overflowed off-screen; `ToastStack` was in-flow (no
+  layer / dock) and covered the left half of the screen with its empty
+  auto-sized box; `DualPane`'s `> Pane` CSS selector didn't match because
+  the Panes are children of an inner `Horizontal`; `Container#content-host`
+  stayed empty after `switch_service` because the view layer never mounted
+  the service's widget. Fixed all four.
+- `.gitignore` inline-comment bug — gitignore has no inline-comment
+  syntax, so the `snapshot_report.html       # comment` entry was
+  matching the literal filename + trailing spaces + comment text and
+  never ignoring the file. Moved comment to its own line. Same pass
+  removed the no-op `~/.config/aws-tui/` and `~/.cache/aws-tui/`
+  patterns (gitignore does not tilde-expand).
+- `StatusBar` widget's `query_one(".status-auth-ok, .status-auth-warn,
+  .status-auth-err", Static)` used a comma-union selector that
+  Textual's query layer does not support — every auth-indicator update
+  silently raised and the bar never refreshed. Each Static now gets a
+  stable `id` and the refresh path queries `#status-auth`.
+- Theme stylesheets used `Pane > Breadcrumb` / `> ColumnHeader` /
+  `> PaneFooter` / `> .entry-row` / `> .pane-placeholder` selectors
+  that never matched — `Breadcrumb` etc. are not widget types, and
+  `EntryRow` / placeholder children live inside `Vertical(id=pane-body)`,
+  so the direct-child combinator didn't apply. Switched the four
+  built-in themes to descendant selectors + normalized the pane chrome
+  class names to kebab-case (`column-header`, `pane-footer`); the
+  pane chrome and row styling now actually theme.
+- S3FS direct construction (the production path via S3Service) was
+  using BotoConfig with no retries / timeouts; spec §6.3 + §7.3 mandate
+  adaptive retries (6 attempts) + 10 s connect / 60 s read. Apply.
+- `composition.run_aws_configure_sso` had no subprocess timeout — a
+  hung `aws configure sso` froze the TUI forever. 10-minute cap
+  matches the SSO device-flow grace; returns 124 on expiry.
+- `TransferState` was defined twice (Literal alias in `vm/messages.py`
+  + StrEnum in `vm/file_manager/transfer_vm.py`). Consolidated as a
+  single StrEnum in `vm/messages.py`; `transfer_vm.py` re-exports it.
+- Documentation drift across the prose docs:
+  - README's Documentation index is now hierarchically numbered, plus
+    the six prose docs (architecture, connections, cookbook,
+    keybindings, theming, adding-a-service) carry hierarchical
+    section/sub-section numbering. Inbound cross-doc anchors updated.
+  - `docs/keybindings.md` and `docs/cookbook.md` action IDs now match
+    `KeymapStore.DEFAULT_BINDINGS`; `pane.refresh` binding corrected
+    from `Ctrl+R` to `r`; duplicate `r`-binding row removed (rename is
+    `pane.move` with one entry marked, not a separate action).
+  - `docs/architecture.md` testing-pyramid count corrected from 463
+    to 429; the architecture doc's
+    `MessageHub.subscribe(callback, filter=...)` claim replaced with
+    the actual `hub.messages.subscribe(on_next=...)` API.
+  - `docs/adding-a-service.md` cross-reference to spec §7 corrected
+    to §2 (the FileSystemProvider protocol).
+
+### Changed
+
+- `AwsTuiApp.on_mount` (was 63 effective lines) extracted into four
+  helpers: `_apply_initial_theme`, `_resolve_initial_connection`,
+  `_mount_initial_service_view`, `_mount_no_connection_placeholder`.
+  on_mount itself is now 18 lines.
+- `pyproject.toml` `[tool.pytest.ini_options].addopts` now defaults to
+  `-m 'not integration'` so `uv run pytest` runs the 478-test
+  unit/snapshot/e2e tiers without Docker. The 9 integration tests
+  opt in via `uv run pytest -m integration`. CI continues to invoke
+  `pytest -m integration` for the integration job — the right-most
+  `-m` wins.
+- `.github/dependabot.yml` `python-runtime` group now includes
+  `tomli-w` (was missed); `python-dev` group includes `testcontainers*`
+  and `types-*` (also missed) so they group instead of opening
+  individual PRs.
+- `.pre-commit-config.yaml` `astral-sh/ruff-pre-commit` bumped from
+  `v0.15.0` to `v0.15.17` to match `uv.lock` (closes the patch-level
+  drift the M1 fix `91f6040` left at the minor level).
+
+### Removed
+
+- Dead code: stray `_ = head` placeholder in `S3FS.delete()`; unused
+  `max_concurrent` ctor param + field in `TransfersVM`. The function-
+  local `DualPane` import in `app.py.on_mount` moved to a module-level
+  import.
+
 ## [0.7.0] - 2026-06-14
 
 ### Added

@@ -7,10 +7,8 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 (terminals intercept it). Letter-driven, with the command palette
 (`:` or `Ctrl+K`) as the universal escape hatch.
 
-## Default bindings
-
-### Navigation
-
+## 1. Default bindings
+### 1.1. Navigation
 | Action | Default | Notes |
 |---|---|---|
 | Cursor up / down | `↑ ↓` or `j k` | vi-style alternatives are first-class |
@@ -21,8 +19,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Top / bottom | `g` / `G` | |
 | Toggle hidden files (LocalFS) | `.` | |
 
-### Selection
-
+### 1.2. Selection
 | Action | Default | Notes |
 |---|---|---|
 | Enter multi-select mode | `v` | Visual-block style |
@@ -30,19 +27,17 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Select all | `a` (in multi-select) | |
 | Clear selection | `Esc` (in multi-select) | |
 
-### File operations
-
+### 1.3. File operations
 | Action | Default | Notes |
 |---|---|---|
 | Copy across panes | `c` | Streams through `CrossFsCopy` |
 | Move across panes | `m` | Copy + delete-source after success |
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
 | New folder | `n` | |
-| Rename in place | `r` | |
-| Refresh pane | `Ctrl+R` | |
+| Rename in place | `m` | Move-with-one-marked doubles as rename |
+| Refresh pane | `r` | |
 
-### Overlays
-
+### 1.4. Overlays
 | Action | Default |
 |---|---|
 | Quick Look | `Space` (normal mode) |
@@ -52,61 +47,71 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Transfers tray | `t` |
 | Help overlay | `?` |
 
-### Connection / auth
-
+### 1.5. Connection / auth
 | Action | Default |
 |---|---|
 | Authenticate (when auth toast active) | `a` |
 | Connection switcher | `:` then `connection switch` |
 
-### App
-
+### 1.6. App
 | Action | Default |
 |---|---|
 | Cancel / dismiss modal | `Esc` |
 | Quit | `q` or `Ctrl+C` |
 
-## Customizing
-
+## 2. Customizing
 A binding can be a single keystroke or a list of fallback keystrokes:
 
 ```toml
 [keybindings]
 "pane.copy" = "c"
-"pane.delete_marked" = "d"
-"app.command_palette" = ["Ctrl+K", ":"]
+"pane.delete" = "d"
+"app.command_palette" = ["ctrl+k", ":"]
 "app.help" = "?"
 ```
 
-The input router goes through `ui/actions.py` (action registry) →
-`ui/bindings.py` (action ↔ key) → VM command. The default map
-(declared in `infra/keymap_store.py`) is merged with your overlay;
-unknown action ids are rejected so a typo in your config raises a
-startup error instead of silently dropping a binding.
+The default map is declared in `infra/keymap_store.py` and merged with
+your overlay; unknown action ids are rejected so a typo in your config
+raises a startup error instead of silently dropping a binding.
 
-## Action IDs
+Note: the keyboard ↔ action ↔ VM-command input router is not yet
+fully wired in v0.7 (only `q` / `Ctrl+C` are routed via Textual's
+hardcoded `BINDINGS`). The `[keybindings]` overlay is parsed and
+validated against `KeymapStore.DEFAULT_BINDINGS`, but most actions
+do not yet have a Textual-side handler. Customizing the overlay
+today gates how future rebinds will land.
 
-The full list of registered actions is dumped on every launch into
-`~/.cache/aws-tui/log/aws-tui.log` (look for the `bindings.resolved`
-record). Highlights:
-
+## 3. Action IDs
 | Action ID | Default key | What it does |
 |---|---|---|
-| `pane.cursor_up` / `pane.cursor_down` | `k` / `j` | Move cursor |
-| `pane.open` | `Enter` | Descend |
-| `pane.ascend` | `Backspace` | Go up one level |
-| `pane.refresh` | `Ctrl+R` | Re-run `provider.list()` |
-| `pane.copy` / `pane.move` / `pane.delete_marked` | `c` / `m` / `d` | Cross-pane ops |
-| `pane.toggle_select` | `Space` (multi-select) | Add/remove from selection |
-| `pane.set_filter` | `/` | Local pane filter |
-| `dualpane.switch_focus` | `Tab` | Move focus between panes |
-| `command_palette.open` | `:` / `Ctrl+K` | Open palette |
-| `quick_look.open` | `Space` (normal) | Stream first 64 KB |
-| `app.quit` | `q` / `Ctrl+C` | Graceful shutdown |
-| `theme.switch` | (palette only) | Reload `.tcss` for the chosen theme |
+| `app.quit` | `q` / `ctrl+c` | Graceful shutdown |
+| `app.command_palette` | `:` / `ctrl+k` | Open palette |
+| `app.help` | `?` | Help overlay |
+| `app.transfers_tray` | `t` | Toggle transfers tray |
+| `pane.move_up` / `pane.move_down` | `↑` (`up`) `j` / `↓` (`down`) `k` | Move cursor |
+| `pane.descend` | `enter` | Descend into folder / bucket |
+| `pane.ascend` | `backspace` / `←` (`left`) | Parent path |
+| `pane.switch_focus` | `tab` | Move focus to the other pane |
+| `pane.switch_focus_back` | `shift+tab` | Move focus to the previous pane |
+| `pane.quick_look` | `space` (normal mode) | Stream first 64 KB |
+| `pane.filter` | `/` | Local pane filter |
+| `pane.fuzzy_find` | `ctrl+p` | Fuzzy find paths / buckets |
+| `pane.enter_multiselect` | `v` | Enter multi-select mode |
+| `pane.toggle_select` | `space` (multi-select) | Add / remove from selection |
+| `pane.select_all` | `a` | Select all in pane |
+| `pane.copy` | `c` | Copy marked entries to other pane |
+| `pane.move` | `m` | Move marked entries to other pane (or rename one) |
+| `pane.delete` | `d` | Delete marked entries (confirms) |
+| `pane.new` | `n` | New folder / bucket |
+| `pane.refresh` | `r` | Re-run `provider.list()` |
+| `auth.authenticate` | `a` (when auth toast active) | Shell-out to `aws sso login` |
+| `modal.cancel` | `escape` | Cancel / close current overlay |
 
-## Layer separation
+These are the action IDs `KeymapStore.DEFAULT_BINDINGS` actually
+registers. Overlay any of them in your `[keybindings]` table; any other
+id raises `UnknownAction` at startup.
 
+## 4. Layer separation
 The View layer never invokes a VM command by attribute access; it
 always goes through the action registry. That's how rebinding can be
 purely config-driven — no Textual `BINDINGS` are hard-coded except

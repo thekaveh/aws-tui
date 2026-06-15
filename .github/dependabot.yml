@@ -9,10 +9,28 @@ updates:
     groups:
       python-runtime:
         applies-to: version-updates
-        patterns: ["textual", "boto3", "aioboto3", "botocore", "anyio", "aiofiles", "keyring"]
+        patterns:
+          - "textual"
+          - "boto3"
+          - "aioboto3"
+          - "botocore"
+          - "anyio"
+          - "aiofiles"
+          - "keyring"
+          - "tomli-w"
       python-dev:
         applies-to: version-updates
-        patterns: ["pytest*", "ruff", "mypy", "pre-commit", "moto", "factory-boy", "freezegun", "twine"]
+        patterns:
+          - "pytest*"
+          - "ruff"
+          - "mypy"
+          - "pre-commit"
+          - "moto"
+          - "factory-boy"
+          - "freezegun"
+          - "twine"
+          - "testcontainers*"
+          - "types-*"
     labels: ["dependencies", "python"]
 
   - package-ecosystem: github-actions

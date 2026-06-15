@@ -32,17 +32,6 @@ if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
 
 
-# Mapping from message-layer literal to enum.
-_STATE_FROM_LITERAL: dict[str, TransferState] = {
-    "pending": TransferState.PENDING,
-    "running": TransferState.RUNNING,
-    "paused": TransferState.PAUSED,
-    "completed": TransferState.COMPLETED,
-    "failed": TransferState.FAILED,
-    "cancelled": TransferState.CANCELLED,
-}
-
-
 class TransfersVM:
     """Composite + hub subscriber for active and finished transfers."""
 
@@ -51,11 +40,9 @@ class TransfersVM:
         *,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
-        max_concurrent: int = 8,
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
-        self._max_concurrent: int = max_concurrent
         self._disposed: bool = False
 
         self._transfers: list[TransferVM] = []
@@ -200,7 +187,9 @@ class TransfersVM:
         if not isinstance(msg, TransferProgressMessage):
             return
         target = self._find(msg.transfer_id)
-        new_state = _STATE_FROM_LITERAL.get(msg.state, TransferState.RUNNING)
+        # msg.state IS a TransferState (StrEnum) since the consolidation in
+        # vm/messages.py; no lookup needed.
+        new_state = msg.state
         if target is None:
             # First sighting — auto-register a placeholder so the bookkeeping
             # is symmetric whether the caller pre-registered or not.

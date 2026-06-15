@@ -99,13 +99,22 @@ Pick one to get going.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [Keybindings](docs/keybindings.md)
-- [Theming](docs/theming.md)
-- [Connections (AWS profiles + S3-compatible)](docs/connections.md)
-- [Adding a new service (for contributors)](docs/adding-a-service.md)
-- [Cookbook (common recipes)](docs/cookbook.md)
-- [Full design spec](docs/superpowers/specs/2026-06-13-aws-tui-design.md)
+Numbered hierarchically per the project's documentation hierarchy mandate.
+
+1. **User-facing**
+   1. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
+   2. [Keybindings](docs/keybindings.md) — full key map; how to customize bindings via `~/.config/aws-tui/config.toml`.
+   3. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
+   4. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to MinIO, switch theme on the fly, customize bindings, resume after a crash).
+2. **Contributor-facing**
+   1. [Architecture](docs/architecture.md) — five-layer model + composition root + lifecycle + messaging primer.
+   2. [Adding a new service](docs/adding-a-service.md) — the `Service` protocol + per-layer wiring.
+   3. [VMx Python cheatsheet](docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md) — facade pattern, message-protocol shape, lifecycle gotchas.
+3. **Spec + plans**
+   1. [Design spec (v0.1.0)](docs/superpowers/specs/2026-06-13-aws-tui-design.md) — authoritative source for behavior + acceptance.
+   2. [Implementation plans (M0–M6)](docs/superpowers/plans/) — per-milestone breakdown, end-of-pass revisions captured in-tree.
+4. **Maintainer-facing**
+   1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
 
 ## File locations
 

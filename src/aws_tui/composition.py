@@ -269,18 +269,31 @@ def needs_first_run(
     return not discovered
 
 
+#: Hard cap on ``aws configure sso`` wall-clock. A hung wizard should
+#: not freeze the TUI forever; 600 s matches the SSO device-flow grace
+#: period. Returned as 124 (timeout exit code) on expiry.
+_AWS_CONFIGURE_SSO_TIMEOUT_SECONDS = 600
+
+
 def run_aws_configure_sso() -> int:
     """Shell out to ``aws configure sso``. Returns the subprocess return code.
 
     Blocks the calling thread while the wizard runs; the TUI freezes for
-    that duration, which is expected per spec §6.4 Flow 5.
+    that duration, which is expected per spec §6.4 Flow 5. A 10-minute
+    timeout guards against a hung wizard (returns ``124``).
     """
     import subprocess
 
     try:
-        result = subprocess.run(["aws", "configure", "sso"], check=False)
+        result = subprocess.run(
+            ["aws", "configure", "sso"],
+            check=False,
+            timeout=_AWS_CONFIGURE_SSO_TIMEOUT_SECONDS,
+        )
     except FileNotFoundError:
         return 127
+    except subprocess.TimeoutExpired:
+        return 124
     return result.returncode
 
 

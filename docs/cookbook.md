@@ -3,21 +3,19 @@
 > Common recipes for daily aws-tui use. Each recipe is end-to-end —
 > commands you can copy/paste plus the in-app key sequence.
 
-- [Connect to a local MinIO](#connect-to-a-local-minio)
-- [Switch the theme on the fly](#switch-the-theme-on-the-fly)
-- [Customize a keybinding](#customize-a-keybinding)
-- [Resume after a crash](#resume-after-a-crash)
+1. [Connect to a local MinIO](#1-connect-to-a-local-minio)
+2. [Switch the theme on the fly](#2-switch-the-theme-on-the-fly)
+3. [Customize a keybinding](#3-customize-a-keybinding)
+4. [Resume after a crash](#4-resume-after-a-crash)
 
 ---
 
-## Connect to a local MinIO
-
+## 1. Connect to a local MinIO
 You have a MinIO running on `http://localhost:9000` with the dev
 credentials `minioadmin / minioadmin`. Goal: a `minio-local`
 connection in aws-tui that points at it.
 
-### 1. Start MinIO (skip if already running)
-
+### 1.1. Start MinIO (skip if already running)
 ```bash
 docker run --rm -d --name minio \
     -p 9000:9000 -p 9001:9001 \
@@ -26,8 +24,7 @@ docker run --rm -d --name minio \
     minio/minio:latest server /data --console-address ":9001"
 ```
 
-### 2. Store the credentials in the macOS Keychain (recommended)
-
+### 1.2. Store the credentials in the macOS Keychain (recommended)
 ```bash
 # Stores under service="minio-local", account="default".
 security add-generic-password \
@@ -44,8 +41,7 @@ security add-generic-password \
 (The Python `keyring` library aws-tui uses delegates to the macOS
 Keychain by default.)
 
-### 3a. Add via the in-TUI first-run / add form
-
+### 1.3. Add via the in-TUI first-run / add form
 The first time you run aws-tui with no connections configured, the
 welcome modal pops up — pick **add s3-compatible** and fill the form:
 
@@ -71,8 +67,7 @@ force_path_style = true
 verify_tls = true
 ```
 
-### 3b. Add by editing the file directly
-
+### 1.4. Add by editing the file directly
 If you already have other connections, just append:
 
 ```toml
@@ -85,8 +80,7 @@ force_path_style = true
 verify_tls = true
 ```
 
-### 4. Use it
-
+### 1.5. Use it
 ```bash
 aws-tui
 ```
@@ -96,10 +90,8 @@ pane should list your buckets.
 
 ---
 
-## Switch the theme on the fly
-
-### One-off (session-only)
-
+## 2. Switch the theme on the fly
+### 2.1. One-off (session-only)
 ```
 :                       # open command palette
 theme switch ▸ voidline # fuzzy-filter to the theme you want
@@ -109,8 +101,7 @@ Enter
 The `ThemeChangedMessage` fires and the active stylesheet reloads
 instantly — no restart needed.
 
-### Persistent
-
+### 2.2. Persistent
 ```toml
 # ~/.config/aws-tui/config.toml
 [defaults]
@@ -119,15 +110,13 @@ theme = "voidline"
 
 Theme names: `carbon` (default), `voidline`, `lattice`, `amber`.
 
-### Add a custom theme
-
+### 2.3. Add a custom theme
 Copy `src/aws_tui/ui/themes/carbon.tcss` to
 `~/.config/aws-tui/themes/midnight.tcss`, edit the palette tokens,
 and pick it from the palette like any built-in. See
-[theming.md](theming.md#full-custom-themes) for the full token table.
+[theming.md](theming.md#32-full-custom-themes) for the full token table.
 
-### Tweak just one or two colors
-
+### 2.4. Tweak just one or two colors
 Drop `~/.config/aws-tui/theme.tcss` and override what you need; the
 overlay layers on top of the active built-in:
 
@@ -139,8 +128,7 @@ Footer { background: #050505; }
 
 ---
 
-## Customize a keybinding
-
+## 3. Customize a keybinding
 Goal: rebind copy (`pane.copy`) from `c` to `y` (vim yank).
 
 ```toml
@@ -156,41 +144,36 @@ For a fallback list (try `Ctrl+K` first, fall back to `:`):
 "app.command_palette" = ["Ctrl+K", ":"]
 ```
 
-### Disable a default binding
-
+### 3.1. Disable a default binding
 Set the action to an empty list:
 
 ```toml
 [keybindings]
-"pane.delete_marked" = []   # nope, no quick delete
+"pane.delete" = []   # nope, no quick delete
 ```
 
-You can still trigger it via the command palette (`:` `pane delete`).
+You can still trigger it via the command palette (`:` then search "delete").
 
-### See the active map
+### 3.2. See the active map
+The full list of action IDs lives in
+[`docs/keybindings.md`](keybindings.md#3-action-ids) and is the same set
+declared in `src/aws_tui/infra/keymap_store.py:DEFAULT_BINDINGS`. There
+is no `--print-bindings` CLI flag in v0.7; the launch path enters the
+TUI directly.
 
-```
-aws-tui --print-bindings   # prints the resolved action ↔ key map and exits
-```
-
-(or check `~/.cache/aws-tui/log/aws-tui.log` for the `bindings.resolved`
-record).
-
-### Unknown action IDs raise on startup
-
-If you typo `pane.cpy = "y"`, aws-tui refuses to launch and points
-at the bad entry. That's deliberate — silently dropping a binding
-is the worst kind of bug.
+### 3.3. Unknown action IDs raise on startup
+If you overlay an action id that isn't in `KeymapStore.DEFAULT_BINDINGS`
+(e.g. typo `pane.cpy`), `KeymapStore.resolve` raises `UnknownAction`
+on startup. That's deliberate — silently dropping a binding is the
+worst kind of bug.
 
 ---
 
-## Resume after a crash
-
+## 4. Resume after a crash
 Long-running multipart uploads survive aws-tui crashes. Here's the
 flow:
 
-### What gets saved
-
+### 4.1. What gets saved
 After each completed multipart part, the in-flight transfer appends
 a JSONL line to `~/.cache/aws-tui/transfers/<id>.jsonl`:
 
@@ -204,8 +187,7 @@ On normal completion it gets a trailing `{"kind":"finished",...}`
 line; on user cancel a `{"kind":"aborted",...}` line. Either
 terminates the journal.
 
-### What happens on next launch
-
+### 4.2. What happens on next launch
 `composition.py` calls `TransferJournal.find_unfinished()` after the
 connection resolves. If any journal lacks a terminal record, the
 resume modal pops up:
@@ -224,8 +206,7 @@ resume modal pops up:
 | **decide each** | *(v0.7.0: equivalent to **keep for later**; per-entry modal lands in a follow-up.)* |
 | **keep for later** | No mutation. The modal shows again on next launch. |
 
-### Manual cleanup
-
+### 4.3. Manual cleanup
 If you want to nuke the journals without going through the modal:
 
 ```bash
@@ -233,11 +214,10 @@ rm -f ~/.cache/aws-tui/transfers/*.jsonl
 ```
 
 (But: this leaves orphaned MPUs on the server. The
-[1-day MPU abort lifecycle rule](connections.md#recommended-1-day-mpu-abort-lifecycle-rule)
+[1-day MPU abort lifecycle rule](connections.md#5-recommended-1-day-mpu-abort-lifecycle-rule)
 is your backstop.)
 
-### What gets dumped on a crash
-
+### 4.4. What gets dumped on a crash
 If aws-tui hits an unhandled exception, it writes
 `~/.cache/aws-tui/crash/<ts>.txt`:
 
@@ -250,9 +230,9 @@ exception: TypeError: unsupported operand type(s) for +: ...
   ...
 
 == last user actions ==
-2026-06-14T12:00:00 pane.cursor_down
+2026-06-14T12:00:00 pane.move_down
 2026-06-14T12:00:01 pane.refresh
-2026-06-14T12:00:02 pane.delete_marked
+2026-06-14T12:00:02 pane.delete
 
 == log tail ==
 ... (last 1000 lines of aws-tui.log)

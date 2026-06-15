@@ -71,7 +71,7 @@ aws-tui
 ```
 
 Embed below the "Use it" step of the MinIO recipe in
-[cookbook.md](cookbook.md#connect-to-a-local-minio).
+[cookbook.md](cookbook.md#1-connect-to-a-local-minio).
 
 ## 4. Theme switch (cookbook: switch theme)
 

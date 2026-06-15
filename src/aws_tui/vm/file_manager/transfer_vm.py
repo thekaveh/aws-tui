@@ -9,26 +9,16 @@ changes via :class:`PropertyChangedMessage` ("model").
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from enum import StrEnum
 from typing import Literal
 
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage, RelayCommand
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm.messages import TransferState  # canonical: re-exported for callers
+
 #: Direction discriminator on a :class:`TransferModel`.
 TransferDirection = Literal["upload", "download", "local-copy", "s3-copy"]
-
-
-class TransferState(StrEnum):
-    """State machine values; mirrors the literal in :mod:`aws_tui.vm.messages`."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True, slots=True)
