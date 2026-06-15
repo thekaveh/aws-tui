@@ -137,4 +137,4 @@ aws-tui appends a JSONL line per completed multipart part to
 `~/.cache/aws-tui/transfers/<id>.jsonl`. On launch it scans the
 directory for journals lacking a terminal `finished` / `aborted`
 record and offers a resume / abort / decide-each / keep modal — see
-the [cookbook](cookbook.md#resume-after-a-crash) for the walkthrough.
+the [cookbook](cookbook.md#4-resume-after-a-crash) for the walkthrough.
