@@ -162,25 +162,25 @@ Set the action to an empty list:
 
 ```toml
 [keybindings]
-"pane.delete_marked" = []   # nope, no quick delete
+"pane.delete" = []   # nope, no quick delete
 ```
 
-You can still trigger it via the command palette (`:` `pane delete`).
+You can still trigger it via the command palette (`:` then search "delete").
 
 ### See the active map
 
-```
-aws-tui --print-bindings   # prints the resolved action ↔ key map and exits
-```
-
-(or check `~/.cache/aws-tui/log/aws-tui.log` for the `bindings.resolved`
-record).
+The full list of action IDs lives in
+[`docs/keybindings.md`](keybindings.md#action-ids) and is the same set
+declared in `src/aws_tui/infra/keymap_store.py:DEFAULT_BINDINGS`. There
+is no `--print-bindings` CLI flag in v0.7; the launch path enters the
+TUI directly.
 
 ### Unknown action IDs raise on startup
 
-If you typo `pane.cpy = "y"`, aws-tui refuses to launch and points
-at the bad entry. That's deliberate — silently dropping a binding
-is the worst kind of bug.
+If you overlay an action id that isn't in `KeymapStore.DEFAULT_BINDINGS`
+(e.g. typo `pane.cpy`), `KeymapStore.resolve` raises `UnknownAction`
+on startup. That's deliberate — silently dropping a binding is the
+worst kind of bug.
 
 ---
 
@@ -250,9 +250,9 @@ exception: TypeError: unsupported operand type(s) for +: ...
   ...
 
 == last user actions ==
-2026-06-14T12:00:00 pane.cursor_down
+2026-06-14T12:00:00 pane.move_down
 2026-06-14T12:00:01 pane.refresh
-2026-06-14T12:00:02 pane.delete_marked
+2026-06-14T12:00:02 pane.delete
 
 == log tail ==
 ... (last 1000 lines of aws-tui.log)

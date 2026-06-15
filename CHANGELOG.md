@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **App launch was visually blank** because `app.py.on_mount` never invoked
+  `RootVM.switch_connection_with` / `switch_service`; widgets had no
+  PropertyChangedMessage to render against. `on_mount` now resolves the
+  initial connection (config defaults → first auto-discovered AWS profile),
+  probes SSO state, awaits both switches, and mounts a `DualPane` widget
+  into the content host. With no connection available, the content host
+  shows a clear "configure one and relaunch" message.
+- **Main-screen layout repairs**: `StatusBar`'s Statics had no width
+  constraint and overflowed off-screen; `ToastStack` was in-flow (no
+  layer / dock) and covered the left half of the screen with its empty
+  auto-sized box; `DualPane`'s `> Pane` CSS selector didn't match because
+  the Panes are children of an inner `Horizontal`; `Container#content-host`
+  stayed empty after `switch_service` because the view layer never mounted
+  the service's widget. Fixed all four.
+- **Maintenance pass 1** — see the next pass's per-file notes for the
+  full list, including a `.gitignore` inline-comment bug, an invalid
+  `query_one` selector in `StatusBar`, missing BotoConfig retries +
+  timeouts on the production S3FS construction path, and consolidating
+  `TransferState` (was defined twice).
+
+### Changed
+
+- `.gitignore` entry for `snapshot_report.html` rewritten — gitignore has
+  no inline-comment syntax, so the previous entry never matched.
+
 ## [0.7.0] - 2026-06-14
 
 ### Added

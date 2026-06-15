@@ -80,8 +80,9 @@ needs a `construct → destruct → dispose` surface.
 4. **Reuse existing VM families** where possible:
     - For storage-like services (lists with hierarchy): the file-
       manager VMs in `vm/file_manager/` work as-is — write a new
-      `FileSystemProvider` (see §7 of the design spec for the
-      protocol) and reuse `PaneVM` + `DualPaneVM`.
+      `FileSystemProvider` (see `src/aws_tui/domain/filesystem.py`
+      for the protocol, and §2 / §3 of the design spec for the
+      architectural shape) and reuse `PaneVM` + `DualPaneVM`.
     - For flat resource lists (EC2 instances, IAM users): write a new
       `ListPaneVM` under `vm/<service>/` and a corresponding widget
       family under `ui/widgets/<service>/`.

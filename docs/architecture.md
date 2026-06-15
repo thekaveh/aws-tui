@@ -85,9 +85,9 @@ view layer subscribes via `HubSubscriberMixin` on a per-widget basis.
 
 ## Testing pyramid
 
-| Tier | Count (v0.7.0) | What it proves |
+| Tier | Count | What it proves |
 |---|---|---|
-| Unit | 463 | VM, domain, infra behavior; no I/O |
+| Unit | 429 | VM, domain, infra behavior; no I/O |
 | Snapshot | 44 | View rendering against golden SVGs per theme |
 | E2E | 5 | Pilot-driven user journeys |
 | Integration | 9 | MinIO via testcontainers (opt-in) |
