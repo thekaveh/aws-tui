@@ -51,20 +51,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TransferState` was defined twice (Literal alias in `vm/messages.py`
   + StrEnum in `vm/file_manager/transfer_vm.py`). Consolidated as a
   single StrEnum in `vm/messages.py`; `transfer_vm.py` re-exports it.
-- Documentation drift: README's Documentation index is now
-  hierarchically numbered; `docs/keybindings.md` and `docs/cookbook.md`
-  action IDs now match `KeymapStore.DEFAULT_BINDINGS`; `pane.refresh`
-  binding corrected from `Ctrl+R` to `r`; `docs/architecture.md`
-  testing-pyramid count corrected from 463 to 429; the architecture
-  doc's `MessageHub.subscribe(callback, filter=...)` claim replaced
-  with the actual `hub.messages.subscribe(on_next=...)` API; the
-  `docs/adding-a-service.md` cross-reference to spec §7 corrected
-  to §2 (the FileSystemProvider protocol).
+- Documentation drift across the prose docs:
+  - README's Documentation index is now hierarchically numbered, plus
+    the six prose docs (architecture, connections, cookbook,
+    keybindings, theming, adding-a-service) carry hierarchical
+    section/sub-section numbering. Inbound cross-doc anchors updated.
+  - `docs/keybindings.md` and `docs/cookbook.md` action IDs now match
+    `KeymapStore.DEFAULT_BINDINGS`; `pane.refresh` binding corrected
+    from `Ctrl+R` to `r`; duplicate `r`-binding row removed (rename is
+    `pane.move` with one entry marked, not a separate action).
+  - `docs/architecture.md` testing-pyramid count corrected from 463
+    to 429; the architecture doc's
+    `MessageHub.subscribe(callback, filter=...)` claim replaced with
+    the actual `hub.messages.subscribe(on_next=...)` API.
+  - `docs/adding-a-service.md` cross-reference to spec §7 corrected
+    to §2 (the FileSystemProvider protocol).
 
 ### Changed
 
-- `.gitignore` entry for `snapshot_report.html` rewritten — gitignore has
-  no inline-comment syntax, so the previous entry never matched.
+- `AwsTuiApp.on_mount` (was 63 effective lines) extracted into four
+  helpers: `_apply_initial_theme`, `_resolve_initial_connection`,
+  `_mount_initial_service_view`, `_mount_no_connection_placeholder`.
+  on_mount itself is now 18 lines.
+- `pyproject.toml` `[tool.pytest.ini_options].addopts` now defaults to
+  `-m 'not integration'` so `uv run pytest` runs the 478-test
+  unit/snapshot/e2e tiers without Docker. The 9 integration tests
+  opt in via `uv run pytest -m integration`. CI continues to invoke
+  `pytest -m integration` for the integration job — the right-most
+  `-m` wins.
+- `.github/dependabot.yml` `python-runtime` group now includes
+  `tomli-w` (was missed); `python-dev` group includes `testcontainers*`
+  and `types-*` (also missed) so they group instead of opening
+  individual PRs.
+- `.pre-commit-config.yaml` `astral-sh/ruff-pre-commit` bumped from
+  `v0.15.0` to `v0.15.17` to match `uv.lock` (closes the patch-level
+  drift the M1 fix `91f6040` left at the minor level).
+
+### Removed
+
+- Dead code: stray `_ = head` placeholder in `S3FS.delete()`; unused
+  `max_concurrent` ctor param + field in `TransfersVM`. The function-
+  local `DualPane` import in `app.py.on_mount` moved to a module-level
+  import.
 
 ## [0.7.0] - 2026-06-14
 
