@@ -26,8 +26,15 @@ class DualPane(HubSubscriberMixin, Widget):
         height: 1fr;
     }
 
-    DualPane > Pane {
+    DualPane > Horizontal {
+        width: 100%;
+        height: 100%;
+        layout: horizontal;
+    }
+
+    DualPane Pane {
         width: 1fr;
+        height: 100%;
     }
     """
 

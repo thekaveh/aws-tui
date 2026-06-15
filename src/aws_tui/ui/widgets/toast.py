@@ -75,8 +75,16 @@ class ToastStack(Widget):
 
     DEFAULT_CSS = """
     ToastStack {
-        height: auto;
+        layer: notifications;
+        dock: top;
+        align: right top;
         width: auto;
+        height: auto;
+        max-width: 50;
+    }
+    ToastStack > #toast-stack-inner {
+        width: auto;
+        height: auto;
     }
     """
 

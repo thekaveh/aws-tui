@@ -45,6 +45,14 @@ class AwsTuiApp(App[None]):
     TITLE = "aws-tui"
     SUB_TITLE = f"v{__version__}"
 
+    # Declare the notifications layer so ToastStack floats above the
+    # main layout instead of consuming flow space.
+    CSS = """
+    Screen {
+        layers: base notifications;
+    }
+    """
+
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "Quit", show=True),
         Binding("ctrl+c", "quit", "Quit", show=False),
@@ -125,6 +133,19 @@ class AwsTuiApp(App[None]):
             await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
             with contextlib.suppress(Exception):
                 await ctx.root_vm.switch_service("s3")
+            # After switch_service, mount the service's view into the host.
+            # The VM tree is updated by switch_service, but the View layer
+            # has to follow — Textual won't infer that from VMx state.
+            try:
+                from aws_tui.ui.widgets.dual_pane import DualPane
+
+                current_vm = ctx.root_vm.content_host.current
+                if current_vm is not None:
+                    host = self.query_one("#content-host", Container)
+                    host.remove_children()
+                    host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+            except Exception:
+                ctx.log_sink.error("app.mount_service_view.failed", service_id="s3")
         else:
             with contextlib.suppress(Exception):
                 host = self.query_one("#content-host", Container)

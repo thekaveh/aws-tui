@@ -31,6 +31,10 @@ class StatusBar(HubSubscriberMixin, Widget):
         height: 1;
         layout: horizontal;
     }
+    StatusBar > Static {
+        width: auto;
+        height: 1;
+    }
     """
 
     PROP_NAMES: ClassVar[frozenset[str]] = frozenset(
