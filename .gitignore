@@ -49,6 +49,7 @@ htmlcov/
 coverage.xml
 *.cover
 *.py,cover
+snapshot_report.html       # pytest-textual-snapshot HTML diff report
 
 # mypy / ruff / type checkers
 .mypy_cache/
