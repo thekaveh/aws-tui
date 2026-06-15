@@ -24,6 +24,7 @@ from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
 from aws_tui.ui.widgets.crash_modal import CrashModal
+from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.services_menu import ServicesMenu
 from aws_tui.ui.widgets.status_bar import StatusBar
@@ -137,8 +138,6 @@ class AwsTuiApp(App[None]):
             # The VM tree is updated by switch_service, but the View layer
             # has to follow — Textual won't infer that from VMx state.
             try:
-                from aws_tui.ui.widgets.dual_pane import DualPane
-
                 current_vm = ctx.root_vm.content_host.current
                 if current_vm is not None:
                     host = self.query_one("#content-host", Container)

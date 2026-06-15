@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from textual.app import ComposeResult
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub
@@ -58,11 +59,23 @@ class StatusBar(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        yield Static("aws.tui", classes="status-name")
-        yield Static(self._connection_text(), classes="status-conn")
-        yield Static(self._region_text(), classes="status-region")
-        yield Static(self._vm.auth_indicator, classes=self._auth_classes())
-        yield Static(self._vm.transfers_summary, classes="status-transfers")
+        # Each Static gets a stable id so we can re-query reliably from
+        # _refresh_section. The auth indicator's level class is applied
+        # dynamically; the id lets us find the widget regardless of which
+        # level class it currently carries.
+        yield Static("aws.tui", id="status-name", classes="status-name")
+        yield Static(self._connection_text(), id="status-conn", classes="status-conn")
+        yield Static(self._region_text(), id="status-region", classes="status-region")
+        yield Static(
+            self._vm.auth_indicator,
+            id="status-auth",
+            classes=self._auth_classes(),
+        )
+        yield Static(
+            self._vm.transfers_summary,
+            id="status-transfers",
+            classes="status-transfers",
+        )
 
     def on_mount(self) -> None:
         self.subscribe_to_vm(
@@ -86,16 +99,19 @@ class StatusBar(HubSubscriberMixin, Widget):
         elif property_name == "region":
             self._set_text("status-region", self._region_text())
         elif property_name == "auth_indicator":
-            target = self.query_one(".status-auth-ok, .status-auth-warn, .status-auth-err", Static)
+            try:
+                target = self.query_one("#status-auth", Static)
+            except NoMatches:
+                return
             target.update(self._vm.auth_indicator)
             target.set_classes(self._auth_classes())
         elif property_name == "transfers_summary":
             self._set_text("status-transfers", self._vm.transfers_summary)
 
-    def _set_text(self, css_class: str, value: str) -> None:
+    def _set_text(self, widget_id: str, value: str) -> None:
         try:
-            target = self.query_one(f".{css_class}", Static)
-        except Exception:
+            target = self.query_one(f"#{widget_id}", Static)
+        except NoMatches:
             return
         target.update(value)
 

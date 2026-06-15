@@ -90,9 +90,16 @@ class S3FS:
         self._bucket: str | None = bucket
         self._prefix: str = prefix.strip("/")
         self._endpoint_url: str | None = endpoint_url
+        # Apply the same retry / timeout policy spec §6.3 + §7.3 mandates for
+        # every AWS client. infra/AwsSession.client() does the equivalent for
+        # service callers; S3FS is constructed directly with an aioboto3
+        # Session by S3Service, so the budget has to live here too.
         self._config = BotoConfig(
             s3={"addressing_style": "path" if force_path_style else "auto"},
             signature_version="s3v4",
+            retries={"max_attempts": 6, "mode": "adaptive"},
+            connect_timeout=10,
+            read_timeout=60,
         )
 
     # ------------------------------------------------------------------
@@ -273,7 +280,7 @@ class S3FS:
                 # Try object delete first; if that "succeeds" but no
                 # such object existed, fall through to prefix-delete.
                 try:
-                    head = await s3.head_object(Bucket=self._bucket, Key=key)
+                    await s3.head_object(Bucket=self._bucket, Key=key)
                     file_exists = True
                 except ClientError as exc:
                     if _error_code(exc) in {"404", "NoSuchKey", "NotFound"}:
@@ -282,7 +289,6 @@ class S3FS:
                         raise _map_client_error(exc, key) from exc
 
                 if file_exists:
-                    _ = head
                     await s3.delete_object(Bucket=self._bucket, Key=key)
                     return
 

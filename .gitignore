@@ -49,7 +49,8 @@ htmlcov/
 coverage.xml
 *.cover
 *.py,cover
-snapshot_report.html       # pytest-textual-snapshot HTML diff report
+# pytest-textual-snapshot HTML diff report (gitignore has no inline-comment syntax)
+snapshot_report.html
 
 # mypy / ruff / type checkers
 .mypy_cache/

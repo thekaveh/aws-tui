@@ -190,7 +190,7 @@ class DualPaneVM:
                         transfer_id=_tid,
                         bytes_transferred=p.bytes_transferred,
                         bytes_total=p.bytes_total,
-                        state="running",
+                        state=TransferState.RUNNING,
                     )
                 )
 
@@ -202,7 +202,7 @@ class DualPaneVM:
                         transfer_id=transfer_id,
                         bytes_transferred=0,
                         bytes_total=entry.entry.size,
-                        state="failed",
+                        state=TransferState.FAILED,
                     )
                 )
                 self._journal.mark_aborted(transfer_id)
@@ -212,7 +212,7 @@ class DualPaneVM:
                     transfer_id=transfer_id,
                     bytes_transferred=entry.entry.size or 0,
                     bytes_total=entry.entry.size,
-                    state="completed",
+                    state=TransferState.COMPLETED,
                 )
             )
             self._journal.mark_finished(transfer_id)
@@ -243,21 +243,21 @@ class DualPaneVM:
                         transfer_id=_tid,
                         bytes_transferred=p.bytes_transferred,
                         bytes_total=p.bytes_total,
-                        state="running",
+                        state=TransferState.RUNNING,
                     )
                 )
 
             state: TransferState
             try:
                 await mover.move(src_path, dst_path, progress=_progress, on_conflict=on_conflict)
-                state = "completed"
+                state = TransferState.COMPLETED
             except Exception:
                 self._hub.send(
                     TransferProgressMessage(
                         transfer_id=transfer_id,
                         bytes_transferred=0,
                         bytes_total=entry.entry.size,
-                        state="failed",
+                        state=TransferState.FAILED,
                     )
                 )
                 self._journal.mark_aborted(transfer_id)

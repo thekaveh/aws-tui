@@ -13,6 +13,7 @@ to keep the VM layer free of Textual / boto3 imports.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal
 
 from aws_tui.infra.aws_session import TokenState
@@ -21,8 +22,22 @@ from aws_tui.infra.connection_resolver import Connection
 #: Reason values for ``AuthExpiredMessage``.
 AuthExpiredReason = Literal["expired", "missing", "load_error"]
 
-#: State values for ``TransferProgressMessage`` — mirrors the §7.5 state machine.
-TransferState = Literal["pending", "running", "paused", "completed", "failed", "cancelled"]
+
+class TransferState(StrEnum):
+    """State machine values per spec §7.5.
+
+    ``PAUSED`` is reachable via the network-failure recovery flow (spec §7.5):
+    ``RUNNING -> PAUSED -> RUNNING (recovered)``. The connectivity watcher that
+    transitions to PAUSED on sustained network failure is not yet wired in
+    v0.7.x; the state remains in the enum so the eventual wiring is additive.
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True, slots=True)
