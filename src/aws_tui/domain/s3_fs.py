@@ -28,7 +28,12 @@ from typing import TYPE_CHECKING, Any
 
 import aioboto3
 from botocore.config import Config as BotoConfig
-from botocore.exceptions import ClientError, EndpointConnectionError
+from botocore.exceptions import (
+    ClientError,
+    EndpointConnectionError,
+    NoCredentialsError,
+    PartialCredentialsError,
+)
 
 from aws_tui.domain.filesystem import (
     ConflictError,
@@ -141,6 +146,11 @@ class S3FS:
         try:
             async with self._client() as s3:
                 resp = await s3.list_buckets()
+        except (NoCredentialsError, PartialCredentialsError) as exc:
+            raise PermissionDeniedError(
+                "no AWS credentials configured — run `aws configure`, set AWS_ACCESS_KEY_ID, "
+                "or pick a connection with `:` `connection switch`"
+            ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
@@ -204,6 +214,11 @@ class S3FS:
                     if not resp.get("IsTruncated"):
                         break
                     token = resp.get("NextContinuationToken")
+        except (NoCredentialsError, PartialCredentialsError) as exc:
+            raise PermissionDeniedError(
+                "no AWS credentials configured — run `aws configure`, set AWS_ACCESS_KEY_ID, "
+                "or pick a connection with `:` `connection switch`"
+            ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
@@ -241,6 +256,11 @@ class S3FS:
                             )
                         raise NotFoundError(path.as_posix()) from exc
                     raise _map_client_error(exc, key) from exc
+        except (NoCredentialsError, PartialCredentialsError) as exc:
+            raise PermissionDeniedError(
+                "no AWS credentials configured — run `aws configure`, set AWS_ACCESS_KEY_ID, "
+                "or pick a connection with `:` `connection switch`"
+            ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         return FileEntry(
@@ -266,6 +286,11 @@ class S3FS:
         try:
             async with self._client() as s3:
                 await s3.put_object(Bucket=self._bucket, Key=key, Body=b"")
+        except (NoCredentialsError, PartialCredentialsError) as exc:
+            raise PermissionDeniedError(
+                "no AWS credentials configured — run `aws configure`, set AWS_ACCESS_KEY_ID, "
+                "or pick a connection with `:` `connection switch`"
+            ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
@@ -320,6 +345,11 @@ class S3FS:
                     token = resp.get("NextContinuationToken")
                 if not deleted_any:
                     raise NotFoundError(path.as_posix())
+        except (NoCredentialsError, PartialCredentialsError) as exc:
+            raise PermissionDeniedError(
+                "no AWS credentials configured — run `aws configure`, set AWS_ACCESS_KEY_ID, "
+                "or pick a connection with `:` `connection switch`"
+            ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
 
@@ -346,6 +376,11 @@ class S3FS:
                 except ClientError as exc:
                     raise _map_client_error(exc, src_key) from exc
                 await s3.delete_object(Bucket=self._bucket, Key=src_key)
+        except (NoCredentialsError, PartialCredentialsError) as exc:
+            raise PermissionDeniedError(
+                "no AWS credentials configured — run `aws configure`, set AWS_ACCESS_KEY_ID, "
+                "or pick a connection with `:` `connection switch`"
+            ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
 
@@ -379,6 +414,11 @@ class S3FS:
                     if not chunk:
                         return
                     yield chunk
+        except (NoCredentialsError, PartialCredentialsError) as exc:
+            raise PermissionDeniedError(
+                "no AWS credentials configured — run `aws configure`, set AWS_ACCESS_KEY_ID, "
+                "or pick a connection with `:` `connection switch`"
+            ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
 
@@ -416,6 +456,11 @@ class S3FS:
                     )
                 except ClientError as exc:
                     raise _map_client_error(exc, key) from exc
+        except (NoCredentialsError, PartialCredentialsError) as exc:
+            raise PermissionDeniedError(
+                "no AWS credentials configured — run `aws configure`, set AWS_ACCESS_KEY_ID, "
+                "or pick a connection with `:` `connection switch`"
+            ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
 

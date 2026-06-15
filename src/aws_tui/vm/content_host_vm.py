@@ -92,20 +92,22 @@ class ContentHostVM:
         if vm is None:
             return
 
-        # Construct the new one and announce the swap.
+        # Construct the new one and adopt it before driving setup. Adopting
+        # first means a setup failure (e.g. ``S3FS.list`` raising
+        # ``NoCredentialsError``) still leaves the View layer with something
+        # to mount — every pane renders its own error placeholder per spec
+        # §7.7. If we adopted only on setup success, an auth failure would
+        # leave the content host entirely blank instead.
         vm.construct()
-        # If the service VM exposes an async ``setup()`` (e.g. ``DualPaneVM``
-        # which calls ``provider.list()`` on each pane), drive it now so the
-        # listings populate before the View layer renders. Skipping this is
-        # how every pane ends up empty after a launch / service switch.
+        self._current = vm
+        self._current_id = service_id
+        self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
+
         setup = getattr(vm, "setup", None)
         if callable(setup):
             result = setup()
             if inspect.isawaitable(result):
                 await result
-        self._current = vm
-        self._current_id = service_id
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
 
 
 __all__ = ["ContentHostVM"]

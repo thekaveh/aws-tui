@@ -173,10 +173,17 @@ class AwsTuiApp(App[None]):
             host = self.query_one("#content-host", Container)
             host.mount(
                 Static(
-                    "no AWS profile or S3-compatible connection found.\n"
-                    "configure one in ~/.config/aws-tui/config.toml or "
-                    "run `aws configure` then relaunch.",
+                    "\n  No AWS profile or S3-compatible connection found.\n\n"
+                    "  To get started, do ONE of the following and relaunch:\n\n"
+                    "    1. Run [b]aws configure[/]                      (interactive AWS keys setup)\n"
+                    "    2. Run [b]aws configure sso[/]                  (interactive SSO setup)\n"
+                    "    3. Edit [b]~/.config/aws-tui/config.toml[/]     (add an AWS or S3-compatible connection)\n\n"
+                    "  See [b]docs/connections.md[/] in the repo for the [b][connections.<name>][/] schema and\n"
+                    "  vendor quirks (MinIO, R2, B2, Wasabi).\n\n"
+                    "  Press [b]q[/] to quit.",
                     id="content-placeholder",
+                    classes="content-placeholder",
+                    markup=True,
                 )
             )
 
