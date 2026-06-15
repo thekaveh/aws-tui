@@ -58,9 +58,10 @@ snapshot_report.html
 .pytype/
 .pyre/
 
-# aws-tui local runtime state (per-user; never committed)
-~/.config/aws-tui/
-~/.cache/aws-tui/
+# aws-tui local runtime state lives under $HOME, not in the worktree —
+# nothing to ignore here. These paths are documented in README + cookbook
+# for users; gitignore does NOT tilde-expand so explicit patterns would
+# be no-ops.
 
 # Local environment overrides
 .env

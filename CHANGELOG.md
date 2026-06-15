@@ -23,11 +23,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Panes are children of an inner `Horizontal`; `Container#content-host`
   stayed empty after `switch_service` because the view layer never mounted
   the service's widget. Fixed all four.
-- **Maintenance pass 1** — see the next pass's per-file notes for the
-  full list, including a `.gitignore` inline-comment bug, an invalid
-  `query_one` selector in `StatusBar`, missing BotoConfig retries +
-  timeouts on the production S3FS construction path, and consolidating
-  `TransferState` (was defined twice).
+- `.gitignore` inline-comment bug — gitignore has no inline-comment
+  syntax, so the `snapshot_report.html       # comment` entry was
+  matching the literal filename + trailing spaces + comment text and
+  never ignoring the file. Moved comment to its own line. Same pass
+  removed the no-op `~/.config/aws-tui/` and `~/.cache/aws-tui/`
+  patterns (gitignore does not tilde-expand).
+- `StatusBar` widget's `query_one(".status-auth-ok, .status-auth-warn,
+  .status-auth-err", Static)` used a comma-union selector that
+  Textual's query layer does not support — every auth-indicator update
+  silently raised and the bar never refreshed. Each Static now gets a
+  stable `id` and the refresh path queries `#status-auth`.
+- Theme stylesheets used `Pane > Breadcrumb` / `> ColumnHeader` /
+  `> PaneFooter` / `> .entry-row` / `> .pane-placeholder` selectors
+  that never matched — `Breadcrumb` etc. are not widget types, and
+  `EntryRow` / placeholder children live inside `Vertical(id=pane-body)`,
+  so the direct-child combinator didn't apply. Switched the four
+  built-in themes to descendant selectors + normalized the pane chrome
+  class names to kebab-case (`column-header`, `pane-footer`); the
+  pane chrome and row styling now actually theme.
+- S3FS direct construction (the production path via S3Service) was
+  using BotoConfig with no retries / timeouts; spec §6.3 + §7.3 mandate
+  adaptive retries (6 attempts) + 10 s connect / 60 s read. Apply.
+- `composition.run_aws_configure_sso` had no subprocess timeout — a
+  hung `aws configure sso` froze the TUI forever. 10-minute cap
+  matches the SSO device-flow grace; returns 124 on expiry.
+- `TransferState` was defined twice (Literal alias in `vm/messages.py`
+  + StrEnum in `vm/file_manager/transfer_vm.py`). Consolidated as a
+  single StrEnum in `vm/messages.py`; `transfer_vm.py` re-exports it.
+- Documentation drift: README's Documentation index is now
+  hierarchically numbered; `docs/keybindings.md` and `docs/cookbook.md`
+  action IDs now match `KeymapStore.DEFAULT_BINDINGS`; `pane.refresh`
+  binding corrected from `Ctrl+R` to `r`; `docs/architecture.md`
+  testing-pyramid count corrected from 463 to 429; the architecture
+  doc's `MessageHub.subscribe(callback, filter=...)` claim replaced
+  with the actual `hub.messages.subscribe(on_next=...)` API; the
+  `docs/adding-a-service.md` cross-reference to spec §7 corrected
+  to §2 (the FileSystemProvider protocol).
 
 ### Changed
 

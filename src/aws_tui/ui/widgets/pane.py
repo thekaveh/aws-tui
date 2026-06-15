@@ -147,9 +147,9 @@ class Pane(HubSubscriberMixin, Widget):
 
     def compose(self) -> ComposeResult:
         yield Static(self._breadcrumb_text(), classes="breadcrumb")
-        yield Static(self._column_header_text(), classes="ColumnHeader")
+        yield Static(self._column_header_text(), classes="column-header")
         yield Vertical(id="pane-body")
-        yield Static(self._footer_text(), classes="PaneFooter")
+        yield Static(self._footer_text(), classes="pane-footer")
 
     def on_mount(self) -> None:
         self._render_body()
@@ -177,8 +177,8 @@ class Pane(HubSubscriberMixin, Widget):
     def _refresh_all(self) -> None:
         try:
             breadcrumb = self.query_one(".breadcrumb", Static)
-            header = self.query_one(".ColumnHeader", Static)
-            footer = self.query_one(".PaneFooter", Static)
+            header = self.query_one(".column-header", Static)
+            footer = self.query_one(".pane-footer", Static)
         except Exception:
             return
         breadcrumb.update(self._breadcrumb_text())

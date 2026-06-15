@@ -106,7 +106,7 @@ Pane.-focused {
     border: double $accent;
 }
 
-Pane > Breadcrumb {
+Pane .breadcrumb {
     height: 1;
     background: $bg-elev;
     color: $accent;
@@ -114,48 +114,48 @@ Pane > Breadcrumb {
     text-style: bold;
 }
 
-Pane > ColumnHeader {
+Pane .column-header {
     height: 1;
     color: $accent-hot;
     text-style: bold;
 }
 
-Pane > .entry-row {
+Pane .entry-row {
     color: $text;
     height: 1;
 }
 
-Pane > .entry-row.-selected {
+Pane .entry-row.-selected {
     background: $accent;
     color: $bg;
     text-style: bold;
 }
 
-Pane > .entry-row.-marked {
+Pane .entry-row.-marked {
     color: $accent-hot;
 }
 
-Pane > .entry-row.-dir {
+Pane .entry-row.-dir {
     text-style: bold;
 }
 
-Pane > PaneFooter {
+Pane .pane-footer {
     height: 1;
     background: $bg-elev;
     color: $text-muted;
     padding: 0 1;
 }
 
-Pane > .pane-placeholder {
+Pane .pane-placeholder {
     color: $text-muted;
     content-align: center middle;
 }
 
-Pane > .pane-placeholder.-error {
+Pane .pane-placeholder.-error {
     color: $danger;
 }
 
-Pane > .pane-placeholder.-warning {
+Pane .pane-placeholder.-warning {
     color: $warning;
 }
 

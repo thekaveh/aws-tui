@@ -80,8 +80,11 @@ All cross-VM communication goes through the session's single
   `AuthExpiredMessage`, `TransferProgressMessage`,
   `KeymapChangedMessage`, `FocusChangedMessage`.
 
-VMs subscribe via `MessageHub.subscribe(callback, filter=...)`; the
-view layer subscribes via `HubSubscriberMixin` on a per-widget basis.
+VMs subscribe via `hub.messages.subscribe(on_next=callback)` (an
+`reactivex.Observable` under the hood); filtering happens inside the
+callback (typically `isinstance(msg, FooMessage)`). The view layer
+subscribes via `HubSubscriberMixin` on a per-widget basis, which wraps
+the same observable plus dispose-on-unmount.
 
 ## Testing pyramid
 

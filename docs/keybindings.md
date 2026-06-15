@@ -39,7 +39,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
 | New folder | `n` | |
 | Rename in place | `r` | |
-| Refresh pane | `Ctrl+R` | |
+| Refresh pane | `r` | |
 
 ### Overlays
 
