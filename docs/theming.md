@@ -3,8 +3,7 @@
 > Mirror of spec §4.5. Four built-in themes ship; the default is
 > configurable; full `.tcss` overrides are supported.
 
-## Built-in themes
-
+## 1. Built-in themes
 | Theme | Vibe | Borders | Accent |
 |---|---|---|---|
 | `carbon` (default) | Near-monochrome, macOS-quietness | thin | ice-blue (`#6fb8ff`) |
@@ -18,8 +17,7 @@ for narrow, meaningful uses (`success` only on auth + transfer status;
 `danger` only on "cannot be undone" affordances; `warning` only on
 numerics in Quick Look).
 
-## Selecting a theme
-
+## 2. Selecting a theme
 In config:
 
 ```toml
@@ -40,10 +38,8 @@ The switch lives only for the session unless you also update
 `config.toml`. No restart needed — `ThemeChangedMessage` reflows
 the active stylesheet on the fly.
 
-## User overrides
-
-### Single-token overrides
-
+## 3. User overrides
+### 3.1. Single-token overrides
 Drop `~/.config/aws-tui/theme.tcss` to override individual tokens of
 the active built-in. The overlay layers on top of the built-in CSS so
 you can adjust one or two colors without forking the whole theme:
@@ -60,8 +56,7 @@ Screen {
 }
 ```
 
-### Full custom themes
-
+### 3.2. Full custom themes
 Drop a full `.tcss` file under `~/.config/aws-tui/themes/<name>.tcss`
 and it's selectable like any built-in (palette: `theme switch ▸
 <name>`).
@@ -69,8 +64,7 @@ and it's selectable like any built-in (palette: `theme switch ▸
 Use one of the built-ins as a starting point — they live in the
 package data at `src/aws_tui/ui/themes/<name>.tcss`.
 
-## Palette tokens
-
+## 4. Palette tokens
 The Carbon palette tokens (full spec table in §4.5):
 
 | Token | Hex | Use |
@@ -90,8 +84,7 @@ The Carbon palette tokens (full spec table in §4.5):
 
 See spec §4.5 for the matching Voidline / Lattice / Amber tables.
 
-## How the loader works
-
+## 5. How the loader works
 `infra/theme_store.py` reads the active theme by:
 
 1. Loading the built-in `<name>.tcss` from the package data via
@@ -106,8 +99,7 @@ See spec §4.5 for the matching Voidline / Lattice / Amber tables.
 The overlay layering means you can keep the built-in look and adjust
 just one or two colors without copying the entire theme.
 
-## Snapshot tests
-
+## 6. Snapshot tests
 The four themes are pinned by 44 SVG snapshot tests in
 `tests/snapshot/__snapshots__/` (main screen + 7 modals × 4 themes +
 pane-state placeholders). Updates: `uv run pytest tests/snapshot

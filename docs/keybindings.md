@@ -7,10 +7,8 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 (terminals intercept it). Letter-driven, with the command palette
 (`:` or `Ctrl+K`) as the universal escape hatch.
 
-## Default bindings
-
-### Navigation
-
+## 1. Default bindings
+### 1.1. Navigation
 | Action | Default | Notes |
 |---|---|---|
 | Cursor up / down | `↑ ↓` or `j k` | vi-style alternatives are first-class |
@@ -21,8 +19,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Top / bottom | `g` / `G` | |
 | Toggle hidden files (LocalFS) | `.` | |
 
-### Selection
-
+### 1.2. Selection
 | Action | Default | Notes |
 |---|---|---|
 | Enter multi-select mode | `v` | Visual-block style |
@@ -30,19 +27,17 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Select all | `a` (in multi-select) | |
 | Clear selection | `Esc` (in multi-select) | |
 
-### File operations
-
+### 1.3. File operations
 | Action | Default | Notes |
 |---|---|---|
 | Copy across panes | `c` | Streams through `CrossFsCopy` |
 | Move across panes | `m` | Copy + delete-source after success |
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
 | New folder | `n` | |
-| Rename in place | `r` | |
+| Rename in place | `m` | Move-with-one-marked doubles as rename |
 | Refresh pane | `r` | |
 
-### Overlays
-
+### 1.4. Overlays
 | Action | Default |
 |---|---|
 | Quick Look | `Space` (normal mode) |
@@ -52,22 +47,19 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Transfers tray | `t` |
 | Help overlay | `?` |
 
-### Connection / auth
-
+### 1.5. Connection / auth
 | Action | Default |
 |---|---|
 | Authenticate (when auth toast active) | `a` |
 | Connection switcher | `:` then `connection switch` |
 
-### App
-
+### 1.6. App
 | Action | Default |
 |---|---|
 | Cancel / dismiss modal | `Esc` |
 | Quit | `q` or `Ctrl+C` |
 
-## Customizing
-
+## 2. Customizing
 A binding can be a single keystroke or a list of fallback keystrokes:
 
 ```toml
@@ -89,8 +81,7 @@ validated against `KeymapStore.DEFAULT_BINDINGS`, but most actions
 do not yet have a Textual-side handler. Customizing the overlay
 today gates how future rebinds will land.
 
-## Action IDs
-
+## 3. Action IDs
 | Action ID | Default key | What it does |
 |---|---|---|
 | `app.quit` | `q` / `ctrl+c` | Graceful shutdown |
@@ -120,8 +111,7 @@ These are the action IDs `KeymapStore.DEFAULT_BINDINGS` actually
 registers. Overlay any of them in your `[keybindings]` table; any other
 id raises `UnknownAction` at startup.
 
-## Layer separation
-
+## 4. Layer separation
 The View layer never invokes a VM command by attribute access; it
 always goes through the action registry. That's how rebinding can be
 purely config-driven — no Textual `BINDINGS` are hard-coded except

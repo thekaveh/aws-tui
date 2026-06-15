@@ -8,8 +8,7 @@ aws-tui's service-plugin spine is designed so adding a top-level AWS
 `src/aws_tui/services/<name>/` and one registration call in
 `composition.py`. No other layer changes.
 
-## The `Service` protocol
-
+## 1. The `Service` protocol
 Declared in `src/aws_tui/vm/services_protocol.py`, re-exported from
 `src/aws_tui/services/__init__.py`:
 
@@ -33,8 +32,7 @@ without instantiating. `build_vm` returns whatever facade /
 `ComponentVM` the service decides to host — `ContentHostVM` only
 needs a `construct → destruct → dispose` surface.
 
-## Steps
-
+## 2. Steps
 1. **Create the folder.**
 
     ```
@@ -101,8 +99,7 @@ needs a `construct → destruct → dispose` surface.
 7. **Update docs.** Add any vendor / API quirks to
     `docs/connections.md`. Update the README's features list.
 
-## Layer rules cheat-sheet for services
-
+## 3. Layer rules cheat-sheet for services
 A service module **may** import from:
 
 - `aws_tui.infra.*` (aws_session, config_store, log_sink, …)
@@ -120,15 +117,13 @@ A service module **may not** import from:
   `FileSystemProvider` protocol and let the file-manager VMs do the
   rest — see `services/s3/service.py` for the pattern).
 
-## Future: entry-point discovery
-
+## 4. Future: entry-point discovery
 v1.1 promotes the registry to
 `importlib.metadata.entry_points(group="aws_tui.services")` so third-
 party packages can ship services without forking. The same `Service`
 protocol applies.
 
-## Reference: the S3 service
-
+## 5. Reference: the S3 service
 `src/aws_tui/services/s3/service.py` is the only concrete service in
 v0.7.0. Read it end-to-end (~80 lines):
 

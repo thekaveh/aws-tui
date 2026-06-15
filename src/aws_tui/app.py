@@ -20,6 +20,7 @@ from textual.containers import Container, Horizontal
 from textual.widgets import Static
 
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
@@ -102,7 +103,23 @@ class AwsTuiApp(App[None]):
         ctx.quick_look_vm.construct()
         ctx.command_palette_vm.construct()
 
-        # Apply the active theme as additional stylesheet rules.
+        self._apply_initial_theme()
+
+        initial_conn = self._resolve_initial_connection()
+        if initial_conn is not None:
+            auth_state = ctx.aws_session.probe_token(initial_conn).state
+            await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
+            with contextlib.suppress(Exception):
+                await ctx.root_vm.switch_service("s3")
+            self._mount_initial_service_view()
+        else:
+            self._mount_no_connection_placeholder()
+
+    # ── on_mount helpers ───────────────────────────────────────────────────
+
+    def _apply_initial_theme(self) -> None:
+        """Layer the active theme `.tcss` on top of Textual's defaults."""
+        ctx = self._app_ctx
         try:
             theme_css = ctx.theme_store.load(ctx.initial_theme)
             self.stylesheet.add_source(theme_css)
@@ -111,10 +128,12 @@ class AwsTuiApp(App[None]):
         except Exception:
             ctx.log_sink.error("theme.load.failed", name=ctx.initial_theme)
 
-        # Pick the initial connection — respect config's defaults.connection if
-        # set, else fall back to the first auto-discovered profile. With no
-        # connections at all, leave the screen unwired (a follow-up wires the
-        # first-run modal here).
+    def _resolve_initial_connection(self) -> Connection | None:
+        """Pick the initial connection: ``[defaults].connection`` if set and
+        present in the resolver's list, else the first auto-discovered profile,
+        else ``None`` (signals the no-connection placeholder branch).
+        """
+        ctx = self._app_ctx
         try:
             cfg = ctx.config_store.load()
         except Exception:
@@ -128,34 +147,38 @@ class AwsTuiApp(App[None]):
             )
         if initial_conn is None and connections:
             initial_conn = connections[0]
+        return initial_conn
 
-        if initial_conn is not None:
-            auth_state = ctx.aws_session.probe_token(initial_conn).state
-            await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
-            with contextlib.suppress(Exception):
-                await ctx.root_vm.switch_service("s3")
-            # After switch_service, mount the service's view into the host.
-            # The VM tree is updated by switch_service, but the View layer
-            # has to follow — Textual won't infer that from VMx state.
-            try:
-                current_vm = ctx.root_vm.content_host.current
-                if current_vm is not None:
-                    host = self.query_one("#content-host", Container)
-                    host.remove_children()
-                    host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
-            except Exception:
-                ctx.log_sink.error("app.mount_service_view.failed", service_id="s3")
-        else:
-            with contextlib.suppress(Exception):
+    def _mount_initial_service_view(self) -> None:
+        """Mount the current service's view widget into the content host.
+
+        ``switch_service`` updates the VM tree; the View layer has to follow
+        explicitly — Textual won't infer that from VMx state.
+        """
+        ctx = self._app_ctx
+        try:
+            current_vm = ctx.root_vm.content_host.current
+            if current_vm is not None:
                 host = self.query_one("#content-host", Container)
-                host.mount(
-                    Static(
-                        "no AWS profile or S3-compatible connection found.\n"
-                        "configure one in ~/.config/aws-tui/config.toml or "
-                        "run `aws configure` then relaunch.",
-                        id="content-placeholder",
-                    )
+                host.remove_children()
+                host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+        except Exception:
+            ctx.log_sink.error("app.mount_service_view.failed", service_id="s3")
+
+    def _mount_no_connection_placeholder(self) -> None:
+        """Render a clear "configure one and relaunch" message when no
+        AWS / S3-compatible connection resolves at startup.
+        """
+        with contextlib.suppress(Exception):
+            host = self.query_one("#content-host", Container)
+            host.mount(
+                Static(
+                    "no AWS profile or S3-compatible connection found.\n"
+                    "configure one in ~/.config/aws-tui/config.toml or "
+                    "run `aws configure` then relaunch.",
+                    id="content-placeholder",
                 )
+            )
 
     # ── Action handlers ────────────────────────────────────────────────────
 

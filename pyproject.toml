@@ -78,7 +78,7 @@ dev = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-ra --strict-markers --strict-config"
+addopts = "-ra --strict-markers --strict-config -m 'not integration'"
 markers = [
   "unit: fast pure-Python tests, no I/O (default tier)",
   "integration: tests against moto / MinIO / tmp_path",

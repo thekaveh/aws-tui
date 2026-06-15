@@ -16,8 +16,7 @@ Each layer imports only from layers beneath it. `ruff`
 greps for any forbidden imports across the five subtrees as a
 belt-and-suspenders.
 
-## Layers
-
+## 1. Layers
 - **View** — Textual widgets and `.tcss` themes
   (`src/aws_tui/ui/`). Never touches `boto3`, `aioboto3`, or
   `botocore`. Talks to VMs via property reads + relay-command
@@ -43,8 +42,7 @@ belt-and-suspenders.
   `KeychainBackend`. The only layer that touches the OS, AWS APIs,
   the file system, or the macOS keychain.
 
-## Composition root
-
+## 2. Composition root
 The two top-level files `src/aws_tui/composition.py` and
 `src/aws_tui/app.py` are the only modules permitted to import from
 every layer. `composition.py` builds the dependency graph; `app.py`
@@ -61,8 +59,7 @@ handlers.
 - `add_s3_compat_connection(form)` — materializes the in-TUI
   S3-compatible form into a config-store entry.
 
-## Lifecycle
-
+## 3. Lifecycle
 VMs implement `construct → run → destruct → dispose` (VMx convention).
 The `RootVM` constructs the chrome and content-host children
 depth-first; `ContentHostVM.set_content(new)` disposes the previous
@@ -70,8 +67,7 @@ content via the same cascade. App shutdown awaits the in-flight
 transfers cancel + closes every aioboto3 client before disposing the
 VM tree (spec §5.4).
 
-## Messaging
-
+## 4. Messaging
 All cross-VM communication goes through the session's single
 `MessageHub`. Custom envelopes (defined in
 `src/aws_tui/vm/messages.py`):
@@ -86,8 +82,7 @@ callback (typically `isinstance(msg, FooMessage)`). The view layer
 subscribes via `HubSubscriberMixin` on a per-widget basis, which wraps
 the same observable plus dispose-on-unmount.
 
-## Testing pyramid
-
+## 5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
 | Unit | 429 | VM, domain, infra behavior; no I/O |
@@ -98,15 +93,13 @@ the same observable plus dispose-on-unmount.
 Run all tiers with `uv run pytest`; opt into integration with
 `uv run pytest -m integration`.
 
-## Layer-rule check
-
+## 6. Layer-rule check
 `scripts/check-layers.sh` shells out to `grep -RnE` across the five
 layer subtrees with the banned-import patterns inlined. The
 composition root and `app.py` are deliberately excluded — they live at
 `src/aws_tui/` top-level so the check never inspects them.
 
-## Where to start reading the code
-
+## 7. Where to start reading the code
 1. `src/aws_tui/composition.py` — see how everything wires.
 2. `src/aws_tui/vm/root_vm.py` — top of the VM tree.
 3. `src/aws_tui/services/s3/service.py` — the only concrete service in

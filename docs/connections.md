@@ -11,8 +11,7 @@ A **Connection** is the unit aws-tui authenticates as. Two kinds:
 - `kind = "s3-compatible"` — for MinIO, Cloudflare R2, Backblaze B2,
   Wasabi, Ceph, SeaweedFS, anything with an S3-compatible API.
 
-## Config schema (`~/.config/aws-tui/config.toml`)
-
+## 1. Config schema (`~/.config/aws-tui/config.toml`)
 ```toml
 [connections.kaveh-dev]
 kind = "aws"
@@ -39,8 +38,7 @@ connection = "kaveh-dev"
 theme = "carbon"
 ```
 
-## Credential sources for S3-compatible connections
-
+## 2. Credential sources for S3-compatible connections
 The `credentials` field is dispatched at runtime:
 
 | Spec | Source |
@@ -56,8 +54,7 @@ follow-up step is to move the credentials to the keychain via
 `keyring set <service> <key>` and switch the config to
 `credentials = "keychain:<service>"`.
 
-## Auto-discovery + SSO cache probe
-
+## 3. Auto-discovery + SSO cache probe
 `ConnectionResolver.list()` unions on **every launch**:
 
 1. `[connections.*]` entries in `~/.config/aws-tui/config.toml`
@@ -79,8 +76,7 @@ cheap freshness check **without calling AWS**:
 
 Total cost: one `os.stat` + one ~1 KB JSON read. Sub-millisecond.
 
-## Vendor quirks (manual checklist)
-
+## 4. Vendor quirks (manual checklist)
 - **Cloudflare R2** — no bucket versioning, no replication;
   `region = "auto"`; uses HTTPS at
   `https://<account>.r2.cloudflarestorage.com`.
@@ -93,8 +89,7 @@ Total cost: one `os.stat` + one ~1 KB JSON read. Sub-millisecond.
   us-east-2 buckets).
 - **Ceph RGW / SeaweedFS** — typically path-style + custom region.
 
-## Recommended: 1-day MPU abort lifecycle rule
-
+## 5. Recommended: 1-day MPU abort lifecycle rule
 Set a 1-day lifecycle rule to abort incomplete multipart uploads on
 every bucket you write to from aws-tui (or any other tool). aws-tui
 aborts MPUs on user cancel and on the resume modal's `abort all`,
@@ -118,8 +113,7 @@ aws s3api put-bucket-lifecycle-configuration \
     --bucket <name> --lifecycle-configuration file://lifecycle.json
 ```
 
-## First-run flow
-
+## 6. First-run flow
 If `ConfigStore.load()` returns no `[connections.*]` and
 `~/.aws/{config,credentials}` is also empty, aws-tui shows a welcome
 modal on launch (per spec §6.4 Flow 5):
@@ -138,8 +132,7 @@ s3-compatible` opens an in-TUI form prompting for name, endpoint URL,
 region, access key, secret key. `skip` proceeds to the main screen
 with no connection selected.
 
-## Crash-recovery transfer journal
-
+## 7. Crash-recovery transfer journal
 aws-tui appends a JSONL line per completed multipart part to
 `~/.cache/aws-tui/transfers/<id>.jsonl`. On launch it scans the
 directory for journals lacking a terminal `finished` / `aborted`
