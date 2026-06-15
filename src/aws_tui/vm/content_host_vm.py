@@ -8,6 +8,7 @@ service" updates without rebuilding the world.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
@@ -93,6 +94,15 @@ class ContentHostVM:
 
         # Construct the new one and announce the swap.
         vm.construct()
+        # If the service VM exposes an async ``setup()`` (e.g. ``DualPaneVM``
+        # which calls ``provider.list()`` on each pane), drive it now so the
+        # listings populate before the View layer renders. Skipping this is
+        # how every pane ends up empty after a launch / service switch.
+        setup = getattr(vm, "setup", None)
+        if callable(setup):
+            result = setup()
+            if inspect.isawaitable(result):
+                await result
         self._current = vm
         self._current_id = service_id
         self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
