@@ -69,6 +69,40 @@ async def test_dispose_disposes_current_content() -> None:
     assert child.status == ConstructionStatus.DISPOSED
 
 
+async def test_set_content_awaits_setup_when_vm_defines_one() -> None:
+    """Regression: production-path `DualPaneVM` exposes async `setup()` that
+    runs `provider.list()` on each pane. The host must await it after
+    `construct()` or the panes render empty. Cf. `S3Service.build_vm`'s
+    docstring requiring this contract.
+    """
+
+    class _SetupVM:
+        def __init__(self) -> None:
+            self.constructed = False
+            self.setup_called = False
+            self.is_constructed = False
+            self.status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.constructed = True
+            self.is_constructed = True
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            assert self.constructed, "setup must run after construct"
+            self.setup_called = True
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    vm = _SetupVM()
+    await host.set_content(cast("ComponentVM", vm), service_id="s3")
+    assert vm.constructed
+    assert vm.setup_called
+    host.dispose()
+
+
 async def test_set_content_none_clears_current() -> None:
     host = _build()
     child = _component()
