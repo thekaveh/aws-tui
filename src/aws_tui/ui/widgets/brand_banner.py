@@ -105,30 +105,24 @@ def _build_rows(word: str = _WORD, gap: str = " ") -> tuple[str, ...]:
     return tuple(gap.join(_LETTERS[c][row] for c in word) for row in range(6))
 
 
-def _apply_genai_gradient(line: str) -> Text:
-    """Apply the genai-vanilla apply_enhanced_gradient algorithm verbatim:
-    map each character's position within the line to one of the 15
-    palette stops via ``idx = i * len(palette) // len(line)``. Same
-    formula their banner uses, so the colors land in the same places."""
-    text = Text()
-    n = len(line)
-    if n == 0:
-        return text
+def _color_for_row(row_index: int, total_rows: int) -> str:
+    """Pick one stop from the 15-color genai-vanilla palette for an
+    entire row. The gradient flows vertically (row 0 dark navy, last row
+    pale blue) while still landing on the exact ``color(17)…color(195)``
+    stops the bootstrap-wizard banner uses."""
     stops = len(_GRADIENT)
-    for i, ch in enumerate(line):
-        idx = min((i * stops) // n, stops - 1)
-        text.append(ch, style=f"bold {_GRADIENT[idx]}")
-    return text
+    idx = min((row_index * stops) // total_rows, stops - 1)
+    return _GRADIENT[idx]
 
 
 class BrandBanner(Widget):
     """Top-of-screen block-art "aws-tui" banner inside its own subtle border.
 
-    Gradient algorithm + 256-color stops are byte-for-byte the same as the
-    genai-vanilla bootstrap-wizard's full banner — each character within a
-    row gets a stop from ``color(17)`` (dark navy) through ``color(195)``
-    (pale blue), so the sweep flows left-to-right with smooth horizontal
-    columns of consistent color across the 6-row block.
+    Palette is byte-for-byte the same 15-stop blue→cyan sweep from
+    genai-vanilla's ``bootstrapper/utils/banner.py``
+    (``color(17)`` Dark Navy → ``color(195)`` Pale Blue). The gradient
+    flows vertically: each row of the 6-row block gets one solid color
+    from the palette, top dark to bottom light.
     """
 
     # Only structural CSS lives here — colors / borders are theme tokens
@@ -151,10 +145,11 @@ class BrandBanner(Widget):
 
     def render(self) -> Text:
         out = Text(justify="center")
+        n_rows = len(self._rows)
         for i, row in enumerate(self._rows):
             if i > 0:
                 out.append("\n")
-            out.append(_apply_genai_gradient(row))
+            out.append(row, style=f"bold {_color_for_row(i, n_rows)}")
         return out
 
 
