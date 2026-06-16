@@ -21,6 +21,7 @@ class HintLegend(HubSubscriberMixin, Widget):
     DEFAULT_CSS = """
     HintLegend {
         height: 1;
+        content-align: center middle;
     }
     """
 
@@ -41,13 +42,14 @@ class HintLegend(HubSubscriberMixin, Widget):
         return self._vm
 
     def render(self) -> Text:
-        text = Text()
+        text = Text(justify="center")
         chips = self._vm.actions
         if not chips:
             return text
         for index, chip in enumerate(chips):
             if index > 0:
-                text.append("  ", style="dim")
+                # Dim middle-dot separator between chips ("Enter open · Tab switch · ...").
+                text.append("  ·  ", style="dim")
             text.append(chip.key_label, style="bold cyan")
             text.append(" ")
             text.append(chip.action_label, style="dim")

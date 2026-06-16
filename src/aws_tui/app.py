@@ -26,6 +26,7 @@ from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
+from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.services_menu import ServicesMenu
 from aws_tui.ui.widgets.status_bar import StatusBar
@@ -74,6 +75,8 @@ class AwsTuiApp(App[None]):
         Binding("enter", "descend", "Open", show=True, priority=True),
         Binding("backspace,left", "ascend", "Up", show=True, priority=True),
         Binding("r", "refresh", "Refresh", show=True, priority=True),
+        Binding("question_mark", "help", "Help", show=True, priority=True),
+        Binding("colon", "help", "Cmd", show=True, priority=True),
     ]
 
     def __init__(self, context: AppContext | None = None) -> None:
@@ -251,6 +254,11 @@ class AwsTuiApp(App[None]):
         target = pane.selected_entry
         if target is None:
             return
+        # ".." synthetic entry — ascend to parent.
+        if target.entry.name == "..":
+            if not pane.path.is_root:
+                await pane.navigate_to(pane.path.parent())
+            return
         # Descend only into directories; files trigger Quick Look later.
         if str(target.entry.kind) == "directory":
             await pane.navigate_to(pane.path.join(target.entry.name))
@@ -271,6 +279,11 @@ class AwsTuiApp(App[None]):
         pane = getattr(dual, "focused_pane", None)
         if pane is not None:
             await pane.refresh()
+
+    async def action_help(self) -> None:
+        """Show the help overlay (also bound to ``:`` until the real command
+        palette lands)."""
+        await self.push_screen(HelpModal())
 
     # ── Crash handling ─────────────────────────────────────────────────────
 
