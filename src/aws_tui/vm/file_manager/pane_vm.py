@@ -35,6 +35,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import (
     EntryKind,
+    FileEntry,
     FileSystemProvider,
     NotFoundError,
     PathRef,
@@ -415,6 +416,15 @@ class PaneVM:
             return
 
         self._error_text = None
+        # Prepend a synthetic ".." parent entry on any non-root path so the
+        # user can navigate up via Enter / mouse / single keystroke without
+        # remembering Backspace.
+        materialized: list[FileEntry] = list(raw)
+        if not self._path.is_root:
+            materialized.insert(
+                0,
+                FileEntry(name="..", kind=EntryKind.DIRECTORY, size=None, modified=None),
+            )
         self._replace_entries(
             [
                 EntryVM(
@@ -423,10 +433,12 @@ class PaneVM:
                     dispatcher=self._dispatcher,
                     id_prefix=f"{self._id_prefix}.entry",
                 )
-                for fe in raw
+                for fe in materialized
             ]
         )
-        self._set_state(PaneState.EMPTY if not raw else PaneState.IDLE)
+        # IDLE if at least one real entry; EMPTY only if neither real entries
+        # nor a ".." row is present (i.e. truly root + empty bucket).
+        self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)
 
     def _replace_entries(self, new_entries: list[EntryVM]) -> None:
         for child in self._entries:

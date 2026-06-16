@@ -58,9 +58,26 @@ def _format_modified(when: datetime | None) -> str:
 _PLACEHOLDER_TEXT: dict[PaneState, tuple[str, str]] = {
     PaneState.LOADING: ("loading...", ""),
     PaneState.EMPTY: ("empty", ""),
-    PaneState.AUTH_REQUIRED: ("auth needed - press a to sign in", "-warning"),
-    PaneState.FORBIDDEN: ("access denied", "-error"),
-    PaneState.UNREACHABLE: ("endpoint unreachable - press r to retry", "-warning"),
+    PaneState.AUTH_REQUIRED: (
+        "auth needed - press a to sign in (or `aws sso login --profile <name>`)",
+        "-warning",
+    ),
+    PaneState.FORBIDDEN: (
+        "access denied\n\n"
+        "Possible causes:\n"
+        "  - No AWS credentials configured.\n"
+        "    Run `aws configure` or `aws configure sso` and relaunch.\n"
+        "  - Credentials are valid but the IAM principal lacks\n"
+        "    `s3:ListAllMyBuckets` (root listing) or `s3:ListBucket`\n"
+        "    (object listing). Check IAM policy on the profile.\n"
+        "  - Expired SSO token. Run `aws sso login --profile <name>`.\n\n"
+        "Press r to retry. Press ? for the full keymap.",
+        "-error",
+    ),
+    PaneState.UNREACHABLE: (
+        "endpoint unreachable - press r to retry; check network / VPN / endpoint URL",
+        "-warning",
+    ),
     PaneState.ERROR: ("error", "-error"),
 }
 
@@ -92,11 +109,19 @@ class EntryRow(Widget):
     def render(self) -> Text:
         entry = self._entry_vm.entry
         marker = "*" if self._entry_vm.is_marked else " "
-        cursor = ">" if self._entry_vm.is_selected else " "
+        # Left-edge accent column on the selected row (a half-block at column 0
+        # in the accent color). Replaces the older ">" prefix — looks closer
+        # to the design-spec mockups and avoids stealing a character cell from
+        # the name area when the row is unselected.
+        cursor_bar = "▌" if self._entry_vm.is_selected else " "
+        cursor_style = "bold cyan" if self._entry_vm.is_selected else ""
         name = entry.name + ("/" if entry.kind is EntryKind.DIRECTORY else "")
         size = _format_size(entry.size, entry.kind)
         modified = _format_modified(entry.modified)
-        return Text(f"{cursor}{marker} {name:<32} {size:>10}  {modified}")
+        text = Text()
+        text.append(cursor_bar, style=cursor_style)
+        text.append(f"{marker} {name:<32} {size:>10}  {modified}")
+        return text
 
     def update_state(self) -> None:
         # Sync CSS classes to mirror VM flags.
@@ -167,6 +192,28 @@ class Pane(HubSubscriberMixin, Widget):
             self.add_class("-focused")
         else:
             self.remove_class("-focused")
+
+    async def on_click(self, _event: object) -> None:
+        """Clicking anywhere in a pane switches focus to it (when applicable).
+
+        Walks up the widget tree to find the ``DualPane`` parent and toggles
+        focus via its VM's ``switch_focus_command`` if this pane isn't already
+        the focused side. The deeper-than-Tab affordance asked for in the
+        post-v0.7 usability feedback.
+        """
+        node: object | None = self
+        while node is not None:
+            if type(node).__name__ == "DualPane":
+                dual_vm = getattr(node, "_vm", None)
+                if dual_vm is None:
+                    return
+                from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
+
+                want = FocusedPane.LEFT if self._vm is dual_vm.left else FocusedPane.RIGHT
+                if dual_vm.focused is not want:
+                    dual_vm.switch_focus_command.execute()
+                return
+            node = getattr(node, "parent", None)
 
     # ── Internal ────────────────────────────────────────────────────────────
 
