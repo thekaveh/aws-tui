@@ -140,12 +140,14 @@ class S3Service:
             hub=hub,
             dispatcher=self._dispatcher,
             id_prefix="pane.s3",
+            border_title=_format_pane_title(connection),
         )
         right = PaneVM(
             provider=local_provider,
             hub=hub,
             dispatcher=self._dispatcher,
             id_prefix="pane.local",
+            border_title="local",
         )
         return DualPaneVM(
             left=left,
@@ -168,6 +170,22 @@ class S3Service:
             endpoint_url=connection.endpoint_url,
             force_path_style=connection.force_path_style,
         )
+
+
+def _format_pane_title(connection: Connection) -> str:
+    """Build a compact ``kind · profile · region`` border title.
+
+    Drops any ``None`` segments so MinIO-style s3-compatible connections
+    (no profile) render as ``s3 · us-east-1`` without an empty pair of
+    separators. Kept here (not on PaneVM) so the connection→title format
+    stays close to the place that knows the connection shape.
+    """
+    parts: list[str] = [connection.kind]
+    if connection.profile:
+        parts.append(connection.profile)
+    if connection.region:
+        parts.append(connection.region)
+    return " · ".join(parts)
 
 
 __all__ = ["S3FsFactory", "S3Service"]

@@ -3,13 +3,16 @@
 Strict MVVM: the view computes nothing user-facing. All display strings
 (``display_name``, ``size_display``, ``modified_display``, ``mark_glyph``,
 ``cursor_glyph``, ``breadcrumb_text``, ``column_header_text``,
-``placeholder_text``, ``placeholder_severity``) live on the VM. The view
-just lays them out and routes input to VM commands.
+``placeholder_text``, ``placeholder_severity``, ``border_title``) live on
+the VM. The view just lays them out and routes input to VM commands.
+
+Flicker discipline: cursor moves do NOT re-mount the entry list. Each
+:class:`EntryRow` subscribes to its own :class:`EntryVM` on the hub and
+self-refreshes on ``is_selected`` / ``is_marked`` changes. The Pane only
+re-renders the body when ``entries`` or ``state`` change.
 """
 
 from __future__ import annotations
-
-from typing import ClassVar
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -23,8 +26,13 @@ from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 
 
-class EntryRow(Widget):
-    """One entry row in a pane — bound to a single :class:`EntryVM`."""
+class EntryRow(HubSubscriberMixin, Widget):
+    """One entry row in a pane — bound to a single :class:`EntryVM`.
+
+    Subscribes to the entry's own ``is_selected``/``is_marked`` changes so
+    cursor moves and multi-select toggles update *this* row in place
+    instead of triggering a body re-mount on the parent pane.
+    """
 
     DEFAULT_CSS = """
     EntryRow {
@@ -36,12 +44,14 @@ class EntryRow(Widget):
         self,
         entry_vm: EntryVM,
         *,
+        hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         merged = " ".join(c for c in (classes, "entry-row") if c)
         super().__init__(id=id, classes=merged)
         self._entry_vm = entry_vm
+        self._hub = hub
 
     @property
     def entry_vm(self) -> EntryVM:
@@ -49,22 +59,35 @@ class EntryRow(Widget):
 
     def render(self) -> Text:
         vm = self._entry_vm
-        cursor_style = "bold cyan" if vm.is_selected else ""
+        # No inline style on the cursor bar: the row's CSS class
+        # (``-selected``) drives the color so theme swaps take effect
+        # everywhere — including the bar — without re-rendering Python.
         text = Text()
-        text.append(vm.cursor_glyph, style=cursor_style)
+        text.append(vm.cursor_glyph)
         text.append(
             f"{vm.mark_glyph} {vm.display_name:<32} {vm.size_display:>10}  {vm.modified_display}"
         )
         return text
 
-    async def on_click(self, _event: object) -> None:
-        """Mouse click on a row.
+    def on_mount(self) -> None:
+        self._apply_state_classes()
+        self.subscribe_to_vm(
+            hub=self._hub,
+            vm=self._entry_vm,
+            on_property_changed=self._on_entry_changed,
+        )
 
-        - First click on an unfocused row: switches pane focus + moves the
-          cursor to this row (no domain reasoning here — pure index math).
-        - Click on the already-selected row: delegates to
-          :meth:`PaneVM.activate`, which owns the ``..``/dir/file dispatch.
-        """
+    def on_unmount(self) -> None:
+        self.unsubscribe_from_vm()
+
+    def _on_entry_changed(self, property_name: str) -> None:
+        if property_name in ("is_selected", "is_marked"):
+            self._apply_state_classes()
+            self.refresh()
+
+    async def on_click(self, _event: object) -> None:
+        """First click: switch pane focus + move cursor. Second click on the
+        already-selected row delegates to :meth:`PaneVM.activate`."""
         host: Pane | None = None
         node: object | None = self
         while node is not None:
@@ -89,7 +112,7 @@ class EntryRow(Widget):
 
         await host.vm.activate(target_index)
 
-    def update_state(self) -> None:
+    def _apply_state_classes(self) -> None:
         """Sync CSS classes to mirror VM flags (purely cosmetic)."""
         if self._entry_vm.is_selected:
             self.add_class("-selected")
@@ -103,22 +126,30 @@ class EntryRow(Widget):
             self.add_class("-dir")
         else:
             self.remove_class("-dir")
-        self.refresh()
+
+
+# Property names on PaneVM that warrant a full body re-mount (entry-list
+# identity changed or placeholder swap). Cursor moves and viewmodel-only
+# updates are handled by per-row subscriptions + chrome updates.
+_BODY_REFRESH_PROPS: frozenset[str] = frozenset({"entries", "state", "path"})
+
+# Property names that only require updating the breadcrumb / header /
+# footer Static widgets — cheap, no re-mount.
+_CHROME_REFRESH_PROPS: frozenset[str] = frozenset({"viewmodel", "filter_text"})
 
 
 class Pane(HubSubscriberMixin, Widget):
     """Single file-manager pane."""
 
+    # Theme tokens ($text-dim etc) live in the theme .tcss files, not in
+    # DEFAULT_CSS — the latter parses before the theme overlay loads.
     DEFAULT_CSS = """
     Pane {
         layout: vertical;
         height: 1fr;
+        border-title-align: left;
     }
     """
-
-    PROP_NAMES: ClassVar[frozenset[str]] = frozenset(
-        {"entries", "viewmodel", "state", "cursor_index", "filter_text", "path"}
-    )
 
     def __init__(
         self,
@@ -144,6 +175,7 @@ class Pane(HubSubscriberMixin, Widget):
         yield Static(vm.summary, classes="pane-footer")
 
     def on_mount(self) -> None:
+        self._apply_border_title()
         self._render_body()
         self.subscribe_to_vm(
             hub=self._hub,
@@ -178,11 +210,19 @@ class Pane(HubSubscriberMixin, Widget):
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _on_vm_property_changed(self, property_name: str) -> None:
-        if property_name in self.PROP_NAMES:
-            self.call_after_refresh(self._refresh_all)
+    def _apply_border_title(self) -> None:
+        title = self._vm.viewmodel.border_title
+        if title:
+            self.border_title = title
 
-    def _refresh_all(self) -> None:
+    def _on_vm_property_changed(self, property_name: str) -> None:
+        if property_name in _BODY_REFRESH_PROPS:
+            self.call_after_refresh(self._refresh_all)
+        elif property_name in _CHROME_REFRESH_PROPS:
+            self.call_after_refresh(self._refresh_chrome)
+
+    def _refresh_chrome(self) -> None:
+        """Update breadcrumb / header / footer Statics in place — no remount."""
         try:
             breadcrumb = self.query_one(".breadcrumb", Static)
             header = self.query_one(".column-header", Static)
@@ -193,6 +233,10 @@ class Pane(HubSubscriberMixin, Widget):
         breadcrumb.update(vm.breadcrumb_text)
         header.update(vm.column_header_text)
         footer.update(vm.summary)
+        self._apply_border_title()
+
+    def _refresh_all(self) -> None:
+        self._refresh_chrome()
         self._render_body()
 
     def _render_body(self) -> None:
@@ -212,13 +256,8 @@ class Pane(HubSubscriberMixin, Widget):
             return
 
         for entry_vm in self._vm.filtered_entries:
-            row = EntryRow(entry_vm)
+            row = EntryRow(entry_vm, hub=self._hub)
             body.mount(row)
-        self.call_after_refresh(self._refresh_row_states)
-
-    def _refresh_row_states(self) -> None:
-        for row in self.query(EntryRow):
-            row.update_state()
 
 
 __all__ = ["EntryRow", "Pane"]

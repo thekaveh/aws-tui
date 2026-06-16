@@ -98,6 +98,7 @@ Pane {
     background: $bg;
     color: $text;
     border: thick $rule-dim;
+    border-title-color: $text-dim;
 }
 
 Pane.-focused {
@@ -350,6 +351,11 @@ ProgressBar.-accent > .bar--bar {
 ProgressBar.-success > .bar--bar {
     color: $success;
 }
+BrandBanner {
+    border: round $rule-dim;
+    background: $bg-elev;
+}
+
 /* No-connection placeholder shown in the content host when no AWS or */
 /* S3-compatible connection is configured at startup.                  */
 .content-placeholder {
