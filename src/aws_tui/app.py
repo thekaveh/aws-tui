@@ -34,6 +34,7 @@ from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.services_menu import ServicesMenu
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
+from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.version import __version__
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
@@ -94,6 +95,7 @@ class AwsTuiApp(App[None]):
         Binding("colon", "help", "Cmd", show=True, priority=True),
         Binding("t", "themes", "Themes", show=True, priority=True),
         Binding("c", "copy", "Copy", show=True, priority=True),
+        Binding("d", "delete", "Delete", show=True, priority=True),
     ]
 
     def __init__(self, context: AppContext | None = None) -> None:
@@ -134,6 +136,7 @@ class AwsTuiApp(App[None]):
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
         yield ToastStack(ctx.root_vm.chrome.toast_stack, hub=ctx.hub, id="toast-stack")
+        yield TransfersOverlay(ctx.transfers_vm, hub=ctx.hub, id="transfers-overlay")
 
     async def on_mount(self) -> None:
         ctx = self._app_ctx
@@ -382,7 +385,76 @@ class AwsTuiApp(App[None]):
             for entry in targets:
                 entry.set_marked(True)
         try:
-            await copy_across()
+            try:
+                await copy_across()
+            except Exception as exc:
+                # Don't escalate to the crash modal. Log + surface as a
+                # Textual notification so the user sees the failure and
+                # the app keeps running.
+                ctx.log_sink.error("copy.failed", error=str(exc))
+                self.notify(f"Copy failed: {exc}", severity="error", timeout=8)
+        finally:
+            if used_cursor_fallback:
+                for entry in targets:
+                    entry.set_marked(False)
+
+    async def action_delete(self) -> None:
+        """Delete the focused pane's marked entries (or the cursor row if
+        none are marked). Pops a danger-styled confirm modal first."""
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        src_pane = getattr(dual, "focused_pane", None)
+        if src_pane is None:
+            return
+
+        targets = list(src_pane.marked_entries)
+        used_cursor_fallback = not targets
+        if used_cursor_fallback:
+            selected = src_pane.selected_entry
+            if selected is not None and not selected.is_parent_link:
+                targets = [selected]
+        if not targets:
+            return
+
+        ctx = self._app_ctx
+        base = src_pane.viewmodel.border_title
+        names_preview = (
+            targets[0].entry.name
+            if len(targets) == 1
+            else f"{len(targets)} items ({targets[0].entry.name}, …)"
+        )
+        request = ConfirmRequest(
+            title="Delete?",
+            body_lines=(
+                f"Path: {_join_path(base, names_preview)}",
+                "",
+                f"Source pane: {base}",
+                f"Items: {len(targets)}",
+                "",
+                "This cannot be undone.",
+            ),
+            confirm_label="Delete",
+            cancel_label="Cancel",
+            danger=True,
+        )
+        modal = ConfirmModal(ctx.confirm_vm, request, hub=ctx.hub)
+        decision = await self.push_screen_wait(modal)
+        if not decision:
+            return
+
+        delete_in_focused = getattr(dual, "delete_in_focused", None)
+        if delete_in_focused is None:
+            return
+        if used_cursor_fallback:
+            for entry in targets:
+                entry.set_marked(True)
+        try:
+            try:
+                await delete_in_focused()
+            except Exception as exc:
+                ctx.log_sink.error("delete.failed", error=str(exc))
+                self.notify(f"Delete failed: {exc}", severity="error", timeout=8)
         finally:
             if used_cursor_fallback:
                 for entry in targets:

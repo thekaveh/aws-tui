@@ -105,13 +105,19 @@ def _build_rows(word: str = _WORD, gap: str = " ") -> tuple[str, ...]:
     return tuple(gap.join(_LETTERS[c][row] for c in word) for row in range(6))
 
 
-def _color_for_row(row_index: int, total_rows: int) -> str:
-    """Pick one stop from the 15-color genai-vanilla palette for an
-    entire row. The gradient flows vertically (row 0 dark navy, last row
-    pale blue) while still landing on the exact ``color(17)…color(195)``
-    stops the bootstrap-wizard banner uses."""
-    stops = len(_GRADIENT)
-    idx = min((row_index * stops) // total_rows, stops - 1)
+# Per-row stop indices chosen to span the full 15-color genai-vanilla
+# palette across the 6 banner rows — evenly distributed so the eye sees
+# the same Dark Navy → Royal Blue → Cyan-Blue → Light Cyan-Blue →
+# Bright Cyan → Pale Blue progression the bootstrap-wizard banner does.
+# Formula: ``round(i * (stops - 1) / (rows - 1))`` for i in 0..5.
+_ROW_STOPS: tuple[int, ...] = (0, 3, 6, 8, 11, 14)
+
+
+def _color_for_row(row_index: int) -> str:
+    """Map a row index to its assigned stop from the genai-vanilla
+    palette. ``row 0`` is the topmost line (dark navy), ``row 5`` the
+    bottom (pale blue)."""
+    idx = _ROW_STOPS[min(row_index, len(_ROW_STOPS) - 1)]
     return _GRADIENT[idx]
 
 
@@ -145,11 +151,10 @@ class BrandBanner(Widget):
 
     def render(self) -> Text:
         out = Text(justify="center")
-        n_rows = len(self._rows)
         for i, row in enumerate(self._rows):
             if i > 0:
                 out.append("\n")
-            out.append(row, style=f"bold {_color_for_row(i, n_rows)}")
+            out.append(row, style=f"bold {_color_for_row(i)}")
         return out
 
 

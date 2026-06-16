@@ -55,7 +55,7 @@ class KeymapStore:
         "pane.delete": ("d",),
         "pane.new": ("n",),
         "pane.refresh": ("r",),
-        "app.transfers_tray": ("t",),
+        "app.themes": ("t",),
         "auth.authenticate": ("a",),
         "modal.cancel": ("escape",),
     }

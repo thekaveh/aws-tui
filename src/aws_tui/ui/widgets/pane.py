@@ -244,7 +244,9 @@ class Pane(HubSubscriberMixin, Widget):
 
     def compose(self) -> ComposeResult:
         vm = self._vm.viewmodel
-        yield Static(vm.breadcrumb_text, classes="breadcrumb")
+        # NOTE: the inline ``.breadcrumb`` Static was removed in pass-9
+        # because the same path is rendered in the pane's top border
+        # title — keeping both was redundant.
         yield Static(_column_header_for(self._name_column_width), classes="column-header")
         # VerticalScroll instead of Vertical so long listings scroll on
         # mousewheel / trackpad without extra wiring, and so the cursor
@@ -344,15 +346,13 @@ class Pane(HubSubscriberMixin, Widget):
                 return
 
     def _refresh_chrome(self) -> None:
-        """Update breadcrumb / header / footer Statics in place — no remount."""
+        """Update header / footer Statics in place — no remount."""
         try:
-            breadcrumb = self.query_one(".breadcrumb", Static)
             header = self.query_one(".column-header", Static)
             footer = self.query_one(".pane-footer", Static)
         except Exception:
             return
         vm = self._vm.viewmodel
-        breadcrumb.update(vm.breadcrumb_text)
         # Header always uses the adaptive width — VM's column_header_text
         # field stays as a fallback for non-Pane consumers.
         header.update(_column_header_for(self._name_column_width))

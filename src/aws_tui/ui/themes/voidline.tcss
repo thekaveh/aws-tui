@@ -362,6 +362,14 @@ BrandBanner {
     background: $bg-elev;
 }
 
+TransfersOverlay {
+    background: $bg-elev 92%;
+    border: round $rule-dim;
+}
+TransfersOverlay #transfers-overlay-title {
+    color: $accent;
+}
+
 /* No-connection placeholder shown in the content host when no AWS or */
 /* S3-compatible connection is configured at startup.                  */
 .content-placeholder {

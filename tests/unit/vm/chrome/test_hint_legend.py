@@ -104,11 +104,13 @@ def test_keymap_changed_re_derives_legend() -> None:
 
 
 def test_register_focusable_with_no_focus_does_not_disturb_state() -> None:
-    legend, _hub = _build(actions={"pane.left": ("pane.copy",)})
+    legend, _hub = _build(actions={"pane.left": ("pane.new",)})
     actions = legend.actions
     action_ids = {a.action_id for a in actions}
-    # Without a focus message the registration is dormant; only fallbacks.
-    assert "pane.copy" not in action_ids
+    # Without a focus message the registration is dormant; only fallbacks
+    # are surfaced. `pane.new` is not in the app-level fallback set, so
+    # registering it for a not-yet-focused VM must keep it hidden.
+    assert "pane.new" not in action_ids
     legend.dispose()
 
 
