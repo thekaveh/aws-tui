@@ -81,6 +81,10 @@ _LETTERS: dict[str, tuple[str, str, str, str, str, str]] = {
 _WORD = "AWS-TUI"
 
 # 15-stop blue→cyan gradient, identical to genai-vanilla's banner palette.
+# This is the *carbon* (default) palette — the one bouncing the user
+# off the original genai-vanilla source code. The other themes use
+# similar 6-stop sweeps in their own accent color family, picked from
+# the 256-color palette and tuned to roughly track each theme's accent.
 _GRADIENT: tuple[str, ...] = (
     "color(17)",
     "color(18)",
@@ -99,26 +103,59 @@ _GRADIENT: tuple[str, ...] = (
     "color(195)",
 )
 
+# Per-theme 6-stop vertical sweep for the banner: dark at the top → light
+# at the bottom, in each theme's accent color family. New themes can
+# extend this dict; the fallback is the carbon (blue) palette.
+_THEME_PALETTES: dict[str, tuple[str, ...]] = {
+    # carbon — blue, taken from the genai-vanilla stops at
+    # indices (0, 3, 6, 8, 11, 14) of the 15-stop palette.
+    "carbon": (
+        "color(17)",
+        "color(20)",
+        "color(27)",
+        "color(39)",
+        "color(51)",
+        "color(195)",
+    ),
+    # amber — gold / warm yellow → cream. Tracks the amber CRT theme.
+    "amber": (
+        "color(52)",
+        "color(94)",
+        "color(130)",
+        "color(166)",
+        "color(208)",
+        "color(222)",
+    ),
+    # voidline — deep magenta → soft pink, mirrors the voidline accent.
+    "voidline": (
+        "color(53)",
+        "color(89)",
+        "color(125)",
+        "color(161)",
+        "color(197)",
+        "color(219)",
+    ),
+    # lattice — teal / mint, mirrors the lattice accent.
+    "lattice": (
+        "color(23)",
+        "color(30)",
+        "color(37)",
+        "color(44)",
+        "color(50)",
+        "color(122)",
+    ),
+}
+
 
 def _build_rows(word: str = _WORD, gap: str = " ") -> tuple[str, ...]:
     """Concatenate per-letter rows into the 6 banner rows for ``word``."""
     return tuple(gap.join(_LETTERS[c][row] for c in word) for row in range(6))
 
 
-# Per-row stop indices chosen to span the full 15-color genai-vanilla
-# palette across the 6 banner rows — evenly distributed so the eye sees
-# the same Dark Navy → Royal Blue → Cyan-Blue → Light Cyan-Blue →
-# Bright Cyan → Pale Blue progression the bootstrap-wizard banner does.
-# Formula: ``round(i * (stops - 1) / (rows - 1))`` for i in 0..5.
-_ROW_STOPS: tuple[int, ...] = (0, 3, 6, 8, 11, 14)
-
-
-def _color_for_row(row_index: int) -> str:
-    """Map a row index to its assigned stop from the genai-vanilla
-    palette. ``row 0`` is the topmost line (dark navy), ``row 5`` the
-    bottom (pale blue)."""
-    idx = _ROW_STOPS[min(row_index, len(_ROW_STOPS) - 1)]
-    return _GRADIENT[idx]
+def _palette_for(theme_name: str) -> tuple[str, ...]:
+    """Return the 6-stop vertical gradient for ``theme_name``. Falls
+    back to the carbon (blue) palette if the theme isn't registered."""
+    return _THEME_PALETTES.get(theme_name, _THEME_PALETTES["carbon"])
 
 
 class BrandBanner(Widget):
@@ -145,16 +182,35 @@ class BrandBanner(Widget):
 
     DEFAULT_CLASSES = "brand-banner"
 
-    def __init__(self, *, id: str | None = None, classes: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        theme_name: str = "carbon",
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
         super().__init__(id=id, classes=classes)
         self._rows: tuple[str, ...] = _build_rows()
+        self._palette: tuple[str, ...] = _palette_for(theme_name)
+
+    def set_theme(self, theme_name: str) -> None:
+        """Swap to the theme's color family. The app calls this from
+        :meth:`AwsTuiApp.switch_theme` so the banner repaints alongside
+        the rest of the chrome instead of staying frozen on the
+        previous theme's palette."""
+        new_palette = _palette_for(theme_name)
+        if new_palette == self._palette:
+            return
+        self._palette = new_palette
+        self.refresh()
 
     def render(self) -> Text:
         out = Text(justify="center")
         for i, row in enumerate(self._rows):
             if i > 0:
                 out.append("\n")
-            out.append(row, style=f"bold {_color_for_row(i)}")
+            color = self._palette[min(i, len(self._palette) - 1)]
+            out.append(row, style=f"bold {color}")
         return out
 
 

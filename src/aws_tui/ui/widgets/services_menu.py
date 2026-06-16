@@ -45,6 +45,16 @@ class ServiceItemView(Widget):
 
     def render(self) -> Text:
         prefix = "> " if self._item_vm.is_selected else "  "
+        # When the parent ServicesMenu is collapsed we show only the
+        # icon glyph (or the first letter of the label as a fallback)
+        # so the rail stays narrow. The parent toggles its CSS class
+        # via :meth:`ServicesMenu.toggle_collapsed`.
+        parent = self.parent
+        while parent is not None and not isinstance(parent, ServicesMenu):
+            parent = getattr(parent, "parent", None)
+        if isinstance(parent, ServicesMenu) and parent.is_collapsed:
+            short = (self._item_vm.descriptor.icon or self._item_vm.descriptor.label or "?")[:2]
+            return Text(prefix + short)
         text = Text(prefix + self._item_vm.descriptor.label)
         return text
 
@@ -62,10 +72,19 @@ class ServiceItemView(Widget):
 
 
 class ServicesMenu(HubSubscriberMixin, Widget):
-    """Left-rail service-picker widget."""
+    """Left-rail service-picker widget.
+
+    Collapsible. Starts collapsed so the dual-pane area gets all the
+    horizontal space by default; press the configured toggle key (or
+    call :meth:`toggle_collapsed`) to expand into the full-width label
+    mode.
+    """
 
     DEFAULT_CSS = """
     ServicesMenu {
+        width: 6;
+    }
+    ServicesMenu.-expanded {
         width: 16;
     }
     """
@@ -82,6 +101,21 @@ class ServicesMenu(HubSubscriberMixin, Widget):
         self._vm: ServicesMenuVM = vm
         self._hub: MessageHub[Message] = hub
         self._collection_sub: DisposableBase | None = None
+        # Collapsed by default — the rail shows just the icon column
+        # until the user toggles it (frees up width for the panes).
+        self._collapsed: bool = True
+
+    @property
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def toggle_collapsed(self) -> None:
+        self._collapsed = not self._collapsed
+        if self._collapsed:
+            self.remove_class("-expanded")
+        else:
+            self.add_class("-expanded")
+        self._refresh_selections()
 
     @property
     def vm(self) -> ServicesMenuVM:

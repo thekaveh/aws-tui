@@ -12,6 +12,7 @@ from typing import ClassVar
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical, VerticalScroll
+from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import Static
 from vmx import Message, MessageHub
@@ -106,11 +107,12 @@ class ThemePickerModal(ModalScreen[None]):
     }
     """
 
+    # Only the dismiss + apply chords go through the binding system —
+    # arrow keys are handled via :meth:`on_key` because the App-level
+    # ``priority=True`` arrow bindings (file-manager cursor) otherwise
+    # win the race over a modal's bindings.
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape,q,t", "dismiss", "Close", show=True, priority=True),
-        Binding("up,k", "move(-1)", "Up", show=True, priority=True),
-        Binding("down,j", "move(1)", "Down", show=True, priority=True),
-        Binding("enter", "apply", "Apply", show=True, priority=True),
     ]
 
     def __init__(self, *, picker: ThemePickerVM, hub: MessageHub[Message]) -> None:
@@ -137,6 +139,24 @@ class ThemePickerModal(ModalScreen[None]):
     def on_mount(self) -> None:
         self._rows = list(self.query(_ThemeRow))
         self._sync_cursor_class()
+
+    async def on_key(self, event: Key) -> None:
+        """Handle navigation + apply at the event layer.
+
+        Bindings would be eaten by the App's ``priority=True`` arrow
+        bindings (which exist so the file-manager cursor reacts even
+        before a pane is focused). At the event layer the active screen
+        on the stack sees the key first.
+        """
+        if event.key in ("up", "k"):
+            self.action_move(-1)
+            event.stop()
+        elif event.key in ("down", "j"):
+            self.action_move(1)
+            event.stop()
+        elif event.key == "enter":
+            self.action_apply()
+            event.stop()
 
     # ── Mouse ──────────────────────────────────────────────────────────────
 
