@@ -281,9 +281,29 @@ class AwsTuiApp(App[None]):
             await pane.refresh()
 
     async def action_help(self) -> None:
-        """Show the help overlay (also bound to ``:`` until the real command
-        palette lands)."""
-        await self.push_screen(HelpModal())
+        """Show the help overlay + theme picker (also bound to ``:``)."""
+        ctx = self._app_ctx
+        await self.push_screen(
+            HelpModal(
+                current_theme=ctx.initial_theme,
+                themes=ctx.theme_store.BUILTIN_NAMES,
+            )
+        )
+
+    def switch_theme(self, name: str) -> None:
+        """Runtime theme swap — re-load the chosen ``.tcss`` over the current
+        stylesheet (mirrors :meth:`_apply_initial_theme`'s code path)."""
+        ctx = self._app_ctx
+        try:
+            theme_css = ctx.theme_store.load(name)
+        except Exception:
+            ctx.log_sink.error("theme.load.failed", name=name)
+            return
+        self.stylesheet.add_source(theme_css)
+        self.stylesheet.parse()
+        self.stylesheet.update(self)
+        ctx.initial_theme = name
+        self.refresh()
 
     # ── Crash handling ─────────────────────────────────────────────────────
 

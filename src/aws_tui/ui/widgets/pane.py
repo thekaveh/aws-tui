@@ -123,6 +123,45 @@ class EntryRow(Widget):
         text.append(f"{marker} {name:<32} {size:>10}  {modified}")
         return text
 
+    async def on_click(self, _event: object) -> None:
+        """Mouse click on an entry row.
+
+        - First click: focus the host pane (if not already) AND move the
+          cursor to this row.
+        - Click on the already-selected row: descend / ascend depending on
+          whether the entry is a directory (or ``..``).
+        """
+        host: Pane | None = None
+        node: object | None = self
+        while node is not None:
+            if isinstance(node, Pane):
+                host = node
+                break
+            node = getattr(node, "parent", None)
+        if host is None:
+            return
+
+        # Ensure host pane gets focus first so subsequent keys land on it.
+        await host.on_click(_event)
+
+        target_index = host.vm.filtered_entries.index(self._entry_vm)
+        already_selected = self._entry_vm.is_selected
+        if not already_selected:
+            # Move cursor to the clicked row.
+            delta = target_index - host.vm.cursor_index
+            if delta != 0:
+                host.vm.move_cursor_command.execute(delta)
+            return
+
+        # Second click on the same row: navigate (descend or ascend on "..").
+        entry = self._entry_vm.entry
+        if entry.name == "..":
+            if not host.vm.path.is_root:
+                await host.vm.navigate_to(host.vm.path.parent())
+            return
+        if entry.kind is EntryKind.DIRECTORY:
+            await host.vm.navigate_to(host.vm.path.join(entry.name))
+
     def update_state(self) -> None:
         # Sync CSS classes to mirror VM flags.
         if self._entry_vm.is_selected:
