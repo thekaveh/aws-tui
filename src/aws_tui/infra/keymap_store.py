@@ -56,6 +56,8 @@ class KeymapStore:
         "pane.new": ("n",),
         "pane.refresh": ("r",),
         "app.themes": ("t",),
+        "app.cycle_theme": ("T",),
+        "app.swap_source": ("S",),
         "auth.authenticate": ("a",),
         "modal.cancel": ("escape",),
     }

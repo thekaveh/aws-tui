@@ -19,8 +19,9 @@ import os
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.events import Click
 from textual.widget import Widget
-from textual.widgets import Button, ProgressBar, Static
+from textual.widgets import ProgressBar, Static
 from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
@@ -48,12 +49,13 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
     Subscribes to the transfer's own ``model`` PropertyChanged so the
     progress bar and label refresh without rebuilding the row."""
 
-    # Height 4 instead of 3 so the Cancel button has room for its label
-    # without colliding with the progress bar; the bar shrinks (width:
-    # auto with explicit max) so the button can claim its own min width.
+    # The Cancel "button" is a themable Static instead of
+    # ``textual.widgets.Button`` because Button ships with its own
+    # heavy DEFAULT_CSS (ansi colors etc) that doesn't follow our
+    # theme tokens.
     DEFAULT_CSS = """
     TransferRowWidget {
-        height: 4;
+        height: 3;
         width: 100%;
         margin: 0 0 1 0;
         padding: 0 1;
@@ -63,19 +65,19 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         width: 100%;
     }
     TransferRowWidget > .transfer-row {
-        height: 3;
+        height: 1;
         width: 100%;
-        align-vertical: middle;
     }
     TransferRowWidget ProgressBar {
         width: 1fr;
         height: 1;
     }
-    TransferRowWidget Button {
-        min-width: 10;
-        width: auto;
-        height: 3;
-        margin: 0 0 0 2;
+    TransferRowWidget .transfer-cancel {
+        width: 10;
+        height: 1;
+        margin: 0 0 0 1;
+        content-align: center middle;
+        text-style: bold;
     }
     """
 
@@ -92,7 +94,7 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         yield Static(self._label_text(), classes="transfer-label", markup=True)
         with Horizontal(classes="transfer-row"):
             yield ProgressBar(total=100, show_eta=False, show_percentage=True)
-            yield Button("Cancel", id="cancel-btn", variant="default")
+            yield Static("Cancel", id="cancel-btn", classes="transfer-cancel")
 
     def on_mount(self) -> None:
         self._refresh_progress()
@@ -105,9 +107,15 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cancel-btn":
-            self._vm.cancel_command.execute()
+    def on_click(self, event: Click) -> None:
+        # Bubble: react when the click landed on our Cancel Static.
+        target = event.widget if hasattr(event, "widget") else None
+        node: object | None = target
+        while node is not None:
+            if isinstance(node, Static) and getattr(node, "id", None) == "cancel-btn":
+                self._vm.cancel_command.execute()
+                return
+            node = getattr(node, "parent", None)
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name == "model":
