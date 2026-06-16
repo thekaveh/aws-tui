@@ -55,9 +55,21 @@ class AwsTuiApp(App[None]):
     }
     """
 
+    # Minimum-viable input router (input-router-deferred from M6). The
+    # `[keybindings]` overlay in config.toml is parsed by `KeymapStore` but
+    # the action→Textual handler indirection isn't wired yet; until it is,
+    # the bindings here drive the most essential navigation actions
+    # directly. Spec §4.2 documents the full set.
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "Quit", show=True),
         Binding("ctrl+c", "quit", "Quit", show=False),
+        Binding("tab", "switch_focus", "Switch pane", show=True),
+        Binding("shift+tab", "switch_focus", "Switch pane", show=False),
+        Binding("up,k", "move_up", "↑", show=True),
+        Binding("down,j", "move_down", "↓", show=True),
+        Binding("enter", "descend", "Open", show=True),
+        Binding("backspace,left", "ascend", "Up", show=True),
+        Binding("r", "refresh", "Refresh", show=True),
     ]
 
     def __init__(self, context: AppContext | None = None) -> None:
@@ -195,6 +207,66 @@ class AwsTuiApp(App[None]):
 
     def _handle_quit(self) -> None:
         self.exit()
+
+    def _dual_pane(self) -> object | None:
+        """Return the currently-hosted ``DualPaneVM`` (or None)."""
+        return self._app_ctx.root_vm.content_host.current
+
+    def action_switch_focus(self) -> None:
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        cmd = getattr(dual, "switch_focus_command", None)
+        if cmd is not None:
+            cmd.execute()
+
+    def action_move_up(self) -> None:
+        self._move_cursor(-1)
+
+    def action_move_down(self) -> None:
+        self._move_cursor(1)
+
+    def _move_cursor(self, delta: int) -> None:
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        pane = getattr(dual, "focused_pane", None)
+        if pane is None:
+            return
+        cmd = getattr(pane, "move_cursor_command", None)
+        if cmd is not None:
+            cmd.execute(delta)
+
+    async def action_descend(self) -> None:
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        pane = getattr(dual, "focused_pane", None)
+        if pane is None:
+            return
+        target = pane.selected_entry
+        if target is None:
+            return
+        # Descend only into directories; files trigger Quick Look later.
+        if str(target.entry.kind) == "directory":
+            await pane.navigate_to(pane.path.join(target.entry.name))
+
+    async def action_ascend(self) -> None:
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        pane = getattr(dual, "focused_pane", None)
+        if pane is None or pane.path.is_root:
+            return
+        await pane.navigate_to(pane.path.parent())
+
+    async def action_refresh(self) -> None:
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        pane = getattr(dual, "focused_pane", None)
+        if pane is not None:
+            await pane.refresh()
 
     # ── Crash handling ─────────────────────────────────────────────────────
 

@@ -255,6 +255,12 @@ class ServicesMenuVM:
                 item.construct()
             self._inner.append(item._inner)
 
+        # Notify subscribers that the items collection changed so the View
+        # layer can re-mount the rows. Without this, the ServicesMenu widget
+        # binds to the initial (empty) item set at mount and never re-renders
+        # when the connection resolution adds entries.
+        self._hub.send(PropertyChangedMessage.create(self, self.name, "items"))
+
         # Clear stale selection if the active id is no longer in the menu.
         if self._selected_id is not None and not any(
             item.descriptor.id == self._selected_id for item in self._items

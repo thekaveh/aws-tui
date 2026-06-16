@@ -121,6 +121,8 @@ class ServicesMenu(HubSubscriberMixin, Widget):
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name == "selected_id":
             self.call_after_refresh(self._refresh_selections)
+        elif property_name == "items":
+            self.call_after_refresh(self._rebuild_items)
 
     def _rebuild_items(self) -> None:
         try:
