@@ -140,14 +140,16 @@ class S3Service:
             hub=hub,
             dispatcher=self._dispatcher,
             id_prefix="pane.s3",
-            border_title=_format_pane_title(connection),
+            identity_label=_format_pane_title(connection),
+            path_protocol="s3:",
         )
         right = PaneVM(
             provider=local_provider,
             hub=hub,
             dispatcher=self._dispatcher,
             id_prefix="pane.local",
-            border_title="local",
+            identity_label="local",
+            path_protocol="",
         )
         return DualPaneVM(
             left=left,
