@@ -164,6 +164,7 @@ DualPane {
 HintLegend {
     background: $bg-elev;
     color: $text-muted;
+    border: round $rule-dim;
 }
 
 HintLegend .hint-key {

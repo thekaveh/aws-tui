@@ -168,6 +168,7 @@ DualPane {
 HintLegend {
     background: $bg-elev;
     color: $text-muted;
+    border: round $rule-dim;
 }
 
 HintLegend .hint-key {
@@ -232,8 +233,21 @@ ConfirmModal > Container {
     color: $text;
     border: double $accent;
     padding: 1 2;
-    width: 60;
+    width: 70;
     height: auto;
+}
+ConfirmModal > Container > .modal-body {
+    height: auto;
+    padding: 0 1 1 1;
+}
+ConfirmModal > Container > .modal-footer {
+    height: 3;
+    align: right middle;
+    padding: 1 0 0 0;
+}
+ConfirmModal > Container > .modal-footer > Button {
+    margin: 0 1;
+    min-width: 12;
 }
 
 ConfirmModal > Container > .modal-title {

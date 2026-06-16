@@ -13,8 +13,12 @@ border via the parent screen's layout.
 
 from __future__ import annotations
 
+from reactivex.abc import DisposableBase
 from rich.text import Text
 from textual.widget import Widget
+from vmx import Message, MessageHub
+
+from aws_tui.vm.messages import ThemeChangedMessage
 
 # Block-art rows for "AWS-TUI" — built letter-by-letter and concatenated
 # so the gradient flows horizontally across each row exactly like the
@@ -104,45 +108,49 @@ _GRADIENT: tuple[str, ...] = (
 )
 
 # Per-theme 6-stop vertical sweep for the banner: dark at the top → light
-# at the bottom, in each theme's accent color family. New themes can
-# extend this dict; the fallback is the carbon (blue) palette.
+# at the bottom, in each theme's accent color family. Palette ranges are
+# picked from the 256-color cube so neighbors are perceptually close —
+# the lattice (teal) palette is the reference the others now match.
 _THEME_PALETTES: dict[str, tuple[str, ...]] = {
-    # carbon — blue, taken from the genai-vanilla stops at
-    # indices (0, 3, 6, 8, 11, 14) of the 15-stop palette.
+    # carbon — deep navy → bright sky-blue, evenly spaced through the
+    # blue band of the 256-color cube (no big perceptual jumps).
     "carbon": (
-        "color(17)",
-        "color(20)",
-        "color(27)",
-        "color(39)",
-        "color(51)",
-        "color(195)",
+        "color(17)",  # #00005f  dark navy
+        "color(18)",  # #000087  navy
+        "color(19)",  # #0000af
+        "color(20)",  # #0000d7
+        "color(33)",  # #0087ff  azure
+        "color(75)",  # #5fafff  sky
     ),
-    # amber — gold / warm yellow → cream. Tracks the amber CRT theme.
+    # amber — dark mahogany → gold, the smooth orange band of the
+    # cube. Tracks the amber-CRT theme's accent.
     "amber": (
-        "color(52)",
-        "color(94)",
-        "color(130)",
-        "color(166)",
-        "color(208)",
-        "color(222)",
+        "color(94)",  # #875f00  dark amber
+        "color(130)",  # #af5f00  burnt orange
+        "color(166)",  # #d75f00  orange
+        "color(208)",  # #ff8700
+        "color(214)",  # #ffaf00
+        "color(220)",  # #ffd700  gold
     ),
-    # voidline — deep magenta → soft pink, mirrors the voidline accent.
+    # voidline — deep purple → soft pink. Smooth march through the
+    # magenta band; the bottom stop is light enough to read on the
+    # dark background.
     "voidline": (
-        "color(53)",
-        "color(89)",
-        "color(125)",
-        "color(161)",
-        "color(197)",
-        "color(219)",
+        "color(54)",  # #5f0087  deep purple
+        "color(91)",  # #8700af
+        "color(128)",  # #af00d7
+        "color(165)",  # #d700ff  magenta
+        "color(207)",  # #ff5fff
+        "color(219)",  # #ffafff  light pink
     ),
-    # lattice — teal / mint, mirrors the lattice accent.
+    # lattice — teal / mint, the user-approved reference palette.
     "lattice": (
-        "color(23)",
+        "color(23)",  # #005f5f  dark teal
         "color(30)",
         "color(37)",
         "color(44)",
         "color(50)",
-        "color(122)",
+        "color(122)",  # #87ffd7  pale mint
     ),
 }
 
@@ -186,18 +194,36 @@ class BrandBanner(Widget):
         self,
         *,
         theme_name: str = "carbon",
+        hub: MessageHub[Message] | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._rows: tuple[str, ...] = _build_rows()
         self._palette: tuple[str, ...] = _palette_for(theme_name)
+        self._hub: MessageHub[Message] | None = hub
+        self._sub: DisposableBase | None = None
+
+    def on_mount(self) -> None:
+        if self._hub is not None:
+            self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+
+    def on_unmount(self) -> None:
+        if self._sub is not None:
+            self._sub.dispose()
+            self._sub = None
+
+    def _on_hub_message(self, msg: object) -> None:
+        """React to a hub-broadcast theme change so the banner stays in
+        sync with the rest of the chrome without the app reaching in
+        per widget type."""
+        if isinstance(msg, ThemeChangedMessage):
+            self.set_theme(msg.name)
 
     def set_theme(self, theme_name: str) -> None:
-        """Swap to the theme's color family. The app calls this from
-        :meth:`AwsTuiApp.switch_theme` so the banner repaints alongside
-        the rest of the chrome instead of staying frozen on the
-        previous theme's palette."""
+        """Swap to the theme's color family. Idempotent; called from
+        :meth:`_on_hub_message` (preferred) or directly during initial
+        composition."""
         new_palette = _palette_for(theme_name)
         if new_palette == self._palette:
             return

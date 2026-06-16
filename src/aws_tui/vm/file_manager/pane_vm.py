@@ -442,6 +442,34 @@ class PaneVM:
     async def refresh(self) -> None:
         await self._reload()
 
+    async def swap_provider(
+        self,
+        provider: FileSystemProvider,
+        *,
+        identity_label: str | None = None,
+        path_protocol: str | None = None,
+    ) -> None:
+        """Replace this pane's filesystem provider at runtime.
+
+        Used by the app-level ``swap_source`` action so the user can put
+        any of the four (S3, S3) / (S3, local) / (local, S3) /
+        (local, local) combinations in the dual-pane. Resets path to
+        root and re-lists so the pane reflects the new provider's
+        contents from the top.
+        """
+        self._provider = provider
+        if identity_label is not None:
+            self._identity_label = identity_label
+        if path_protocol is not None:
+            self._path_protocol = path_protocol
+        self._path = _ROOT_PATH
+        self._cursor_index = 0
+        self._filter_text = ""
+        self._is_multiselect_mode = False
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "path"))
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        await self._reload()
+
     async def activate(self, target_index: int) -> None:
         """Activate the entry at ``target_index`` in :attr:`filtered_entries`.
 

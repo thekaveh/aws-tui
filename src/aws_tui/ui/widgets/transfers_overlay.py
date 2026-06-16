@@ -48,9 +48,12 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
     Subscribes to the transfer's own ``model`` PropertyChanged so the
     progress bar and label refresh without rebuilding the row."""
 
+    # Height 4 instead of 3 so the Cancel button has room for its label
+    # without colliding with the progress bar; the bar shrinks (width:
+    # auto with explicit max) so the button can claim its own min width.
     DEFAULT_CSS = """
     TransferRowWidget {
-        height: 3;
+        height: 4;
         width: 100%;
         margin: 0 0 1 0;
         padding: 0 1;
@@ -60,16 +63,19 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         width: 100%;
     }
     TransferRowWidget > .transfer-row {
-        height: 1;
+        height: 3;
         width: 100%;
+        align-vertical: middle;
     }
     TransferRowWidget ProgressBar {
         width: 1fr;
+        height: 1;
     }
     TransferRowWidget Button {
-        min-width: 8;
-        height: 1;
-        margin: 0 0 0 1;
+        min-width: 10;
+        width: auto;
+        height: 3;
+        margin: 0 0 0 2;
     }
     """
 
