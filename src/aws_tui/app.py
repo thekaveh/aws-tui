@@ -278,25 +278,29 @@ class AwsTuiApp(App[None]):
         if cmd is not None:
             cmd.execute()
 
-    def action_move_up(self) -> None:
-        # Textual dispatches priority bindings in *reversed* order:
-        # App first, screen last. So this action wins the race over a
-        # modal's own ``priority=True`` up binding. To make the picker
-        # modal usable, forward to the active screen first when it
-        # exposes an ``action_move_up``. Same pattern for action_move_down.
-        if len(self.screen_stack) > 1:
-            forward = getattr(self.screen, "action_move_up", None)
+    def _forward_to_modal(self, *action_names: str) -> bool:
+        """When a modal is active, try each ``action_name`` on the active
+        screen and run the first that exists. Used to work around
+        Textual dispatching App-level priority bindings BEFORE modal
+        ones — without forwarding, things like ↑/↓/Enter in our modals
+        would never reach the modal's own handlers."""
+        if len(self.screen_stack) <= 1:
+            return False
+        for name in action_names:
+            forward = getattr(self.screen, name, None)
             if forward is not None:
                 forward()
-                return
+                return True
+        return False
+
+    def action_move_up(self) -> None:
+        if self._forward_to_modal("action_move_up"):
+            return
         self._move_cursor(-1)
 
     def action_move_down(self) -> None:
-        if len(self.screen_stack) > 1:
-            forward = getattr(self.screen, "action_move_down", None)
-            if forward is not None:
-                forward()
-                return
+        if self._forward_to_modal("action_move_down"):
+            return
         self._move_cursor(1)
 
     def _move_cursor(self, delta: int) -> None:
@@ -311,6 +315,13 @@ class AwsTuiApp(App[None]):
             cmd.execute(delta)
 
     async def action_descend(self) -> None:
+        # Forward Enter to the active modal first. Most of our modals
+        # treat Enter as confirm/apply (ConfirmModal.action_confirm,
+        # ThemePickerModal.action_apply). Without this, App's
+        # priority=True enter binding always wins and Enter never
+        # reaches the modal's handler.
+        if self._forward_to_modal("action_confirm", "action_apply"):
+            return
         dual = self._dual_pane()
         if dual is None:
             return
@@ -330,6 +341,10 @@ class AwsTuiApp(App[None]):
             await pane.navigate_to(pane.path.join(target.entry.name))
 
     async def action_ascend(self) -> None:
+        # Forward Backspace/Left to the active modal as a cancel-by-key
+        # gesture (esc still works too).
+        if self._forward_to_modal("action_cancel", "action_close", "action_dismiss"):
+            return
         dual = self._dual_pane()
         if dual is None:
             return

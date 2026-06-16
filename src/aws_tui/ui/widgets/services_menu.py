@@ -147,6 +147,19 @@ class ServicesMenu(HubSubscriberMixin, Widget):
             self._collection_sub.dispose()
             self._collection_sub = None
 
+    def on_click(self, _event: object) -> None:
+        """Clicking the rail (anywhere not on a service item) toggles
+        collapsed/expanded so the user doesn't have to remember the
+        ``s`` shortcut. ServiceItemView click handling runs first via
+        event bubbling, so the rail toggle only fires when the click
+        lands on the rail's empty area."""
+        # Only toggle when the click is on the rail itself, not bubbled
+        # up from a service item. Textual delivers events to the
+        # bottom-most widget first; if it wasn't consumed there, the
+        # parent gets it. By the time we arrive here, no child handled
+        # it — safe to toggle.
+        self.toggle_collapsed()
+
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _on_collection_changed(self, _event: object) -> None:

@@ -1,18 +1,63 @@
-"""ConfirmModal screen bound to :class:`ConfirmationVM`.
+r"""ConfirmModal screen bound to :class:`ConfirmationVM`.
 
-Centered modal with title + body lines + confirm/cancel buttons.
-``Enter`` accepts (confirm), ``Esc`` cancels.
+Custom-styled, bound-box modal with title + body lines + confirm/cancel
+"buttons". The buttons are Static widgets (not :class:`Button`) because
+the Textual default Button ships with heavy built-in CSS (ansi colors,
+``\$border-blurred``, etc.) that fights theme overrides and makes the
+labels overflow on narrow widths. Static + a small CSS class gives us
+predictable layout + clean theme adoption.
+
+Enter accepts (confirm), Esc cancels. The App-level priority bindings
+for arrows + enter are forwarded to ``action_confirm`` / ``action_cancel``
+from ``AwsTuiApp`` (see ``_forward_to_modal``).
 """
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
+from textual.events import Click
 from textual.screen import ModalScreen
-from textual.widgets import Button, Static
+from textual.widgets import Static
 from vmx import Message, MessageHub
 
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
+
+
+class _ModalButton(Static):
+    """Themable clickable button replacement.
+
+    Two CSS classes carry visual state:
+    - ``-primary``: the confirm side (accent color).
+    - ``-danger``: the destructive variant (theme danger color).
+
+    The widget owns no state; on_click posts a tagged message via the
+    ``button_id`` attribute that the modal looks at."""
+
+    DEFAULT_CSS = """
+    _ModalButton {
+        height: 1;
+        min-width: 14;
+        padding: 0 2;
+        content-align: center middle;
+        text-style: bold;
+        margin: 0 1;
+    }
+    _ModalButton.-primary {
+        text-style: bold;
+    }
+    """
+
+    def __init__(self, label: str, *, button_id: str, classes: str = "") -> None:
+        merged = " ".join(c for c in ("modal-button", classes) if c)
+        super().__init__(label, classes=merged)
+        self.button_id = button_id
+
+    def on_click(self, _event: Click) -> None:
+        # Bubble up — the modal's on_click reads ``button_id`` to act on
+        # the press. Textual's event bubbling delivers the event to
+        # parent widgets on its way up.
+        pass
 
 
 class ConfirmModal(ModalScreen[bool]):
@@ -51,8 +96,16 @@ class ConfirmModal(ModalScreen[bool]):
             for line in self._request.body_lines:
                 yield Static(line, classes="modal-body")
             with Horizontal(classes="modal-footer"):
-                yield Button(self._request.cancel_label, id="cancel-btn")
-                yield Button(self._request.confirm_label, id="confirm-btn", variant="error")
+                yield _ModalButton(
+                    f"  {self._request.cancel_label}  ",
+                    button_id="cancel",
+                )
+                primary_classes = "-danger" if self._request.danger else "-primary"
+                yield _ModalButton(
+                    f"  {self._request.confirm_label}  ",
+                    button_id="confirm",
+                    classes=primary_classes,
+                )
 
     def action_cancel(self) -> None:
         self._vm.cancel_command.execute()
@@ -62,11 +115,17 @@ class ConfirmModal(ModalScreen[bool]):
         self._vm.confirm_command.execute()
         self.dismiss(True)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "confirm-btn":
-            self.action_confirm()
-        elif event.button.id == "cancel-btn":
-            self.action_cancel()
+    def on_click(self, event: Click) -> None:
+        # Walk up from the click target to find the button (if any).
+        node: object | None = event.widget if hasattr(event, "widget") else None
+        while node is not None:
+            if isinstance(node, _ModalButton):
+                if node.button_id == "confirm":
+                    self.action_confirm()
+                else:
+                    self.action_cancel()
+                return
+            node = getattr(node, "parent", None)
 
 
 __all__ = ["ConfirmModal"]

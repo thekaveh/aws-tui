@@ -168,11 +168,17 @@ class EntryRow(HubSubscriberMixin, Widget):
         except ValueError:
             return
 
-        # Shift held → multi-select toggle. The ".." parent link is
-        # not markable. PaneVM.toggle_mark_at also republishes the
-        # viewmodel so the pane footer's marked-byte total updates.
-        shift_pressed = bool(getattr(event, "shift", False))
-        if shift_pressed and not self._entry_vm.is_parent_link:
+        # Modifier-click → multi-select toggle. We accept Shift, Meta
+        # (Cmd on macOS), or Ctrl as the modifier because most macOS
+        # terminals reserve Shift+Click for native text-selection and
+        # never forward it to the app — Cmd+Click is the reliable path
+        # there. The ".." parent link is not markable.
+        modifier_pressed = bool(
+            getattr(event, "shift", False)
+            or getattr(event, "meta", False)
+            or getattr(event, "ctrl", False)
+        )
+        if modifier_pressed and not self._entry_vm.is_parent_link:
             host.vm.move_cursor_to(target_index)
             host.vm.toggle_mark_at(target_index)
             return
