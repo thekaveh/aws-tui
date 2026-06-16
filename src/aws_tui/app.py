@@ -31,7 +31,9 @@ from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
-from aws_tui.ui.widgets.services_menu import ServicesMenu
+from aws_tui.ui.widgets.services_menu import (
+    ServicesMenu,
+)
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
@@ -96,6 +98,7 @@ class AwsTuiApp(App[None]):
         Binding("t", "themes", "Themes", show=True, priority=True),
         Binding("c", "copy", "Copy", show=True, priority=True),
         Binding("d", "delete", "Delete", show=True, priority=True),
+        Binding("s", "toggle_services", "Services", show=True, priority=True),
     ]
 
     def __init__(self, context: AppContext | None = None) -> None:
@@ -130,7 +133,7 @@ class AwsTuiApp(App[None]):
         # exist in RootVM.chrome so hub subscribers stay wired up; only
         # the widget is dropped.
         ctx = self._app_ctx
-        yield BrandBanner(id="brand-banner")
+        yield BrandBanner(theme_name=ctx.initial_theme, id="brand-banner")
         with Horizontal(id="main-area"):
             yield ServicesMenu(ctx.root_vm.services_menu, hub=ctx.hub, id="services-menu")
             yield Container(id="content-host")
@@ -494,6 +497,11 @@ class AwsTuiApp(App[None]):
                 for entry in targets:
                     entry.set_marked(False)  # type: ignore[attr-defined]
 
+    def action_toggle_services(self) -> None:
+        """Collapse/expand the left services rail."""
+        for menu in self.query(ServicesMenu):
+            menu.toggle_collapsed()
+
     async def action_themes(self) -> None:
         """Open the keyboard-navigable theme picker modal."""
         ctx = self._app_ctx
@@ -532,6 +540,10 @@ class AwsTuiApp(App[None]):
         self.stylesheet.parse()
         self.stylesheet.update(self)
         ctx.initial_theme = name
+        # Banner uses a Python-side palette (not pure CSS) so it needs
+        # an explicit theme swap to repaint into the new color family.
+        for banner in self.query(BrandBanner):
+            banner.set_theme(name)
         # Force every widget under every screen to recompute its styles
         # AND re-render. ``layout=True`` re-runs the styles + layout
         # pipeline; ``repaint=True`` invalidates the visual cache.

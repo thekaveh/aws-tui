@@ -103,14 +103,19 @@ async def test_hint_legend_renders_with_registered_actions() -> None:
         async with app.run_test() as pilot:
             await pilot.pause()
             widget = app.query_one(HintLegend)
-            text = widget.render()
-            assert "cmd" in text.plain  # fallback
+            # Each chip is its own Static child now (so theme tcss can
+            # color it). Aggregate via .render() against the chip strip.
+            from textual.widgets import Static
+
+            def _strip_text(host: HintLegend) -> str:
+                return " ".join(str(s.render()) for s in host.query(Static))
+
+            assert "cmd" in _strip_text(widget)  # fallback action surfaces
             from aws_tui.vm.messages import FocusChangedMessage
 
             hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
             await pilot.pause()
-            text2 = app.query_one(HintLegend).render()
-            assert "copy" in text2.plain
+            assert "copy" in _strip_text(app.query_one(HintLegend))
     finally:
         vm.dispose()
         hub.dispose()

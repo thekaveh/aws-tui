@@ -146,19 +146,35 @@ class EntryRow(HubSubscriberMixin, Widget):
             self._apply_state_classes()
             self.refresh()
 
-    async def on_click(self, _event: object) -> None:
-        """First click: switch pane focus + move cursor. Second click on the
-        already-selected row delegates to :meth:`PaneVM.activate`."""
+    async def on_click(self, event: object) -> None:
+        """Click handling:
+
+        - **Shift+click**: toggle the row's marked flag (multi-select).
+          Cursor is also moved to the row so subsequent shift+clicks
+          extend from a known anchor.
+        - First click without shift: switch pane focus + move cursor.
+        - Click on the already-selected row: delegates to
+          :meth:`PaneVM.activate`.
+        """
         host = self._find_pane()
         if host is None:
             return
 
-        await host.on_click(_event)
+        await host.on_click(event)
 
         filtered = host.vm.filtered_entries
         try:
             target_index = filtered.index(self._entry_vm)
         except ValueError:
+            return
+
+        # Shift held → multi-select toggle. The ".." parent link is
+        # not markable. PaneVM.toggle_mark_at also republishes the
+        # viewmodel so the pane footer's marked-byte total updates.
+        shift_pressed = bool(getattr(event, "shift", False))
+        if shift_pressed and not self._entry_vm.is_parent_link:
+            host.vm.move_cursor_to(target_index)
+            host.vm.toggle_mark_at(target_index)
             return
 
         if not self._entry_vm.is_selected:

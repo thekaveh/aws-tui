@@ -1,14 +1,18 @@
 """HintLegend widget — bottom contextual hint row bound to :class:`HintLegendVM`.
 
-Each chip is rendered as ``<key in accent> <label in dim>`` with two spaces
-between chips. The widget subscribes to ``PropertyChangedMessage`` on the
-hub for the VM's ``actions`` property and re-renders on change.
+Each chip is rendered as a pair of Static widgets (key + label) with
+distinct CSS classes (``.hint-key`` / ``.hint-label``). Coloring now
+comes from the theme tcss (``$accent`` for keys, ``$text-muted`` for
+labels) instead of hard-coded Rich styles — that's what makes the bar
+adopt the new accent the moment the user switches themes.
 """
 
 from __future__ import annotations
 
-from rich.text import Text
+from textual.app import ComposeResult
+from textual.containers import Horizontal
 from textual.widget import Widget
+from textual.widgets import Static
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
@@ -18,10 +22,33 @@ from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
 class HintLegend(HubSubscriberMixin, Widget):
     """Bottom hint-legend row."""
 
+    # Structural only — colors come from the theme stylesheet so that a
+    # runtime theme swap repaints the footer immediately.
     DEFAULT_CSS = """
     HintLegend {
         height: 1;
+        margin: 0 1 1 1;
         content-align: center middle;
+    }
+    HintLegend > #hint-strip {
+        height: 1;
+        width: auto;
+        align-horizontal: center;
+    }
+    HintLegend .hint-key {
+        width: auto;
+        height: 1;
+        text-style: bold;
+    }
+    HintLegend .hint-label {
+        width: auto;
+        height: 1;
+        padding: 0 1 0 1;
+    }
+    HintLegend .hint-sep {
+        width: auto;
+        height: 1;
+        padding: 0 1 0 1;
     }
     """
 
@@ -41,19 +68,9 @@ class HintLegend(HubSubscriberMixin, Widget):
     def vm(self) -> HintLegendVM:
         return self._vm
 
-    def render(self) -> Text:
-        text = Text(justify="center")
-        chips = self._vm.actions
-        if not chips:
-            return text
-        for index, chip in enumerate(chips):
-            if index > 0:
-                # Dim middle-dot separator between chips ("Enter open · Tab switch · ...").
-                text.append("  ·  ", style="dim")
-            text.append(chip.key_label, style="bold cyan")
-            text.append(" ")
-            text.append(chip.action_label, style="dim")
-        return text
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="hint-strip"):
+            yield from self._build_chips()
 
     def on_mount(self) -> None:
         self.subscribe_to_vm(
@@ -67,7 +84,26 @@ class HintLegend(HubSubscriberMixin, Widget):
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name == "actions":
-            self.refresh()
+            self.call_after_refresh(self._rebuild_chips)
+
+    def _rebuild_chips(self) -> None:
+        try:
+            strip = self.query_one("#hint-strip", Horizontal)
+        except Exception:
+            return
+        for child in list(strip.children):
+            child.remove()
+        for chip in self._build_chips():
+            strip.mount(chip)
+
+    def _build_chips(self) -> list[Widget]:
+        widgets: list[Widget] = []
+        for i, chip in enumerate(self._vm.actions):
+            if i > 0:
+                widgets.append(Static("·", classes="hint-sep"))
+            widgets.append(Static(chip.key_label, classes="hint-key"))
+            widgets.append(Static(chip.action_label, classes="hint-label"))
+        return widgets
 
 
 __all__ = ["HintLegend"]

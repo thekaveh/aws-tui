@@ -176,19 +176,23 @@ DualPane {
 /* ── Hint legend (bottom) ────────────────────────────────────────────── */
 
 HintLegend {
-    height: 1;
     background: $bg-elev;
     color: $text-muted;
-    padding: 0 1;
 }
 
-HintLegend > .key {
+HintLegend .hint-key {
     color: $accent;
-    text-style: bold;
+    background: $bg-elev;
 }
 
-HintLegend > .label {
+HintLegend .hint-label {
     color: $text-muted;
+    background: $bg-elev;
+}
+
+HintLegend .hint-sep {
+    color: $text-dim;
+    background: $bg-elev;
 }
 
 /* ── Command palette ─────────────────────────────────────────────────── */

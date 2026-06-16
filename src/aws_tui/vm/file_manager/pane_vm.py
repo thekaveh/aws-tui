@@ -120,14 +120,17 @@ _PLACEHOLDER_FOR_STATE: dict[PaneState, tuple[str, str]] = {
 _COLUMN_HEADER_TEXT: str = f"   {'NAME':<40} {'SIZE':>12}  {'MODIFIED':<18}"
 
 
-def _summary_text(*, count: int, marked: int, total_bytes: int) -> str:
-    """Build the canonical summary line (matches spec §4.x)."""
+def _summary_text(*, count: int, marked: int, total_bytes: int, marked_bytes: int) -> str:
+    """Build the canonical summary line.
+
+    When the user has marked entries the size label shows the SUM OF
+    THE MARKED ENTRIES (so the user can see how big the upcoming copy
+    is). With no marks, it falls back to the total directory size."""
     if count == 0:
         return "empty"
-    size_label = _human_bytes(total_bytes)
     if marked > 0:
-        return f"{count} obj · {marked} marked · {size_label}"
-    return f"{count} obj · {size_label}"
+        return f"{count} obj · {marked} marked · {_human_bytes(marked_bytes)} selected"
+    return f"{count} obj · {_human_bytes(total_bytes)}"
 
 
 def _human_bytes(n: int) -> str:
@@ -298,6 +301,7 @@ class PaneVM:
     def viewmodel(self) -> PaneViewModel:
         marked = sum(1 for e in self._entries if e.is_marked)
         total_bytes = sum((e.entry.size or 0) for e in self._entries)
+        marked_bytes = sum((e.entry.size or 0) for e in self._entries if e.is_marked)
         placeholder, severity = self._placeholder_for_current_state()
         return PaneViewModel(
             breadcrumb=self._path.segments,
@@ -306,7 +310,12 @@ class PaneVM:
             selection_count=marked,
             filter_text=self._filter_text,
             error_text=self._error_text,
-            summary=_summary_text(count=len(self._entries), marked=marked, total_bytes=total_bytes),
+            summary=_summary_text(
+                count=len(self._entries),
+                marked=marked,
+                total_bytes=total_bytes,
+                marked_bytes=marked_bytes,
+            ),
             breadcrumb_text="/" if self._path.is_root else "/" + "/".join(self._path.segments),
             column_header_text=_COLUMN_HEADER_TEXT,
             placeholder_text=placeholder,
@@ -457,6 +466,19 @@ class PaneVM:
             await self.navigate_to(self._path.join(entry.name))
             return
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "preview_requested"))
+
+    def toggle_mark_at(self, target_index: int) -> None:
+        """Toggle the marked flag on the entry at ``target_index`` and
+        republish the viewmodel so subscribers (pane footer) recompute
+        marked counts + byte totals. Used by shift+click multi-select
+        in the view layer."""
+        if not (0 <= target_index < len(self._filtered)):
+            return
+        entry_vm = self._entries[self._filtered[target_index]]
+        if not self._is_multiselect_mode:
+            self._set_multiselect(True)
+        entry_vm.toggle_mark()
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
 
     def move_cursor_to(self, target_index: int) -> None:
         """Place the cursor directly at ``target_index`` (clamped). Used by
