@@ -41,6 +41,7 @@ from aws_tui.version import __version__
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
+from aws_tui.vm.messages import ThemeChangedMessage
 
 _ACTION_RING_SIZE = 100
 
@@ -96,9 +97,13 @@ class AwsTuiApp(App[None]):
         Binding("question_mark", "help", "Help", show=True, priority=True),
         Binding("colon", "help", "Cmd", show=True, priority=True),
         Binding("t", "themes", "Themes", show=True, priority=True),
+        Binding("T", "cycle_theme", "Cycle theme", show=True, priority=True),
         Binding("c", "copy", "Copy", show=True, priority=True),
         Binding("d", "delete", "Delete", show=True, priority=True),
         Binding("s", "toggle_services", "Services", show=True, priority=True),
+        Binding("S", "swap_source", "Swap source", show=True, priority=True),
+        Binding("shift+up", "mark_up", "Mark ↑", show=False, priority=True),
+        Binding("shift+down", "mark_down", "Mark ↓", show=False, priority=True),
     ]
 
     def __init__(self, context: AppContext | None = None) -> None:
@@ -133,7 +138,11 @@ class AwsTuiApp(App[None]):
         # exist in RootVM.chrome so hub subscribers stay wired up; only
         # the widget is dropped.
         ctx = self._app_ctx
-        yield BrandBanner(theme_name=ctx.initial_theme, id="brand-banner")
+        yield BrandBanner(
+            theme_name=ctx.initial_theme,
+            hub=ctx.hub,
+            id="brand-banner",
+        )
         with Horizontal(id="main-area"):
             yield ServicesMenu(ctx.root_vm.services_menu, hub=ctx.hub, id="services-menu")
             yield Container(id="content-host")
@@ -270,9 +279,24 @@ class AwsTuiApp(App[None]):
             cmd.execute()
 
     def action_move_up(self) -> None:
+        # Textual dispatches priority bindings in *reversed* order:
+        # App first, screen last. So this action wins the race over a
+        # modal's own ``priority=True`` up binding. To make the picker
+        # modal usable, forward to the active screen first when it
+        # exposes an ``action_move_up``. Same pattern for action_move_down.
+        if len(self.screen_stack) > 1:
+            forward = getattr(self.screen, "action_move_up", None)
+            if forward is not None:
+                forward()
+                return
         self._move_cursor(-1)
 
     def action_move_down(self) -> None:
+        if len(self.screen_stack) > 1:
+            forward = getattr(self.screen, "action_move_down", None)
+            if forward is not None:
+                forward()
+                return
         self._move_cursor(1)
 
     def _move_cursor(self, delta: int) -> None:
@@ -502,6 +526,105 @@ class AwsTuiApp(App[None]):
         for menu in self.query(ServicesMenu):
             menu.toggle_collapsed()
 
+    def action_cycle_theme(self) -> None:
+        """Cycle to the next theme without opening the picker modal —
+        bound to ``Shift+T`` so the footer chip is reachable too."""
+        ctx = self._app_ctx
+        names = list(ctx.theme_store.BUILTIN_NAMES)
+        if not names:
+            return
+        try:
+            idx = names.index(ctx.initial_theme)
+        except ValueError:
+            idx = -1
+        nxt = names[(idx + 1) % len(names)]
+        self.switch_theme(nxt)
+        self.notify(f"Theme: {nxt}", severity="information", timeout=2)
+
+    def action_mark_up(self) -> None:
+        self._extend_selection(-1)
+
+    def action_mark_down(self) -> None:
+        self._extend_selection(1)
+
+    def _extend_selection(self, delta: int) -> None:
+        """Shift+arrow handler: mark the current entry then move the
+        cursor in the given direction. Mirrors how spreadsheets and
+        file managers extend a multi-selection one cell at a time."""
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        pane = getattr(dual, "focused_pane", None)
+        if pane is None:
+            return
+        cur = pane.cursor_index
+        target = cur + delta
+        # toggle_mark_at also enters multiselect mode + republishes
+        # the viewmodel so the footer recomputes immediately.
+        toggle = getattr(pane, "toggle_mark_at", None)
+        if toggle is not None:
+            toggle(cur)
+        move = getattr(pane, "move_cursor_command", None)
+        if move is not None:
+            move.execute(delta)
+        # If the new cursor position is on a row that hasn't been
+        # marked yet, mark it too so the selection grows contiguously.
+        if toggle is not None and 0 <= target < len(pane.filtered_entries):
+            new_entry = pane.filtered_entries[target]
+            if not new_entry.is_marked:
+                toggle(target)
+
+    async def action_swap_source(self) -> None:
+        """Swap the focused pane between S3 and local provider so the
+        user can put any of the four {S3, local} x {S3, local}
+        combinations on the dual-pane."""
+        ctx = self._app_ctx
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        focused = getattr(dual, "focused_pane", None)
+        if focused is None:
+            return
+        try:
+            from aws_tui.domain.local_fs import LocalFS
+            from aws_tui.domain.s3_fs import S3FS
+        except Exception:
+            return
+        # Decide what the OTHER provider would be based on the current
+        # one's type. We replace the focused pane's provider with the
+        # complementary one and re-list from the root.
+        current = focused.provider
+        new_provider: object
+        new_identity: str
+        new_protocol: str
+        if isinstance(current, S3FS):
+            new_provider = LocalFS()
+            new_identity = "local"
+            new_protocol = ""
+        else:
+            # Local → S3. Build a service-root S3FS off the active
+            # connection (best-effort; absent connection is a no-op).
+            initial_conn = self._resolve_initial_connection()
+            if initial_conn is None:
+                self.notify("No AWS connection — can't swap to S3", severity="warning")
+                return
+            from aws_tui.services.s3.service import _aioboto3_session_for, _format_pane_title
+
+            session = _aioboto3_session_for(initial_conn)
+            new_provider = S3FS(
+                session=session,
+                bucket=None,
+                endpoint_url=initial_conn.endpoint_url,
+                force_path_style=initial_conn.force_path_style,
+            )
+            new_identity = _format_pane_title(initial_conn)
+            new_protocol = "s3:"
+        swap = getattr(focused, "swap_provider", None)
+        if swap is None:
+            return
+        ctx.log_sink.info("pane.swap_source", to=new_identity)
+        await swap(new_provider, identity_label=new_identity, path_protocol=new_protocol)
+
     async def action_themes(self) -> None:
         """Open the keyboard-navigable theme picker modal."""
         ctx = self._app_ctx
@@ -519,16 +642,26 @@ class AwsTuiApp(App[None]):
         finally:
             self.call_after_refresh(picker.dispose)
 
-    def switch_theme(self, name: str) -> None:
-        """Runtime theme swap — re-load the chosen ``.tcss`` over the current
-        stylesheet and force every mounted widget to repaint.
+    # Stable read_from key for the aws-tui theme source — re-using it on
+    # every ``add_source`` call means subsequent theme swaps REPLACE the
+    # source instead of stacking (the old code accumulated one source
+    # per swap, which is wasteful and can leak cached rules).
+    _THEME_SOURCE_KEY: ClassVar[tuple[str, str]] = ("aws_tui", "active-theme.tcss")
 
-        Why the walk: ``stylesheet.update(self)`` re-resolves CSS for the
-        whole tree, but widgets that have already cached a Rich renderable
-        (e.g. text with explicit styles) won't repaint until their next
-        refresh tick. Without the walk the previously-focused pane
-        adopted the new accent while the other one kept the old colors
-        until the user pressed Tab.
+    def switch_theme(self, name: str) -> None:
+        """Runtime theme swap.
+
+        Mirrors Textual's own ``_watch_theme`` flow:
+
+        1. Replace the theme tcss source via a stable ``read_from`` key so
+           sources don't accumulate.
+        2. Call ``refresh_css(animate=False)`` — that one call re-parses
+           the stylesheet, re-resolves variables, and applies styles to
+           every screen in the stack (current + background). It's the
+           same API Textual uses internally for its theme reactive.
+        3. Publish a ThemeChangedMessage on the hub so VMx-bound widgets
+           that bake colors into Python (BrandBanner) can swap their
+           per-theme palette without us reaching in by widget type.
         """
         ctx = self._app_ctx
         try:
@@ -536,21 +669,20 @@ class AwsTuiApp(App[None]):
         except Exception:
             ctx.log_sink.error("theme.load.failed", name=name)
             return
-        self.stylesheet.add_source(theme_css)
-        self.stylesheet.parse()
-        self.stylesheet.update(self)
+
+        # 1. Replace, don't accumulate.
+        self.stylesheet.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
+
+        # 2. Use Textual's own theme-refresh pipeline. This is the API
+        # ``_watch_theme`` itself uses — it covers reparse, variable
+        # re-resolution, and layout refresh across all mounted screens.
+        self._invalidate_css()
+        self.refresh_css(animate=False)
+
         ctx.initial_theme = name
-        # Banner uses a Python-side palette (not pure CSS) so it needs
-        # an explicit theme swap to repaint into the new color family.
-        for banner in self.query(BrandBanner):
-            banner.set_theme(name)
-        # Force every widget under every screen to recompute its styles
-        # AND re-render. ``layout=True`` re-runs the styles + layout
-        # pipeline; ``repaint=True`` invalidates the visual cache.
-        for screen in list(self.screen_stack):
-            screen.refresh(repaint=True, layout=True)
-            for widget in screen.walk_children(with_self=False):
-                widget.refresh(repaint=True, layout=True)
+
+        # 3. Broadcast for Python-side palettes (e.g. the banner).
+        ctx.hub.send(ThemeChangedMessage(name=name))
 
     # ── Crash handling ─────────────────────────────────────────────────────
 

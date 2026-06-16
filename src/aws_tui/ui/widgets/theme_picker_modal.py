@@ -3,6 +3,14 @@
 Dedicated modal screen so the user can iterate themes with up/down/k/j
 and apply with Enter (mouse still works too). Binds to the existing
 :class:`ThemePickerVM`; each row mirrors a :class:`ThemeOptionVM`.
+
+Binding strategy: every navigation key is declared **both** as a
+``priority=True`` binding AND handled in :meth:`on_key` as
+defense-in-depth. The priority binding wins the dispatch race against
+the App's own ``priority=True`` arrow bindings (Textual iterates the
+binding chain *reversed* for priority lookups, so the modal — being on
+top of the screen stack — fires first). The :meth:`on_key` fallback
+covers the edge case where a key isn't declared in the binding map.
 """
 
 from __future__ import annotations
@@ -75,22 +83,14 @@ class _ThemeRow(HubSubscriberMixin, Static):
 
 
 class ThemePickerModal(ModalScreen[None]):
-    """Modal that lets the user pick a theme by keyboard or mouse.
-
-    Bindings:
-
-    - ``up``/``k`` and ``down``/``j``: move the cursor between rows.
-    - ``enter``: apply the highlighted theme and close.
-    - ``escape`` / ``q`` / ``t``: close without changing.
-    - Mouse click on a row: apply that theme and close.
-    """
+    """Modal that lets the user pick a theme by keyboard or mouse."""
 
     DEFAULT_CSS = """
     ThemePickerModal {
         align: center middle;
     }
     ThemePickerModal > #picker-frame {
-        width: 48;
+        width: 44;
         max-height: 20;
         padding: 1 0;
     }
@@ -107,20 +107,20 @@ class ThemePickerModal(ModalScreen[None]):
     }
     """
 
-    # Only the dismiss + apply chords go through the binding system —
-    # arrow keys are handled via :meth:`on_key` because the App-level
-    # ``priority=True`` arrow bindings (file-manager cursor) otherwise
-    # win the race over a modal's bindings.
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape,q,t", "dismiss", "Close", show=True, priority=True),
+        # priority=True so these win against the App's own priority arrow
+        # bindings (Textual iterates the binding chain in reverse for
+        # priority lookups → modal at the top of the stack fires first).
+        Binding("up,k", "move_up", "↑", show=False, priority=True),
+        Binding("down,j", "move_down", "↓", show=False, priority=True),
+        Binding("enter", "apply", "Apply", show=True, priority=True),
+        Binding("escape,q,t", "close", "Close", show=True, priority=True),
     ]
 
     def __init__(self, *, picker: ThemePickerVM, hub: MessageHub[Message]) -> None:
         super().__init__()
         self._picker: ThemePickerVM = picker
         self._hub: MessageHub[Message] = hub
-        # Start the cursor on the currently-active theme so Enter without
-        # any nav re-applies the current selection (harmless and intuitive).
         names = [opt.name for opt in picker.options]
         try:
             self._cursor: int = names.index(picker.active_theme)
@@ -141,30 +141,20 @@ class ThemePickerModal(ModalScreen[None]):
         self._sync_cursor_class()
 
     async def on_key(self, event: Key) -> None:
-        """Handle navigation + apply at the event layer.
-
-        Bindings would be eaten by the App's ``priority=True`` arrow
-        bindings (which exist so the file-manager cursor reacts even
-        before a pane is focused). At the event layer the active screen
-        on the stack sees the key first.
-        """
+        """Defense-in-depth: if a priority-binding mismatch lets a key
+        slip past the binding system, catch it here at the event layer."""
         if event.key in ("up", "k"):
-            self.action_move(-1)
+            self._move_by(-1)
             event.stop()
         elif event.key in ("down", "j"):
-            self.action_move(1)
+            self._move_by(1)
             event.stop()
         elif event.key == "enter":
             self.action_apply()
             event.stop()
 
-    # ── Mouse ──────────────────────────────────────────────────────────────
-
     def on_click(self, event: object) -> None:
-        # Hit-test which row was clicked (if any) and apply it.
         target = getattr(event, "control", None) or getattr(event, "widget", None)
-        if target is None:
-            return
         node: object | None = target
         while node is not None:
             if isinstance(node, _ThemeRow):
@@ -173,16 +163,13 @@ class ThemePickerModal(ModalScreen[None]):
                 return
             node = getattr(node, "parent", None)
 
-    # ── Actions ────────────────────────────────────────────────────────────
+    # ── Actions (non-parameterized so the action-router can dispatch them) ──
 
-    def action_move(self, delta: int) -> None:
-        if not self._rows:
-            return
-        new = max(0, min(self._cursor + delta, len(self._rows) - 1))
-        if new == self._cursor:
-            return
-        self._cursor = new
-        self._sync_cursor_class()
+    def action_move_up(self) -> None:
+        self._move_by(-1)
+
+    def action_move_down(self) -> None:
+        self._move_by(1)
 
     def action_apply(self) -> None:
         if not self._rows:
@@ -192,10 +179,19 @@ class ThemePickerModal(ModalScreen[None]):
         self._picker.pick_theme_command.execute(row.theme_name)
         self.dismiss(None)
 
-    def action_dismiss(self, _result: object = None) -> None:  # type: ignore[override]
+    def action_close(self) -> None:
         self.dismiss(None)
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    def _move_by(self, delta: int) -> None:
+        if not self._rows:
+            return
+        new = max(0, min(self._cursor + delta, len(self._rows) - 1))
+        if new == self._cursor:
+            return
+        self._cursor = new
+        self._sync_cursor_class()
 
     def _sync_cursor_class(self) -> None:
         for i, row in enumerate(self._rows):

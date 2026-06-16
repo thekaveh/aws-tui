@@ -22,13 +22,15 @@ from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
 class HintLegend(HubSubscriberMixin, Widget):
     """Bottom hint-legend row."""
 
-    # Structural only — colors come from the theme stylesheet so that a
-    # runtime theme swap repaints the footer immediately.
+    # Structural only — colors / border come from the theme stylesheet
+    # so that a runtime theme swap repaints the footer immediately.
+    # ``align: center middle`` on the host + ``align-horizontal: center``
+    # on the chip strip centers the row even when chips don't fill it.
     DEFAULT_CSS = """
     HintLegend {
-        height: 1;
+        height: 3;
         margin: 0 1 1 1;
-        content-align: center middle;
+        align: center middle;
     }
     HintLegend > #hint-strip {
         height: 1;
