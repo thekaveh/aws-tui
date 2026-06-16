@@ -1,8 +1,9 @@
-"""Help + theme-picker modal.
+"""Help + theme-picker modal — strict MVVM.
 
-Stand-in for the full command-palette deferred from M6. The modal lists
-every wired keyboard binding, lets the user click a theme to switch at
-runtime, and points at the deeper docs. Dismisses on Esc / ? / q.
+The theme-picker section is backed by :class:`ThemePickerVM`; each row is
+a :class:`ThemeOptionVM` bound to its own :class:`ThemeOptionRow` view.
+Clicks fire ``pick_theme_command``; the View never reaches into the App
+service directly.
 """
 
 from __future__ import annotations
@@ -12,50 +13,72 @@ from typing import ClassVar
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical, VerticalScroll
-from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Static
+from vmx import Message, MessageHub
+
+from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
+from aws_tui.vm.chrome.theme_picker_vm import ThemeOptionVM, ThemePickerVM
 
 
-class ThemePickEntry(Widget):
-    """Single themed row in the theme-picker section.
+class ThemeOptionRow(HubSubscriberMixin, Widget):
+    """One clickable row in the theme picker — bound to a :class:`ThemeOptionVM`.
 
-    Bound to a theme name; on click, posts a ``ThemePicked`` message that
-    the parent modal routes to the App for a runtime stylesheet swap.
+    Listens for ``is_active`` PropertyChanged on the hub so the glyph
+    swaps live without the parent modal having to re-mount the section.
     """
 
     DEFAULT_CSS = """
-    ThemePickEntry {
+    ThemeOptionRow {
         height: 1;
         padding: 0 2;
     }
-    ThemePickEntry.-active {
+    ThemeOptionRow.-active {
         background: $boost;
         text-style: bold;
     }
     """
 
-    class ThemePicked(Message):
-        def __init__(self, name: str) -> None:
-            super().__init__()
-            self.name = name
-
-    def __init__(self, name: str, *, active: bool) -> None:
-        super().__init__(classes="theme-entry " + ("-active" if active else ""))
-        self._theme_name = name
-        self._active = active
+    def __init__(
+        self,
+        vm: ThemeOptionVM,
+        *,
+        hub: MessageHub[Message],
+        picker: ThemePickerVM,
+    ) -> None:
+        super().__init__(classes="theme-entry " + ("-active" if vm.is_active else ""))
+        self._vm: ThemeOptionVM = vm
+        self._hub: MessageHub[Message] = hub
+        self._picker: ThemePickerVM = picker
 
     def render(self) -> str:
-        mark = "●" if self._active else "○"
-        return f"  {mark}  {self._theme_name}"
+        return f"  {self._vm.marker_glyph}  {self._vm.name}"
+
+    def on_mount(self) -> None:
+        self.subscribe_to_vm(
+            hub=self._hub,
+            vm=self._vm,
+            on_property_changed=self._on_vm_property_changed,
+        )
+
+    def on_unmount(self) -> None:
+        self.unsubscribe_from_vm()
+
+    def _on_vm_property_changed(self, property_name: str) -> None:
+        if property_name == "is_active":
+            if self._vm.is_active:
+                self.add_class("-active")
+            else:
+                self.remove_class("-active")
+            self.refresh()
 
     def on_click(self, _event: object) -> None:
-        self.post_message(self.ThemePicked(self._theme_name))
+        self._picker.pick_theme_command.execute(self._vm.name)
 
 
 class HelpModal(ModalScreen[None]):
-    """Help overlay listing keybindings, mouse, and a theme picker."""
+    """Help overlay listing keybindings, mouse, and a VM-backed theme picker."""
 
     DEFAULT_CSS = """
     HelpModal {
@@ -97,10 +120,6 @@ class HelpModal(ModalScreen[None]):
         color: $text-muted;
         padding: 0 2;
     }
-    HelpModal .help-key {
-        color: $accent;
-        text-style: bold;
-    }
     HelpModal #help-footer {
         padding: 1 2 0 2;
         color: $text-muted;
@@ -113,10 +132,10 @@ class HelpModal(ModalScreen[None]):
         Binding("escape,question_mark,q,colon", "dismiss", "Close", show=True, priority=True),
     ]
 
-    def __init__(self, *, current_theme: str, themes: tuple[str, ...]) -> None:
+    def __init__(self, *, theme_picker: ThemePickerVM, hub: MessageHub[Message]) -> None:
         super().__init__()
-        self._current_theme = current_theme
-        self._themes = themes
+        self._theme_picker: ThemePickerVM = theme_picker
+        self._hub: MessageHub[Message] = hub
 
     def compose(self) -> ComposeResult:
         with Vertical(id="help-frame"):
@@ -126,7 +145,6 @@ class HelpModal(ModalScreen[None]):
                 id="help-subtitle",
             )
             with VerticalScroll():
-                # ── Keyboard ──────────────────────────────────────────────
                 yield Static("Navigation", classes="help-section")
                 for key, label in (
                     ("Tab / Shift+Tab", "switch pane focus"),
@@ -146,12 +164,10 @@ class HelpModal(ModalScreen[None]):
                 yield self._key_row("?  or  :", "this help overlay")
                 yield self._key_row("q / Ctrl+C", "quit")
 
-                # ── Themes ────────────────────────────────────────────────
                 yield Static("Themes (click to switch)", classes="help-section")
-                for name in self._themes:
-                    yield ThemePickEntry(name, active=name == self._current_theme)
+                for option in self._theme_picker.options:
+                    yield ThemeOptionRow(option, hub=self._hub, picker=self._theme_picker)
 
-                # ── Docs ──────────────────────────────────────────────────
                 yield Static("Docs", classes="help-section")
                 yield Static(
                     "  docs/connections.md       config schema + vendor quirks\n"
@@ -163,17 +179,11 @@ class HelpModal(ModalScreen[None]):
             yield Static("press ?  /  Esc  to close", id="help-footer")
 
     def _key_row(self, key: str, label: str) -> Static:
-        """Render one shortcut row with the key in accent and label in dim."""
-        return Static(f"  [b cyan]{key:<18}[/]  [dim]{label}[/]", classes="help-row", markup=True)
-
-    def on_theme_pick_entry_theme_picked(self, event: ThemePickEntry.ThemePicked) -> None:
-        """Route a theme click up to the App for a stylesheet swap."""
-        from aws_tui.app import AwsTuiApp  # local import to avoid cycle
-
-        app = self.app
-        if isinstance(app, AwsTuiApp):
-            app.switch_theme(event.name)
-        self.app.pop_screen()
+        return Static(
+            f"  [b cyan]{key:<18}[/]  [dim]{label}[/]",
+            classes="help-row",
+            markup=True,
+        )
 
 
-__all__ = ["HelpModal", "ThemePickEntry"]
+__all__ = ["HelpModal", "ThemeOptionRow"]
