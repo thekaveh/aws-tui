@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from collections import deque
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -24,6 +25,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
+from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.help_modal import HelpModal
@@ -33,6 +35,7 @@ from aws_tui.ui.widgets.status_bar import StatusBar
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.version import __version__
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
+from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 
 _ACTION_RING_SIZE = 100
 
@@ -106,6 +109,7 @@ class AwsTuiApp(App[None]):
 
     def compose(self) -> ComposeResult:
         ctx = self._app_ctx
+        yield BrandBanner(id="brand-banner")
         yield StatusBar(ctx.root_vm.chrome.status_bar, hub=ctx.hub, id="status-bar")
         with Horizontal(id="main-area"):
             yield ServicesMenu(ctx.root_vm.services_menu, hub=ctx.hub, id="services-menu")
@@ -148,9 +152,16 @@ class AwsTuiApp(App[None]):
             ctx.log_sink.error("theme.load.failed", name=ctx.initial_theme)
 
     def _resolve_initial_connection(self) -> Connection | None:
-        """Pick the initial connection: ``[defaults].connection`` if set and
-        present in the resolver's list, else the first auto-discovered profile,
-        else ``None`` (signals the no-connection placeholder branch).
+        """Pick the initial connection in this order:
+
+        1. ``[defaults].connection`` from config.toml, if it resolves.
+        2. ``$AWS_PROFILE`` if exported — matches the AWS CLI's resolution
+           order so the TUI lands on the same identity a user gets from
+           ``aws s3 ls`` in the same shell. This is the SSO-recovery path
+           for users whose ``[default]`` profile has no creds but whose
+           working profile is the env var.
+        3. The first auto-discovered profile (legacy fallback).
+        4. ``None`` — the no-connection placeholder branch.
         """
         ctx = self._app_ctx
         try:
@@ -164,6 +175,13 @@ class AwsTuiApp(App[None]):
                 (c for c in connections if c.name == cfg.defaults.connection),
                 None,
             )
+        if initial_conn is None:
+            env_profile = (os.environ.get("AWS_PROFILE") or "").strip()
+            if env_profile:
+                initial_conn = next(
+                    (c for c in connections if c.profile == env_profile),
+                    None,
+                )
         if initial_conn is None and connections:
             initial_conn = connections[0]
         return initial_conn
@@ -281,14 +299,23 @@ class AwsTuiApp(App[None]):
             await pane.refresh()
 
     async def action_help(self) -> None:
-        """Show the help overlay + theme picker (also bound to ``:``)."""
+        """Show the help overlay + VM-backed theme picker (also bound to ``:``)."""
         ctx = self._app_ctx
-        await self.push_screen(
-            HelpModal(
-                current_theme=ctx.initial_theme,
-                themes=ctx.theme_store.BUILTIN_NAMES,
-            )
+        picker = ThemePickerVM(
+            themes=ctx.theme_store.BUILTIN_NAMES,
+            active_theme=ctx.initial_theme,
+            on_pick=self.switch_theme,
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
         )
+        picker.construct()
+        modal = HelpModal(theme_picker=picker, hub=ctx.hub)
+        try:
+            await self.push_screen(modal)
+        finally:
+            # The modal lifetime is bounded by the screen; once it pops, the
+            # picker VM has no more subscribers and can be released.
+            self.call_after_refresh(picker.dispose)
 
     def switch_theme(self, name: str) -> None:
         """Runtime theme swap — re-load the chosen ``.tcss`` over the current

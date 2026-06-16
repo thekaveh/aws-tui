@@ -14,12 +14,35 @@ inner VM.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage, RelayCommand
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import EntryKind, FileEntry
+
+
+def _format_size(size: int | None, kind: EntryKind) -> str:
+    """Human-readable size string. ``<DIR>`` for directories; ``?`` for unknown."""
+    if kind is EntryKind.DIRECTORY:
+        return "<DIR>"
+    if size is None:
+        return "?"
+    if size < 1024:
+        return f"{size} B"
+    value = float(size)
+    for unit in ("K", "M", "G", "T"):
+        value /= 1024.0
+        if value < 1024.0:
+            return f"{value:.1f} {unit}"
+    return f"{value:.1f} P"
+
+
+def _format_modified(when: datetime | None) -> str:
+    if when is None:
+        return "-"
+    return when.strftime("%Y-%m-%d %H:%M")
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +124,45 @@ class EntryVM:
     @property
     def is_marked(self) -> bool:
         return self._inner.model.is_marked
+
+    # ── Display projections (VM owns formatting — view just renders) ──────
+
+    @property
+    def display_name(self) -> str:
+        """Filename suffixed with ``/`` on directories so the view doesn't
+        branch on :class:`EntryKind`."""
+        entry = self._inner.model.entry
+        if entry.kind is EntryKind.DIRECTORY and entry.name != "..":
+            return f"{entry.name}/"
+        return entry.name
+
+    @property
+    def size_display(self) -> str:
+        entry = self._inner.model.entry
+        return _format_size(entry.size, entry.kind)
+
+    @property
+    def modified_display(self) -> str:
+        return _format_modified(self._inner.model.entry.modified)
+
+    @property
+    def mark_glyph(self) -> str:
+        """``*`` when marked, space otherwise — multi-select indicator."""
+        return "*" if self._inner.model.is_marked else " "
+
+    @property
+    def cursor_glyph(self) -> str:
+        """Heavy left bar on the selected row; blank otherwise."""
+        return "▌" if self._inner.model.is_selected else " "
+
+    @property
+    def is_parent_link(self) -> bool:
+        """``True`` for the synthetic ``..`` parent-link row."""
+        return self._inner.model.entry.name == ".."
+
+    @property
+    def is_directory(self) -> bool:
+        return self._inner.model.entry.kind is EntryKind.DIRECTORY
 
     @property
     def toggle_select_command(self) -> RelayCommand:

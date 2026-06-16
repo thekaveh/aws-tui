@@ -1,22 +1,14 @@
 """Pane widget — single Norton-Commander column bound to :class:`PaneVM`.
 
-Layout:
-
-    +-- breadcrumb (single row) ---------------+
-    | NAME    SIZE     MODIFIED                |
-    | entry row 1                              |
-    | entry row 2                              |
-    | ...                                      |
-    +-- footer summary -----------------------+
-
-State placeholders (``loading`` / ``empty`` / ``auth_required`` /
-``forbidden`` / ``unreachable`` / ``error``) replace the entry body when
-``PaneVM.state != IDLE`` per spec §7.7.
+Strict MVVM: the view computes nothing user-facing. All display strings
+(``display_name``, ``size_display``, ``modified_display``, ``mark_glyph``,
+``cursor_glyph``, ``breadcrumb_text``, ``column_header_text``,
+``placeholder_text``, ``placeholder_severity``) live on the VM. The view
+just lays them out and routes input to VM commands.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import ClassVar
 
 from rich.text import Text
@@ -26,64 +18,13 @@ from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub
 
-from aws_tui.domain.filesystem import EntryKind
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.vm.file_manager.entry_vm import EntryVM
-from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
-
-
-def _format_size(size: int | None, kind: EntryKind) -> str:
-    if kind is EntryKind.DIRECTORY:
-        return "<DIR>"
-    if size is None:
-        return "?"
-    if size < 1024:
-        return f"{size} B"
-    units = ("K", "M", "G", "T")
-    value = float(size)
-    for unit in units:
-        value /= 1024.0
-        if value < 1024.0:
-            return f"{value:.1f} {unit}"
-    return f"{value:.1f} P"
-
-
-def _format_modified(when: datetime | None) -> str:
-    if when is None:
-        return "-"
-    return when.strftime("%Y-%m-%d %H:%M")
-
-
-# State -> placeholder text + class suffix.
-_PLACEHOLDER_TEXT: dict[PaneState, tuple[str, str]] = {
-    PaneState.LOADING: ("loading...", ""),
-    PaneState.EMPTY: ("empty", ""),
-    PaneState.AUTH_REQUIRED: (
-        "auth needed - press a to sign in (or `aws sso login --profile <name>`)",
-        "-warning",
-    ),
-    PaneState.FORBIDDEN: (
-        "access denied\n\n"
-        "Possible causes:\n"
-        "  - No AWS credentials configured.\n"
-        "    Run `aws configure` or `aws configure sso` and relaunch.\n"
-        "  - Credentials are valid but the IAM principal lacks\n"
-        "    `s3:ListAllMyBuckets` (root listing) or `s3:ListBucket`\n"
-        "    (object listing). Check IAM policy on the profile.\n"
-        "  - Expired SSO token. Run `aws sso login --profile <name>`.\n\n"
-        "Press r to retry. Press ? for the full keymap.",
-        "-error",
-    ),
-    PaneState.UNREACHABLE: (
-        "endpoint unreachable - press r to retry; check network / VPN / endpoint URL",
-        "-warning",
-    ),
-    PaneState.ERROR: ("error", "-error"),
-}
+from aws_tui.vm.file_manager.pane_vm import PaneVM
 
 
 class EntryRow(Widget):
-    """One entry row in a pane."""
+    """One entry row in a pane — bound to a single :class:`EntryVM`."""
 
     DEFAULT_CSS = """
     EntryRow {
@@ -107,29 +48,22 @@ class EntryRow(Widget):
         return self._entry_vm
 
     def render(self) -> Text:
-        entry = self._entry_vm.entry
-        marker = "*" if self._entry_vm.is_marked else " "
-        # Left-edge accent column on the selected row (a half-block at column 0
-        # in the accent color). Replaces the older ">" prefix — looks closer
-        # to the design-spec mockups and avoids stealing a character cell from
-        # the name area when the row is unselected.
-        cursor_bar = "▌" if self._entry_vm.is_selected else " "
-        cursor_style = "bold cyan" if self._entry_vm.is_selected else ""
-        name = entry.name + ("/" if entry.kind is EntryKind.DIRECTORY else "")
-        size = _format_size(entry.size, entry.kind)
-        modified = _format_modified(entry.modified)
+        vm = self._entry_vm
+        cursor_style = "bold cyan" if vm.is_selected else ""
         text = Text()
-        text.append(cursor_bar, style=cursor_style)
-        text.append(f"{marker} {name:<32} {size:>10}  {modified}")
+        text.append(vm.cursor_glyph, style=cursor_style)
+        text.append(
+            f"{vm.mark_glyph} {vm.display_name:<32} {vm.size_display:>10}  {vm.modified_display}"
+        )
         return text
 
     async def on_click(self, _event: object) -> None:
-        """Mouse click on an entry row.
+        """Mouse click on a row.
 
-        - First click: focus the host pane (if not already) AND move the
-          cursor to this row.
-        - Click on the already-selected row: descend / ascend depending on
-          whether the entry is a directory (or ``..``).
+        - First click on an unfocused row: switches pane focus + moves the
+          cursor to this row (no domain reasoning here — pure index math).
+        - Click on the already-selected row: delegates to
+          :meth:`PaneVM.activate`, which owns the ``..``/dir/file dispatch.
         """
         host: Pane | None = None
         node: object | None = self
@@ -141,29 +75,22 @@ class EntryRow(Widget):
         if host is None:
             return
 
-        # Ensure host pane gets focus first so subsequent keys land on it.
         await host.on_click(_event)
 
-        target_index = host.vm.filtered_entries.index(self._entry_vm)
-        already_selected = self._entry_vm.is_selected
-        if not already_selected:
-            # Move cursor to the clicked row.
-            delta = target_index - host.vm.cursor_index
-            if delta != 0:
-                host.vm.move_cursor_command.execute(delta)
+        filtered = host.vm.filtered_entries
+        try:
+            target_index = filtered.index(self._entry_vm)
+        except ValueError:
             return
 
-        # Second click on the same row: navigate (descend or ascend on "..").
-        entry = self._entry_vm.entry
-        if entry.name == "..":
-            if not host.vm.path.is_root:
-                await host.vm.navigate_to(host.vm.path.parent())
+        if not self._entry_vm.is_selected:
+            host.vm.move_cursor_to(target_index)
             return
-        if entry.kind is EntryKind.DIRECTORY:
-            await host.vm.navigate_to(host.vm.path.join(entry.name))
+
+        await host.vm.activate(target_index)
 
     def update_state(self) -> None:
-        # Sync CSS classes to mirror VM flags.
+        """Sync CSS classes to mirror VM flags (purely cosmetic)."""
         if self._entry_vm.is_selected:
             self.add_class("-selected")
         else:
@@ -172,7 +99,7 @@ class EntryRow(Widget):
             self.add_class("-marked")
         else:
             self.remove_class("-marked")
-        if self._entry_vm.entry.kind is EntryKind.DIRECTORY:
+        if self._entry_vm.is_directory:
             self.add_class("-dir")
         else:
             self.remove_class("-dir")
@@ -210,10 +137,11 @@ class Pane(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        yield Static(self._breadcrumb_text(), classes="breadcrumb")
-        yield Static(self._column_header_text(), classes="column-header")
+        vm = self._vm.viewmodel
+        yield Static(vm.breadcrumb_text, classes="breadcrumb")
+        yield Static(vm.column_header_text, classes="column-header")
         yield Vertical(id="pane-body")
-        yield Static(self._footer_text(), classes="pane-footer")
+        yield Static(vm.summary, classes="pane-footer")
 
     def on_mount(self) -> None:
         self._render_body()
@@ -233,13 +161,7 @@ class Pane(HubSubscriberMixin, Widget):
             self.remove_class("-focused")
 
     async def on_click(self, _event: object) -> None:
-        """Clicking anywhere in a pane switches focus to it (when applicable).
-
-        Walks up the widget tree to find the ``DualPane`` parent and toggles
-        focus via its VM's ``switch_focus_command`` if this pane isn't already
-        the focused side. The deeper-than-Tab affordance asked for in the
-        post-v0.7 usability feedback.
-        """
+        """Clicking anywhere in a pane switches focus to it (when applicable)."""
         node: object | None = self
         while node is not None:
             if type(node).__name__ == "DualPane":
@@ -267,9 +189,10 @@ class Pane(HubSubscriberMixin, Widget):
             footer = self.query_one(".pane-footer", Static)
         except Exception:
             return
-        breadcrumb.update(self._breadcrumb_text())
-        header.update(self._column_header_text())
-        footer.update(self._footer_text())
+        vm = self._vm.viewmodel
+        breadcrumb.update(vm.breadcrumb_text)
+        header.update(vm.column_header_text)
+        footer.update(vm.summary)
         self._render_body()
 
     def _render_body(self) -> None:
@@ -277,43 +200,25 @@ class Pane(HubSubscriberMixin, Widget):
             body = self.query_one("#pane-body", Vertical)
         except Exception:
             return
-        # Clear any existing children.
         for child in list(body.children):
             child.remove()
 
-        state = self._vm.state
-        if state in _PLACEHOLDER_TEXT and (state != PaneState.IDLE):
-            text, suffix = _PLACEHOLDER_TEXT[state]
-            if self._vm.viewmodel.error_text:
-                text = f"{text}: {self._vm.viewmodel.error_text}"
+        vm = self._vm.viewmodel
+        if vm.placeholder_text is not None:
             placeholder_class = "pane-placeholder"
-            if suffix:
-                placeholder_class = f"{placeholder_class} {suffix}"
-            body.mount(Static(text, classes=placeholder_class))
+            if vm.placeholder_severity:
+                placeholder_class = f"{placeholder_class} -{vm.placeholder_severity}"
+            body.mount(Static(vm.placeholder_text, classes=placeholder_class))
             return
 
         for entry_vm in self._vm.filtered_entries:
             row = EntryRow(entry_vm)
             body.mount(row)
-        # Sync cursor / marked classes after mount.
         self.call_after_refresh(self._refresh_row_states)
 
     def _refresh_row_states(self) -> None:
         for row in self.query(EntryRow):
             row.update_state()
-
-    def _breadcrumb_text(self) -> str:
-        path = self._vm.path
-        if path.is_root:
-            return "/"
-        return "/" + "/".join(path.segments)
-
-    @staticmethod
-    def _column_header_text() -> str:
-        return f"   {'NAME':<32} {'SIZE':>10}  MODIFIED"
-
-    def _footer_text(self) -> str:
-        return self._vm.viewmodel.summary
 
 
 __all__ = ["EntryRow", "Pane"]

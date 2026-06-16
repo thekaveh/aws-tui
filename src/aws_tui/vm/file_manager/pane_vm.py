@@ -66,6 +66,11 @@ class PaneViewModel:
     """Immutable projection consumed by the view layer.
 
     Derived from the underlying entries + cursor + filter + provider state.
+
+    All user-visible strings (``breadcrumb_text``, ``column_header_text``,
+    ``placeholder_text``, ``summary``) live here so the view layer owns
+    *zero* copy. ``placeholder_severity`` lets the view pick a CSS class
+    without branching on :class:`PaneState`.
     """
 
     breadcrumb: tuple[str, ...]
@@ -75,6 +80,42 @@ class PaneViewModel:
     filter_text: str
     error_text: str | None
     summary: str
+    breadcrumb_text: str
+    column_header_text: str
+    placeholder_text: str | None
+    placeholder_severity: str  # "", "warning", "error"
+
+
+# State → (user-facing text, severity) — VM-owned per MVVM. Severity maps
+# to a CSS class suffix the view appends.
+_PLACEHOLDER_FOR_STATE: dict[PaneState, tuple[str, str]] = {
+    PaneState.LOADING: ("loading...", ""),
+    PaneState.EMPTY: ("empty", ""),
+    PaneState.AUTH_REQUIRED: (
+        "auth needed - press a to sign in (or `aws sso login --profile <name>`)",
+        "warning",
+    ),
+    PaneState.FORBIDDEN: (
+        "access denied\n\n"
+        "Possible causes:\n"
+        "  - No AWS credentials configured.\n"
+        "    Run `aws configure` or `aws configure sso` and relaunch.\n"
+        "  - Credentials are valid but the IAM principal lacks\n"
+        "    `s3:ListAllMyBuckets` (root listing) or `s3:ListBucket`\n"
+        "    (object listing). Check IAM policy on the profile.\n"
+        "  - Expired SSO token. Run `aws sso login --profile <name>`.\n\n"
+        "Press r to retry. Press ? for the full keymap.",
+        "error",
+    ),
+    PaneState.UNREACHABLE: (
+        "endpoint unreachable - press r to retry; check network / VPN / endpoint URL",
+        "warning",
+    ),
+    PaneState.ERROR: ("error", "error"),
+}
+
+
+_COLUMN_HEADER_TEXT: str = f"   {'NAME':<32} {'SIZE':>10}  MODIFIED"
 
 
 def _summary_text(*, count: int, marked: int, total_bytes: int) -> str:
@@ -245,6 +286,7 @@ class PaneVM:
     def viewmodel(self) -> PaneViewModel:
         marked = sum(1 for e in self._entries if e.is_marked)
         total_bytes = sum((e.entry.size or 0) for e in self._entries)
+        placeholder, severity = self._placeholder_for_current_state()
         return PaneViewModel(
             breadcrumb=self._path.segments,
             state=self._state,
@@ -253,7 +295,19 @@ class PaneVM:
             filter_text=self._filter_text,
             error_text=self._error_text,
             summary=_summary_text(count=len(self._entries), marked=marked, total_bytes=total_bytes),
+            breadcrumb_text="/" if self._path.is_root else "/" + "/".join(self._path.segments),
+            column_header_text=_COLUMN_HEADER_TEXT,
+            placeholder_text=placeholder,
+            placeholder_severity=severity,
         )
+
+    def _placeholder_for_current_state(self) -> tuple[str | None, str]:
+        if self._state == PaneState.IDLE:
+            return None, ""
+        text, severity = _PLACEHOLDER_FOR_STATE.get(self._state, ("error", "error"))
+        if self._error_text:
+            text = f"{text}: {self._error_text}"
+        return text, severity
 
     # ── Commands ────────────────────────────────────────────────────────────
 
@@ -351,6 +405,45 @@ class PaneVM:
 
     async def refresh(self) -> None:
         await self._reload()
+
+    async def activate(self, target_index: int) -> None:
+        """Activate the entry at ``target_index`` in :attr:`filtered_entries`.
+
+        Encapsulates the ".." / directory / file dispatch + path arithmetic
+        so the view never reaches into :class:`PathRef`. Behavior:
+
+        - ``..`` (synthetic parent link) — ascend if not already at root.
+        - Directory — navigate into ``self.path.join(name)``.
+        - File — emit ``preview_requested`` for a higher-level VM to handle.
+
+        ``target_index`` out of range is silently ignored.
+        """
+        if not (0 <= target_index < len(self._filtered)):
+            return
+        entry_vm = self._entries[self._filtered[target_index]]
+        entry = entry_vm.entry
+        if entry_vm.is_parent_link:
+            if not self._path.is_root:
+                await self.navigate_to(self._path.parent())
+            return
+        if entry.kind is EntryKind.DIRECTORY:
+            await self.navigate_to(self._path.join(entry.name))
+            return
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "preview_requested"))
+
+    def move_cursor_to(self, target_index: int) -> None:
+        """Place the cursor directly at ``target_index`` (clamped). Used by
+        view-side input adapters that translate a click coordinate into a
+        filtered-row index without computing a delta themselves."""
+        if not self._filtered:
+            return
+        clamped = max(0, min(target_index, len(self._filtered) - 1))
+        if clamped == self._cursor_index:
+            return
+        self._cursor_index = clamped
+        self._sync_cursor_selection()
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "cursor_index"))
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
 
     async def delete_marked(self) -> None:
         """Delete every marked entry; refresh on success."""
