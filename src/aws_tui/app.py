@@ -371,32 +371,48 @@ class AwsTuiApp(App[None]):
 
         ctx = self._app_ctx
         modal = ConfirmModal(ctx.confirm_vm, request, hub=ctx.hub)
-        decision = await self.push_screen_wait(modal)
-        if not decision:
-            return
 
-        # copy_across operates on marked_entries — promote the cursor row
-        # for the duration of the copy and unmark it after so the UI
-        # state matches what the user saw.
+        # Why ``push_screen`` with a callback instead of
+        # ``push_screen_wait``: the latter requires a Textual worker
+        # context, which actions invoked through bindings don't have —
+        # calling it raised ``NoActiveWorker`` and popped the crash
+        # modal. Schedule the actual copy as a worker after the user
+        # decides.
+        def _after_decision(decision: bool | None) -> None:
+            if not decision:
+                return
+            self.run_worker(
+                self._run_copy(dual, list(targets), used_cursor_fallback),
+                exclusive=False,
+            )
+
+        self.push_screen(modal, _after_decision)
+
+    async def _run_copy(
+        self,
+        dual: object,
+        targets: list[object],
+        used_cursor_fallback: bool,
+    ) -> None:
+        """Run ``DualPaneVM.copy_across`` from a worker. Errors are
+        toasted, never re-raised."""
+        ctx = self._app_ctx
         copy_across = getattr(dual, "copy_across", None)
         if copy_across is None:
             return
         if used_cursor_fallback:
             for entry in targets:
-                entry.set_marked(True)
+                entry.set_marked(True)  # type: ignore[attr-defined]
         try:
             try:
                 await copy_across()
             except Exception as exc:
-                # Don't escalate to the crash modal. Log + surface as a
-                # Textual notification so the user sees the failure and
-                # the app keeps running.
                 ctx.log_sink.error("copy.failed", error=str(exc))
                 self.notify(f"Copy failed: {exc}", severity="error", timeout=8)
         finally:
             if used_cursor_fallback:
                 for entry in targets:
-                    entry.set_marked(False)
+                    entry.set_marked(False)  # type: ignore[attr-defined]
 
     async def action_delete(self) -> None:
         """Delete the focused pane's marked entries (or the cursor row if
@@ -439,16 +455,34 @@ class AwsTuiApp(App[None]):
             danger=True,
         )
         modal = ConfirmModal(ctx.confirm_vm, request, hub=ctx.hub)
-        decision = await self.push_screen_wait(modal)
-        if not decision:
-            return
 
+        # Same worker-deferral as action_copy — bindings don't run in a
+        # worker, so push_screen_wait would raise NoActiveWorker and
+        # crash the app. Push, then kick off the delete in a worker.
+        def _after_decision(decision: bool | None) -> None:
+            if not decision:
+                return
+            self.run_worker(
+                self._run_delete(dual, list(targets), used_cursor_fallback),
+                exclusive=False,
+            )
+
+        self.push_screen(modal, _after_decision)
+
+    async def _run_delete(
+        self,
+        dual: object,
+        targets: list[object],
+        used_cursor_fallback: bool,
+    ) -> None:
+        """Mirror of :meth:`_run_copy` for the delete path."""
+        ctx = self._app_ctx
         delete_in_focused = getattr(dual, "delete_in_focused", None)
         if delete_in_focused is None:
             return
         if used_cursor_fallback:
             for entry in targets:
-                entry.set_marked(True)
+                entry.set_marked(True)  # type: ignore[attr-defined]
         try:
             try:
                 await delete_in_focused()
@@ -458,7 +492,7 @@ class AwsTuiApp(App[None]):
         finally:
             if used_cursor_fallback:
                 for entry in targets:
-                    entry.set_marked(False)
+                    entry.set_marked(False)  # type: ignore[attr-defined]
 
     async def action_themes(self) -> None:
         """Open the keyboard-navigable theme picker modal."""
