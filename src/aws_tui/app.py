@@ -26,18 +26,30 @@ from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
 from aws_tui.ui.widgets.brand_banner import BrandBanner
+from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.services_menu import ServicesMenu
-from aws_tui.ui.widgets.status_bar import StatusBar
+from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.version import __version__
+from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 
 _ACTION_RING_SIZE = 100
+
+
+def _join_path(base: str, name: str) -> str:
+    """Append ``name`` to ``base`` with a single ``/`` separator. Used
+    only by the copy confirm modal to surface source/destination paths."""
+    if not base:
+        return name
+    if base.endswith("/"):
+        return f"{base}{name}"
+    return f"{base}/{name}"
 
 
 class AwsTuiApp(App[None]):
@@ -80,6 +92,8 @@ class AwsTuiApp(App[None]):
         Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True),
         Binding("colon", "help", "Cmd", show=True, priority=True),
+        Binding("t", "themes", "Themes", show=True, priority=True),
+        Binding("c", "copy", "Copy", show=True, priority=True),
     ]
 
     def __init__(self, context: AppContext | None = None) -> None:
@@ -108,9 +122,13 @@ class AwsTuiApp(App[None]):
         return self._app_ctx
 
     def compose(self) -> ComposeResult:
+        # StatusBar was removed in pass-7 — profile/region/auth indicator
+        # now live in the left pane's border (title shows the live path,
+        # subtitle shows the connection identity). Bookkeeping VMs still
+        # exist in RootVM.chrome so hub subscribers stay wired up; only
+        # the widget is dropped.
         ctx = self._app_ctx
         yield BrandBanner(id="brand-banner")
-        yield StatusBar(ctx.root_vm.chrome.status_bar, hub=ctx.hub, id="status-bar")
         with Horizontal(id="main-area"):
             yield ServicesMenu(ctx.root_vm.services_menu, hub=ctx.hub, id="services-menu")
             yield Container(id="content-host")
@@ -299,7 +317,79 @@ class AwsTuiApp(App[None]):
             await pane.refresh()
 
     async def action_help(self) -> None:
-        """Show the help overlay + VM-backed theme picker (also bound to ``:``)."""
+        """Show the help overlay (also bound to ``:``). The theme picker
+        is a separate modal — press ``t`` (or use the help modal's
+        Themes link)."""
+        await self.push_screen(HelpModal())
+
+    async def action_copy(self) -> None:
+        """Copy the focused pane's marked entries (or the cursor row if
+        none are marked) into the *other* pane. Pops a confirm modal
+        showing source → destination paths first; only proceeds on
+        explicit confirm."""
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        src_pane = getattr(dual, "focused_pane", None)
+        dst_pane = getattr(dual, "other_pane", None)
+        if src_pane is None or dst_pane is None:
+            return
+
+        targets = list(src_pane.marked_entries)
+        # Fall back to the cursor row if nothing is multi-selected.
+        used_cursor_fallback = not targets
+        if used_cursor_fallback:
+            selected = src_pane.selected_entry
+            if selected is not None and not selected.is_parent_link:
+                targets = [selected]
+        if not targets:
+            return
+
+        src_base = src_pane.viewmodel.border_title
+        dst_base = dst_pane.viewmodel.border_title
+        names_preview = (
+            targets[0].entry.name
+            if len(targets) == 1
+            else f"{len(targets)} items ({targets[0].entry.name}, …)"
+        )
+        request = ConfirmRequest(
+            title="Copy?",
+            body_lines=(
+                f"From: {_join_path(src_base, names_preview)}",
+                f"To:   {_join_path(dst_base, names_preview)}",
+                "",
+                f"Source pane: {src_base}",
+                f"Destination: {dst_base}",
+                f"Items: {len(targets)}",
+            ),
+            confirm_label="Copy",
+            cancel_label="Cancel",
+        )
+
+        ctx = self._app_ctx
+        modal = ConfirmModal(ctx.confirm_vm, request, hub=ctx.hub)
+        decision = await self.push_screen_wait(modal)
+        if not decision:
+            return
+
+        # copy_across operates on marked_entries — promote the cursor row
+        # for the duration of the copy and unmark it after so the UI
+        # state matches what the user saw.
+        copy_across = getattr(dual, "copy_across", None)
+        if copy_across is None:
+            return
+        if used_cursor_fallback:
+            for entry in targets:
+                entry.set_marked(True)
+        try:
+            await copy_across()
+        finally:
+            if used_cursor_fallback:
+                for entry in targets:
+                    entry.set_marked(False)
+
+    async def action_themes(self) -> None:
+        """Open the keyboard-navigable theme picker modal."""
         ctx = self._app_ctx
         picker = ThemePickerVM(
             themes=ctx.theme_store.BUILTIN_NAMES,
@@ -309,17 +399,23 @@ class AwsTuiApp(App[None]):
             dispatcher=ctx.dispatcher,
         )
         picker.construct()
-        modal = HelpModal(theme_picker=picker, hub=ctx.hub)
+        modal = ThemePickerModal(picker=picker, hub=ctx.hub)
         try:
             await self.push_screen(modal)
         finally:
-            # The modal lifetime is bounded by the screen; once it pops, the
-            # picker VM has no more subscribers and can be released.
             self.call_after_refresh(picker.dispose)
 
     def switch_theme(self, name: str) -> None:
         """Runtime theme swap — re-load the chosen ``.tcss`` over the current
-        stylesheet (mirrors :meth:`_apply_initial_theme`'s code path)."""
+        stylesheet and force every mounted widget to repaint.
+
+        Why the walk: ``stylesheet.update(self)`` re-resolves CSS for the
+        whole tree, but widgets that have already cached a Rich renderable
+        (e.g. text with explicit styles) won't repaint until their next
+        refresh tick. Without the walk the previously-focused pane
+        adopted the new accent while the other one kept the old colors
+        until the user pressed Tab.
+        """
         ctx = self._app_ctx
         try:
             theme_css = ctx.theme_store.load(name)
@@ -330,7 +426,13 @@ class AwsTuiApp(App[None]):
         self.stylesheet.parse()
         self.stylesheet.update(self)
         ctx.initial_theme = name
-        self.refresh()
+        # Force every widget under every screen to recompute its styles
+        # AND re-render. ``layout=True`` re-runs the styles + layout
+        # pipeline; ``repaint=True`` invalidates the visual cache.
+        for screen in list(self.screen_stack):
+            screen.refresh(repaint=True, layout=True)
+            for widget in screen.walk_children(with_self=False):
+                widget.refresh(repaint=True, layout=True)
 
     # ── Crash handling ─────────────────────────────────────────────────────
 

@@ -74,10 +74,11 @@ async def test_journey_1_silent_sso(app_context: AppContext, tmp_path: Path) -> 
         await pilot.pause()
         # No toast was raised on launch.
         assert app_context.root_vm.chrome.toast_stack.count == 0
-        # The status bar is mounted (visible).
-        from aws_tui.ui.widgets.status_bar import StatusBar
+        # Top chrome is mounted (BrandBanner replaced the old StatusBar in
+        # pass-7; profile/region now live in the left pane's border).
+        from aws_tui.ui.widgets.brand_banner import BrandBanner
 
-        assert len(app.query(StatusBar)) == 1
+        assert len(app.query(BrandBanner)) == 1
 
 
 # ── Journey 2: copy S3 -> local via DualPaneVM ──────────────────────────────

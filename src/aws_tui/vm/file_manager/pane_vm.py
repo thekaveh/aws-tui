@@ -84,7 +84,8 @@ class PaneViewModel:
     column_header_text: str
     placeholder_text: str | None
     placeholder_severity: str  # "", "warning", "error"
-    border_title: str | None  # rendered subtly inside the pane's top border
+    border_title: str  # live path, rendered subtly in the pane's top border
+    border_subtitle: str | None  # connection identity, in the bottom border
 
 
 # State → (user-facing text, severity) — VM-owned per MVVM. Severity maps
@@ -116,7 +117,7 @@ _PLACEHOLDER_FOR_STATE: dict[PaneState, tuple[str, str]] = {
 }
 
 
-_COLUMN_HEADER_TEXT: str = f"   {'NAME':<32} {'SIZE':>10}  MODIFIED"
+_COLUMN_HEADER_TEXT: str = f"   {'NAME':<40} {'SIZE':>12}  {'MODIFIED':<18}"
 
 
 def _summary_text(*, count: int, marked: int, total_bytes: int) -> str:
@@ -159,14 +160,22 @@ class PaneVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         id_prefix: str = "pane",
-        border_title: str | None = None,
+        identity_label: str | None = None,
+        path_protocol: str = "",
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._provider: FileSystemProvider = provider
         self._path: PathRef = initial_path
         self._id_prefix: str = id_prefix
-        self._border_title: str | None = border_title
+        # Connection identity rendered in the bottom border subtitle
+        # (e.g. ``aws · sso-dev · us-east-1`` for the left pane). Stable
+        # across the session.
+        self._identity_label: str | None = identity_label
+        # Scheme prefix prepended to the path label (e.g. ``s3:``). The
+        # rendered title becomes ``s3://bucket/folder`` for S3 and just
+        # ``/Users/kaveh/...`` for local.
+        self._path_protocol: str = path_protocol
 
         self._entries: list[EntryVM] = []
         self._filtered: tuple[int, ...] = ()  # indices into self._entries
@@ -302,8 +311,22 @@ class PaneVM:
             column_header_text=_COLUMN_HEADER_TEXT,
             placeholder_text=placeholder,
             placeholder_severity=severity,
-            border_title=self._border_title,
+            border_title=self._format_border_title(),
+            border_subtitle=self._identity_label,
         )
+
+    def _format_border_title(self) -> str:
+        """Render the path label that lives in the pane's top border.
+
+        Format:
+
+        - With protocol ``s3:``: ``s3://`` (root), ``s3://bucket/folder``.
+        - Without protocol: ``/`` (root), ``/Users/kaveh/repos``.
+        """
+        base = "/" + "/".join(self._path.segments) if not self._path.is_root else "/"
+        if self._path_protocol:
+            return f"{self._path_protocol}/{base}" if base != "/" else f"{self._path_protocol}//"
+        return base
 
     def _placeholder_for_current_state(self) -> tuple[str | None, str]:
         if self._state == PaneState.IDLE:

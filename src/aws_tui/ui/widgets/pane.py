@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub
@@ -62,11 +62,12 @@ class EntryRow(HubSubscriberMixin, Widget):
         # No inline style on the cursor bar: the row's CSS class
         # (``-selected``) drives the color so theme swaps take effect
         # everywhere — including the bar — without re-rendering Python.
+        # Column widths come from the VM as pre-padded strings — keeps
+        # alignment crisp regardless of name length and centralizes the
+        # layout in one place (entry_vm.py).
         text = Text()
         text.append(vm.cursor_glyph)
-        text.append(
-            f"{vm.mark_glyph} {vm.display_name:<32} {vm.size_display:>10}  {vm.modified_display}"
-        )
+        text.append(f"{vm.mark_glyph} {vm.name_column} {vm.size_column}  {vm.modified_column}")
         return text
 
     def on_mount(self) -> None:
@@ -137,6 +138,11 @@ _BODY_REFRESH_PROPS: frozenset[str] = frozenset({"entries", "state", "path"})
 # footer Static widgets — cheap, no re-mount.
 _CHROME_REFRESH_PROPS: frozenset[str] = frozenset({"viewmodel", "filter_text"})
 
+# Property names that just need the cursor to be scrolled into view (no
+# re-mount, no Static update). The per-row hub subs handle the actual
+# selected/unselected redraw — we only need to keep the row on-screen.
+_SCROLL_TRACK_PROPS: frozenset[str] = frozenset({"cursor_index"})
+
 
 class Pane(HubSubscriberMixin, Widget):
     """Single file-manager pane."""
@@ -171,7 +177,10 @@ class Pane(HubSubscriberMixin, Widget):
         vm = self._vm.viewmodel
         yield Static(vm.breadcrumb_text, classes="breadcrumb")
         yield Static(vm.column_header_text, classes="column-header")
-        yield Vertical(id="pane-body")
+        # VerticalScroll instead of Vertical so long listings scroll on
+        # mousewheel / trackpad without extra wiring, and so the cursor
+        # can be scrolled into view via scroll_to_widget().
+        yield VerticalScroll(id="pane-body")
         yield Static(vm.summary, classes="pane-footer")
 
     def on_mount(self) -> None:
@@ -211,15 +220,39 @@ class Pane(HubSubscriberMixin, Widget):
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _apply_border_title(self) -> None:
-        title = self._vm.viewmodel.border_title
-        if title:
-            self.border_title = title
+        """Reflect the VM's live path + identity into the pane border.
+
+        - ``border_title`` (top): the path, updates on every navigation.
+        - ``border_subtitle`` (bottom): the connection identity (S3 only).
+        """
+        vm = self._vm.viewmodel
+        self.border_title = vm.border_title
+        if vm.border_subtitle is not None:
+            self.border_subtitle = vm.border_subtitle
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name in _BODY_REFRESH_PROPS:
             self.call_after_refresh(self._refresh_all)
         elif property_name in _CHROME_REFRESH_PROPS:
             self.call_after_refresh(self._refresh_chrome)
+        elif property_name in _SCROLL_TRACK_PROPS:
+            self.call_after_refresh(self._scroll_to_cursor)
+
+    def _scroll_to_cursor(self) -> None:
+        """Keep the selected row inside the visible viewport. No-ops if
+        the body is in a placeholder state or the row is already visible.
+        """
+        try:
+            body = self.query_one("#pane-body", VerticalScroll)
+        except Exception:
+            return
+        target_vm = self._vm.selected_entry
+        if target_vm is None:
+            return
+        for row in body.query(EntryRow):
+            if row.entry_vm is target_vm:
+                body.scroll_to_widget(row, animate=False)
+                return
 
     def _refresh_chrome(self) -> None:
         """Update breadcrumb / header / footer Statics in place — no remount."""
@@ -241,7 +274,7 @@ class Pane(HubSubscriberMixin, Widget):
 
     def _render_body(self) -> None:
         try:
-            body = self.query_one("#pane-body", Vertical)
+            body = self.query_one("#pane-body", VerticalScroll)
         except Exception:
             return
         for child in list(body.children):

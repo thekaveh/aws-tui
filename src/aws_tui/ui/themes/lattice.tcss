@@ -99,6 +99,7 @@ Pane {
     color: $text;
     border: round $rule-dim;
     border-title-color: $text-dim;
+    border-subtitle-color: $text-dim;
 }
 
 Pane.-focused {

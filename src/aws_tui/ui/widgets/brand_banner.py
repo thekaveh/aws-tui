@@ -105,21 +105,30 @@ def _build_rows(word: str = _WORD, gap: str = " ") -> tuple[str, ...]:
     return tuple(gap.join(_LETTERS[c][row] for c in word) for row in range(6))
 
 
-def _color_for_row(row_index: int, total_rows: int) -> str:
-    """Pick one gradient stop for a whole row — the gradient now flows
-    top-to-bottom (row 0 dark, last row light), not left-to-right."""
+def _apply_genai_gradient(line: str) -> Text:
+    """Apply the genai-vanilla apply_enhanced_gradient algorithm verbatim:
+    map each character's position within the line to one of the 15
+    palette stops via ``idx = i * len(palette) // len(line)``. Same
+    formula their banner uses, so the colors land in the same places."""
+    text = Text()
+    n = len(line)
+    if n == 0:
+        return text
     stops = len(_GRADIENT)
-    idx = min((row_index * stops) // total_rows, stops - 1)
-    return _GRADIENT[idx]
+    for i, ch in enumerate(line):
+        idx = min((i * stops) // n, stops - 1)
+        text.append(ch, style=f"bold {_GRADIENT[idx]}")
+    return text
 
 
 class BrandBanner(Widget):
     """Top-of-screen block-art "aws-tui" banner inside its own subtle border.
 
-    Background matches the chrome strip ($bg-elev — same as the StatusBar
-    that sits just below) so the banner reads as part of the chrome, not a
-    floating callout. Border uses $rule-dim, the same low-contrast rule
-    Pane uses when unfocused.
+    Gradient algorithm + 256-color stops are byte-for-byte the same as the
+    genai-vanilla bootstrap-wizard's full banner — each character within a
+    row gets a stop from ``color(17)`` (dark navy) through ``color(195)``
+    (pale blue), so the sweep flows left-to-right with smooth horizontal
+    columns of consistent color across the 6-row block.
     """
 
     # Only structural CSS lives here — colors / borders are theme tokens
@@ -142,11 +151,10 @@ class BrandBanner(Widget):
 
     def render(self) -> Text:
         out = Text(justify="center")
-        n_rows = len(self._rows)
         for i, row in enumerate(self._rows):
             if i > 0:
                 out.append("\n")
-            out.append(row, style=f"bold {_color_for_row(i, n_rows)}")
+            out.append(_apply_genai_gradient(row))
         return out
 
 

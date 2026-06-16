@@ -101,6 +101,7 @@ Pane {
     color: $text;
     border: double $rule-dim;
     border-title-color: $text-dim;
+    border-subtitle-color: $text-dim;
 }
 
 Pane.-focused {
