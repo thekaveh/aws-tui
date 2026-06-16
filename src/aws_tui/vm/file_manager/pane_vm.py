@@ -84,6 +84,7 @@ class PaneViewModel:
     column_header_text: str
     placeholder_text: str | None
     placeholder_severity: str  # "", "warning", "error"
+    border_title: str | None  # rendered subtly inside the pane's top border
 
 
 # State → (user-facing text, severity) — VM-owned per MVVM. Severity maps
@@ -158,12 +159,14 @@ class PaneVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         id_prefix: str = "pane",
+        border_title: str | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._provider: FileSystemProvider = provider
         self._path: PathRef = initial_path
         self._id_prefix: str = id_prefix
+        self._border_title: str | None = border_title
 
         self._entries: list[EntryVM] = []
         self._filtered: tuple[int, ...] = ()  # indices into self._entries
@@ -299,6 +302,7 @@ class PaneVM:
             column_header_text=_COLUMN_HEADER_TEXT,
             placeholder_text=placeholder,
             placeholder_severity=severity,
+            border_title=self._border_title,
         )
 
     def _placeholder_for_current_state(self) -> tuple[str | None, str]:

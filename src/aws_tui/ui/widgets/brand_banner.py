@@ -105,30 +105,32 @@ def _build_rows(word: str = _WORD, gap: str = " ") -> tuple[str, ...]:
     return tuple(gap.join(_LETTERS[c][row] for c in word) for row in range(6))
 
 
-def _apply_gradient(line: str) -> Text:
-    """Apply the bold blue→cyan gradient char-by-char (genai-vanilla algo)."""
-    text = Text()
-    n = len(line)
-    if n == 0:
-        return text
+def _color_for_row(row_index: int, total_rows: int) -> str:
+    """Pick one gradient stop for a whole row — the gradient now flows
+    top-to-bottom (row 0 dark, last row light), not left-to-right."""
     stops = len(_GRADIENT)
-    for i, ch in enumerate(line):
-        idx = min((i * stops) // n, stops - 1)
-        text.append(ch, style=f"bold {_GRADIENT[idx]}")
-    return text
+    idx = min((row_index * stops) // total_rows, stops - 1)
+    return _GRADIENT[idx]
 
 
 class BrandBanner(Widget):
-    """Top-of-screen block-art "aws-tui" banner inside its own border."""
+    """Top-of-screen block-art "aws-tui" banner inside its own subtle border.
 
+    Background matches the chrome strip ($bg-elev — same as the StatusBar
+    that sits just below) so the banner reads as part of the chrome, not a
+    floating callout. Border uses $rule-dim, the same low-contrast rule
+    Pane uses when unfocused.
+    """
+
+    # Only structural CSS lives here — colors / borders are theme tokens
+    # ($rule-dim, $bg-elev) defined in each theme's .tcss. Putting theme
+    # vars in DEFAULT_CSS fails parsing because DEFAULT_CSS is processed
+    # before the theme overlay is loaded.
     DEFAULT_CSS = """
     BrandBanner {
         height: auto;
         width: 100%;
-        padding: 0 1;
-        border: round $accent;
         content-align: center middle;
-        background: $surface;
     }
     """
 
@@ -140,10 +142,11 @@ class BrandBanner(Widget):
 
     def render(self) -> Text:
         out = Text(justify="center")
+        n_rows = len(self._rows)
         for i, row in enumerate(self._rows):
             if i > 0:
                 out.append("\n")
-            out.append(_apply_gradient(row))
+            out.append(row, style=f"bold {_color_for_row(i, n_rows)}")
         return out
 
 

@@ -134,10 +134,19 @@ class S3FS:
     # ------------------------------------------------------------------
 
     async def list(self, path: PathRef) -> list[FileEntry]:
-        if self._bucket is None and path.is_root:
-            return await self._list_buckets()
+        # bucket-less (service-root) S3FS: at root we list buckets; any
+        # deeper path is interpreted with the first segment as the bucket
+        # so the same provider can drive a single-pane "buckets → objects"
+        # navigation (PaneVM.navigate_to appends one segment at a time).
         if self._bucket is None:
-            raise ProviderError("S3FS without bucket can only list at root")
+            if path.is_root:
+                return await self._list_buckets()
+            bucket = path.segments[0]
+            sub = PathRef(path.segments[1:])
+            prefix = self._key_for(sub)
+            if prefix and not prefix.endswith("/"):
+                prefix = f"{prefix}/"
+            return await self._list_objects(prefix, bucket=bucket)
         prefix = self._key_for(path)
         if prefix and not prefix.endswith("/"):
             prefix = f"{prefix}/"
@@ -173,15 +182,18 @@ class S3FS:
         entries.sort(key=lambda e: e.name)
         return entries
 
-    async def _list_objects(self, prefix: str) -> _List[FileEntry]:
-        assert self._bucket is not None
+    async def _list_objects(self, prefix: str, *, bucket: str | None = None) -> _List[FileEntry]:
+        # When the caller passes ``bucket`` explicitly (virtual-root navigation
+        # via the bucketless service FS), use that instead of ``self._bucket``.
+        target_bucket = bucket if bucket is not None else self._bucket
+        assert target_bucket is not None
         entries: list[FileEntry] = []
         try:
             async with self._client() as s3:
                 token: str | None = None
                 while True:
                     kwargs: dict[str, Any] = {
-                        "Bucket": self._bucket,
+                        "Bucket": target_bucket,
                         "Prefix": prefix,
                         "Delimiter": "/",
                     }

@@ -108,6 +108,7 @@ Pane {
     background: $bg;
     color: $text;
     border: solid $rule-dim;
+    border-title-color: $text-dim;
 }
 
 Pane.-focused {
@@ -373,6 +374,13 @@ ProgressBar.-accent > .bar--bar {
 ProgressBar.-success > .bar--bar {
     color: $success;
 }
+/* ── Brand banner (top) ───────────────────────────────────────────────── */
+/* Subtle rounded border + chrome-strip background; matches StatusBar.   */
+BrandBanner {
+    border: round $rule-dim;
+    background: $bg-elev;
+}
+
 /* No-connection placeholder shown in the content host when no AWS or */
 /* S3-compatible connection is configured at startup.                  */
 .content-placeholder {
