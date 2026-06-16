@@ -1,10 +1,10 @@
 """Pane widget — single Norton-Commander column bound to :class:`PaneVM`.
 
-Strict MVVM: the view computes nothing user-facing. All display strings
-(``display_name``, ``size_display``, ``modified_display``, ``mark_glyph``,
-``cursor_glyph``, ``breadcrumb_text``, ``column_header_text``,
-``placeholder_text``, ``placeholder_severity``, ``border_title``) live on
-the VM. The view just lays them out and routes input to VM commands.
+MVVM with one explicit exception: column widths are computed in the
+view layer because they depend on the actual rendered Pane width
+(an intrinsically view-side measurement). The VM still owns every
+user-visible string — the view just decides how much horizontal space
+to give each column at the current Pane size.
 
 Flicker discipline: cursor moves do NOT re-mount the entry list. Each
 :class:`EntryRow` subscribes to its own :class:`EntryVM` on the hub and
@@ -17,6 +17,7 @@ from __future__ import annotations
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
+from textual.events import Resize
 from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub
@@ -26,12 +27,69 @@ from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 
 
+def _truncate(text: str, max_width: int) -> str:
+    """Right-trim with an ellipsis when ``text`` overflows ``max_width``.
+
+    Duplicates the small helper in :mod:`entry_vm` so the view layer
+    doesn't reach into a private symbol of the VM module."""
+    if len(text) <= max_width:
+        return text
+    if max_width <= 1:
+        return text[:max_width]
+    return text[: max_width - 1] + "…"
+
+
+# Fixed-width columns. NAME is adaptive (fills remaining space); these
+# two stay constant because their content (formatted size string, ISO
+# timestamp) has a known maximum.
+_SIZE_COL_WIDTH = 10
+_MODIFIED_COL_WIDTH = 16
+
+# Non-name pixels per row: cursor(1) + mark(1) + sep(1) + sep(1) + 2
+# extra spaces between size and modified = 6, plus size(10) + modified(16)
+# = 32 total fixed cost. NAME gets whatever's left.
+_FIXED_ROW_COST = 6 + _SIZE_COL_WIDTH + _MODIFIED_COL_WIDTH  # 32
+
+# Width subtracted from Pane.size.width to account for the surrounding
+# border (1 char each side) and the VerticalScroll's scrollbar gutter.
+_PANE_CHROME_PADDING = 3
+
+# Soft bounds on the NAME column so very narrow / very wide panes still
+# look reasonable.
+_MIN_NAME_WIDTH = 12
+_MAX_NAME_WIDTH = 64
+
+# Initial value before the first Resize event fires — covers a typical
+# two-pane split on a ~120-col terminal.
+_DEFAULT_NAME_WIDTH = 24
+
+
+def _name_width_for(pane_width: int) -> int:
+    """Compute the NAME column width that, together with the two fixed
+    columns, fills the usable pane content area."""
+    usable = max(0, pane_width - _PANE_CHROME_PADDING)
+    raw = usable - _FIXED_ROW_COST
+    return max(_MIN_NAME_WIDTH, min(_MAX_NAME_WIDTH, raw))
+
+
+def _column_header_for(name_width: int) -> str:
+    """Header text mirroring the row layout for the given NAME width."""
+    name = f"{'NAME':<{name_width}}"
+    size = f"{'SIZE':>{_SIZE_COL_WIDTH}}"
+    modified = f"{'MODIFIED':<{_MODIFIED_COL_WIDTH}}"
+    return f"   {name} {size}  {modified}"
+
+
 class EntryRow(HubSubscriberMixin, Widget):
     """One entry row in a pane — bound to a single :class:`EntryVM`.
 
     Subscribes to the entry's own ``is_selected``/``is_marked`` changes so
     cursor moves and multi-select toggles update *this* row in place
     instead of triggering a body re-mount on the parent pane.
+
+    Column widths are read from the parent Pane (which tracks its actual
+    rendered size via :meth:`Pane.on_resize`), so NAME expands on wide
+    panes and contracts on narrow ones while SIZE/MODIFIED stay visible.
     """
 
     DEFAULT_CSS = """
@@ -59,15 +117,17 @@ class EntryRow(HubSubscriberMixin, Widget):
 
     def render(self) -> Text:
         vm = self._entry_vm
+        host = self._find_pane()
+        name_width = host.name_column_width if host is not None else _DEFAULT_NAME_WIDTH
         # No inline style on the cursor bar: the row's CSS class
         # (``-selected``) drives the color so theme swaps take effect
         # everywhere — including the bar — without re-rendering Python.
-        # Column widths come from the VM as pre-padded strings — keeps
-        # alignment crisp regardless of name length and centralizes the
-        # layout in one place (entry_vm.py).
+        name_str = f"{_truncate(vm.display_name, name_width):<{name_width}}"
+        size_str = f"{vm.size_display:>{_SIZE_COL_WIDTH}}"
+        modified_str = f"{vm.modified_display:<{_MODIFIED_COL_WIDTH}}"
         text = Text()
         text.append(vm.cursor_glyph)
-        text.append(f"{vm.mark_glyph} {vm.name_column} {vm.size_column}  {vm.modified_column}")
+        text.append(f"{vm.mark_glyph} {name_str} {size_str}  {modified_str}")
         return text
 
     def on_mount(self) -> None:
@@ -89,13 +149,7 @@ class EntryRow(HubSubscriberMixin, Widget):
     async def on_click(self, _event: object) -> None:
         """First click: switch pane focus + move cursor. Second click on the
         already-selected row delegates to :meth:`PaneVM.activate`."""
-        host: Pane | None = None
-        node: object | None = self
-        while node is not None:
-            if isinstance(node, Pane):
-                host = node
-                break
-            node = getattr(node, "parent", None)
+        host = self._find_pane()
         if host is None:
             return
 
@@ -127,6 +181,14 @@ class EntryRow(HubSubscriberMixin, Widget):
             self.add_class("-dir")
         else:
             self.remove_class("-dir")
+
+    def _find_pane(self) -> Pane | None:
+        node: object | None = self
+        while node is not None:
+            if isinstance(node, Pane):
+                return node
+            node = getattr(node, "parent", None)
+        return None
 
 
 # Property names on PaneVM that warrant a full body re-mount (entry-list
@@ -168,15 +230,22 @@ class Pane(HubSubscriberMixin, Widget):
         super().__init__(id=id, classes=classes)
         self._vm: PaneVM = vm
         self._hub: MessageHub[Message] = hub
+        # Recomputed on every Resize. EntryRow.render reads this directly
+        # so wider terminals get wider NAME columns automatically.
+        self._name_column_width: int = _DEFAULT_NAME_WIDTH
 
     @property
     def vm(self) -> PaneVM:
         return self._vm
 
+    @property
+    def name_column_width(self) -> int:
+        return self._name_column_width
+
     def compose(self) -> ComposeResult:
         vm = self._vm.viewmodel
         yield Static(vm.breadcrumb_text, classes="breadcrumb")
-        yield Static(vm.column_header_text, classes="column-header")
+        yield Static(_column_header_for(self._name_column_width), classes="column-header")
         # VerticalScroll instead of Vertical so long listings scroll on
         # mousewheel / trackpad without extra wiring, and so the cursor
         # can be scrolled into view via scroll_to_widget().
@@ -194,6 +263,26 @@ class Pane(HubSubscriberMixin, Widget):
 
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()
+
+    def on_resize(self, event: Resize) -> None:
+        """Recompute NAME column width on resize and reflow the visible
+        rows + header to fill the new pane width."""
+        new_width = _name_width_for(event.size.width)
+        if new_width == self._name_column_width:
+            return
+        self._name_column_width = new_width
+        # Update the header Static; existing EntryRow widgets pick up
+        # the new width on their next refresh, which we trigger here.
+        self.call_after_refresh(self._reflow_columns)
+
+    def _reflow_columns(self) -> None:
+        try:
+            header = self.query_one(".column-header", Static)
+        except Exception:
+            return
+        header.update(_column_header_for(self._name_column_width))
+        for row in self.query(EntryRow):
+            row.refresh()
 
     def set_focused(self, value: bool) -> None:
         if value:
@@ -264,7 +353,9 @@ class Pane(HubSubscriberMixin, Widget):
             return
         vm = self._vm.viewmodel
         breadcrumb.update(vm.breadcrumb_text)
-        header.update(vm.column_header_text)
+        # Header always uses the adaptive width — VM's column_header_text
+        # field stays as a fallback for non-Pane consumers.
+        header.update(_column_header_for(self._name_column_width))
         footer.update(vm.summary)
         self._apply_border_title()
 
