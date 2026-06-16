@@ -63,13 +63,17 @@ class AwsTuiApp(App[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "Quit", show=True),
         Binding("ctrl+c", "quit", "Quit", show=False),
-        Binding("tab", "switch_focus", "Switch pane", show=True),
-        Binding("shift+tab", "switch_focus", "Switch pane", show=False),
-        Binding("up,k", "move_up", "↑", show=True),
-        Binding("down,j", "move_down", "↓", show=True),
-        Binding("enter", "descend", "Open", show=True),
-        Binding("backspace,left", "ascend", "Up", show=True),
-        Binding("r", "refresh", "Refresh", show=True),
+        # priority=True puts these *ahead* of Textual's Screen-level defaults
+        # for focus rotation (Tab/Shift+Tab/arrows). Without priority, Screen
+        # consumes the key for its built-in focus traversal before the App
+        # handler ever fires — that's the "Tab does nothing" symptom.
+        Binding("tab", "switch_focus", "Switch pane", show=True, priority=True),
+        Binding("shift+tab", "switch_focus", "Switch pane", show=False, priority=True),
+        Binding("up,k", "move_up", "↑", show=True, priority=True),
+        Binding("down,j", "move_down", "↓", show=True, priority=True),
+        Binding("enter", "descend", "Open", show=True, priority=True),
+        Binding("backspace,left", "ascend", "Up", show=True, priority=True),
+        Binding("r", "refresh", "Refresh", show=True, priority=True),
     ]
 
     def __init__(self, context: AppContext | None = None) -> None:

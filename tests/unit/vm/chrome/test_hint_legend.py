@@ -62,7 +62,10 @@ def test_focus_on_pane_swaps_actions() -> None:
         "pane.move",
         "pane.delete",
     ]
-    assert action_ids[-2:] == ["app.command_palette", "app.help"]
+    # App-level fallbacks follow the pane actions; the trailing tail is the
+    # static fallback set (`pane.switch_focus`, `pane.descend`, `pane.ascend`,
+    # `pane.refresh`, `app.command_palette`, `app.help`, `app.quit`).
+    assert action_ids[-3:] == ["app.command_palette", "app.help", "app.quit"]
     legend.dispose()
 
 
