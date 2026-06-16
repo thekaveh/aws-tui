@@ -22,8 +22,21 @@ from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
 from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
 
 # Always-visible chips appended to the end of the legend; the spec calls them
-# "app-level fallbacks" — `: cmd` and `? help`.
-_FALLBACK_ACTIONS: tuple[str, ...] = ("app.command_palette", "app.help")
+# "App-level fallbacks" — shown in the hint legend when no widget has
+# announced focus. These cover the keyboard bindings actually wired in
+# `AwsTuiApp.BINDINGS` so the bottom row tells the user something useful
+# even before focus tracking is wired (the full input router is deferred
+# per memory `deferred-from-m6`). Keep ordering consistent with the
+# spec §4.1 chip sequence.
+_FALLBACK_ACTIONS: tuple[str, ...] = (
+    "pane.switch_focus",
+    "pane.descend",
+    "pane.ascend",
+    "pane.refresh",
+    "app.command_palette",
+    "app.help",
+    "app.quit",
+)
 
 # Human-readable labels per action id. Anything not listed falls back to the
 # tail-segment of the action id (e.g. "pane.copy" -> "copy"). Keeping this
