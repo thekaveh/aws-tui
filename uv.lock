@@ -380,7 +380,7 @@ requires-dist = [
     { name = "keyring", specifier = ">=24" },
     { name = "textual", specifier = ">=0.79" },
     { name = "tomli-w", specifier = ">=1.0" },
-    { name = "vmx", directory = "vendor/vmx/langs/python" },
+    { name = "vmx", specifier = ">=2.6.0,<3.0.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -3024,26 +3024,15 @@ wheels = [
 
 [[package]]
 name = "vmx"
-source = { directory = "vendor/vmx/langs/python" }
+version = "2.6.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "reactivex" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8" },
-    { name = "mypy", marker = "extra == 'typing'", specifier = ">=1.8" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=7" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4" },
-    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4" },
-    { name = "reactivex", specifier = ">=4.0.4" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.4" },
+sdist = { url = "https://files.pythonhosted.org/packages/40/ab/353333efd9ef565f69288e11aeadef90aaea6fa30d2c3f835ac3b421a947/vmx-2.6.1.tar.gz", hash = "sha256:df918db60f87f9e4406a44107f4c25ed7097c2de0e91c38b7922ef52f5875f8a", size = 170234, upload-time = "2026-06-17T02:28:59.652Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/77/055d99bd02707c1fbf7752e613cca5bb7b34475b6edb3a790a552c487499/vmx-2.6.1-py3-none-any.whl", hash = "sha256:7fb6937046197bdd3b28537ca7a7204236354aa6c289b77301cc843eb552fc4c", size = 112362, upload-time = "2026-06-17T02:28:58.256Z" },
 ]
-provides-extras = ["dev", "lint", "test", "typing"]
 
 [[package]]
 name = "werkzeug"

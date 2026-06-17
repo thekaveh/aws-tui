@@ -1,5 +1,11 @@
 # aws-tui M0 (Bootstrap) Implementation Plan
 
+> **Historical plan — M0 ship date 2026-06-14.** Submodule-related
+> tasks (`vendor/vmx` add, `--recurse-submodules` clone, etc.) are
+> accurate for M0 execution time but stale today: VMx is now a PyPI
+> dependency. See
+> `docs/superpowers/plans/2026-06-17-vmx-pypi-migration.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stand up a public GitHub repo at `thekaveh/aws-tui` containing a working hello-world Textual app, full project scaffolding (pyproject + uv-managed deps + VMx as a git submodule), repo hygiene (LICENSE/CHANGELOG/etc.), CI green on every push.

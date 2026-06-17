@@ -58,6 +58,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but the TUI shows access denied" SSO setup where `[default]` has no
   creds and the working profile lives in the env.
 
+### Changed
+
+- **VMx is now consumed from PyPI**, replacing the `vendor/vmx` git
+  submodule. Pinned at `vmx>=2.6.0,<3.0.0` — PyPI's lowest published
+  version is `2.6.0`, the vendored `python-v2.4.0` tag was never
+  released. API parity across the 2.4 → 2.6 minor bump verified by
+  522/40 tests staying green. Effects for users: fresh clones no
+  longer need `--recurse-submodules`; CI checkouts no longer fetch
+  the submodule; `scripts/bootstrap.sh` drops the
+  `git submodule update --init --recursive` step. Internal source
+  organization unchanged — every `from vmx import ...` continues to
+  resolve to the same symbols. This also lifts the long-standing
+  "aws-tui PyPI release blocked on VMx publishing" gate; aws-tui's
+  own first PyPI release is the next scheduled milestone.
+
 ### Fixed
 
 - **`[defaults].theme` from `config.toml` was silently ignored on

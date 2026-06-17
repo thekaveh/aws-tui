@@ -64,8 +64,9 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
 
 ## 2. Install
 
-> **PyPI release is blocked** on VMx publishing to PyPI. Until then,
-> install from Git:
+> **PyPI release of `aws-tui` is in flight** — the VMx PyPI blocker has
+> lifted (the framework now ships on PyPI). Until aws-tui's own first
+> PyPI release lands, install from Git:
 
 ```bash
 pipx install git+https://github.com/thekaveh/aws-tui.git
