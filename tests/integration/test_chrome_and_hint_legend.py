@@ -1,10 +1,10 @@
-"""Chrome composition + hint legend content — locks in pass-7 through
-pass-12 visual decisions:
+"""Chrome composition + hint legend content. Locks in the current
+visual decisions:
 
 - ``BrandBanner`` is mounted at the top
-- The old top-strip ``StatusBar`` widget is NOT present (identity moved
-  to the pane border subtitle in pass-7)
-- ``ServicesMenu`` starts collapsed (pass-10)
+- The old top-strip ``StatusBar`` widget is NOT present (identity is
+  surfaced via the pane border subtitle instead)
+- ``ServicesMenu`` starts collapsed
 - ``HintLegend`` includes the action ids the user can reach via
   bindings: t themes, T cycle, S swap source, c copy, d delete,
   enter open, tab switch, r refresh, ? help, q quit
@@ -32,7 +32,7 @@ def _strip_text(host: HintLegend) -> str:
 async def test_chrome_has_banner_no_statusbar(
     app_context_factory: AppContextBuilder,
 ) -> None:
-    """StatusBar was removed in pass-7. BrandBanner mounts at top."""
+    """StatusBar is not mounted; BrandBanner sits at the top of the chrome."""
     ctx = app_context_factory()
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:

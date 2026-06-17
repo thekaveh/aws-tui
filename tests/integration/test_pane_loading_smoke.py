@@ -52,9 +52,9 @@ async def _seed_fs() -> InMemoryFS:
 @pytest.mark.asyncio
 async def test_panes_populate_with_entries_after_mount() -> None:
     """Mounting the full app with a wired S3Service must surface entry rows
-    in both panes. Regression guard for pass-7: the cursor/path/border
-    refactor + StatusBar removal previously left both panes empty in real
-    launches even though unit tests passed."""
+    in both panes. Regression guard against the failure mode where the
+    cursor/path/border refactor + StatusBar removal left both panes
+    empty in real launches even though unit tests passed."""
 
     tmp = Path(tempfile.mkdtemp(prefix="aws-tui-smoke-"))
 

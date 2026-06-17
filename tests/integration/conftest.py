@@ -6,8 +6,8 @@
   callable that constructs an :class:`AppContext` for full-app pilot
   tests. Pass ``fs=`` to inject a seeded :class:`InMemoryFS` as the
   S3 service's provider; defaults to an empty in-memory FS.
-  Consolidates ~50 LOC of boilerplate that was duplicated across 8
-  integration test files (pass-17 maintenance cleanup).
+  Consolidates the boilerplate that would otherwise be duplicated
+  across every integration test that needs a real ``AppContext``.
 """
 
 from __future__ import annotations
