@@ -22,8 +22,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -39,8 +37,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -56,8 +52,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -73,8 +67,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -90,8 +82,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -113,8 +103,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
