@@ -202,11 +202,10 @@ aws-tui/
 │       │       └── entry_vm.py
 │       │
 │       ├── services/               # plugin spine
-│       │   ├── base.py             # Service protocol
-│       │   ├── __init__.py         # ServiceRegistry + default registrations
+│       │   ├── __init__.py         # re-exports Service / ServiceDescriptor /
+│       │   │                       # ServiceRegistry from vm/services_protocol.py
 │       │   └── s3/
-│       │       ├── service.py      # S3Service composes DualPaneVM[LocalFS, S3FS]
-│       │       └── view.py         # any s3-specific view wiring
+│       │       └── service.py      # S3Service composes DualPaneVM[LocalFS, S3FS]
 │       │
 │       └── ui/                     # Textual widget layer (no boto3 import)
 │           ├── widgets/
@@ -998,14 +997,14 @@ We do not enforce 100% — chasing the last 10% encourages tests that exercise l
 
 ### 9.5 CI workflows (release-side; test matrix in §8.9)
 
-| Workflow | Trigger | Does |
-|---|---|---|
-| `ci.yml` | PR, push to `main` | matrix from §8.9 |
-| `release.yml` | tag push (`v*`) | build wheel + sdist; `twine check`; GitHub release w/ changelog; upload to PyPI when configured |
-| `snapshot-drift.yml` | nightly cron | snapshot tests on `main` to detect rendering drift; opens issue on diff |
-| `submodule-bump.yml` | weekly cron | checks for new VMx tags; opens PR bumping the pin |
-| `codeql.yml` | weekly + PR | security scanning |
-| `dependabot.yml` | continuous | dep updates grouped weekly |
+| Workflow | Trigger | Does | v0.7.x status |
+|---|---|---|---|
+| `ci.yml` | PR, push to `main` | matrix from §8.9 | shipped |
+| `release.yml` | tag push (`v*`) | build wheel + sdist; `twine check`; GitHub release w/ changelog; upload to PyPI when configured | deferred (PyPI release blocked on VMx) |
+| `snapshot-drift.yml` | nightly cron | snapshot tests on `main` to detect rendering drift; opens issue on diff | deferred |
+| `submodule-bump.yml` | weekly cron | checks for new VMx tags; opens PR bumping the pin | deferred |
+| `codeql.yml` | weekly + PR | security scanning | deferred |
+| `dependabot.yml` | continuous | dep updates grouped weekly | shipped (`.github/dependabot.yml`) |
 
 ### 9.6 Repo bootstrap — first commits after spec sign-off
 
