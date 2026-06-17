@@ -126,6 +126,10 @@ def build_app_context(
 
     log_sink = LogSink(base_dir=cache_dir / "log")
     config_store = ConfigStore(path=config_dir / "config.toml")
+    try:
+        initial_theme = config_store.load().defaults.theme
+    except Exception:
+        initial_theme = "carbon"
     keymap_store = KeymapStore()
     theme_store = ThemeStore(
         user_themes_dir=config_dir / "themes",
@@ -183,7 +187,7 @@ def build_app_context(
         transfer_journal=transfer_journal,
         hub=hub,
         dispatcher=dispatcher,
-        initial_theme="carbon",
+        initial_theme=initial_theme,
     )
 
 
