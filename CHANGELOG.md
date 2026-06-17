@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (passes 7–13, post-v0.7.0)
+### Added
 
 - **Block-art brand banner** atop the chrome — six-row aws-tui logo with
   a per-theme 6-stop vertical gradient (carbon → deep navy/sky-blue;
@@ -58,8 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but the TUI shows access denied" SSO setup where `[default]` has no
   creds and the working profile lives in the env.
 
-### Fixed (passes 7–13, post-v0.7.0)
+### Fixed
 
+- **`[defaults].theme` from `config.toml` was silently ignored on
+  launch.** `build_app_context()` hardcoded `initial_theme="carbon"`
+  and never consulted `ConfigStore`, so a user who set `theme =
+  "voidline"` got carbon on every launch and had to press `T` to
+  reach their configured theme each session. Composition now loads
+  the config at startup and falls back to carbon only if the file is
+  absent or malformed.
 - **S3 → local copy crashed the app.** `S3FS.stat / read_stream /
   write_stream / delete / mkdir / rename` all raised `ProviderError`
   when `bucket=None` — but the service-level `S3FS` is always
@@ -93,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the border title). Dropped the inline `.breadcrumb` Static — the
   border title is the single source.
 
-### Removed (passes 7–13)
+### Removed
 
 - `StatusBar` widget. Profile / region / auth indicator moved to the
   left pane's `border_subtitle`. The chrome VM stays so hub
@@ -112,9 +119,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   propagation, chrome layout, hint-legend chips, modifier-click
   multi-select, ConfirmModal Enter forwarding, `$AWS_PROFILE`
   resolution, pane source swap). Total: 482 → 518 tests (net of 5
-  dead-widget tests dropped in the pass-13 maintenance cleanup).
+  dead-widget tests dropped in the pass-13 maintenance cleanup). The
+  pass-2 theme-default fix adds 3 more (total 521).
 
-### Fixed
+### Fixed (first maintenance loop, passes 1–6)
 
 - **App launch was visually blank** because `app.py.on_mount` never invoked
   `RootVM.switch_connection_with` / `switch_service`; widgets had no
@@ -174,7 +182,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `docs/adding-a-service.md` cross-reference to spec §7 corrected
     to §2 (the FileSystemProvider protocol).
 
-### Changed
+### Changed (first maintenance loop, passes 1–6)
 
 - `AwsTuiApp.on_mount` (was 63 effective lines) extracted into four
   helpers: `_apply_initial_theme`, `_resolve_initial_connection`,
@@ -194,7 +202,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `v0.15.0` to `v0.15.17` to match `uv.lock` (closes the patch-level
   drift the M1 fix `91f6040` left at the minor level).
 
-### Removed
+### Removed (first maintenance loop, passes 1–6)
 
 - Dead code: stray `_ = head` placeholder in `S3FS.delete()`; unused
   `max_concurrent` ctor param + field in `TransfersVM`. The function-
