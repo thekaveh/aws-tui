@@ -85,10 +85,12 @@ needs a `construct → destruct → dispose` surface.
       family under `ui/widgets/<service>/`.
 
 5. **Layer rules.** Services live one layer above domain, so they may
-    import from `domain/` and `infra/`. They may **not** import from
-    `ui/` or `vm/file_manager/`. They may import from
-    `vm/services_protocol.py` (re-exported via `services/__init__.py`)
-    and `vm/messages.py`.
+    import from `domain/`, `infra/`, and the public VM surface
+    (`vm/services_protocol.py`, `vm/messages.py`, and the file-manager
+    VMs in `vm/file_manager/` for storage-like services that reuse
+    `PaneVM`/`DualPaneVM`). The only hard ban is `ui/` (no Textual
+    widget imports) and Textual itself — enforced by
+    `scripts/check-layers.sh`. See §3 below for the full cheat-sheet.
 
 6. **Tests.** Add unit tests under `tests/unit/services/<name>/` and,
     if your service touches AWS, integration tests under
@@ -106,15 +108,19 @@ A service module **may** import from:
 - `aws_tui.vm.services_protocol` (Service, ServiceDescriptor,
   ServiceRegistry) — re-exported as `aws_tui.services.*`
 - `aws_tui.vm.messages` (for pushing on the hub)
+- `aws_tui.vm.file_manager.*` (the public VMs — `PaneVM`,
+  `DualPaneVM`, etc. — for storage-like services that reuse the
+  file-manager scaffolding; see `services/s3/service.py` for the
+  pattern that composes `DualPaneVM(left=PaneVM(S3FS),
+  right=PaneVM(LocalFS))`).
 - `vmx.*`
 
 A service module **may not** import from:
 
-- `aws_tui.ui.*`
-- `aws_tui.vm.file_manager.*` (file-manager VMs are private to that
-  subtree; a service that wants dual-pane should depend on the
-  `FileSystemProvider` protocol and let the file-manager VMs do the
-  rest — see `services/s3/service.py` for the pattern).
+- `aws_tui.ui.*` (no Textual widget code)
+- `textual.*` directly
+
+These bans are enforced by `scripts/check-layers.sh`.
 
 ## 4. Future: entry-point discovery
 v1.1 promotes the registry to

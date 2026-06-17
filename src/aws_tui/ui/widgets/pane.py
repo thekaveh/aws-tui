@@ -319,7 +319,7 @@ class Pane(HubSubscriberMixin, Widget):
         node: object | None = self
         while node is not None:
             if type(node).__name__ == "DualPane":
-                dual_vm = getattr(node, "_vm", None)
+                dual_vm = getattr(node, "vm", None)
                 if dual_vm is None:
                     return
                 from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
