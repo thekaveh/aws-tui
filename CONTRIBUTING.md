@@ -5,9 +5,9 @@ Thanks for your interest. aws-tui is pre-release; the API and config schema may 
 ## 1. Quickstart
 
 ```bash
-git clone --recurse-submodules https://github.com/thekaveh/aws-tui.git
+git clone https://github.com/thekaveh/aws-tui.git
 cd aws-tui
-./scripts/bootstrap.sh           # initializes submodule + uv sync
+./scripts/bootstrap.sh           # uv sync + pre-commit hooks
 uv run pytest                    # run unit tests
 ./scripts/dev.sh                 # launch with Textual dev tools (live-reload .tcss)
 ```
