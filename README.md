@@ -50,8 +50,9 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
 - **Fully customizable keymap.** Action ↔ keystroke is config-driven —
   rebind anything in `[keybindings]` without touching code.
 - **Streaming Quick Look.** `Space` on a file streams the first 64 KB
-  with a syntax tint; `v` shells out to `$PAGER` for the full file
-  (background-downloads with toast progress).
+  with a syntax tint for a fast peek without downloading the whole
+  object. (A full-file `$PAGER` shell-out is in the spec but not yet
+  wired in v0.7.x; see CHANGELOG for the v0.8 roadmap.)
 - **Command palette.** `:` or `Ctrl+K`. Fuzzy-filterable list of every
   action — including dynamic ones like `connection switch <name>` and
   `theme switch <name>`.
@@ -156,9 +157,12 @@ Numbered hierarchically per the project's `NUMBERED_DOCS` mandate.
 |---|---|---|
 | `AWS_PROFILE` | unset | Pick this AWS profile at launch when `[defaults].connection` is unset. Honored between config and first-auto-discovered fallback. |
 | `AWS_DEFAULT_REGION` | unset | Standard boto3 region override. |
-| `PAGER` | `less` | Quick Look uses this when `v` shells out for the full-file view. |
-| `EDITOR` | system | Used by some `aws configure` flows the TUI shells out to. |
 | `AWS_TUI_TRANSFER_LINGER` | `3.0` | Seconds a finished transfer's row stays visible in the transfers overlay before it fades. Test-only knob — short values make `pytest` runs faster. |
+
+`$PAGER` and `$EDITOR` are honored by the underlying AWS CLI / boto3
+flows the TUI shells out to for SSO setup; aws-tui itself does not
+read them in v0.7.x. The Quick Look full-file `$PAGER` shell-out is
+spec'd but not yet wired.
 
 ## 7. Contributing
 
