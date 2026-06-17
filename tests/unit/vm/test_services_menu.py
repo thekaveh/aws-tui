@@ -1,4 +1,4 @@
-"""Tests for ServicesMenuVM, Service protocol, and ServiceRegistry (Task 8)."""
+"""Tests for ServicesMenuVM, Service protocol, and ServiceRegistry."""
 
 from __future__ import annotations
 

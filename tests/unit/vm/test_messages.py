@@ -1,4 +1,4 @@
-"""Tests for the custom message envelopes (Task 2)."""
+"""Tests for the custom message envelopes."""
 
 from __future__ import annotations
 

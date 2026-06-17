@@ -1,8 +1,9 @@
-"""VMx familiarization smoke (Task 1 acceptance).
+"""VMx familiarization smoke.
 
-Sanity-constructs and disposes the core VMx primitives the M3 facades will
-use. If VMx changes shape such that these break, the rest of the vm/ layer
-will need updating; this is the early-warning canary.
+Sanity-constructs and disposes the core VMx primitives the VM-shell
+facades depend on. If VMx changes shape such that these break, the
+rest of the vm/ layer will need updating; this is the early-warning
+canary.
 """
 
 from __future__ import annotations

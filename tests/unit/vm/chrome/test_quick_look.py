@@ -1,4 +1,4 @@
-"""Tests for the QuickLookVM (Task 7)."""
+"""Tests for the QuickLookVM."""
 
 from __future__ import annotations
 

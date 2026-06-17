@@ -1,4 +1,4 @@
-"""End-to-end integration test for the M3 VM tree (Task 9)."""
+"""End-to-end integration test for the VM-shell tree (RootVM + chrome + content host)."""
 
 from __future__ import annotations
 

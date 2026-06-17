@@ -1,4 +1,4 @@
-"""Tests for the RootVM (Task 9)."""
+"""Tests for the RootVM."""
 
 from __future__ import annotations
 

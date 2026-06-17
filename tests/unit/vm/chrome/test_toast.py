@@ -1,4 +1,4 @@
-"""Tests for the ToastVM + ToastStackVM (Task 3)."""
+"""Tests for the ToastVM + ToastStackVM."""
 
 from __future__ import annotations
 
