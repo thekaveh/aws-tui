@@ -1,3 +1,0 @@
-[submodule "vendor/vmx"]
-	path = vendor/vmx
-	url = https://github.com/thekaveh/VMx.git
