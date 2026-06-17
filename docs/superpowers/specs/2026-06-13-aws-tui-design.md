@@ -139,10 +139,10 @@ aws-tui/
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci.yml                  # matrix from §8; ruff + mypy + pytest
-│   │   ├── release.yml             # build + publish to PyPI on tag (when ready)
-│   │   ├── snapshot-drift.yml      # nightly snapshot-test drift detection
-│   │   ├── submodule-bump.yml      # weekly VMx submodule pin update PR
-│   │   └── codeql.yml
+│   │   ├── release.yml             # deferred — see §9.5
+│   │   ├── snapshot-drift.yml      # deferred — see §9.5
+│   │   ├── submodule-bump.yml      # deferred — see §9.5
+│   │   └── codeql.yml              # deferred — see §9.5
 │   ├── ISSUE_TEMPLATE/
 │   ├── pull_request_template.md
 │   └── dependabot.yml

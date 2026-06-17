@@ -4,7 +4,7 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
 [Textual](https://textual.textualize.io/) and the
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
-> **Status: v0.7.0** — feature-complete pre-PyPI release. All five
+> **Status: v0.7.0** — feature-complete pre-PyPI release. All seven
 > milestones (M0 scaffold ▸ M6 polish) shipped, plus a post-tag
 > usability train (passes 7–12) that hardened the chrome, fixed the
 > S3→local copy crash, added theme cycling + source swap + multi-select
