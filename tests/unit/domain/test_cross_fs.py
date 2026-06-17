@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import aioboto3
 import pytest
-from moto.server import ThreadedMotoServer
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
 from aws_tui.domain.filesystem import (
@@ -20,6 +19,8 @@ from aws_tui.domain.filesystem import (
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.s3_fs import S3FS
 from tests.unit.domain._in_memory_fs import InMemoryFS
+
+# moto_server + s3_endpoint fixtures come from tests/unit/domain/conftest.py.
 
 pytestmark = pytest.mark.unit
 
@@ -47,33 +48,6 @@ async def _put_file(fs: FileSystemProvider, path: PathRef, data: bytes) -> None:
 
 async def _read_file(fs: FileSystemProvider, path: PathRef) -> bytes:
     return await _drain(await fs.read_stream(path))
-
-
-# ---------------------------------------------------------------------------
-# Moto fixtures (shared with other domain tests)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def moto_server() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
-
-
-@pytest.fixture
-def s3_endpoint(moto_server: str, monkeypatch: pytest.MonkeyPatch) -> str:
-    import urllib.request
-
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    urllib.request.urlopen(
-        urllib.request.Request(f"{moto_server}/moto-api/reset", method="POST")
-    ).read()
-    return moto_server
 
 
 def _s3_session() -> aioboto3.Session:

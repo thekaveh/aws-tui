@@ -1,19 +1,18 @@
 """Unit tests for S3FS, against an in-process moto threaded server.
 
-We use ``ThreadedMotoServer`` (rather than ``mock_aws``) because moto's
-in-memory monkey-patching doesn't compose with aiobotocore's awaited
-response body. The threaded server speaks HTTP, so aiobotocore drives
-it as if it were real S3 — at no network cost.
+The shared ``moto_server`` + ``s3_endpoint`` fixtures live in
+``tests/unit/domain/conftest.py`` so the three moto-backed suites
+(this one, ``test_s3_fs_bucketless_ops.py``, ``test_cross_fs.py``)
+share one moto process per pytest run.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 
 import aioboto3
 import pytest
-from moto.server import ThreadedMotoServer
 
 from aws_tui.domain.filesystem import (
     EntryKind,
@@ -24,32 +23,6 @@ from aws_tui.domain.filesystem import (
 from aws_tui.domain.s3_fs import S3FS
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.fixture(scope="module")
-def moto_server() -> Iterator[str]:
-    """Spin up a single shared moto HTTP server for the module's tests."""
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
-
-
-@pytest.fixture
-def s3_endpoint(
-    moto_server: str, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
-) -> Iterator[str]:
-    """Wipe S3 state between tests so each starts with a clean slate."""
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    import urllib.request
-
-    urllib.request.urlopen(
-        urllib.request.Request(f"{moto_server}/moto-api/reset", method="POST")
-    ).read()
-    return moto_server
 
 
 def _session() -> aioboto3.Session:
