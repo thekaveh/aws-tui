@@ -1,5 +1,10 @@
 # aws-tui M3 (VM shell) Implementation Plan
 
+> **Historical plan — M3 ship date 2026-06-14.** Path references to
+> `vendor/vmx/langs/python/...` inside this document are accurate
+> for M3 execution time but stale today: VMx is now a PyPI dependency.
+> See `docs/superpowers/plans/2026-06-17-vmx-pypi-migration.md`.
+
 > **For agentic workers:** Compact-plan format. Spec is the source of truth — read §4 (UI), §5 (MVVM wiring), §6 (auth+lifecycle). VMx Python source at `vendor/vmx/langs/python/src/vmx/` is the second source of truth.
 
 **Goal:** Land the entire `vm/` layer except `vm/file_manager/` (that's M4). Build the application shell — root, services menu, content host, chrome (hint legend + status bar + toast stack), and overlays (command palette, confirmation, quick look). All VMx-based, pure viewmodels, NO Textual imports allowed (enforced by `./scripts/check-layers.sh`).

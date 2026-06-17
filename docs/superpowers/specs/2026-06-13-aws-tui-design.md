@@ -7,7 +7,7 @@
 | Status | Draft, ready for implementation plan |
 | Target version | v0.1.0 |
 | Repo | `thekaveh/aws-tui` (to be created on implementation Step 1) |
-| Companion | VMx (`thekaveh/VMx`) — submodule at `vendor/vmx` until on PyPI |
+| Companion | VMx (`thekaveh/VMx`) — PyPI dependency `vmx>=2.6.0,<3.0.0` |
 
 ---
 
@@ -146,11 +146,10 @@ aws-tui/
 │   ├── ISSUE_TEMPLATE/
 │   ├── pull_request_template.md
 │   └── dependabot.yml
-├── .gitmodules                     # pins vendor/vmx
 ├── .gitignore  .gitattributes  .editorconfig
 ├── .pre-commit-config.yaml         # ruff, mypy, taplo, end-of-file-fixer
 │
-├── vendor/
+├── vendor/                         # historical — emptied by the 2026-06-17 vmx→PyPI migration
 │   └── vmx/                        # git submodule → github.com/thekaveh/VMx
 │
 ├── docs/
@@ -1013,9 +1012,12 @@ We do not enforce 100% — chasing the last 10% encourages tests that exercise l
 02. cd /Users/kaveh/repos/aws-tui && git init && set upstream
 03. add: .gitignore (Python + macOS), .editorconfig, .gitattributes,
          LICENSE (MIT), CHANGELOG.md, CODE_OF_CONDUCT.md, SECURITY.md
-04. git submodule add https://github.com/thekaveh/VMx.git vendor/vmx
-05. add: pyproject.toml (PEP 621, hatchling, py>=3.11, path dep on
-         vendor/vmx/langs/python), uv.lock (committed)
+04. (Historical: M0 added vendor/vmx as a submodule pinned to
+    python-v2.4.0. The 2026-06-17 vmx→PyPI migration removed it;
+    aws-tui now consumes vmx>=2.6.0,<3.0.0 from PyPI. See
+    docs/superpowers/plans/2026-06-17-vmx-pypi-migration.md.)
+05. add: pyproject.toml (PEP 621, hatchling, py>=3.11), uv.lock
+         (committed)
 06. add: src/aws_tui/{__init__.py, __main__.py, version.py}
 07. add: README.md (skeleton with install + quickstart)
 08. add: docs/{architecture,keybindings,theming,connections,
