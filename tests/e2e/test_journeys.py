@@ -195,7 +195,7 @@ class _SpyProvider(InMemoryFS):
         super().__init__()
         self.delete_calls: list[PathRef] = []
 
-    async def delete(self, path: PathRef) -> None:  # type: ignore[override]
+    async def delete(self, path: PathRef) -> None:
         self.delete_calls.append(path)
         await super().delete(path)
 
