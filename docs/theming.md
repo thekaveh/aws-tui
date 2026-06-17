@@ -26,17 +26,27 @@ In config:
 theme = "voidline"
 ```
 
-At runtime via the command palette:
+At runtime via the keyboard:
 
 ```
-:                       # opens palette
-theme switch ▸ voidline # arrow keys or fuzzy filter
+t                       # open the theme picker modal
+↑ ↓                     # arrow to the theme you want
 Enter                   # apply
+```
+
+Or skip the modal entirely and cycle to the next theme:
+
+```
+Shift+T                 # cycle: carbon → voidline → lattice → amber → ...
 ```
 
 The switch lives only for the session unless you also update
 `config.toml`. No restart needed — `ThemeChangedMessage` reflows
 the active stylesheet on the fly.
+
+> The command-palette path (`:` then `theme switch ▸ voidline`) is in
+> the design spec but the palette doesn't yet register theme entries
+> in v0.7.x — `t` / `Shift+T` are the working shortcuts.
 
 ## 3. User overrides
 ### 3.1. Single-token overrides
