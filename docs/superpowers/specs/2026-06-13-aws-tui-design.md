@@ -97,7 +97,9 @@ Strict one-way dependencies. Each layer only knows the layer beneath it.
 │                                                                    │
 │    FileSystemProvider  (Protocol)                                  │
 │      list / stat / mkdir / delete / rename                         │
-│      read_stream / write_stream / copy_within                      │
+│      read_stream / write_stream                                    │
+│      (cross-provider copy/move lives in CrossFsCopy /              │
+│       CrossFsMove, not on the protocol itself)                     │
 │                                                                    │
 │    ┌──────────────────┐    ┌──────────────────┐                    │
 │    │  LocalFS         │    │  S3FS            │                    │
@@ -213,7 +215,7 @@ aws-tui/
 │           │   ├── command_palette.py
 │           │   ├── hint_legend.py  │  status_bar.py
 │           │   ├── quick_look.py   │  confirm_modal.py  │  toast.py
-│           │   └── transfers_tray.py
+│           │   └── transfers_overlay.py
 │           ├── bindings.py         # default action → key map
 │           ├── actions.py          # action registry (string id → callable on VM)
 │           └── themes/
