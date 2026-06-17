@@ -120,7 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multi-select, ConfirmModal Enter forwarding, `$AWS_PROFILE`
   resolution, pane source swap). Total: 482 → 518 tests (net of 5
   dead-widget tests dropped in the pass-13 maintenance cleanup). The
-  pass-2 theme-default fix adds 3 more (total 521).
+  second overnight loop's pass-2 theme-default fix adds 3 (total 521);
+  pass-10's journal-preservation regression test adds 1 (total 522).
 
 ### Fixed (first maintenance loop, passes 1–6)
 

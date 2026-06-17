@@ -85,7 +85,7 @@ the same observable plus dispose-on-unmount.
 ## 5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
-| Unit | 449 | VM, domain, infra behavior; no I/O |
+| Unit | 453 | VM, domain, infra behavior; no I/O |
 | Snapshot | 40 | View rendering against golden SVGs per theme |
 | E2E | 5 | Pilot-driven user journeys |
 | Integration (in-process) | 24 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, etc.) |
