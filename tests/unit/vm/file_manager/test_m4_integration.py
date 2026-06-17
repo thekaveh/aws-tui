@@ -1,4 +1,4 @@
-"""End-to-end M4 integration test.
+"""End-to-end file-manager integration test.
 
 Composes a :class:`RootVM` with a :class:`ServiceRegistry` containing
 the real :class:`S3Service` (configured with the test ``s3_fs_factory``

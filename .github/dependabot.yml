@@ -26,8 +26,6 @@ updates:
           - "mypy"
           - "pre-commit"
           - "moto"
-          - "factory-boy"
-          - "freezegun"
           - "twine"
           - "testcontainers*"
           - "types-*"

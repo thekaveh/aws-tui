@@ -1,4 +1,4 @@
-"""Tests for the ContentHostVM (Task 9)."""
+"""Tests for the ContentHostVM."""
 
 from __future__ import annotations
 

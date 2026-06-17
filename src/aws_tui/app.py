@@ -133,7 +133,7 @@ class AwsTuiApp(App[None]):
         return self._app_ctx
 
     def compose(self) -> ComposeResult:
-        # StatusBar was removed in pass-7 — profile/region/auth indicator
+        # StatusBar is no longer mounted — profile/region/auth indicator
         # now live in the left pane's border (title shows the live path,
         # subtitle shows the connection identity). Bookkeeping VMs still
         # exist in RootVM.chrome so hub subscribers stay wired up; only
@@ -774,8 +774,10 @@ class AwsTuiApp(App[None]):
         """Push the crash modal for ``report`` and await the user's choice.
 
         Public so tests and recovery flows can drive the modal without
-        also having to raise an exception. Mostly used from
-        :func:`run_with_crash_capture`.
+        also having to raise an exception. The in-app crash path
+        (``_handle_exception``) does not currently call this — see the
+        ``deferred-from-m6`` note on ``record_action``/crash-modal
+        push_screen wiring.
         """
         ctx = self._app_ctx
         crash_vm = CrashVM(report, hub=ctx.hub, dispatcher=ctx.dispatcher)

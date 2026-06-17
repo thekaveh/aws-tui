@@ -14,6 +14,7 @@ from reactivex.abc import DisposableBase
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from vmx import Message, MessageHub
 
@@ -129,7 +130,7 @@ class ToastStack(Widget):
     def _rebuild_toasts(self) -> None:
         try:
             container = self.query_one("#toast-stack-inner", Vertical)
-        except Exception:
+        except NoMatches:
             return
         # Remove existing children + remount fresh ones.
         for child in list(container.children):

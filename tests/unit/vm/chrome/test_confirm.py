@@ -1,4 +1,4 @@
-"""Tests for the ConfirmationVM (Task 7)."""
+"""Tests for the ConfirmationVM."""
 
 from __future__ import annotations
 

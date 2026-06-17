@@ -1,7 +1,7 @@
-"""M0 sanity smoke tests — the package imports, version is set, app class is exposed.
-
-These exist as the bare minimum CI must keep green from M0 onward. Real
-behavioral tests appear with their respective layers (M1+).
+"""Package-level sanity smoke tests — the package imports, version is
+set, and the app class is exposed. The bare-minimum CI must keep
+green; per-layer behavioral coverage lives in the tier suites under
+unit/, integration/, snapshot/, and e2e/.
 """
 
 from __future__ import annotations

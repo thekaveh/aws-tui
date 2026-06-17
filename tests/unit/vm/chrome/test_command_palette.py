@@ -1,4 +1,4 @@
-"""Tests for the CommandPaletteVM (Task 6)."""
+"""Tests for the CommandPaletteVM."""
 
 from __future__ import annotations
 

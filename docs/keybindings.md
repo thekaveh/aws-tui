@@ -96,11 +96,16 @@ your overlay; unknown action ids are rejected so a typo in your config
 raises a startup error instead of silently dropping a binding.
 
 The mainline navigation, file-ops, overlay, and chrome actions are
-fully wired into Textual handlers — your overlay edits take effect at
-launch. A few advanced action ids (the full command-palette registry
-beyond `app.command_palette` itself, and a couple of `pane.*` actions
-the input router doesn't yet route) are still pending; bind them ahead
-of time and the wiring will pick them up once it lands.
+fully wired into Textual handlers. **v0.7.x status**: the
+`KeymapStore` accepts the `[keybindings]` overlay via its constructor
+and validates every action id, but the composition root does not yet
+read the overlay from `config.toml` — that wiring is part of the
+input-router work deferred from M6 (see
+[cookbook.md §3](cookbook.md#3-customize-a-keybinding)). Today the
+same effect is achievable by editing
+`src/aws_tui/infra/keymap_store.py::DEFAULT_BINDINGS` directly in
+a fork. Bind ahead of time in your config and the wiring will pick
+them up once it lands.
 
 ## 3. Action IDs
 

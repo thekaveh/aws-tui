@@ -97,7 +97,9 @@ Strict one-way dependencies. Each layer only knows the layer beneath it.
 │                                                                    │
 │    FileSystemProvider  (Protocol)                                  │
 │      list / stat / mkdir / delete / rename                         │
-│      read_stream / write_stream / copy_within                      │
+│      read_stream / write_stream                                    │
+│      (cross-provider copy/move lives in CrossFsCopy /              │
+│       CrossFsMove, not on the protocol itself)                     │
 │                                                                    │
 │    ┌──────────────────┐    ┌──────────────────┐                    │
 │    │  LocalFS         │    │  S3FS            │                    │
@@ -137,10 +139,10 @@ aws-tui/
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci.yml                  # matrix from §8; ruff + mypy + pytest
-│   │   ├── release.yml             # build + publish to PyPI on tag (when ready)
-│   │   ├── snapshot-drift.yml      # nightly snapshot-test drift detection
-│   │   ├── submodule-bump.yml      # weekly VMx submodule pin update PR
-│   │   └── codeql.yml
+│   │   ├── release.yml             # deferred — see §9.5
+│   │   ├── snapshot-drift.yml      # deferred — see §9.5
+│   │   ├── submodule-bump.yml      # deferred — see §9.5
+│   │   └── codeql.yml              # deferred — see §9.5
 │   ├── ISSUE_TEMPLATE/
 │   ├── pull_request_template.md
 │   └── dependabot.yml
@@ -200,11 +202,10 @@ aws-tui/
 │       │       └── entry_vm.py
 │       │
 │       ├── services/               # plugin spine
-│       │   ├── base.py             # Service protocol
-│       │   ├── __init__.py         # ServiceRegistry + default registrations
+│       │   ├── __init__.py         # re-exports Service / ServiceDescriptor /
+│       │   │                       # ServiceRegistry from vm/services_protocol.py
 │       │   └── s3/
-│       │       ├── service.py      # S3Service composes DualPaneVM[LocalFS, S3FS]
-│       │       └── view.py         # any s3-specific view wiring
+│       │       └── service.py      # S3Service composes DualPaneVM[LocalFS, S3FS]
 │       │
 │       └── ui/                     # Textual widget layer (no boto3 import)
 │           ├── widgets/
@@ -213,7 +214,7 @@ aws-tui/
 │           │   ├── command_palette.py
 │           │   ├── hint_legend.py  │  status_bar.py
 │           │   ├── quick_look.py   │  confirm_modal.py  │  toast.py
-│           │   └── transfers_tray.py
+│           │   └── transfers_overlay.py
 │           ├── bindings.py         # default action → key map
 │           ├── actions.py          # action registry (string id → callable on VM)
 │           └── themes/
@@ -487,6 +488,8 @@ async def shutdown():
     root_vm.dispose()                               # sync depth-first cascade
 ```
 
+**Status (v0.7.x):** `transfers_vm.cancel_all()` and `aws_session.aclose_all_clients()` are wired; the `asyncio.wait(..., timeout=5)` graceful-drain step is **deferred** because it depends on the cancellation-propagation refactor (see `TransfersVM.cancel_all` known gap). Today shutdown cancels and disposes without an explicit drain window; in-flight transfers complete naturally after `dispose()`.
+
 If async drain exceeds 5 s, we log a warning and proceed to `dispose()` anyway; in-memory state is released, the OS reaps any leaked socket.
 
 ### 5.5 Async + threading
@@ -751,7 +754,7 @@ botocore.config.Config(
 | `max_io_queue` | 100 | RAM pressure guard |
 | `use_threads` | False | asyncio-native; no thread pool |
 
-Global cap: **8 concurrent transfers** (configurable). `TransfersVM` enforces; excess transfers queue with state `pending`.
+Global cap: **8 concurrent transfers** (configurable). `TransfersVM` enforces; excess transfers queue with state `pending`. **Status (v0.7.x):** the global cap and `pending` queue are **deferred** — `TransfersVM.register()` currently accepts every transfer without limit. The per-transfer `boto3` knobs above (multipart_chunksize, max_concurrency) are wired.
 
 ### 7.5 Per-transfer state machine
 
@@ -789,7 +792,7 @@ Modal: "2 transfers from a previous session were not finished.
 | `state` | Pane renders |
 |---|---|
 | `idle` | the entry list (normal) |
-| `loading` | `loading...` + spinner (after 200 ms — fast listings don't flicker) |
+| `loading` | `loading...` + spinner (after 200 ms — fast listings don't flicker; **v0.7.x:** spinner appears immediately, debounce deferred) |
 | `empty` | `empty bucket` / `empty folder` |
 | `auth_required` | `auth needed - press a to sign in` |
 | `forbidden` | `access denied to <bucket>/<prefix>` + `: connection switch` hint |
@@ -994,14 +997,14 @@ We do not enforce 100% — chasing the last 10% encourages tests that exercise l
 
 ### 9.5 CI workflows (release-side; test matrix in §8.9)
 
-| Workflow | Trigger | Does |
-|---|---|---|
-| `ci.yml` | PR, push to `main` | matrix from §8.9 |
-| `release.yml` | tag push (`v*`) | build wheel + sdist; `twine check`; GitHub release w/ changelog; upload to PyPI when configured |
-| `snapshot-drift.yml` | nightly cron | snapshot tests on `main` to detect rendering drift; opens issue on diff |
-| `submodule-bump.yml` | weekly cron | checks for new VMx tags; opens PR bumping the pin |
-| `codeql.yml` | weekly + PR | security scanning |
-| `dependabot.yml` | continuous | dep updates grouped weekly |
+| Workflow | Trigger | Does | v0.7.x status |
+|---|---|---|---|
+| `ci.yml` | PR, push to `main` | matrix from §8.9 | shipped |
+| `release.yml` | tag push (`v*`) | build wheel + sdist; `twine check`; GitHub release w/ changelog; upload to PyPI when configured | deferred (PyPI release blocked on VMx) |
+| `snapshot-drift.yml` | nightly cron | snapshot tests on `main` to detect rendering drift; opens issue on diff | deferred |
+| `submodule-bump.yml` | weekly cron | checks for new VMx tags; opens PR bumping the pin | deferred |
+| `codeql.yml` | weekly + PR | security scanning | deferred |
+| `dependabot.yml` | continuous | dep updates grouped weekly | shipped (`.github/dependabot.yml`) |
 
 ### 9.6 Repo bootstrap — first commits after spec sign-off
 

@@ -1,10 +1,10 @@
 """Smoke: action_copy + action_delete must NOT crash the running app.
 
-User-reported pass-9 regression: both commands escalate to the crash
-modal during the launch flow. We can't reproduce the real S3 backend
-here, but we can exercise the full UI path (focus pane → mark → press
-key → confirm modal → run async op) against in-memory providers and
-ensure no exception escapes.
+Regression guard: both commands previously escalated to the crash modal
+during the launch flow. We can't reproduce the real S3 backend here,
+but we can exercise the full UI path (focus pane → mark → press key →
+confirm modal → run async op) against in-memory providers and ensure
+no exception escapes.
 """
 
 from __future__ import annotations

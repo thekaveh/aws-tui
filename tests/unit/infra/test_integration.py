@@ -1,6 +1,6 @@
-"""M1 infra integration sanity test.
+"""Infra integration sanity test.
 
-Composes all six M1 components against tmp dirs to verify:
+Composes all six infra components against tmp dirs to verify:
 
 1. There are no circular imports between modules.
 2. The full happy-path (load config, list connections, resolve both

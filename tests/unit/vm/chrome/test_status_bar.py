@@ -1,4 +1,4 @@
-"""Tests for the StatusBarVM (Task 4)."""
+"""Tests for the StatusBarVM."""
 
 from __future__ import annotations
 

@@ -144,6 +144,71 @@ async def test_abort_all_aborts_and_purges(tmp_path: Path) -> None:
     assert list((tmp_path / "transfers").glob("*.jsonl")) == []
 
 
+class _FlakyS3Client:
+    """S3 client whose ``abort_multipart_upload`` always raises."""
+
+    def __init__(self) -> None:
+        self.aborts: list[dict[str, Any]] = []
+
+    async def abort_multipart_upload(self, **kwargs: Any) -> dict[str, Any]:
+        self.aborts.append(kwargs)
+        raise RuntimeError("S3 abort failed (network / auth / throttle)")
+
+
+class _FlakyAwsSession:
+    def __init__(self) -> None:
+        self.client_obj = _FlakyS3Client()
+
+    async def client(self, connection: Connection, service: str) -> Any:
+        client_obj = self.client_obj
+
+        @asynccontextmanager
+        async def _ctx():
+            yield client_obj
+
+        return _ctx()
+
+
+@pytest.mark.asyncio
+async def test_abort_all_preserves_journal_when_s3_abort_fails(tmp_path: Path) -> None:
+    """If ``abort_multipart_upload`` raises, we must NOT purge the journal.
+
+    Purging on failure leaves the MPU alive on S3 (still costing storage)
+    with no local record — silent data leak. The journal stays so the next
+    session can retry the abort.
+    """
+    journal = TransferJournal(base_dir=tmp_path / "transfers")
+    tid = journal.begin(
+        source_uri="local:///a",
+        destination_uri="s3://bucket/uploads/a.bin",
+        upload_id="mpu-a",
+    )
+    entry = TransferJournalEntry(
+        transfer_id=tid,
+        source_uri="local:///a",
+        destination_uri="s3://bucket/uploads/a.bin",
+        upload_id="mpu-a",
+        bytes_total=4096,
+        started_at=datetime(2026, 6, 13, tzinfo=UTC),
+        last_progress=datetime(2026, 6, 13, tzinfo=UTC),
+    )
+    session = _FlakyAwsSession()
+    await apply_resume_decision(
+        decision=ResumeAction.ABORT_ALL,
+        entries=[entry],
+        journal=journal,
+        aws_session=session,  # type: ignore[arg-type]
+        connection=_connection(),
+    )
+    # The abort was attempted (so the boto3 retries-and-backoff already
+    # ran inside the suppressed call).
+    assert len(session.client_obj.aborts) == 1
+    # The journal must still be on disk for next-session retry.
+    assert list((tmp_path / "transfers").glob("*.jsonl")) == [
+        tmp_path / "transfers" / f"{tid}.jsonl"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_abort_all_without_connection_is_noop(tmp_path: Path) -> None:
     journal = TransferJournal(base_dir=tmp_path / "transfers")

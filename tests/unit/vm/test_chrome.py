@@ -1,4 +1,4 @@
-"""Tests for the ChromeVM (Task 9)."""
+"""Tests for the ChromeVM."""
 
 from __future__ import annotations
 

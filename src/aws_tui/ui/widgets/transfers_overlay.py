@@ -19,6 +19,7 @@ import os
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.events import Click
 from textual.widget import Widget
 from textual.widgets import ProgressBar, Static
@@ -122,7 +123,7 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
             self._refresh_progress()
             try:
                 label = self.query_one(".transfer-label", Static)
-            except Exception:
+            except NoMatches:
                 return
             label.update(self._label_text())
 

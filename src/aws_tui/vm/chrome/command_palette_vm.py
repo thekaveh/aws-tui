@@ -213,6 +213,14 @@ class CommandPaletteVM:
         self._inner.destruct()
 
     def dispose(self) -> None:
+        # Cancel any in-flight action tasks; the done-callback would
+        # normally discard them from the set, but on dispose we don't
+        # want them outliving the VM and firing into a torn-down hub.
+        for task in list(self._pending_tasks):
+            if not task.done():
+                task.cancel()
+        self._pending_tasks.clear()
+        self._entries.clear()
         self._open_command.dispose()
         self._close_command.dispose()
         self._execute_selected_command.dispose()

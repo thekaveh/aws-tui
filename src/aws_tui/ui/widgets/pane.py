@@ -17,6 +17,7 @@ from __future__ import annotations
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.events import Resize
 from textual.widget import Widget
 from textual.widgets import Static
@@ -266,9 +267,9 @@ class Pane(HubSubscriberMixin, Widget):
 
     def compose(self) -> ComposeResult:
         vm = self._vm.viewmodel
-        # NOTE: the inline ``.breadcrumb`` Static was removed in pass-9
-        # because the same path is rendered in the pane's top border
-        # title — keeping both was redundant.
+        # The inline ``.breadcrumb`` Static is intentionally absent — the
+        # same path is rendered in the pane's top border title and
+        # showing it twice was redundant.
         yield Static(_column_header_for(self._name_column_width), classes="column-header")
         # VerticalScroll instead of Vertical so long listings scroll on
         # mousewheel / trackpad without extra wiring, and so the cursor
@@ -319,7 +320,7 @@ class Pane(HubSubscriberMixin, Widget):
         node: object | None = self
         while node is not None:
             if type(node).__name__ == "DualPane":
-                dual_vm = getattr(node, "_vm", None)
+                dual_vm = getattr(node, "vm", None)
                 if dual_vm is None:
                     return
                 from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
@@ -372,7 +373,7 @@ class Pane(HubSubscriberMixin, Widget):
         try:
             header = self.query_one(".column-header", Static)
             footer = self.query_one(".pane-footer", Static)
-        except Exception:
+        except NoMatches:
             return
         vm = self._vm.viewmodel
         # Header always uses the adaptive width — VM's column_header_text

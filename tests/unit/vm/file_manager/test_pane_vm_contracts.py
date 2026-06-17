@@ -1,4 +1,4 @@
-"""Capability contract tests for :class:`PaneVM` (M4 Task 6).
+"""Capability contract tests for :class:`PaneVM`.
 
 VMx does not ship a Python ``vmx.testing.conformance`` package; we
 hand-roll equivalent contracts so any future PaneVM refactor stays

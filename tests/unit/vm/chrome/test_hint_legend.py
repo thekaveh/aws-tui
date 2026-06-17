@@ -1,4 +1,4 @@
-"""Tests for the HintLegendVM (Task 5)."""
+"""Tests for the HintLegendVM."""
 
 from __future__ import annotations
 

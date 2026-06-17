@@ -74,8 +74,8 @@ async def test_journey_1_silent_sso(app_context: AppContext, tmp_path: Path) -> 
         await pilot.pause()
         # No toast was raised on launch.
         assert app_context.root_vm.chrome.toast_stack.count == 0
-        # Top chrome is mounted (BrandBanner replaced the old StatusBar in
-        # pass-7; profile/region now live in the left pane's border).
+        # Top chrome is mounted (BrandBanner replaced the old StatusBar;
+        # profile/region now live in the left pane's border).
         from aws_tui.ui.widgets.brand_banner import BrandBanner
 
         assert len(app.query(BrandBanner)) == 1
@@ -195,7 +195,7 @@ class _SpyProvider(InMemoryFS):
         super().__init__()
         self.delete_calls: list[PathRef] = []
 
-    async def delete(self, path: PathRef) -> None:  # type: ignore[override]
+    async def delete(self, path: PathRef) -> None:
         self.delete_calls.append(path)
         await super().delete(path)
 

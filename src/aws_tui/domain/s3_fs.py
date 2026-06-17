@@ -191,7 +191,7 @@ class S3FS:
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
-            raise _map_client_error(exc, "<service>") from exc
+            raise _map_client_error(exc, "buckets") from exc
         entries: list[FileEntry] = []
         for b in resp.get("Buckets", []):
             entries.append(

@@ -20,7 +20,7 @@ async def test_s_key_toggles_services_collapsed_state(
         await pilot.pause()
 
         menu = app.query_one(ServicesMenu)
-        # Pass-10 default: starts collapsed.
+        # Services rail starts collapsed by default.
         assert menu.is_collapsed is True
 
         await pilot.press("s")

@@ -20,7 +20,7 @@ This repo follows a strict layer architecture; see [docs/architecture.md](docs/a
 View (Textual)  →  ViewModel (VMx)  →  Service plugins  →  Domain ops  →  Infrastructure
 ```
 
-Linting rules (`ruff` `flake8-tidy-imports`) enforce one-way dependencies between layers. Violations fail CI.
+`scripts/check-layers.sh` greps each layer for forbidden imports and fails CI on any violation. (The `flake8-tidy-imports` ruff plugin will replace the grep script once cross-layer imports start to appear — until then, the empty rule block would be a no-op.)
 
 ## 3. Commits
 

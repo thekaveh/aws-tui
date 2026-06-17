@@ -1,6 +1,5 @@
 """Smoke tests for overlay widgets: command palette, confirm modal,
-quick look. (TransfersTray was removed in pass-13 maintenance — the
-runtime transfers UI is :class:`TransfersOverlay` now.)"""
+quick look. The runtime transfers UI is :class:`TransfersOverlay`."""
 
 from __future__ import annotations
 

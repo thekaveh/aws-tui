@@ -406,8 +406,8 @@ TransfersOverlay .transfer-cancel:hover {
 /* No-connection placeholder shown in the content host when no AWS or */
 /* S3-compatible connection is configured at startup.                  */
 .content-placeholder {
-    color: #e6e8eb;
-    background: #0d0e10;
+    color: $text;
+    background: $bg;
     padding: 1 2;
     width: 100%;
     height: 100%;

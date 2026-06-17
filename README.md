@@ -4,7 +4,7 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
 [Textual](https://textual.textualize.io/) and the
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
-> **Status: v0.7.0** — feature-complete pre-PyPI release. All five
+> **Status: v0.7.0** — feature-complete pre-PyPI release. All seven
 > milestones (M0 scaffold ▸ M6 polish) shipped, plus a post-tag
 > usability train (passes 7–12) that hardened the chrome, fixed the
 > S3→local copy crash, added theme cycling + source swap + multi-select
@@ -58,8 +58,9 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
   `theme switch <name>`.
 - **Strict layered architecture.** View ▸ ViewModel ▸ Service ▸ Domain
   ▸ Infra; enforced by `ruff` import rules + `scripts/check-layers.sh`.
-  Mypy strict-clean. 518 tests across unit / integration / snapshot /
-  e2e tiers + 9 integration tests against MinIO.
+  Mypy strict-clean. 522 default-tier tests (unit / in-process
+  integration / snapshot / e2e), plus 9 opt-in MinIO integration tests
+  (`uv run pytest -m integration`).
 
 ## 2. Install
 

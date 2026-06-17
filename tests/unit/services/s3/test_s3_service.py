@@ -1,4 +1,4 @@
-"""Tests for the S3 service (M4 Task 5)."""
+"""Tests for the S3 service."""
 
 from __future__ import annotations
 

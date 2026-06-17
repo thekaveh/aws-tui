@@ -195,8 +195,6 @@ class ConnectionResolver:
                     continue
                 region = cfg_parser.get(section, "region", fallback=None)
                 profiles[name] = region
-            if cfg_parser.has_section("default"):
-                profiles.setdefault("default", cfg_parser.get("default", "region", fallback=None))
 
         creds_parser = configparser.ConfigParser()
         if self._aws_credentials_path.is_file():

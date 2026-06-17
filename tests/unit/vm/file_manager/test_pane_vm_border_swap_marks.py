@@ -1,4 +1,4 @@
-"""Unit tests for PaneVM features added in passes 7-12.
+"""Unit tests for PaneVM border / swap / marked-bytes behavior.
 
 Locks in:
 - ``border_title`` is the live path (s3://bucket/folder or /abs/path)

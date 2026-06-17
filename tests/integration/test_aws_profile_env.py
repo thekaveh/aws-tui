@@ -1,4 +1,4 @@
-"""$AWS_PROFILE env-var resolution — pass-5 fix.
+"""$AWS_PROFILE env-var resolution.
 
 If $AWS_PROFILE is exported, ``AwsTuiApp._resolve_initial_connection``
 must prefer that profile over the first auto-discovered profile. This is
@@ -8,7 +8,6 @@ profile and the real profile in $AWS_PROFILE.
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -92,9 +91,9 @@ def _make_app_with_two_profiles(tmp: Path, default_profile: str) -> AwsTuiApp:
 
 def test_resolve_picks_aws_profile_env_var_when_set(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="aws-tui-prof-"))
-    app = _make_app_with_two_profiles(tmp, default_profile="default")
+    app = _make_app_with_two_profiles(tmp_path, default_profile="default")
     monkeypatch.setenv("AWS_PROFILE", "sso-dev")
 
     conn = app._resolve_initial_connection()  # type: ignore[attr-defined]
@@ -106,9 +105,9 @@ def test_resolve_picks_aws_profile_env_var_when_set(
 
 def test_resolve_falls_back_to_first_auto_when_env_unset(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    tmp = Path(tempfile.mkdtemp(prefix="aws-tui-prof-"))
-    app = _make_app_with_two_profiles(tmp, default_profile="default")
+    app = _make_app_with_two_profiles(tmp_path, default_profile="default")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
 
     conn = app._resolve_initial_connection()  # type: ignore[attr-defined]
@@ -119,11 +118,11 @@ def test_resolve_falls_back_to_first_auto_when_env_unset(
 
 def test_resolve_ignores_empty_aws_profile(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """An empty/whitespace ``$AWS_PROFILE`` should not poison resolution
     (a user exporting it to '' should be treated as not-set)."""
-    tmp = Path(tempfile.mkdtemp(prefix="aws-tui-prof-"))
-    app = _make_app_with_two_profiles(tmp, default_profile="default")
+    app = _make_app_with_two_profiles(tmp_path, default_profile="default")
     monkeypatch.setenv("AWS_PROFILE", "  ")
     conn = app._resolve_initial_connection()  # type: ignore[attr-defined]
     assert conn is not None

@@ -11,10 +11,11 @@ dependencies:
 View (Textual)  →  ViewModel (VMx)  →  Service plugins  →  Domain ops  →  Infrastructure
 ```
 
-Each layer imports only from layers beneath it. `ruff`
-`flake8-tidy-imports` enforces this at lint time; `scripts/check-layers.sh`
-greps for any forbidden imports across the five subtrees as a
-belt-and-suspenders.
+Each layer imports only from layers beneath it. `scripts/check-layers.sh`
+greps for any forbidden imports across the five subtrees and is run by
+CI on every push; it's the active enforcement today. The
+`flake8-tidy-imports` ruff plugin is planned as a follow-up but is not
+yet wired (the empty config block would be a no-op).
 
 ## 1. Layers
 - **View** — Textual widgets and `.tcss` themes
@@ -85,7 +86,7 @@ the same observable plus dispose-on-unmount.
 ## 5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
-| Unit | 449 | VM, domain, infra behavior; no I/O |
+| Unit | 453 | VM, domain, infra behavior; no I/O |
 | Snapshot | 40 | View rendering against golden SVGs per theme |
 | E2E | 5 | Pilot-driven user journeys |
 | Integration (in-process) | 24 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, etc.) |

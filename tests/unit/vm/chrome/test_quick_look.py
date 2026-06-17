@@ -1,4 +1,4 @@
-"""Tests for the QuickLookVM (Task 7)."""
+"""Tests for the QuickLookVM."""
 
 from __future__ import annotations
 
@@ -20,11 +20,6 @@ def _build() -> QuickLookVM:
     vm = QuickLookVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     return vm
-
-
-async def _empty_chunks() -> AsyncIterator[bytes]:
-    if False:
-        yield b""
 
 
 async def _chunks(data: bytes) -> AsyncIterator[bytes]:
