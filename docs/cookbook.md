@@ -25,17 +25,20 @@ docker run --rm -d --name minio \
 ```
 
 ### 1.2. Store the credentials in the macOS Keychain (recommended)
-```bash
-# Stores under service="minio-local", account="default".
-security add-generic-password \
-    -s minio-local -a default -w minioadmin
-```
 
-You can repeat for `minio-local-secret`:
+The resolver expects two keychain entries under ONE service name
+(matching the `credentials = "keychain:<service>"` value in
+`config.toml`): one account named `access_key_id` and one named
+`secret_access_key`. So for a `keychain:minio-local` config entry:
 
 ```bash
+# service="minio-local", account="access_key_id"
 security add-generic-password \
-    -s minio-local-secret -a default -w minioadmin
+    -s minio-local -a access_key_id -w minioadmin
+
+# service="minio-local", account="secret_access_key"
+security add-generic-password \
+    -s minio-local -a secret_access_key -w minioadmin
 ```
 
 (The Python `keyring` library aws-tui uses delegates to the macOS

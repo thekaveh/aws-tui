@@ -87,7 +87,7 @@ The Carbon palette tokens (full spec table in §4.5):
 | `text-dim` | `#5e6470` | Labels |
 | `accent` | `#6fb8ff` | Focused/actionable glyphs |
 | `accent-soft` | `#cfe4ff` | Selected-row foreground |
-| `magenta` | `#c9a0ff` | Command palette `:` glyph |
+| `accent-hot` | `#c9a0ff` | Command palette `:` glyph |
 | `success` | `#5cd693` | SSO ok, transfer up arrow |
 | `warning` | `#f0c674` | Auth-pending state |
 | `danger` | `#ff6b7a` | Destructive op modal accents |
