@@ -487,6 +487,8 @@ async def shutdown():
     root_vm.dispose()                               # sync depth-first cascade
 ```
 
+**Status (v0.7.x):** `transfers_vm.cancel_all()` and `aws_session.aclose_all_clients()` are wired; the `asyncio.wait(..., timeout=5)` graceful-drain step is **deferred** because it depends on the cancellation-propagation refactor (see `TransfersVM.cancel_all` known gap). Today shutdown cancels and disposes without an explicit drain window; in-flight transfers complete naturally after `dispose()`.
+
 If async drain exceeds 5 s, we log a warning and proceed to `dispose()` anyway; in-memory state is released, the OS reaps any leaked socket.
 
 ### 5.5 Async + threading
@@ -751,7 +753,7 @@ botocore.config.Config(
 | `max_io_queue` | 100 | RAM pressure guard |
 | `use_threads` | False | asyncio-native; no thread pool |
 
-Global cap: **8 concurrent transfers** (configurable). `TransfersVM` enforces; excess transfers queue with state `pending`.
+Global cap: **8 concurrent transfers** (configurable). `TransfersVM` enforces; excess transfers queue with state `pending`. **Status (v0.7.x):** the global cap and `pending` queue are **deferred** — `TransfersVM.register()` currently accepts every transfer without limit. The per-transfer `boto3` knobs above (multipart_chunksize, max_concurrency) are wired.
 
 ### 7.5 Per-transfer state machine
 
@@ -789,7 +791,7 @@ Modal: "2 transfers from a previous session were not finished.
 | `state` | Pane renders |
 |---|---|
 | `idle` | the entry list (normal) |
-| `loading` | `loading...` + spinner (after 200 ms — fast listings don't flicker) |
+| `loading` | `loading...` + spinner (after 200 ms — fast listings don't flicker; **v0.7.x:** spinner appears immediately, debounce deferred) |
 | `empty` | `empty bucket` / `empty folder` |
 | `auth_required` | `auth needed - press a to sign in` |
 | `forbidden` | `access denied to <bucket>/<prefix>` + `: connection switch` hint |
