@@ -238,6 +238,44 @@ ConfirmModal > Container > .modal-title {
     text-style: bold;
 }
 
+ConfirmModal > Container > .modal-footer {
+    height: 3;
+    align: right middle;
+    padding: 1 0 0 0;
+}
+ConfirmModal > Container > .modal-footer > _ModalButton {
+    background: $bg;
+    color: $text;
+    border: round $rule-dim;
+    width: auto;
+    min-width: 14;
+    height: 3;
+    padding: 0 2;
+    content-align: center middle;
+}
+ConfirmModal > Container > .modal-footer > _ModalButton:hover {
+    background: $bg-elev;
+    border: round $accent;
+    color: $accent;
+}
+ConfirmModal > Container > .modal-footer > _ModalButton.-primary {
+    background: $accent;
+    color: $bg;
+    border: round $accent;
+}
+ConfirmModal > Container > .modal-footer > _ModalButton.-primary:hover {
+    background: $accent-soft;
+    border: round $accent-soft;
+}
+ConfirmModal > Container > .modal-footer > _ModalButton.-danger {
+    background: $danger;
+    color: $bg;
+    border: round $danger;
+}
+ConfirmModal > Container > .modal-footer > _ModalButton.-danger:hover {
+    background: $danger;
+}
+
 ConfirmModal.-danger > Container {
     border: thick $danger;
 }
