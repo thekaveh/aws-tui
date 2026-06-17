@@ -106,7 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 38 new regression tests across 8 files cover every pass-7–12
+- 41 new regression tests across 8 files cover every pass-7–12
   feature and bug-fix (`S3FS` bucketless ops, `PaneVM` border / swap /
   marked-bytes, `BrandBanner` theme palette swap, theme runtime
   propagation, chrome layout, hint-legend chips, modifier-click
