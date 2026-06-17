@@ -111,7 +111,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marked-bytes, `BrandBanner` theme palette swap, theme runtime
   propagation, chrome layout, hint-legend chips, modifier-click
   multi-select, ConfirmModal Enter forwarding, `$AWS_PROFILE`
-  resolution, pane source swap). Total: 482 → 523 tests.
+  resolution, pane source swap). Total: 482 → 518 tests (net of 5
+  dead-widget tests dropped in the pass-13 maintenance cleanup).
 
 ### Fixed
 
