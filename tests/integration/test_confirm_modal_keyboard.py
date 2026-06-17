@@ -1,6 +1,6 @@
-"""Pass-12: Enter in a ConfirmModal must call action_confirm even
-though the App declares ``Binding('enter', 'descend', priority=True)``
-to navigate the dual-pane. ``_forward_to_modal`` routes Enter to
+"""Enter in a ConfirmModal must call action_confirm even though the
+App declares ``Binding('enter', 'descend', priority=True)`` to
+navigate the dual-pane. ``_forward_to_modal`` routes Enter to
 ``ModalScreen.action_confirm`` when a modal is on top of the stack.
 """
 
