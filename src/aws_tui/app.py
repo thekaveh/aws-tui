@@ -774,8 +774,10 @@ class AwsTuiApp(App[None]):
         """Push the crash modal for ``report`` and await the user's choice.
 
         Public so tests and recovery flows can drive the modal without
-        also having to raise an exception. Mostly used from
-        :func:`run_with_crash_capture`.
+        also having to raise an exception. The in-app crash path
+        (``_handle_exception``) does not currently call this — see the
+        ``deferred-from-m6`` note on ``record_action``/crash-modal
+        push_screen wiring.
         """
         ctx = self._app_ctx
         crash_vm = CrashVM(report, hub=ctx.hub, dispatcher=ctx.dispatcher)
