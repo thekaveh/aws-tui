@@ -18,7 +18,6 @@ The composition builds:
 
 from __future__ import annotations
 
-import contextlib
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
@@ -223,13 +222,24 @@ async def apply_resume_decision(
         async with await aws_session.client(connection, "s3") as client:
             for entry in entries:
                 bucket, key = _parse_s3_uri(entry.destination_uri)
+                abort_succeeded = True
                 if bucket and key and entry.upload_id:
-                    with contextlib.suppress(Exception):
+                    try:
                         await client.abort_multipart_upload(
                             Bucket=bucket, Key=key, UploadId=entry.upload_id
                         )
-                journal.mark_aborted(entry.transfer_id)
-                journal.purge(entry.transfer_id)
+                    except Exception:
+                        # Keep the journal so the next session can retry. If
+                        # we purged here, the MPU would continue to live on
+                        # S3 (consuming storage quota) with no local record
+                        # of it — silent data leak. The bucket-level MPU
+                        # lifecycle rule recommended in connections.md is
+                        # the backstop, but the journal is the recovery
+                        # path the user actually drives.
+                        abort_succeeded = False
+                if abort_succeeded:
+                    journal.mark_aborted(entry.transfer_id)
+                    journal.purge(entry.transfer_id)
         return
     if decision is ResumeAction.DECIDE_EACH:
         # Fall back per plan §M6 T2.
