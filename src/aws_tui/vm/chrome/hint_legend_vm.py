@@ -65,7 +65,6 @@ _ACTION_LABELS: dict[str, str] = {
     "app.cycle_theme": "cycle",
     "app.swap_source": "swap src",
     "app.quit": "quit",
-    "app.transfers_tray": "transfers",
     "auth.authenticate": "sign in",
     "modal.cancel": "cancel",
 }
