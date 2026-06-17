@@ -11,10 +11,11 @@ dependencies:
 View (Textual)  →  ViewModel (VMx)  →  Service plugins  →  Domain ops  →  Infrastructure
 ```
 
-Each layer imports only from layers beneath it. `ruff`
-`flake8-tidy-imports` enforces this at lint time; `scripts/check-layers.sh`
-greps for any forbidden imports across the five subtrees as a
-belt-and-suspenders.
+Each layer imports only from layers beneath it. `scripts/check-layers.sh`
+greps for any forbidden imports across the five subtrees and is run by
+CI on every push; it's the active enforcement today. The
+`flake8-tidy-imports` ruff plugin is planned as a follow-up but is not
+yet wired (the empty config block would be a no-op).
 
 ## 1. Layers
 - **View** — Textual widgets and `.tcss` themes
