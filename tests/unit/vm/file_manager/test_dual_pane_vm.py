@@ -1,4 +1,4 @@
-"""Tests for DualPaneVM (M4 Task 3)."""
+"""Tests for DualPaneVM."""
 
 from __future__ import annotations
 

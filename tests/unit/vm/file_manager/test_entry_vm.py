@@ -1,4 +1,4 @@
-"""Tests for EntryVM facade (M4 Task 1)."""
+"""Tests for the EntryVM facade."""
 
 from __future__ import annotations
 

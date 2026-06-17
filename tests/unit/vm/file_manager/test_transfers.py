@@ -1,4 +1,4 @@
-"""Tests for TransferVM + TransfersVM (M4 Task 4)."""
+"""Tests for TransferVM + TransfersVM."""
 
 from __future__ import annotations
 
