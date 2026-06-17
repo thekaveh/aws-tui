@@ -52,10 +52,21 @@ class QuickLook(ModalScreen[None]):
             return
         body = self.query_one("#quicklook-body", Static)
         buf = bytearray()
-        async for chunk in content.chunks:
-            buf.extend(chunk)
-            if len(buf) >= 64 * 1024:
-                break
+        chunks = content.chunks
+        try:
+            async for chunk in chunks:
+                buf.extend(chunk)
+                if len(buf) >= 64 * 1024:
+                    break
+        finally:
+            # Close the underlying file handle / S3 stream deterministically
+            # when we break out at the 64 KiB cap, rather than waiting for
+            # the generator to be GC'd. ``FileSystemProvider.read_stream`` is
+            # typed as ``AsyncIterator[bytes]`` (no formal aclose), but every
+            # concrete impl returns an async generator that does.
+            aclose = getattr(chunks, "aclose", None)
+            if aclose is not None:
+                await aclose()
         try:
             text = buf.decode("utf-8", errors="replace")
         except Exception:
