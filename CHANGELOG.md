@@ -212,9 +212,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_mount_initial_service_view`, `_mount_no_connection_placeholder`.
   on_mount itself is now 18 lines.
 - `pyproject.toml` `[tool.pytest.ini_options].addopts` now defaults to
-  `-m 'not integration'` so `uv run pytest` runs the 478-test
-  unit/snapshot/e2e tiers without Docker. The 9 integration tests
-  opt in via `uv run pytest -m integration`. CI continues to invoke
+  `-m 'not integration'` so `uv run pytest` runs the default tier
+  (unit + snapshot + e2e + in-process integration) without Docker.
+  The opt-in MinIO testcontainer tier runs via
+  `uv run pytest -m integration`. CI continues to invoke
   `pytest -m integration` for the integration job — the right-most
   `-m` wins.
 - `.github/dependabot.yml` `python-runtime` group now includes
