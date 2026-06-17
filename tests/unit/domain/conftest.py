@@ -31,8 +31,15 @@ def moto_server() -> Iterator[str]:
 
 
 @pytest.fixture
-def s3_endpoint(moto_server: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Wipe S3 state between tests so each starts with a clean slate."""
+def s3_endpoint(moto_server: str, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Wipe S3 state between tests so each starts with a clean slate.
+
+    Returns the moto-server base URL (a plain ``str``, not a generator).
+    The fixture body has no teardown so ``return`` is correct here —
+    the previously declared ``-> Iterator[str]`` annotation was wrong;
+    pytest gates this distinction on whether the body actually
+    ``yield``s.
+    """
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
