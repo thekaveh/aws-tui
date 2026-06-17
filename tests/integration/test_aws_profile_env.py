@@ -1,4 +1,4 @@
-"""$AWS_PROFILE env-var resolution — pass-5 fix.
+"""$AWS_PROFILE env-var resolution.
 
 If $AWS_PROFILE is exported, ``AwsTuiApp._resolve_initial_connection``
 must prefer that profile over the first auto-discovered profile. This is

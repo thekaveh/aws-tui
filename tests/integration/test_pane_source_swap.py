@@ -1,4 +1,4 @@
-"""Pane source switching via Shift+S — pass-11.
+"""Pane source switching via Shift+S.
 
 Locks in PaneVM.swap_provider behavior wired through the App action:
 - The focused pane's provider is replaced
