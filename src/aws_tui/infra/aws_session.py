@@ -117,7 +117,7 @@ class AwsSession:
         try:
             payload = json.loads(cache_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise TokenLoadError(str(cache_file)) from exc
+            raise TokenLoadError(f"could not read SSO token cache at {cache_file}") from exc
 
         expires_raw = payload.get("expiresAt")
         if not isinstance(expires_raw, str):
