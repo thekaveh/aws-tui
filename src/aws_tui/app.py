@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import sys
 from collections import deque
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -830,8 +831,6 @@ def main() -> None:
         if report is None:
             report = app._build_crash_report(exc)
         # Print to stderr (after Textual has restored the terminal).
-        import sys
-
         print(
             "\naws-tui crashed.\n"
             f"  {report.exception_type}: {report.exception_message}\n"
@@ -845,8 +844,6 @@ def main() -> None:
         # rendering a fatal panel).
         report = app.crash_report
         if report is not None:
-            import sys
-
             print(
                 "\naws-tui crashed.\n"
                 f"  {report.exception_type}: {report.exception_message}\n"

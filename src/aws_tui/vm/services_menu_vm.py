@@ -3,7 +3,7 @@
 The menu filters the global :class:`ServiceRegistry` by the active
 :class:`Connection` (via :meth:`Service.supports`). Selecting a service
 fires the :attr:`switch_service_command`; the actual swap of
-``ContentHostVM`` happens in :class:`RootVM` (Task 9).
+``ContentHostVM`` happens in :class:`RootVM`.
 """
 
 from __future__ import annotations

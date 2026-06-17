@@ -137,7 +137,7 @@ crash modal. Revert the change before committing.
 Save as `docs/assets/crash-modal-carbon.png`. Embed below the "What
 gets dumped on a crash" section.
 
-## When you're done
+## 7. When you're done
 
 Once the artifacts land, update the `<!-- screenshot: TODO ... -->`
 markers in `README.md` and `docs/cookbook.md` and (optionally) delete

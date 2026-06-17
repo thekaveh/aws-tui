@@ -7,6 +7,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (passes 7–13, post-v0.7.0)
+
+- **Block-art brand banner** atop the chrome — six-row aws-tui logo with
+  a per-theme 6-stop vertical gradient (carbon → deep navy/sky-blue;
+  amber → mahogany/gold; voidline → deep purple/soft pink; lattice →
+  dark teal/pale mint). Banner subscribes to a hub
+  `ThemeChangedMessage` so the palette repaints in lockstep with every
+  theme swap.
+- **Live path in the pane border title** — left pane shows
+  `s3://my-bucket/folder/`, right pane shows `/Users/.../path`. Identity
+  (`kind · profile · region`) moved to the bottom border subtitle so it
+  doesn't compete for the strip the old `StatusBar` used to occupy
+  (`StatusBar` was removed in pass-7).
+- **Adaptive pane columns** — `Pane.on_resize` recomputes the NAME
+  column width as `pane_width − 32` (cursor + mark + separators +
+  SIZE=10 + MODIFIED=16), clamped to `[12, 64]`. SIZE and MODIFIED
+  stay visible on standard ~100-col-pane terminals; NAME grows when
+  the user widens the terminal.
+- **Mouse + trackpad scrolling**, `#pane-body` swapped from `Vertical`
+  to `VerticalScroll`. Cursor moves trigger `scroll_to_widget` so the
+  selected row stays in view past the visible window.
+- **Theme switching from the keyboard or the chrome.** `t` opens the
+  keyboard-navigable theme picker modal (↑/↓/Enter); `Shift+T` cycles
+  to the next theme without a modal; both refresh the stylesheet via
+  Textual's own `refresh_css(animate=False)` + a stable `read_from`
+  key so theme sources don't accumulate.
+- **Multi-select** via `v` + `Space`, `Shift+↑/↓` (extend selection),
+  and modifier+click (`Shift`, `Cmd`, or `Ctrl` — `Shift+Click` is
+  often consumed by macOS terminals for native text-select, so
+  `Cmd+Click` is the reliable path there). Marked-byte total surfaces
+  in the pane footer (`N obj · M marked · X selected`).
+- **Collapsible services rail.** `s` toggles between 6-wide icon-only
+  and 16-wide full-label mode; clicking the rail also toggles.
+- **Pane source swap** via `Shift+S` and `PaneVM.swap_provider`. Any of
+  the four `{S3, local} × {S3, local}` combinations can be live in the
+  dual-pane in the same session.
+- **Copy / delete via confirm modal**, `c` and `d`. Themable
+  `_ModalButton` widgets replace `textual.widgets.Button` (which ships
+  its own ANSI palette that fights theme overrides). `Enter` confirms,
+  `Esc` cancels — App-level `priority=True` bindings are routed past
+  the modal via the new `_forward_to_modal` helper.
+- **Transfers overlay** — top-right floating box on the notifications
+  layer. Each active transfer renders src → dst label + `ProgressBar`
+  + Cancel button. Finished entries linger `AWS_TUI_TRANSFER_LINGER`
+  seconds (default 3.0; env-overridable for tests) then fade so new
+  transfers take their place.
+- **`$AWS_PROFILE` env-var resolution** between `[defaults].connection`
+  and the first-auto fallback — fixes the "aws s3 ls works on the CLI
+  but the TUI shows access denied" SSO setup where `[default]` has no
+  creds and the working profile lives in the env.
+
+### Fixed (passes 7–13, post-v0.7.0)
+
+- **S3 → local copy crashed the app.** `S3FS.stat / read_stream /
+  write_stream / delete / mkdir / rename` all raised `ProviderError`
+  when `bucket=None` — but the service-level `S3FS` is always
+  constructed bucketless. New `_resolve(path) → (bucket, key)` helper
+  centralises the "first path segment is the bucket" translation;
+  every op now routes through it.
+- **Copy / delete escalated to the crash modal.**
+  `await push_screen_wait(modal)` requires a Textual worker context
+  that binding-fired actions don't have, so the call raised
+  `NoActiveWorker`. Switched to `push_screen(modal, callback)` plus
+  `run_worker` for the actual transfer.
+- **Theme picker arrows / Enter were eaten by App-level priority
+  bindings.** Textual dispatches `priority=True` bindings in
+  *reversed* order (App fires before the modal), so the dual-pane
+  cursor consumed ↑/↓/Enter before the modal could see them. New
+  `_forward_to_modal(*action_names)` in `AwsTuiApp` forwards
+  `action_descend`/`action_ascend`/`action_move_up`/`action_move_down`
+  to the active screen first.
+- **Pane content "didn't load"** because rows were wider than the pane
+  rectangle — adaptive columns fixed the actual symptom (SIZE +
+  MODIFIED were just clipped off the right).
+- **Theme switches didn't repaint unfocused widgets.** Replaced the
+  hand-rolled tree walk with Textual's own `refresh_css(animate=False)`
+  pipeline plus a hub broadcast (`ThemeChangedMessage`) for the
+  Python-side palettes (banner).
+- **Hint legend used hard-coded Rich styles** (`bold cyan`), so the
+  footer never followed the theme. Each chip is now a `Static` with
+  `.hint-key` / `.hint-label` / `.hint-sep` classes; coloring comes
+  from theme tcss.
+- **Path duplicated** inside each pane (in both the breadcrumb Static
+  and the border title). Dropped the inline `.breadcrumb` Static — the
+  border title is the single source.
+
+### Removed (passes 7–13)
+
+- `StatusBar` widget. Profile / region / auth indicator moved to the
+  left pane's `border_subtitle`. The chrome VM stays so hub
+  subscribers continue to receive updates.
+- Vacuous `if t.id not in existing_ids: pass` dead branch in
+  `TransfersOverlay._rebuild` — the linger arm beneath it is already
+  idempotent.
+- Duplicate `import sys` inside `app.main()` (was imported twice on
+  separate exception branches); folded into the module-level import.
+
+### Testing
+
+- 41 new regression tests across 8 files cover every pass-7–12
+  feature and bug-fix (`S3FS` bucketless ops, `PaneVM` border / swap /
+  marked-bytes, `BrandBanner` theme palette swap, theme runtime
+  propagation, chrome layout, hint-legend chips, modifier-click
+  multi-select, ConfirmModal Enter forwarding, `$AWS_PROFILE`
+  resolution, pane source swap). Total: 482 → 518 tests (net of 5
+  dead-widget tests dropped in the pass-13 maintenance cleanup).
+
 ### Fixed
 
 - **App launch was visually blank** because `app.py.on_mount` never invoked

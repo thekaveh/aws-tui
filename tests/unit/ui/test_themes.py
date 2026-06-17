@@ -55,6 +55,7 @@ def test_builtin_theme_styles_widgets(name: str) -> None:
         "QuickLook",
         "ToastStack",
         "Toast",
-        "TransfersTray",
+        "BrandBanner",
+        "TransfersOverlay",
     ):
         assert widget in content, f"theme {name} missing widget {widget}"

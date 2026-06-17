@@ -14,21 +14,12 @@ bind to, so it would silently do nothing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import ClassVar
 
 
 class UnknownAction(Exception):
     """Raised when :meth:`KeymapStore.resolve` is asked for an action that
     has no default and no overlay binding."""
-
-
-@dataclass(frozen=True, slots=True)
-class KeyBinding:
-    """A single resolved binding: an action and its keystroke(s)."""
-
-    action: str
-    keys: tuple[str, ...]
 
 
 class KeymapStore:
@@ -92,4 +83,4 @@ class KeymapStore:
         return dict(self._bindings)
 
 
-__all__ = ["KeyBinding", "KeymapStore", "UnknownAction"]
+__all__ = ["KeymapStore", "UnknownAction"]

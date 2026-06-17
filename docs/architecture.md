@@ -85,13 +85,16 @@ the same observable plus dispose-on-unmount.
 ## 5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
-| Unit | 429 | VM, domain, infra behavior; no I/O |
-| Snapshot | 44 | View rendering against golden SVGs per theme |
+| Unit | 449 | VM, domain, infra behavior; no I/O |
+| Snapshot | 40 | View rendering against golden SVGs per theme |
 | E2E | 5 | Pilot-driven user journeys |
-| Integration | 9 | MinIO via testcontainers (opt-in) |
+| Integration (in-process) | 24 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, etc.) |
+| Integration (MinIO) | 9 | MinIO via testcontainers (opt-in, `-m integration`) |
 
-Run all tiers with `uv run pytest`; opt into integration with
-`uv run pytest -m integration`.
+Run the default tiers (unit + snapshot + e2e + in-process integration)
+with `uv run pytest`. Opt into the MinIO tier with
+`uv run pytest -m integration` — it spins up a container, which the
+default `addopts` filter excludes (`-m 'not integration'`).
 
 ## 6. Layer-rule check
 `scripts/check-layers.sh` shells out to `grep -RnE` across the five

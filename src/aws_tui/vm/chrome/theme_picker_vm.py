@@ -79,10 +79,6 @@ class ThemeOptionVM:
     def status(self) -> ConstructionStatus:
         return self._inner.status
 
-    @property
-    def vm_name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:

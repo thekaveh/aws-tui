@@ -247,7 +247,6 @@ class TransfersOverlay(Widget):
 
         # Pick the set of rows to render: every active transfer plus any
         # recently-finished ones we haven't yet expired.
-        existing_ids = {row.transfer_vm.id for row in container.query(TransferRowWidget)}
         visible: list[TransferVM] = []
         for t in self._vm.transfers:
             if t.id in self._expired_ids:
@@ -255,10 +254,11 @@ class TransfersOverlay(Widget):
             if t.is_active or t.state is TransferState.PENDING:
                 visible.append(t)
             elif t.is_finished:
-                # Newly finished — schedule the linger timer the first
-                # time we observe completion.
-                if t.id not in existing_ids:
-                    pass
+                # Newly finished — keep visible while the linger timer
+                # ticks. ``_arm_linger`` is already idempotent (it
+                # short-circuits on `transfer_id in self._expired_ids`)
+                # so we don't need to filter on "is this the first
+                # time" — the second call is a no-op.
                 visible.append(t)
                 self._arm_linger(t.id)
 

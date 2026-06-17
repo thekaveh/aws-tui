@@ -26,17 +26,27 @@ In config:
 theme = "voidline"
 ```
 
-At runtime via the command palette:
+At runtime via the keyboard:
 
 ```
-:                       # opens palette
-theme switch ▸ voidline # arrow keys or fuzzy filter
+t                       # open the theme picker modal
+↑ ↓                     # arrow to the theme you want
 Enter                   # apply
+```
+
+Or skip the modal entirely and cycle to the next theme:
+
+```
+Shift+T                 # cycle: carbon → voidline → lattice → amber → ...
 ```
 
 The switch lives only for the session unless you also update
 `config.toml`. No restart needed — `ThemeChangedMessage` reflows
 the active stylesheet on the fly.
+
+> The command-palette path (`:` then `theme switch ▸ voidline`) is in
+> the design spec but the palette doesn't yet register theme entries
+> in v0.7.x — `t` / `Shift+T` are the working shortcuts.
 
 ## 3. User overrides
 ### 3.1. Single-token overrides
@@ -77,7 +87,7 @@ The Carbon palette tokens (full spec table in §4.5):
 | `text-dim` | `#5e6470` | Labels |
 | `accent` | `#6fb8ff` | Focused/actionable glyphs |
 | `accent-soft` | `#cfe4ff` | Selected-row foreground |
-| `magenta` | `#c9a0ff` | Command palette `:` glyph |
+| `accent-hot` | `#c9a0ff` | Command palette `:` glyph |
 | `success` | `#5cd693` | SSO ok, transfer up arrow |
 | `warning` | `#f0c674` | Auth-pending state |
 | `danger` | `#ff6b7a` | Destructive op modal accents |
@@ -100,8 +110,8 @@ The overlay layering means you can keep the built-in look and adjust
 just one or two colors without copying the entire theme.
 
 ## 6. Snapshot tests
-The four themes are pinned by 44 SVG snapshot tests in
-`tests/snapshot/__snapshots__/` (main screen + 7 modals × 4 themes +
+The four themes are pinned by 40 SVG snapshot tests in
+`tests/snapshot/__snapshots__/` (main screen + 6 modals × 4 themes +
 pane-state placeholders). Updates: `uv run pytest tests/snapshot
 --snapshot-update`. Snapshots are CI-gated only on Python 3.12 /
 Ubuntu to avoid tolerance flakes.

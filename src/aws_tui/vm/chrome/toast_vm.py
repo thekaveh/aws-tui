@@ -1,7 +1,7 @@
 """ToastVM — single toast facade over a VMx ``ComponentVMOf[ToastModel]``.
 
 A toast carries an immutable :class:`ToastModel` (text + level + sticky flag +
-optional action). The :class:`ToastStackVM` owns the collection (Task 3) and
+optional action). The :class:`ToastStackVM` owns the collection and
 schedules auto-dismiss timers; this module only models the individual
 notification.
 """

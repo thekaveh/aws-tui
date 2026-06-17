@@ -75,6 +75,11 @@ class StatusBarVM:
             ComponentVM.builder().name("status_bar").services(hub, dispatcher).build()
         )
         self._sub: DisposableBase | None = None
+        # Tracks which transfer ids we've already counted as "active" so a
+        # repeat RUNNING event doesn't double-increment. Populated in
+        # __init__ rather than lazily on first message so the attribute
+        # set is fully declared up-front.
+        self._seen_ids: set[str] = set()
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -148,8 +153,6 @@ class StatusBarVM:
         # the StatusBarVM is a denormalized projection of a small space,
         # this simple counter is enough for the §4.1 status strip.
         is_active = msg.state in _ACTIVE_STATES
-        if not hasattr(self, "_seen_ids"):
-            self._seen_ids: set[str] = set()
         was_active = msg.transfer_id in self._seen_ids
         if is_active and not was_active:
             self._seen_ids.add(msg.transfer_id)

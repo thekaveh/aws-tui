@@ -1,8 +1,8 @@
 """Modal-snapshot harness apps.
 
 Each app composes one overlay (CommandPalette, ConfirmModal, QuickLook,
-TransfersTray, CrashModal, ResumeModal, FirstRunModal) on top of a
-near-empty base so the snapshot focuses on the overlay's rendering.
+CrashModal, ResumeModal, FirstRunModal) on top of a near-empty base so
+the snapshot focuses on the overlay's rendering.
 """
 
 from __future__ import annotations
@@ -23,15 +23,12 @@ from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.first_run_modal import FirstRunModal
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.resume_modal import ResumeModal
-from aws_tui.ui.widgets.transfers_tray import TransfersTray
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM, PaletteEntry
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashReport, CrashVM
 from aws_tui.vm.chrome.first_run_vm import FirstRunVM
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent, QuickLookVM
 from aws_tui.vm.chrome.resume_vm import ResumeVM
-from aws_tui.vm.file_manager.transfer_vm import TransferModel, TransferState
-from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 
 
 def _load_css(theme: str) -> str:
@@ -135,43 +132,6 @@ class QuickLookApp(App[None]):
         )
         self._vm.open_command.execute(content)
         await self.push_screen(QuickLook(self._vm, hub=self._hub))
-
-
-# ── Transfers tray ─────────────────────────────────────────────────────────
-
-
-class TransfersTrayApp(App[None]):
-    def __init__(self, *, theme: str = "carbon") -> None:
-        super().__init__()
-        self.CSS = _load_css(theme)
-        self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
-        self._vm = TransfersVM(hub=self._hub, dispatcher=self._dispatcher)
-
-    def compose(self) -> ComposeResult:
-        yield Static("aws-tui main view", id="placeholder")
-        yield TransfersTray(self._vm, hub=self._hub, id="transfers-tray")
-
-    async def on_mount(self) -> None:
-        self._vm.construct()
-        for i, (state, frac) in enumerate(
-            [
-                (TransferState.RUNNING, 0.4),
-                (TransferState.RUNNING, 0.75),
-                (TransferState.COMPLETED, 1.0),
-            ]
-        ):
-            self._vm.register(
-                TransferModel(
-                    id=f"t-{i}",
-                    direction="upload",
-                    source_label=f"data/file-{i}.dat",
-                    destination_label=f"s3://bucket/file-{i}.dat",
-                    bytes_done=int(2048 * frac),
-                    bytes_total=2048,
-                    state=state,
-                )
-            )
 
 
 # ── Crash modal ────────────────────────────────────────────────────────────
@@ -279,5 +239,4 @@ __all__ = [
     "FirstRunModalApp",
     "QuickLookApp",
     "ResumeModalApp",
-    "TransfersTrayApp",
 ]

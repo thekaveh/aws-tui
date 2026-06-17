@@ -25,17 +25,20 @@ docker run --rm -d --name minio \
 ```
 
 ### 1.2. Store the credentials in the macOS Keychain (recommended)
-```bash
-# Stores under service="minio-local", account="default".
-security add-generic-password \
-    -s minio-local -a default -w minioadmin
-```
 
-You can repeat for `minio-local-secret`:
+The resolver expects two keychain entries under ONE service name
+(matching the `credentials = "keychain:<service>"` value in
+`config.toml`): one account named `access_key_id` and one named
+`secret_access_key`. So for a `keychain:minio-local` config entry:
 
 ```bash
+# service="minio-local", account="access_key_id"
 security add-generic-password \
-    -s minio-local-secret -a default -w minioadmin
+    -s minio-local -a access_key_id -w minioadmin
+
+# service="minio-local", account="secret_access_key"
+security add-generic-password \
+    -s minio-local -a secret_access_key -w minioadmin
 ```
 
 (The Python `keyring` library aws-tui uses delegates to the macOS
@@ -92,14 +95,18 @@ pane should list your buckets.
 
 ## 2. Switch the theme on the fly
 ### 2.1. One-off (session-only)
-```
-:                       # open command palette
-theme switch ▸ voidline # fuzzy-filter to the theme you want
-Enter
-```
+Two paths, both fire `ThemeChangedMessage` and reload the active
+stylesheet instantly without a restart:
 
-The `ThemeChangedMessage` fires and the active stylesheet reloads
-instantly — no restart needed.
+- Press `t` to open the theme picker modal, arrow to the theme you
+  want, hit Enter.
+- Press `Shift+T` (`T`) to cycle straight to the next theme without
+  the modal — handy when you just want to flip carbon ↔ voidline.
+
+> The command-palette path (`:` then `theme switch ▸ voidline`) is
+> spec'd in the design but not wired in v0.7.x — the palette
+> registers no entries yet, so `t` / `Shift+T` are the working
+> shortcuts.
 
 ### 2.2. Persistent
 ```toml
@@ -113,7 +120,7 @@ Theme names: `carbon` (default), `voidline`, `lattice`, `amber`.
 ### 2.3. Add a custom theme
 Copy `src/aws_tui/ui/themes/carbon.tcss` to
 `~/.config/aws-tui/themes/midnight.tcss`, edit the palette tokens,
-and pick it from the palette like any built-in. See
+and pick it from the theme picker (`t`) like any built-in. See
 [theming.md](theming.md#32-full-custom-themes) for the full token table.
 
 ### 2.4. Tweak just one or two colors
@@ -129,6 +136,17 @@ Footer { background: #050505; }
 ---
 
 ## 3. Customize a keybinding
+
+> **v0.7.x status:** the `KeymapStore` accepts a `[keybindings]`
+> overlay (passed via the constructor) and validates that every
+> action id maps to a known one. The composition root does not yet
+> read the overlay from `config.toml` — that wiring is part of the
+> input-router work deferred from M6. The schema below is the
+> intended shape for when the loader lands; today the same effect
+> is achievable by editing
+> `src/aws_tui/infra/keymap_store.py::DEFAULT_BINDINGS` directly in
+> a fork.
+
 Goal: rebind copy (`pane.copy`) from `c` to `y` (vim yank).
 
 ```toml

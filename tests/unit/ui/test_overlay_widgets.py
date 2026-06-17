@@ -1,5 +1,6 @@
 """Smoke tests for overlay widgets: command palette, confirm modal,
-quick look, transfers tray."""
+quick look. (TransfersTray was removed in pass-13 maintenance — the
+runtime transfers UI is :class:`TransfersOverlay` now.)"""
 
 from __future__ import annotations
 
@@ -12,15 +13,12 @@ from vmx import MessageHub, RxDispatcher
 from aws_tui.ui.widgets.command_palette import CommandPalette, CommandPaletteItem
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.quick_look import QuickLook
-from aws_tui.ui.widgets.transfers_tray import TransferRow, TransfersTray
 from aws_tui.vm.chrome.command_palette_vm import (
     CommandPaletteVM,
     PaletteEntry,
 )
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent, QuickLookVM
-from aws_tui.vm.file_manager.transfer_vm import TransferModel, TransferState
-from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 
 # ── CommandPalette ──────────────────────────────────────────────────────────
 
@@ -142,43 +140,6 @@ async def test_quick_look_streams_content() -> None:
 
             body = app.screen.query_one("#quicklook-body", Static)
             assert "Hello" in str(body.render())
-    finally:
-        vm.dispose()
-        hub.dispose()
-
-
-# ── TransfersTray ───────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_transfers_tray_renders_rows() -> None:
-    hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
-    vm = TransfersVM(hub=hub, dispatcher=dispatcher)
-    vm.construct()
-    for i in range(2):
-        vm.register(
-            TransferModel(
-                id=f"t-{i}",
-                direction="upload",
-                source_label=f"local/file-{i}.dat",
-                destination_label=f"s3://bucket/file-{i}.dat",
-                bytes_done=512 if i == 0 else 1024,
-                bytes_total=2048,
-                state=TransferState.RUNNING,
-            )
-        )
-    try:
-
-        class _App(App[None]):
-            def compose(self) -> ComposeResult:
-                yield TransfersTray(vm, hub=hub)
-
-        app = _App()
-        async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.pause()
-            rows = app.query(TransferRow)
-            assert len(rows) == 2
     finally:
         vm.dispose()
         hub.dispose()

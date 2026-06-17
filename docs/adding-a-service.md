@@ -18,7 +18,7 @@ from aws_tui.infra.connection_resolver import Connection
 from vmx import ComponentVM
 
 class Service(Protocol):
-    descriptor: ServiceDescriptor  # id, label, icon, sort order
+    descriptor: ServiceDescriptor  # id, label, icon
 
     def supports(self, connection: Connection) -> bool:
         """True if this service can run against the given connection."""
@@ -54,7 +54,6 @@ needs a `construct → destruct → dispose` surface.
             id="ec2",
             label="EC2",
             icon="•",
-            sort=20,
         )
 
         def __init__(self, *, aws_session: AwsSession, ...) -> None:
@@ -127,7 +126,7 @@ protocol applies.
 `src/aws_tui/services/s3/service.py` is the only concrete service in
 v0.7.0. Read it end-to-end (~80 lines):
 
-- `descriptor` declares `id = "s3"`, label `"S3"`, icon `"⎙"`, sort 10.
+- `descriptor` declares `id = "s3"`, label `"S3"`, icon `"⎙"`.
 - `supports()` accepts both `aws` and `s3-compatible` connections.
 - `build_vm(connection)` composes
   `DualPaneVM(left=PaneVM(S3FS), right=PaneVM(LocalFS))` each call.

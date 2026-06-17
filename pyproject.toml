@@ -63,8 +63,6 @@ dev = [
   "pytest-cov>=4",
   "pytest-xdist>=3",
   "pytest-textual-snapshot>=1",
-  "factory-boy>=3.3",
-  "freezegun>=1.4",
   "moto[server,s3]>=5",
   "testcontainers[minio]>=4",
   "types-aiofiles>=23",
@@ -80,10 +78,22 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-markers --strict-config -m 'not integration'"
 markers = [
-  "unit: fast pure-Python tests, no I/O (default tier)",
-  "integration: tests against moto / MinIO / tmp_path",
-  "snapshot: Textual view snapshot tests",
-  "e2e: end-to-end app-level smoke tests",
+  # Tagged via ``pytestmark = pytest.mark.unit`` in 6 files under
+  # tests/unit/domain/ — descriptive only; the default run already
+  # includes everything except ``-m 'not integration'``.
+  "unit: pure-Python tests, no external service (run by default)",
+  # Opt-in marker for tests that spin up a real testcontainer (MinIO).
+  # Excluded from the default ``uv run pytest`` via the ``addopts``
+  # filter above; opt in with ``-m integration``. Applied via
+  # ``pytestmark = pytest.mark.integration`` in
+  # tests/integration/{test_cross_fs_minio,test_s3_fs_minio}.py. Fast
+  # in-process tests under tests/integration/ (full-app pilot, modal
+  # forwarding, etc.) intentionally don't carry this marker — they run
+  # by default.
+  "integration: tests that spin up a testcontainer or external service",
+  # Tagged on every test function in tests/e2e/test_journeys.py.
+  # Descriptive only; runs by default.
+  "e2e: end-to-end app-level pilot journeys (run by default)",
 ]
 
 [tool.coverage.run]

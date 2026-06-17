@@ -302,7 +302,11 @@ Default bindings — `⌘` is not used because terminals intercept it.
 | Show keymap | `?` | Full overlay reference |
 | Cancel / close overlay | `Esc` | |
 | Authenticate (when toast is up) | `a` | Shell-out to `aws sso login --profile <name>` |
-| Toggle transfers tray | `t` | |
+| Open theme picker (modal) | `t` | (post-v0.7.0: was `t = toggle transfers tray` in v0.1.0 spec; transfers now render as a permanent overlay so the `t` slot was reused for the theme picker) |
+| Cycle to next theme (no modal) | `Shift+T` (`T`) | |
+| Swap focused pane source (S3 ↔ local) | `Shift+S` (`S`) | |
+| Toggle services rail | `s` | Also toggles on a mouse click on the rail |
+| Extend selection one row | `Shift+↑` / `Shift+↓` | Marks current row + advances cursor |
 | Quit | `q` or `Ctrl+C` | Triggers graceful shutdown sequence |
 
 All bindings are configurable via `~/.config/aws-tui/config.toml`:
@@ -349,7 +353,7 @@ Four built-ins ship; default is **Carbon** but the default is itself configurabl
 | `text-dim` | `#5e6470` | Labels |
 | `accent` | `#6fb8ff` | Focused/actionable glyphs, keymap chips |
 | `accent-soft` | `#cfe4ff` | Selected-row foreground |
-| `magenta` | `#c9a0ff` | Command palette `:` glyph |
+| `accent-hot` | `#c9a0ff` | Command palette `:` glyph |
 | `success` | `#5cd693` | SSO ok, transfer up arrow |
 | `warning` | `#f0c674` | Auth-pending state |
 | `danger` | `#ff6b7a` | Destructive op modal accents |
@@ -815,10 +819,17 @@ unexpected error
   
   ~/.cache/aws-tui/crash/2026-06-13T23-50-22.txt
   
-  [view trace]  [open issue with details (browser)]  [continue]  [quit]
+  [view trace]  [continue]  [quit]
 ```
 
 `continue` tries to recover (drop the offending action, restore VM state to before it); some error classes make `continue` unsafe and we disable that button.
+
+> **Deferred from v0.1.0:** the original spec listed a fourth
+> `[open issue with details (browser)]` button. v0.7.0 ships with the
+> three buttons above; the issue-opener (which would `webbrowser.open` a
+> pre-filled GitHub new-issue URL with the dump excerpt) is deferred
+> until the project moves the repo out of pre-release. See
+> `ui/widgets/crash_modal.py` for the current button set.
 
 ### 7.11 Non-goals
 

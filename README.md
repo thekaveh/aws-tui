@@ -5,24 +5,32 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
 > **Status: v0.7.0** — feature-complete pre-PyPI release. All five
-> milestones (M0 scaffold ▸ M6 polish) shipped. See
-> [the design spec](docs/superpowers/specs/2026-06-13-aws-tui-design.md)
-> for the full plan and `CHANGELOG.md` for the per-milestone delta.
+> milestones (M0 scaffold ▸ M6 polish) shipped, plus a post-tag
+> usability train (passes 7–12) that hardened the chrome, fixed the
+> S3→local copy crash, added theme cycling + source swap + multi-select
+> + a transfers overlay, and locked everything in with 41 new
+> regression tests. See `CHANGELOG.md` for the per-pass delta.
 
 <!-- screenshot: TODO - replace with an asciinema cast of `aws-tui` cold launch on Carbon theme; see docs/recording-todo.md -->
 
-## Features
+## 1. Features
 
 - **Norton-Commander–style dual pane.** S3 (or any S3-compatible bucket)
   on one side, your local filesystem on the other. Copy, move, rename,
-  delete across panes with `c`, `m`, `r`, `d` (multi-select with `v` and
-  `Space`).
+  delete across panes with `c`, `m`, `r`, `d` (multi-select with `v` +
+  `Space`, or modifier+click, or `Shift+↑/↓`).
+- **Swappable pane source.** `Shift+S` flips the focused pane between
+  S3 and local, so the four combos `{S3, local} × {S3, local}` are all
+  reachable in the same session.
 - **First-class S3-compatible support.** MinIO, Cloudflare R2,
   Backblaze B2, Wasabi, Ceph, SeaweedFS — same code path as native
   AWS. Path-style addressing toggle and per-vendor docs.
 - **Silent SSO.** Auto-discovers every AWS profile from
   `~/.aws/{config,credentials}` and cheaply probes the SSO token cache
   on launch (one `stat`, one ~1 KB JSON read, sub-millisecond).
+  Honors `$AWS_PROFILE` between `[defaults].connection` and the
+  first-auto fallback so SSO setups where `[default]` has no creds
+  still pick the right profile.
 - **Crash-recovery transfer journal.** Multi-GB uploads survive a
   restart: each completed multipart part appends a line to
   `~/.cache/aws-tui/transfers/<id>.jsonl`; on relaunch you get a
@@ -30,24 +38,30 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
 - **Crash modal.** Unhandled exceptions write a dump to
   `~/.cache/aws-tui/crash/<ts>.txt` (traceback, last 1000 log lines,
   last 100 user actions) and show a recovery modal with view/continue/quit.
+- **Transfers overlay.** Top-right floating box: one row per active
+  transfer with src → dst label, progress bar, and cancel button.
+  Finished entries linger briefly then disappear so newer transfers
+  take their place.
 - **Four built-in themes.** Carbon (default), Voidline (neon),
-  Lattice (mint), Amber CRT (retro). User overrides via
-  `~/.config/aws-tui/theme.tcss` or full `.tcss` themes under
+  Lattice (mint), Amber CRT (retro). Each theme drives a matching
+  banner gradient at launch and on every `T` cycle. User overrides
+  via `~/.config/aws-tui/theme.tcss` or full `.tcss` themes under
   `~/.config/aws-tui/themes/`.
 - **Fully customizable keymap.** Action ↔ keystroke is config-driven —
   rebind anything in `[keybindings]` without touching code.
 - **Streaming Quick Look.** `Space` on a file streams the first 64 KB
-  with a syntax tint; `v` shells out to `$PAGER` for the full file
-  (background-downloads with toast progress).
+  with a syntax tint for a fast peek without downloading the whole
+  object. (A full-file `$PAGER` shell-out is in the spec but not yet
+  wired in v0.7.x; see CHANGELOG for the v0.8 roadmap.)
 - **Command palette.** `:` or `Ctrl+K`. Fuzzy-filterable list of every
   action — including dynamic ones like `connection switch <name>` and
   `theme switch <name>`.
 - **Strict layered architecture.** View ▸ ViewModel ▸ Service ▸ Domain
   ▸ Infra; enforced by `ruff` import rules + `scripts/check-layers.sh`.
-  Mypy strict-clean. 478 tests across unit / snapshot / e2e tiers + 9
-  integration tests against MinIO.
+  Mypy strict-clean. 518 tests across unit / integration / snapshot /
+  e2e tiers + 9 integration tests against MinIO.
 
-## Install
+## 2. Install
 
 > **PyPI release is blocked** on VMx publishing to PyPI. Until then,
 > install from Git:
@@ -68,7 +82,7 @@ uv run aws-tui
 Requirements: Python 3.11 / 3.12 / 3.13. macOS-tailored but Linux
 works fine.
 
-## Quickstart
+## 3. Quickstart
 
 ```bash
 aws-tui                       # launches with the default connection
@@ -79,7 +93,13 @@ up the cached token silently (no network round-trip just to render the
 UI). Otherwise the picker shows the connection in `login needed`
 state — press `a` to authenticate.
 
-### First-time launch
+If `aws s3 ls` works on your shell but `aws-tui` shows
+`access denied` on the left pane, the most common cause is that
+`[default]` in `~/.aws/config` has no creds. Export `$AWS_PROFILE`
+pointing at the working profile and relaunch — the resolver picks it
+up between `[defaults].connection` and the first-auto fallback.
+
+### 3.1. First-time launch
 
 If you have **no** `[connections.*]` in `~/.config/aws-tui/config.toml`
 **and** `~/.aws/{config,credentials}` is empty, you'll see a welcome
@@ -97,9 +117,9 @@ Pick one to get going.
 
 <!-- screenshot: TODO - capture the first-run modal on Voidline; see docs/recording-todo.md -->
 
-## Documentation
+## 4. Documentation
 
-Numbered hierarchically per the project's documentation hierarchy mandate.
+Numbered hierarchically per the project's `NUMBERED_DOCS` mandate.
 
 1. **User-facing**
    1. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
@@ -115,8 +135,12 @@ Numbered hierarchically per the project's documentation hierarchy mandate.
    2. [Implementation plans (M0–M6)](docs/superpowers/plans/) — per-milestone breakdown, end-of-pass revisions captured in-tree.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
+5. **Project meta**
+   1. [Contributing](CONTRIBUTING.md) — development setup, commit conventions, code of conduct.
+   2. [Security policy](SECURITY.md) — vulnerability reporting + supported versions.
+   3. [Changelog](CHANGELOG.md) — per-pass + per-release deltas.
 
-## File locations
+## 5. File locations
 
 | Path | Contents |
 |---|---|
@@ -127,7 +151,20 @@ Numbered hierarchically per the project's documentation hierarchy mandate.
 | `~/.cache/aws-tui/transfers/<id>.jsonl` | Per-transfer crash-recovery journal |
 | `~/.cache/aws-tui/crash/<ts>.txt` | Full traceback + log/action tail per crash |
 
-## Contributing
+## 6. Environment variables
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AWS_PROFILE` | unset | Pick this AWS profile at launch when `[defaults].connection` is unset. Honored between config and first-auto-discovered fallback. |
+| `AWS_DEFAULT_REGION` | unset | Standard boto3 region override. |
+| `AWS_TUI_TRANSFER_LINGER` | `3.0` | Seconds a finished transfer's row stays visible in the transfers overlay before it fades. Test-only knob — short values make `pytest` runs faster. |
+
+`$PAGER` and `$EDITOR` are honored by the underlying AWS CLI / boto3
+flows the TUI shells out to for SSO setup; aws-tui itself does not
+read them in v0.7.x. The Quick Look full-file `$PAGER` shell-out is
+spec'd but not yet wired.
+
+## 7. Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). License:
-[MIT](LICENSE).
+[MIT](LICENSE). Security: see [SECURITY.md](SECURITY.md).

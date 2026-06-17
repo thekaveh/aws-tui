@@ -14,11 +14,10 @@ aiobotocore's awaited response body).
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 
 import aioboto3
 import pytest
-from moto.server import ThreadedMotoServer
 
 from aws_tui.domain.filesystem import EntryKind, PathRef
 from aws_tui.domain.s3_fs import S3FS
@@ -37,28 +36,6 @@ async def _collect(it: AsyncIterator[bytes]) -> bytes:
     async for chunk in it:
         out.extend(chunk)
     return bytes(out)
-
-
-@pytest.fixture(scope="module")
-def moto_server() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
-
-
-@pytest.fixture
-def s3_endpoint(moto_server: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    import urllib.request
-
-    urllib.request.urlopen(
-        urllib.request.Request(f"{moto_server}/moto-api/reset", method="POST")
-    ).read()
-    return moto_server
 
 
 def _session() -> aioboto3.Session:
