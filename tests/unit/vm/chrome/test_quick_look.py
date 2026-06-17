@@ -22,11 +22,6 @@ def _build() -> QuickLookVM:
     return vm
 
 
-async def _empty_chunks() -> AsyncIterator[bytes]:
-    if False:
-        yield b""
-
-
 async def _chunks(data: bytes) -> AsyncIterator[bytes]:
     yield data
 
