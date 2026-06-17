@@ -58,8 +58,9 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
   `theme switch <name>`.
 - **Strict layered architecture.** View ▸ ViewModel ▸ Service ▸ Domain
   ▸ Infra; enforced by `ruff` import rules + `scripts/check-layers.sh`.
-  Mypy strict-clean. 522 tests across unit / integration / snapshot /
-  e2e tiers + 9 integration tests against MinIO.
+  Mypy strict-clean. 522 default-tier tests (unit / in-process
+  integration / snapshot / e2e), plus 9 opt-in MinIO integration tests
+  (`uv run pytest -m integration`).
 
 ## 2. Install
 
