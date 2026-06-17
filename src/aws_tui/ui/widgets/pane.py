@@ -17,6 +17,7 @@ from __future__ import annotations
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.events import Resize
 from textual.widget import Widget
 from textual.widgets import Static
@@ -372,7 +373,7 @@ class Pane(HubSubscriberMixin, Widget):
         try:
             header = self.query_one(".column-header", Static)
             footer = self.query_one(".pane-footer", Static)
-        except Exception:
+        except NoMatches:
             return
         vm = self._vm.viewmodel
         # Header always uses the adaptive width — VM's column_header_text
