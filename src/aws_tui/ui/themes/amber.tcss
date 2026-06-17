@@ -287,6 +287,8 @@ ConfirmModal.-danger > Container > .modal-title {
 }
 
 ConfirmModal > Container > .modal-body {
+    height: auto;
+    padding: 0 1 1 1;
     color: $text;
 }
 
