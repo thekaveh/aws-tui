@@ -1,14 +1,16 @@
 # Security Policy
 
-## Supported versions
+## 1. Supported versions
 
 aws-tui is pre-release. Only the latest tagged release receives security fixes.
 
-| Version  | Supported |
-| -------- | --------- |
-| 0.0.x    | latest only |
+| Version | Supported |
+| ------- | --------- |
+| 0.7.x   | latest    |
+| 0.6.x   | no        |
+| < 0.6   | no        |
 
-## Reporting a vulnerability
+## 2. Reporting a vulnerability
 
 Please report security issues privately to **kaveh.razavi@gmail.com** rather than opening a public issue. Include:
 
@@ -18,6 +20,6 @@ Please report security issues privately to **kaveh.razavi@gmail.com** rather tha
 
 We aim to acknowledge reports within 72 hours and to issue a patch within 14 days for confirmed vulnerabilities.
 
-## Scope
+## 3. Scope
 
 aws-tui orchestrates the AWS CLI and the `boto3` credential chain — it does not store credentials itself. Reports involving the AWS CLI, `boto3`, or upstream Python libraries should be filed with those projects.

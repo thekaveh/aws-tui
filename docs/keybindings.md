@@ -8,7 +8,9 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 (`:` or `Ctrl+K`) as the universal escape hatch.
 
 ## 1. Default bindings
+
 ### 1.1. Navigation
+
 | Action | Default | Notes |
 |---|---|---|
 | Cursor up / down | `↑ ↓` or `j k` | vi-style alternatives are first-class |
@@ -20,17 +22,21 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Toggle hidden files (LocalFS) | `.` | |
 
 ### 1.2. Selection
+
 | Action | Default | Notes |
 |---|---|---|
 | Enter multi-select mode | `v` | Visual-block style |
 | Toggle row selection | `Space` (in multi-select) | |
+| Extend selection one row | `Shift+↑` / `Shift+↓` | Marks the current row + moves cursor |
+| Modifier+click on row | `Shift+Click`, `Cmd+Click`, `Ctrl+Click` | Toggles mark on the clicked row; on macOS terminals reserve `Shift+Click`, so `Cmd+Click` is the reliable path there |
 | Select all | `a` (in multi-select) | |
 | Clear selection | `Esc` (in multi-select) | |
 
 ### 1.3. File operations
+
 | Action | Default | Notes |
 |---|---|---|
-| Copy across panes | `c` | Streams through `CrossFsCopy` |
+| Copy across panes | `c` | Streams through `CrossFsCopy`, shows confirm modal |
 | Move across panes | `m` | Copy + delete-source after success |
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
 | New folder | `n` | |
@@ -38,28 +44,40 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Refresh pane | `r` | |
 
 ### 1.4. Overlays
+
 | Action | Default |
 |---|---|
 | Quick Look | `Space` (normal mode) |
 | Fuzzy find | `Ctrl+P` |
 | Filter pane | `/` |
 | Command palette | `:` or `Ctrl+K` |
-| Transfers tray | `t` |
+| Theme picker (modal) | `t` |
+| Cycle to next theme (no modal) | `Shift+T` (`T`) |
 | Help overlay | `?` |
 
-### 1.5. Connection / auth
+### 1.5. Pane chrome
+
+| Action | Default | Notes |
+|---|---|---|
+| Toggle services rail (collapsed ↔ expanded) | `s` | Also toggles on a mouse click on the rail |
+| Swap focused pane source (S3 ↔ local) | `Shift+S` (`S`) | Enables any of `{S3, local} × {S3, local}` dual-pane combos |
+
+### 1.6. Connection / auth
+
 | Action | Default |
 |---|---|
 | Authenticate (when auth toast active) | `a` |
 | Connection switcher | `:` then `connection switch` |
 
-### 1.6. App
+### 1.7. App
+
 | Action | Default |
 |---|---|
 | Cancel / dismiss modal | `Esc` |
 | Quit | `q` or `Ctrl+C` |
 
 ## 2. Customizing
+
 A binding can be a single keystroke or a list of fallback keystrokes:
 
 ```toml
@@ -68,29 +86,35 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "pane.delete" = "d"
 "app.command_palette" = ["ctrl+k", ":"]
 "app.help" = "?"
+"app.themes" = "t"
+"app.cycle_theme" = "T"
+"app.swap_source" = "S"
 ```
 
 The default map is declared in `infra/keymap_store.py` and merged with
 your overlay; unknown action ids are rejected so a typo in your config
 raises a startup error instead of silently dropping a binding.
 
-Note: the keyboard ↔ action ↔ VM-command input router is not yet
-fully wired in v0.7 (only `q` / `Ctrl+C` are routed via Textual's
-hardcoded `BINDINGS`). The `[keybindings]` overlay is parsed and
-validated against `KeymapStore.DEFAULT_BINDINGS`, but most actions
-do not yet have a Textual-side handler. Customizing the overlay
-today gates how future rebinds will land.
+The mainline navigation, file-ops, overlay, and chrome actions are
+fully wired into Textual handlers — your overlay edits take effect at
+launch. A few advanced action ids (the full command-palette registry
+beyond `app.command_palette` itself, and a couple of `pane.*` actions
+the input router doesn't yet route) are still pending; bind them ahead
+of time and the wiring will pick them up once it lands.
 
 ## 3. Action IDs
+
 | Action ID | Default key | What it does |
 |---|---|---|
 | `app.quit` | `q` / `ctrl+c` | Graceful shutdown |
 | `app.command_palette` | `:` / `ctrl+k` | Open palette |
 | `app.help` | `?` | Help overlay |
-| `app.transfers_tray` | `t` | Toggle transfers tray |
-| `pane.move_up` / `pane.move_down` | `↑` (`up`) `j` / `↓` (`down`) `k` | Move cursor |
+| `app.themes` | `t` | Open theme picker modal |
+| `app.cycle_theme` | `T` (`shift+t`) | Cycle to next theme without opening the modal |
+| `app.swap_source` | `S` (`shift+s`) | Swap the focused pane between S3 and local |
+| `pane.move_up` / `pane.move_down` | `↑` / `↓` (also `j` / `k`) | Move cursor |
 | `pane.descend` | `enter` | Descend into folder / bucket |
-| `pane.ascend` | `backspace` / `←` (`left`) | Parent path |
+| `pane.ascend` | `backspace` / `←` | Parent path |
 | `pane.switch_focus` | `tab` | Move focus to the other pane |
 | `pane.switch_focus_back` | `shift+tab` | Move focus to the previous pane |
 | `pane.quick_look` | `space` (normal mode) | Stream first 64 KB |
@@ -111,9 +135,30 @@ These are the action IDs `KeymapStore.DEFAULT_BINDINGS` actually
 registers. Overlay any of them in your `[keybindings]` table; any other
 id raises `UnknownAction` at startup.
 
-## 4. Layer separation
+`Shift+↑` / `Shift+↓` (extend-selection) and `s` (services rail toggle)
+are wired directly in `AwsTuiApp.BINDINGS` rather than the keymap
+store, because they're either modifier combinations or static UI
+toggles. They are not currently rebindable through `[keybindings]`.
+
+## 4. Modal forwarding for Enter / Esc / arrows
+
+Textual dispatches App-level `priority=True` bindings *before* modal
+screen bindings. Without that, pressing `Enter` inside the theme
+picker or confirm modal would fire the dual-pane `descend` action and
+never reach the modal's confirm handler.
+
+`AwsTuiApp` works around this via `_forward_to_modal(*action_names)`:
+when a modal is on top of the screen stack, `action_descend` /
+`action_ascend` / `action_move_up` / `action_move_down` first look for
+the corresponding handler on the active screen and forward there. The
+result: `Enter` confirms in any modal, `Esc` (or `Backspace`) cancels,
+and `↑/↓` navigate the picker even though the app reserves them for
+the dual-pane cursor.
+
+## 5. Layer separation
+
 The View layer never invokes a VM command by attribute access; it
 always goes through the action registry. That's how rebinding can be
 purely config-driven — no Textual `BINDINGS` are hard-coded except
-for `q` and `Ctrl+C` (so the app can always exit even if the keymap
-is broken).
+for `q`, `Ctrl+C` (so the app can always exit even if the keymap
+is broken), and the modifier-combination actions noted in §3.
