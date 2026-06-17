@@ -91,7 +91,7 @@ async def test_hint_legend_contains_all_expected_action_chips(
 async def test_hint_legend_chips_use_themable_css_classes(
     app_context_factory: AppContextBuilder,
 ) -> None:
-    """Pass-10/11 split each chip into ``.hint-key`` and ``.hint-label``
+    """Each hint chip is split into ``.hint-key`` and ``.hint-label``
     Statics so theme tcss can color them. Verify the CSS classes are
     actually applied."""
     ctx = app_context_factory()

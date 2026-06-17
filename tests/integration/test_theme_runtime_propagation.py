@@ -40,9 +40,9 @@ async def test_switch_theme_repaints_banner_via_hub(
 async def test_repeated_theme_swaps_dont_accumulate_sources(
     app_context_factory: AppContextBuilder,
 ) -> None:
-    """Pass-11 added a stable ``read_from`` key so subsequent
-    ``switch_theme`` calls REPLACE the theme source instead of stacking
-    them. Without this, the stylesheet grew unbounded."""
+    """A stable ``read_from`` key makes subsequent ``switch_theme``
+    calls REPLACE the theme source instead of stacking them. Without
+    that key the stylesheet would grow unbounded across swaps."""
     ctx = app_context_factory()
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:

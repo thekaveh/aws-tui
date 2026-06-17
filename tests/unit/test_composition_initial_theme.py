@@ -1,6 +1,6 @@
 """``build_app_context`` honours ``[defaults].theme`` from ``config.toml``.
 
-Pass-2 maintenance loop caught that the composition root hard-coded
+Regression guard: the composition root used to hard-code
 ``initial_theme="carbon"`` and never consulted ``ConfigStore.load()``,
 so a user's configured theme was silently ignored on every launch.
 """

@@ -63,8 +63,8 @@ async def test_shift_arrow_extends_selection(
 async def test_pane_footer_summary_includes_selected_bytes(
     app_context_factory: AppContextBuilder,
 ) -> None:
-    """Pass-10: when entries are marked, summary shows the marked
-    byte total, not the all-entries total."""
+    """When entries are marked, the summary shows the marked-byte
+    total, not the all-entries total."""
     local = await _seed_local()
     ctx = app_context_factory(fs=local)
     app = AwsTuiApp(ctx)
