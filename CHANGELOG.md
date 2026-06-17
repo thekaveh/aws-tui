@@ -67,6 +67,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reach their configured theme each session. Composition now loads
   the config at startup and falls back to carbon only if the file is
   absent or malformed.
+- **Transfer journal silently destroyed on S3
+  `AbortMultipartUpload` failure.** When the resume modal's "abort
+  all" path hit any S3 error (network, expired creds, throttle, 5xx)
+  the code suppressed the exception and unconditionally purged the
+  journal anyway — so the MPU continued to live on S3 (consuming
+  storage quota) with no local record of it, no recovery path. Now
+  the journal is only purged after a successful abort; failures
+  leave the journal intact for next-session retry.
+- **`.content-placeholder` no-connection screen ignored user theme
+  overrides.** All four built-in themes declared the placeholder
+  background and foreground as hex literals matching their own
+  `$bg`/`$text` instead of referencing the variables. A user who
+  overrode `$text` or `$bg` in `~/.config/aws-tui/theme.tcss` would
+  see every other widget pick up the override but the placeholder
+  would stay on the built-in hex. Rewired the four themes' rules to
+  use `$text` / `$bg`.
+- **QuickLook leaked file handles / S3 streams on the 64 KiB cap.**
+  The preview's `async for chunk in content.chunks: ...; break` left
+  the iterator for garbage collection, so the underlying file handle
+  (for LocalFS) or botocore stream (for S3FS) stayed open until the
+  generator was GC'd. Now wrapped in try/finally + explicit
+  `aclose()`.
 - **S3 → local copy crashed the app.** `S3FS.stat / read_stream /
   write_stream / delete / mkdir / rename` all raised `ProviderError`
   when `bucket=None` — but the service-level `S3FS` is always
