@@ -230,6 +230,7 @@ ConfirmModal > Container {
     padding: 1 2;
     width: 60;
     height: auto;
+    max-height: 80%;
 }
 
 ConfirmModal > Container > .modal-title {

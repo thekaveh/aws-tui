@@ -235,6 +235,7 @@ ConfirmModal > Container {
     padding: 1 2;
     width: 70;
     height: auto;
+    max-height: 80%;
 }
 ConfirmModal > Container > .modal-body {
     height: auto;
