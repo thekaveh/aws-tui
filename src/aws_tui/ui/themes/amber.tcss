@@ -315,48 +315,6 @@ Toast.-error {
     color: $danger;
 }
 
-TransfersTray {
-    dock: bottom;
-    height: 10;
-    background: $bg-elev;
-    color: $text;
-    border-top: thick $rule-dim;
-    padding: 0 1;
-}
-
-TransfersTray > .tray-title {
-    color: $accent;
-    text-style: bold;
-}
-
-TransferRow {
-    height: 1;
-    color: $text;
-}
-
-TransferRow.-running {
-    color: $text;
-}
-
-TransferRow.-completed {
-    color: $success;
-}
-
-TransferRow.-failed {
-    color: $danger;
-}
-
-TransferRow.-cancelled {
-    color: $text-dim;
-}
-
-ProgressBar.-accent > .bar--bar {
-    color: $accent;
-}
-
-ProgressBar.-success > .bar--bar {
-    color: $success;
-}
 BrandBanner {
     border: round $rule-dim;
     background: $bg-elev;
