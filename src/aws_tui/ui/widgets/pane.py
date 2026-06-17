@@ -267,9 +267,9 @@ class Pane(HubSubscriberMixin, Widget):
 
     def compose(self) -> ComposeResult:
         vm = self._vm.viewmodel
-        # NOTE: the inline ``.breadcrumb`` Static was removed in pass-9
-        # because the same path is rendered in the pane's top border
-        # title — keeping both was redundant.
+        # The inline ``.breadcrumb`` Static is intentionally absent — the
+        # same path is rendered in the pane's top border title and
+        # showing it twice was redundant.
         yield Static(_column_header_for(self._name_column_width), classes="column-header")
         # VerticalScroll instead of Vertical so long listings scroll on
         # mousewheel / trackpad without extra wiring, and so the cursor

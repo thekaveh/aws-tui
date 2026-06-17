@@ -133,7 +133,7 @@ class AwsTuiApp(App[None]):
         return self._app_ctx
 
     def compose(self) -> ComposeResult:
-        # StatusBar was removed in pass-7 — profile/region/auth indicator
+        # StatusBar is no longer mounted — profile/region/auth indicator
         # now live in the left pane's border (title shows the live path,
         # subtitle shows the connection identity). Bookkeeping VMs still
         # exist in RootVM.chrome so hub subscribers stay wired up; only
