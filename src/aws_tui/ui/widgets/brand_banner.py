@@ -112,15 +112,18 @@ _GRADIENT: tuple[str, ...] = (
 # picked from the 256-color cube so neighbors are perceptually close —
 # the lattice (teal) palette is the reference the others now match.
 _THEME_PALETTES: dict[str, tuple[str, ...]] = {
-    # carbon — deep navy → bright sky-blue, evenly spaced through the
-    # blue band of the 256-color cube (no big perceptual jumps).
+    # carbon — slate gray → ice-blue. The carbon theme is "near-
+    # monochrome with one accent" (per spec §4.5); the previous
+    # navy→azure gradient was too saturated for that aesthetic. This
+    # palette walks from charcoal up to the carbon accent token's
+    # ice-blue family so the banner reads as part of the theme.
     "carbon": (
-        "color(17)",  # #00005f  dark navy
-        "color(18)",  # #000087  navy
-        "color(19)",  # #0000af
-        "color(20)",  # #0000d7
-        "color(33)",  # #0087ff  azure
-        "color(75)",  # #5fafff  sky
+        "color(236)",  # #303030  charcoal
+        "color(238)",  # #444444
+        "color(60)",  # #5f5f87  slate
+        "color(67)",  # #5f87af  slate-blue
+        "color(74)",  # #5fafd7  cool azure
+        "color(117)",  # #87d7ff  pale ice-blue (kin to $accent #6fb8ff)
     ),
     # amber — dark mahogany → gold, the smooth orange band of the
     # cube. Tracks the amber-CRT theme's accent.

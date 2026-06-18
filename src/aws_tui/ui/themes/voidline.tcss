@@ -144,7 +144,7 @@ Pane .entry-row.-dir {
 Pane .pane-footer {
     height: 1;
     background: $bg-elev;
-    color: $text-muted;
+    color: $accent-hot;
     padding: 0 1;
 }
 
@@ -167,22 +167,23 @@ DualPane {
 
 HintLegend {
     background: $bg-elev;
-    color: $text-muted;
-    border: round $rule-dim;
+    color: $accent-hot;
+    border: round $accent;
 }
 
 HintLegend .hint-key {
     color: $accent;
     background: $bg-elev;
+    text-style: bold;
 }
 
 HintLegend .hint-label {
-    color: $accent-soft;
+    color: $accent-hot;
     background: $bg-elev;
 }
 
 HintLegend .hint-sep {
-    color: $text-dim;
+    color: $accent;
     background: $bg-elev;
 }
 
