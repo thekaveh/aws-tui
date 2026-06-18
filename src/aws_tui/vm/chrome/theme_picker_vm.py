@@ -188,6 +188,23 @@ class ThemePickerVM:
             opt.set_active(opt.name == name)
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "active_theme"))
 
+    def next_theme(self) -> str:
+        """Return the next theme in the cycle order. Wraps at the end.
+
+        Used by the cycle action (Shift+T) so both the cycle and modal
+        paths share one canonical source of truth (the registered theme
+        tuple this VM owns) instead of computing the order in the View
+        layer.
+        """
+        names = [opt.name for opt in self._options]
+        if not names:
+            return self._active_theme
+        try:
+            idx = names.index(self._active_theme)
+        except ValueError:
+            idx = -1
+        return names[(idx + 1) % len(names)]
+
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _pick(self, name: str | None) -> None:
