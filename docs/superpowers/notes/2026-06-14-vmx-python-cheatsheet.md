@@ -1,8 +1,10 @@
 # VMx Python cheatsheet (2026-06-14)
 
-Quick reference distilled from `vendor/vmx/langs/python/src/vmx/` for the M3
-implementation. Captures the actual API surface so the M3 plan's assumptions
-about `AggregateVM3`, `MessageHub`, `RelayCommand`, `DerivedProperty`, etc. can
+Quick reference distilled from the VMx Python source for the M3
+implementation. (Distilled originally from `vendor/vmx/langs/python/src/vmx/`;
+VMx now ships from PyPI — `import vmx` resolves directly from the installed
+wheel.) Captures the actual API surface so the M3 plan's assumptions about
+`AggregateVM3`, `MessageHub`, `RelayCommand`, `DerivedProperty`, etc. can
 be reconciled with reality before writing real VMs.
 
 ## 0. Imports
