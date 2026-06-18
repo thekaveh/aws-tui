@@ -112,21 +112,36 @@ _GRADIENT: tuple[str, ...] = (
 # picked from the 256-color cube so neighbors are perceptually close —
 # the lattice (teal) palette is the reference the others now match.
 _THEME_PALETTES: dict[str, tuple[str, ...]] = {
-    # Design language for every gradient (the amber + lattice palettes
-    # are the user-approved references all others now follow):
+    # Design language for every gradient (carbon + amber + lattice are
+    # the three reference palettes; all others follow the same rule):
     #
-    #   * SIX stops, evenly perceptually spaced (one per banner row).
+    #   * SIX stops, one per banner row.
     #   * Walk through ONE hue family — no mixing greyscale with blues
-    #     or jumping from purple to pink mid-gradient. Consistency over
-    #     drama.
+    #     or jumping from purple to pink mid-gradient.
     #   * Start DARK (top of the block art) → end LIGHT (bottom).
-    #   * The final, brightest stop lands close to the theme's
-    #     ``$accent`` (or ``$accent-hot`` for themes whose identity
-    #     leans on the hot variant) so the banner reads as part of the
-    #     theme's branding rather than orphaned chrome.
+    #   * The early/middle stops sit in the saturated dark band; the
+    #     final stop "pops" notably lighter (large cube-position jump)
+    #     for a clear dark-to-bright sweep — same shape as the
+    #     genai-vanilla 15-stop blue→cyan reference the carbon palette
+    #     subsamples directly.
+    #   * The brightest stop lands close to the theme's ``$accent``
+    #     (or ``$accent-hot`` for themes whose identity leans on the
+    #     hot variant) so the banner reads as part of the brand.
     #   * Source stops from the 256-color cube so neighbours are
-    #     guaranteed to be perceptually adjacent.
-    # amber — reference. Mahogany → gold through the orange band.
+    #     guaranteed perceptually adjacent.
+    # carbon — REFERENCE. Direct 6-stop subsample of the genai-vanilla
+    # 15-stop blue→cyan gradient (color(17) deep navy → color(195)
+    # pale blue), matching the upstream banner the carbon theme was
+    # spec'd against.
+    "carbon": (
+        "color(17)",  # #00005f  deep navy
+        "color(21)",  # #0000ff  pure blue (genai-vanilla mid)
+        "color(33)",  # #0087ff  azure
+        "color(45)",  # #00d7ff  bright cyan
+        "color(123)",  # #87ffff  pale cyan
+        "color(195)",  # #d7d7ff  very pale blue
+    ),
+    # amber — REFERENCE. Mahogany → gold through the orange band.
     "amber": (
         "color(94)",  # #875f00  dark amber
         "color(130)",  # #af5f00  burnt orange
@@ -135,7 +150,7 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
         "color(214)",  # #ffaf00
         "color(220)",  # #ffd700  gold
     ),
-    # lattice — reference. Dark teal → pale mint through the cyan band.
+    # lattice — REFERENCE. Dark teal → pale mint through the cyan band.
     "lattice": (
         "color(23)",  # #005f5f  dark teal
         "color(30)",  # #008787  teal-cyan
@@ -143,16 +158,6 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
         "color(44)",  # #00d7d7  bright cyan
         "color(50)",  # #00ffd7  cyan-mint
         "color(122)",  # #87ffd7  pale mint
-    ),
-    # carbon — deep navy → pale ice-blue. Walks the SAME blue band the
-    # carbon accent (#6fb8ff) sits in; no more grey-into-blue mixing.
-    "carbon": (
-        "color(17)",  # #00005f  dark navy
-        "color(18)",  # #000087  navy
-        "color(19)",  # #0000af
-        "color(33)",  # #0087ff  azure
-        "color(75)",  # #5fafff  light azure (kin to $accent #6fb8ff)
-        "color(117)",  # #87d7ff  pale ice-blue
     ),
     # voidline — deep magenta → pale pink, electric-CRT identity. Lands
     # close to $accent-hot #ff3df8 (the louder of voidline's twin

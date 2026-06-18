@@ -76,11 +76,13 @@ class ServiceItemView(Widget):
 
 
 class _ServicesMenuTitle(Static):
-    """Title row inside ServicesMenu, visible only when the rail is
-    expanded. The collapsed-state affordance lives elsewhere now —
-    :class:`ServicesHamburger` floats at the top-left of the screen
-    and is what the user clicks to *open* the rail. Clicking this
-    title (with the rail open) collapses it again."""
+    """Passive label at the top of the expanded rail — purely a header.
+
+    Clicking the title used to also toggle the rail, but that's
+    redundant now that the :class:`ServicesHamburger` button owns the
+    collapse/expand gesture. Without ``on_click``, clicks on the title
+    bubble harmlessly past it (the rail has no body-click handler
+    either)."""
 
     DEFAULT_CSS = """
     _ServicesMenuTitle {
@@ -92,22 +94,10 @@ class _ServicesMenuTitle(Static):
         super().__init__(classes="title", **kwargs)  # type: ignore[arg-type]
 
     def render_label(self, *, collapsed: bool) -> str:
-        # The hamburger glyph mirrors the floating ServicesHamburger so
-        # the connection between the two affordances is visually clear.
-        return "≡" if collapsed else "≡ services"
+        return "services" if not collapsed else ""
 
     def update_for_state(self, *, collapsed: bool) -> None:
         self.update(self.render_label(collapsed=collapsed))
-
-    def on_click(self, event: object) -> None:
-        parent = self.parent
-        while parent is not None and not isinstance(parent, ServicesMenu):
-            parent = getattr(parent, "parent", None)
-        if isinstance(parent, ServicesMenu):
-            parent.toggle_collapsed()
-            stop = getattr(event, "stop", None)
-            if callable(stop):
-                stop()
 
 
 class ServicesMenu(HubSubscriberMixin, Widget):
