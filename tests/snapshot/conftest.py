@@ -8,7 +8,18 @@ Ubuntu only (rendering-tolerance reasons).
 
 from __future__ import annotations
 
-THEMES = ("carbon", "voidline", "lattice", "amber")
+THEMES = (
+    "carbon",
+    "voidline",
+    "lattice",
+    "amber",
+    "solarized-light",
+    "github-light",
+    "one-light",
+    "nord",
+    "dracula",
+    "gruvbox-dark",
+)
 
 #: Standard terminal size for every snapshot fixture.
 TERMINAL_SIZE = (120, 40)

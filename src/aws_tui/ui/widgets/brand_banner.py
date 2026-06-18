@@ -155,6 +155,63 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
         "color(50)",
         "color(122)",  # #87ffd7  pale mint
     ),
+    # solarized-light — Solarized accent blues. Light theme; the gradient
+    # stays in the deep-to-medium blue band so it pops on the cream bg.
+    "solarized-light": (
+        "color(17)",  # #00005f  dark navy
+        "color(18)",  # #000087
+        "color(19)",  # #0000af
+        "color(20)",  # #0000d7
+        "color(33)",  # #0087ff  azure (matches $accent #268bd2 family)
+        "color(67)",  # #5f87af  slate-blue
+    ),
+    # github-light — Primer link-blue family. Light theme; dark stops for
+    # contrast against the white bg.
+    "github-light": (
+        "color(17)",  # #00005f
+        "color(19)",  # #0000af
+        "color(20)",  # #0000d7
+        "color(33)",  # #0087ff  GitHub link blue
+        "color(63)",  # #5f5fff
+        "color(99)",  # #875fff
+    ),
+    # one-light — Atom One Light blue + purple. Light theme.
+    "one-light": (
+        "color(53)",  # #5f005f  dark magenta
+        "color(54)",  # #5f0087
+        "color(56)",  # #5f00d7
+        "color(57)",  # #5f00ff
+        "color(63)",  # #5f5fff
+        "color(99)",  # #875fff
+    ),
+    # nord — Frost cyan family. Dark theme.
+    "nord": (
+        "color(24)",  # #005f87  dark Frost
+        "color(31)",  # #0087af
+        "color(37)",  # #00afaf
+        "color(74)",  # #5fafd7
+        "color(110)",  # #87afd7  (close to $accent #88c0d0)
+        "color(152)",  # #afd7d7  pale Frost
+    ),
+    # dracula — purple → pink Aurora sweep.
+    "dracula": (
+        "color(53)",  # #5f005f  dark magenta
+        "color(91)",  # #8700af
+        "color(99)",  # #875fff  purple (close to $accent #bd93f9)
+        "color(141)",  # #af87ff
+        "color(170)",  # #d75fd7  magenta
+        "color(213)",  # #ff87ff  light pink (close to $accent-hot #ff79c6)
+    ),
+    # gruvbox-dark — Pavel Pertsev's mahogany → gold band, distinct from
+    # amber by sitting in the warmer red-brown to mustard family.
+    "gruvbox-dark": (
+        "color(94)",  # #875f00  dark amber
+        "color(130)",  # #af5f00  rust
+        "color(166)",  # #d75f00  orange
+        "color(208)",  # #ff8700
+        "color(214)",  # #ffaf00  (close to $accent #fabd2f)
+        "color(222)",  # #ffd787  pale gold
+    ),
 }
 
 

@@ -1,15 +1,22 @@
 # Theming
 
-> Mirror of spec §4.5. Four built-in themes ship; the default is
-> configurable; full `.tcss` overrides are supported.
+> Mirror of spec §4.5. Ten built-in themes ship (4 dark + 3 light +
+> 3 popular community palettes); the default is configurable; full
+> `.tcss` overrides are supported.
 
 ## 1. Built-in themes
 | Theme | Vibe | Borders | Accent |
 |---|---|---|---|
-| `carbon` (default) | Near-monochrome, macOS-quietness | thin | ice-blue (`#6fb8ff`) |
+| `carbon` (default) | Near-monochrome, macOS-quietness | rounded | ice-blue (`#6fb8ff`) |
 | `voidline` | Neon cyan + magenta on near-black; Tron / Blade Runner | heavy double-line `╔══╗` | cyan + magenta |
 | `lattice` | Mint-teal + lavender on deep teal | rounded `╭─╮` | mint (`#4ce0d2`) |
 | `amber` | Retro phosphor monitor | thick block | amber (`#ffb000`) |
+| `solarized-light` | Ethan Schoonover's cream + muted accents (Solarized Light) | rounded `╭─╮` | Solarized blue (`#268bd2`) |
+| `github-light` | Primer-style clean white with link-blue accent | rounded `╭─╮` | link blue (`#0969da`) |
+| `one-light` | Atom One Light pastels on near-white | rounded `╭─╮` | One blue (`#4078f2`) |
+| `nord` | Sven Greb's Arctic Polar Night with Frost accents | rounded `╭─╮` | Frost cyan (`#88c0d0`) |
+| `dracula` | Zeno Rocha's purple-and-pink on deep blue | rounded `╭─╮` | purple (`#bd93f9`) |
+| `gruvbox-dark` | Pavel Pertsev's warm earth tones (mahogany → mustard) | rounded `╭─╮` | gold (`#fabd2f`) |
 
 Carbon's discipline: **one accent color**, **three-tier text
 hierarchy** (primary / secondary / label), semantic colors reserved
@@ -37,7 +44,9 @@ Enter                   # apply
 Or skip the modal entirely and cycle to the next theme:
 
 ```
-Shift+T                 # cycle: carbon → voidline → lattice → amber → ...
+Shift+T                 # cycle: carbon → voidline → lattice → amber →
+                        # solarized-light → github-light → one-light →
+                        # nord → dracula → gruvbox-dark → carbon ...
 ```
 
 The switch lives only for the session unless you also update
