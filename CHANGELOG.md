@@ -97,6 +97,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Shift+Arrow couldn't deselect an isolated marked row.** The
+  extend/shrink rule had no way to handle "the cursor is on a
+  marked row, the row in the opposite direction is unmarked, and
+  the target is unmarked" — that pattern is the user re-pressing
+  Shift+Arrow on a solo mark to toggle it off. Added it as a third
+  branch in `_extend_selection`: when current is marked and the
+  opposite-direction neighbor is unmarked → unmark current + move.
+- **Hamburger sat over the brand banner and click toggled twice.**
+  Moved the `ServicesHamburger` from a top-of-screen overlay into
+  the left edge of `#main-area` (just below the banner) so its
+  position now reads as "the control for the column to my right."
+  Removed the `ServicesMenu` body-click handler that was double-
+  firing on the bubbled click (expand-then-immediately-collapse);
+  collapse/expand now goes only through the hamburger or `m`.
+- **Services rail styling did not match the file panes.** Reworked
+  to mirror `Pane`: full `border: solid $rule-dim`, `color: $text`
+  (not muted), and selected-row treatment matches `entry-row.-selected`
+  (`$bg-sel` background, `$accent-soft` color, bold) across all 10
+  themes.
+- **`s` collapse-key was too close to `S` (swap source).** Rebound
+  services toggle from `s` to `m` (Menu). `S` still swaps the
+  focused pane's provider; the footer chip updates accordingly.
+- **Theme-change toast text was too terse.** Was "Theme: X"; now
+  "Theme changed to: [X]".
+- **Banner gradients were inconsistent — only amber and lattice
+  read as deliberate.** Redesigned the gradients for the other 8
+  themes using amber and lattice as references: 6 evenly-spaced
+  256-color cube stops, single hue family, dark→light, ending
+  near each theme's `$accent`.
+    - carbon: deep navy → pale ice-blue (was greyscale→azure mix)
+    - voidline: deep magenta → pale pink (kin to `$accent-hot`)
+    - solarized-light / github-light / one-light: dark navy →
+      theme-specific blue (dark stops for contrast on light bg)
+    - nord: dark Frost → pale Frost (cyan band)
+    - dracula: deep purple → pale purple (drops the pink drift)
+    - gruvbox-dark: forest → olive-gold (distinct hue from amber
+      so the two warm themes don't read identically)
 - **Confirm modal: From / To / Target labels were invisible.** The
   rule `height: 1; padding: 1 1 0 1;` left zero content rows. Fixed
   to `height: 1; padding: 0 1; margin-top: 1` so each label renders

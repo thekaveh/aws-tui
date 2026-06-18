@@ -1,14 +1,16 @@
-"""ServicesHamburger — fixed top-left ``[≡]`` button that toggles the
+"""ServicesHamburger — top-left ``[≡]`` button that toggles the
 services rail open/closed.
 
-Lives on the ``notifications`` layer with ``dock: top`` so it floats
-above the brand banner without taking any extra flow space at the App
-level — the same trick the toast stack and transfers overlay use.
+Mounted as the first child of ``#main-area`` (next to the file panes,
+*below* the brand banner) so its visual position reads as "the
+control for the column to my right" rather than floating over the
+brand banner. A fixed-width ``3`` column with no border so the panes
+reclaim the rest of the row.
 
-Clicking the glyph fires :meth:`AwsTuiApp.action_toggle_services`. We
-intentionally avoid reaching into the ``ServicesMenu`` widget directly
-so the rail can be ``display: none`` when collapsed (truly zero
-column) and still reachable.
+Clicking fires :meth:`AwsTuiApp.action_toggle_services`. We
+intentionally avoid reaching into ``ServicesMenu`` directly so the
+rail can be ``display: none`` when collapsed (truly zero column) and
+still reachable.
 """
 
 from __future__ import annotations
@@ -18,16 +20,12 @@ from textual.widgets import Static
 
 
 class ServicesHamburger(Static):
-    """Persistent floating hamburger that opens/closes the services rail."""
+    """Persistent hamburger button that opens/closes the services rail."""
 
     DEFAULT_CSS = """
     ServicesHamburger {
-        layer: notifications;
-        dock: top;
-        offset: 1 1;
         width: 3;
         height: 1;
-        background: transparent;
         content-align: center middle;
         text-style: bold;
     }
@@ -39,16 +37,19 @@ class ServicesHamburger(Static):
     def on_click(self, event: Click) -> None:
         # Re-export the click as an app action so AwsTuiApp owns the
         # actual collapsed/expanded state — the widget is a pure
-        # affordance.
+        # affordance. ``event.stop()`` is critical: without it, the
+        # click also bubbles to ``ServicesMenu``'s own ``on_click`` and
+        # the user gets an immediate re-toggle ("expands then
+        # collapses").
+        stop = getattr(event, "stop", None)
+        if callable(stop):
+            stop()
         app = getattr(self, "app", None)
         if app is None:
             return
         action = getattr(app, "action_toggle_services", None)
         if callable(action):
             action()
-            stop = getattr(event, "stop", None)
-            if callable(stop):
-                stop()
 
 
 __all__ = ["ServicesHamburger"]

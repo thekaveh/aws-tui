@@ -193,13 +193,11 @@ class ServicesMenu(HubSubscriberMixin, Widget):
             self._collection_sub.dispose()
             self._collection_sub = None
 
-    def on_click(self, _event: object) -> None:
-        """Clicking the rail's empty area toggles collapsed/expanded so
-        the user doesn't have to remember the ``s`` shortcut or click
-        the title's +/- glyph. The title widget has its own on_click
-        that fires first; this handler only catches clicks elsewhere on
-        the rail (or bubbled clicks from non-interactive areas)."""
-        self.toggle_collapsed()
+    # No body-click handler: collapse/expand goes through the
+    # ServicesHamburger overlay (and the ``m`` key). The previous
+    # whole-rail click toggle competed with the hamburger's click,
+    # producing an "expand-then-immediately-collapse" double-toggle
+    # when the click bubbled up from the hamburger.
 
     # ── Internal ────────────────────────────────────────────────────────────
 

@@ -66,19 +66,20 @@ StatusBar > .status-transfers {
 ServicesMenu {
     width: 16;
     background: $bg;
-    color: $text-muted;
-    border-right: double $accent;
+    color: $text;
+    border: solid $rule-dim;
+    border-title-color: $text-dim;
     padding: 0 1;
 }
 
 ServicesMenu > .service-item {
-    color: $text-muted;
+    color: $text;
     height: 1;
 }
 
 ServicesMenu > .service-item.-selected {
-    color: $bg;
-    background: $accent-hot;
+    color: $accent-soft;
+    background: $bg-sel;
     text-style: bold;
 }
 

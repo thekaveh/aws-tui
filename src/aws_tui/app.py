@@ -105,7 +105,7 @@ class AwsTuiApp(App[None]):
         Binding("T", "cycle_theme", "Cycle theme", show=True, priority=True),
         Binding("c", "copy", "Copy", show=True, priority=True),
         Binding("d", "delete", "Delete", show=True, priority=True),
-        Binding("s", "toggle_services", "Services", show=True, priority=True),
+        Binding("m", "toggle_services", "Menu", show=True, priority=True),
         Binding("S", "swap_source", "Swap source", show=True, priority=True),
         Binding("shift+up", "mark_up", "Mark ↑", show=False, priority=True),
         Binding("shift+down", "mark_down", "Mark ↓", show=False, priority=True),
@@ -149,10 +149,10 @@ class AwsTuiApp(App[None]):
             id="brand-banner",
         )
         with Horizontal(id="main-area"):
+            yield ServicesHamburger(id="services-hamburger")
             yield ServicesMenu(ctx.root_vm.services_menu, hub=ctx.hub, id="services-menu")
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
-        yield ServicesHamburger(id="services-hamburger")
         yield ToastStack(ctx.root_vm.chrome.toast_stack, hub=ctx.hub, id="toast-stack")
         yield TransfersOverlay(ctx.transfers_vm, hub=ctx.hub, id="transfers-overlay")
 
@@ -590,22 +590,22 @@ class AwsTuiApp(App[None]):
         self._extend_selection(1)
 
     def _extend_selection(self, delta: int) -> None:
-        """Shift+arrow handler with extend/shrink semantics.
+        """Shift+arrow handler with three modes — extend, shrink, and
+        toggle-off-isolated.
 
-        Direction is inferred from whether the *target* row is already
-        marked:
-
-        - Target NOT marked → **extend**. Mark the current row (so the
-          starting cell joins the range even on the first press) and
-          mark the target row, then move the cursor.
-        - Target IS marked → **shrink** (the user is reversing course
-          back into a previously-selected range). Unmark the row we
-          are leaving (current row), then move the cursor onto the
-          target without re-marking it.
-
-        Result: Shift+Down then Shift+Up over the same range cleanly
-        deselects rows the same way it selected them, instead of
-        leaving the selection sticky (the pre-existing bug)."""
+        - **Target marked** → *shrink*. The user is reversing course
+          back into the existing range; unmark the row we're leaving.
+        - **Current marked + opposite-direction neighbor marked** →
+          *extend*. We are at the leading edge of a multi-row range
+          and pushing it forward; mark the target.
+        - **Current marked + opposite-direction neighbor unmarked**
+          (the "isolated mark" case) → *toggle off*. The current row
+          is a single solo mark and the user has Shift-Arrowed onto
+          it again — the natural reading is "undo this mark." Unmark
+          current, move cursor; don't touch target.
+        - **Current unmarked** → *extend from scratch*. Mark both
+          current and target so the very first Shift+Arrow captures
+          the starting cell."""
         dual = self._dual_pane()
         if dual is None:
             return
@@ -621,12 +621,15 @@ class AwsTuiApp(App[None]):
         if mark is None:
             return
         target_marked = entries[target].is_marked
+        current_marked = entries[cur].is_marked
+        opposite_idx = cur - delta
+        opposite_marked = 0 <= opposite_idx < len(entries) and entries[opposite_idx].is_marked
         if target_marked:
-            # Shrink: drop the row we're leaving.
+            mark(cur, marked=False)
+        elif current_marked and not opposite_marked:
+            # Isolated single mark + Shift+Arrow → toggle the mark off.
             mark(cur, marked=False)
         else:
-            # Extend: mark both the origin (so the very first Shift+Arrow
-            # captures the starting row) and the target.
             mark(cur, marked=True)
             mark(target, marked=True)
         move = getattr(pane, "move_cursor_command", None)
@@ -715,7 +718,7 @@ class AwsTuiApp(App[None]):
         ctx.root_vm.chrome.toast_stack.raise_toast(
             ToastModel(
                 id=f"theme-changed-{theme_name}",
-                text=f"Theme: {theme_name}",
+                text=f"Theme changed to: [{theme_name}]",
                 level=ToastLevel.INFO,
                 sticky=False,
                 timeout_seconds=2.0,
