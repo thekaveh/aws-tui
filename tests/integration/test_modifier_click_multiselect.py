@@ -83,6 +83,47 @@ async def test_pane_footer_summary_includes_selected_bytes(
 
 
 @pytest.mark.asyncio
+async def test_modifier_click_marks_the_row(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    """Pilot click + a shift/meta/ctrl modifier on a row must mark it.
+
+    Background: on macOS Terminal.app, Shift+Click is intercepted by
+    the terminal for native text-selection and never reaches the app;
+    Cmd+Click (meta) is the documented workaround on that platform
+    (see docs/keybindings.md). This test verifies that the view-side
+    modifier dispatch in pane.py recognises any of the three flags —
+    so when the terminal DOES forward the event, the row gets marked.
+    """
+    from aws_tui.ui.widgets.pane import EntryRow
+
+    local = await _seed_local()
+    ctx = app_context_factory(fs=local)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        panes = list(app.query(Pane))
+        focused = panes[0]
+        before = sum(1 for e in focused.vm.filtered_entries if e.is_marked)
+
+        rows = list(focused.query(EntryRow))
+        # Click on a real entry row (not the ".." parent link, which
+        # the click handler intentionally won't mark).
+        target = next((r for r in rows if not r._entry_vm.is_parent_link), None)  # type: ignore[attr-defined]
+        assert target is not None, "no markable entry row found"
+
+        await pilot.click(target, control=True)  # Ctrl+Click — universal modifier
+        await pilot.pause()
+
+        after = sum(1 for e in focused.vm.filtered_entries if e.is_marked)
+        assert after == before + 1, (
+            f"Ctrl+Click didn't mark a row (was {before}, now {after}). "
+            "If this regresses, shift+click and cmd+click will silently break too."
+        )
+
+
+@pytest.mark.asyncio
 async def test_pane_vm_toggle_mark_at_enters_multiselect(
     app_context_factory: AppContextBuilder,
 ) -> None:
