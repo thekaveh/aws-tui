@@ -11,6 +11,7 @@ import pytest
 from tests.snapshot.apps.modals import (
     CommandPaletteApp,
     ConfirmModalApp,
+    CopyConfirmModalApp,
     CrashModalApp,
     FirstRunModalApp,
     QuickLookApp,
@@ -27,6 +28,11 @@ def test_command_palette(theme: str, snap_compare) -> None:
 @pytest.mark.parametrize("theme", THEMES)
 def test_confirm_modal_danger(theme: str, snap_compare) -> None:
     assert snap_compare(ConfirmModalApp(theme=theme), terminal_size=TERMINAL_SIZE)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_confirm_modal_copy_paths(theme: str, snap_compare) -> None:
+    assert snap_compare(CopyConfirmModalApp(theme=theme), terminal_size=TERMINAL_SIZE)
 
 
 @pytest.mark.parametrize("theme", THEMES)

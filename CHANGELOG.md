@@ -97,6 +97,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Confirm-modal "Confirm" / "Delete" button was invisible after the
+  PR-25 `ModalButton` extraction.** The widget class was renamed from
+  the private `_ModalButton` to the public `ModalButton`, but every
+  theme `.tcss` still selected on `_ModalButton`, so the theme rules
+  no longer matched and both footer buttons fell back to the
+  background-on-background default. The only visible button was the
+  one whose text contrasted by accident. Renamed selectors to
+  `ModalButton` in all 10 themes and dropped a leftover
+  `.modal-footer > Button` rule from the Textual-Button era.
+- **Theme-change toast rendered over the brand-banner top border.**
+  `ToastStack` was docked `top` on the notifications layer, so the
+  stack landed on the same rows the banner occupies. Re-anchored to
+  match the `TransfersOverlay` pattern (`dock: right; offset: 0 8;`)
+  so toasts appear at the top-right just below the banner, fully
+  inside the visible viewport.
+- **Services rail did not collapse horizontally** — the collapsed
+  width was `6` (still showing icon glyphs) instead of disappearing
+  down to the toggle. Collapsed width is now `3` (just the `+`
+  affordance) and `#services-list` is hidden via `display: none` in
+  the collapsed state, so the file panes reclaim the full width.
+- **Copy / delete confirm dialogs duplicated the source path and
+  buried the most important info under unstructured prose.** Replaced
+  `body_lines` source/destination duplication with a structured
+  `paths: tuple[ConfirmPath, ...]` field on `ConfirmRequest`. The
+  modal now renders each path as a bold accent-colored label (`From`,
+  `To`, `Target`) followed by the path inside a rounded border block.
+  Copy shows From + To; delete shows Target plus the unchanged "This
+  cannot be undone." warning. No duplication.
 - **`[defaults].theme` from `config.toml` was silently ignored on
   launch.** `build_app_context()` hardcoded `initial_theme="carbon"`
   and never consulted `ConfigStore`, so a user who set `theme =

@@ -58,6 +58,9 @@ class ConfirmModal(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Container():
             yield Static(self._request.title, classes="modal-title")
+            for path_entry in self._request.paths:
+                yield Static(path_entry.label, classes="modal-path-label")
+                yield Static(path_entry.path, classes="modal-path-value")
             for line in self._request.body_lines:
                 yield Static(line, classes="modal-body")
             with Horizontal(classes="modal-footer"):

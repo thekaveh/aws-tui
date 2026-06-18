@@ -39,7 +39,7 @@ from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.version import __version__
-from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
+from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
@@ -399,15 +399,12 @@ class AwsTuiApp(App[None]):
             if len(targets) == 1
             else f"{len(targets)} items ({targets[0].entry.name}, …)"
         )
+        items_summary = "1 item" if len(targets) == 1 else f"{len(targets)} items"
         request = ConfirmRequest(
-            title="Copy?",
-            body_lines=(
-                f"From: {_join_path(src_base, names_preview)}",
-                f"To:   {_join_path(dst_base, names_preview)}",
-                "",
-                f"Source pane: {src_base}",
-                f"Destination: {dst_base}",
-                f"Items: {len(targets)}",
+            title=f"Copy {items_summary}?",
+            paths=(
+                ConfirmPath(label="From", path=_join_path(src_base, names_preview)),
+                ConfirmPath(label="To", path=_join_path(dst_base, names_preview)),
             ),
             confirm_label="Copy",
             cancel_label="Cancel",
@@ -484,16 +481,11 @@ class AwsTuiApp(App[None]):
             if len(targets) == 1
             else f"{len(targets)} items ({targets[0].entry.name}, …)"
         )
+        items_summary = "1 item" if len(targets) == 1 else f"{len(targets)} items"
         request = ConfirmRequest(
-            title="Delete?",
-            body_lines=(
-                f"Path: {_join_path(base, names_preview)}",
-                "",
-                f"Source pane: {base}",
-                f"Items: {len(targets)}",
-                "",
-                "This cannot be undone.",
-            ),
+            title=f"Delete {items_summary}?",
+            paths=(ConfirmPath(label="Target", path=_join_path(base, names_preview)),),
+            body_lines=("This cannot be undone.",),
             confirm_label="Delete",
             cancel_label="Cancel",
             danger=True,
