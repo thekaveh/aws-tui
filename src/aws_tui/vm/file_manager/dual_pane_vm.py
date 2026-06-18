@@ -178,10 +178,27 @@ class DualPaneVM:
         for entry in targets:
             src_path = src_pane.path.join(entry.entry.name)
             dst_path = dst_pane.path.join(entry.entry.name)
+            src_uri = _pane_uri(src_pane, entry.entry.name)
+            dst_uri = _pane_uri(dst_pane, entry.entry.name)
             transfer_id = self._journal.begin(
-                source_uri=_pane_uri(src_pane, entry.entry.name),
-                destination_uri=_pane_uri(dst_pane, entry.entry.name),
+                source_uri=src_uri,
+                destination_uri=dst_uri,
                 bytes_total=entry.entry.size,
+            )
+
+            # First progress message carries the labels so TransfersVM
+            # can auto-register a placeholder with meaningful "from /
+            # to" text instead of "??". Subsequent messages may omit
+            # them — the placeholder is already set up.
+            self._hub.send(
+                TransferProgressMessage(
+                    transfer_id=transfer_id,
+                    bytes_transferred=0,
+                    bytes_total=entry.entry.size,
+                    state=TransferState.PENDING,
+                    source_label=src_uri,
+                    destination_label=dst_uri,
+                )
             )
 
             def _progress(p: TransferProgress, *, _tid: str = transfer_id) -> None:
@@ -231,10 +248,24 @@ class DualPaneVM:
         for entry in targets:
             src_path = src_pane.path.join(entry.entry.name)
             dst_path = dst_pane.path.join(entry.entry.name)
+            src_uri = _pane_uri(src_pane, entry.entry.name)
+            dst_uri = _pane_uri(dst_pane, entry.entry.name)
             transfer_id = self._journal.begin(
-                source_uri=_pane_uri(src_pane, entry.entry.name),
-                destination_uri=_pane_uri(dst_pane, entry.entry.name),
+                source_uri=src_uri,
+                destination_uri=dst_uri,
                 bytes_total=entry.entry.size,
+            )
+
+            # Seed the placeholder labels (see copy_across for rationale).
+            self._hub.send(
+                TransferProgressMessage(
+                    transfer_id=transfer_id,
+                    bytes_transferred=0,
+                    bytes_total=entry.entry.size,
+                    state=TransferState.PENDING,
+                    source_label=src_uri,
+                    destination_label=dst_uri,
+                )
             )
 
             def _progress(p: TransferProgress, *, _tid: str = transfer_id) -> None:

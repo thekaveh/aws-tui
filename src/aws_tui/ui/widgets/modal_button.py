@@ -25,8 +25,8 @@ class ModalButton(Static):
 
     DEFAULT_CSS = """
     ModalButton {
+        width: 14;
         height: 1;
-        min-width: 14;
         padding: 0 2;
         content-align: center middle;
         text-style: bold;
@@ -34,6 +34,9 @@ class ModalButton(Static):
     }
     ModalButton.-primary {
         text-style: bold;
+    }
+    ModalButton.-focused {
+        text-style: bold reverse;
     }
     """
 
