@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
+from textual.events import Click
 from textual.screen import ModalScreen
-from textual.widgets import Button, Static
+from textual.widgets import Static
 from vmx import Message, MessageHub
 
+from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.resume_vm import ResumeAction, ResumeVM, entry_summary
 
 
@@ -56,10 +58,10 @@ class ResumeModal(ModalScreen[ResumeAction]):
                         classes="modal-body resume-entry",
                     )
             with Horizontal(classes="modal-footer"):
-                yield Button("resume all", id="resume-resume-btn")
-                yield Button("abort all", id="resume-abort-btn", variant="error")
-                yield Button("decide each", id="resume-decide-btn")
-                yield Button("keep for later", id="resume-keep-btn")
+                yield ModalButton("resume all", button_id="resume-resume-btn", classes="-primary")
+                yield ModalButton("abort all", button_id="resume-abort-btn", classes="-danger")
+                yield ModalButton("decide each", button_id="resume-decide-btn")
+                yield ModalButton("keep for later", button_id="resume-keep-btn")
 
     def action_resume_all(self) -> None:
         self._vm.resume_all_command.execute()
@@ -77,14 +79,17 @@ class ResumeModal(ModalScreen[ResumeAction]):
         self._vm.keep_for_later_command.execute()
         self.dismiss(ResumeAction.KEEP_FOR_LATER)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "resume-resume-btn":
+    def on_click(self, event: Click) -> None:
+        # ModalButton bubbles its click up; we read the tagged button_id.
+        target = event.widget
+        button_id = getattr(target, "button_id", None)
+        if button_id == "resume-resume-btn":
             self.action_resume_all()
-        elif event.button.id == "resume-abort-btn":
+        elif button_id == "resume-abort-btn":
             self.action_abort_all()
-        elif event.button.id == "resume-decide-btn":
+        elif button_id == "resume-decide-btn":
             self.action_decide_each()
-        elif event.button.id == "resume-keep-btn":
+        elif button_id == "resume-keep-btn":
             self.action_keep_for_later()
 
 

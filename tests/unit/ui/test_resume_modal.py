@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button
 from vmx import MessageHub, RxDispatcher
 
 from aws_tui.domain.transfer_journal import TransferJournalEntry
+from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.ui.widgets.resume_modal import ResumeModal
 from aws_tui.vm.chrome.resume_vm import ResumeVM
 
@@ -51,8 +51,8 @@ async def test_resume_modal_renders_entries() -> None:
             await pilot.pause()
             modal = app.screen
             assert isinstance(modal, ResumeModal)
-            buttons = modal.query(Button)
-            assert {b.id for b in buttons} == {
+            buttons = modal.query(ModalButton)
+            assert {b.button_id for b in buttons} == {
                 "resume-resume-btn",
                 "resume-abort-btn",
                 "resume-decide-btn",

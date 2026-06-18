@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button
 from vmx import MessageHub, RxDispatcher
 
 from aws_tui.ui.widgets.first_run_modal import FirstRunModal, S3CompatFormModal
+from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.first_run_vm import FirstRunVM
 
 
@@ -31,8 +31,8 @@ async def test_first_run_modal_has_three_buttons() -> None:
             await pilot.pause()
             modal = app.screen
             assert isinstance(modal, FirstRunModal)
-            buttons = modal.query(Button)
-            assert {b.id for b in buttons} == {
+            buttons = modal.query(ModalButton)
+            assert {b.button_id for b in buttons} == {
                 "first-run-aws-btn",
                 "first-run-s3-btn",
                 "first-run-skip-btn",
