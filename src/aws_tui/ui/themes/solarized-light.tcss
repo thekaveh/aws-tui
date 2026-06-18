@@ -241,7 +241,7 @@ ConfirmModal > Container > .modal-footer {
     align: right middle;
     padding: 1 0 0 0;
 }
-ConfirmModal > Container > .modal-footer > _ModalButton {
+ConfirmModal > Container > .modal-footer > ModalButton {
     background: $bg;
     color: $text;
     border: round $rule-dim;
@@ -251,26 +251,26 @@ ConfirmModal > Container > .modal-footer > _ModalButton {
     padding: 0 2;
     content-align: center middle;
 }
-ConfirmModal > Container > .modal-footer > _ModalButton:hover {
+ConfirmModal > Container > .modal-footer > ModalButton:hover {
     background: $bg-elev;
     border: round $accent;
     color: $accent;
 }
-ConfirmModal > Container > .modal-footer > _ModalButton.-primary {
+ConfirmModal > Container > .modal-footer > ModalButton.-primary {
     background: $accent;
     color: $bg;
     border: round $accent;
 }
-ConfirmModal > Container > .modal-footer > _ModalButton.-primary:hover {
+ConfirmModal > Container > .modal-footer > ModalButton.-primary:hover {
     background: $accent-soft;
     border: round $accent-soft;
 }
-ConfirmModal > Container > .modal-footer > _ModalButton.-danger {
+ConfirmModal > Container > .modal-footer > ModalButton.-danger {
     background: $danger;
     color: $bg;
     border: round $danger;
 }
-ConfirmModal > Container > .modal-footer > _ModalButton.-danger:hover {
+ConfirmModal > Container > .modal-footer > ModalButton.-danger:hover {
     background: $danger;
 }
 
@@ -288,10 +288,21 @@ ConfirmModal > Container > .modal-body {
     padding: 0 1 1 1;
     color: $text;
 }
-
-ConfirmModal > Container > .modal-footer > Button {
+ConfirmModal > Container > .modal-path-label {
+    color: $accent;
+    text-style: bold;
+    height: 1;
+    padding: 1 1 0 1;
+}
+ConfirmModal > Container > .modal-path-value {
+    color: $text;
+    background: $bg;
+    border: round $rule-dim;
+    height: auto;
+    padding: 0 1;
     margin: 0 1;
 }
+
 
 QuickLook {
     align: center middle;
@@ -318,10 +329,11 @@ QuickLook > Container > .quicklook-body {
 
 ToastStack {
     layer: notifications;
-    dock: top;
-    align: right top;
+    dock: right;
+    offset: 0 8;
     width: 50;
     height: auto;
+    align: right top;
     background: transparent;
 }
 

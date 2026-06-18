@@ -77,11 +77,11 @@ class ToastStack(Widget):
     DEFAULT_CSS = """
     ToastStack {
         layer: notifications;
-        dock: top;
-        align: right top;
-        width: auto;
+        dock: right;
+        offset: 0 8;
+        width: 50;
         height: auto;
-        max-width: 50;
+        align: right top;
     }
     ToastStack > #toast-stack-inner {
         width: auto;

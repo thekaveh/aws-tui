@@ -117,10 +117,16 @@ class ServicesMenu(HubSubscriberMixin, Widget):
 
     DEFAULT_CSS = """
     ServicesMenu {
-        width: 6;
+        width: 3;
+    }
+    ServicesMenu > #services-list {
+        display: none;
     }
     ServicesMenu.-expanded {
         width: 16;
+    }
+    ServicesMenu.-expanded > #services-list {
+        display: block;
     }
     """
 

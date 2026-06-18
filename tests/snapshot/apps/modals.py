@@ -24,7 +24,7 @@ from aws_tui.ui.widgets.first_run_modal import FirstRunModal
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.resume_modal import ResumeModal
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM, PaletteEntry
-from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
+from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashReport, CrashVM
 from aws_tui.vm.chrome.first_run_vm import FirstRunVM
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent, QuickLookVM
@@ -85,18 +85,39 @@ class ConfirmModalApp(App[None]):
     async def on_mount(self) -> None:
         self._vm.construct()
         request = ConfirmRequest(
-            title="Delete 3 objects?",
-            body_lines=(
-                "This will permanently delete:",
-                "  data/alpha.txt",
-                "  data/beta.json",
-                "  data/gamma.csv",
-                "",
-                "This cannot be undone.",
-            ),
+            title="Delete 1 item?",
+            paths=(ConfirmPath(label="Target", path="s3://kaveh-dev/data/alpha.txt"),),
+            body_lines=("This cannot be undone.",),
             confirm_label="Delete",
             cancel_label="Cancel",
             danger=True,
+        )
+        await self.push_screen(ConfirmModal(self._vm, request, hub=self._hub))
+
+
+class CopyConfirmModalApp(App[None]):
+    """Confirm modal exercising the From/To path block layout."""
+
+    def __init__(self, *, theme: str = "carbon") -> None:
+        super().__init__()
+        self.CSS = _load_css(theme)
+        self._hub: MessageHub = MessageHub()
+        self._dispatcher = RxDispatcher.immediate()
+        self._vm = ConfirmationVM(hub=self._hub, dispatcher=self._dispatcher)
+
+    def compose(self) -> ComposeResult:
+        yield Static("aws-tui main view (behind modal)", id="placeholder")
+
+    async def on_mount(self) -> None:
+        self._vm.construct()
+        request = ConfirmRequest(
+            title="Copy 1 item?",
+            paths=(
+                ConfirmPath(label="From", path="s3://kaveh-dev/data/alpha.txt"),
+                ConfirmPath(label="To", path="local:///Users/kaveh/inbox/alpha.txt"),
+            ),
+            confirm_label="Copy",
+            cancel_label="Cancel",
         )
         await self.push_screen(ConfirmModal(self._vm, request, hub=self._hub))
 
@@ -235,6 +256,7 @@ class FirstRunModalApp(App[None]):
 __all__ = [
     "CommandPaletteApp",
     "ConfirmModalApp",
+    "CopyConfirmModalApp",
     "CrashModalApp",
     "FirstRunModalApp",
     "QuickLookApp",

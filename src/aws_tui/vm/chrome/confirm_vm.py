@@ -20,15 +20,25 @@ from vmx.services.dispatcher import Dispatcher
 
 
 @dataclass(frozen=True, slots=True)
+class ConfirmPath:
+    """A single labeled path block — rendered as bold label + bordered path."""
+
+    label: str
+    path: str
+
+
+@dataclass(frozen=True, slots=True)
 class ConfirmRequest:
     """Immutable description of a confirmation prompt.
 
-    The view layer renders ``body_lines`` exactly as supplied; the VM adds
-    no formatting.
+    The view renders ``paths`` first (each as a bold label + bordered
+    Static showing the path), then ``body_lines`` as plain rows beneath.
+    The VM applies no formatting of its own.
     """
 
     title: str
-    body_lines: tuple[str, ...]
+    paths: tuple[ConfirmPath, ...] = ()
+    body_lines: tuple[str, ...] = ()
     confirm_label: str = "OK"
     cancel_label: str = "Cancel"
     danger: bool = False
@@ -158,4 +168,4 @@ class ConfirmationVM:
         self._hub.send(PropertyChangedMessage.create(self, self.name, "request"))
 
 
-__all__ = ["ConfirmRequest", "ConfirmationVM"]
+__all__ = ["ConfirmPath", "ConfirmRequest", "ConfirmationVM"]
