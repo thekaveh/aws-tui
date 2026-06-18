@@ -121,6 +121,48 @@ async def test_swap_provider_replaces_source_and_resets_root() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mark_at_is_idempotent_set_not_toggle() -> None:
+    """Regression: shift+arrow extend-selection used to call toggle_mark_at
+    on the *current* row before moving. When the user walked the cursor
+    back across an already-marked row, toggle un-marked it — leaving
+    holes mid-range. ``mark_at(idx, marked=True)`` is the new idempotent
+    setter and fixes that.
+
+    Trace: mark rows 0 and 1, then `mark_at(1, marked=True)` again. The
+    second call must be a no-op, not a flip.
+    """
+    hub: MessageHub = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    fs = await _seed()
+    vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher)
+    vm.construct()
+    await vm.setup()
+    try:
+        names = [e.entry.name for e in vm.filtered_entries]
+        idx_a = names.index("alpha.txt")
+        idx_b = names.index("beta.txt")
+
+        vm.mark_at(idx_a, marked=True)
+        vm.mark_at(idx_b, marked=True)
+        first = {e.entry.name for e in vm.filtered_entries if e.is_marked}
+        assert first == {"alpha.txt", "beta.txt"}
+
+        # Calling mark_at(beta, True) again must NOT flip beta off.
+        vm.mark_at(idx_b, marked=True)
+        second = {e.entry.name for e in vm.filtered_entries if e.is_marked}
+        assert second == {"alpha.txt", "beta.txt"}, (
+            "mark_at(..., marked=True) on an already-marked entry must be a no-op"
+        )
+
+        # And mark_at(..., marked=False) explicitly clears.
+        vm.mark_at(idx_a, marked=False)
+        third = {e.entry.name for e in vm.filtered_entries if e.is_marked}
+        assert third == {"beta.txt"}
+    finally:
+        vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_toggle_mark_at_updates_summary() -> None:
     hub: MessageHub = MessageHub()
     dispatcher = RxDispatcher.immediate()
