@@ -97,6 +97,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Carbon banner now uses the genai-vanilla blue gradient.**
+  Direct 6-stop subsample of the upstream 15-stop palette
+  (`color(17)` deep navy → `color(195)` pale blue), matching the
+  banner the carbon theme was spec'd against. Carbon, amber, and
+  lattice are now the three reference palettes the other 7 themes
+  follow: 6 stops, one hue family, dark→light, final stop close to
+  `$accent`.
+- **Services-rail title click was redundant with the hamburger.**
+  Removed the title's `on_click` toggle; it's now a passive
+  "services" header. Collapse/expand goes through the hamburger
+  button (or `m`).
+- **Copy / Delete modal buttons were clipped — only one rendered
+  fully.** Root cause: `.modal-footer` was `height: 3` with
+  `padding-top: 1` (2 usable rows), but each `ModalButton` is 3 rows
+  tall (rounded border + 1 content row). The second button was
+  pushed out of the footer's clip rect. Footer is now `height: 5`
+  and buttons widen to `width: 18` with `padding: 0 3` so labels
+  read clearly and both render with room to spare.
 - **Shift+Arrow couldn't deselect an isolated marked row.** The
   extend/shrink rule had no way to handle "the cursor is on a
   marked row, the row in the opposite direction is unmarked, and

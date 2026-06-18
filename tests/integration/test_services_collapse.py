@@ -42,7 +42,9 @@ async def test_title_shows_services_when_expanded(
     app_context_factory: AppContextBuilder,
 ) -> None:
     """The inline title becomes visible only when the rail is expanded
-    and shows the hamburger glyph + the word 'services'."""
+    and shows the word 'services'. (The hamburger affordance lives
+    elsewhere — :class:`ServicesHamburger` — so the title is a passive
+    header.)"""
     ctx = app_context_factory()
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -57,7 +59,6 @@ async def test_title_shows_services_when_expanded(
         assert menu.is_collapsed is False
         rendered = str(title.render())
         assert "services" in rendered
-        assert rendered.startswith("≡"), "expanded title must lead with the hamburger glyph"
 
 
 @pytest.mark.asyncio
