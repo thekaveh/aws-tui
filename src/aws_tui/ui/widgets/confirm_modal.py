@@ -21,43 +21,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 from vmx import Message, MessageHub
 
+from aws_tui.ui.widgets.modal_button import ModalButton as _ModalButton
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
-
-
-class _ModalButton(Static):
-    """Themable clickable button replacement.
-
-    Two CSS classes carry visual state:
-    - ``-primary``: the confirm side (accent color).
-    - ``-danger``: the destructive variant (theme danger color).
-
-    The widget owns no state; on_click posts a tagged message via the
-    ``button_id`` attribute that the modal looks at."""
-
-    DEFAULT_CSS = """
-    _ModalButton {
-        height: 1;
-        min-width: 14;
-        padding: 0 2;
-        content-align: center middle;
-        text-style: bold;
-        margin: 0 1;
-    }
-    _ModalButton.-primary {
-        text-style: bold;
-    }
-    """
-
-    def __init__(self, label: str, *, button_id: str, classes: str = "") -> None:
-        merged = " ".join(c for c in ("modal-button", classes) if c)
-        super().__init__(label, classes=merged)
-        self.button_id = button_id
-
-    def on_click(self, _event: Click) -> None:
-        # Bubble up — the modal's on_click reads ``button_id`` to act on
-        # the press. Textual's event bubbling delivers the event to
-        # parent widgets on its way up.
-        pass
 
 
 class ConfirmModal(ModalScreen[bool]):

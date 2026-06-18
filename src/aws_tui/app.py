@@ -42,6 +42,7 @@ from aws_tui.version import __version__
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
+from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 from aws_tui.vm.messages import ThemeChangedMessage
 
 _ACTION_RING_SIZE = 100
@@ -544,18 +545,29 @@ class AwsTuiApp(App[None]):
 
     def action_cycle_theme(self) -> None:
         """Cycle to the next theme without opening the picker modal —
-        bound to ``Shift+T`` so the footer chip is reachable too."""
+        bound to ``Shift+T`` so the footer chip is reachable too.
+
+        Uses the canonical :class:`ThemePickerVM` (same VMx model the
+        modal flow uses) to determine the next theme, then raises a
+        top-right toast through :class:`ToastStackVM` so the
+        notification overlay layer (not Textual's built-in bottom-
+        center notify) handles placement + theme conformance.
+        """
         ctx = self._app_ctx
-        names = list(ctx.theme_store.BUILTIN_NAMES)
-        if not names:
-            return
+        picker = ThemePickerVM(
+            themes=ctx.theme_store.BUILTIN_NAMES,
+            active_theme=ctx.initial_theme,
+            on_pick=self.switch_theme,
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+        )
+        picker.construct()
         try:
-            idx = names.index(ctx.initial_theme)
-        except ValueError:
-            idx = -1
-        nxt = names[(idx + 1) % len(names)]
-        self.switch_theme(nxt)
-        self.notify(f"Theme: {nxt}", severity="information", timeout=2)
+            nxt = picker.next_theme()
+            picker.pick_theme_command.execute(nxt)
+        finally:
+            self.call_after_refresh(picker.dispose)
+        self._raise_theme_changed_toast(nxt)
 
     def action_mark_up(self) -> None:
         self._extend_selection(-1)
@@ -645,10 +657,15 @@ class AwsTuiApp(App[None]):
     async def action_themes(self) -> None:
         """Open the keyboard-navigable theme picker modal."""
         ctx = self._app_ctx
+
+        def _pick_with_toast(name: str) -> None:
+            self.switch_theme(name)
+            self._raise_theme_changed_toast(name)
+
         picker = ThemePickerVM(
             themes=ctx.theme_store.BUILTIN_NAMES,
             active_theme=ctx.initial_theme,
-            on_pick=self.switch_theme,
+            on_pick=_pick_with_toast,
             hub=ctx.hub,
             dispatcher=ctx.dispatcher,
         )
@@ -658,6 +675,24 @@ class AwsTuiApp(App[None]):
             await self.push_screen(modal)
         finally:
             self.call_after_refresh(picker.dispose)
+
+    def _raise_theme_changed_toast(self, theme_name: str) -> None:
+        """Raise a top-right, theme-conformant toast announcing the
+        switch. Routed through :class:`ToastStackVM` (notifications
+        overlay layer) rather than ``self.notify()`` (Textual's
+        built-in bottom-center notify, which wrecks the footer)."""
+        ctx = self._app_ctx
+        ctx.root_vm.chrome.toast_stack.raise_toast(
+            ToastModel(
+                id=f"theme-changed-{theme_name}",
+                text=f"Theme: {theme_name}",
+                level=ToastLevel.INFO,
+                sticky=False,
+                timeout_seconds=2.0,
+                action_label=None,
+                action_action=None,
+            )
+        )
 
     # Stable read_from key for the aws-tui theme source — re-using it on
     # every ``add_source`` call means subsequent theme swaps REPLACE the

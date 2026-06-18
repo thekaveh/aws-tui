@@ -17,10 +17,12 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
+from textual.events import Click
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Static
+from textual.widgets import Input, Static
 from vmx import Message, MessageHub
 
+from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.first_run_vm import FirstRunAction, FirstRunVM, S3CompatForm
 
 
@@ -72,9 +74,9 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
                 classes="modal-body first-run-bullet",
             )
             with Horizontal(classes="modal-footer"):
-                yield Button("add aws", id="first-run-aws-btn")
-                yield Button("add s3-compatible", id="first-run-s3-btn")
-                yield Button("skip", id="first-run-skip-btn")
+                yield ModalButton("add aws", button_id="first-run-aws-btn", classes="-primary")
+                yield ModalButton("add s3-compatible", button_id="first-run-s3-btn")
+                yield ModalButton("skip", button_id="first-run-skip-btn")
 
     def action_add_aws(self) -> None:
         self._vm.add_aws_command.execute()
@@ -88,12 +90,14 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
         self._vm.skip_command.execute()
         self.dismiss(FirstRunAction.SKIP)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "first-run-aws-btn":
+    def on_click(self, event: Click) -> None:
+        target = event.widget
+        button_id = getattr(target, "button_id", None)
+        if button_id == "first-run-aws-btn":
             self.action_add_aws()
-        elif event.button.id == "first-run-s3-btn":
+        elif button_id == "first-run-s3-btn":
             self.action_add_s3_compat()
-        elif event.button.id == "first-run-skip-btn":
+        elif button_id == "first-run-skip-btn":
             self.action_skip()
 
 
@@ -140,8 +144,8 @@ class S3CompatFormModal(ModalScreen[S3CompatForm | None]):
                         id=f"form-{key}",
                     )
             with Horizontal(classes="modal-footer"):
-                yield Button("cancel", id="form-cancel-btn")
-                yield Button("save", id="form-save-btn")
+                yield ModalButton("cancel", button_id="form-cancel-btn")
+                yield ModalButton("save", button_id="form-save-btn", classes="-primary")
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -164,10 +168,12 @@ class S3CompatFormModal(ModalScreen[S3CompatForm | None]):
             return
         self.dismiss(form)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "form-cancel-btn":
+    def on_click(self, event: Click) -> None:
+        target = event.widget
+        button_id = getattr(target, "button_id", None)
+        if button_id == "form-cancel-btn":
             self.action_cancel()
-        elif event.button.id == "form-save-btn":
+        elif button_id == "form-save-btn":
             self.action_submit()
 
 
