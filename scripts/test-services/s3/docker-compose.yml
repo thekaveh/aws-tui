@@ -1,0 +1,35 @@
+# MinIO container for local aws-tui development.
+#
+# Usage:
+#   scripts/test-services/s3/up.sh    # start + seed
+#   scripts/test-services/s3/down.sh  # stop (data preserved on the named volume)
+#   scripts/test-services/s3/down.sh --purge   # stop AND wipe volume
+#
+# S3 endpoint: http://localhost:9000
+# Web console: http://localhost:9001  (login: minioadmin / minioadmin)
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: aws-tui-dev-minio
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - aws-tui-dev-minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      # MinIO's own readiness endpoint. seed.py polls this before seeding.
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  aws-tui-dev-minio-data:
+    name: aws-tui-dev-minio-data

@@ -16,6 +16,23 @@ credentials `minioadmin / minioadmin`. Goal: a `minio-local`
 connection in aws-tui that points at it.
 
 ### 1.1. Start MinIO (skip if already running)
+
+**Quickest path — dev seeded MinIO** (recommended for first-time
+exploration; ships ~5 buckets and ~90 objects so you have content to
+navigate):
+
+```bash
+scripts/test-services/s3/up.sh
+```
+
+This wraps `docker compose` + `seed.py` and prints the config snippet
+to add to `~/.config/aws-tui/config.toml`. Teardown is
+`scripts/test-services/s3/down.sh` (add `--purge` to wipe the data
+volume). See `scripts/test-services/README.md` for the seeded
+dataset and how to extend it.
+
+**Plain MinIO** (no seed):
+
 ```bash
 docker run --rm -d --name minio \
     -p 9000:9000 -p 9001:9001 \

@@ -1,0 +1,22 @@
+# Paste this block into ~/.config/aws-tui/config.toml to point aws-tui at
+# the local MinIO seeded by scripts/test-services/s3/seed.py. Then launch:
+#
+#   aws-tui
+#
+# The first-run modal or the `:` command palette can switch to this
+# connection. If you set [defaults].connection = "dev-s3", aws-tui will
+# pick it up on the next launch.
+
+[connections.dev-s3]
+kind = "s3-compatible"
+endpoint_url = "http://localhost:9000"
+region = "us-east-1"
+credentials = "static"
+access_key_id = "minioadmin"
+secret_access_key = "minioadmin"
+force_path_style = true
+verify_tls = true
+
+# Optional — make dev-s3 the default startup connection.
+# [defaults]
+# connection = "dev-s3"
