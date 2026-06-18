@@ -112,21 +112,21 @@ _GRADIENT: tuple[str, ...] = (
 # picked from the 256-color cube so neighbors are perceptually close —
 # the lattice (teal) palette is the reference the others now match.
 _THEME_PALETTES: dict[str, tuple[str, ...]] = {
-    # carbon — slate gray → ice-blue. The carbon theme is "near-
-    # monochrome with one accent" (per spec §4.5); the previous
-    # navy→azure gradient was too saturated for that aesthetic. This
-    # palette walks from charcoal up to the carbon accent token's
-    # ice-blue family so the banner reads as part of the theme.
-    "carbon": (
-        "color(236)",  # #303030  charcoal
-        "color(238)",  # #444444
-        "color(60)",  # #5f5f87  slate
-        "color(67)",  # #5f87af  slate-blue
-        "color(74)",  # #5fafd7  cool azure
-        "color(117)",  # #87d7ff  pale ice-blue (kin to $accent #6fb8ff)
-    ),
-    # amber — dark mahogany → gold, the smooth orange band of the
-    # cube. Tracks the amber-CRT theme's accent.
+    # Design language for every gradient (the amber + lattice palettes
+    # are the user-approved references all others now follow):
+    #
+    #   * SIX stops, evenly perceptually spaced (one per banner row).
+    #   * Walk through ONE hue family — no mixing greyscale with blues
+    #     or jumping from purple to pink mid-gradient. Consistency over
+    #     drama.
+    #   * Start DARK (top of the block art) → end LIGHT (bottom).
+    #   * The final, brightest stop lands close to the theme's
+    #     ``$accent`` (or ``$accent-hot`` for themes whose identity
+    #     leans on the hot variant) so the banner reads as part of the
+    #     theme's branding rather than orphaned chrome.
+    #   * Source stops from the 256-color cube so neighbours are
+    #     guaranteed to be perceptually adjacent.
+    # amber — reference. Mahogany → gold through the orange band.
     "amber": (
         "color(94)",  # #875f00  dark amber
         "color(130)",  # #af5f00  burnt orange
@@ -135,82 +135,97 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
         "color(214)",  # #ffaf00
         "color(220)",  # #ffd700  gold
     ),
-    # voidline — deep purple → soft pink. Smooth march through the
-    # magenta band; the bottom stop is light enough to read on the
-    # dark background.
-    "voidline": (
-        "color(54)",  # #5f0087  deep purple
-        "color(91)",  # #8700af
-        "color(128)",  # #af00d7
-        "color(165)",  # #d700ff  magenta
-        "color(207)",  # #ff5fff
-        "color(219)",  # #ffafff  light pink
-    ),
-    # lattice — teal / mint, the user-approved reference palette.
+    # lattice — reference. Dark teal → pale mint through the cyan band.
     "lattice": (
         "color(23)",  # #005f5f  dark teal
-        "color(30)",
-        "color(37)",
-        "color(44)",
-        "color(50)",
+        "color(30)",  # #008787  teal-cyan
+        "color(37)",  # #00afaf  cyan
+        "color(44)",  # #00d7d7  bright cyan
+        "color(50)",  # #00ffd7  cyan-mint
         "color(122)",  # #87ffd7  pale mint
     ),
-    # solarized-light — Solarized accent blues. Light theme; the gradient
-    # stays in the deep-to-medium blue band so it pops on the cream bg.
-    "solarized-light": (
+    # carbon — deep navy → pale ice-blue. Walks the SAME blue band the
+    # carbon accent (#6fb8ff) sits in; no more grey-into-blue mixing.
+    "carbon": (
         "color(17)",  # #00005f  dark navy
+        "color(18)",  # #000087  navy
+        "color(19)",  # #0000af
+        "color(33)",  # #0087ff  azure
+        "color(75)",  # #5fafff  light azure (kin to $accent #6fb8ff)
+        "color(117)",  # #87d7ff  pale ice-blue
+    ),
+    # voidline — deep magenta → pale pink, electric-CRT identity. Lands
+    # close to $accent-hot #ff3df8 (the louder of voidline's twin
+    # accents — magenta carries the brand more than the cyan does).
+    "voidline": (
+        "color(53)",  # #5f005f  deep magenta
+        "color(90)",  # #870087
+        "color(127)",  # #af00af  bright magenta
+        "color(164)",  # #d700d7  pink-magenta
+        "color(206)",  # #ff5fd7  hot pink (kin to $accent-hot #ff3df8)
+        "color(219)",  # #ffafff  pale pink
+    ),
+    # solarized-light — Solarized blue family. LIGHT theme: stops stay
+    # in the saturated dark band so the gradient pops on the cream bg.
+    "solarized-light": (
+        "color(17)",  # #00005f  navy
         "color(18)",  # #000087
         "color(19)",  # #0000af
         "color(20)",  # #0000d7
-        "color(33)",  # #0087ff  azure (matches $accent #268bd2 family)
-        "color(67)",  # #5f87af  slate-blue
+        "color(26)",  # #005fd7  Solarized blue family
+        "color(32)",  # #0087d7  (kin to $accent #268bd2)
     ),
-    # github-light — Primer link-blue family. Light theme; dark stops for
-    # contrast against the white bg.
+    # github-light — Primer link-blue family. LIGHT theme; dark stops
+    # for contrast against the white bg.
     "github-light": (
-        "color(17)",  # #00005f
+        "color(17)",  # #00005f  navy
+        "color(18)",  # #000087
         "color(19)",  # #0000af
         "color(20)",  # #0000d7
-        "color(33)",  # #0087ff  GitHub link blue
-        "color(63)",  # #5f5fff
-        "color(99)",  # #875fff
+        "color(26)",  # #005fd7
+        "color(33)",  # #0087ff  GitHub link blue (kin to $accent #0969da)
     ),
-    # one-light — Atom One Light blue + purple. Light theme.
+    # one-light — Atom One Light's deep-blue family. LIGHT theme.
     "one-light": (
-        "color(53)",  # #5f005f  dark magenta
-        "color(54)",  # #5f0087
-        "color(56)",  # #5f00d7
-        "color(57)",  # #5f00ff
-        "color(63)",  # #5f5fff
-        "color(99)",  # #875fff
+        "color(17)",  # #00005f
+        "color(18)",  # #000087
+        "color(19)",  # #0000af
+        "color(20)",  # #0000d7
+        "color(27)",  # #005fff
+        "color(33)",  # #0087ff  (kin to $accent #4078f2)
     ),
-    # nord — Frost cyan family. Dark theme.
+    # nord — Frost cyan family. Walks the Frost band end-to-end.
     "nord": (
         "color(24)",  # #005f87  dark Frost
         "color(31)",  # #0087af
-        "color(37)",  # #00afaf
-        "color(74)",  # #5fafd7
-        "color(110)",  # #87afd7  (close to $accent #88c0d0)
-        "color(152)",  # #afd7d7  pale Frost
+        "color(38)",  # #00b7af  teal-cyan
+        "color(45)",  # #00d7ff  cyan
+        "color(74)",  # #5fafd7  Frost-blue
+        "color(110)",  # #87afd7  pale Frost (kin to $accent #88c0d0)
     ),
-    # dracula — purple → pink Aurora sweep.
+    # dracula — pure purple walk, Dracula's signature palette. Ends
+    # near $accent #bd93f9 instead of drifting into pink — leaves
+    # $accent-hot's pink as a footer-only accent rather than competing
+    # with the banner.
     "dracula": (
-        "color(53)",  # #5f005f  dark magenta
-        "color(91)",  # #8700af
-        "color(99)",  # #875fff  purple (close to $accent #bd93f9)
-        "color(141)",  # #af87ff
-        "color(170)",  # #d75fd7  magenta
-        "color(213)",  # #ff87ff  light pink (close to $accent-hot #ff79c6)
+        "color(54)",  # #5f0087  deep purple
+        "color(56)",  # #5f00d7  bright purple
+        "color(63)",  # #5f5fff  purple-blue
+        "color(99)",  # #875fff  purple
+        "color(141)",  # #af87ff  light purple (kin to $accent #bd93f9)
+        "color(183)",  # #d7afff  pale purple
     ),
-    # gruvbox-dark — Pavel Pertsev's mahogany → gold band, distinct from
-    # amber by sitting in the warmer red-brown to mustard family.
+    # gruvbox-dark — Gruvbox's forest-to-olive green walk. Distinct
+    # hue from amber's orange-gold (amber's identity owns the warm
+    # yellow band); green is Gruvbox's other signature accent and
+    # lands at olive-gold near $accent #fabd2f.
     "gruvbox-dark": (
-        "color(94)",  # #875f00  dark amber
-        "color(130)",  # #af5f00  rust
-        "color(166)",  # #d75f00  orange
-        "color(208)",  # #ff8700
-        "color(214)",  # #ffaf00  (close to $accent #fabd2f)
-        "color(222)",  # #ffd787  pale gold
+        "color(22)",  # #005f00  dark forest
+        "color(28)",  # #008700
+        "color(34)",  # #00af00  bright green
+        "color(70)",  # #5faf00  yellow-green
+        "color(106)",  # #87af00  olive
+        "color(142)",  # #afaf00  gold-olive (kin to $accent #fabd2f)
     ),
 }
 

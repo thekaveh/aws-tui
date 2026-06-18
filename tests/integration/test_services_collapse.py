@@ -15,7 +15,7 @@ from tests.integration.conftest import AppContextBuilder
 
 
 @pytest.mark.asyncio
-async def test_s_key_toggles_services_collapsed_state(
+async def test_m_key_toggles_services_collapsed_state(
     app_context_factory: AppContextBuilder,
 ) -> None:
     ctx = app_context_factory()
@@ -28,13 +28,13 @@ async def test_s_key_toggles_services_collapsed_state(
         # Services rail starts collapsed by default.
         assert menu.is_collapsed is True
 
-        await pilot.press("s")
+        await pilot.press("m")
         await pilot.pause()
-        assert menu.is_collapsed is False, "'s' didn't expand the services rail"
+        assert menu.is_collapsed is False, "'m' didn't expand the services rail"
 
-        await pilot.press("s")
+        await pilot.press("m")
         await pilot.pause()
-        assert menu.is_collapsed is True, "'s' didn't collapse the rail again"
+        assert menu.is_collapsed is True, "'m' didn't collapse the rail again"
 
 
 @pytest.mark.asyncio
@@ -52,7 +52,7 @@ async def test_title_shows_services_when_expanded(
         menu = app.query_one(ServicesMenu)
         title = menu.query_one(_ServicesMenuTitle, Static)
 
-        await pilot.press("s")
+        await pilot.press("m")
         await pilot.pause()
         assert menu.is_collapsed is False
         rendered = str(title.render())
