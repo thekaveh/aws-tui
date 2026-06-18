@@ -96,12 +96,20 @@ class TransferProgressMessage:
 
     Subscribers: :class:`TransferVM` (per-transfer detail),
     :class:`StatusBarVM` (aggregate counter).
+
+    ``source_label`` / ``destination_label`` are optional — included so
+    that the first message for a given transfer can carry enough info
+    for :class:`TransfersVM` to auto-register a usefully-labeled
+    placeholder. Subsequent progress messages for the same transfer
+    may omit them (the placeholder already has the labels).
     """
 
     transfer_id: str
     bytes_transferred: int
     bytes_total: int | None
     state: TransferState
+    source_label: str = ""
+    destination_label: str = ""
     sender_name: str = "transfers"
 
     @property

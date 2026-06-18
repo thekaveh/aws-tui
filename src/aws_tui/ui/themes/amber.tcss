@@ -76,7 +76,7 @@ ServicesMenu > .service-item {
 
 ServicesMenu > .service-item.-selected {
     color: $bg;
-    background: $accent;
+    background: $accent-hot;
     text-style: bold;
 }
 
@@ -248,8 +248,7 @@ ConfirmModal > Container > .modal-footer > ModalButton {
     background: $bg;
     color: $text;
     border: round $rule-dim;
-    width: auto;
-    min-width: 14;
+    width: 14;
     height: 3;
     padding: 0 2;
     content-align: center middle;
@@ -267,6 +266,21 @@ ConfirmModal > Container > .modal-footer > ModalButton.-primary {
 ConfirmModal > Container > .modal-footer > ModalButton.-primary:hover {
     background: $accent-soft;
     border: round $accent-soft;
+}
+ConfirmModal > Container > .modal-footer > ModalButton.-focused {
+    background: $bg-elev;
+    border: round $accent;
+    color: $accent;
+}
+ConfirmModal > Container > .modal-footer > ModalButton.-primary.-focused {
+    background: $accent;
+    color: $bg;
+    border: round $accent-hot;
+}
+ConfirmModal > Container > .modal-footer > ModalButton.-danger.-focused {
+    background: $danger;
+    color: $bg;
+    border: round $accent;
 }
 ConfirmModal > Container > .modal-footer > ModalButton.-danger {
     background: $danger;
@@ -295,7 +309,8 @@ ConfirmModal > Container > .modal-path-label {
     color: $accent;
     text-style: bold;
     height: 1;
-    padding: 1 1 0 1;
+    padding: 0 1;
+    margin: 1 0 0 0;
 }
 ConfirmModal > Container > .modal-path-value {
     color: $text;
@@ -418,4 +433,17 @@ TransferRowWidget ProgressBar > .bar--percentage {
     padding: 1 2;
     width: 100%;
     height: 100%;
+}
+
+
+/* ── Services hamburger (top-left toggle) ────────────────────────────── */
+ServicesHamburger {
+    background: $bg-elev;
+    color: $accent;
+    border-left: solid $accent-hot;
+    border-right: solid $accent-hot;
+}
+ServicesHamburger:hover {
+    background: $accent;
+    color: $bg;
 }

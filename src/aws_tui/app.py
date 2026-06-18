@@ -32,6 +32,7 @@ from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
+from aws_tui.ui.widgets.services_hamburger import ServicesHamburger
 from aws_tui.ui.widgets.services_menu import (
     ServicesMenu,
 )
@@ -94,7 +95,9 @@ class AwsTuiApp(App[None]):
         Binding("up,k", "move_up", "↑", show=True, priority=True),
         Binding("down,j", "move_down", "↓", show=True, priority=True),
         Binding("enter", "descend", "Open", show=True, priority=True),
-        Binding("backspace,left", "ascend", "Up", show=True, priority=True),
+        Binding("backspace", "ascend", "Up", show=True, priority=True),
+        Binding("left", "modal_left_or_ascend", "←", show=False, priority=True),
+        Binding("right", "modal_right", "→", show=False, priority=True),
         Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True),
         Binding("colon", "help", "Cmd", show=True, priority=True),
@@ -149,6 +152,7 @@ class AwsTuiApp(App[None]):
             yield ServicesMenu(ctx.root_vm.services_menu, hub=ctx.hub, id="services-menu")
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
+        yield ServicesHamburger(id="services-hamburger")
         yield ToastStack(ctx.root_vm.chrome.toast_stack, hub=ctx.hub, id="toast-stack")
         yield TransfersOverlay(ctx.transfers_vm, hub=ctx.hub, id="transfers-overlay")
 
@@ -321,8 +325,11 @@ class AwsTuiApp(App[None]):
         # treat Enter as confirm/apply (ConfirmModal.action_confirm,
         # ThemePickerModal.action_apply). Without this, App's
         # priority=True enter binding always wins and Enter never
-        # reaches the modal's handler.
-        if self._forward_to_modal("action_confirm", "action_apply"):
+        # reaches the modal's handler. ``commit_focused`` is the
+        # confirm-modal handler that commits whichever button has
+        # arrow-key focus — checked first so it wins over the plain
+        # ``confirm`` fallback.
+        if self._forward_to_modal("action_commit_focused", "action_confirm", "action_apply"):
             return
         dual = self._dual_pane()
         if dual is None:
@@ -343,7 +350,7 @@ class AwsTuiApp(App[None]):
             await pane.navigate_to(pane.path.join(target.entry.name))
 
     async def action_ascend(self) -> None:
-        # Forward Backspace/Left to the active modal as a cancel-by-key
+        # Forward Backspace to the active modal as a cancel-by-key
         # gesture (esc still works too).
         if self._forward_to_modal("action_cancel", "action_close", "action_dismiss"):
             return
@@ -354,6 +361,21 @@ class AwsTuiApp(App[None]):
         if pane is None or pane.path.is_root:
             return
         await pane.navigate_to(pane.path.parent())
+
+    async def action_modal_left_or_ascend(self) -> None:
+        # In a modal: Left moves arrow-key focus to the previous footer
+        # button (or whatever the modal exposes as ``action_focus_prev``).
+        # Outside any modal: behaves like ``ascend`` so file-pane
+        # navigation is unchanged.
+        if self._forward_to_modal("action_focus_prev"):
+            return
+        await self.action_ascend()
+
+    def action_modal_right(self) -> None:
+        # In a modal: Right moves arrow-key focus to the next footer
+        # button. Outside any modal: no-op (panes don't currently bind
+        # Right to anything).
+        self._forward_to_modal("action_focus_next")
 
     async def action_refresh(self) -> None:
         dual = self._dual_pane()
@@ -568,13 +590,22 @@ class AwsTuiApp(App[None]):
         self._extend_selection(1)
 
     def _extend_selection(self, delta: int) -> None:
-        """Shift+arrow handler: ensure the current entry is marked, then
-        move the cursor and ensure the new entry is marked too. Mirrors
-        how spreadsheets and file managers extend a multi-selection one
-        cell at a time. Uses ``mark_at(..., marked=True)`` (idempotent
-        set) rather than ``toggle_mark_at`` — toggle semantics break
-        when the user moves back over an already-marked row: row N
-        would lose its mark and "holes" appear mid-range."""
+        """Shift+arrow handler with extend/shrink semantics.
+
+        Direction is inferred from whether the *target* row is already
+        marked:
+
+        - Target NOT marked → **extend**. Mark the current row (so the
+          starting cell joins the range even on the first press) and
+          mark the target row, then move the cursor.
+        - Target IS marked → **shrink** (the user is reversing course
+          back into a previously-selected range). Unmark the row we
+          are leaving (current row), then move the cursor onto the
+          target without re-marking it.
+
+        Result: Shift+Down then Shift+Up over the same range cleanly
+        deselects rows the same way it selected them, instead of
+        leaving the selection sticky (the pre-existing bug)."""
         dual = self._dual_pane()
         if dual is None:
             return
@@ -583,17 +614,24 @@ class AwsTuiApp(App[None]):
             return
         cur = pane.cursor_index
         target = cur + delta
-        # mark_at also enters multiselect mode + republishes the
-        # viewmodel so the footer recomputes immediately.
+        entries = pane.filtered_entries
+        if not (0 <= target < len(entries)):
+            return
         mark = getattr(pane, "mark_at", None)
-        if mark is not None:
+        if mark is None:
+            return
+        target_marked = entries[target].is_marked
+        if target_marked:
+            # Shrink: drop the row we're leaving.
+            mark(cur, marked=False)
+        else:
+            # Extend: mark both the origin (so the very first Shift+Arrow
+            # captures the starting row) and the target.
             mark(cur, marked=True)
+            mark(target, marked=True)
         move = getattr(pane, "move_cursor_command", None)
         if move is not None:
             move.execute(delta)
-        # Extend the selection to the row we just moved to.
-        if mark is not None and 0 <= target < len(pane.filtered_entries):
-            mark(target, marked=True)
 
     async def action_swap_source(self) -> None:
         """Swap the focused pane between S3 and local provider so the

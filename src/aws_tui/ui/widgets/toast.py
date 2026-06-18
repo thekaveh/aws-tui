@@ -84,7 +84,7 @@ class ToastStack(Widget):
         align: right top;
     }
     ToastStack > #toast-stack-inner {
-        width: auto;
+        width: 100%;
         height: auto;
     }
     """

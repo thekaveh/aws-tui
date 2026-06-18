@@ -196,8 +196,8 @@ class TransfersVM:
             placeholder = TransferModel(
                 id=msg.transfer_id,
                 direction="local-copy",
-                source_label="",
-                destination_label="",
+                source_label=msg.source_label,
+                destination_label=msg.destination_label,
                 bytes_done=msg.bytes_transferred,
                 bytes_total=msg.bytes_total,
                 state=new_state,

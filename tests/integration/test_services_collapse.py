@@ -1,5 +1,7 @@
-"""Regression: pressing 's' OR clicking the +/- title toggles the
-services rail's collapsed state, and the title glyph reflects state."""
+"""Regression: pressing 's', clicking the floating hamburger, or clicking
+the inline title (when expanded) all toggle the services rail. The rail
+is fully hidden (display:none, width:0) when collapsed; expanded it
+shows the '≡ services' title."""
 
 from __future__ import annotations
 
@@ -7,6 +9,7 @@ import pytest
 from textual.widgets import Static
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.ui.widgets.services_hamburger import ServicesHamburger
 from aws_tui.ui.widgets.services_menu import ServicesMenu, _ServicesMenuTitle
 from tests.integration.conftest import AppContextBuilder
 
@@ -35,10 +38,11 @@ async def test_s_key_toggles_services_collapsed_state(
 
 
 @pytest.mark.asyncio
-async def test_title_glyph_reflects_collapsed_state(
+async def test_title_shows_services_when_expanded(
     app_context_factory: AppContextBuilder,
 ) -> None:
-    """The +/- glyph in the title row must update when the rail toggles."""
+    """The inline title becomes visible only when the rail is expanded
+    and shows the hamburger glyph + the word 'services'."""
     ctx = app_context_factory()
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -47,23 +51,21 @@ async def test_title_glyph_reflects_collapsed_state(
 
         menu = app.query_one(ServicesMenu)
         title = menu.query_one(_ServicesMenuTitle, Static)
-
-        assert menu.is_collapsed is True
-        assert str(title.render()) == "+", "collapsed rail must show '+'"
 
         await pilot.press("s")
         await pilot.pause()
         assert menu.is_collapsed is False
-        assert "services" in str(title.render())
-        assert str(title.render()).startswith("-"), "expanded rail must show '- services'"
+        rendered = str(title.render())
+        assert "services" in rendered
+        assert rendered.startswith("≡"), "expanded title must lead with the hamburger glyph"
 
 
 @pytest.mark.asyncio
-async def test_clicking_the_title_toggles_the_rail(
+async def test_clicking_the_hamburger_toggles_the_rail(
     app_context_factory: AppContextBuilder,
 ) -> None:
-    """Clicking the +/- title row toggles collapsed state — discoverable
-    affordance alongside the 's' shortcut."""
+    """The floating top-left ServicesHamburger is the always-visible
+    affordance for opening (and closing) the rail."""
     ctx = app_context_factory()
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -71,13 +73,13 @@ async def test_clicking_the_title_toggles_the_rail(
         await pilot.pause()
 
         menu = app.query_one(ServicesMenu)
-        title = menu.query_one(_ServicesMenuTitle, Static)
+        hamburger = app.query_one(ServicesHamburger)
 
         assert menu.is_collapsed is True
-        await pilot.click(title)
+        await pilot.click(hamburger)
         await pilot.pause()
-        assert menu.is_collapsed is False, "clicking '+' didn't expand the rail"
+        assert menu.is_collapsed is False, "clicking the hamburger didn't expand the rail"
 
-        await pilot.click(title)
+        await pilot.click(hamburger)
         await pilot.pause()
-        assert menu.is_collapsed is True, "clicking '-' didn't collapse the rail"
+        assert menu.is_collapsed is True, "clicking the hamburger didn't collapse the rail"

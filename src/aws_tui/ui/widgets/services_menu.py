@@ -44,7 +44,11 @@ class ServiceItemView(Widget):
         return self._item_vm
 
     def render(self) -> Text:
-        prefix = "> " if self._item_vm.is_selected else "  "
+        # ``▌`` is the same heavy-left-bar prefix the file pane uses on
+        # the selected entry row — keeps the visual language consistent.
+        # No inline color: the row's ``.-selected`` CSS class drives the
+        # tint so theme swaps repaint the bar too.
+        prefix = "▌ " if self._item_vm.is_selected else "  "
         # When the parent ServicesMenu is collapsed we show only the
         # icon glyph (or the first letter of the label as a fallback)
         # so the rail stays narrow. The parent toggles its CSS class
@@ -72,11 +76,11 @@ class ServiceItemView(Widget):
 
 
 class _ServicesMenuTitle(Static):
-    """Clickable title for ServicesMenu — shows '+' when the rail is
-    collapsed (an affordance: 'click to expand') and '- services' when
-    expanded. Has its own ``on_click`` so the click is reliably handled
-    on the title row regardless of what bubbling does for the rail
-    below."""
+    """Title row inside ServicesMenu, visible only when the rail is
+    expanded. The collapsed-state affordance lives elsewhere now —
+    :class:`ServicesHamburger` floats at the top-left of the screen
+    and is what the user clicks to *open* the rail. Clicking this
+    title (with the rail open) collapses it again."""
 
     DEFAULT_CSS = """
     _ServicesMenuTitle {
@@ -88,9 +92,9 @@ class _ServicesMenuTitle(Static):
         super().__init__(classes="title", **kwargs)  # type: ignore[arg-type]
 
     def render_label(self, *, collapsed: bool) -> str:
-        # The '+' / '-' glyph IS the affordance — visible in both modes,
-        # so the user discovers that the rail is clickable.
-        return "+" if collapsed else "- services"
+        # The hamburger glyph mirrors the floating ServicesHamburger so
+        # the connection between the two affordances is visually clear.
+        return "≡" if collapsed else "≡ services"
 
     def update_for_state(self, *, collapsed: bool) -> None:
         self.update(self.render_label(collapsed=collapsed))
@@ -117,16 +121,12 @@ class ServicesMenu(HubSubscriberMixin, Widget):
 
     DEFAULT_CSS = """
     ServicesMenu {
-        width: 3;
-    }
-    ServicesMenu > #services-list {
         display: none;
+        width: 0;
     }
     ServicesMenu.-expanded {
-        width: 16;
-    }
-    ServicesMenu.-expanded > #services-list {
         display: block;
+        width: 16;
     }
     """
 

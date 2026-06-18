@@ -97,6 +97,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Confirm modal: From / To / Target labels were invisible.** The
+  rule `height: 1; padding: 1 1 0 1;` left zero content rows. Fixed
+  to `height: 1; padding: 0 1; margin-top: 1` so each label renders
+  on its own row above the bordered path block.
+- **Confirm modal: Cancel and Confirm buttons were different widths
+  and text was clipped.** Buttons now use a fixed `width: 14` (in
+  both `ModalButton` DEFAULT_CSS and every theme override) and the
+  text no longer gets manual `"  Label  "` padding spaces — the CSS
+  `content-align: center middle` handles centering. Identical
+  rectangles, no spill.
+- **Confirm modal: no arrow-key navigation between footer buttons.**
+  `Left` / `Right` (and `Shift+Tab` / `Tab`) now swap the focused
+  button; the focused side gets a `-focused` class that themes paint
+  with the louder accent. `Enter` commits whichever side has focus
+  (`action_commit_focused`). Default focus = Confirm for normal
+  modals, Cancel for danger modals (so a reflex Enter on a delete
+  doesn't nuke data).
+- **Theme-change toast rendered as a blank horizontal line with no
+  text.** `ToastStack` was fixed-width 50 but the inner `Vertical`
+  was `width: auto`; child `Toast` widgets asked for `width: 100%`
+  of an auto parent → the resolver collapsed everything to 0. Inner
+  Vertical is now `width: 100%`, so toasts fill the 50-col stack and
+  the "Theme: voidline" text is visible again.
+- **Transfer overlay showed `?  →  ?` for source and destination.**
+  `TransferProgressMessage` didn't carry the source / destination
+  URIs, so `TransfersVM._on_message` auto-registered placeholders
+  with empty labels. Added optional `source_label` /
+  `destination_label` fields to the message and seeded a `PENDING`
+  message at the start of `copy_across` / `move_across` so the
+  placeholder gets meaningful labels from the very first sighting.
+- **Services rail did not actually collapse the column — only the
+  list inside.** Reworked the affordance: a new `ServicesHamburger`
+  floats at the top-left on the `notifications` layer (always
+  clickable), the rail itself is now `display: none; width: 0;` in
+  the collapsed state. Clicking the hamburger or pressing `s`
+  toggles it. Expanded width unchanged (16).
+- **Services list selection used the muted accent without a side
+  bar.** Selected row now uses `background: $accent-hot; color: $bg;
+  text-style: bold;` across all themes and renders with the same
+  heavy `▌` left-bar prefix the file pane uses for its cursor row,
+  so the visual language is consistent.
+- **Shift+Arrow deselection didn't work** — extending forward marked
+  rows, but reversing course did not unmark them. `_extend_selection`
+  now infers direction from whether the *target* row is already
+  marked: target marked → shrink (unmark the row we're leaving),
+  target unmarked → extend (mark current + target). Walking back
+  through a previously-selected range now cleanly deselects.
 - **Confirm-modal "Confirm" / "Delete" button was invisible after the
   PR-25 `ModalButton` extraction.** The widget class was renamed from
   the private `_ModalButton` to the public `ModalButton`, but every
