@@ -42,8 +42,10 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
   transfer with src → dst label, progress bar, and cancel button.
   Finished entries linger briefly then disappear so newer transfers
   take their place.
-- **Four built-in themes.** Carbon (default), Voidline (neon),
-  Lattice (mint), Amber CRT (retro). Each theme drives a matching
+- **Ten built-in themes.** Four dark originals — Carbon (default),
+  Voidline (neon), Lattice (mint), Amber CRT (retro) — plus three
+  light themes (Solarized Light, GitHub Light, One Light) and three
+  popular community palettes (Nord, Dracula, Gruvbox Dark). Each drives a matching
   banner gradient at launch and on every `T` cycle. User overrides
   via `~/.config/aws-tui/theme.tcss` or full `.tcss` themes under
   `~/.config/aws-tui/themes/`.
@@ -58,7 +60,7 @@ Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
   `theme switch <name>`.
 - **Strict layered architecture.** View ▸ ViewModel ▸ Service ▸ Domain
   ▸ Infra; enforced by `ruff` import rules + `scripts/check-layers.sh`.
-  Mypy strict-clean. 522 default-tier tests (unit / in-process
+  Mypy strict-clean. 580 default-tier tests (unit / in-process
   integration / snapshot / e2e), plus 9 opt-in MinIO integration tests
   (`uv run pytest -m integration`).
 

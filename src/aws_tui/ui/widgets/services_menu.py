@@ -71,13 +71,48 @@ class ServiceItemView(Widget):
         self.refresh()
 
 
+class _ServicesMenuTitle(Static):
+    """Clickable title for ServicesMenu — shows '+' when the rail is
+    collapsed (an affordance: 'click to expand') and '- services' when
+    expanded. Has its own ``on_click`` so the click is reliably handled
+    on the title row regardless of what bubbling does for the rail
+    below."""
+
+    DEFAULT_CSS = """
+    _ServicesMenuTitle {
+        height: 1;
+    }
+    """
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(classes="title", **kwargs)  # type: ignore[arg-type]
+
+    def render_label(self, *, collapsed: bool) -> str:
+        # The '+' / '-' glyph IS the affordance — visible in both modes,
+        # so the user discovers that the rail is clickable.
+        return "+" if collapsed else "- services"
+
+    def update_for_state(self, *, collapsed: bool) -> None:
+        self.update(self.render_label(collapsed=collapsed))
+
+    def on_click(self, event: object) -> None:
+        parent = self.parent
+        while parent is not None and not isinstance(parent, ServicesMenu):
+            parent = getattr(parent, "parent", None)
+        if isinstance(parent, ServicesMenu):
+            parent.toggle_collapsed()
+            stop = getattr(event, "stop", None)
+            if callable(stop):
+                stop()
+
+
 class ServicesMenu(HubSubscriberMixin, Widget):
     """Left-rail service-picker widget.
 
     Collapsible. Starts collapsed so the dual-pane area gets all the
-    horizontal space by default; press the configured toggle key (or
-    call :meth:`toggle_collapsed`) to expand into the full-width label
-    mode.
+    horizontal space by default; press the configured toggle key, click
+    the +/- glyph in the title row, or click the rail's empty area to
+    toggle.
     """
 
     DEFAULT_CSS = """
@@ -115,6 +150,9 @@ class ServicesMenu(HubSubscriberMixin, Widget):
             self.remove_class("-expanded")
         else:
             self.add_class("-expanded")
+        # Repaint the title glyph and re-render items so labels switch
+        # between icon-only and full-label.
+        self._refresh_title()
         self._refresh_selections()
 
     @property
@@ -122,7 +160,9 @@ class ServicesMenu(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        yield Static("services", classes="title")
+        title = _ServicesMenuTitle()
+        title.update_for_state(collapsed=self._collapsed)
+        yield title
         yield Vertical(id="services-list")
 
     def on_mount(self) -> None:
@@ -148,16 +188,11 @@ class ServicesMenu(HubSubscriberMixin, Widget):
             self._collection_sub = None
 
     def on_click(self, _event: object) -> None:
-        """Clicking the rail (anywhere not on a service item) toggles
-        collapsed/expanded so the user doesn't have to remember the
-        ``s`` shortcut. ServiceItemView click handling runs first via
-        event bubbling, so the rail toggle only fires when the click
-        lands on the rail's empty area."""
-        # Only toggle when the click is on the rail itself, not bubbled
-        # up from a service item. Textual delivers events to the
-        # bottom-most widget first; if it wasn't consumed there, the
-        # parent gets it. By the time we arrive here, no child handled
-        # it — safe to toggle.
+        """Clicking the rail's empty area toggles collapsed/expanded so
+        the user doesn't have to remember the ``s`` shortcut or click
+        the title's +/- glyph. The title widget has its own on_click
+        that fires first; this handler only catches clicks elsewhere on
+        the rail (or bubbled clicks from non-interactive areas)."""
         self.toggle_collapsed()
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -186,6 +221,13 @@ class ServicesMenu(HubSubscriberMixin, Widget):
     def _refresh_selections(self) -> None:
         for view in self.query(ServiceItemView):
             view.update_state()
+
+    def _refresh_title(self) -> None:
+        try:
+            title = self.query_one(_ServicesMenuTitle)
+        except Exception:
+            return
+        title.update_for_state(collapsed=self._collapsed)
 
 
 __all__ = ["ServiceItemView", "ServicesMenu"]

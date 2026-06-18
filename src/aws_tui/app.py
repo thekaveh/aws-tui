@@ -564,9 +564,13 @@ class AwsTuiApp(App[None]):
         self._extend_selection(1)
 
     def _extend_selection(self, delta: int) -> None:
-        """Shift+arrow handler: mark the current entry then move the
-        cursor in the given direction. Mirrors how spreadsheets and
-        file managers extend a multi-selection one cell at a time."""
+        """Shift+arrow handler: ensure the current entry is marked, then
+        move the cursor and ensure the new entry is marked too. Mirrors
+        how spreadsheets and file managers extend a multi-selection one
+        cell at a time. Uses ``mark_at(..., marked=True)`` (idempotent
+        set) rather than ``toggle_mark_at`` — toggle semantics break
+        when the user moves back over an already-marked row: row N
+        would lose its mark and "holes" appear mid-range."""
         dual = self._dual_pane()
         if dual is None:
             return
@@ -575,20 +579,17 @@ class AwsTuiApp(App[None]):
             return
         cur = pane.cursor_index
         target = cur + delta
-        # toggle_mark_at also enters multiselect mode + republishes
-        # the viewmodel so the footer recomputes immediately.
-        toggle = getattr(pane, "toggle_mark_at", None)
-        if toggle is not None:
-            toggle(cur)
+        # mark_at also enters multiselect mode + republishes the
+        # viewmodel so the footer recomputes immediately.
+        mark = getattr(pane, "mark_at", None)
+        if mark is not None:
+            mark(cur, marked=True)
         move = getattr(pane, "move_cursor_command", None)
         if move is not None:
             move.execute(delta)
-        # If the new cursor position is on a row that hasn't been
-        # marked yet, mark it too so the selection grows contiguously.
-        if toggle is not None and 0 <= target < len(pane.filtered_entries):
-            new_entry = pane.filtered_entries[target]
-            if not new_entry.is_marked:
-                toggle(target)
+        # Extend the selection to the row we just moved to.
+        if mark is not None and 0 <= target < len(pane.filtered_entries):
+            mark(target, marked=True)
 
     async def action_swap_source(self) -> None:
         """Swap the focused pane between S3 and local provider so the

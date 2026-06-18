@@ -149,9 +149,6 @@ aws-tui/
 ├── .gitignore  .gitattributes  .editorconfig
 ├── .pre-commit-config.yaml         # ruff, mypy, taplo, end-of-file-fixer
 │
-├── vendor/                         # historical — emptied by the 2026-06-17 vmx→PyPI migration
-│   └── vmx/                        # git submodule → github.com/thekaveh/VMx
-│
 ├── docs/
 │   ├── architecture.md             # human-readable mirror of §2
 │   ├── keybindings.md              # default keymap + customization
@@ -235,7 +232,7 @@ aws-tui/
 │       └── snapshots/<theme>/      # pytest-textual-snapshot goldens
 │
 ├── scripts/
-│   ├── bootstrap.sh                # uv sync + submodule init
+│   ├── bootstrap.sh                # uv sync + pre-commit install
 │   └── dev.sh                      # textual run --dev src/aws_tui/app.py
 │
 ├── pyproject.toml                  # PEP 621 + hatchling, src-layout, py>=3.11
@@ -909,7 +906,7 @@ def test_pane_vm_satisfies_capability(contract, pane_vm_factory):
     contract.run(pane_vm_factory)
 ```
 
-If a VMx upgrade tightens `ISelectable` and we missed something, CI fails after the submodule bump.
+If a VMx upgrade tightens `ISelectable` and we missed something, CI fails after the PyPI version bump.
 
 ### 8.7 aws-tui-specific lifecycle suite
 
@@ -984,14 +981,14 @@ We do not enforce 100% — chasing the last 10% encourages tests that exercise l
 | `nix profile install` | community contribution welcome | not us |
 | Standalone binaries (PyInstaller / Briefcase) | rejected | bundling Textual breaks `.tcss` overrides, +30 MB |
 
-### 9.3 PyPI blocker
+### 9.3 PyPI release path
 
-`vmx` is currently a path-installed submodule. PyPI wheels can't reference path deps, so we **wait for VMx PyPI publication** before our own PyPI release. Until then, `pipx install git+...` is the recommended install. The README install command swaps in one line when ready.
+VMx now ships on PyPI (consumed as `vmx>=2.6.0,<3.0.0` — see the 2026-06-17 migration plan). aws-tui's own first PyPI release is the remaining gate; until that lands, `pipx install git+...` is the recommended install. The README install command swaps in one line when ready.
 
 ### 9.4 Versioning
 
 - **SemVer.** `0.x` = pre-stable; `1.0` = PyPI release + API stability on commands & config schema.
-- **Pinned VMx submodule commit** in `.gitmodules` for reproducible builds. Submodule updates are explicit PRs that bump the pin + run the VMx conformance suite.
+- **VMx PyPI pin** lives in `pyproject.toml` `[project].dependencies`. Bumps are explicit PRs that adjust the version range and run the existing test suite (no separate "conformance suite" PR — the published VMx wheel is the contract).
 - **Changelog** auto-generated from conventional commits via `git-cliff`. CI fails on PRs into `main` if a commit message doesn't match `<type>(<scope>): <subject>`.
 
 ### 9.5 CI workflows (release-side; test matrix in §8.9)
@@ -1058,7 +1055,7 @@ This is M0 below.
 | v0.2 | Second AWS service | EC2 or IAM via the plugin spine — proves the extension story |
 | v0.3 | Preview upgrades | Syntax-highlit Quick Look, hexview for binary |
 | v0.4 | Session restore | Preserve pane paths + selected entries across launches |
-| v1.0 | PyPI release | When VMx publishes; swap submodule → PyPI pin; SemVer stability on CLI + config schema |
+| v1.0 | PyPI release | aws-tui's own first PyPI publish (VMx PyPI gate lifted 2026-06-17); SemVer stability on CLI + config schema |
 | v1.1 | Plugin discovery | `aws_tui.services` entry-point group — 3rd-party packages add services |
 | v1.2 | Homebrew tap | `brew install thekaveh/tap/aws-tui` |
 | v1.3 | Multi-region browsing | Region switch inside a connection |

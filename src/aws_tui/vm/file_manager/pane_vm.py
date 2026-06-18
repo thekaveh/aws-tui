@@ -508,6 +508,23 @@ class PaneVM:
         entry_vm.toggle_mark()
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
 
+    def mark_at(self, target_index: int, *, marked: bool = True) -> None:
+        """Set the marked flag on the entry at ``target_index`` to a
+        specific value (idempotent — re-marking an already-marked entry
+        is a no-op). Used by shift+arrow extend-selection where toggle
+        semantics produce the wrong result: walking back through an
+        already-marked row would un-mark it, leaving "holes" mid-range.
+        """
+        if not (0 <= target_index < len(self._filtered)):
+            return
+        entry_vm = self._entries[self._filtered[target_index]]
+        if entry_vm.is_marked == marked:
+            return
+        if marked and not self._is_multiselect_mode:
+            self._set_multiselect(True)
+        entry_vm.set_marked(marked)
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+
     def move_cursor_to(self, target_index: int) -> None:
         """Place the cursor directly at ``target_index`` (clamped). Used by
         view-side input adapters that translate a click coordinate into a

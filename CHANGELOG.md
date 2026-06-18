@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dark teal/pale mint). Banner subscribes to a hub
   `ThemeChangedMessage` so the palette repaints in lockstep with every
   theme swap.
+- **Six new built-in themes** — three light themes (Solarized Light,
+  GitHub Light, One Light) and three popular community palettes
+  (Nord, Dracula, Gruvbox Dark). Cycle order (`Shift+T`) is now
+  carbon → voidline → lattice → amber → solarized-light →
+  github-light → one-light → nord → dracula → gruvbox-dark. All
+  follow the structural template lattice + amber set: matching
+  border / radius style, `$accent` / `$accent-hot` semantics, and a
+  per-theme 6-stop banner gradient picked from the 256-color cube to
+  track the theme's signature color family.
+- **`+` / `-` toggle glyph in the services-menu title.** Click the
+  glyph (or anywhere on the rail) to toggle the rail's collapsed
+  state — discoverable affordance alongside the existing `s` key.
 - **Live path in the pane border title** — left pane shows
   `s3://my-bucket/folder/`, right pane shows `/Users/.../path`. Identity
   (`kind · profile · region`) moved to the bottom border subtitle so it

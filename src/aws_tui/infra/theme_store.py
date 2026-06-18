@@ -33,7 +33,21 @@ def _default_user_overlay() -> Path:
 class ThemeStore:
     """Layered theme loader for Textual ``.tcss`` content."""
 
-    BUILTIN_NAMES: ClassVar[tuple[str, ...]] = ("carbon", "voidline", "lattice", "amber")
+    BUILTIN_NAMES: ClassVar[tuple[str, ...]] = (
+        # Original four (dark themes).
+        "carbon",
+        "voidline",
+        "lattice",
+        "amber",
+        # Three light themes.
+        "solarized-light",
+        "github-light",
+        "one-light",
+        # Three additional dark themes.
+        "nord",
+        "dracula",
+        "gruvbox-dark",
+    )
 
     def __init__(
         self,
