@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dark teal/pale mint). Banner subscribes to a hub
   `ThemeChangedMessage` so the palette repaints in lockstep with every
   theme swap.
+- **Dev `test-services/` harness for local AWS-compatible backends.**
+  `scripts/test-services/s3/` ships a MinIO Docker Compose +
+  `seed.py` that pre-populates 5 buckets (~90 objects) with a
+  realistic mix: nested folder trees, unicode / long / spaced
+  filenames, small files + an 8MB+ file that exercises the
+  multipart-upload path. `up.sh` brings it up + seeds idempotently;
+  `down.sh` stops (or `--purge` wipes). The directory layout is
+  designed for extension — sibling subdirs (`ec2/`, `iam/`, …) can
+  drop in their own docker-compose + seed using LocalStack as the
+  backend for non-S3 services. See `scripts/test-services/README.md`.
 - **Six new built-in themes** — three light themes (Solarized Light,
   GitHub Light, One Light) and three popular community palettes
   (Nord, Dracula, Gruvbox Dark). Cycle order (`Shift+T`) is now
