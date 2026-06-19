@@ -173,4 +173,5 @@ spec'd but not yet wired.
 ## 7. Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). License:
-[MIT](LICENSE). Security: see [SECURITY.md](SECURITY.md).
+[Apache License 2.0](LICENSE) (with [NOTICE](NOTICE)). Security:
+see [SECURITY.md](SECURITY.md).

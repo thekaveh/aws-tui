@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Relicensed from MIT to Apache License 2.0.** ``LICENSE`` now
+  carries the canonical Apache 2.0 text and is paired with a new
+  ``NOTICE`` file (Apache convention for attribution). ``pyproject.toml``
+  classifier and ``license`` field, the banner widget's pedigree
+  subtitle (which renders bottom-right of the brand banner border
+  inside the running app), and the README footer all updated.
+  Historical changelog entries that refer to the prior MIT licence
+  are deliberately preserved — they're records of project state at
+  that point in time, not active declarations.
+
 ### Added
 
 - **Cross-platform support — runs on macOS, Linux, and Windows.**
