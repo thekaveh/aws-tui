@@ -572,6 +572,7 @@ class AwsTuiApp(App[None]):
             themes=ctx.theme_store.BUILTIN_NAMES,
             active_theme=ctx.initial_theme,
             on_pick=self.switch_theme,
+            on_preview=self.switch_theme,
             hub=ctx.hub,
             dispatcher=ctx.dispatcher,
         )
@@ -713,6 +714,7 @@ class AwsTuiApp(App[None]):
             themes=ctx.theme_store.BUILTIN_NAMES,
             active_theme=ctx.initial_theme,
             on_pick=_pick_with_toast,
+            on_preview=self.switch_theme,
             hub=ctx.hub,
             dispatcher=ctx.dispatcher,
         )
