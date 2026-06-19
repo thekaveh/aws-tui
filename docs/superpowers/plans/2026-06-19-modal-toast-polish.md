@@ -1248,6 +1248,146 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
+## Task 6.5: `TransfersVM.register_vm` for pre-built TransferVMs
+
+**Files:**
+- Modify: `src/aws_tui/vm/file_manager/transfers_vm.py` (add `register_vm` public method)
+- Modify: `tests/unit/vm/file_manager/test_transfers.py` (one new unit test)
+
+**Interfaces:**
+- Consumes: existing `TransfersVM._find`, `_transfers`, `_inner`, `_hub` instance state; `TransferVM.id` property.
+- Produces: `TransfersVM.register_vm(vm: TransferVM) -> TransferVM` — accepts a pre-constructed TransferVM (e.g. one built with an injected fake clock), registers it in the composite, and emits `transfers` PropertyChanged. Idempotent on transfer-id collision (returns the existing VM, same shape as `register(model)`). The existing `register(model)` semantics stay unchanged — under the hood it now delegates to `register_vm` after constructing a default-clock TransferVM.
+
+**Why:** Task 7's snapshot harness needs to populate `TransferVM._speed_window` deterministically (the speed/eta meta row depends on it). `register(model)` builds its own TransferVM with `time.monotonic`, discarding any pre-built fake-clock VM. `register_vm` exposes the lower-level primitive without touching production callers.
+
+- [ ] **Step 1: Write the failing test**
+
+Open `tests/unit/vm/file_manager/test_transfers.py`. Add this test at the end of the file:
+
+```python
+def test_transfers_register_vm_accepts_prebuilt_transfer_vm() -> None:
+    """register_vm(vm) lets a caller (notably the snapshot harness)
+    construct a TransferVM with a custom clock and register it directly,
+    bypassing register(model) which builds its own production-clock VM.
+    """
+    hub = _hub()
+    tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    tvms.construct()
+    # Pre-build a TransferVM with a fake clock; populate the speed window.
+    ticks = iter([0.0, 1.0])
+    vm = TransferVM(
+        _model(id="custom", state=TransferState.RUNNING, bytes_done=0, bytes_total=1_000_000),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        clock=lambda: next(ticks),
+    )
+    vm.construct()
+    vm.apply_update(bytes_done=0, bytes_total=1_000_000, state=TransferState.RUNNING)
+    vm.apply_update(bytes_done=500_000, bytes_total=1_000_000, state=TransferState.RUNNING)
+
+    returned = tvms.register_vm(vm)
+    assert returned is vm  # identity preserved
+    assert any(t.id == "custom" for t in tvms.transfers)
+    # Speed survived because the pre-built VM kept its clock + samples.
+    assert returned.current_speed == 500_000.0
+
+    # Idempotent on id collision — re-registering returns the same VM, doesn't dupe.
+    duplicate = TransferVM(
+        _model(id="custom", state=TransferState.RUNNING),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    duplicate.construct()
+    assert tvms.register_vm(duplicate) is vm  # original wins
+    assert sum(1 for t in tvms.transfers if t.id == "custom") == 1
+    tvms.dispose()
+```
+
+- [ ] **Step 2: Run it — should fail**
+
+```bash
+uv run pytest tests/unit/vm/file_manager/test_transfers.py::test_transfers_register_vm_accepts_prebuilt_transfer_vm -v
+```
+
+Expected: FAIL — `TransfersVM` has no `register_vm` attribute.
+
+- [ ] **Step 3: Implement `register_vm` and refactor `register` to delegate**
+
+In `src/aws_tui/vm/file_manager/transfers_vm.py`, find the existing `register` method (around line 136-147). Replace it with these two methods:
+
+```python
+    def register(self, model: TransferModel) -> TransferVM:
+        """Add a new transfer from a model; the caller-driven path."""
+        existing = self._find(model.id)
+        if existing is not None:
+            return existing
+        vm = TransferVM(model, hub=self._hub, dispatcher=self._dispatcher)
+        return self.register_vm(vm)
+
+    def register_vm(self, vm: TransferVM) -> TransferVM:
+        """Register a pre-constructed :class:`TransferVM`.
+
+        Lower-level primitive ``register(model)`` delegates to. Tests and
+        snapshot harnesses use this directly to inject a TransferVM built
+        with a custom clock (so ``current_speed`` / ``current_eta`` render
+        deterministically). Idempotent on transfer-id collision — returns
+        the existing VM and does NOT dispose the passed-in one (caller
+        owns it in that case).
+        """
+        existing = self._find(vm.id)
+        if existing is not None:
+            return existing
+        self._transfers.append(vm)
+        if self._inner.is_constructed:
+            vm.construct()
+        self._inner.append(vm.inner)
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
+        return vm
+```
+
+(Net: `register` becomes 5 lines; the previous body moved into `register_vm` verbatim except for the `TransferVM(model, ...)` line which is now in `register`.)
+
+- [ ] **Step 4: Re-run the test — should pass**
+
+```bash
+uv run pytest tests/unit/vm/file_manager/test_transfers.py -v
+```
+
+Expected: all transfers-VM tests pass, including the new one.
+
+- [ ] **Step 5: Full gate (no snapshot or theme change in this task)**
+
+```bash
+uv run ruff check src tests && uv run ruff format --check src tests && uv run mypy src && uv run pytest --tb=short -q && bash scripts/check-layers.sh && uv run pre-commit run --all-files
+```
+
+Expected: 632 + 1 = `633 passed` (the +1 is the new test_register_vm; the +6 from Task 6 + +3 from Task 4 + +10 from Task 3 already in the baseline = 613 + 19 = 632 before this task).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/aws_tui/vm/file_manager/transfers_vm.py tests/unit/vm/file_manager/test_transfers.py
+git commit -m "feat(vm): TransfersVM.register_vm for pre-built TransferVM injection
+
+register(model) constructs its own TransferVM with time.monotonic,
+which silently discards any pre-built VM a caller may have prepared
+with a custom clock. The snapshot harness for the upcoming
+TransfersOverlay redesign needs deterministic speed/eta values that
+depend on TransferVM._speed_window being populated under a fake
+clock.
+
+Added TransfersVM.register_vm(vm: TransferVM) -> TransferVM as the
+lower-level primitive. register(model) now delegates to it after
+constructing a default-clock VM, so existing callers are unaffected.
+
+Idempotent on transfer-id collision (returns the existing VM, does
+not dispose the passed-in one — caller owns it in that case).
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
+```
+
+---
+
 ## Task 7: TransfersOverlay card redesign (custom bar, meta row, themed)
 
 **Files:**
@@ -1258,7 +1398,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 - Modify: `src/aws_tui/vm/chrome/resume_vm.py` exports — re-export `humanize_bytes` if not already public (verify)
 
 **Interfaces:**
-- Consumes: `TransferVM.current_speed`, `TransferVM.current_eta` (added in Task 6), `TransferVM.model` (existing), `humanize_bytes` from `vm/chrome/resume_vm.py` (existing — verify it's in `__all__`).
+- Consumes: `TransferVM.current_speed`, `TransferVM.current_eta` (added in Task 6), `TransferVM.model` (existing), `humanize_bytes` from `vm/chrome/resume_vm.py` (existing — verify it's in `__all__`), `TransfersVM.register_vm` (added in Task 6.5).
 - Produces: redesigned overlay rows; 10 new snapshot goldens.
 
 - [ ] **Step 1: Verify `humanize_bytes` is importable**
@@ -1751,13 +1891,15 @@ class TransfersSnapshotApp(App[None]):
         )
         # First sample at t=0 with bytes_done=700_000; second sample at t=1.0
         # with bytes_done=1_240_000. The second apply_update IS the visible
-        # state in the snapshot.
+        # state in the snapshot. Use register_vm (Task 6.5) so the fake-clock
+        # samples survive — register(model) would discard this VM and build
+        # its own with time.monotonic.
         running.construct()
         running.apply_update(bytes_done=700_000, bytes_total=2_000_000,
                              state=TransferState.RUNNING)
         running.apply_update(bytes_done=1_240_000, bytes_total=2_000_000,
                              state=TransferState.RUNNING)
-        self._transfers.register(running.model)
+        self._transfers.register_vm(running)
 
         done = TransferVM(
             _model(id="d", bytes_done=458_000, bytes_total=458_000,
@@ -1767,7 +1909,7 @@ class TransfersSnapshotApp(App[None]):
             hub=self._hub, dispatcher=self._dispatcher,
         )
         done.construct()
-        self._transfers.register(done.model)
+        self._transfers.register_vm(done)
 
         failed = TransferVM(
             _model(id="f", bytes_done=120_000, bytes_total=4_200_000,
@@ -1777,7 +1919,7 @@ class TransfersSnapshotApp(App[None]):
             hub=self._hub, dispatcher=self._dispatcher,
         )
         failed.construct()
-        self._transfers.register(failed.model)
+        self._transfers.register_vm(failed)
         self._transfers.construct()
 
     def compose(self) -> ComposeResult:
@@ -1839,7 +1981,7 @@ Expected: empty.
 uv run ruff check src tests && uv run ruff format --check src tests && uv run mypy src && uv run pytest --tb=short -q && bash scripts/check-layers.sh && uv run pre-commit run --all-files
 ```
 
-Expected: 632 + 10 = `642 passed`.
+Expected: 633 + 10 = `643 passed`.
 
 - [ ] **Step 11: Commit**
 
@@ -2030,7 +2172,7 @@ Expected: empty.
 uv run ruff check src tests && uv run ruff format --check src tests && uv run mypy src && uv run pytest --tb=short -q && bash scripts/check-layers.sh && uv run pre-commit run --all-files
 ```
 
-Expected: 642 + 10 = `652 passed`.
+Expected: 643 + 10 = `653 passed`.
 
 - [ ] **Step 9: Commit**
 
@@ -2141,7 +2283,7 @@ uv run pre-commit run --all-files
 
 Expected:
 - ruff / ruff-format / mypy / check-layers / pre-commit: all clean.
-- pytest default tier: `652 passed, 9 deselected` (613 baseline + 30 new snapshots + 6 transfer-speed + 3 theme-picker-preview).
+- pytest default tier: `653 passed, 9 deselected` (613 baseline + 30 new snapshots + 6 transfer-speed + 3 theme-picker-preview + 1 register_vm).
 - pytest integration tier: `9 passed`.
 
 - [ ] **Step 4: Verify out-of-scope snapshots still untouched**
@@ -2195,7 +2337,7 @@ Implements the design spec at \`docs/superpowers/specs/2026-06-19-modal-toast-po
 
 ## Test plan
 
-- [x] \`uv run pytest\` — 652 default-tier pass.
+- [x] \`uv run pytest\` — 653 default-tier pass.
 - [x] \`uv run pytest -m integration\` — 9 opt-in MinIO pass.
 - [x] \`uv run ruff check src tests\`, \`uv run ruff format --check\`, \`uv run mypy src\`, \`scripts/check-layers.sh\`, \`uv run pre-commit run --all-files\` — clean.
 - [x] Out-of-scope snapshots verified unchanged (74 goldens: 5 deferred modals \xc3\x97 10 + pane states \xc3\x97 24).
