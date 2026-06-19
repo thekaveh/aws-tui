@@ -14,7 +14,12 @@ import os
 import sys
 from collections import deque
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+from reactivex.abc import DisposableBase
+
+if TYPE_CHECKING:
+    from aws_tui.vm.file_manager.pane_vm import PaneState
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
@@ -175,6 +180,14 @@ class AwsTuiApp(App[None]):
         # unhandled exception so ``main()`` can print the dump path and
         # re-raise after the app has torn down.
         self._crash_report: CrashReport | None = None
+        # Per-pane current-connection trackers — used by the
+        # _on_pane_state_changed hub subscriber to attribute UNREACHABLE
+        # state transitions to a specific connection. Updated when
+        # action_swap_source completes a successful swap and at initial
+        # mount.
+        self._left_pane_conn_key: tuple[str, str] | None = None
+        self._right_pane_conn_key: tuple[str, str] | None = None
+        self._pane_state_sub: DisposableBase | None = None
 
     @property
     def app_ctx(self) -> AppContext:
@@ -217,9 +230,13 @@ class AwsTuiApp(App[None]):
             await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
             with contextlib.suppress(Exception):
                 await ctx.root_vm.switch_service("s3")
-            self._mount_initial_service_view()
+            self._mount_initial_service_view(initial_conn=initial_conn)
         else:
             self._mount_no_connection_placeholder()
+
+        # Subscribe to PaneVM state transitions to maintain the
+        # unreachable-connections set.
+        self._pane_state_sub = ctx.hub.messages.subscribe(on_next=self._on_hub_message_pane_state)
 
     # ── on_mount helpers ───────────────────────────────────────────────────
 
@@ -269,7 +286,7 @@ class AwsTuiApp(App[None]):
             initial_conn = connections[0]
         return initial_conn
 
-    def _mount_initial_service_view(self) -> None:
+    def _mount_initial_service_view(self, *, initial_conn: Connection | None = None) -> None:
         """Mount the current service's view widget into the content host.
 
         ``switch_service`` updates the VM tree; the View layer has to follow
@@ -282,6 +299,11 @@ class AwsTuiApp(App[None]):
                 host = self.query_one("#content-host", Container)
                 host.remove_children()
                 host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+                if initial_conn is not None:
+                    self._left_pane_conn_key = (initial_conn.kind, initial_conn.name)
+                # Right pane defaults to local in the M5 service composition;
+                # local isn't tracked in the unreachable set.
+                self._right_pane_conn_key = None
         except Exception:
             ctx.log_sink.error("app.mount_service_view.failed", service_id="s3")
 
@@ -746,6 +768,24 @@ class AwsTuiApp(App[None]):
         ctx.log_sink.info("pane.swap_source", to=next_label)
         await swap(new_provider, identity_label=next_label, path_protocol=new_protocol)
 
+        # Update the per-pane connection key so the hub subscriber can
+        # attribute future UNREACHABLE state transitions correctly.
+        dual_left = getattr(dual, "left", None)
+        if payload == "local":
+            # local is never marked unreachable
+            if focused is dual_left:
+                self._left_pane_conn_key = None
+            else:
+                self._right_pane_conn_key = None
+        else:
+            assert not isinstance(payload, str)  # narrows payload to Connection
+            conn = payload
+            key = (conn.kind, conn.name)
+            if focused is dual_left:
+                self._left_pane_conn_key = key
+            else:
+                self._right_pane_conn_key = key
+
     async def action_themes(self) -> None:
         """Open the keyboard-navigable theme picker modal."""
         ctx = self._app_ctx
@@ -828,6 +868,66 @@ class AwsTuiApp(App[None]):
 
         # 3. Broadcast for Python-side palettes (e.g. the banner).
         ctx.hub.send(ThemeChangedMessage(name=name))
+
+    # ── Connection-reachability tracking ───────────────────────────────────
+
+    def _mark_connection_unreachable(self, kind: str, name: str) -> None:
+        """Add ``(kind, name)`` to the unreachable set so subsequent
+        Shift+S cycles skip this connection. Idempotent.
+        """
+        self._app_ctx.unreachable_connections.add((kind, name))
+        self._app_ctx.log_sink.info("connection.unreachable.mark", kind=kind, name=name)
+
+    def _clear_connection_unreachable(self, kind: str, name: str) -> None:
+        """Remove ``(kind, name)`` from the unreachable set so it
+        re-enters the swap-source ring. Idempotent.
+        """
+        self._app_ctx.unreachable_connections.discard((kind, name))
+        self._app_ctx.log_sink.info("connection.unreachable.clear", kind=kind, name=name)
+
+    def _on_pane_state_changed(
+        self,
+        *,
+        kind: str,
+        name: str,
+        new_state: PaneState,
+    ) -> None:
+        """Hub-subscriber dispatch. When an active pane's state hits
+        UNREACHABLE, mark its connection. When it transitions to
+        IDLE / EMPTY from UNREACHABLE, clear the mark.
+        """
+        from aws_tui.vm.file_manager.pane_vm import PaneState
+
+        was_marked = (kind, name) in self._app_ctx.unreachable_connections
+        if new_state is PaneState.UNREACHABLE:
+            self._mark_connection_unreachable(kind, name)
+        elif was_marked and new_state in (PaneState.IDLE, PaneState.EMPTY):
+            self._clear_connection_unreachable(kind, name)
+
+    def _on_hub_message_pane_state(self, msg: object) -> None:
+        from vmx import PropertyChangedMessage
+
+        from aws_tui.vm.file_manager.pane_vm import PaneVM
+
+        if not isinstance(msg, PropertyChangedMessage):
+            return
+        if msg.property_name != "state":
+            return
+        if not isinstance(msg.sender_object, PaneVM):
+            return
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        sender_vm = msg.sender_object
+        if sender_vm is getattr(dual, "left", None):
+            key = self._left_pane_conn_key
+        elif sender_vm is getattr(dual, "right", None):
+            key = self._right_pane_conn_key
+        else:
+            return  # not one of our active panes
+        if key is None:
+            return  # local pane — never tracked
+        self._on_pane_state_changed(kind=key[0], name=key[1], new_state=sender_vm.state)
 
     # ── Crash handling ─────────────────────────────────────────────────────
 
@@ -937,6 +1037,9 @@ class AwsTuiApp(App[None]):
         with contextlib.suppress(Exception):
             ctx.log_sink.flush()
             ctx.log_sink.close()
+        if self._pane_state_sub is not None:
+            self._pane_state_sub.dispose()
+            self._pane_state_sub = None
         with contextlib.suppress(Exception):
             ctx.command_palette_vm.dispose()
             ctx.quick_look_vm.dispose()
