@@ -67,6 +67,7 @@ class AppContext:
         "theme_store",
         "transfer_journal",
         "transfers_vm",
+        "unreachable_connections",
     )
 
     def __init__(
@@ -88,6 +89,7 @@ class AppContext:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         initial_theme: str,
+        unreachable_connections: set[tuple[str, str]] | None = None,
     ) -> None:
         self.root_vm = root_vm
         self.registry = registry
@@ -105,6 +107,9 @@ class AppContext:
         self.hub = hub
         self.dispatcher = dispatcher
         self.initial_theme = initial_theme
+        self.unreachable_connections: set[tuple[str, str]] = (
+            unreachable_connections if unreachable_connections is not None else set()
+        )
 
 
 def build_app_context(
@@ -196,6 +201,7 @@ def build_app_context(
         hub=hub,
         dispatcher=dispatcher,
         initial_theme=initial_theme,
+        unreachable_connections=set(),
     )
 
 
