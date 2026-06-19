@@ -38,3 +38,15 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
+
+  # Tracks bumps for the local-dev MinIO container declared in
+  # scripts/test-services/s3/docker-compose.yml. Keeps the supply-
+  # chain-reproducibility pin (no ``:latest``) maintained without
+  # manual upgrades.
+  - package-ecosystem: docker
+    directory: "/scripts/test-services/s3/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    labels: ["dependencies", "docker"]

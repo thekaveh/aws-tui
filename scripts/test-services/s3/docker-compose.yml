@@ -10,7 +10,11 @@
 
 services:
   minio:
-    image: minio/minio:latest
+    # Pinned (not ``:latest``) for supply-chain reproducibility — a
+    # breaking change upstream can't silently wedge the local dev seed
+    # flow with no version to revert to. Dependabot's ``docker``
+    # ecosystem (see ``.github/dependabot.yml``) tracks bumps.
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: aws-tui-dev-minio
     ports:
       - "9000:9000"   # S3 API
