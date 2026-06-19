@@ -111,7 +111,15 @@ class HintLegend(HubSubscriberMixin, Widget):
             # as the genai-vanilla reference (``[a] all  ·  [e] errors  ·  …``)
             # so the bound key is unambiguous even when an action label
             # itself looks key-like.
-            widgets.append(Static(f"[{chip.key_label}]", classes="hint-key"))
+            #
+            # ``markup=False`` is CRITICAL: Static parses its content as
+            # Rich markup by default, and ``[tab]`` / ``[c]`` / ``[d]``
+            # etc. would get parsed as (unknown) style tags and silently
+            # stripped — so only the chips whose key isn't a valid Rich
+            # tag name (``:``, ``?``, …) would render correctly. With
+            # markup disabled, every chip prints its bracketed key as
+            # plain text.
+            widgets.append(Static(f"[{chip.key_label}]", classes="hint-key", markup=False))
             widgets.append(Static(chip.action_label, classes="hint-label"))
         return widgets
 

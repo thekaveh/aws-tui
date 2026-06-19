@@ -180,8 +180,7 @@ HintLegend {
     background: $bg;
     color: $text-muted;
     border: round $rule-dim;
-    border-title-color: $accent;
-    border-title-style: bold;
+    border-title-color: $rule-dim;
 }
 
 HintLegend .hint-key {
@@ -413,9 +412,8 @@ Toast.-error {
 BrandBanner {
     border: round $rule-dim;
     background: $bg;
-    border-title-color: $accent;
-    border-subtitle-color: $text-dim;
-    border-title-style: bold;
+    border-title-color: $rule-dim;
+    border-subtitle-color: $rule-dim;
 }
 
 /* ── Transfers overlay (top-right floating box) ──────────────────────── */
