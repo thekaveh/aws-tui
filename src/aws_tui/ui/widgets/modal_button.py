@@ -25,9 +25,10 @@ class ModalButton(Static):
 
     DEFAULT_CSS = """
     ModalButton {
-        width: 18;
+        width: auto;
+        min-width: 14;
         height: 3;
-        padding: 0 3;
+        padding: 0 2;
         content-align: center middle;
         text-style: bold;
         margin: 0 1;
