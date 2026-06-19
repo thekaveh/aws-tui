@@ -203,3 +203,41 @@ def test_auto_register_infers_direction_from_uri_schemes() -> None:
             f"{src!r} → {dst!r}: expected direction={expected!r}, got {actual!r}"
         )
         tvms.dispose()
+
+
+def test_transfers_register_vm_accepts_prebuilt_transfer_vm() -> None:
+    """register_vm(vm) lets a caller (notably the snapshot harness)
+    construct a TransferVM with a custom clock and register it directly,
+    bypassing register(model) which builds its own production-clock VM.
+    """
+    hub = _hub()
+    tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    tvms.construct()
+    # Pre-build a TransferVM with a fake clock; populate the speed window.
+    ticks = iter([0.0, 1.0])
+    vm = TransferVM(
+        _model(id="custom", state=TransferState.RUNNING, bytes_done=0, bytes_total=1_000_000),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        clock=lambda: next(ticks),
+    )
+    vm.construct()
+    vm.apply_update(bytes_done=0, bytes_total=1_000_000, state=TransferState.RUNNING)
+    vm.apply_update(bytes_done=500_000, bytes_total=1_000_000, state=TransferState.RUNNING)
+
+    returned = tvms.register_vm(vm)
+    assert returned is vm  # identity preserved
+    assert any(t.id == "custom" for t in tvms.transfers)
+    # Speed survived because the pre-built VM kept its clock + samples.
+    assert returned.current_speed == 500_000.0
+
+    # Idempotent on id collision — re-registering returns the same VM, doesn't dupe.
+    duplicate = TransferVM(
+        _model(id="custom", state=TransferState.RUNNING),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    duplicate.construct()
+    assert tvms.register_vm(duplicate) is vm  # original wins
+    assert sum(1 for t in tvms.transfers if t.id == "custom") == 1
+    tvms.dispose()
