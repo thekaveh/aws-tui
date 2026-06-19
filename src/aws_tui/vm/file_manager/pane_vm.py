@@ -282,6 +282,16 @@ class PaneVM:
         return self._filter_text
 
     @property
+    def identity_label(self) -> str | None:
+        """Connection identity string rendered in the pane's bottom
+        border subtitle (``aws s3 · default · us-east-1``,
+        ``s3-compatible · minio-local · localhost:64093``, ``local``).
+        Exposed so the cycle-source action can find the current pane's
+        position among the available sources without parsing the
+        subtitle out of the viewmodel."""
+        return self._identity_label
+
+    @property
     def entries(self) -> tuple[EntryVM, ...]:
         return tuple(self._entries)
 
