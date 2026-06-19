@@ -1,5 +1,9 @@
 # aws-tui
 
+<p align="center">
+  <img src="assets/screenshots/aws-tui-running.png" alt="aws-tui — Norton-Commander-style dual-pane TUI with the carbon block-art banner up top, an S3-compatible MinIO source on the left, the local filesystem on the right, and a labelled Shortcuts row along the bottom." width="100%">
+</p>
+
 Cross-platform TUI for AWS and S3-compatible services — runs on macOS,
 Linux, and Windows. Powered by
 [Textual](https://textual.textualize.io/) and the
@@ -11,8 +15,6 @@ Linux, and Windows. Powered by
 > S3→local copy crash, added theme cycling + source swap + multi-select
 > + a transfers overlay, and locked everything in with 41 new
 > regression tests. See `CHANGELOG.md` for the per-pass delta.
-
-<!-- screenshot: TODO - replace with an asciinema cast of `aws-tui` cold launch on Carbon theme; see docs/recording-todo.md -->
 
 ## 1. Features
 
