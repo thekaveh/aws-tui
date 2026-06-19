@@ -47,6 +47,13 @@ async def test_pane_mounts_and_populates_rows() -> None:
 
         app = _App()
         async with app.run_test(size=(120, 30)) as pilot:
+            # Two pauses: Pane.on_mount now defers _render_body via
+            # call_after_refresh so #pane-body is fully mounted first.
+            # One pilot.pause() ticks the event loop once; on slow
+            # event loops (notably Windows CI runners) the deferred
+            # render hasn't completed by the time control returns to
+            # this test, so the second pause flushes it.
+            await pilot.pause()
             await pilot.pause()
             rows = app.query(EntryRow)
             assert len(rows) == 5  # data dir + 4 files
@@ -72,6 +79,9 @@ async def test_pane_renders_loading_placeholder_for_state() -> None:
 
         app = _App()
         async with app.run_test(size=(120, 30)) as pilot:
+            # See note in test_pane_mounts_and_populates_rows above —
+            # the deferred _render_body needs a second pump on Windows.
+            await pilot.pause()
             await pilot.pause()
             # No rows; instead, a placeholder.
             rows = app.query(EntryRow)
@@ -199,6 +209,10 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
 
         app = _App()
         async with app.run_test(size=(120, 30)) as pilot:
+            # Double pause for the same reason described in the other
+            # tests in this file — the deferred _render_body needs a
+            # second event-loop pump on slow runners (Windows CI).
+            await pilot.pause()
             await pilot.pause()
             # No exception => no MountError on the deferred render.
             left_placeholder = app.query("#pane-left .pane-placeholder")
