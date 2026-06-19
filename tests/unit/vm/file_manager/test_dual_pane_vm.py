@@ -95,6 +95,20 @@ async def test_dual_copy_across_publishes_transfer_progress(tmp_path: Path) -> N
     states = [m.state for m in received]
     assert "running" in states
     assert "completed" in states
+    # Pin the producer-side URI shape that ``TransfersVM._infer_direction``
+    # depends on: both panes are LocalFS in this test, so labels must
+    # start with the absolute filesystem ``/`` (no scheme prefix).
+    # Locks in the V4-001 fix end-to-end on the real flow, not just
+    # the mocked consumer test in test_transfers.py.
+    labeled = [m for m in received if m.source_label and m.destination_label]
+    assert labeled, "expected at least one progress message to carry source/dest labels"
+    sample = labeled[0]
+    assert sample.source_label.startswith("/"), (
+        f"local pane source must emit unprefixed posix path, got {sample.source_label!r}"
+    )
+    assert sample.destination_label.startswith("/"), (
+        f"local pane destination must emit unprefixed posix path, got {sample.destination_label!r}"
+    )
     dp.dispose()
 
 

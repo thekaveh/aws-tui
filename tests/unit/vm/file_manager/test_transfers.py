@@ -98,14 +98,20 @@ def test_transfers_vm_subscribes_to_progress_messages() -> None:
     tvms.register(_model(id="a", state=TransferState.RUNNING))
     hub.send(
         TransferProgressMessage(
-            transfer_id="a", bytes_transferred=750, bytes_total=1000, state="running"
+            transfer_id="a",
+            bytes_transferred=750,
+            bytes_total=1000,
+            state=TransferState.RUNNING,
         )
     )
     a = tvms.transfers[0]
     assert a.model.bytes_done == 750
     hub.send(
         TransferProgressMessage(
-            transfer_id="a", bytes_transferred=1000, bytes_total=1000, state="completed"
+            transfer_id="a",
+            bytes_transferred=1000,
+            bytes_total=1000,
+            state=TransferState.COMPLETED,
         )
     )
     assert a.state == TransferState.COMPLETED
@@ -118,7 +124,10 @@ def test_transfers_vm_auto_registers_unknown_id() -> None:
     tvms.construct()
     hub.send(
         TransferProgressMessage(
-            transfer_id="new", bytes_transferred=10, bytes_total=100, state="running"
+            transfer_id="new",
+            bytes_transferred=10,
+            bytes_total=100,
+            state=TransferState.RUNNING,
         )
     )
     assert tvms.active_count == 1

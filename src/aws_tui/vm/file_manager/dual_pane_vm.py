@@ -42,8 +42,10 @@ def _pane_uri(pane: PaneVM, leaf: str) -> str:
     transfer as upload / download / s3-copy / local-copy without
     re-parsing the underlying provider type.
     """
+    # ``rstrip("/")`` makes ``base`` empty for root, never ``"/"`` —
+    # so a single template covers both root and non-root paths.
     base = pane.path.as_posix().rstrip("/")
-    body = f"{base}/{leaf}" if base != "/" else f"/{leaf}"
+    body = f"{base}/{leaf}"
     if pane.path_protocol:
         return f"{pane.path_protocol}/{body}"
     return body
