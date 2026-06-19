@@ -42,10 +42,6 @@ class _ThemeRow(HubSubscriberMixin, Static):
         height: 1;
         padding: 0 2;
     }
-    _ThemeRow.-cursor {
-        background: $boost;
-        text-style: bold;
-    }
     """
 
     def __init__(self, vm: ThemeOptionVM, *, hub: MessageHub[Message]) -> None:
@@ -88,22 +84,6 @@ class ThemePickerModal(ModalScreen[None]):
     DEFAULT_CSS = """
     ThemePickerModal {
         align: center middle;
-    }
-    ThemePickerModal > #picker-frame {
-        width: 44;
-        max-height: 20;
-        padding: 1 0;
-    }
-    ThemePickerModal #picker-title {
-        text-style: bold;
-        text-align: center;
-        width: 100%;
-        padding: 0 2 1 2;
-    }
-    ThemePickerModal #picker-help {
-        text-align: center;
-        width: 100%;
-        padding: 1 2 0 2;
     }
     """
 

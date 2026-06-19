@@ -336,6 +336,39 @@ ConfirmModal > Container > .modal-body {
     color: $text;
 }
 
+/* ── Theme picker modal ──────────────────────────────────────────────── */
+ThemePickerModal {
+    background: $bg 60%;
+}
+ThemePickerModal > #picker-frame {
+    background: $bg-elev;
+    color: $text;
+    border: round $rule-dim;
+    padding: 1 0;
+    width: 44;
+    max-height: 20;
+}
+ThemePickerModal #picker-title {
+    color: $accent;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    padding: 0 2 1 2;
+}
+ThemePickerModal #picker-help {
+    color: $text-muted;
+    text-align: center;
+    width: 100%;
+    padding: 1 2 0 2;
+}
+ThemePickerModal _ThemeRow {
+    color: $text;
+}
+ThemePickerModal _ThemeRow.-cursor {
+    background: $bg-sel;
+    color: $accent-soft;
+    text-style: bold;
+}
 
 QuickLook {
     align: center middle;
