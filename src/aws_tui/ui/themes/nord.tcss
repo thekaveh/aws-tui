@@ -300,6 +300,10 @@ ConfirmModal.-danger > Container > .modal-title {
     text-style: bold;
 }
 
+ConfirmModal > Container > .modal-footer.-danger > ModalButton.-danger {
+    margin-right: 2;
+}
+
 ConfirmModal > Container > .modal-body {
     height: auto;
     padding: 0 1 1 1;
@@ -319,6 +323,8 @@ ConfirmModal > Container > .modal-path-value {
     height: auto;
     padding: 0 1;
     margin: 0 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 
 
