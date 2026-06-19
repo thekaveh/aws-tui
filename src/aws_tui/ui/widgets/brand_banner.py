@@ -13,6 +13,8 @@ border via the parent screen's layout.
 
 from __future__ import annotations
 
+import colorsys
+
 from reactivex.abc import DisposableBase
 from rich.text import Text
 from textual.widget import Widget
@@ -107,47 +109,89 @@ _GRADIENT: tuple[str, ...] = (
     "color(195)",
 )
 
-# Per-theme 6-stop vertical sweep for the banner. Two layout conventions
-# co-exist by deliberate choice:
-#   * amber and lattice walk DARK → LIGHT top-to-bottom (their look the
-#     user already approved — don't touch).
-#   * carbon (the genai-vanilla reference) plus every other theme walk
-#     LIGHT → DARK top-to-bottom, matching the upstream reference image
-#     where the pale tint sits at the top of the block art and the
-#     saturated dark sits at the bottom.
-# Palette stops are picked from the 256-color cube so neighbours are
-# perceptually adjacent within each hue family.
+# ── Carbon-derived gradient transform ───────────────────────────────────────
+#
+# Carbon's user-specified six-stop palette is the *reference shape* the other
+# themes follow: a smooth light→dark vertical sweep, holding one hue family,
+# with the saturation peaking in the middle and the lightness walking from
+# ~71% at the top down to ~19% at the bottom.
+#
+# Rather than hand-author equivalent palettes per theme (which drifts the
+# moment carbon's stops change), we extract carbon's (L, S) progression once
+# and re-apply it at each theme's *accent hue*. The output is six fresh hex
+# stops that read as the same gradient shape rendered in the theme's
+# signature colour family. Background, "passive" (low-emphasis chrome), and
+# "active" (accent) inputs all live in the per-theme .tcss palette — the
+# transform's job is to map carbon's lightness curve onto the active token's
+# hue so the banner reads as part of the theme's identity.
+#
+# amber and lattice are explicitly excluded from the transform: the user
+# signed off on those two earlier and asked they stay untouched.
+
+# Reference palette — user-specified verbatim. Source of the (L, S) curve.
+_CARBON_REFERENCE: tuple[str, ...] = (
+    "#74A6F4",  # row 1 (top, brightest)
+    "#4F8AED",  # row 2
+    "#316DDF",  # row 3
+    "#1F4FBE",  # row 4
+    "#14338B",  # row 5
+    "#0A1A55",  # row 6 (bottom, darkest)
+)
+
+
+def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
+    h = hex_str.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _hex_to_hls(hex_str: str) -> tuple[float, float, float]:
+    r, g, b = _hex_to_rgb(hex_str)
+    return colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+
+
+def _hls_to_hex(h: float, lightness: float, saturation: float) -> str:
+    r, g, b = colorsys.hls_to_rgb(h, lightness, saturation)
+    return f"#{round(r * 255):02X}{round(g * 255):02X}{round(b * 255):02X}"
+
+
+# Per-row (lightness, saturation) extracted from the carbon reference. These
+# are the only knobs the transform reads from carbon — the hue is replaced
+# per theme so the gradient SHAPE is preserved while the COLOUR shifts.
+_CARBON_LS_CURVE: tuple[tuple[float, float], ...] = tuple(
+    (_hex_to_hls(stop)[1], _hex_to_hls(stop)[2]) for stop in _CARBON_REFERENCE
+)
+
+
+def _carbon_like_palette(hue_degrees: float) -> tuple[str, ...]:
+    """Return a 6-stop palette at ``hue_degrees`` using carbon's lightness +
+    saturation progression byte-for-byte. The returned palette walks light →
+    dark top-to-bottom just like carbon."""
+    hue = (hue_degrees % 360.0) / 360.0
+    return tuple(
+        _hls_to_hex(hue, lightness, saturation) for lightness, saturation in _CARBON_LS_CURVE
+    )
+
+
+# Each non-reference theme picks a representative hue from its $accent (the
+# "active" colour). voidline is the exception: its brand identity leans on
+# $accent-hot (electric magenta) more than the $accent cyan, so we transform
+# from the hot variant.
+_THEME_HUES_DEGREES: dict[str, float] = {
+    "voidline": 302.0,  # $accent-hot magenta carries the brand
+    "solarized-light": 205.0,  # $accent #268bd2
+    "github-light": 212.0,  # $accent #0969da
+    "one-light": 221.0,  # $accent #4078f2
+    "nord": 193.0,  # $accent #88c0d0 (Frost cyan)
+    "dracula": 265.0,  # $accent #bd93f9 (Dracula purple)
+    "gruvbox-dark": 42.0,  # $accent #fabd2f (yellow-gold)
+}
+
+
 _THEME_PALETTES: dict[str, tuple[str, ...]] = {
-    # Design language:
-    #
-    #   * SIX stops, one per banner row.
-    #   * Walk through ONE hue family — no mixing greyscale with blues
-    #     or jumping from purple to pink mid-gradient.
-    #   * Direction: carbon + all non-amber/lattice themes go LIGHT →
-    #     DARK top-to-bottom (matches the genai-vanilla reference
-    #     image). amber and lattice keep their existing DARK → LIGHT
-    #     orientation — the user signed off on those two specifically.
-    #   * The darkest, most saturated stop sits at the *bottom* of the
-    #     block art and lands close to the theme's ``$accent``
-    #     (or ``$accent-hot`` for themes whose identity leans on the
-    #     hot variant). The lightest pale tint sits at the top.
-    #   * Source stops from the 256-color cube so neighbours are
-    #     guaranteed perceptually adjacent.
-    # carbon — REFERENCE. User-specified pure-blue gradient, exact
-    # hex values (no 256-cube approximation): each stop is one band
-    # darker than the previous, walking from sky-blue at the top to
-    # deep navy at the bottom. Rich accepts ``#rrggbb`` in style
-    # strings directly so the rendered colours match the spec to the
-    # byte.
-    "carbon": (
-        "#74A6F4",  # row 1 (top, brightest)
-        "#4F8AED",  # row 2
-        "#316DDF",  # row 3
-        "#1F4FBE",  # row 4
-        "#14338B",  # row 5
-        "#0A1A55",  # row 6 (bottom, darkest)
-    ),
-    # amber — REFERENCE (unchanged). Mahogany → gold, dark → light.
+    # Carbon stays at the user's verbatim hex stops — not derived, so a
+    # future tweak to the transform never silently drifts the reference.
+    "carbon": _CARBON_REFERENCE,
+    # amber + lattice are explicitly excluded from the transform.
     "amber": (
         "color(94)",  # #875f00  dark amber
         "color(130)",  # #af5f00  burnt orange
@@ -156,7 +200,6 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
         "color(214)",  # #ffaf00
         "color(220)",  # #ffd700  gold
     ),
-    # lattice — REFERENCE (unchanged). Dark teal → pale mint.
     "lattice": (
         "color(23)",  # #005f5f  dark teal
         "color(30)",  # #008787  teal-cyan
@@ -165,72 +208,9 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
         "color(50)",  # #00ffd7  cyan-mint
         "color(122)",  # #87ffd7  pale mint
     ),
-    # voidline — pale pink → deep magenta, electric-CRT identity. Ends
-    # near $accent-hot #ff3df8 family at the bottom.
-    "voidline": (
-        "color(219)",  # #ffafff  pale pink
-        "color(206)",  # #ff5fd7  hot pink (kin to $accent-hot #ff3df8)
-        "color(164)",  # #d700d7  pink-magenta
-        "color(127)",  # #af00af  bright magenta
-        "color(90)",  # #870087
-        "color(53)",  # #5f005f  deep magenta
-    ),
-    # solarized-light — Solarized blue family. LIGHT theme: even the
-    # "light" end is still a saturated blue so it reads on cream bg.
-    "solarized-light": (
-        "color(32)",  # #0087d7  (kin to $accent #268bd2)
-        "color(26)",  # #005fd7
-        "color(20)",  # #0000d7
-        "color(19)",  # #0000af
-        "color(18)",  # #000087
-        "color(17)",  # #00005f  navy
-    ),
-    # github-light — Primer link-blue family, LIGHT theme.
-    "github-light": (
-        "color(33)",  # #0087ff  GitHub link blue (kin to $accent #0969da)
-        "color(26)",  # #005fd7
-        "color(20)",  # #0000d7
-        "color(19)",  # #0000af
-        "color(18)",  # #000087
-        "color(17)",  # #00005f  navy
-    ),
-    # one-light — Atom One Light's deep-blue family. LIGHT theme.
-    "one-light": (
-        "color(33)",  # #0087ff  (kin to $accent #4078f2)
-        "color(27)",  # #005fff
-        "color(20)",  # #0000d7
-        "color(19)",  # #0000af
-        "color(18)",  # #000087
-        "color(17)",  # #00005f
-    ),
-    # nord — Frost cyan family, pale → dark.
-    "nord": (
-        "color(110)",  # #87afd7  pale Frost (kin to $accent #88c0d0)
-        "color(74)",  # #5fafd7  Frost-blue
-        "color(45)",  # #00d7ff  cyan
-        "color(38)",  # #00b7af  teal-cyan
-        "color(31)",  # #0087af
-        "color(24)",  # #005f87  dark Frost
-    ),
-    # dracula — pure purple walk, pale → deep. Lands near $accent
-    # #bd93f9 at the saturated bottom rows.
-    "dracula": (
-        "color(183)",  # #d7afff  pale purple
-        "color(141)",  # #af87ff  light purple (kin to $accent #bd93f9)
-        "color(99)",  # #875fff  purple
-        "color(63)",  # #5f5fff  purple-blue
-        "color(56)",  # #5f00d7  bright purple
-        "color(54)",  # #5f0087  deep purple
-    ),
-    # gruvbox-dark — forest-to-olive green walk, pale → dark.
-    "gruvbox-dark": (
-        "color(142)",  # #afaf00  gold-olive (kin to $accent #fabd2f)
-        "color(106)",  # #87af00  olive
-        "color(70)",  # #5faf00  yellow-green
-        "color(34)",  # #00af00  bright green
-        "color(28)",  # #008700
-        "color(22)",  # #005f00  dark forest
-    ),
+    # Every other theme is derived from carbon's (L, S) curve at the
+    # theme's $accent hue (or $accent-hot for voidline).
+    **{name: _carbon_like_palette(hue) for name, hue in _THEME_HUES_DEGREES.items()},
 }
 
 
