@@ -235,8 +235,17 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
 }
 
 
-def _build_rows(word: str = _WORD, gap: str = " ") -> tuple[str, ...]:
-    """Concatenate per-letter rows into the 6 banner rows for ``word``."""
+def _build_rows(word: str = _WORD, gap: str = "") -> tuple[str, ...]:
+    """Concatenate per-letter rows into the 6 banner rows for ``word``.
+
+    Default ``gap=""`` reproduces ANSI-Shadow's natural tight kerning:
+    each glyph already includes the column of whitespace it needs to
+    sit beside its neighbour, so inserting an additional space would
+    add a stray column at every letter boundary (~2 cells too wide
+    per letter, e.g. AWS-TUI: 59 cols with a single space vs 53 cols
+    natural — the same density difference visible between the
+    spread-out previous title and the genai-vanilla reference).
+    """
     return tuple(gap.join(_LETTERS[c][row] for c in word) for row in range(6))
 
 
