@@ -167,25 +167,27 @@ DualPane {
 }
 
 HintLegend {
-    background: $bg-elev;
+    background: $bg;
     color: $accent-hot;
     border: round $accent;
+    border-title-color: $accent;
+    border-title-style: bold;
 }
 
 HintLegend .hint-key {
     color: $accent;
-    background: $bg-elev;
+    background: $bg;
     text-style: bold;
 }
 
 HintLegend .hint-label {
     color: $accent-hot;
-    background: $bg-elev;
+    background: $bg;
 }
 
 HintLegend .hint-sep {
     color: $accent;
-    background: $bg-elev;
+    background: $bg;
 }
 
 CommandPalette {
@@ -392,7 +394,7 @@ Toast.-error {
 
 BrandBanner {
     border: round $rule-dim;
-    background: $bg-elev;
+    background: $bg;
     border-title-color: $accent;
     border-subtitle-color: $text-dim;
     border-title-style: bold;
