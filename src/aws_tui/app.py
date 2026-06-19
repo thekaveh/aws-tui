@@ -49,6 +49,50 @@ from aws_tui.vm.messages import ThemeChangedMessage
 _ACTION_RING_SIZE = 100
 
 
+def _build_swap_candidates(
+    ctx: AppContext,
+) -> tuple[list[tuple[str, str | Connection]], list[str]]:
+    """Build the (label, payload) ring for ``action_swap_source``,
+    filtering out connections in ``ctx.unreachable_connections``.
+
+    Returns ``(candidates, skipped_names)`` where ``skipped_names`` is
+    the list of TOML section names / profile names that were filtered
+    out (used by ``_raise_skip_toast`` to inform the user).
+    """
+    from aws_tui.services.s3.service import _format_pane_title
+
+    candidates: list[tuple[str, str | Connection]] = [("local", "local")]
+    skipped: list[str] = []
+    for conn in ctx.connection_resolver.list():
+        if (conn.kind, conn.name) in ctx.unreachable_connections:
+            skipped.append(conn.name)
+            continue
+        candidates.append((_format_pane_title(conn), conn))
+    return candidates, skipped
+
+
+def _raise_skip_toast(ctx: AppContext, skipped: list[str]) -> None:
+    """Raise a one-line INFO toast naming the skipped connections.
+
+    No-op if ``skipped`` is empty.
+    """
+    if not skipped:
+        return
+    text = f"Skipped unreachable: {', '.join(skipped)}"
+    toast_id = f"swap-skip-{','.join(skipped)}"
+    ctx.root_vm.chrome.toast_stack.raise_toast(
+        ToastModel(
+            id=toast_id,
+            text=text,
+            level=ToastLevel.INFO,
+            sticky=False,
+            timeout_seconds=3.0,
+            action_label=None,
+            action_action=None,
+        )
+    )
+
+
 def _join_path(base: str, name: str) -> str:
     """Append ``name`` to ``base`` with a single ``/`` separator. Used
     only by the copy confirm modal to surface source/destination paths."""
@@ -650,26 +694,26 @@ class AwsTuiApp(App[None]):
         try:
             from aws_tui.domain.local_fs import LocalFS
             from aws_tui.domain.s3_fs import S3FS
-            from aws_tui.services.s3.service import (
-                _aioboto3_session_for,
-                _format_pane_title,
-            )
+            from aws_tui.services.s3.service import _aioboto3_session_for
         except Exception:
             return
 
         _LOCAL_LABEL = "local"
-
-        # Build the candidate ring: local first, then every connection
-        # the resolver knows about. Each entry carries its display
-        # label and a factory that returns ``(provider, path_protocol)``
-        # ready to feed into ``swap_provider``. Connection captures use
-        # default-arg binding so the closure doesn't latch onto the
-        # loop variable.
-        candidates: list[tuple[str, object]] = [(_LOCAL_LABEL, "local")]
-        for conn in ctx.connection_resolver.list():
-            candidates.append((_format_pane_title(conn), conn))
+        candidates, skipped = _build_swap_candidates(ctx)
+        _raise_skip_toast(ctx, skipped)
         if len(candidates) <= 1:
-            self.notify("No connections configured — can't swap source.", severity="warning")
+            # Only local — either no connections configured, or every
+            # configured connection has been observed unreachable.
+            if skipped:
+                self.notify(
+                    "All connections unreachable — staying on local.",
+                    severity="warning",
+                )
+            else:
+                self.notify(
+                    "No connections configured — can't swap source.",
+                    severity="warning",
+                )
             return
 
         current_label = focused.identity_label or _LOCAL_LABEL
@@ -685,8 +729,8 @@ class AwsTuiApp(App[None]):
             new_provider = LocalFS()
             new_protocol = ""
         else:
-            assert not isinstance(payload, str)  # narrowed for mypy
-            conn = payload  # type: ignore[assignment]
+            assert not isinstance(payload, str)  # narrows payload to Connection
+            conn = payload
             session = _aioboto3_session_for(conn)
             new_provider = S3FS(
                 session=session,
