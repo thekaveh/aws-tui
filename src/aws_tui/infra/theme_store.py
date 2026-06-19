@@ -23,11 +23,15 @@ class ThemeNotFound(Exception):
 
 
 def _default_user_themes_dir() -> Path:
-    return Path.home() / ".config" / "aws-tui" / "themes"
+    from aws_tui.infra.paths import config_home
+
+    return config_home() / "themes"
 
 
 def _default_user_overlay() -> Path:
-    return Path.home() / ".config" / "aws-tui" / "theme.tcss"
+    from aws_tui.infra.paths import config_home
+
+    return config_home() / "theme.tcss"
 
 
 class ThemeStore:

@@ -31,6 +31,7 @@ from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.log_sink import LogSink
+from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.services.s3.service import S3Service
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
@@ -113,15 +114,20 @@ def build_app_context(
     Parameters
     ----------
     config_dir:
-        Override for ``~/.config/aws-tui`` (used by tests).
+        Override for the platform-native config directory (used by tests).
+        Defaults to :func:`aws_tui.infra.paths.config_home` which resolves
+        to ``%APPDATA%\\aws-tui`` on Windows, ``~/Library/Application
+        Support/aws-tui`` on macOS, and ``~/.config/aws-tui`` on Linux
+        (with the legacy XDG location preferred if it already exists).
     cache_dir:
-        Override for ``~/.cache/aws-tui`` (used by tests).
+        Override for the platform-native cache directory. Defaults to
+        :func:`aws_tui.infra.paths.cache_home`.
     """
     # ── Infra ──────────────────────────────────────────────────────────────
     if config_dir is None:
-        config_dir = Path.home() / ".config" / "aws-tui"
+        config_dir = config_home()
     if cache_dir is None:
-        cache_dir = Path.home() / ".cache" / "aws-tui"
+        cache_dir = cache_home()
 
     log_sink = LogSink(base_dir=cache_dir / "log")
     config_store = ConfigStore(path=config_dir / "config.toml")

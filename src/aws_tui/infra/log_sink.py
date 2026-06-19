@@ -58,7 +58,9 @@ class LogSink:
         backup_count: int = _DEFAULT_BACKUP_COUNT,
     ) -> None:
         if base_dir is None:
-            base_dir = Path.home() / ".cache" / "aws-tui" / "log"
+            from aws_tui.infra.paths import cache_home
+
+            base_dir = cache_home() / "log"
         base_dir.mkdir(parents=True, exist_ok=True)
 
         self._base_dir: Path = base_dir
