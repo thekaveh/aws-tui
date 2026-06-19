@@ -107,41 +107,43 @@ _GRADIENT: tuple[str, ...] = (
     "color(195)",
 )
 
-# Per-theme 6-stop vertical sweep for the banner: dark at the top → light
-# at the bottom, in each theme's accent color family. Palette ranges are
-# picked from the 256-color cube so neighbors are perceptually close —
-# the lattice (teal) palette is the reference the others now match.
+# Per-theme 6-stop vertical sweep for the banner. Two layout conventions
+# co-exist by deliberate choice:
+#   * amber and lattice walk DARK → LIGHT top-to-bottom (their look the
+#     user already approved — don't touch).
+#   * carbon (the genai-vanilla reference) plus every other theme walk
+#     LIGHT → DARK top-to-bottom, matching the upstream reference image
+#     where the pale tint sits at the top of the block art and the
+#     saturated dark sits at the bottom.
+# Palette stops are picked from the 256-color cube so neighbours are
+# perceptually adjacent within each hue family.
 _THEME_PALETTES: dict[str, tuple[str, ...]] = {
-    # Design language for every gradient (carbon + amber + lattice are
-    # the three reference palettes; all others follow the same rule):
+    # Design language:
     #
     #   * SIX stops, one per banner row.
     #   * Walk through ONE hue family — no mixing greyscale with blues
     #     or jumping from purple to pink mid-gradient.
-    #   * Start DARK (top of the block art) → end LIGHT (bottom).
-    #   * The early/middle stops sit in the saturated dark band; the
-    #     final stop "pops" notably lighter (large cube-position jump)
-    #     for a clear dark-to-bright sweep — same shape as the
-    #     genai-vanilla 15-stop blue→cyan reference the carbon palette
-    #     subsamples directly.
-    #   * The brightest stop lands close to the theme's ``$accent``
+    #   * Direction: carbon + all non-amber/lattice themes go LIGHT →
+    #     DARK top-to-bottom (matches the genai-vanilla reference
+    #     image). amber and lattice keep their existing DARK → LIGHT
+    #     orientation — the user signed off on those two specifically.
+    #   * The darkest, most saturated stop sits at the *bottom* of the
+    #     block art and lands close to the theme's ``$accent``
     #     (or ``$accent-hot`` for themes whose identity leans on the
-    #     hot variant) so the banner reads as part of the brand.
+    #     hot variant). The lightest pale tint sits at the top.
     #   * Source stops from the 256-color cube so neighbours are
     #     guaranteed perceptually adjacent.
-    # carbon — REFERENCE. Direct 6-stop subsample of the genai-vanilla
-    # 15-stop blue→cyan gradient (color(17) deep navy → color(195)
-    # pale blue), matching the upstream banner the carbon theme was
-    # spec'd against.
+    # carbon — REFERENCE. Genai-vanilla 6-stop subsample, applied
+    # LIGHT → DARK top-to-bottom to match the upstream image.
     "carbon": (
-        "color(17)",  # #00005f  deep navy
-        "color(21)",  # #0000ff  pure blue (genai-vanilla mid)
-        "color(33)",  # #0087ff  azure
-        "color(45)",  # #00d7ff  bright cyan
-        "color(123)",  # #87ffff  pale cyan
         "color(195)",  # #d7d7ff  very pale blue
+        "color(123)",  # #87ffff  pale cyan
+        "color(45)",  # #00d7ff  bright cyan
+        "color(33)",  # #0087ff  azure
+        "color(21)",  # #0000ff  pure blue
+        "color(17)",  # #00005f  deep navy (kin to $accent #6fb8ff family)
     ),
-    # amber — REFERENCE. Mahogany → gold through the orange band.
+    # amber — REFERENCE (unchanged). Mahogany → gold, dark → light.
     "amber": (
         "color(94)",  # #875f00  dark amber
         "color(130)",  # #af5f00  burnt orange
@@ -150,7 +152,7 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
         "color(214)",  # #ffaf00
         "color(220)",  # #ffd700  gold
     ),
-    # lattice — REFERENCE. Dark teal → pale mint through the cyan band.
+    # lattice — REFERENCE (unchanged). Dark teal → pale mint.
     "lattice": (
         "color(23)",  # #005f5f  dark teal
         "color(30)",  # #008787  teal-cyan
@@ -159,78 +161,71 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
         "color(50)",  # #00ffd7  cyan-mint
         "color(122)",  # #87ffd7  pale mint
     ),
-    # voidline — deep magenta → pale pink, electric-CRT identity. Lands
-    # close to $accent-hot #ff3df8 (the louder of voidline's twin
-    # accents — magenta carries the brand more than the cyan does).
+    # voidline — pale pink → deep magenta, electric-CRT identity. Ends
+    # near $accent-hot #ff3df8 family at the bottom.
     "voidline": (
-        "color(53)",  # #5f005f  deep magenta
-        "color(90)",  # #870087
-        "color(127)",  # #af00af  bright magenta
-        "color(164)",  # #d700d7  pink-magenta
-        "color(206)",  # #ff5fd7  hot pink (kin to $accent-hot #ff3df8)
         "color(219)",  # #ffafff  pale pink
+        "color(206)",  # #ff5fd7  hot pink (kin to $accent-hot #ff3df8)
+        "color(164)",  # #d700d7  pink-magenta
+        "color(127)",  # #af00af  bright magenta
+        "color(90)",  # #870087
+        "color(53)",  # #5f005f  deep magenta
     ),
-    # solarized-light — Solarized blue family. LIGHT theme: stops stay
-    # in the saturated dark band so the gradient pops on the cream bg.
+    # solarized-light — Solarized blue family. LIGHT theme: even the
+    # "light" end is still a saturated blue so it reads on cream bg.
     "solarized-light": (
-        "color(17)",  # #00005f  navy
-        "color(18)",  # #000087
-        "color(19)",  # #0000af
-        "color(20)",  # #0000d7
-        "color(26)",  # #005fd7  Solarized blue family
         "color(32)",  # #0087d7  (kin to $accent #268bd2)
-    ),
-    # github-light — Primer link-blue family. LIGHT theme; dark stops
-    # for contrast against the white bg.
-    "github-light": (
-        "color(17)",  # #00005f  navy
-        "color(18)",  # #000087
-        "color(19)",  # #0000af
-        "color(20)",  # #0000d7
         "color(26)",  # #005fd7
+        "color(20)",  # #0000d7
+        "color(19)",  # #0000af
+        "color(18)",  # #000087
+        "color(17)",  # #00005f  navy
+    ),
+    # github-light — Primer link-blue family, LIGHT theme.
+    "github-light": (
         "color(33)",  # #0087ff  GitHub link blue (kin to $accent #0969da)
+        "color(26)",  # #005fd7
+        "color(20)",  # #0000d7
+        "color(19)",  # #0000af
+        "color(18)",  # #000087
+        "color(17)",  # #00005f  navy
     ),
     # one-light — Atom One Light's deep-blue family. LIGHT theme.
     "one-light": (
-        "color(17)",  # #00005f
-        "color(18)",  # #000087
-        "color(19)",  # #0000af
-        "color(20)",  # #0000d7
-        "color(27)",  # #005fff
         "color(33)",  # #0087ff  (kin to $accent #4078f2)
+        "color(27)",  # #005fff
+        "color(20)",  # #0000d7
+        "color(19)",  # #0000af
+        "color(18)",  # #000087
+        "color(17)",  # #00005f
     ),
-    # nord — Frost cyan family. Walks the Frost band end-to-end.
+    # nord — Frost cyan family, pale → dark.
     "nord": (
-        "color(24)",  # #005f87  dark Frost
-        "color(31)",  # #0087af
-        "color(38)",  # #00b7af  teal-cyan
-        "color(45)",  # #00d7ff  cyan
-        "color(74)",  # #5fafd7  Frost-blue
         "color(110)",  # #87afd7  pale Frost (kin to $accent #88c0d0)
+        "color(74)",  # #5fafd7  Frost-blue
+        "color(45)",  # #00d7ff  cyan
+        "color(38)",  # #00b7af  teal-cyan
+        "color(31)",  # #0087af
+        "color(24)",  # #005f87  dark Frost
     ),
-    # dracula — pure purple walk, Dracula's signature palette. Ends
-    # near $accent #bd93f9 instead of drifting into pink — leaves
-    # $accent-hot's pink as a footer-only accent rather than competing
-    # with the banner.
+    # dracula — pure purple walk, pale → deep. Lands near $accent
+    # #bd93f9 at the saturated bottom rows.
     "dracula": (
-        "color(54)",  # #5f0087  deep purple
-        "color(56)",  # #5f00d7  bright purple
-        "color(63)",  # #5f5fff  purple-blue
-        "color(99)",  # #875fff  purple
-        "color(141)",  # #af87ff  light purple (kin to $accent #bd93f9)
         "color(183)",  # #d7afff  pale purple
+        "color(141)",  # #af87ff  light purple (kin to $accent #bd93f9)
+        "color(99)",  # #875fff  purple
+        "color(63)",  # #5f5fff  purple-blue
+        "color(56)",  # #5f00d7  bright purple
+        "color(54)",  # #5f0087  deep purple
     ),
-    # gruvbox-dark — Gruvbox's forest-to-olive green walk. Distinct
-    # hue from amber's orange-gold (amber's identity owns the warm
-    # yellow band); green is Gruvbox's other signature accent and
-    # lands at olive-gold near $accent #fabd2f.
+    # gruvbox-dark — forest-to-olive green walk, pale → dark.
     "gruvbox-dark": (
-        "color(22)",  # #005f00  dark forest
-        "color(28)",  # #008700
-        "color(34)",  # #00af00  bright green
-        "color(70)",  # #5faf00  yellow-green
-        "color(106)",  # #87af00  olive
         "color(142)",  # #afaf00  gold-olive (kin to $accent #fabd2f)
+        "color(106)",  # #87af00  olive
+        "color(70)",  # #5faf00  yellow-green
+        "color(34)",  # #00af00  bright green
+        "color(28)",  # #008700
+        "color(22)",  # #005f00  dark forest
     ),
 }
 
