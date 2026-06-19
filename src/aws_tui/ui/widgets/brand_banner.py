@@ -133,15 +133,20 @@ _THEME_PALETTES: dict[str, tuple[str, ...]] = {
     #     hot variant). The lightest pale tint sits at the top.
     #   * Source stops from the 256-color cube so neighbours are
     #     guaranteed perceptually adjacent.
-    # carbon — REFERENCE. Genai-vanilla 6-stop subsample, applied
-    # LIGHT → DARK top-to-bottom to match the upstream image.
+    # carbon — REFERENCE. Pure-blue 6-stop walk that matches the
+    # genai-vanilla upstream image: no cyan, no greenish tints. Every
+    # stop has G≤175 / R≤95 (with the brightest stop slightly above
+    # to reach a sky-blue tint without crossing into cyan). The
+    # earlier carbon palette mixed in cyan stops color(123) / color(45)
+    # — those have a strong green channel and read as turquoise, which
+    # the reference image does not have.
     "carbon": (
-        "color(195)",  # #d7d7ff  very pale blue
-        "color(123)",  # #87ffff  pale cyan
-        "color(45)",  # #00d7ff  bright cyan
+        "color(75)",  # #5fafff  bright sky-blue
         "color(33)",  # #0087ff  azure
-        "color(21)",  # #0000ff  pure blue
-        "color(17)",  # #00005f  deep navy (kin to $accent #6fb8ff family)
+        "color(27)",  # #005fff  bright pure blue
+        "color(21)",  # #0000ff  pure blue (saturated)
+        "color(19)",  # #0000af  dark blue
+        "color(17)",  # #00005f  deep navy
     ),
     # amber — REFERENCE (unchanged). Mahogany → gold, dark → light.
     "amber": (
