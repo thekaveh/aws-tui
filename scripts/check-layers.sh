@@ -20,7 +20,12 @@ banned vm        "ViewModel"     "textual" "boto3" "aioboto3" "botocore" "aws_tu
 banned domain    "Domain"        "textual" "aws_tui\\.vm" "aws_tui\\.ui" "aws_tui\\.services"
 banned infra     "Infrastructure" "textual" "aws_tui\\.vm" "aws_tui\\.ui" "aws_tui\\.services" "aws_tui\\.domain"
 banned ui        "View"          "boto3" "aioboto3" "botocore" "aws_tui\\.infra\\.aws_session" "aws_tui\\.infra\\.connection_resolver"
-banned services  "Services"      "textual"
+# services/ is allowed to import vm/ for the Service / ServiceDescriptor
+# protocols that live in vm/services_protocol.py (the protocol home is
+# vm/ so that the VM layer can satisfy it without violating the
+# one-way arrow — see docs/architecture.md §2). Everything else stays
+# banned. ui/ is a hard upward dependency.
+banned services  "Services"      "textual" "aws_tui\\.ui"
 
 if [ "$fail" -ne 0 ]; then
   exit 1

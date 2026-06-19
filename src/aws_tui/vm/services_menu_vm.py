@@ -75,6 +75,15 @@ class ServiceItemVM:
     def name(self) -> str:
         return self._inner.name
 
+    @property
+    def inner(self) -> ComponentVMOf[ServiceDescriptor]:
+        """Underlying VMx component. ``ServicesMenuVM`` composes a
+        parent ``CompositeVM`` over the live items via this accessor,
+        which matches the public ``inner`` pattern on the other VM
+        facades (``EntryVM`` / ``TransferVM`` / ``PaneVM`` / ``ToastVM``).
+        """
+        return self._inner
+
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:
@@ -199,7 +208,7 @@ class ServicesMenuVM:
 
     def _initial_children(self) -> tuple[ComponentVMOf[ServiceDescriptor], ...]:
         # The initial pass uses whatever update_connection(...) has staged.
-        return tuple(item._inner for item in self._items)
+        return tuple(item.inner for item in self._items)
 
     def _on_message(self, msg: object) -> None:
         if isinstance(msg, ConnectionChangedMessage):
@@ -235,8 +244,8 @@ class ServicesMenuVM:
 
         # Clear old items.
         for item in list(self._items):
-            if item._inner in self._inner:
-                self._inner.remove(item._inner)
+            if item.inner in self._inner:
+                self._inner.remove(item.inner)
             item.dispose()
         self._items.clear()
 
@@ -253,7 +262,7 @@ class ServicesMenuVM:
             self._items.append(item)
             if self._inner.is_constructed:
                 item.construct()
-            self._inner.append(item._inner)
+            self._inner.append(item.inner)
 
         # Notify subscribers that the items collection changed so the View
         # layer can re-mount the rows. Without this, the ServicesMenu widget

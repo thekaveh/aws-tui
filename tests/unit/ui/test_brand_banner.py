@@ -21,10 +21,14 @@ assert RxDispatcher  # silence unused-import nag
 
 def test_palette_dict_has_all_builtin_themes() -> None:
     """Every shipped theme must have its own banner palette so the
-    banner can adopt that theme's color family on switch."""
-    for theme in ("carbon", "amber", "voidline", "lattice"):
-        assert theme in _THEME_PALETTES, f"missing banner palette for {theme}"
-        assert len(_THEME_PALETTES[theme]) == 6, f"{theme} palette must have 6 stops"
+    banner can adopt that theme's color family on switch. Iterates the
+    full ``_THEME_PALETTES`` registry rather than a hand-maintained
+    subset, so adding a new theme to ``_THEME_HUES_DEGREES`` without
+    producing a 6-stop entry would be caught.
+    """
+    assert _THEME_PALETTES, "no banner palettes registered"
+    for theme, palette in _THEME_PALETTES.items():
+        assert len(palette) == 6, f"{theme} palette must have 6 stops"
 
 
 def test_palettes_are_distinct() -> None:
@@ -48,12 +52,12 @@ async def test_banner_swaps_palette_on_hub_message() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         banner = app.query_one(BrandBanner)
-        before = banner._palette  # type: ignore[attr-defined]
+        before = banner.palette
         assert before == _THEME_PALETTES["carbon"]
 
         hub.send(ThemeChangedMessage(name="amber"))
         await pilot.pause()
-        after = banner._palette  # type: ignore[attr-defined]
+        after = banner.palette
         assert after == _THEME_PALETTES["amber"]
         assert before != after
 
@@ -71,6 +75,6 @@ async def test_banner_set_theme_idempotent() -> None:
         await pilot.pause()
         banner = app.query_one(BrandBanner)
         # Same theme name — no-op.
-        before = banner._palette  # type: ignore[attr-defined]
+        before = banner.palette
         banner.set_theme("carbon")
-        assert banner._palette is before  # type: ignore[attr-defined]
+        assert banner.palette is before

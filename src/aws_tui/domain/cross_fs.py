@@ -18,6 +18,7 @@ configurable per call:
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Final
 
 from aws_tui.domain.filesystem import (
     ConflictError,
@@ -27,6 +28,11 @@ from aws_tui.domain.filesystem import (
     PathRef,
     ProgressCallback,
 )
+
+#: Maximum ``" (N)"`` suffixes the ``RENAME`` conflict resolver will try
+#: before giving up. 1000 is plenty for any plausible user-driven copy
+#: workflow and bounds the loop in pathological mass-collision cases.
+_MAX_RENAME_ATTEMPTS: Final[int] = 1000
 
 
 class ConflictResolution(StrEnum):
@@ -136,8 +142,8 @@ class CrossFsCopy:
             return None
         if on_conflict == ConflictResolution.OVERWRITE:
             return dst
-        # RENAME: try " (1)", " (2)", ... up to a safety bound.
-        for i in range(1, 1000):
+        # RENAME: try " (1)", " (2)", ... up to the safety bound.
+        for i in range(1, _MAX_RENAME_ATTEMPTS):
             candidate = dst.with_name(self._rename(dst.name, i))
             try:
                 await self._destination.stat(candidate)
