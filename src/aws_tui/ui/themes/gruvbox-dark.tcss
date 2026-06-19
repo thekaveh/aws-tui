@@ -488,6 +488,21 @@ TransferRowWidget .transfer-rate  { color: $text-muted; }
     height: 100%;
 }
 
+/* ── Toast stack (top-right notifications layer) ─────────────────────────── */
+ToastStack {
+    background: transparent;
+}
+
+Toast {
+    background: $bg-elev;
+    color: $text;
+    border: round $rule-dim;
+    padding: 0 1;
+}
+Toast.-info    { border: round $rule-dim; }
+Toast.-success { border: round $success;  color: $success; }
+Toast.-warning { border: round $warning;  color: $warning; }
+Toast.-error   { border: round $danger;   color: $danger; }
 
 /* ── Services hamburger (top-left toggle) ────────────────────────────── */
 ServicesHamburger {
