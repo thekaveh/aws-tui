@@ -266,6 +266,15 @@ class PaneVM:
         return self._path
 
     @property
+    def path_protocol(self) -> str:
+        """Scheme prefix this pane stamps on its path label (e.g. ``"s3:"``
+        for S3 panes, ``""`` for local). Used by transfer-progress
+        emitters to disambiguate upload vs download vs s3-copy vs
+        local-copy without re-parsing the underlying provider type.
+        """
+        return self._path_protocol
+
+    @property
     def state(self) -> PaneState:
         return self._state
 
@@ -770,9 +779,7 @@ class PaneVM:
             # schedule navigate_to(...).
             self._notify("open_requested")
         else:
-            self._hub.send(
-                PropertyChangedMessage.create(self, self._inner.name, "preview_requested")
-            )
+            self._notify("preview_requested")
 
     def _ascend_sync(self) -> None:
         if self._path.is_root:

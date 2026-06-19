@@ -44,6 +44,8 @@ from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
 
+_logger = logging.getLogger("aws_tui.composition")
+
 
 class AppContext:
     """The bag of pre-wired objects the Textual app consumes."""
@@ -351,9 +353,6 @@ def add_s3_compat_connection(
         verify_tls=form.verify_tls,
     )
     config_store.add_connection(entry)
-
-
-_logger = logging.getLogger("aws_tui.composition")
 
 
 __all__ = [

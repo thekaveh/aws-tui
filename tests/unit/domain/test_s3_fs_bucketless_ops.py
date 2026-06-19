@@ -165,3 +165,33 @@ async def test_bucketless_rename_within_bucket(s3_endpoint: str) -> None:
         resp = await client.list_objects_v2(Bucket=_BUCKET)
         keys = {o["Key"] for o in resp.get("Contents", [])}
         assert keys == {"b.txt"}
+
+
+def test_to_aware_coerces_naive_to_utc() -> None:
+    """``_to_aware`` must promote a naïve datetime to UTC-aware so
+    downstream sort/format code never has to mix tz-aware and tz-naïve
+    values (older MinIO releases historically returned naïve
+    ``LastModified`` timestamps).
+    """
+    from datetime import UTC, datetime, timedelta, timezone
+
+    from aws_tui.domain.s3_fs import _to_aware
+
+    # None passes through unchanged.
+    assert _to_aware(None) is None
+
+    # Naïve → UTC-aware.
+    naive = datetime(2026, 1, 1, 12, 30, 45)
+    coerced = _to_aware(naive)
+    assert coerced is not None
+    assert coerced.tzinfo is UTC
+    assert coerced.replace(tzinfo=None) == naive
+
+    # Already aware: returned unchanged (same instance — no copy).
+    aware = datetime(2026, 1, 1, 12, 30, 45, tzinfo=UTC)
+    assert _to_aware(aware) is aware
+
+    # Non-UTC aware: also returned unchanged.
+    other_tz = timezone(timedelta(hours=5))
+    aware_other = datetime(2026, 1, 1, 12, 30, 45, tzinfo=other_tz)
+    assert _to_aware(aware_other) is aware_other

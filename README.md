@@ -65,7 +65,7 @@ Linux, and Windows. Powered by
 - **Strict layered architecture.** View ▸ ViewModel ▸ Service ▸ Domain
   ▸ Infra; enforced by `scripts/check-layers.sh` (a ruff
   `flake8-tidy-imports` migration is queued — see
-  `docs/architecture.md` §2). Mypy strict-clean. 609 default-tier tests
+  `docs/architecture.md` §2). Mypy strict-clean. 613 default-tier tests
   (unit / in-process integration / snapshot / e2e), plus 9 opt-in MinIO
   integration tests (`uv run pytest -m integration`).
 

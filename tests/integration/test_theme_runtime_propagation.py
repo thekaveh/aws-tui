@@ -27,12 +27,12 @@ async def test_switch_theme_repaints_banner_via_hub(
         await pilot.pause()
         await pilot.pause()
         banner = app.query_one(BrandBanner)
-        assert banner._palette == _THEME_PALETTES["carbon"]  # type: ignore[attr-defined]
+        assert banner.palette == _THEME_PALETTES["carbon"]
 
         app.switch_theme("amber")
         await pilot.pause()
 
-        assert banner._palette == _THEME_PALETTES["amber"]  # type: ignore[attr-defined]
+        assert banner.palette == _THEME_PALETTES["amber"]
         assert ctx.initial_theme == "amber"
 
 

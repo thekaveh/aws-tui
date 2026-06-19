@@ -154,3 +154,43 @@ def test_transfers_total_bytes_aggregation() -> None:
     tvms.register(_model(id="c", state=TransferState.RUNNING, bytes_done=0, bytes_total=None))
     assert tvms.total_bytes_total is None
     tvms.dispose()
+
+
+def test_auto_register_infers_direction_from_uri_schemes() -> None:
+    """When a TransferProgressMessage arrives for an unknown transfer
+    id, ``TransfersVM`` auto-registers a placeholder ``TransferModel``
+    and must infer the ``direction`` from the ``source_label`` /
+    ``destination_label`` URI schemes — not hard-code one direction.
+
+    Locks in the V4-001 producer→consumer wiring fix:
+    ``DualPaneVM._pane_uri`` now emits a scheme-prefixed URI
+    (``s3://...`` for S3 panes, plain ``/...`` for local) so
+    ``TransfersVM._infer_direction`` can correctly classify the
+    transfer as upload / download / s3-copy / local-copy.
+    """
+    pairs = [
+        ("upload", "/Users/kaveh/foo.txt", "s3://bucket/foo.txt"),
+        ("download", "s3://bucket/foo.txt", "/Users/kaveh/foo.txt"),
+        ("s3-copy", "s3://src-bucket/foo.txt", "s3://dst-bucket/foo.txt"),
+        ("local-copy", "/Users/kaveh/foo.txt", "/Users/kaveh/bar.txt"),
+    ]
+    for expected, src, dst in pairs:
+        hub = _hub()
+        tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
+        tvms.construct()
+        hub.send(
+            TransferProgressMessage(
+                transfer_id="x",
+                bytes_transferred=0,
+                bytes_total=100,
+                state=TransferState.PENDING,
+                source_label=src,
+                destination_label=dst,
+            )
+        )
+        assert tvms.transfers, f"placeholder not auto-registered for {src!r}→{dst!r}"
+        actual = tvms.transfers[0].model.direction
+        assert actual == expected, (
+            f"{src!r} → {dst!r}: expected direction={expected!r}, got {actual!r}"
+        )
+        tvms.dispose()

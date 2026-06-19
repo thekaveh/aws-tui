@@ -143,7 +143,7 @@ class CrossFsCopy:
         if on_conflict == ConflictResolution.OVERWRITE:
             return dst
         # RENAME: try " (1)", " (2)", ... up to the safety bound.
-        for i in range(1, _MAX_RENAME_ATTEMPTS):
+        for i in range(1, _MAX_RENAME_ATTEMPTS + 1):
             candidate = dst.with_name(self._rename(dst.name, i))
             try:
                 await self._destination.stat(candidate)

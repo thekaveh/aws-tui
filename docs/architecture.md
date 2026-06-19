@@ -86,10 +86,10 @@ the same observable plus dispose-on-unmount.
 ## 5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
-| Unit | 472 | VM, domain, infra behavior; no I/O |
+| Unit | 474 | VM, domain, infra behavior; no I/O |
 | Snapshot | 104 | View rendering against golden SVGs per theme × screen-state combination |
 | E2E | 5 | Pilot-driven user journeys |
-| Integration (in-process) | 28 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, etc.) |
+| Integration (in-process) | 30 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, etc.) |
 | Integration (MinIO) | 9 | MinIO via testcontainers (opt-in, `-m integration`) |
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)

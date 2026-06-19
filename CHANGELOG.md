@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   submodule. Pinned at `vmx>=2.6.0,<3.0.0` — PyPI's lowest published
   version is `2.6.0`, the vendored `python-v2.4.0` tag was never
   released. API parity across the 2.4 → 2.6 minor bump verified by
-  522/40 tests staying green. Effects for users: fresh clones no
+  the full default-tier suite staying green. Effects for users: fresh clones no
   longer need `--recurse-submodules`; CI checkouts no longer fetch
   the submodule; `scripts/bootstrap.sh` drops the
   `git submodule update --init --recursive` step. Internal source
@@ -161,6 +161,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Transfers overlay mislabelled every transfer as "local-copy."**
+  ``TransfersVM`` auto-registered placeholder ``TransferModel`` rows
+  with a hard-coded ``direction="local-copy"`` regardless of whether
+  the underlying transfer was an upload, download, or s3-copy.
+  Producer (``DualPaneVM._pane_uri``) now emits scheme-prefixed URIs
+  (``s3://...`` for S3 panes, plain ``/...`` for local) and consumer
+  (``TransfersVM._infer_direction``) classifies from the prefix.
+  Locked in by ``test_auto_register_infers_direction_from_uri_schemes``.
+- **S3 ``LastModified`` from older MinIO releases was treated as the
+  wrong timezone.** ``S3FS._to_aware`` was a no-op return; it now
+  coerces naïve datetimes to UTC-aware so downstream sort / format
+  code can mix tz-aware and tz-naïve responses safely.
+- **``AwsSession.aclose_all_clients`` silently swallowed every
+  shutdown exception.** Replaced ``contextlib.suppress(Exception)``
+  with a logged warning so crash-dump triage has a signal when a
+  client fails to close cleanly. Shutdown stays best-effort.
 - **Shift+Arrow semantics simplified to "toggle the row I'm
   leaving."** Previous version had three modes (extend / shrink /
   toggle-isolated) and could touch both the current and target
@@ -442,8 +458,10 @@ cuts a new `[Unreleased]`.
     `KeymapStore.DEFAULT_BINDINGS`; `pane.refresh` binding corrected
     from `Ctrl+R` to `r`; duplicate `r`-binding row removed (rename is
     `pane.move` with one entry marked, not a separate action).
-  - `docs/architecture.md` testing-pyramid count corrected from 463
-    to 429; the architecture doc's
+  - `docs/architecture.md` testing-pyramid counts corrected to match
+    the live suite (the specific 463 → 429 → … historical figures are
+    no longer load-bearing — see the current table in architecture.md
+    §5 for today's authoritative numbers); the architecture doc's
     `MessageHub.subscribe(callback, filter=...)` claim replaced with
     the actual `hub.messages.subscribe(on_next=...)` API.
   - `docs/adding-a-service.md` cross-reference to spec §7 corrected

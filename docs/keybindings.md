@@ -35,12 +35,12 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 
 | Action | Default | Notes |
 |---|---|---|
-| Enter multi-select mode | `v` | Visual-block style |
-| Toggle row selection | `Space` (in multi-select) | |
-| Extend selection one row | `Shift+↑` / `Shift+↓` | Marks the current row + moves cursor |
+| Enter multi-select mode | `pane.enter_multiselect` action — *(deferred)* | Spec'd on `v`; handler not wired in v0.7.x |
+| Toggle row selection | `pane.toggle_select` action — *(deferred)* | Spec'd on `Space` (in multi-select); not wired |
+| Extend selection one row | `Shift+↑` / `Shift+↓` | Marks the row the cursor is leaving + moves cursor |
 | Modifier+click on row | `Shift+Click`, `Cmd+Click`, `Ctrl+Click` | Toggles mark on the clicked row; on macOS terminals reserve `Shift+Click`, so `Cmd+Click` is the reliable path there |
-| Select all | `a` (in multi-select) | |
-| Clear selection | `Esc` (in multi-select) | |
+| Select all | `pane.select_all` action — *(deferred)* | Spec'd on `a` (in multi-select); not wired |
+| Clear selection | `Esc` (in multi-select) | Modal-style cancel; clears mark set |
 
 ### 1.3. File operations
 
