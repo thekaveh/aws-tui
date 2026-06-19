@@ -1,10 +1,10 @@
 """TransfersOverlay — top-right floating box listing in-progress transfers.
 
 Each :class:`TransferVM` in :class:`TransfersVM` gets one
-:class:`TransferRowWidget`: a label, a progress bar, and a cancel
-button. Finished transfers linger briefly (so the user can see they
-landed) then quietly disappear, leaving the next ones to take their
-place.
+:class:`TransferRowWidget`: a card with a state-colored left bar
+(``$accent`` running / ``$success`` done / ``$danger`` failed),
+title row, destination row, custom 10-cell progress bar + cancel chip,
+and a meta row (bytes done/total + speed + eta).
 
 Wiring: the overlay docks on the ``notifications`` layer (same one
 ToastStack uses) so it floats above the dual-pane without taking flow
@@ -22,10 +22,11 @@ from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.events import Click
 from textual.widget import Widget
-from textual.widgets import ProgressBar, Static
+from textual.widgets import Static
 from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
+from aws_tui.vm.chrome.resume_vm import humanize_bytes
 from aws_tui.vm.file_manager.transfer_vm import TransferState, TransferVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 
@@ -34,6 +35,11 @@ from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 # that the box doesn't accumulate cruft. Override with $AWS_TUI_TRANSFER_LINGER
 # (used by tests so they don't have to sleep).
 _LINGER_SECONDS: float = float(os.environ.get("AWS_TUI_TRANSFER_LINGER", "3.0"))
+
+#: Width of the custom progress bar in cells.
+_BAR_CELLS: int = 10
+_BAR_FILLED: str = "▰"  # ▰
+_BAR_EMPTY: str = "▱"  # ▱
 
 
 def _last_segment(uri: str) -> str:
@@ -44,46 +50,79 @@ def _last_segment(uri: str) -> str:
     return cleaned.rsplit("/", 1)[-1]
 
 
+def _format_eta(seconds: float | None) -> str:
+    """Human-readable mm:ss / h:mm:ss for the ETA cell."""
+    if seconds is None:
+        return "--:--"
+    total = int(seconds)
+    if total < 0:
+        return "--:--"
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _state_class(state: TransferState) -> str:
+    """CSS modifier class corresponding to a transfer state."""
+    return {
+        TransferState.PENDING: "-pending",
+        TransferState.RUNNING: "-running",
+        TransferState.PAUSED: "-paused",
+        TransferState.COMPLETED: "-done",
+        TransferState.FAILED: "-failed",
+        TransferState.CANCELLED: "-cancelled",
+    }.get(state, "-pending")
+
+
 class TransferRowWidget(HubSubscriberMixin, Widget):
-    """One row inside the overlay — bound to a :class:`TransferVM`.
+    """One card-style row inside the overlay — bound to a :class:`TransferVM`.
 
-    Subscribes to the transfer's own ``model`` PropertyChanged so the
-    progress bar and label refresh without rebuilding the row."""
+    Subscribes to the transfer's own ``state`` PropertyChanged so the
+    bar / meta line / state class refresh without rebuilding the row."""
 
-    # The Cancel "button" is a themable Static instead of
-    # ``textual.widgets.Button`` because Button ships with its own
-    # heavy DEFAULT_CSS (ansi colors etc) that doesn't follow our
-    # theme tokens.
     DEFAULT_CSS = """
     TransferRowWidget {
-        height: 3;
+        height: 5;
         width: 100%;
-        margin: 0 0 1 0;
         padding: 0 1;
+        border-left: thick transparent;
     }
-    TransferRowWidget > .transfer-label {
+    TransferRowWidget > .transfer-title-row {
+        height: 1;
+        width: 100%;
+        layout: horizontal;
+    }
+    TransferRowWidget > .transfer-dest-row {
         height: 1;
         width: 100%;
     }
-    TransferRowWidget > .transfer-row {
+    TransferRowWidget > .transfer-bar-row {
         height: 1;
         width: 100%;
+        layout: horizontal;
     }
-    TransferRowWidget ProgressBar {
-        width: 1fr;
+    TransferRowWidget > .transfer-meta-row {
         height: 1;
+        width: 100%;
+        layout: horizontal;
     }
+    TransferRowWidget .transfer-name { width: 1fr; }
+    TransferRowWidget .transfer-state-word { width: auto; text-align: right; }
+    TransferRowWidget .transfer-bar { width: 1fr; }
     TransferRowWidget .transfer-cancel {
-        width: 10;
+        width: 5;
         height: 1;
+        text-align: center;
         margin: 0 0 0 1;
-        content-align: center middle;
-        text-style: bold;
     }
+    TransferRowWidget .transfer-bytes { width: 1fr; }
+    TransferRowWidget .transfer-rate { width: auto; text-align: right; }
     """
 
     def __init__(self, transfer_vm: TransferVM, *, hub: MessageHub[Message]) -> None:
-        super().__init__(classes="transfer-row-host")
+        super().__init__(classes=f"transfer-row {_state_class(transfer_vm.state)}")
         self._vm: TransferVM = transfer_vm
         self._hub: MessageHub[Message] = hub
 
@@ -92,13 +131,18 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        yield Static(self._label_text(), classes="transfer-label", markup=True)
-        with Horizontal(classes="transfer-row"):
-            yield ProgressBar(total=100, show_eta=False, show_percentage=True)
-            yield Static("Cancel", id="cancel-btn", classes="transfer-cancel")
+        with Horizontal(classes="transfer-title-row"):
+            yield Static(self._name_text(), classes="transfer-name", markup=False)
+            yield Static(self._state_word(), classes="transfer-state-word", markup=False)
+        yield Static(self._dest_text(), classes="transfer-dest-row", markup=False)
+        with Horizontal(classes="transfer-bar-row"):
+            yield Static(self._bar_text(), classes="transfer-bar", markup=False)
+            yield Static("[✕]", id="cancel-btn", classes="transfer-cancel", markup=False)
+        with Horizontal(classes="transfer-meta-row"):
+            yield Static(self._bytes_text(), classes="transfer-bytes", markup=False)
+            yield Static(self._rate_text(), classes="transfer-rate", markup=False)
 
     def on_mount(self) -> None:
-        self._refresh_progress()
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
@@ -110,6 +154,9 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
 
     def on_click(self, event: Click) -> None:
         # Bubble: react when the click landed on our Cancel Static.
+        # Cancelled / completed / failed rows ignore clicks (the chip is dim).
+        if self._vm.is_finished:
+            return
         target = event.widget if hasattr(event, "widget") else None
         node: object | None = target
         while node is not None:
@@ -119,58 +166,86 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
             node = getattr(node, "parent", None)
 
     def _on_vm_property_changed(self, property_name: str) -> None:
-        if property_name == "model":
-            self._refresh_progress()
-            try:
-                label = self.query_one(".transfer-label", Static)
-            except NoMatches:
-                return
-            label.update(self._label_text())
-
-    def _label_text(self) -> str:
-        model = self._vm.model
-        src = _last_segment(model.source_label)
-        dst = _last_segment(model.destination_label)
-        state_tag = self._state_tag()
-        return f"[b]{src}[/]  →  {dst}  {state_tag}"
-
-    def _state_tag(self) -> str:
-        state = self._vm.state
-        if state is TransferState.RUNNING:
-            return "[dim]running[/]"
-        if state is TransferState.PAUSED:
-            return "[yellow]paused[/]"
-        if state is TransferState.COMPLETED:
-            return "[green]done[/]"
-        if state is TransferState.FAILED:
-            return "[red]failed[/]"
-        if state is TransferState.CANCELLED:
-            return "[dim]cancelled[/]"
-        return f"[dim]{state}[/]"
-
-    def _refresh_progress(self) -> None:
-        try:
-            bar = self.query_one(ProgressBar)
-        except Exception:
+        if property_name != "state":
             return
-        model = self._vm.model
-        total = model.bytes_total
-        done = model.bytes_done
-        if total and total > 0:
-            bar.update(total=total, progress=min(done, total))
-        else:
-            # Indeterminate — leave at 0 so the bar isn't misleading.
-            bar.update(total=100, progress=0)
+        # Refresh state-class modifier and the four lines.
+        self._sync_state_class()
+        self._refresh_lines()
+
+    def _refresh_lines(self) -> None:
+        try:
+            self.query_one(".transfer-name", Static).update(self._name_text())
+            self.query_one(".transfer-state-word", Static).update(self._state_word())
+            self.query_one(".transfer-dest-row", Static).update(self._dest_text())
+            self.query_one(".transfer-bar", Static).update(self._bar_text())
+            self.query_one(".transfer-bytes", Static).update(self._bytes_text())
+            self.query_one(".transfer-rate", Static).update(self._rate_text())
+        except NoMatches:
+            return
+
+    def _sync_state_class(self) -> None:
+        for cls in ("-pending", "-running", "-paused", "-done", "-failed", "-cancelled"):
+            self.remove_class(cls)
+        self.add_class(_state_class(self._vm.state))
+
+    def _name_text(self) -> str:
+        return _last_segment(self._vm.model.source_label)
+
+    def _dest_text(self) -> str:
+        return f"→ {_last_segment(self._vm.model.destination_label)}"
+
+    def _state_word(self) -> str:
+        state = self._vm.state
+        pct = self._percentage()
+        if state is TransferState.RUNNING:
+            return f"↑ {pct}%" if pct is not None else "↑ ..."
+        if state is TransferState.PAUSED:
+            return f"⏸ {pct}%" if pct is not None else "⏸ ..."
+        if state is TransferState.COMPLETED:
+            return "✓ done"
+        if state is TransferState.FAILED:
+            return "✗ failed"
+        if state is TransferState.CANCELLED:
+            return "⊘ cancelled"
+        return "..."
+
+    def _bar_text(self) -> str:
+        pct = self._percentage()
+        if pct is None:
+            return _BAR_EMPTY * _BAR_CELLS
+        filled = round(pct / 100.0 * _BAR_CELLS)
+        filled = max(0, min(filled, _BAR_CELLS))
+        return (_BAR_FILLED * filled) + (_BAR_EMPTY * (_BAR_CELLS - filled))
+
+    def _bytes_text(self) -> str:
+        done = self._vm.model.bytes_done
+        total = self._vm.model.bytes_total
+        if total is None or total <= 0:
+            return f"{humanize_bytes(done)} · streaming…"
+        return f"{humanize_bytes(done)} / {humanize_bytes(total)}"
+
+    def _rate_text(self) -> str:
+        if self._vm.is_finished:
+            return ""
+        speed = self._vm.current_speed
+        eta = self._vm.current_eta
+        if speed is None:
+            return ""
+        speed_str = f"{humanize_bytes(int(speed))}/s"
+        eta_str = _format_eta(eta)
+        return f"{speed_str} · {eta_str}"
+
+    def _percentage(self) -> int | None:
+        total = self._vm.model.bytes_total
+        if total is None or total <= 0:
+            return None
+        return int(self._vm.model.bytes_done / total * 100)
 
 
 class TransfersOverlay(Widget):
     """Top-right floating box that aggregates active + recently-finished
-    transfers. New transfers stack below older ones; finished entries
-    linger briefly then disappear."""
+    transfers."""
 
-    # Structural CSS only — colors/border come from the theme overlay
-    # (each .tcss defines TransfersOverlay with $bg-elev background and
-    # $rule-dim border so they swap on theme change).
     DEFAULT_CSS = """
     TransfersOverlay {
         layer: notifications;
@@ -181,9 +256,7 @@ class TransfersOverlay(Widget):
         max-height: 60%;
         padding: 1 0;
     }
-    TransfersOverlay.-hidden {
-        display: none;
-    }
+    TransfersOverlay.-hidden { display: none; }
     TransfersOverlay #transfers-overlay-inner {
         width: 100%;
         height: auto;
@@ -208,8 +281,6 @@ class TransfersOverlay(Widget):
         self._vm: TransfersVM = vm
         self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
-        # Transfer ids whose row should drop on the next rebuild because
-        # the linger timer has elapsed.
         self._expired_ids: set[str] = set()
 
     @property
@@ -217,7 +288,7 @@ class TransfersOverlay(Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        yield Static("Transfers", id="transfers-overlay-title")
+        yield Static("▌ TRANSFERS", id="transfers-overlay-title", markup=False)
         yield Vertical(id="transfers-overlay-inner")
 
     def on_mount(self) -> None:
@@ -228,8 +299,6 @@ class TransfersOverlay(Widget):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
-
-    # ── Internal ────────────────────────────────────────────────────────────
 
     def _on_hub_message(self, msg: object) -> None:
         if not isinstance(msg, PropertyChangedMessage):
@@ -243,11 +312,9 @@ class TransfersOverlay(Widget):
     def _rebuild(self) -> None:
         try:
             container = self.query_one("#transfers-overlay-inner", Vertical)
-        except Exception:
+        except NoMatches:
             return
 
-        # Pick the set of rows to render: every active transfer plus any
-        # recently-finished ones we haven't yet expired.
         visible: list[TransferVM] = []
         for t in self._vm.transfers:
             if t.id in self._expired_ids:
@@ -255,29 +322,19 @@ class TransfersOverlay(Widget):
             if t.is_active or t.state is TransferState.PENDING:
                 visible.append(t)
             elif t.is_finished:
-                # Newly finished — keep visible while the linger timer
-                # ticks. ``_arm_linger`` is already idempotent (it
-                # short-circuits on `transfer_id in self._expired_ids`)
-                # so we don't need to filter on "is this the first
-                # time" — the second call is a no-op.
                 visible.append(t)
                 self._arm_linger(t.id)
 
         new_ids = {t.id for t in visible}
-
-        # Remove rows no longer in the visible set.
         for row in list(container.query(TransferRowWidget)):
             if row.transfer_vm.id not in new_ids:
                 row.remove()
 
-        # Add fresh rows for transfers not yet mounted.
         currently_mounted = {row.transfer_vm.id for row in container.query(TransferRowWidget)}
         for t in visible:
             if t.id not in currently_mounted:
                 container.mount(TransferRowWidget(t, hub=self._hub))
 
-        # Hide the whole overlay when there's nothing to show — keeps the
-        # corner of the screen free during idle moments.
         if visible:
             self.remove_class("-hidden")
         else:
@@ -293,7 +350,6 @@ class TransfersOverlay(Widget):
             self._expired_ids.add(transfer_id)
             self.call_after_refresh(self._rebuild)
 
-        # Don't fire if already expired between scheduling + run.
         self.set_timer(_LINGER_SECONDS, _expire)
 
 
