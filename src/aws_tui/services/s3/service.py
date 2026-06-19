@@ -174,15 +174,48 @@ class S3Service:
         )
 
 
-def _format_pane_title(connection: Connection) -> str:
-    """Build a compact ``kind · profile · region`` border title.
+def _strip_scheme(url: str | None) -> str | None:
+    """Strip ``http://`` / ``https://`` so the endpoint reads cleanly in
+    the pane's border subtitle (``localhost:64093`` instead of
+    ``http://localhost:64093``)."""
+    if not url:
+        return url
+    for scheme in ("https://", "http://"):
+        if url.startswith(scheme):
+            return url[len(scheme) :]
+    return url
 
-    Drops any ``None`` segments so MinIO-style s3-compatible connections
-    (no profile) render as ``s3 · us-east-1`` without an empty pair of
-    separators. Kept here (not on PaneVM) so the connection→title format
-    stays close to the place that knows the connection shape.
-    """
-    parts: list[str] = [connection.kind]
+
+def _format_pane_title(connection: Connection) -> str:
+    """Build the connection-identity string rendered in the pane's
+    bottom border subtitle.
+
+    Format depends on the connection ``kind``:
+
+    - ``aws``            → ``aws s3 · {profile} · {region}``
+    - ``s3-compatible``  → ``s3-compatible · {name} · {endpoint}``
+
+    For ``s3-compatible`` the ``region`` is intentionally *not* shown —
+    MinIO and friends don't have a meaningful region, and surfacing the
+    internal default (``us-east-1`` for SigV4) is misleading. The
+    user-defined connection ``name`` and ``endpoint_url`` carry the
+    actual identity. The endpoint's ``http(s)://`` scheme is stripped
+    for compactness."""
+    if connection.kind == "aws":
+        parts: list[str] = ["aws s3"]
+        if connection.profile:
+            parts.append(connection.profile)
+        if connection.region:
+            parts.append(connection.region)
+        return " · ".join(parts)
+    if connection.kind == "s3-compatible":
+        parts = ["s3-compatible", connection.name]
+        endpoint = _strip_scheme(connection.endpoint_url)
+        if endpoint:
+            parts.append(endpoint)
+        return " · ".join(parts)
+    # Fallback for any future kind — keep the old shape.
+    parts = [connection.kind]
     if connection.profile:
         parts.append(connection.profile)
     if connection.region:

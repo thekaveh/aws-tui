@@ -74,14 +74,14 @@ welcome modal pops up — pick **add s3-compatible** and fill the form:
 | Secret access key | `minioadmin` |
 
 That writes a `static` entry to `config.toml`. To upgrade to
-keychain-backed credentials, edit `~/.config/aws-tui/config.toml`
-and change:
+keychain-backed credentials, edit your config file (see
+[docs/platforms.md](platforms.md) for the path on each OS) and
+change:
 
 ```toml
 [connections.minio-local]
 kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
-region = "us-east-1"
 credentials = "keychain:minio-local"
 force_path_style = true
 verify_tls = true
@@ -94,11 +94,21 @@ If you already have other connections, just append:
 [connections.minio-local]
 kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
-region = "us-east-1"
-credentials = "keychain:minio-local"
+credentials = "static"          # tells the resolver to use inline keys below
+access_key_id = "minioadmin"
+secret_access_key = "minioadmin"
 force_path_style = true
-verify_tls = true
+verify_tls = false              # http:// MinIO → no cert to verify
 ```
+
+For **multiple** S3-compatible services, just add more
+`[connections.<name>]` blocks — the `<name>` (e.g. `minio-local`,
+`r2-prod`, `b2-archive`) becomes the source identifier shown in
+the pane's bottom border (`s3-compatible · minio-local · localhost:9000`).
+**Region is optional and intentionally not displayed** for
+`s3-compatible` connections — MinIO/R2/B2/etc. don't have a
+meaningful region, so the pane title shows `name · endpoint`
+instead.
 
 ### 1.5. Use it
 ```bash
@@ -107,6 +117,13 @@ aws-tui
 
 Then in-app: `:` `connection switch ▸ minio-local` `Enter`. The S3
 pane should list your buckets.
+
+Press `Shift+S` on the focused pane to **cycle through every
+available source** — `local` → every TOML / auto-discovered
+connection → wrap. AWS profiles auto-discovered from
+`~/.aws/credentials` show up as `aws s3 · {profile} · {region}`;
+TOML `s3-compatible` entries show up as
+`s3-compatible · {name} · {endpoint}`.
 
 ---
 

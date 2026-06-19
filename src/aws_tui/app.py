@@ -627,9 +627,18 @@ class AwsTuiApp(App[None]):
             move.execute(delta)
 
     async def action_swap_source(self) -> None:
-        """Swap the focused pane between S3 and local provider so the
-        user can put any of the four {S3, local} x {S3, local}
-        combinations on the dual-pane."""
+        """Cycle the focused pane through every available source.
+
+        The cycle is built from ``ConnectionResolver.list()`` (TOML +
+        auto-discovered AWS profiles) plus the local filesystem. Each
+        press of ``Shift+S`` advances to the next candidate, wrapping
+        at the end, so the user can spin through ``aws s3 · default ·
+        us-east-1`` → ``s3-compatible · minio-local · localhost:64093``
+        → ``local`` → ``aws s3 · default · …`` without opening the
+        connection picker.
+
+        The current position is found by matching the focused pane's
+        identity label against each candidate's computed label."""
         ctx = self._app_ctx
         dual = self._dual_pane()
         if dual is None:
@@ -640,42 +649,57 @@ class AwsTuiApp(App[None]):
         try:
             from aws_tui.domain.local_fs import LocalFS
             from aws_tui.domain.s3_fs import S3FS
+            from aws_tui.services.s3.service import (
+                _aioboto3_session_for,
+                _format_pane_title,
+            )
         except Exception:
             return
-        # Decide what the OTHER provider would be based on the current
-        # one's type. We replace the focused pane's provider with the
-        # complementary one and re-list from the root.
-        current = focused.provider
+
+        _LOCAL_LABEL = "local"
+
+        # Build the candidate ring: local first, then every connection
+        # the resolver knows about. Each entry carries its display
+        # label and a factory that returns ``(provider, path_protocol)``
+        # ready to feed into ``swap_provider``. Connection captures use
+        # default-arg binding so the closure doesn't latch onto the
+        # loop variable.
+        candidates: list[tuple[str, object]] = [(_LOCAL_LABEL, "local")]
+        for conn in ctx.connection_resolver.list():
+            candidates.append((_format_pane_title(conn), conn))
+        if len(candidates) <= 1:
+            self.notify("No connections configured — can't swap source.", severity="warning")
+            return
+
+        current_label = focused.identity_label or _LOCAL_LABEL
+        try:
+            idx = next(i for i, (label, _) in enumerate(candidates) if label == current_label)
+        except StopIteration:
+            idx = -1  # current label unknown → start of ring on next++
+        next_label, payload = candidates[(idx + 1) % len(candidates)]
+
         new_provider: object
-        new_identity: str
         new_protocol: str
-        if isinstance(current, S3FS):
+        if payload == "local":
             new_provider = LocalFS()
-            new_identity = "local"
             new_protocol = ""
         else:
-            # Local → S3. Build a service-root S3FS off the active
-            # connection (best-effort; absent connection is a no-op).
-            initial_conn = self._resolve_initial_connection()
-            if initial_conn is None:
-                self.notify("No AWS connection — can't swap to S3", severity="warning")
-                return
-            from aws_tui.services.s3.service import _aioboto3_session_for, _format_pane_title
-
-            session = _aioboto3_session_for(initial_conn)
+            assert not isinstance(payload, str)  # narrowed for mypy
+            conn = payload  # type: ignore[assignment]
+            session = _aioboto3_session_for(conn)
             new_provider = S3FS(
                 session=session,
                 bucket=None,
-                endpoint_url=initial_conn.endpoint_url,
-                force_path_style=initial_conn.force_path_style,
+                endpoint_url=conn.endpoint_url,
+                force_path_style=conn.force_path_style,
             )
-            new_identity = _format_pane_title(initial_conn)
             new_protocol = "s3:"
+
         swap = getattr(focused, "swap_provider", None)
         if swap is None:
             return
-        ctx.log_sink.info("pane.swap_source", to=new_identity)
-        await swap(new_provider, identity_label=new_identity, path_protocol=new_protocol)
+        ctx.log_sink.info("pane.swap_source", to=next_label)
+        await swap(new_provider, identity_label=next_label, path_protocol=new_protocol)
 
     async def action_themes(self) -> None:
         """Open the keyboard-navigable theme picker modal."""

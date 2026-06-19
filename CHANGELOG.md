@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`Shift+S` now cycles through every available source** instead of
+  toggling between the *initial* connection's S3 and Local. The ring
+  is: `local` → every connection the resolver knows about (TOML +
+  auto-discovered AWS profiles) → wrap. Lets you spin through
+  `aws s3 · default · us-east-1` → `s3-compatible · minio-local ·
+  localhost:64093` → `local` → `aws s3 · …` without opening the
+  connection picker.
+- **Pane border-subtitle format is now connection-kind-aware.**
+  - `aws`           → `aws s3 · {profile} · {region}` (was `aws · …`)
+  - `s3-compatible` → `s3-compatible · {name} · {endpoint}`
+    (was `s3-compatible · {profile?} · {region?}`)
+  Region is intentionally *not* surfaced for `s3-compatible` — MinIO,
+  R2, B2, etc. don't have a meaningful region, and showing the
+  internal SigV4 default `us-east-1` was misleading. The user-defined
+  connection `name` (TOML section name) and `endpoint_url` carry the
+  identity. The endpoint's `http(s)://` scheme is stripped for
+  compactness.
+- **Multiple `[connections.<name>]` entries are now first-class.**
+  Adding another `[connections.r2-prod]` block to `config.toml`
+  surfaces it as a candidate in the swap-source ring automatically;
+  the section name is what shows up in the pane title.
 - **Relicensed from MIT to Apache License 2.0.** ``LICENSE`` now
   carries the canonical Apache 2.0 text and is paired with a new
   ``NOTICE`` file (Apache convention for attribution). ``pyproject.toml``
