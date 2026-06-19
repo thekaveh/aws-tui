@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Theme picker now previews themes live as the cursor moves**
+  through the picker; pressing `Esc` rolls back to the
+  originally-active theme; `Enter` commits the cursored theme.
+  Implemented via a new `ThemePickerVM.preview_command` distinct
+  from `pick_theme_command` so commit and preview are semantically
+  separate.
+- **TransfersOverlay rows redesigned as state-coloured cards.**
+  Each transfer is a 5-line card with a colored left border that
+  reflects the state (accent = running, success = done, danger =
+  failed, warning = paused, muted = cancelled), a custom 10-cell
+  progress bar (replaced Textual's `ProgressBar` which fought
+  theme tokens), and a meta row showing bytes done/total + speed
+  + ETA. Speed/ETA derive from a new rolling 5-second sample
+  window on `TransferVM`.
+- **Toast notifications now have per-theme borders coloured by
+  level** (info = rule-dim, success/warning/error use their
+  respective tokens). Previously toasts had padding but no border,
+  which read as floating text on the chrome.
 - **`Shift+S` now cycles through every available source** instead of
   toggling between the *initial* connection's S3 and Local. The ring
   is: `local` → every connection the resolver knows about (TOML +
@@ -161,6 +179,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Modal button labels no longer spill past button borders.**
+  `ModalButton` was fixed-width 18 with padding 0 3, leaving only
+  12 cells for the label; long labels like "Authenticate" clipped
+  through the right border. Buttons are now `width: auto` with a
+  `min-width: 14` and `padding: 0 2`. Every theme's
+  `ConfirmModal > Container > .modal-footer > ModalButton`
+  override was updated to match.
+- **ThemePickerModal now has full per-theme styling.** Previously
+  it shipped only with inline `DEFAULT_CSS` and fell back to
+  bare-terminal background/border on every theme. Each of the 10
+  themes now defines a `ThemePickerModal` block with rounded
+  $bg-elev frame, $accent title, and $bg-sel / $accent-soft
+  cursor highlight matching the file-pane cursor pattern.
+- **ConfirmModal long path values no longer push the modal wider
+  than its 70-col bound.** Path-value chips now `text-wrap: nowrap`
+  and `text-overflow: ellipsis`.
+- **Delete-modal "Confirm" button shifted +2 cells right** as a UX
+  guardrail so a reflex Enter immediately after the modal opens
+  doesn't land where the cursor was. (Borrowed from macOS NSAlert.)
+- **Services-rail selected-row treatment now matches the file-pane
+  cursor pattern** ($bg-sel + $accent-soft + bold) across all 10
+  themes — the rail and the panes now read as siblings.
 - **Transfers overlay mislabelled every transfer as "local-copy."**
   ``TransfersVM`` auto-registered placeholder ``TransferModel`` rows
   with a hard-coded ``direction="local-copy"`` regardless of whether
