@@ -279,7 +279,27 @@ class Pane(HubSubscriberMixin, Widget):
 
     def on_mount(self) -> None:
         self._apply_border_title()
-        self._render_body()
+        # ``_render_body`` calls ``body.mount(...)`` on the ``#pane-body``
+        # VerticalScroll yielded by ``compose``. Textual mounts children
+        # asynchronously AFTER the parent's ``on_mount`` returns, so
+        # calling ``body.mount`` synchronously here raises
+        # ``MountError: Can't mount widget(s) before
+        # VerticalScroll(id='pane-body') is mounted`` whenever the Pane
+        # is mounted dynamically (e.g. via ``host.mount(DualPane(...))``
+        # from ``AwsTuiApp._mount_initial_service_view``) AND the pane
+        # lands in a non-IDLE state at boot (any placeholder branch in
+        # ``_render_body`` has something to mount — UNREACHABLE,
+        # FORBIDDEN, AUTH_REQUIRED, EMPTY, LOADING, ERROR).
+        #
+        # The user-visible trigger: an S3-compatible connection whose
+        # endpoint is offline at app start (MinIO not running, etc.).
+        #
+        # Deferring to the next refresh tick lets Textual finish
+        # mounting ``pane-body`` first. Matches the pattern every other
+        # ``_render_body`` caller in this class uses
+        # (``_on_vm_property_changed`` always goes through
+        # ``call_after_refresh``).
+        self.call_after_refresh(self._render_body)
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
