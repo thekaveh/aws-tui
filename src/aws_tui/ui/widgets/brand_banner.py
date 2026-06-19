@@ -20,7 +20,18 @@ from rich.text import Text
 from textual.widget import Widget
 from vmx import Message, MessageHub
 
+from aws_tui.version import __version__
 from aws_tui.vm.messages import ThemeChangedMessage
+
+# Project tagline (top-left of the banner's border) and pedigree
+# (bottom-right). Match the visual treatment of the genai-vanilla
+# reference: short positioning line up top, attribution / licence /
+# version / repo line down bottom.
+_TAGLINE = "A cross-platform, Norton-Commander-style TUI for AWS and S3-compatible services."
+_PEDIGREE = (
+    "by Kaveh Razavi <kaveh.razavi@gmail.com>  ·  MIT License  ·  "
+    f"v{__version__}  ·  https://github.com/thekaveh/aws-tui"
+)
 
 # Block-art rows for "AWS-TUI" — built letter-by-letter and concatenated
 # so the gradient flows horizontally across each row exactly like the
@@ -253,6 +264,8 @@ class BrandBanner(Widget):
         height: auto;
         width: 100%;
         content-align: center middle;
+        border-title-align: left;
+        border-subtitle-align: right;
     }
     """
 
@@ -271,6 +284,12 @@ class BrandBanner(Widget):
         self._palette: tuple[str, ...] = _palette_for(theme_name)
         self._hub: MessageHub[Message] | None = hub
         self._sub: DisposableBase | None = None
+        # Tagline (border title) + heritage / pedigree (border subtitle)
+        # — same visual treatment as the genai-vanilla reference. Set on
+        # the widget so they survive theme swaps; the border itself
+        # comes from the theme tcss.
+        self.border_title = _TAGLINE
+        self.border_subtitle = _PEDIGREE
 
     def on_mount(self) -> None:
         if self._hub is not None:

@@ -31,6 +31,7 @@ class HintLegend(HubSubscriberMixin, Widget):
         height: 3;
         margin: 0 1 1 1;
         align: center middle;
+        border-title-align: left;
     }
     HintLegend > #hint-strip {
         height: 1;
@@ -65,6 +66,9 @@ class HintLegend(HubSubscriberMixin, Widget):
         super().__init__(id=id, classes=classes)
         self._vm: HintLegendVM = vm
         self._hub: MessageHub[Message] = hub
+        # Border title at top-left — matches the genai-vanilla reference
+        # where the keymap footer is framed by a labelled rule.
+        self.border_title = "Shortcuts"
 
     @property
     def vm(self) -> HintLegendVM:
@@ -103,7 +107,11 @@ class HintLegend(HubSubscriberMixin, Widget):
         for i, chip in enumerate(self._vm.actions):
             if i > 0:
                 widgets.append(Static("·", classes="hint-sep"))
-            widgets.append(Static(chip.key_label, classes="hint-key"))
+            # Wrap the key in ``[...]`` brackets — same visual treatment
+            # as the genai-vanilla reference (``[a] all  ·  [e] errors  ·  …``)
+            # so the bound key is unambiguous even when an action label
+            # itself looks key-like.
+            widgets.append(Static(f"[{chip.key_label}]", classes="hint-key"))
             widgets.append(Static(chip.action_label, classes="hint-label"))
         return widgets
 
