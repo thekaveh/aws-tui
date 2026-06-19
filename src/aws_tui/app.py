@@ -590,22 +590,24 @@ class AwsTuiApp(App[None]):
         self._extend_selection(1)
 
     def _extend_selection(self, delta: int) -> None:
-        """Shift+arrow handler with three modes — extend, shrink, and
-        toggle-off-isolated.
+        """Shift+arrow handler: TOGGLE the row we are leaving, then move.
 
-        - **Target marked** → *shrink*. The user is reversing course
-          back into the existing range; unmark the row we're leaving.
-        - **Current marked + opposite-direction neighbor marked** →
-          *extend*. We are at the leading edge of a multi-row range
-          and pushing it forward; mark the target.
-        - **Current marked + opposite-direction neighbor unmarked**
-          (the "isolated mark" case) → *toggle off*. The current row
-          is a single solo mark and the user has Shift-Arrowed onto
-          it again — the natural reading is "undo this mark." Unmark
-          current, move cursor; don't touch target.
-        - **Current unmarked** → *extend from scratch*. Mark both
-          current and target so the very first Shift+Arrow captures
-          the starting cell."""
+        Rule (from the user — see PR comments): the only row whose
+        mark changes is the row the cursor is *moving away from*. The
+        target row is never touched, and we never modify both rows in
+        the same press. This gives clean, predictable semantics:
+
+        - Walking down through an unmarked range with Shift+Down marks
+          each row as you leave it.
+        - Walking back up through a marked range with Shift+Up unmarks
+          each row as you leave it.
+        - On a row whose mark you want flipped, point at it and press
+          Shift+Arrow — the row toggles, cursor moves on.
+
+        Cursor still moves even when the move would land out of range
+        of the entries list (handled by ``move_cursor_command``'s own
+        clamp), but the toggle only happens when ``cur`` is a real
+        row (always true here since we got it from ``cursor_index``)."""
         dual = self._dual_pane()
         if dual is None:
             return
@@ -613,25 +615,13 @@ class AwsTuiApp(App[None]):
         if pane is None:
             return
         cur = pane.cursor_index
-        target = cur + delta
         entries = pane.filtered_entries
-        if not (0 <= target < len(entries)):
+        if not (0 <= cur < len(entries)):
             return
         mark = getattr(pane, "mark_at", None)
         if mark is None:
             return
-        target_marked = entries[target].is_marked
-        current_marked = entries[cur].is_marked
-        opposite_idx = cur - delta
-        opposite_marked = 0 <= opposite_idx < len(entries) and entries[opposite_idx].is_marked
-        if target_marked:
-            mark(cur, marked=False)
-        elif current_marked and not opposite_marked:
-            # Isolated single mark + Shift+Arrow → toggle the mark off.
-            mark(cur, marked=False)
-        else:
-            mark(cur, marked=True)
-            mark(target, marked=True)
+        mark(cur, marked=not entries[cur].is_marked)
         move = getattr(pane, "move_cursor_command", None)
         if move is not None:
             move.execute(delta)

@@ -60,6 +60,58 @@ async def test_shift_arrow_extends_selection(
 
 
 @pytest.mark.asyncio
+async def test_shift_arrow_toggles_only_the_row_being_left(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    """Locks in the user's exact rule: Shift+Arrow toggles ONLY the
+    row the cursor is moving *away from*. The target row is never
+    touched, and never both. Walking down then back up unmarks each
+    row exactly the way it got marked."""
+    local = await _seed_local()
+    ctx = app_context_factory(fs=local)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        panes = list(app.query(Pane))
+        focused = panes[0]
+        vm = focused.vm
+        assert sum(1 for e in vm.filtered_entries if e.is_marked) == 0
+
+        start_cursor = vm.cursor_index
+        start_entry = vm.filtered_entries[start_cursor]
+        below_entry = vm.filtered_entries[start_cursor + 1]
+
+        # Shift+Down on an unmarked row: that row becomes marked, the
+        # row we moved INTO must stay untouched (still unmarked here).
+        await pilot.press("shift+down")
+        await pilot.pause()
+        assert start_entry.is_marked is True, "row we left should be marked"
+        assert below_entry.is_marked is False, "row we moved into must NOT be marked by shift+arrow"
+        assert vm.cursor_index == start_cursor + 1
+
+        # Shift+Up from the second row (unmarked) back onto the first
+        # row: toggles the SECOND row (the one we're leaving). The
+        # first row is the target and must NOT be toggled again.
+        await pilot.press("shift+up")
+        await pilot.pause()
+        assert below_entry.is_marked is True, "row we left on the way back up should now be marked"
+        assert start_entry.is_marked is True, (
+            "shift+up must not toggle the target row (still marked from before)"
+        )
+        assert vm.cursor_index == start_cursor
+
+        # Shift+Down again at the marked first row: it toggles OFF
+        # (the row is marked → toggle → unmarked). Target untouched.
+        await pilot.press("shift+down")
+        await pilot.pause()
+        assert start_entry.is_marked is False, (
+            "shift+arrow on a marked row should unmark it (toggle, not extend)"
+        )
+        assert below_entry.is_marked is True, "target row must remain at its previous state"
+
+
+@pytest.mark.asyncio
 async def test_pane_footer_summary_includes_selected_bytes(
     app_context_factory: AppContextBuilder,
 ) -> None:
