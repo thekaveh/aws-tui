@@ -30,7 +30,7 @@ class ToastSnapshotApp(App[None]):
         self._stack.raise_toast(
             ToastModel(
                 id="info-1",
-                text="Theme changed to: carbon",
+                text=f"Theme changed to: {self._theme}",
                 level=ToastLevel.INFO,
                 sticky=True,
                 timeout_seconds=None,

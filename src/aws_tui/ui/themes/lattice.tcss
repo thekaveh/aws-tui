@@ -403,26 +403,9 @@ Toast {
     margin: 0 0 1 0;
     background: $bg-elev;
     color: $text;
-    border-left: solid $accent;
+    border: round $rule-dim;
 }
 
-Toast.-info {
-    border-left: solid $accent;
-}
-
-Toast.-success {
-    border-left: solid $success;
-}
-
-Toast.-warning {
-    border-left: solid $warning;
-    color: $warning;
-}
-
-Toast.-error {
-    border-left: solid $danger;
-    color: $danger;
-}
 
 BrandBanner {
     border: round $rule-dim;
@@ -491,16 +474,7 @@ TransferRowWidget .transfer-rate  { color: $text-muted; }
 }
 
 /* ── Toast stack (top-right notifications layer) ─────────────────────────── */
-ToastStack {
-    background: transparent;
-}
 
-Toast {
-    background: $bg-elev;
-    color: $text;
-    border: round $rule-dim;
-    padding: 0 1;
-}
 Toast.-info    { border: round $rule-dim; }
 Toast.-success { border: round $success;  color: $success; }
 Toast.-warning { border: round $warning;  color: $warning; }
