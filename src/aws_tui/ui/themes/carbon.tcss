@@ -177,7 +177,7 @@ DualPane {
 /* ── Hint legend (bottom) ────────────────────────────────────────────── */
 
 HintLegend {
-    background: $bg-elev;
+    background: $bg;
     color: $text-muted;
     border: round $rule-dim;
     border-title-color: $accent;
@@ -186,17 +186,17 @@ HintLegend {
 
 HintLegend .hint-key {
     color: $accent;
-    background: $bg-elev;
+    background: $bg;
 }
 
 HintLegend .hint-label {
     color: $text-muted;
-    background: $bg-elev;
+    background: $bg;
 }
 
 HintLegend .hint-sep {
     color: $text-dim;
-    background: $bg-elev;
+    background: $bg;
 }
 
 /* ── Command palette ─────────────────────────────────────────────────── */
@@ -412,7 +412,7 @@ Toast.-error {
 /* Subtle rounded border + chrome-strip background; matches StatusBar.   */
 BrandBanner {
     border: round $rule-dim;
-    background: $bg-elev;
+    background: $bg;
     border-title-color: $accent;
     border-subtitle-color: $text-dim;
     border-title-style: bold;
