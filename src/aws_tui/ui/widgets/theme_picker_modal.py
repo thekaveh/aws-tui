@@ -42,10 +42,6 @@ class _ThemeRow(HubSubscriberMixin, Static):
         height: 1;
         padding: 0 2;
     }
-    _ThemeRow.-cursor {
-        background: $boost;
-        text-style: bold;
-    }
     """
 
     def __init__(self, vm: ThemeOptionVM, *, hub: MessageHub[Message]) -> None:
@@ -89,22 +85,6 @@ class ThemePickerModal(ModalScreen[None]):
     ThemePickerModal {
         align: center middle;
     }
-    ThemePickerModal > #picker-frame {
-        width: 44;
-        max-height: 20;
-        padding: 1 0;
-    }
-    ThemePickerModal #picker-title {
-        text-style: bold;
-        text-align: center;
-        width: 100%;
-        padding: 0 2 1 2;
-    }
-    ThemePickerModal #picker-help {
-        text-align: center;
-        width: 100%;
-        padding: 1 2 0 2;
-    }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -126,6 +106,7 @@ class ThemePickerModal(ModalScreen[None]):
             self._cursor: int = names.index(picker.active_theme)
         except ValueError:
             self._cursor = 0
+        self._original_theme: str = picker.active_theme
         self._rows: list[_ThemeRow] = []
 
     def compose(self) -> ComposeResult:
@@ -180,6 +161,9 @@ class ThemePickerModal(ModalScreen[None]):
         self.dismiss(None)
 
     def action_close(self) -> None:
+        # Esc: roll back to the theme that was active when the modal opened.
+        if self._picker.active_theme != self._original_theme:
+            self._picker.preview_command.execute(self._original_theme)
         self.dismiss(None)
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -192,6 +176,9 @@ class ThemePickerModal(ModalScreen[None]):
             return
         self._cursor = new
         self._sync_cursor_class()
+        # Live-preview the cursored theme so the user sees what they'd
+        # commit. Esc (action_close) restores _original_theme.
+        self._picker.preview_command.execute(self._rows[self._cursor].theme_name)
 
     def _sync_cursor_class(self) -> None:
         for i, row in enumerate(self._rows):

@@ -270,6 +270,8 @@ ConfirmModal > Container > .modal-path-value {
     height: auto;
     padding: 0 1;
     margin: 0 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 ConfirmModal > Container > .modal-footer {
     height: 5;
@@ -280,9 +282,10 @@ ConfirmModal > Container > .modal-footer > ModalButton {
     background: $bg;
     color: $text;
     border: round $rule-dim;
-    width: 18;
+    width: auto;
+    min-width: 14;
     height: 3;
-    padding: 0 3;
+    padding: 0 2;
     content-align: center middle;
 }
 ConfirmModal > Container > .modal-footer > ModalButton:hover {
@@ -337,10 +340,47 @@ ConfirmModal.-danger > Container > .modal-title {
     text-style: bold;
 }
 
+ConfirmModal > Container > .modal-footer.-danger > ModalButton.-danger {
+    margin-right: 2;
+}
+
 ConfirmModal > Container > .modal-body {
     color: $text;
 }
 
+/* ── Theme picker modal ──────────────────────────────────────────────── */
+ThemePickerModal {
+    background: $bg 60%;
+}
+ThemePickerModal > #picker-frame {
+    background: $bg-elev;
+    color: $text;
+    border: round $rule-dim;
+    padding: 1 0;
+    width: 44;
+    max-height: 20;
+}
+ThemePickerModal #picker-title {
+    color: $accent;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    padding: 0 2 1 2;
+}
+ThemePickerModal #picker-help {
+    color: $text-muted;
+    text-align: center;
+    width: 100%;
+    padding: 1 2 0 2;
+}
+ThemePickerModal _ThemeRow {
+    color: $text;
+}
+ThemePickerModal _ThemeRow.-cursor {
+    background: $bg-sel;
+    color: $accent-soft;
+    text-style: bold;
+}
 
 /* ── Quick Look ──────────────────────────────────────────────────────── */
 
@@ -386,26 +426,9 @@ Toast {
     margin: 0 0 1 0;
     background: $bg-elev;
     color: $text;
-    border-left: solid $accent;
+    border: round $rule-dim;
 }
 
-Toast.-info {
-    border-left: solid $accent;
-}
-
-Toast.-success {
-    border-left: solid $success;
-}
-
-Toast.-warning {
-    border-left: solid $warning;
-    color: $warning;
-}
-
-Toast.-error {
-    border-left: solid $danger;
-    color: $danger;
-}
 
 /* ── Brand banner (top) ───────────────────────────────────────────────── */
 /* Subtle rounded border + chrome-strip background; matches StatusBar.   */
@@ -424,34 +447,46 @@ TransfersOverlay {
 TransfersOverlay #transfers-overlay-title {
     color: $accent;
 }
-TransfersOverlay .transfer-cancel {
+
+TransferRowWidget {
+    border-left: thick $rule-dim;
     background: $bg;
-    color: $accent;
-    border: none;
 }
-TransfersOverlay .transfer-cancel:hover {
-    background: $accent;
+TransferRowWidget.-running        { border-left: thick $accent; }
+TransferRowWidget.-paused         { border-left: thick $warning; }
+TransferRowWidget.-done           { border-left: thick $success; }
+TransferRowWidget.-failed         { border-left: thick $danger; }
+TransferRowWidget.-cancelled      { border-left: thick $rule-dim; }
+
+TransferRowWidget .transfer-name        { color: $text; text-style: bold; }
+TransferRowWidget .transfer-state-word  { color: $text-muted; }
+TransferRowWidget.-running    .transfer-state-word  { color: $accent; }
+TransferRowWidget.-paused     .transfer-state-word  { color: $warning; }
+TransferRowWidget.-done       .transfer-state-word  { color: $success; }
+TransferRowWidget.-failed     .transfer-state-word  { color: $danger; }
+TransferRowWidget.-cancelled  .transfer-state-word  { color: $text-muted; }
+
+TransferRowWidget .transfer-dest-row { color: $text-muted; }
+
+TransferRowWidget .transfer-bar         { color: $accent;     background: $bg; }
+TransferRowWidget.-running    .transfer-bar { color: $accent; }
+TransferRowWidget.-paused     .transfer-bar { color: $warning; }
+TransferRowWidget.-done       .transfer-bar { color: $success; }
+TransferRowWidget.-failed     .transfer-bar { color: $danger; }
+TransferRowWidget.-cancelled  .transfer-bar { color: $text-muted; }
+
+TransferRowWidget .transfer-cancel {
+    color: $text;
+    background: $bg-elev;
+    border: round $rule-dim;
+}
+TransferRowWidget .transfer-cancel:hover {
+    background: $danger;
     color: $bg;
 }
 
-TransferRowWidget ProgressBar {
-    color: $accent;
-    background: $bg-elev;
-}
-TransferRowWidget ProgressBar > Bar {
-    color: $accent;
-    background: $rule-dim;
-}
-TransferRowWidget ProgressBar > Bar > .bar--bar {
-    color: $accent;
-    background: $bg-elev;
-}
-TransferRowWidget ProgressBar > .bar--complete {
-    color: $success;
-}
-TransferRowWidget ProgressBar > .bar--percentage {
-    color: $text;
-}
+TransferRowWidget .transfer-bytes { color: $text-muted; }
+TransferRowWidget .transfer-rate  { color: $text-muted; }
 
 
 /* No-connection placeholder shown in the content host when no AWS or */
@@ -463,6 +498,14 @@ TransferRowWidget ProgressBar > .bar--percentage {
     width: 100%;
     height: 100%;
 }
+
+
+/* ── Toast stack (top-right notifications layer) ─────────────────────────── */
+
+Toast.-info    { border: round $rule-dim; }
+Toast.-success { border: round $success;  color: $success; }
+Toast.-warning { border: round $warning;  color: $warning; }
+Toast.-error   { border: round $danger;   color: $danger; }
 
 
 /* ── Services hamburger (top-left toggle) ────────────────────────────── */

@@ -77,7 +77,8 @@ class ConfirmModal(ModalScreen[bool]):
                 yield Static(path_entry.path, classes="modal-path-value")
             for line in self._request.body_lines:
                 yield Static(line, classes="modal-body")
-            with Horizontal(classes="modal-footer"):
+            footer_classes = "modal-footer -danger" if self._request.danger else "modal-footer"
+            with Horizontal(classes=footer_classes):
                 yield _ModalButton(
                     self._request.cancel_label,
                     button_id="cancel",

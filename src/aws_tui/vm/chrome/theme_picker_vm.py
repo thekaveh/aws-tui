@@ -108,12 +108,16 @@ class ThemePickerVM:
         themes: tuple[str, ...],
         active_theme: str,
         on_pick: Callable[[str], None],
+        on_preview: Callable[[str], None] | None = None,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         id_prefix: str = "theme_picker",
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._on_pick: Callable[[str], None] = on_pick
+        self._on_preview: Callable[[str], None] = (
+            on_preview if on_preview is not None else (lambda _name: None)
+        )
         self._active_theme: str = active_theme
 
         self._options: list[ThemeOptionVM] = [
@@ -141,6 +145,10 @@ class ThemePickerVM:
             RelayCommandOf[str].builder().task(self._pick).build()
         )
 
+        self._preview_theme_command: RelayCommandOf[str] = (
+            RelayCommandOf[str].builder().task(self._preview).build()
+        )
+
     # ── Properties ──────────────────────────────────────────────────────────
 
     @property
@@ -154,6 +162,10 @@ class ThemePickerVM:
     @property
     def pick_theme_command(self) -> RelayCommandOf[str]:
         return self._pick_theme_command
+
+    @property
+    def preview_command(self) -> RelayCommandOf[str]:
+        return self._preview_theme_command
 
     @property
     def status(self) -> ConstructionStatus:
@@ -173,6 +185,7 @@ class ThemePickerVM:
 
     def dispose(self) -> None:
         self._pick_theme_command.dispose()
+        self._preview_theme_command.dispose()
         for opt in self._options:
             opt.dispose()
         self._inner.dispose()
@@ -212,6 +225,19 @@ class ThemePickerVM:
         if not name:
             return
         self._on_pick(name)
+        self.set_active(name)
+
+    def _preview(self, name: str | None) -> None:
+        """Live-preview ``name`` without committing the pick.
+
+        Calls the injected ``on_preview`` (which the modal wires to
+        ``AwsTuiApp.switch_theme`` so the live repaint cascade fires)
+        then updates ``active_theme`` so the row marker follows the
+        cursor.
+        """
+        if not name:
+            return
+        self._on_preview(name)
         self.set_active(name)
 
     def _initial_children(self) -> Iterable[ComponentVMOf[ThemeOptionState]]:

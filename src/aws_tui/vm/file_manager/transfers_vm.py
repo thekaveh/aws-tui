@@ -134,11 +134,26 @@ class TransfersVM:
     # ── Public API ──────────────────────────────────────────────────────────
 
     def register(self, model: TransferModel) -> TransferVM:
-        """Add a new transfer; the caller-driven path."""
+        """Add a new transfer from a model; the caller-driven path."""
         existing = self._find(model.id)
         if existing is not None:
             return existing
         vm = TransferVM(model, hub=self._hub, dispatcher=self._dispatcher)
+        return self.register_vm(vm)
+
+    def register_vm(self, vm: TransferVM) -> TransferVM:
+        """Register a pre-constructed :class:`TransferVM`.
+
+        Lower-level primitive ``register(model)`` delegates to. Tests and
+        snapshot harnesses use this directly to inject a TransferVM built
+        with a custom clock (so ``current_speed`` / ``current_eta`` render
+        deterministically). Idempotent on transfer-id collision — returns
+        the existing VM and does NOT dispose the passed-in one (caller
+        owns it in that case).
+        """
+        existing = self._find(vm.id)
+        if existing is not None:
+            return existing
         self._transfers.append(vm)
         if self._inner.is_constructed:
             vm.construct()
