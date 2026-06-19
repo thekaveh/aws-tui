@@ -393,6 +393,9 @@ Toast.-error {
 BrandBanner {
     border: round $rule-dim;
     background: $bg-elev;
+    border-title-color: $accent;
+    border-subtitle-color: $text-dim;
+    border-title-style: bold;
 }
 
 TransfersOverlay {
