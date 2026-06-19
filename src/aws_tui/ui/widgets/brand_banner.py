@@ -29,7 +29,7 @@ from aws_tui.vm.messages import ThemeChangedMessage
 # version / repo line down bottom.
 _TAGLINE = "A cross-platform, Norton-Commander-style TUI for AWS and S3-compatible services."
 _PEDIGREE = (
-    "by Kaveh Razavi <kaveh.razavi@gmail.com>  ·  MIT License  ·  "
+    "by Kaveh Razavi <kaveh.razavi@gmail.com>  ·  Apache License 2.0  ·  "
     f"v{__version__}  ·  https://github.com/thekaveh/aws-tui"
 )
 

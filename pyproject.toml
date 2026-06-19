@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "aws-tui"
 description = "Cross-platform TUI for AWS and S3-compatible services. Powered by Textual + VMx MVVM."
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "Kaveh Razavi", email = "kaveh.razavi@gmail.com" }]
 requires-python = ">=3.11"
 keywords = [
@@ -25,7 +25,7 @@ classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: System Administrators",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: Apache Software License",
   "Operating System :: MacOS",
   "Operating System :: POSIX :: Linux",
   "Operating System :: Microsoft :: Windows",
