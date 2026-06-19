@@ -97,6 +97,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Shift+Arrow semantics simplified to "toggle the row I'm
+  leaving."** Previous version had three modes (extend / shrink /
+  toggle-isolated) and could touch both the current and target
+  rows in a single press, which surprised users walking back
+  through a contiguous range. New rule from the user: a Shift+Arrow
+  flips the mark on the row the cursor is moving *away from* and
+  never touches the target. Walking down through unmarked rows
+  marks them as you leave; walking back up through them unmarks
+  them the same way. New regression test
+  `test_shift_arrow_toggles_only_the_row_being_left` locks it in.
 - **Carbon banner now uses the genai-vanilla blue gradient.**
   Direct 6-stop subsample of the upstream 15-stop palette
   (`color(17)` deep navy → `color(195)` pale blue), matching the
