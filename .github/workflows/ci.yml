@@ -11,6 +11,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Principle of least privilege: every job in this workflow only reads
+# the repo and writes ephemeral actions-storage artifacts. No token
+# scope above `contents: read` is needed.
+permissions:
+  contents: read
+
 jobs:
   unit:
     name: unit (${{ matrix.os }} / py${{ matrix.python }})
@@ -29,8 +35,14 @@ jobs:
         run: uv python install ${{ matrix.python }}
       - name: sync
         run: uv sync --python ${{ matrix.python }}
-      - name: pytest (unit tier)
-        run: uv run --python ${{ matrix.python }} pytest tests/unit -v
+      # Runs unit + the in-process integration files (full-app pilot,
+      # modal forwarding, etc. — they intentionally lack the
+      # `integration` marker per pyproject's addopts comment). The
+      # MinIO testcontainer tier is excluded by the default
+      # `-m 'not integration'` addopts and runs in the integration job
+      # below.
+      - name: pytest (unit + in-process integration)
+        run: uv run --python ${{ matrix.python }} pytest tests/unit tests/integration -v
 
   integration:
     name: integration (MinIO testcontainer)

@@ -20,6 +20,7 @@ import configparser
 import contextlib
 import hashlib
 import json
+import logging
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -216,8 +217,19 @@ class AwsSession:
         pending = list(self._open_clients)
         self._open_clients.clear()
         for cm in pending:
-            with contextlib.suppress(Exception):
+            try:
                 await cm.__aexit__(None, None, None)
+            except Exception as exc:
+                # Shutdown is best-effort by design (the user has already
+                # asked us to quit), but a silent suppress hid genuine
+                # leaks. Log so crash-dump triage has a signal.
+                _logger.warning(
+                    "aws_session.aclose_failed",
+                    extra={"error": str(exc), "error_type": type(exc).__name__},
+                )
+
+
+_logger = logging.getLogger("aws_tui.infra.aws_session")
 
 
 def _parse_iso8601(value: str) -> datetime:

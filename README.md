@@ -56,16 +56,18 @@ Linux, and Windows. Powered by
   rebind anything in `[keybindings]` without touching code.
 - **Streaming Quick Look.** `Space` on a file streams the first 64 KB
   with a syntax tint for a fast peek without downloading the whole
-  object. (A full-file `$PAGER` shell-out is in the spec but not yet
-  wired in v0.7.x; see CHANGELOG for the v0.8 roadmap.)
+  object. A full-file `$PAGER` shell-out is in the spec but not yet
+  wired in v0.7.x (tracked under the `[Unreleased] Deferred` section
+  of `CHANGELOG.md`).
 - **Command palette.** `:` or `Ctrl+K`. Fuzzy-filterable list of every
   action — including dynamic ones like `connection switch <name>` and
   `theme switch <name>`.
 - **Strict layered architecture.** View ▸ ViewModel ▸ Service ▸ Domain
-  ▸ Infra; enforced by `ruff` import rules + `scripts/check-layers.sh`.
-  Mypy strict-clean. 580 default-tier tests (unit / in-process
-  integration / snapshot / e2e), plus 9 opt-in MinIO integration tests
-  (`uv run pytest -m integration`).
+  ▸ Infra; enforced by `scripts/check-layers.sh` (a ruff
+  `flake8-tidy-imports` migration is queued — see
+  `docs/architecture.md` §2). Mypy strict-clean. 609 default-tier tests
+  (unit / in-process integration / snapshot / e2e), plus 9 opt-in MinIO
+  integration tests (`uv run pytest -m integration`).
 
 ## 2. Install
 
@@ -134,6 +136,7 @@ Numbered hierarchically per the project's `NUMBERED_DOCS` mandate.
    2. [Keybindings](docs/keybindings.md) — full key map; how to customize bindings via `~/.config/aws-tui/config.toml`.
    3. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
    4. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to MinIO, switch theme on the fly, customize bindings, resume after a crash).
+   5. [Supported platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
 2. **Contributor-facing**
    1. [Architecture](docs/architecture.md) — five-layer model + composition root + lifecycle + messaging primer.
    2. [Adding a new service](docs/adding-a-service.md) — the `Service` protocol + per-layer wiring.
@@ -167,10 +170,11 @@ Numbered hierarchically per the project's `NUMBERED_DOCS` mandate.
 | `AWS_DEFAULT_REGION` | unset | Standard boto3 region override. |
 | `AWS_TUI_TRANSFER_LINGER` | `3.0` | Seconds a finished transfer's row stays visible in the transfers overlay before it fades. Test-only knob — short values make `pytest` runs faster. |
 
-`$PAGER` and `$EDITOR` are honored by the underlying AWS CLI / boto3
-flows the TUI shells out to for SSO setup; aws-tui itself does not
-read them in v0.7.x. The Quick Look full-file `$PAGER` shell-out is
-spec'd but not yet wired.
+Any `$PAGER` / `$EDITOR` semantics during the AWS-CLI shell-out for
+SSO setup follow the AWS CLI's own conventions; aws-tui itself does
+not read those variables in v0.7.x. The Quick Look full-file `$PAGER`
+shell-out is spec'd but not yet wired (see the
+`[Unreleased] Deferred` block of `CHANGELOG.md`).
 
 ## 7. Contributing
 

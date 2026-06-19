@@ -1,11 +1,21 @@
 # Keybindings
 
 > Mirror of spec §4.2. Fully customizable via the `[keybindings]`
-> section of `~/.config/aws-tui/config.toml`.
+> section of `~/.config/aws-tui/config.toml` *once the input-router
+> wiring lands* — see the v0.7.x status note at the end of §1 and
+> the **Deferred / v0.8 roadmap** block in `CHANGELOG.md`.
 
 The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 (terminals intercept it). Letter-driven, with the command palette
 (`:` or `Ctrl+K`) as the universal escape hatch.
+
+> **v0.7.x wiring status:** rows below tagged `(deferred)` are
+> declared in `KeymapStore.DEFAULT_BINDINGS` but the matching
+> `action_*` handler has not yet been added to `AwsTuiApp`. They
+> remain valid action IDs (your `[keybindings]` overlay can rebind
+> them today; the binding takes effect once the deferred wiring
+> ships). See the **Deferred / v0.8 roadmap** block in `CHANGELOG.md`
+> for the full list.
 
 ## 1. Default bindings
 
@@ -37,44 +47,44 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Action | Default | Notes |
 |---|---|---|
 | Copy across panes | `c` | Streams through `CrossFsCopy`, shows confirm modal |
-| Move across panes | `m` | Copy + delete-source after success |
+| Move across panes | `pane.move` action — *(deferred)* | `m` is currently bound to the services-rail toggle (§1.5); the move handler is not yet wired in `AwsTuiApp` |
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
-| New folder | `n` | |
-| Rename in place | `m` | Move-with-one-marked doubles as rename |
+| New folder | `pane.new` action — *(deferred)* | No handler wired in v0.7.x |
+| Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
 | Refresh pane | `r` | |
 
 ### 1.4. Overlays
 
-| Action | Default |
-|---|---|
-| Quick Look | `Space` (normal mode) |
-| Fuzzy find | `Ctrl+P` |
-| Filter pane | `/` |
-| Command palette | `:` or `Ctrl+K` |
-| Theme picker (modal) | `t` |
-| Cycle to next theme (no modal) | `Shift+T` (`T`) |
-| Help overlay | `?` |
+| Action | Default | Notes |
+|---|---|---|
+| Quick Look | `pane.quick_look` action — *(deferred)* | Spec'd on `Space`; preview handler not wired in v0.7.x |
+| Fuzzy find | `pane.fuzzy_find` action — *(deferred)* | Spec'd on `Ctrl+P`; not wired |
+| Filter pane | `pane.filter` action — *(deferred)* | Spec'd on `/`; not wired |
+| Command palette | `app.command_palette` action — *(deferred)* | Spec'd on `:` / `Ctrl+K`; in v0.7.x `:` opens the help overlay (placeholder) and `Ctrl+K` is unbound |
+| Theme picker (modal) | `t` | |
+| Cycle to next theme (no modal) | `Shift+T` (`T`) | |
+| Help overlay | `?` | |
 
 ### 1.5. Pane chrome
 
 | Action | Default | Notes |
 |---|---|---|
-| Toggle services rail (collapsed ↔ expanded) | `s` | Also toggles on a mouse click on the rail |
+| Toggle services rail (collapsed ↔ expanded) | `m` | Also toggles via the `+`/`−` hamburger glyph on the rail's top-left |
 | Swap focused pane source (S3 ↔ local) | `Shift+S` (`S`) | Enables any of `{S3, local} × {S3, local}` dual-pane combos |
 
 ### 1.6. Connection / auth
 
-| Action | Default |
-|---|---|
-| Authenticate (when auth toast active) | `a` |
-| Connection switcher | `:` then `connection switch` |
+| Action | Default | Notes |
+|---|---|---|
+| Authenticate (when auth toast active) | `auth.authenticate` action — *(deferred)* | Spec'd on `a`; handler not wired in v0.7.x |
+| Connection switcher | `app.command_palette` action — *(deferred)* | Spec'd as `:` then `connection switch <name>`; the palette open binding is deferred |
 
 ### 1.7. App
 
-| Action | Default |
-|---|---|
-| Cancel / dismiss modal | `Esc` |
-| Quit | `q` or `Ctrl+C` |
+| Action | Default | Notes |
+|---|---|---|
+| Cancel / dismiss modal | `Esc` | Modal-owned; works on every modal that ships in v0.7.x |
+| Quit | `q` or `Ctrl+C` | |
 
 ## 2. Customizing
 
@@ -95,55 +105,65 @@ The default map is declared in `infra/keymap_store.py` and merged with
 your overlay; unknown action ids are rejected so a typo in your config
 raises a startup error instead of silently dropping a binding.
 
-The mainline navigation, file-ops, overlay, and chrome actions are
-fully wired into Textual handlers. **v0.7.x status**: the
-`KeymapStore` accepts the `[keybindings]` overlay via its constructor
-and validates every action id, but the composition root does not yet
-read the overlay from `config.toml` — that wiring is part of the
-input-router work deferred from M6 (see
-[cookbook.md §3](cookbook.md#3-customize-a-keybinding)). Today the
-same effect is achievable by editing
-`src/aws_tui/infra/keymap_store.py::DEFAULT_BINDINGS` directly in
-a fork. Bind ahead of time in your config and the wiring will pick
-them up once it lands.
+**v0.7.x status**: the `KeymapStore` accepts the `[keybindings]`
+overlay via its constructor and validates every action id, but the
+composition root does not yet read the overlay from `config.toml` —
+that wiring is part of the input-router work deferred from M6 (see
+[cookbook.md §3](cookbook.md#3-customize-a-keybinding) and the
+**Deferred / v0.8 roadmap** block in `CHANGELOG.md`). Today the same
+effect is achievable by editing
+`src/aws_tui/infra/keymap_store.py::DEFAULT_BINDINGS` directly in a
+fork. Bind ahead of time in your config and the wiring will pick them
+up once it lands.
+
+The bindings that **are** wired today (in v0.7.x) and routed straight
+through `AwsTuiApp.BINDINGS` rather than the keymap store: `q`,
+`Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
+`Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `c`, `d`, `m`, `S`
+(Shift+S), `Shift+↑`, `Shift+↓`.
 
 ## 3. Action IDs
 
-| Action ID | Default key | What it does |
-|---|---|---|
-| `app.quit` | `q` / `ctrl+c` | Graceful shutdown |
-| `app.command_palette` | `:` / `ctrl+k` | Open palette |
-| `app.help` | `?` | Help overlay |
-| `app.themes` | `t` | Open theme picker modal |
-| `app.cycle_theme` | `T` (`shift+t`) | Cycle to next theme without opening the modal |
-| `app.swap_source` | `S` (`shift+s`) | Swap the focused pane between S3 and local |
-| `pane.move_up` / `pane.move_down` | `↑` / `↓` (also `j` / `k`) | Move cursor |
-| `pane.descend` | `enter` | Descend into folder / bucket |
-| `pane.ascend` | `backspace` / `←` | Parent path |
-| `pane.switch_focus` | `tab` | Move focus to the other pane |
-| `pane.switch_focus_back` | `shift+tab` | Move focus to the previous pane |
-| `pane.quick_look` | `space` (normal mode) | Stream first 64 KB |
-| `pane.filter` | `/` | Local pane filter |
-| `pane.fuzzy_find` | `ctrl+p` | Fuzzy find paths / buckets |
-| `pane.enter_multiselect` | `v` | Enter multi-select mode |
-| `pane.toggle_select` | `space` (multi-select) | Add / remove from selection |
-| `pane.select_all` | `a` | Select all in pane |
-| `pane.copy` | `c` | Copy marked entries to other pane |
-| `pane.move` | `m` | Move marked entries to other pane (or rename one) |
-| `pane.delete` | `d` | Delete marked entries (confirms) |
-| `pane.new` | `n` | New folder / bucket |
-| `pane.refresh` | `r` | Re-run `provider.list()` |
-| `auth.authenticate` | `a` (when auth toast active) | Shell-out to `aws sso login` |
-| `modal.cancel` | `escape` | Cancel / close current overlay |
+The `wired?` column marks whether `AwsTuiApp` currently has a matching
+`action_*` handler. `(deferred)` rows are valid action IDs you can
+overlay today; the binding takes effect once the input-router wiring
+lands (see the §1 status note).
+
+| Action ID | Default key | Wired? | What it does |
+|---|---|---|---|
+| `app.quit` | `q` / `ctrl+c` | ✓ | Graceful shutdown |
+| `app.command_palette` | `:` / `ctrl+k` | *(deferred)* | Open palette (today `:` falls back to the help overlay) |
+| `app.help` | `?` | ✓ | Help overlay |
+| `app.themes` | `t` | ✓ | Open theme picker modal |
+| `app.cycle_theme` | `T` (`shift+t`) | ✓ | Cycle to next theme without opening the modal |
+| `app.swap_source` | `S` (`shift+s`) | ✓ | Swap the focused pane between S3 and local |
+| `pane.move_up` / `pane.move_down` | `↑` / `↓` (also `j` / `k`) | ✓ | Move cursor |
+| `pane.descend` | `enter` | ✓ | Descend into folder / bucket |
+| `pane.ascend` | `backspace` / `←` | ✓ | Parent path |
+| `pane.switch_focus` | `tab` | ✓ | Move focus to the other pane |
+| `pane.switch_focus_back` | `shift+tab` | ✓ | Move focus to the previous pane |
+| `pane.quick_look` | `space` (normal mode) | *(deferred)* | Stream first 64 KB |
+| `pane.filter` | `/` | *(deferred)* | Local pane filter |
+| `pane.fuzzy_find` | `ctrl+p` | *(deferred)* | Fuzzy find paths / buckets |
+| `pane.enter_multiselect` | `v` | *(deferred)* | Enter multi-select mode |
+| `pane.toggle_select` | `space` (multi-select) | *(deferred)* | Add / remove from selection |
+| `pane.select_all` | `a` | *(deferred)* | Select all in pane |
+| `pane.copy` | `c` | ✓ | Copy marked entries to other pane |
+| `pane.move` | `m` | *(deferred)* — `m` is in use by the services-rail toggle | Move marked entries (or rename one) |
+| `pane.delete` | `d` | ✓ | Delete marked entries (confirms) |
+| `pane.new` | `n` | *(deferred)* | New folder / bucket |
+| `pane.refresh` | `r` | ✓ | Re-run `provider.list()` |
+| `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Shell-out to `aws sso login` |
+| `modal.cancel` | `escape` | ✓ | Cancel / close current overlay (modal-owned) |
 
 These are the action IDs `KeymapStore.DEFAULT_BINDINGS` actually
 registers. Overlay any of them in your `[keybindings]` table; any other
 id raises `UnknownAction` at startup.
 
-`Shift+↑` / `Shift+↓` (extend-selection) and `s` (services rail toggle)
-are wired directly in `AwsTuiApp.BINDINGS` rather than the keymap
-store, because they're either modifier combinations or static UI
-toggles. They are not currently rebindable through `[keybindings]`.
+`Shift+↑` / `Shift+↓` (extend-selection) and `m` (services rail
+toggle) are wired directly in `AwsTuiApp.BINDINGS` rather than the
+keymap store, because they're either modifier combinations or static
+UI toggles. They are not currently rebindable through `[keybindings]`.
 
 ## 4. Modal forwarding for Enter / Esc / arrows
 

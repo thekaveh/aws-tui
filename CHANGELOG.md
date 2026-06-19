@@ -16,6 +16,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `aws s3 · default · us-east-1` → `s3-compatible · minio-local ·
   localhost:64093` → `local` → `aws s3 · …` without opening the
   connection picker.
+- **VMx is now consumed from PyPI**, replacing the `vendor/vmx` git
+  submodule. Pinned at `vmx>=2.6.0,<3.0.0` — PyPI's lowest published
+  version is `2.6.0`, the vendored `python-v2.4.0` tag was never
+  released. API parity across the 2.4 → 2.6 minor bump verified by
+  522/40 tests staying green. Effects for users: fresh clones no
+  longer need `--recurse-submodules`; CI checkouts no longer fetch
+  the submodule; `scripts/bootstrap.sh` drops the
+  `git submodule update --init --recursive` step. Internal source
+  organization unchanged — every `from vmx import ...` continues to
+  resolve to the same symbols. This also lifts the long-standing
+  "aws-tui PyPI release blocked on VMx publishing" gate; aws-tui's
+  own first PyPI release is the next scheduled milestone.
+- **(first maintenance loop, passes 1–6)** `AwsTuiApp.on_mount`
+  (was 63 effective lines) extracted into four helpers:
+  `_apply_initial_theme`, `_resolve_initial_connection`,
+  `_mount_initial_service_view`, `_mount_no_connection_placeholder`.
+  on_mount itself is now 18 lines.
+- **(first maintenance loop, passes 1–6)** `pyproject.toml`
+  `[tool.pytest.ini_options].addopts` now defaults to
+  `-m 'not integration'` so `uv run pytest` runs the default tier
+  (unit + snapshot + e2e + in-process integration) without Docker.
+  The opt-in MinIO testcontainer tier runs via
+  `uv run pytest -m integration`. CI continues to invoke
+  `pytest -m integration` for the integration job — the right-most
+  `-m` wins.
+- **(first maintenance loop, passes 1–6)** `.github/dependabot.yml`
+  `python-runtime` group now includes `tomli-w` (was missed);
+  `python-dev` group includes `testcontainers*` and `types-*` (also
+  missed) so they group instead of opening individual PRs.
+- **(first maintenance loop, passes 1–6)** `.pre-commit-config.yaml`
+  `astral-sh/ruff-pre-commit` bumped from `v0.15.0` to `v0.15.17`
+  to match `uv.lock` (closes the patch-level drift the M1 fix
+  `91f6040` left at the minor level).
 - **Pane border-subtitle format is now connection-kind-aware.**
   - `aws`           → `aws s3 · {profile} · {region}` (was `aws · …`)
   - `s3-compatible` → `s3-compatible · {name} · {endpoint}`
@@ -125,21 +158,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the first-auto fallback — fixes the "aws s3 ls works on the CLI
   but the TUI shows access denied" SSO setup where `[default]` has no
   creds and the working profile lives in the env.
-
-### Changed
-
-- **VMx is now consumed from PyPI**, replacing the `vendor/vmx` git
-  submodule. Pinned at `vmx>=2.6.0,<3.0.0` — PyPI's lowest published
-  version is `2.6.0`, the vendored `python-v2.4.0` tag was never
-  released. API parity across the 2.4 → 2.6 minor bump verified by
-  522/40 tests staying green. Effects for users: fresh clones no
-  longer need `--recurse-submodules`; CI checkouts no longer fetch
-  the submodule; `scripts/bootstrap.sh` drops the
-  `git submodule update --init --recursive` step. Internal source
-  organization unchanged — every `from vmx import ...` continues to
-  resolve to the same symbols. This also lifts the long-standing
-  "aws-tui PyPI release blocked on VMx publishing" gate; aws-tui's
-  own first PyPI release is the next scheduled milestone.
 
 ### Fixed
 
@@ -368,7 +386,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second overnight loop's pass-2 theme-default fix adds 3 (total 521);
   pass-10's journal-preservation regression test adds 1 (total 522).
 
-### Fixed (first maintenance loop, passes 1–6)
+**First maintenance loop (passes 1–6) fixes** — folded into the
+unified `### Fixed` section above (per Keep a Changelog one-section
+rule); items retained below for provenance until the next release tag
+cuts a new `[Unreleased]`.
 
 - **App launch was visually blank** because `app.py.on_mount` never invoked
   `RootVM.switch_connection_with` / `switch_service`; widgets had no
@@ -428,33 +449,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `docs/adding-a-service.md` cross-reference to spec §7 corrected
     to §2 (the FileSystemProvider protocol).
 
-### Changed (first maintenance loop, passes 1–6)
+**First maintenance loop (passes 1–6) — removed:** dead code: stray
+`_ = head` placeholder in `S3FS.delete()`; unused `max_concurrent`
+ctor param + field in `TransfersVM`. The function-local `DualPane`
+import in `app.py.on_mount` moved to a module-level import. (Items
+folded into the unified `### Removed` section above; retained here for
+provenance.)
 
-- `AwsTuiApp.on_mount` (was 63 effective lines) extracted into four
-  helpers: `_apply_initial_theme`, `_resolve_initial_connection`,
-  `_mount_initial_service_view`, `_mount_no_connection_placeholder`.
-  on_mount itself is now 18 lines.
-- `pyproject.toml` `[tool.pytest.ini_options].addopts` now defaults to
-  `-m 'not integration'` so `uv run pytest` runs the default tier
-  (unit + snapshot + e2e + in-process integration) without Docker.
-  The opt-in MinIO testcontainer tier runs via
-  `uv run pytest -m integration`. CI continues to invoke
-  `pytest -m integration` for the integration job — the right-most
-  `-m` wins.
-- `.github/dependabot.yml` `python-runtime` group now includes
-  `tomli-w` (was missed); `python-dev` group includes `testcontainers*`
-  and `types-*` (also missed) so they group instead of opening
-  individual PRs.
-- `.pre-commit-config.yaml` `astral-sh/ruff-pre-commit` bumped from
-  `v0.15.0` to `v0.15.17` to match `uv.lock` (closes the patch-level
-  drift the M1 fix `91f6040` left at the minor level).
+### Deferred / v0.8 roadmap
 
-### Removed (first maintenance loop, passes 1–6)
+These items are spec'd but explicitly not wired in v0.7.x. They are
+tracked so the next minor release can pick them up without rediscovery:
 
-- Dead code: stray `_ = head` placeholder in `S3FS.delete()`; unused
-  `max_concurrent` ctor param + field in `TransfersVM`. The function-
-  local `DualPane` import in `app.py.on_mount` moved to a module-level
-  import.
+- **Quick Look full-file `$PAGER` shell-out** — `Space` currently
+  streams the first 64 KB with a syntax tint; full-file pager hand-off
+  per the design spec is pending.
+- **`BindingResolver` is constructed but unwired** — `AwsTuiApp`
+  builds it from `KeymapStore` and the `ActionRegistry`, but
+  `BINDINGS` is still a hard-coded `ClassVar`. User `[keybindings]`
+  overlays in `config.toml` parse and validate but do not yet affect
+  the live keymap.
+- **`*_requested` orphan signals** — `PaneVM`/`DualPaneVM` emit
+  `PropertyChangedMessage` envelopes named `open_requested`,
+  `ascend_requested`, `refresh_requested`, `preview_requested`,
+  `copy_requested`, `move_requested`, `delete_requested` that no
+  subscriber consumes. Direct VM-method calls handle the action; the
+  signal path is preserved for the MVVM-correct subscriber wiring.
+- **Modal-driven flows not yet pushed at runtime:** the `ResumeModal`
+  (transfer-journal resume on relaunch), `FirstRunModal` (welcome
+  flow when no connections are configured), `QuickLook` modal
+  (`preview_requested` consumer), and `CommandPalette` modal
+  (no opening binding) are all built, snapshot-tested, and exported
+  from `composition.py` but not invoked by `AwsTuiApp` runtime
+  wiring. The placeholder `_mount_no_connection_placeholder` text
+  panel covers the no-connection case in v0.7.x.
+- **`AwsTuiApp._handle_exception` does not push the crash modal** —
+  the dump file is written and stderr re-raises through `main()`, but
+  the in-app `CrashChoice` modal flow (continue / view trace / quit)
+  is only reachable via the public `show_crash_modal(report)` method
+  on a healthy app; `record_action()` is also not invoked from any
+  binding, so the `_action_ring` is always empty when a dump is
+  written.
 
 ## [0.7.0] - 2026-06-14
 

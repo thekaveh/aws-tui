@@ -18,6 +18,7 @@ The composition builds:
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
@@ -234,15 +235,30 @@ async def apply_resume_decision(
                         await client.abort_multipart_upload(
                             Bucket=bucket, Key=key, UploadId=entry.upload_id
                         )
-                    except Exception:
+                    except Exception as exc:
                         # Keep the journal so the next session can retry. If
                         # we purged here, the MPU would continue to live on
                         # S3 (consuming storage quota) with no local record
                         # of it — silent data leak. The bucket-level MPU
                         # lifecycle rule recommended in connections.md is
                         # the backstop, but the journal is the recovery
-                        # path the user actually drives.
+                        # path the user actually drives. The catch is broad
+                        # by design (botocore raises many shapes, and the
+                        # journal-preservation contract is verified by
+                        # ``test_abort_all_preserves_journal_when_s3_abort_fails``);
+                        # we log here so operators can still see *why* an
+                        # abort failed without reproducing it.
                         abort_succeeded = False
+                        _logger.warning(
+                            "resume.abort.failed",
+                            extra={
+                                "transfer_id": entry.transfer_id,
+                                "bucket": bucket,
+                                "key": key,
+                                "error": str(exc),
+                                "error_type": type(exc).__name__,
+                            },
+                        )
                 if abort_succeeded:
                     journal.mark_aborted(entry.transfer_id)
                     journal.purge(entry.transfer_id)
@@ -335,6 +351,9 @@ def add_s3_compat_connection(
         verify_tls=form.verify_tls,
     )
     config_store.add_connection(entry)
+
+
+_logger = logging.getLogger("aws_tui.composition")
 
 
 __all__ = [
