@@ -11,6 +11,7 @@
 # Claude Code / superpowers session state (transient; specs and plans under docs/ stay tracked)
 .superpowers/
 .claude/local/
+.overnight-maint/
 
 # Python
 __pycache__/

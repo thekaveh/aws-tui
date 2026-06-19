@@ -11,6 +11,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Principle of least privilege: every job in this workflow only reads
+# the repo and writes ephemeral actions-storage artifacts. No token
+# scope above `contents: read` is needed.
+permissions:
+  contents: read
+
 jobs:
   unit:
     name: unit (${{ matrix.os }} / py${{ matrix.python }})
@@ -29,8 +35,14 @@ jobs:
         run: uv python install ${{ matrix.python }}
       - name: sync
         run: uv sync --python ${{ matrix.python }}
-      - name: pytest (unit tier)
-        run: uv run --python ${{ matrix.python }} pytest tests/unit -v
+      # Runs unit + the in-process integration files (full-app pilot,
+      # modal forwarding, etc. — they intentionally lack the
+      # `integration` marker per pyproject's addopts comment). The
+      # MinIO testcontainer tier is excluded by the default
+      # `-m 'not integration'` addopts and runs in the integration job
+      # below.
+      - name: pytest (unit + in-process integration)
+        run: uv run --python ${{ matrix.python }} pytest tests/unit tests/integration -v
 
   integration:
     name: integration (MinIO testcontainer)
@@ -97,6 +109,14 @@ jobs:
         run: uv run mypy
       - name: layer rules
         run: ./scripts/check-layers.sh
+      # Surfaces every hook defined in .pre-commit-config.yaml that
+      # isn't already covered by the dedicated steps above
+      # (end-of-file-fixer, trailing-whitespace, check-yaml,
+      # check-toml, mixed-line-ending, taplo-format, taplo-lint). A
+      # contributor who skips ``pre-commit install`` or commits with
+      # ``--no-verify`` is still gated by CI.
+      - name: pre-commit (all hooks)
+        run: uv run pre-commit run --all-files --show-diff-on-failure
 
   pkg:
     name: package build

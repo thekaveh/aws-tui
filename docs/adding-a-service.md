@@ -132,7 +132,7 @@ protocol applies.
 `src/aws_tui/services/s3/service.py` is the only concrete service in
 v0.7.0. Read it end-to-end (~80 lines):
 
-- `descriptor` declares `id = "s3"`, label `"S3"`, icon `"⎙"`.
+- `descriptor` declares `id = "s3"`, label `"S3"`, icon `"S3"`.
 - `supports()` accepts both `aws` and `s3-compatible` connections.
 - `build_vm(connection)` composes
   `DualPaneVM(left=PaneVM(S3FS), right=PaneVM(LocalFS))` each call.

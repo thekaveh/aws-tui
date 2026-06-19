@@ -38,7 +38,6 @@ def test_invoke_returns_awaitable_for_async_handler() -> None:
     result = reg.invoke("pane.copy")
     assert asyncio.iscoroutine(result)
     # Drain the coroutine to avoid warnings.
-    assert result is not None
     asyncio.new_event_loop().run_until_complete(result)
 
 

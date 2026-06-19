@@ -199,7 +199,12 @@ class ConfigStore:
             # `os.replace` still flow through here.
             tmp_path.replace(self._path)
         except BaseException:
-            # Clean up the tempfile so we don't leak files on failure.
+            # Catching BaseException (rather than Exception) is
+            # intentional: KeyboardInterrupt and SystemExit must also
+            # trigger tempfile cleanup before we re-raise, otherwise a
+            # Ctrl-C mid-write leaves a stray ``config.toml.XXXX`` on
+            # disk. We always re-raise — this is cleanup-then-propagate,
+            # not error swallowing.
             with contextlib.suppress(FileNotFoundError):
                 tmp_path.unlink()
             raise

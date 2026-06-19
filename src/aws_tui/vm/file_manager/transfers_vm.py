@@ -22,6 +22,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.vm.file_manager.transfer_vm import (
+    TransferDirection,
     TransferModel,
     TransferState,
     TransferVM,
@@ -192,10 +193,13 @@ class TransfersVM:
         new_state = msg.state
         if target is None:
             # First sighting — auto-register a placeholder so the bookkeeping
-            # is symmetric whether the caller pre-registered or not.
+            # is symmetric whether the caller pre-registered or not. Infer the
+            # direction from the source/destination URI prefixes: `s3://` on
+            # exactly one side means upload or download; both s3 means
+            # s3-copy; neither means local-copy.
             placeholder = TransferModel(
                 id=msg.transfer_id,
-                direction="local-copy",
+                direction=_infer_direction(msg.source_label, msg.destination_label),
                 source_label=msg.source_label,
                 destination_label=msg.destination_label,
                 bytes_done=msg.bytes_transferred,
@@ -227,6 +231,18 @@ class TransfersVM:
 
     def _initial_children(self) -> Iterable[ComponentVMOf[TransferModel]]:
         return tuple(t.inner for t in self._transfers)
+
+
+def _infer_direction(source_label: str, destination_label: str) -> TransferDirection:
+    src_s3 = source_label.startswith("s3:")
+    dst_s3 = destination_label.startswith("s3:")
+    if src_s3 and dst_s3:
+        return "s3-copy"
+    if src_s3:
+        return "download"
+    if dst_s3:
+        return "upload"
+    return "local-copy"
 
 
 __all__ = ["TransfersVM"]

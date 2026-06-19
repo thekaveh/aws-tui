@@ -73,10 +73,14 @@ welcome modal pops up — pick **add s3-compatible** and fill the form:
 | Access key ID | `minioadmin` |
 | Secret access key | `minioadmin` |
 
-That writes a `static` entry to `config.toml`. To upgrade to
-keychain-backed credentials, edit your config file (see
-[docs/platforms.md](platforms.md) for the path on each OS) and
-change:
+That writes a `static` entry to `config.toml`. Note: every launch with
+a `static`-credentials connection emits a sticky toast warning, per the
+credential-source preference order documented in
+[connections.md §2](connections.md#2-credential-sources-for-s3-compatible-connections);
+the recommended path is to migrate to a `keychain:` source once
+you've verified the connection works. To do that, edit your config
+file (see [docs/platforms.md](platforms.md) for the path on each OS)
+and change:
 
 ```toml
 [connections.minio-local]
@@ -149,7 +153,10 @@ stylesheet instantly without a restart:
 theme = "voidline"
 ```
 
-Theme names: `carbon` (default), `voidline`, `lattice`, `amber`.
+Theme names: `carbon` (default), `voidline`, `lattice`, `amber`,
+`solarized-light`, `github-light`, `one-light`, `nord`, `dracula`,
+`gruvbox-dark`. See [theming.md §1](theming.md#1-built-in-themes) for
+the full per-theme palette breakdown.
 
 ### 2.3. Add a custom theme
 Copy `src/aws_tui/ui/themes/carbon.tcss` to

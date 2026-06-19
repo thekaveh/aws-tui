@@ -23,7 +23,7 @@ EndpointConnection → Unreachable).
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import aioboto3
@@ -608,7 +608,16 @@ def _clean_etag(raw: str | None) -> str | None:
 
 
 def _to_aware(dt: datetime | None) -> datetime | None:
-    return dt
+    """Coerce a naïve datetime to UTC-aware so callers can compare safely.
+
+    boto3 normally returns tz-aware datetimes (UTC), but some S3-compatible
+    providers (notably older MinIO releases) historically returned naïve
+    timestamps. Treat those as UTC explicitly so downstream sort/format
+    code never has to mix aware and naïve values.
+    """
+    if dt is None or dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=UTC)
 
 
 __all__ = ["S3FS"]

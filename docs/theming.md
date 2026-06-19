@@ -119,8 +119,8 @@ The overlay layering means you can keep the built-in look and adjust
 just one or two colors without copying the entire theme.
 
 ## 6. Snapshot tests
-The four themes are pinned by 40 SVG snapshot tests in
-`tests/snapshot/__snapshots__/` (main screen + 6 modals × 4 themes +
-pane-state placeholders). Updates: `uv run pytest tests/snapshot
---snapshot-update`. Snapshots are CI-gated only on Python 3.12 /
-Ubuntu to avoid tolerance flakes.
+The ten themes are pinned by 104 SVG snapshot tests in
+`tests/snapshot/__snapshots__/` (main screen + ~9 modal/pane-state
+combinations × the active theme set). Updates: `uv run pytest
+tests/snapshot --snapshot-update`. Snapshots are CI-gated only on
+Python 3.12 / Ubuntu to avoid tolerance flakes.

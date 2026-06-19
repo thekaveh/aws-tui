@@ -75,6 +75,15 @@ class ServiceItemVM:
     def name(self) -> str:
         return self._inner.name
 
+    @property
+    def inner(self) -> ComponentVMOf[ServiceDescriptor]:
+        """Underlying VMx component. ``ServicesMenuVM`` composes a
+        parent ``CompositeVM`` over the live items via this accessor,
+        which matches the public ``inner`` pattern on the other VM
+        facades (``EntryVM`` / ``TransferVM`` / ``PaneVM`` / ``ToastVM``).
+        """
+        return self._inner
+
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:
@@ -199,7 +208,7 @@ class ServicesMenuVM:
 
     def _initial_children(self) -> tuple[ComponentVMOf[ServiceDescriptor], ...]:
         # The initial pass uses whatever update_connection(...) has staged.
-        return tuple(item._inner for item in self._items)
+        return tuple(item.inner for item in self._items)
 
     def _on_message(self, msg: object) -> None:
         if isinstance(msg, ConnectionChangedMessage):
@@ -223,37 +232,12 @@ class ServicesMenuVM:
         self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
 
     def _rebuild_items(self) -> None:
-        # Determine the desired item set under the current connection.
-        conn = self._connection
-        if conn is None:
-            desired_ids: list[str] = []
-        else:
-            desired_ids = [s.descriptor.id for s in self._registry.all() if s.supports(conn)]
+        desired_ids = self._desired_service_ids()
         current_ids = [item.descriptor.id for item in self._items]
         if desired_ids == current_ids:
             return
-
-        # Clear old items.
-        for item in list(self._items):
-            if item._inner in self._inner:
-                self._inner.remove(item._inner)
-            item.dispose()
-        self._items.clear()
-
-        # Rebuild from the registry in registry-order, only those that support
-        # the current connection.
-        for service in self._registry.all():
-            if conn is None or not service.supports(conn):
-                continue
-            item = ServiceItemVM(
-                descriptor=service.descriptor,
-                hub=self._hub,
-                dispatcher=self._dispatcher,
-            )
-            self._items.append(item)
-            if self._inner.is_constructed:
-                item.construct()
-            self._inner.append(item._inner)
+        self._clear_items()
+        self._repopulate_items(desired_ids)
 
         # Notify subscribers that the items collection changed so the View
         # layer can re-mount the rows. Without this, the ServicesMenu widget
@@ -267,6 +251,37 @@ class ServicesMenuVM:
         ):
             self._selected_id = None
             self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
+
+    def _desired_service_ids(self) -> list[str]:
+        """Service ids the current connection supports, in registry order."""
+        conn = self._connection
+        if conn is None:
+            return []
+        return [s.descriptor.id for s in self._registry.all() if s.supports(conn)]
+
+    def _clear_items(self) -> None:
+        """Detach + dispose every current ``ServiceItemVM``."""
+        for item in list(self._items):
+            if item.inner in self._inner:
+                self._inner.remove(item.inner)
+            item.dispose()
+        self._items.clear()
+
+    def _repopulate_items(self, desired_ids: list[str]) -> None:
+        """Build new ``ServiceItemVM`` rows for ``desired_ids`` in registry order."""
+        desired = set(desired_ids)
+        for service in self._registry.all():
+            if service.descriptor.id not in desired:
+                continue
+            item = ServiceItemVM(
+                descriptor=service.descriptor,
+                hub=self._hub,
+                dispatcher=self._dispatcher,
+            )
+            self._items.append(item)
+            if self._inner.is_constructed:
+                item.construct()
+            self._inner.append(item.inner)
 
 
 __all__ = ["ServiceItemVM", "ServicesMenuVM"]

@@ -33,9 +33,22 @@ class FocusedPane(StrEnum):
 
 
 def _pane_uri(pane: PaneVM, leaf: str) -> str:
-    """Build a stable label for transfer source/destination identifiers."""
+    """Build a stable scheme-prefixed label for transfer source/
+    destination identifiers.
+
+    The scheme prefix (``pane.path_protocol``, e.g. ``"s3:"`` for an
+    S3 pane, ``""`` for local) is preserved so downstream consumers —
+    notably ``TransfersVM._infer_direction`` — can classify the
+    transfer as upload / download / s3-copy / local-copy without
+    re-parsing the underlying provider type.
+    """
+    # ``rstrip("/")`` makes ``base`` empty for root, never ``"/"`` —
+    # so a single template covers both root and non-root paths.
     base = pane.path.as_posix().rstrip("/")
-    return f"{base}/{leaf}" if base != "/" else f"/{leaf}"
+    body = f"{base}/{leaf}"
+    if pane.path_protocol:
+        return f"{pane.path_protocol}/{body}"
+    return body
 
 
 class DualPaneVM:

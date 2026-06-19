@@ -116,7 +116,7 @@ class ToastStackVM:
         # is observable.
         if self._inner.is_constructed:
             toast.construct()
-        self._inner.append(toast._inner)
+        self._inner.append(toast.inner)
         # auto_construct_on_add=True takes care of construct() on the inner
         # once the composite itself is constructed. If we're called before
         # construct() the toast gets constructed by the composite's own
@@ -139,7 +139,7 @@ class ToastStackVM:
     def _initial_children(self) -> Iterable[ComponentVMOf[ToastModel]]:
         # Toasts are only ever added at runtime via raise_toast; the initial
         # collection is whatever has already been queued before construct().
-        return tuple(t._inner for t in self._toasts)
+        return tuple(t.inner for t in self._toasts)
 
     def _on_toast_dismissed(self, toast: ToastVM) -> None:
         # Cancel timer first so the on_dismiss callback doesn't race with
@@ -152,8 +152,8 @@ class ToastStackVM:
         # turn disposes the inner VMx VM.
         if toast in self._toasts:
             self._toasts.remove(toast)
-        if toast._inner in self._inner:
-            self._inner.remove(toast._inner)
+        if toast.inner in self._inner:
+            self._inner.remove(toast.inner)
         toast.dispose()
 
     def _schedule_auto_dismiss(self, toast: ToastVM) -> None:
@@ -179,6 +179,14 @@ class ToastStackVM:
                 return
             toast.dismiss_command.execute()
 
+        # A toast id can be re-raised (e.g. caller refreshes a sticky-then-
+        # auto-dismiss notification). If a prior timer is still pending,
+        # cancel it before installing the replacement — otherwise the old
+        # task stays alive, dismisses the toast at the original deadline,
+        # and races with the new schedule.
+        prev = self._timers.get(toast.model.id)
+        if prev is not None and not prev.done():
+            prev.cancel()
         task = loop.create_task(_run(), name=f"toast-auto-dismiss-{toast.model.id}")
         self._timers[toast.model.id] = task
 

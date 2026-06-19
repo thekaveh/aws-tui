@@ -291,6 +291,15 @@ class BrandBanner(Widget):
         self.border_title = _TAGLINE
         self.border_subtitle = _PEDIGREE
 
+    @property
+    def palette(self) -> tuple[str, ...]:
+        """Current 6-stop banner gradient (read-only).
+
+        Exposed so callers (notably tests) can verify a theme swap took
+        effect without reaching into the private ``_palette`` attribute.
+        """
+        return self._palette
+
     def on_mount(self) -> None:
         if self._hub is not None:
             self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)

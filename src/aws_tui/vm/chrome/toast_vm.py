@@ -122,6 +122,15 @@ class ToastVM:
     def name(self) -> str:
         return self._inner.name
 
+    @property
+    def inner(self) -> ComponentVMOf[ToastModel]:
+        """Underlying VMx component. ``ToastStackVM`` uses this to
+        compose a parent ``CompositeVM`` over the live toasts; tests and
+        other VM facades access it the same way (matches the public
+        ``inner`` accessor on ``EntryVM`` / ``TransferVM`` / ``PaneVM``).
+        """
+        return self._inner
+
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:
