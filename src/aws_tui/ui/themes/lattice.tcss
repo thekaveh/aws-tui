@@ -440,8 +440,6 @@ TransferRowWidget ProgressBar > .bar--percentage {
 ServicesHamburger {
     background: $bg-elev;
     color: $accent;
-    border-left: solid $accent-hot;
-    border-right: solid $accent-hot;
 }
 ServicesHamburger:hover {
     background: $accent;
