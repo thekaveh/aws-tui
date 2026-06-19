@@ -446,7 +446,7 @@ class PaneVM:
         self._path = path
         self._cursor_index = 0
         self._filter_text = ""
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "path"))
+        self._notify("path")
         await self._reload()
 
     async def refresh(self) -> None:
@@ -476,8 +476,8 @@ class PaneVM:
         self._cursor_index = 0
         self._filter_text = ""
         self._is_multiselect_mode = False
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "path"))
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("path")
+        self._notify("viewmodel")
         await self._reload()
 
     async def activate(self, target_index: int) -> None:
@@ -503,7 +503,7 @@ class PaneVM:
         if entry.kind is EntryKind.DIRECTORY:
             await self.navigate_to(self._path.join(entry.name))
             return
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "preview_requested"))
+        self._notify("preview_requested")
 
     def toggle_mark_at(self, target_index: int) -> None:
         """Toggle the marked flag on the entry at ``target_index`` and
@@ -516,7 +516,7 @@ class PaneVM:
         if not self._is_multiselect_mode:
             self._set_multiselect(True)
         entry_vm.toggle_mark()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("viewmodel")
 
     def mark_at(self, target_index: int, *, marked: bool = True) -> None:
         """Set the marked flag on the entry at ``target_index`` to a
@@ -533,7 +533,7 @@ class PaneVM:
         if marked and not self._is_multiselect_mode:
             self._set_multiselect(True)
         entry_vm.set_marked(marked)
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("viewmodel")
 
     def move_cursor_to(self, target_index: int) -> None:
         """Place the cursor directly at ``target_index`` (clamped). Used by
@@ -546,8 +546,8 @@ class PaneVM:
             return
         self._cursor_index = clamped
         self._sync_cursor_selection()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "cursor_index"))
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("cursor_index")
+        self._notify("viewmodel")
 
     async def delete_marked(self) -> None:
         """Delete every marked entry; refresh on success."""
@@ -650,15 +650,28 @@ class PaneVM:
         self._cursor_index = 0
         self._recompute_filtered()
         self._sync_cursor_selection()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "entries"))
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("entries")
+        self._notify("viewmodel")
 
     def _set_state(self, value: PaneState) -> None:
         if self._state == value:
             return
         self._state = value
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "state"))
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("state")
+        self._notify("viewmodel")
+
+    # ── Helpers ─────────────────────────────────────────────────────────────
+
+    def _notify(self, prop: str) -> None:
+        """Publish a ``PropertyChangedMessage`` for ``prop`` on the hub.
+
+        Thin convenience over the repeated three-argument call so the
+        24 notify sites in this file (which would otherwise be
+        ``self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "prop"))``
+        each) stay readable. Single seam for future coalescing /
+        instrumentation.
+        """
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, prop))
 
     # ── Cursor / selection / filter ─────────────────────────────────────────
 
@@ -677,8 +690,8 @@ class PaneVM:
             return
         self._cursor_index = new_index
         self._sync_cursor_selection()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "cursor_index"))
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("cursor_index")
+        self._notify("viewmodel")
 
     def _sync_cursor_selection(self) -> None:
         target = self._cursor_target()
@@ -692,7 +705,7 @@ class PaneVM:
         if not self._is_multiselect_mode:
             self._set_multiselect(True)
         target.toggle_mark()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("viewmodel")
 
     def _set_multiselect(self, value: bool) -> None:
         if self._is_multiselect_mode == value:
@@ -700,7 +713,7 @@ class PaneVM:
         self._is_multiselect_mode = value
         if not value:
             self._clear_marks()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "is_multiselect_mode"))
+        self._notify("is_multiselect_mode")
 
     def _select_all(self) -> None:
         if not self._filtered:
@@ -709,23 +722,23 @@ class PaneVM:
             self._set_multiselect(True)
         for idx in self._filtered:
             self._entries[idx].set_marked(True)
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("viewmodel")
 
     def _clear_marks(self) -> None:
         for entry in self._entries:
             entry.set_marked(False)
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("viewmodel")
 
     def _set_filter_text(self, text: str | None) -> None:
         new = text or ""
         if new == self._filter_text:
             return
         self._filter_text = new
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "filter_text"))
+        self._notify("filter_text")
         self._recompute_filtered()
         self._cursor_index = 0
         self._sync_cursor_selection()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "viewmodel"))
+        self._notify("viewmodel")
 
     def _recompute_filtered(self) -> None:
         if not self._filter_text:
@@ -755,7 +768,7 @@ class PaneVM:
             # Defer: the async navigation must be driven externally.
             # We publish a PropertyChangedMessage so a higher-level VM can
             # schedule navigate_to(...).
-            self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "open_requested"))
+            self._notify("open_requested")
         else:
             self._hub.send(
                 PropertyChangedMessage.create(self, self._inner.name, "preview_requested")
@@ -764,10 +777,10 @@ class PaneVM:
     def _ascend_sync(self) -> None:
         if self._path.is_root:
             return
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "ascend_requested"))
+        self._notify("ascend_requested")
 
     def _refresh_sync(self) -> None:
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "refresh_requested"))
+        self._notify("refresh_requested")
 
     # ── Composite children factory ─────────────────────────────────────────
 
