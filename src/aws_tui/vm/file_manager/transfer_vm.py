@@ -8,6 +8,9 @@ changes via :class:`PropertyChangedMessage` ("model").
 
 from __future__ import annotations
 
+import time
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -44,9 +47,12 @@ class TransferVM:
         *,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
+        self._clock: Callable[[], float] = clock
+        self._speed_window: deque[tuple[float, int]] = deque()
 
         self._inner: ComponentVMOf[TransferModel] = (
             ComponentVMOf[TransferModel]
@@ -89,6 +95,35 @@ class TransferVM:
             TransferState.FAILED,
             TransferState.CANCELLED,
         )
+
+    @property
+    def current_speed(self) -> float | None:
+        """Bytes-per-second over the last 5 seconds of samples.
+
+        Returns ``None`` if fewer than 2 samples or the sample window
+        spans less than 250 ms (too short for a stable speed estimate).
+        """
+        if len(self._speed_window) < 2:
+            return None
+        first_ts, first_bytes = self._speed_window[0]
+        last_ts, last_bytes = self._speed_window[-1]
+        span = last_ts - first_ts
+        if span < 0.25:
+            return None
+        delta = last_bytes - first_bytes
+        return delta / span
+
+    @property
+    def current_eta(self) -> float | None:
+        """Seconds remaining at current speed, or ``None`` if unknowable."""
+        speed = self.current_speed
+        total = self._inner.model.bytes_total
+        if speed is None or speed <= 0 or total is None:
+            return None
+        remaining = total - self._inner.model.bytes_done
+        if remaining <= 0:
+            return 0.0
+        return remaining / speed
 
     @property
     def cancel_command(self) -> RelayCommand:
@@ -137,6 +172,7 @@ class TransferVM:
         state: TransferState,
         error: str | None = None,
     ) -> None:
+        self._record_sample(bytes_done)
         new = replace(
             self._inner.model,
             bytes_done=bytes_done,
@@ -175,6 +211,16 @@ class TransferVM:
             state=TransferState.PENDING,
             error=None,
         )
+
+    def _record_sample(self, bytes_done: int) -> None:
+        """Append a sample to the rolling 5-second speed window."""
+        now = self._clock()
+        self._speed_window.append((now, bytes_done))
+        # Prune samples older than 5 s. Always keep at least the most
+        # recent sample so the next call still has a window.
+        cutoff = now - 5.0
+        while len(self._speed_window) > 1 and self._speed_window[0][0] < cutoff:
+            self._speed_window.popleft()
 
 
 __all__ = ["TransferDirection", "TransferModel", "TransferState", "TransferVM"]
