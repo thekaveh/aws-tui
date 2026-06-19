@@ -1,6 +1,7 @@
 # aws-tui
 
-Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by
+Cross-platform TUI for AWS and S3-compatible services — runs on macOS,
+Linux, and Windows. Powered by
 [Textual](https://textual.textualize.io/) and the
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
@@ -83,8 +84,9 @@ uv sync --dev
 uv run aws-tui
 ```
 
-Requirements: Python 3.11 / 3.12 / 3.13. macOS-tailored but Linux
-works fine.
+Requirements: Python 3.11 / 3.12 / 3.13. Runs on macOS, Linux, and
+Windows — see [`docs/platforms.md`](docs/platforms.md) for the
+recommended terminal + font setup per OS.
 
 ## 3. Quickstart
 

@@ -21,13 +21,17 @@ from pathlib import Path
 from types import TracebackType
 from typing import Final
 
-_DEFAULT_DIR: Final[Path] = Path.home() / ".cache" / "aws-tui" / "crash"
 _LOG_TAIL_LINES: Final[int] = 1000
 _ACTION_TAIL_LINES: Final[int] = 100
 
 
 def _default_crash_dir() -> Path:
-    return _DEFAULT_DIR
+    # Lazy import to keep ``Path.home()`` evaluation out of module-load
+    # time (matters for tests that monkey-patch ``HOME`` or
+    # ``platformdirs.user_cache_dir`` before importing this module).
+    from aws_tui.infra.paths import cache_home
+
+    return cache_home() / "crash"
 
 
 def _filename_for(ts: datetime) -> str:

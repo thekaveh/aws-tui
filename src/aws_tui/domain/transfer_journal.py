@@ -29,6 +29,12 @@ from typing import Any
 
 
 def _default_journal_dir() -> Path:
+    # Pure-domain fallback: cross-platform cache resolution belongs to the
+    # ``infra`` layer (``aws_tui.infra.paths.cache_home``). The composition
+    # root passes ``base_dir`` explicitly so this default is only hit in
+    # tests / direct-construction scenarios. Keeping ``Path.home()`` here
+    # preserves the layer boundary (domain → infra is technically allowed
+    # but cleaner to avoid for a fallback constant like this).
     return Path.home() / ".cache" / "aws-tui" / "transfers"
 
 

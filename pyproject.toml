@@ -4,12 +4,23 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aws-tui"
-description = "Sleek macOS-tailored TUI for AWS and S3-compatible services. Powered by Textual + VMx MVVM."
+description = "Cross-platform TUI for AWS and S3-compatible services. Powered by Textual + VMx MVVM."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Kaveh Razavi", email = "kaveh.razavi@gmail.com" }]
 requires-python = ">=3.11"
-keywords = ["aws", "tui", "s3", "minio", "textual", "mvvm", "python", "macos"]
+keywords = [
+  "aws",
+  "tui",
+  "s3",
+  "minio",
+  "textual",
+  "mvvm",
+  "python",
+  "macos",
+  "linux",
+  "windows",
+]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: System Administrators",
@@ -17,6 +28,7 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: MacOS",
   "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -35,6 +47,7 @@ dependencies = [
   "aiofiles>=23",
   "tomli-w>=1.0",
   "keyring>=24",
+  "platformdirs>=4",
 ]
 dynamic = ["version"]
 

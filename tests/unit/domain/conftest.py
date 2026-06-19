@@ -22,8 +22,15 @@ from moto.server import ThreadedMotoServer
 
 @pytest.fixture(scope="module")
 def moto_server() -> Iterator[str]:
-    """Spin up a single shared moto HTTP server for the module's tests."""
-    server = ThreadedMotoServer(port=0)
+    """Spin up a single shared moto HTTP server for the module's tests.
+
+    Explicit ``ip_address="127.0.0.1"`` keeps Windows happy. The default
+    ``0.0.0.0`` is a bind-only address; on Windows ``urlopen(http://0.0.0.0:PORT)``
+    fails with ``WSAEADDRNOTAVAIL`` because the connect-side network stack
+    refuses to dial the wildcard. macOS and Linux happily route ``0.0.0.0``
+    to ``localhost``, so the original code accidentally worked there.
+    """
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0)
     server.start()
     host, port = server.get_host_and_port()
     yield f"http://{host}:{port}"

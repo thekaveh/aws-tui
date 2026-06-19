@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cross-platform support — runs on macOS, Linux, and Windows.**
+  Replaced hardcoded `~/.config/aws-tui` and `~/.cache/aws-tui` paths
+  with `platformdirs`-resolved per-OS native locations:
+  - Windows: `%APPDATA%\aws-tui` + `%LOCALAPPDATA%\aws-tui\Cache`
+  - macOS:   `~/Library/Application Support/aws-tui` + `~/Library/Caches/aws-tui`
+  - Linux:   `$XDG_CONFIG_HOME/aws-tui` + `$XDG_CACHE_HOME/aws-tui`
+    (default `~/.config/aws-tui` + `~/.cache/aws-tui`)
+  Legacy XDG paths win when they already exist on disk, so existing
+  macOS / Linux installs see zero disruption. Added a `windows-latest`
+  runner to the CI unit matrix and a new `docs/platforms.md` covering
+  recommended terminal (Windows Terminal 1.18+) + font (Cascadia Code)
+  per OS. Project classifiers updated to include
+  `Operating System :: Microsoft :: Windows`.
 - **Block-art brand banner** atop the chrome — six-row aws-tui logo with
   a per-theme 6-stop vertical gradient (carbon → deep navy/sky-blue;
   amber → mahogany/gold; voidline → deep purple/soft pink; lattice →
