@@ -118,6 +118,31 @@ class TransferProgressMessage:
 
 
 @dataclass(frozen=True, slots=True)
+class TransferCancelRequestedMessage:
+    """Published by :class:`TransferVM` when the user clicks the cancel
+    chip (or otherwise fires ``cancel_command``).
+
+    Subscribers: :class:`DualPaneVM`, which owns the in-flight
+    ``CrossFsCopy.copy(...)`` task and races it against a per-transfer
+    ``asyncio.Event``. When this message arrives the event is set, the
+    copy task is cancelled, the journal is marked aborted, and the
+    batch loop continues to the next queued transfer.
+
+    The VM-side state transition to ``CANCELLED`` happens
+    independently (immediately on user click) so the overlay gives
+    instant feedback; this message is the asynchronous "actually
+    interrupt the copy" signal.
+    """
+
+    transfer_id: str
+    sender_name: str = "transfer"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
 class KeymapChangedMessage:
     """Published by ``infra.KeymapStore`` after a runtime rebind.
 
@@ -157,6 +182,7 @@ __all__ = [
     "FocusChangedMessage",
     "KeymapChangedMessage",
     "ThemeChangedMessage",
+    "TransferCancelRequestedMessage",
     "TransferProgressMessage",
     "TransferState",
 ]

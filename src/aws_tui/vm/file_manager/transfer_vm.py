@@ -18,7 +18,10 @@ from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage, Rela
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.vm.messages import TransferState  # canonical: re-exported for callers
+from aws_tui.vm.messages import (
+    TransferCancelRequestedMessage,
+    TransferState,  # canonical: re-exported for callers
+)
 
 #: Direction discriminator on a :class:`TransferModel`.
 TransferDirection = Literal["upload", "download", "local-copy", "s3-copy"]
@@ -198,11 +201,19 @@ class TransferVM:
         return self._inner.model.state in (TransferState.FAILED, TransferState.CANCELLED)
 
     def _cancel(self) -> None:
+        # Two-part cancel: (1) immediate VM-state transition so the
+        # overlay row flips to CANCELLED right away (UI feedback);
+        # (2) publish a TransferCancelRequestedMessage so DualPaneVM
+        # (which owns the in-flight CrossFsCopy task) can actually
+        # interrupt the copy. Without (2), the row reads CANCELLED but
+        # bytes keep transferring until the copy finishes naturally —
+        # the user-reported "cancel doesn't work" bug.
         self.apply_update(
             bytes_done=self._inner.model.bytes_done,
             bytes_total=self._inner.model.bytes_total,
             state=TransferState.CANCELLED,
         )
+        self._hub.send(TransferCancelRequestedMessage(transfer_id=self._inner.model.id))
 
     def _retry(self) -> None:
         self.apply_update(
