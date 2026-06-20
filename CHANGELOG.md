@@ -93,6 +93,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Shift+S now skips connections observed unreachable.** If a pane
+  mounted on an s3-compatible (or AWS) connection lands in the
+  ``UNREACHABLE`` state — typical case: a local MinIO endpoint that
+  isn't running — that connection is marked in an in-memory set and
+  silently filtered out of the swap-source ring on every subsequent
+  ``Shift+S`` press. A one-line info toast names the skipped
+  connections the first time the cycle would have included them.
+  Pressing ``r`` to retry the pane, on success, clears the mark and
+  re-enters the connection into the ring. No startup probe; no
+  persistence across runs. Identity key is
+  ``(connection.kind, connection.name)`` so an AWS profile and an
+  s3-compatible connection with the same name are tracked
+  independently.
 - **Cross-platform support — runs on macOS, Linux, and Windows.**
   Replaced hardcoded `~/.config/aws-tui` and `~/.cache/aws-tui` paths
   with `platformdirs`-resolved per-OS native locations:
