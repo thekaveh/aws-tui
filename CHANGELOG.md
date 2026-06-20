@@ -192,6 +192,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the first-auto fallback — fixes the "aws s3 ls works on the CLI
   but the TUI shows access denied" SSO setup where `[default]` has no
   creds and the working profile lives in the env.
+- **App Settings overlay** with first panel: full CRUD for s3-compatible
+  connections. New ``⚙  Settings`` gear button pinned to the bottom of
+  the services column (keyboard ``,``) opens a themed ``SettingsModal``
+  with a left-sidebar nav. Sub-project A of three: the sidebar shows
+  ``Connections`` (active), ``Themes (soon)`` and ``Keymap (soon)`` —
+  the disabled rows will go live in sub-projects B and C. The S3 panel
+  reads from ``ConnectionResolver`` (filtered to ``kind = "s3-compatible"``)
+  and writes through new ``ConfigStore.update_connection`` /
+  ``remove_connection`` methods (atomic via ``tempfile + os.replace``).
+  Add and Edit reuse the existing ``S3CompatFormModal`` with a new
+  ``name_locked`` parameter for edit mode (rename disallowed). Delete
+  uses the polished ``ConfirmModal``. Credentials are stored inline in
+  TOML (cross-platform; existing keychain-referencing entries are read
+  transparently and re-written inline on first edit — documented
+  one-way conversion). New ``ConnectionListChangedMessage`` published
+  on every CRUD; subscribers include ``ServicesMenuVM`` (filter
+  refresh) and ``AwsTuiApp`` (drops deleted names from
+  ``AppContext.unreachable_connections``). Affected panes reload
+  exactly once on modal dismiss; single summary toast describes what
+  reloaded. New per-theme CSS for all 10 themes + 50 new snapshots.
 
 ### Fixed
 
