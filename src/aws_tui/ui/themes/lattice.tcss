@@ -229,7 +229,7 @@ ConfirmModal > Container {
     background: $bg-elev;
     color: $text;
     border: round $rule-dim;
-    padding: 1 2;
+    padding: 0 2;
     width: 60;
     height: auto;
     max-height: 80%;
@@ -241,9 +241,9 @@ ConfirmModal > Container > .modal-title {
 }
 
 ConfirmModal > Container > .modal-footer {
-    height: 5;
+    height: 3;
     align: right middle;
-    padding: 1 0 0 0;
+    padding: 0;
 }
 ConfirmModal > Container > .modal-footer > ModalButton {
     background: $bg;
@@ -308,7 +308,7 @@ ConfirmModal > Container > .modal-footer.-danger > ModalButton.-danger {
 
 ConfirmModal > Container > .modal-body {
     height: auto;
-    padding: 0 1 1 1;
+    padding: 0 1;
     color: $text;
 }
 ConfirmModal > Container > .modal-path-label {
@@ -316,7 +316,7 @@ ConfirmModal > Container > .modal-path-label {
     text-style: bold;
     height: 1;
     padding: 0 1;
-    margin: 1 0 0 0;
+    margin: 0;
 }
 ConfirmModal > Container > .modal-path-value {
     color: $text;
@@ -432,7 +432,12 @@ TransferRowWidget.-done           { border-left: thick $success; }
 TransferRowWidget.-failed         { border-left: thick $danger; }
 TransferRowWidget.-cancelled      { border-left: thick $rule-dim; }
 
-TransferRowWidget .transfer-name        { color: $text; text-style: bold; }
+TransferRowWidget .transfer-name {
+    color: $text;
+    text-style: bold;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
 TransferRowWidget .transfer-state-word  { color: $text-muted; }
 TransferRowWidget.-running    .transfer-state-word  { color: $accent; }
 TransferRowWidget.-paused     .transfer-state-word  { color: $warning; }
@@ -440,7 +445,11 @@ TransferRowWidget.-done       .transfer-state-word  { color: $success; }
 TransferRowWidget.-failed     .transfer-state-word  { color: $danger; }
 TransferRowWidget.-cancelled  .transfer-state-word  { color: $text-muted; }
 
-TransferRowWidget .transfer-dest-row { color: $text-muted; }
+TransferRowWidget .transfer-dest-row {
+    color: $text-muted;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
 
 TransferRowWidget .transfer-bar         { color: $accent;     background: $bg; }
 TransferRowWidget.-running    .transfer-bar { color: $accent; }
@@ -449,10 +458,14 @@ TransferRowWidget.-done       .transfer-bar { color: $success; }
 TransferRowWidget.-failed     .transfer-bar { color: $danger; }
 TransferRowWidget.-cancelled  .transfer-bar { color: $text-muted; }
 
+/* Cancel chip is a 1-cell-tall background fill — NO `border: round`
+   because rounded borders need 3 rows to render and clip badly at
+   height: 1, producing the half-rendered chip-stub artifact users
+   reported. Background + accent-coloured glyph reads clearly enough. */
 TransferRowWidget .transfer-cancel {
-    color: $text;
+    color: $accent;
     background: $bg-elev;
-    border: round $rule-dim;
+    text-style: bold;
 }
 TransferRowWidget .transfer-cancel:hover {
     background: $danger;

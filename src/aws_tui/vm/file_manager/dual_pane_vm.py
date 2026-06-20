@@ -23,6 +23,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
 from aws_tui.domain.filesystem import TransferProgress
 from aws_tui.domain.transfer_journal import TransferJournal
+from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.messages import TransferProgressMessage, TransferState
 
@@ -188,9 +189,16 @@ class DualPaneVM:
         if not targets:
             return
         copier = CrossFsCopy(source=src_pane.provider, destination=dst_pane.provider)
+
+        # Pre-register every queued transfer as PENDING before the loop
+        # starts. Without this, only the currently-running transfer +
+        # any lingering recently-finished ones are visible in the
+        # overlay — the user can't see how many more are queued. The
+        # journal entries are also created upfront so a crash
+        # mid-batch records all-of-them as unfinished (not just the
+        # one being copied).
+        transfer_ids: list[tuple[EntryVM, str]] = []  # (entry, transfer_id)
         for entry in targets:
-            src_path = src_pane.path.join(entry.entry.name)
-            dst_path = dst_pane.path.join(entry.entry.name)
             src_uri = _pane_uri(src_pane, entry.entry.name)
             dst_uri = _pane_uri(dst_pane, entry.entry.name)
             transfer_id = self._journal.begin(
@@ -198,11 +206,7 @@ class DualPaneVM:
                 destination_uri=dst_uri,
                 bytes_total=entry.entry.size,
             )
-
-            # First progress message carries the labels so TransfersVM
-            # can auto-register a placeholder with meaningful "from /
-            # to" text instead of "??". Subsequent messages may omit
-            # them — the placeholder is already set up.
+            transfer_ids.append((entry, transfer_id))
             self._hub.send(
                 TransferProgressMessage(
                     transfer_id=transfer_id,
@@ -213,6 +217,10 @@ class DualPaneVM:
                     destination_label=dst_uri,
                 )
             )
+
+        for entry, transfer_id in transfer_ids:
+            src_path = src_pane.path.join(entry.entry.name)
+            dst_path = dst_pane.path.join(entry.entry.name)
 
             def _progress(p: TransferProgress, *, _tid: str = transfer_id) -> None:
                 self._hub.send(
@@ -258,9 +266,10 @@ class DualPaneVM:
         if not targets:
             return
         mover = CrossFsMove(source=src_pane.provider, destination=dst_pane.provider)
+
+        # Pre-register every queued transfer as PENDING (see copy_across).
+        transfer_ids: list[tuple[EntryVM, str]] = []
         for entry in targets:
-            src_path = src_pane.path.join(entry.entry.name)
-            dst_path = dst_pane.path.join(entry.entry.name)
             src_uri = _pane_uri(src_pane, entry.entry.name)
             dst_uri = _pane_uri(dst_pane, entry.entry.name)
             transfer_id = self._journal.begin(
@@ -268,8 +277,7 @@ class DualPaneVM:
                 destination_uri=dst_uri,
                 bytes_total=entry.entry.size,
             )
-
-            # Seed the placeholder labels (see copy_across for rationale).
+            transfer_ids.append((entry, transfer_id))
             self._hub.send(
                 TransferProgressMessage(
                     transfer_id=transfer_id,
@@ -280,6 +288,10 @@ class DualPaneVM:
                     destination_label=dst_uri,
                 )
             )
+
+        for entry, transfer_id in transfer_ids:
+            src_path = src_pane.path.join(entry.entry.name)
+            dst_path = dst_pane.path.join(entry.entry.name)
 
             def _progress(p: TransferProgress, *, _tid: str = transfer_id) -> None:
                 self._hub.send(

@@ -195,6 +195,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Transfers overlay now shows all queued transfers upfront.** When
+  the user marked N entries and pressed `c` / `m`, ``DualPaneVM``
+  registered each transfer one-at-a-time as the loop reached it —
+  so the overlay only ever displayed the currently-running transfer
+  plus any lingering completed ones. With multiple marked entries
+  the queue depth was invisible (users perceived the overlay as
+  "treating them in twos"). Now every marked entry sends a PENDING
+  ``TransferProgressMessage`` before the loop starts, so all N rows
+  appear immediately and transition RUNNING → COMPLETED in order.
+  Pinned by ``test_dual_copy_across_pre_registers_all_pending_before_running``.
+- **Transfers overlay no longer shows empty bars or "0 B · streaming…"
+  on completed directory copies.** When the source entry was a
+  directory, ``LocalFS`` returned ``size=None`` so the COMPLETED
+  message carried ``bytes_total=None``; the row rendered ▱×10
+  (empty bar) and "0 B · streaming…" even though the copy was
+  finished. ``TransferRowWidget._bar_text`` now returns ▰×10 for any
+  COMPLETED state regardless of ``bytes_total``; ``_bytes_text``
+  shows "✓ done" instead of the misleading streaming text when the
+  size is unknown.
+- **Transfers overlay destination label was identical to the source
+  name on every row** (both rendered as the trailing path segment,
+  so users couldn't tell source from destination). The destination
+  now renders the FULL ``destination_label`` (with scheme prefix —
+  ``s3://bucket/path/file``), and the per-theme CSS truncates with
+  ellipsis if the string exceeds the 44-cell overlay width via
+  ``text-wrap: nowrap; text-overflow: ellipsis`` on
+  ``.transfer-name`` and ``.transfer-dest-row``.
+- **Cancel chip in the transfers overlay no longer half-renders.**
+  The chip was styled with ``border: round $rule-dim`` and
+  ``height: 1`` — rounded borders need three rows to render, so the
+  chip clipped to a tiny stub at the right edge of every row. Now
+  styled as a flat 1-cell background fill with ``color: $accent;
+  background: $bg-elev; text-style: bold`` and ``hover →
+  background: $danger; color: $bg``.
+- **ConfirmModal proportions tightened.** The modal felt visually
+  heavy: ``width: 70`` on dark themes (60 elsewhere), container
+  ``padding: 1 2``, body ``padding: 0 1 1 1``, footer ``height: 5``
+  with a row of top-padding. Dropped to ``width: 64`` (dark themes,
+  60 elsewhere unchanged), container ``padding: 0 2``, body
+  ``padding: 0 1``, footer ``height: 3`` ``padding: 0``,
+  path-label ``margin: 0`` (was top-margin 1). Net: the modal is
+  ~5 rows shorter and 6 cols narrower on dark themes. Both copy
+  and delete variants benefit.
 - **Modal button labels no longer spill past button borders.**
   `ModalButton` was fixed-width 18 with padding 0 3, leaving only
   12 cells for the label; long labels like "Authenticate" clipped
