@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from textual import on
+from textual import on, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
@@ -113,25 +113,34 @@ class S3ConnectionsPanel(Widget):
         children.append(_AddButton("+ Add s3-compatible connection", id="add-populated"))
         return children
 
-    def refresh_rows(self) -> None:
-        """Tear down + re-render the body container after a CRUD op."""
+    async def refresh_rows(self) -> None:
+        """Tear down + re-render the body container after a CRUD op.
+
+        ``remove_children()`` returns an ``AwaitRemove``; awaiting it
+        ensures the old widgets are fully unmounted before the new ones
+        are mounted, preventing ``DuplicateIds`` errors.
+        """
         body = self.query_one("#panel-body", Vertical)
-        body.remove_children()
-        body.mount_all(self._render_children())
+        await body.remove_children()
+        await body.mount_all(self._render_children())
 
     @on(Button.Pressed, "#add-empty, #add-populated")
-    async def _on_add(self, event: Button.Pressed) -> None:
+    def _on_add(self, event: Button.Pressed) -> None:
         event.stop()
+        self._do_add()
+
+    @work(exclusive=False)
+    async def _do_add(self) -> None:
         result = await self.app.push_screen_wait(
             S3CompatFormModal(hub=self._hub, defaults=None, name_locked=False)
         )
         if result is None:
             return
         self._vm.add(self._vm.entry_from_form(result))
-        self.refresh_rows()
+        await self.refresh_rows()
 
     @on(Button.Pressed, ".row-chip-edit")
-    async def _on_edit(self, event: Button.Pressed) -> None:
+    def _on_edit(self, event: Button.Pressed) -> None:
         event.stop()
         btn_id = event.button.id or ""
         name = btn_id.removeprefix("edit-")
@@ -147,19 +156,27 @@ class S3ConnectionsPanel(Widget):
             force_path_style=existing.force_path_style,
             verify_tls=existing.verify_tls,
         )
+        self._do_edit(name, defaults)
+
+    @work(exclusive=False)
+    async def _do_edit(self, name: str, defaults: S3CompatForm) -> None:
         result = await self.app.push_screen_wait(
             S3CompatFormModal(hub=self._hub, defaults=defaults, name_locked=True)
         )
         if result is None:
             return
         self._vm.update(name, self._vm.entry_from_form(result))
-        self.refresh_rows()
+        await self.refresh_rows()
 
     @on(Button.Pressed, ".row-chip-delete")
-    async def _on_delete(self, event: Button.Pressed) -> None:
+    def _on_delete(self, event: Button.Pressed) -> None:
         event.stop()
         btn_id = event.button.id or ""
         name = btn_id.removeprefix("delete-")
+        self._do_delete(name)
+
+    @work(exclusive=False)
+    async def _do_delete(self, name: str) -> None:
         confirm_vm = ConfirmationVM(hub=self._hub, dispatcher=self._vm.dispatcher)
         confirm_vm.construct()
         try:
@@ -178,7 +195,7 @@ class S3ConnectionsPanel(Widget):
             confirm_vm.dispose()
         if confirmed:
             self._vm.remove(name)
-            self.refresh_rows()
+            await self.refresh_rows()
 
 
 __all__ = ["S3ConnectionsPanel"]

@@ -57,7 +57,7 @@ async def test_refresh_rows_safe_post_mount(tmp_path: Path) -> None:
         async with app.run_test() as pilot:
             await pilot.pause()
             # If this raises IndexError, the regression has returned.
-            panel.refresh_rows()
+            await panel.refresh_rows()
             await pilot.pause()
     finally:
         s3_vm.dispose()
