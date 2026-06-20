@@ -41,6 +41,7 @@ from aws_tui.ui.widgets.services_hamburger import ServicesHamburger
 from aws_tui.ui.widgets.services_menu import (
     ServicesMenu,
 )
+from aws_tui.ui.widgets.settings_modal import SettingsModal
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
@@ -49,7 +50,7 @@ from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
-from aws_tui.vm.messages import ThemeChangedMessage
+from aws_tui.vm.messages import ConnectionListChangedMessage, ThemeChangedMessage
 
 _ACTION_RING_SIZE = 100
 
@@ -155,6 +156,7 @@ class AwsTuiApp(App[None]):
         Binding("colon", "help", "Cmd", show=True, priority=True),
         Binding("t", "themes", "Themes", show=True, priority=True),
         Binding("T", "cycle_theme", "Cycle theme", show=True, priority=True),
+        Binding("comma", "open_settings", "Settings", show=True, priority=True),
         Binding("c", "copy", "Copy", show=True, priority=True),
         Binding("d", "delete", "Delete", show=True, priority=True),
         Binding("m", "toggle_services", "Menu", show=True, priority=True),
@@ -184,6 +186,7 @@ class AwsTuiApp(App[None]):
         # re-raise after the app has torn down.
         self._crash_report: CrashReport | None = None
         self._pane_state_sub: DisposableBase | None = None
+        self._connection_list_sub: DisposableBase | None = None
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -220,6 +223,8 @@ class AwsTuiApp(App[None]):
         ctx.confirm_vm.construct()
         ctx.quick_look_vm.construct()
         ctx.command_palette_vm.construct()
+        ctx.s3_connections_vm.construct()
+        ctx.settings_vm.construct()
 
         self._apply_initial_theme()
 
@@ -227,6 +232,9 @@ class AwsTuiApp(App[None]):
         # initial UNREACHABLE state-change (if the connection is offline) is
         # not missed (Bug 2: initial mount UNREACHABLE silently missed).
         self._pane_state_sub = ctx.hub.messages.subscribe(on_next=self._on_hub_message_pane_state)
+        self._connection_list_sub = ctx.hub.messages.subscribe(
+            on_next=self._on_connection_list_changed
+        )
 
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
@@ -785,6 +793,114 @@ class AwsTuiApp(App[None]):
             connection_key=new_conn_key,
         )
 
+    def action_open_settings(self) -> None:
+        """Push the SettingsModal. Bound to comma + the gear button."""
+        ctx = self._app_ctx
+        self.push_screen(
+            SettingsModal(vm=ctx.settings_vm, hub=ctx.hub),
+            callback=lambda _result: self._reload_after_settings(),
+        )
+
+    def _reload_after_settings(self) -> None:
+        """Reload any pane bound to a connection that changed during the
+        settings modal's lifetime, then clear the dirty set.
+
+        The synchronous dismiss callback schedules the async reload via
+        ``self.run_worker`` so the callback returns immediately and the
+        modal teardown isn't blocked.
+        """
+        ctx = self._app_ctx
+        dirty = ctx.settings_vm.dirty_connection_names
+        if not dirty:
+            return
+        self.run_worker(self._reload_panes_async(dirty))
+        ctx.settings_vm.clear_dirty()
+
+    async def _reload_panes_async(self, dirty: frozenset[str]) -> None:
+        """Walk both panes; rebind any bound to a dirty connection."""
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        reloaded: list[tuple[str, str]] = []  # (side_label, detail)
+        for side_label, pane in (("Left", dual.left), ("Right", dual.right)):  # type: ignore[attr-defined]
+            key = pane.current_connection_key
+            if key is None:
+                continue
+            _, name = key
+            if name not in dirty:
+                continue
+            try:
+                conn = self._app_ctx.connection_resolver.resolve(name)
+            except Exception:
+                # ``resolve`` raises if the connection no longer exists —
+                # treat as deletion and revert to local.
+                await self._rebind_pane_to_local(pane)
+                reloaded.append((side_label, f"{name} deleted → local"))
+                continue
+            await self._rebind_pane_to_connection(pane, conn)
+            reloaded.append((side_label, f"{name} updated"))
+        if reloaded:
+            self._raise_settings_reload_toast(reloaded)
+
+    async def _rebind_pane_to_local(self, pane: object) -> None:
+        """Rebind a pane to the local filesystem provider.
+
+        Mirrors the local-branch of ``action_swap_source``.
+        """
+        from aws_tui.domain.local_fs import LocalFS
+
+        swap = getattr(pane, "swap_provider", None)
+        if swap is None:
+            return
+        await swap(
+            LocalFS(),
+            identity_label="local",
+            path_protocol="",
+            connection_key=None,
+        )
+
+    async def _rebind_pane_to_connection(self, pane: object, conn: object) -> None:
+        """Rebind a pane to an S3FS provider for ``conn``.
+
+        Mirrors the remote-branch of ``action_swap_source``. ``conn`` is
+        typed as ``object`` here to avoid a circular import with
+        ``infra.connection_resolver``; runtime attribute access is safe
+        (Connection is the only thing the resolver returns).
+        """
+        from aws_tui.domain.s3_fs import S3FS
+        from aws_tui.services.s3.service import _aioboto3_session_for, _format_pane_title
+
+        swap = getattr(pane, "swap_provider", None)
+        if swap is None:
+            return
+        session = _aioboto3_session_for(conn)  # type: ignore[arg-type]
+        provider = S3FS(
+            session=session,
+            bucket=None,
+            endpoint_url=conn.endpoint_url,  # type: ignore[attr-defined]
+            force_path_style=conn.force_path_style,  # type: ignore[attr-defined]
+        )
+        await swap(
+            provider,
+            identity_label=_format_pane_title(conn),  # type: ignore[arg-type]
+            path_protocol="s3:",
+            connection_key=(conn.kind, conn.name),  # type: ignore[attr-defined]
+        )
+
+    def _raise_settings_reload_toast(self, reloaded: list[tuple[str, str]]) -> None:
+        summary = "; ".join(f"{side}: {detail}" for side, detail in reloaded)
+        self._app_ctx.root_vm.chrome.toast_stack.raise_toast(
+            ToastModel(
+                id=f"settings-reload-{','.join(sorted(side for side, _ in reloaded))}",
+                text=f"Settings — {summary}",
+                level=ToastLevel.INFO,
+                sticky=False,
+                timeout_seconds=4.0,
+                action_label=None,
+                action_action=None,
+            )
+        )
+
     async def action_themes(self) -> None:
         """Open the keyboard-navigable theme picker modal."""
         ctx = self._app_ctx
@@ -902,6 +1018,16 @@ class AwsTuiApp(App[None]):
             self._mark_connection_unreachable(kind, name)
         elif was_marked and new_state in (PaneState.IDLE, PaneState.EMPTY):
             self._clear_connection_unreachable(kind, name)
+
+    def _on_connection_list_changed(self, msg: object) -> None:
+        """Hub subscriber: drop deleted connection names from the
+        unreachable set so stale entries don't block the swap-source ring."""
+        if not isinstance(msg, ConnectionListChangedMessage):
+            return
+        if msg.change != "deleted":
+            return
+        for name in msg.names:
+            self._app_ctx.unreachable_connections.discard(("s3-compatible", name))
 
     def _on_hub_message_pane_state(self, msg: object) -> None:
         """Hub subscriber: route PaneVM state changes to the reachability set.
@@ -1041,6 +1167,13 @@ class AwsTuiApp(App[None]):
             if self._pane_state_sub is not None:
                 self._pane_state_sub.dispose()
                 self._pane_state_sub = None
+        with contextlib.suppress(Exception):
+            if self._connection_list_sub is not None:
+                self._connection_list_sub.dispose()
+                self._connection_list_sub = None
+        with contextlib.suppress(Exception):
+            ctx.settings_vm.dispose()
+            ctx.s3_connections_vm.dispose()
         with contextlib.suppress(Exception):
             ctx.command_palette_vm.dispose()
             ctx.quick_look_vm.dispose()

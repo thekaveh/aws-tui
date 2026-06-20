@@ -189,3 +189,71 @@ def test_keybindings_list_round_trip(config_path: Path) -> None:
     store.save(cfg)
     reloaded = store.load()
     assert reloaded.keybindings.bindings == {"pane.copy": ["c", "y"]}
+
+
+def _seed_entry(name: str = "minio-local") -> ConnectionEntry:
+    return ConnectionEntry(
+        name=name,
+        kind="s3-compatible",
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        access_key_id="AKIATEST",
+        secret_access_key="SECRETTEST",
+        force_path_style=True,
+        verify_tls=True,
+    )
+
+
+def test_update_connection_round_trip(tmp_path: Path) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    store.add_connection(_seed_entry())
+    updated = ConnectionEntry(
+        name="minio-local",
+        kind="s3-compatible",
+        region="us-west-2",
+        endpoint_url="https://minio.internal:443",
+        access_key_id="AKIANEW",
+        secret_access_key="SECRETNEW",
+        force_path_style=False,
+        verify_tls=False,
+    )
+    store.update_connection("minio-local", updated)
+    cfg = store.load()
+    assert cfg.connections["minio-local"] == updated
+
+
+def test_remove_connection_round_trip(tmp_path: Path) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    store.add_connection(_seed_entry())
+    store.remove_connection("minio-local")
+    cfg = store.load()
+    assert "minio-local" not in cfg.connections
+
+
+def test_update_connection_unknown_name_raises(tmp_path: Path) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    with pytest.raises(KeyError, match="missing"):
+        store.update_connection("missing", _seed_entry(name="missing"))
+
+
+def test_remove_connection_unknown_name_raises(tmp_path: Path) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    with pytest.raises(ConfigError, match="unknown"):
+        store.remove_connection("missing")
+
+
+def test_remove_connection_clears_default_if_it_was_the_default(tmp_path: Path) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    store.add_connection(_seed_entry("default-conn"))
+    store.set_default_connection("default-conn")
+    assert store.load().defaults.connection == "default-conn"
+    store.remove_connection("default-conn")
+    assert store.load().defaults.connection is None
+
+
+def test_update_connection_rename_disallowed(tmp_path: Path) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    store.add_connection(_seed_entry(name="old"))
+    renamed = _seed_entry(name="new")
+    with pytest.raises(ValueError, match="cannot be renamed"):
+        store.update_connection("old", renamed)

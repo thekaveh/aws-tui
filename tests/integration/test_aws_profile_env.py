@@ -26,6 +26,8 @@ from aws_tui.vm.chrome.quick_look_vm import QuickLookVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import ServiceRegistry
+from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
+from aws_tui.vm.settings.settings_vm import SettingsVM
 
 
 def _make_app_with_two_profiles(tmp: Path, default_profile: str) -> AwsTuiApp:
@@ -68,6 +70,18 @@ def _make_app_with_two_profiles(tmp: Path, default_profile: str) -> AwsTuiApp:
 
     from aws_tui.domain.transfer_journal import TransferJournal
 
+    s3_connections_vm = S3ConnectionsVM(
+        resolver=resolver,
+        config_store=config_store,
+        hub=hub,
+        dispatcher=dispatcher,
+    )
+    settings_vm = SettingsVM(
+        s3=s3_connections_vm,
+        hub=hub,
+        dispatcher=dispatcher,
+    )
+
     ctx = AppContext(
         root_vm=root,
         registry=registry,
@@ -85,6 +99,8 @@ def _make_app_with_two_profiles(tmp: Path, default_profile: str) -> AwsTuiApp:
         hub=hub,
         dispatcher=dispatcher,
         initial_theme="carbon",
+        s3_connections_vm=s3_connections_vm,
+        settings_vm=settings_vm,
     )
     return AwsTuiApp(ctx)
 
@@ -203,6 +219,17 @@ def test_resolve_returns_none_when_nothing_configured(
         dispatcher=dispatcher,
         hub=hub,
     )
+    s3_connections_vm = S3ConnectionsVM(
+        resolver=resolver,
+        config_store=config_store,
+        hub=hub,
+        dispatcher=dispatcher,
+    )
+    settings_vm = SettingsVM(
+        s3=s3_connections_vm,
+        hub=hub,
+        dispatcher=dispatcher,
+    )
     ctx = AppContext(
         root_vm=root,
         registry=registry,
@@ -220,6 +247,8 @@ def test_resolve_returns_none_when_nothing_configured(
         hub=hub,
         dispatcher=dispatcher,
         initial_theme="carbon",
+        s3_connections_vm=s3_connections_vm,
+        settings_vm=settings_vm,
     )
     app = AwsTuiApp(ctx)
     assert app._resolve_initial_connection() is None  # type: ignore[attr-defined]

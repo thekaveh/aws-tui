@@ -203,3 +203,37 @@ def test_fake_service_satisfies_protocol() -> None:
     s: Service = FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True)
     assert isinstance(s, Service)
     assert s.descriptor.id == "s3"
+
+
+# -------------------- ConnectionListChangedMessage subscription --------------------
+
+
+def test_services_menu_vm_refreshes_on_connection_list_change() -> None:
+    """When a ConnectionListChangedMessage arrives on the hub, the
+    services menu re-derives its filter — same path that
+    ConnectionChangedMessage already triggers."""
+    from unittest.mock import MagicMock
+
+    from aws_tui.vm.messages import ConnectionListChangedMessage
+
+    hub = _hub()
+    # Use a MagicMock registry so we can observe re-filter calls.
+    registry = MagicMock()
+    registry.all.return_value = ()
+    vm = ServicesMenuVM(registry=registry, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    try:
+        # Give the VM an active connection so _desired_service_ids() actually
+        # queries the registry (when _connection is None, the early-return
+        # skips registry.all() entirely).
+        vm.update_connection(_minio_conn())
+        registry.all.reset_mock()
+        hub.send(ConnectionListChangedMessage(names=("minio-local",), change="updated"))
+        # The subscriber must have called the same filter-rebuild path
+        # that ConnectionChangedMessage uses — at minimum, registry.all
+        # (used by _desired_service_ids) is called.
+        assert registry.all.called, (
+            "ServicesMenuVM did not re-derive its filter after ConnectionListChangedMessage"
+        )
+    finally:
+        vm.dispose()

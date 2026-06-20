@@ -143,6 +143,29 @@ class TransferCancelRequestedMessage:
 
 
 @dataclass(frozen=True, slots=True)
+class ConnectionListChangedMessage:
+    """Published by :class:`S3ConnectionsVM` after each successful CRUD
+    on the s3-compatible connection list.
+
+    Subscribers:
+    - :class:`ConnectionResolver` (cache invalidation if applicable),
+    - :class:`ServicesMenuVM` (re-derive the service filter),
+    - :class:`AwsTuiApp` (drop deleted names from
+      :attr:`AppContext.unreachable_connections`),
+    - :class:`SettingsVM` (accumulate names for the reload-on-close
+      logic).
+    """
+
+    names: tuple[str, ...]
+    change: Literal["added", "updated", "deleted"]
+    sender_name: str = "s3_connections"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
 class KeymapChangedMessage:
     """Published by ``infra.KeymapStore`` after a runtime rebind.
 
@@ -179,6 +202,7 @@ __all__ = [
     "AuthExpiredMessage",
     "AuthExpiredReason",
     "ConnectionChangedMessage",
+    "ConnectionListChangedMessage",
     "FocusChangedMessage",
     "KeymapChangedMessage",
     "ThemeChangedMessage",

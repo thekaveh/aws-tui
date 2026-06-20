@@ -16,6 +16,7 @@ from textual.widgets import Static
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
+from aws_tui.ui.widgets.services_menu_footer import ServicesMenuFooter
 from aws_tui.vm.services_menu_vm import ServiceItemVM, ServicesMenuVM
 
 
@@ -160,6 +161,7 @@ class ServicesMenu(HubSubscriberMixin, Widget):
         title.update_for_state(collapsed=self._collapsed)
         yield title
         yield Vertical(id="services-list")
+        yield ServicesMenuFooter()
 
     def on_mount(self) -> None:
         self._rebuild_items()

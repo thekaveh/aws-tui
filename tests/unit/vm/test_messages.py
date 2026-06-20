@@ -118,3 +118,26 @@ def test_messages_use_slots() -> None:
     msg = FocusChangedMessage(focused_vm_id="x")
     with pytest.raises((AttributeError, TypeError)):
         msg.random_attr = "y"  # type: ignore[attr-defined]
+
+
+def test_connection_list_changed_message_shape():
+    from aws_tui.vm.messages import ConnectionListChangedMessage
+
+    msg = ConnectionListChangedMessage(
+        names=("minio-local", "ceph-staging"),
+        change="updated",
+    )
+    assert msg.names == ("minio-local", "ceph-staging")
+    assert msg.change == "updated"
+    assert msg.sender_name == "s3_connections"
+    assert msg.sender_object is msg
+
+
+def test_connection_list_changed_message_is_frozen():
+    import dataclasses
+
+    from aws_tui.vm.messages import ConnectionListChangedMessage
+
+    msg = ConnectionListChangedMessage(names=("x",), change="added")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        msg.change = "deleted"  # type: ignore[misc]

@@ -21,7 +21,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.infra.connection_resolver import Connection
-from aws_tui.vm.messages import ConnectionChangedMessage
+from aws_tui.vm.messages import ConnectionChangedMessage, ConnectionListChangedMessage
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 
 
@@ -213,6 +213,8 @@ class ServicesMenuVM:
     def _on_message(self, msg: object) -> None:
         if isinstance(msg, ConnectionChangedMessage):
             self.update_connection(msg.connection)
+        elif isinstance(msg, ConnectionListChangedMessage):
+            self._rebuild_items()
 
     def _can_switch(self, service_id: str | None) -> bool:
         if service_id is None:

@@ -15,6 +15,10 @@ needed to write a new ``[connections.<name>]`` block of
 
 from __future__ import annotations
 
+import re
+from urllib.parse import urlparse
+
+from textual import on
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.events import Click
@@ -24,6 +28,42 @@ from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.first_run_vm import FirstRunAction, FirstRunVM, S3CompatForm
+
+_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _validate_s3_form_value(field: str, value: str) -> str | None:
+    """Return None if the value is valid for the field, else an
+    error message suitable for tooltip display.
+
+    Validation rules per the design spec:
+    - ``name``: matches ``^[A-Za-z0-9_-]{1,32}$``
+    - ``endpoint_url``: starts with ``http://`` or ``https://``, has
+      a non-empty netloc
+    - ``region`` / ``access_key_id`` / ``secret_access_key``:
+      non-empty after strip
+    """
+    stripped = value.strip()
+    if field == "name":
+        if not _NAME_RE.match(value):
+            return "1-32 chars, alphanumeric + dash/underscore only"
+        return None
+    if field == "endpoint_url":
+        if not stripped:
+            return "required"
+        try:
+            parsed = urlparse(stripped)
+        except ValueError:
+            return "not a valid URL"
+        if parsed.scheme not in ("http", "https"):
+            return "must start with http:// or https://"
+        if not parsed.netloc:
+            return "missing host"
+        return None
+    # region, access_key_id, secret_access_key — required, non-empty
+    if not stripped:
+        return "required"
+    return None
 
 
 class FirstRunModal(ModalScreen[FirstRunAction]):
@@ -123,10 +163,12 @@ class S3CompatFormModal(ModalScreen[S3CompatForm | None]):
         *,
         hub: MessageHub[Message],
         defaults: S3CompatForm | None = None,
+        name_locked: bool = False,
     ) -> None:
         super().__init__()
         self._hub: MessageHub[Message] = hub
         self._defaults: S3CompatForm | None = defaults
+        self._name_locked: bool = name_locked
 
     def compose(self) -> ComposeResult:
         with Container():
@@ -142,6 +184,7 @@ class S3CompatFormModal(ModalScreen[S3CompatForm | None]):
                         placeholder=placeholder,
                         password=secret,
                         id=f"form-{key}",
+                        disabled=(self._name_locked and key == "name"),
                     )
             with Horizontal(classes="modal-footer"):
                 yield ModalButton("cancel", button_id="form-cancel-btn")
@@ -167,6 +210,41 @@ class S3CompatFormModal(ModalScreen[S3CompatForm | None]):
         if not form.is_valid():
             return
         self.dismiss(form)
+
+    def on_mount(self) -> None:
+        # Initial sync: if defaults were passed, validation has already
+        # run via compose; otherwise the empty form is invalid and the
+        # save button must reflect that.
+        self._refresh_save_button()
+
+    @on(Input.Changed)
+    def _on_input_changed(self, event: Input.Changed) -> None:
+        field = event.input.id.removeprefix("form-") if event.input.id else ""
+        if field not in {"name", "endpoint_url", "region", "access_key_id", "secret_access_key"}:
+            return
+        err = _validate_s3_form_value(field, event.value)
+        if err is None:
+            event.input.remove_class("-invalid")
+        else:
+            event.input.add_class("-invalid")
+        self._refresh_save_button()
+
+    def _refresh_save_button(self) -> None:
+        """Disable the save button if any required field is invalid."""
+        save_btn: ModalButton | None = None
+        for btn in self.query(ModalButton):
+            if btn.button_id == "form-save-btn":
+                save_btn = btn
+                break
+        if save_btn is None:
+            return
+        invalid = False
+        for key, _, _, _ in _FIELDS:
+            inp = self.query_one(f"#form-{key}", Input)
+            if _validate_s3_form_value(key, inp.value) is not None:
+                invalid = True
+                break
+        save_btn.disabled = invalid
 
     def on_click(self, event: Click) -> None:
         target = event.widget

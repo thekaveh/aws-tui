@@ -34,6 +34,8 @@ from aws_tui.vm.chrome.quick_look_vm import QuickLookVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
+from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
+from aws_tui.vm.settings.settings_vm import SettingsVM
 from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
@@ -113,6 +115,18 @@ async def test_panes_populate_with_entries_after_mount() -> None:
         '[connections.test]\nkind = "aws"\nprofile = "test"\nregion = "us-east-1"\n'
     )
 
+    s3_connections_vm = S3ConnectionsVM(
+        resolver=resolver,
+        config_store=config_store,
+        hub=hub,
+        dispatcher=dispatcher,
+    )
+    settings_vm = SettingsVM(
+        s3=s3_connections_vm,
+        hub=hub,
+        dispatcher=dispatcher,
+    )
+
     ctx = AppContext(
         root_vm=root,
         registry=registry,
@@ -130,6 +144,8 @@ async def test_panes_populate_with_entries_after_mount() -> None:
         hub=hub,
         dispatcher=dispatcher,
         initial_theme="carbon",
+        s3_connections_vm=s3_connections_vm,
+        settings_vm=settings_vm,
     )
 
     app = AwsTuiApp(ctx)
