@@ -269,19 +269,44 @@ class ConfigStore:
             )
         )
 
-    def remove_connection(self, name: str) -> None:
-        """Remove ``name`` and persist. Raises :class:`ConfigError` if missing."""
+    def update_connection(self, name: str, entry: ConnectionEntry) -> None:
+        """Atomic in-place update of an existing connection.
+
+        Raises ``KeyError`` if no connection with that name exists.
+        Raises ``ValueError`` if ``entry.name != name`` (renaming is
+        not supported; the field is read-only on edit in the UI).
+        """
+        if entry.name != name:
+            raise ValueError(
+                f"connection cannot be renamed in place: old={name!r}, new={entry.name!r}"
+            )
+        if entry.kind not in VALID_KINDS:
+            raise ConfigError(f"connection {entry.name!r} has invalid kind {entry.kind!r}")
         cfg = self.load()
         if name not in cfg.connections:
-            raise ConfigError(f"unknown connection: {name!r}")
-        new_conns = {k: v for k, v in cfg.connections.items() if k != name}
-        new_defaults = cfg.defaults
-        if cfg.defaults.connection == name:
-            new_defaults = Defaults(connection=None, theme=cfg.defaults.theme)
+            raise KeyError(name)
+        new_conns = {**cfg.connections, name: entry}
         self.save(
             Config(
                 connections=new_conns,
-                defaults=new_defaults,
+                defaults=cfg.defaults,
+                keybindings=cfg.keybindings,
+            )
+        )
+
+    def remove_connection(self, name: str) -> None:
+        """Atomic removal of a connection.
+
+        Raises ``KeyError`` if no connection with that name exists.
+        """
+        cfg = self.load()
+        if name not in cfg.connections:
+            raise KeyError(name)
+        new_conns = {k: v for k, v in cfg.connections.items() if k != name}
+        self.save(
+            Config(
+                connections=new_conns,
+                defaults=cfg.defaults,
                 keybindings=cfg.keybindings,
             )
         )
