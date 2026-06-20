@@ -229,6 +229,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   styled as a flat 1-cell background fill with ``color: $accent;
   background: $bg-elev; text-style: bold`` and ``hover →
   background: $danger; color: $bg``.
+- **Cancel chip now actually interrupts the in-flight copy.**
+  ``TransferVM._cancel`` flipped the row's VM state to ``CANCELLED``
+  but the underlying ``CrossFsCopy.copy(...)`` task kept running —
+  the row read ``⊘ cancelled`` while bytes kept transferring (the
+  user-reported "cancel doesn't work" bug). Fixed with a two-part
+  cancel: ``TransferVM`` still flips state immediately for instant
+  UI feedback, AND publishes a new ``TransferCancelRequestedMessage``
+  on the hub. ``DualPaneVM`` subscribes, holds a per-transfer
+  ``asyncio.Event`` registry populated by ``copy_across`` /
+  ``move_across`` during the pre-register pass, and races the copy
+  task against the event via ``asyncio.wait(..., return_when=
+  FIRST_COMPLETED)``. When the event fires the copy task is
+  ``cancel()``-ed (CrossFsCopy bails at its next await point), the
+  journal is marked aborted, and the batch loop moves on to the
+  next queued transfer. Pre-PENDING cancels are handled too: a
+  cancel arriving before the queued transfer's turn skips the work
+  entirely. Pinned by
+  ``test_dual_copy_across_cancel_event_interrupts_in_flight_copy``.
 - **ConfirmModal proportions tightened.** The modal felt visually
   heavy: ``width: 70`` on dark themes (60 elsewhere), container
   ``padding: 1 2``, body ``padding: 0 1 1 1``, footer ``height: 5``

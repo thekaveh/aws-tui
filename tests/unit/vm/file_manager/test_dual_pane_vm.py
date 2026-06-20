@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -155,6 +156,140 @@ async def test_dual_copy_across_pre_registers_all_pending_before_running(
         f"pending at {pending_indexes}, running at {running_indexes}"
     )
     dp.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dual_copy_across_cancel_event_interrupts_in_flight_copy(
+    tmp_path: Path,
+) -> None:
+    """User clicks the cancel chip mid-copy: the per-transfer
+    ``asyncio.Event`` is set, ``copy_across``'s ``asyncio.wait`` race
+    wakes up, the copy task is cancelled, journal is marked aborted,
+    and the batch loop continues to the next queued transfer.
+
+    Pre-PR (just the VM state flip): the row showed CANCELLED while
+    bytes kept transferring — the user-reported "cancel doesn't work"
+    bug. This test pins the actual interruption.
+    """
+    # A provider that blocks indefinitely inside read_stream so the
+    # copy task is interruptable mid-flight (it sits at an await
+    # point that respects CancelledError).
+    from collections.abc import AsyncIterator as _AsyncIterator
+
+    from aws_tui.domain.filesystem import EntryKind, FileEntry
+    from aws_tui.domain.filesystem import PathRef as _PathRef
+    from aws_tui.vm.messages import TransferCancelRequestedMessage
+
+    class _BlockingProvider(InMemoryFS):
+        """LocalFS-shaped provider whose read_stream blocks forever
+        on a "big file" — gives the copy task something to await on
+        that we can interrupt via task.cancel().
+        """
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._block_event = asyncio.Event()
+            self.read_was_cancelled = False
+            self._entry = FileEntry(
+                name="big-file.bin",
+                kind=EntryKind.FILE,
+                size=10_000_000,
+                modified=None,
+            )
+
+        async def list(self, path: _PathRef) -> tuple[FileEntry, ...]:
+            return (self._entry,)
+
+        async def stat(self, path: _PathRef) -> FileEntry:
+            # CrossFsCopy.copy calls stat before read_stream; without
+            # this the test errors out with NotFoundError before ever
+            # reaching the interruptable await.
+            if path.segments and path.segments[-1] == "big-file.bin":
+                return self._entry
+            return await super().stat(path)
+
+        async def read_stream(  # type: ignore[override]
+            self, _path: _PathRef, *, chunk_size: int = 8 * 1024 * 1024
+        ) -> _AsyncIterator[bytes]:
+            # Match the FileSystemProvider protocol: ``async def`` whose
+            # body ``return``s a separately-defined async generator (same
+            # pattern as ``LocalFS.read_stream`` and ``InMemoryFS``).
+            # The inner generator yields one empty chunk so the consumer
+            # enters its ``async for`` loop, then blocks on the never-set
+            # event — leaving the copy task awaiting at a cancellation
+            # point we can interrupt via ``task.cancel()``.
+            return self._blocking_gen()
+
+        async def _blocking_gen(self) -> _AsyncIterator[bytes]:
+            yield b""
+            try:
+                await self._block_event.wait()
+            except asyncio.CancelledError:
+                # The generator's awaiter (CrossFsCopy.copy's
+                # ``async for`` consumer) was cancelled — record it so
+                # the test can prove the cancel actually interrupted
+                # the in-flight copy task and re-raise.
+                self.read_was_cancelled = True
+                raise
+            yield b"never reached"  # pragma: no cover
+
+    hub: MessageHub[Message] = cast("MessageHub[Message]", MessageHub())
+    journal = TransferJournal(base_dir=tmp_path / "journal")
+    left_provider = _BlockingProvider()
+    right_fs = InMemoryFS()
+    left = PaneVM(provider=left_provider, hub=hub, dispatcher=NULL_DISPATCHER, id_prefix="left")
+    right = PaneVM(provider=right_fs, hub=hub, dispatcher=NULL_DISPATCHER, id_prefix="right")
+    dp = DualPaneVM(
+        left=left,
+        right=right,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        transfer_journal=journal,
+    )
+    dp.construct()
+    await dp.setup()
+    try:
+        dp.left.enter_multiselect_command.execute()
+        dp.left.toggle_select_command.execute()
+        assert dp.left.marked_entries, "expected at least one marked entry"
+
+        # Start the copy in the background; it'll hang inside
+        # read_stream waiting on the blocking event.
+        copy_task = asyncio.create_task(dp.copy_across())
+
+        # Wait for the cancel event to appear in DualPaneVM's registry
+        # (it's populated synchronously by the pre-register loop, but
+        # we need to yield to the loop so copy_across runs that far).
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if dp._cancel_events:
+                break
+        assert dp._cancel_events, "copy_across never populated _cancel_events"
+
+        # Fire the cancel-request as if the user clicked the chip.
+        transfer_id = next(iter(dp._cancel_events.keys()))
+        hub.send(TransferCancelRequestedMessage(transfer_id=transfer_id))
+
+        # copy_across should now return cleanly (cancel races the
+        # blocked copy task, kills it, moves on to the next queued
+        # transfer — but there's only one, so the batch ends).
+        await asyncio.wait_for(copy_task, timeout=2.0)
+
+        # Cancel event entry was cleaned up in the `finally` block.
+        assert transfer_id not in dp._cancel_events
+        # The critical assertion that distinguishes "the VM flipped
+        # its state to CANCELLED" (pre-fix behaviour) from "the actual
+        # in-flight copy task was interrupted" (post-fix behaviour).
+        # Without ``copy_task.cancel()`` in ``DualPaneVM._run_one_transfer``
+        # the consumer keeps awaiting ``self._block_event.wait()``
+        # forever and ``read_was_cancelled`` stays False — exactly the
+        # user-reported "cancel doesn't work" bug.
+        assert left_provider.read_was_cancelled, (
+            "copy_task was not actually cancelled — bytes would have "
+            "kept transferring despite the row showing CANCELLED"
+        )
+    finally:
+        dp.dispose()
 
 
 @pytest.mark.asyncio
