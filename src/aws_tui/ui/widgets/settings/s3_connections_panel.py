@@ -9,7 +9,6 @@ from textual.widget import Widget
 from textual.widgets import Button, Static
 from vmx import Message, MessageHub
 
-from aws_tui.infra.config_store import ConnectionEntry
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.first_run_modal import S3CompatFormModal
 from aws_tui.vm.chrome.confirm_vm import (
@@ -76,37 +75,49 @@ class S3ConnectionsPanel(Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="panel-body"):
-            yield from self._render_body()
+        yield Vertical(*self._render_children(), id="panel-body")
 
-    def _render_body(self) -> ComposeResult:
+    def _render_children(self) -> list[Widget]:
+        """Build the body's children as constructed widget instances.
+
+        Safe to call OUTSIDE compose() (no context-manager state required).
+        """
         conns = self._vm.connections
         self._last_row_count = len(conns)
         if not conns:
-            with Vertical(classes="empty-state"):
-                yield Static("No S3-compatible connections configured yet.")
-                yield Static("")
-                yield Static("Add one to access MinIO, Wasabi, R2, etc.")
-                yield Static("from the same panes you use for AWS S3.")
-                yield Static("")
-                yield _AddButton("+ Add s3-compatible connection", id="add-empty")
-            return
+            return [
+                Vertical(
+                    Static("No S3-compatible connections configured yet."),
+                    Static(""),
+                    Static("Add one to access MinIO, Wasabi, R2, etc."),
+                    Static("from the same panes you use for AWS S3."),
+                    Static(""),
+                    _AddButton("+ Add s3-compatible connection", id="add-empty"),
+                    classes="empty-state",
+                )
+            ]
+        children: list[Widget] = []
         for c in conns:
-            with Horizontal(classes="connection-row", id=f"row-{c.name}"):
-                yield _RowAccent("▎", classes="row-accent")
-                yield Static(c.name, classes="row-name")
-                yield Static(c.endpoint_url or "", classes="row-endpoint")
-                yield Static(c.region, classes="row-region")
-                yield _ChipEdit("✎", id=f"edit-{c.name}", classes="row-chip-edit")
-                yield _ChipDelete("✕", id=f"delete-{c.name}", classes="row-chip-delete")
-        yield _AddButton("+ Add s3-compatible connection", id="add-populated")
+            children.append(
+                Horizontal(
+                    _RowAccent("▎", classes="row-accent"),
+                    Static(c.name, classes="row-name"),
+                    Static(c.endpoint_url or "", classes="row-endpoint"),
+                    Static(c.region, classes="row-region"),
+                    _ChipEdit("✎", id=f"edit-{c.name}", classes="row-chip-edit"),
+                    _ChipDelete("✕", id=f"delete-{c.name}", classes="row-chip-delete"),
+                    classes="connection-row",
+                    id=f"row-{c.name}",
+                )
+            )
+        children.append(_AddButton("+ Add s3-compatible connection", id="add-populated"))
+        return children
 
     def refresh_rows(self) -> None:
         """Tear down + re-render the body container after a CRUD op."""
         body = self.query_one("#panel-body", Vertical)
         body.remove_children()
-        for child in self._render_body():
-            body.mount(child)
+        body.mount_all(self._render_children())
 
     @on(Button.Pressed, "#add-empty, #add-populated")
     async def _on_add(self, event: Button.Pressed) -> None:
@@ -116,7 +127,7 @@ class S3ConnectionsPanel(Widget):
         )
         if result is None:
             return
-        self._vm.add(_form_to_entry(result))
+        self._vm.add(self._vm.entry_from_form(result))
         self.refresh_rows()
 
     @on(Button.Pressed, ".row-chip-edit")
@@ -141,7 +152,7 @@ class S3ConnectionsPanel(Widget):
         )
         if result is None:
             return
-        self._vm.update(name, _form_to_entry(result))
+        self._vm.update(name, self._vm.entry_from_form(result))
         self.refresh_rows()
 
     @on(Button.Pressed, ".row-chip-delete")
@@ -168,19 +179,6 @@ class S3ConnectionsPanel(Widget):
         if confirmed:
             self._vm.remove(name)
             self.refresh_rows()
-
-
-def _form_to_entry(form: S3CompatForm) -> ConnectionEntry:
-    return ConnectionEntry(
-        name=form.name,
-        kind="s3-compatible",
-        region=form.region,
-        endpoint_url=form.endpoint_url,
-        access_key_id=form.access_key_id,
-        secret_access_key=form.secret_access_key,
-        force_path_style=form.force_path_style,
-        verify_tls=form.verify_tls,
-    )
 
 
 __all__ = ["S3ConnectionsPanel"]

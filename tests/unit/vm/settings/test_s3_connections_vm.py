@@ -123,3 +123,28 @@ def test_construct_dispose_clean(tmp_path: Path) -> None:
     vm.dispose()
     # No exception on double-dispose
     vm.dispose()
+
+
+def test_entry_from_form_round_trip(tmp_path: Path) -> None:
+    from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+
+    vm, _, _ = _make_vm(tmp_path)
+    form = S3CompatForm(
+        name="from-form",
+        endpoint_url="http://x:9000",
+        region="r1",
+        access_key_id="ak",
+        secret_access_key="sk",
+        force_path_style=True,
+        verify_tls=False,
+    )
+    entry = vm.entry_from_form(form)
+    assert entry.name == "from-form"
+    assert entry.kind == "s3-compatible"
+    assert entry.endpoint_url == "http://x:9000"
+    assert entry.region == "r1"
+    assert entry.access_key_id == "ak"
+    assert entry.secret_access_key == "sk"
+    assert entry.force_path_style is True
+    assert entry.verify_tls is False
+    vm.dispose()

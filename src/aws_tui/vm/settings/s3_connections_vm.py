@@ -8,6 +8,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
+from aws_tui.vm.chrome.first_run_vm import S3CompatForm
 from aws_tui.vm.messages import ConnectionListChangedMessage
 
 
@@ -101,6 +102,24 @@ class S3ConnectionsVM:
         """Persist removal, publish 'deleted'."""
         self._config_store.remove_connection(name)
         self._hub.send(ConnectionListChangedMessage(names=(name,), change="deleted"))
+
+    # ── Form helpers ───────────────────────────────────────────────────────
+
+    def entry_from_form(self, form: S3CompatForm) -> ConnectionEntry:
+        """Convert a filled :class:`S3CompatForm` to a :class:`ConnectionEntry`.
+
+        Keeps infra types out of the UI layer.
+        """
+        return ConnectionEntry(
+            name=form.name,
+            kind="s3-compatible",
+            region=form.region,
+            endpoint_url=form.endpoint_url,
+            access_key_id=form.access_key_id,
+            secret_access_key=form.secret_access_key,
+            force_path_style=form.force_path_style,
+            verify_tls=form.verify_tls,
+        )
 
 
 __all__ = ["S3ConnectionsVM"]
