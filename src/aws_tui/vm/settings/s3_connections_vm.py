@@ -63,6 +63,10 @@ class S3ConnectionsVM:
     # ── Read ───────────────────────────────────────────────────────────────
 
     @property
+    def dispatcher(self) -> Dispatcher:
+        return self._dispatcher
+
+    @property
     def connections(self) -> tuple[Connection, ...]:
         """All s3-compatible connections, in resolver order.
 
