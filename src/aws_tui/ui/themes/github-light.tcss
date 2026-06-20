@@ -650,3 +650,9 @@ ServicesMenuFooter _GearButton {
 ServicesMenuFooter _GearButton:hover {
     background: $accent-soft;
 }
+
+/* ─── S3CompatFormModal ─────────────────────────────────────────── */
+
+S3CompatFormModal Input.-invalid {
+    border: tall $danger;
+}
