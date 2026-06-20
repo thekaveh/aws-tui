@@ -43,6 +43,8 @@ from aws_tui.vm.chrome.resume_vm import ResumeAction
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
+from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
+from aws_tui.vm.settings.settings_vm import SettingsVM
 
 _logger = logging.getLogger("aws_tui.composition")
 
@@ -64,6 +66,8 @@ class AppContext:
         "quick_look_vm",
         "registry",
         "root_vm",
+        "s3_connections_vm",
+        "settings_vm",
         "theme_store",
         "transfer_journal",
         "transfers_vm",
@@ -89,6 +93,8 @@ class AppContext:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         initial_theme: str,
+        s3_connections_vm: S3ConnectionsVM | None = None,
+        settings_vm: SettingsVM | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
     ) -> None:
         self.root_vm = root_vm
@@ -107,6 +113,8 @@ class AppContext:
         self.hub = hub
         self.dispatcher = dispatcher
         self.initial_theme = initial_theme
+        self.s3_connections_vm = s3_connections_vm
+        self.settings_vm = settings_vm
         self.unreachable_connections: set[tuple[str, str]] = (
             unreachable_connections if unreachable_connections is not None else set()
         )
@@ -183,6 +191,17 @@ def build_app_context(
     confirm_vm = ConfirmationVM(hub=hub, dispatcher=dispatcher)
     quick_look_vm = QuickLookVM(hub=hub, dispatcher=dispatcher)
     transfers_vm = TransfersVM(hub=hub, dispatcher=dispatcher)
+    s3_connections_vm = S3ConnectionsVM(
+        resolver=connection_resolver,
+        config_store=config_store,
+        hub=hub,
+        dispatcher=dispatcher,
+    )
+    settings_vm = SettingsVM(
+        s3=s3_connections_vm,
+        hub=hub,
+        dispatcher=dispatcher,
+    )
 
     return AppContext(
         root_vm=root_vm,
@@ -201,6 +220,8 @@ def build_app_context(
         hub=hub,
         dispatcher=dispatcher,
         initial_theme=initial_theme,
+        s3_connections_vm=s3_connections_vm,
+        settings_vm=settings_vm,
         unreachable_connections=set(),
     )
 
