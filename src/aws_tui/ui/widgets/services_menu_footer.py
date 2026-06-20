@@ -5,7 +5,6 @@ from __future__ import annotations
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal
-from textual.events import Click
 from textual.widget import Widget
 from textual.widgets import Button
 
@@ -41,22 +40,7 @@ class ServicesMenuFooter(Widget):
     @on(Button.Pressed, "#gear-button")
     def _on_gear(self, event: Button.Pressed) -> None:
         event.stop()
-        app = self.app
-        action = getattr(app, "action_open_settings", None)
-        if callable(action):
-            action()
-
-    def on_click(self, event: Click) -> None:
-        # Allow clicks anywhere in the band (not just the button glyph)
-        # to invoke the action — matches the affordance described in
-        # the spec ("a small ⚙ Settings row pinned to the bottom").
-        stop = getattr(event, "stop", None)
-        if callable(stop):
-            stop()
-        app = getattr(self, "app", None)
-        if app is None:
-            return
-        action = getattr(app, "action_open_settings", None)
+        action = getattr(self.app, "action_open_settings", None)
         if callable(action):
             action()
 
