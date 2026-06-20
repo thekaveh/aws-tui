@@ -500,3 +500,153 @@ ServicesHamburger:hover {
     background: $accent;
     color: $bg;
 }
+
+/* ─── SettingsModal ───────────────────────────────────────────── */
+
+SettingsModal {
+    align: center middle;
+    background: $bg 60%;
+}
+
+SettingsModal > #settings-frame {
+    background: $bg-elev;
+    color: $text;
+    border: round $rule-dim;
+    padding: 0 2;
+    width: 80;
+    height: 28;
+    max-height: 90%;
+}
+
+SettingsModal > #settings-frame > #settings-title {
+    color: $accent;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+SettingsModal > #settings-frame > #settings-content {
+    height: 1fr;
+}
+
+SettingsModal #settings-sidebar {
+    width: 22;
+    background: $bg;
+    border-right: solid $rule-dim;
+}
+
+SettingsModal #settings-sidebar ListView {
+    background: $bg;
+}
+
+SettingsModal #settings-sidebar ListItem {
+    padding: 0 1;
+    color: $text;
+}
+
+SettingsModal #settings-sidebar ListItem.-disabled {
+    color: $text-muted;
+    text-style: italic;
+}
+
+SettingsModal #settings-sidebar ListItem.-active {
+    background: $accent-soft;
+    color: $accent;
+    text-style: bold;
+}
+
+SettingsModal #settings-body {
+    width: 1fr;
+    padding: 0 1;
+}
+
+SettingsModal > #settings-frame > #settings-footer {
+    height: 3;
+    align: right middle;
+}
+
+/* ─── S3ConnectionsPanel ──────────────────────────────────────── */
+
+S3ConnectionsPanel .connection-row {
+    height: 1;
+}
+
+S3ConnectionsPanel .row-accent {
+    width: 1;
+    color: $rule-dim;
+}
+
+S3ConnectionsPanel .row-name {
+    width: 16;
+    text-style: bold;
+    color: $text;
+}
+
+S3ConnectionsPanel .row-endpoint {
+    width: 1fr;
+    color: $text-muted;
+}
+
+S3ConnectionsPanel .row-region {
+    width: 10;
+    color: $text-muted;
+}
+
+S3ConnectionsPanel .row-chip-edit {
+    width: 3;
+    min-width: 3;
+    height: 1;
+    background: $bg-elev;
+    color: $accent;
+    text-style: bold;
+    border: none;
+}
+
+S3ConnectionsPanel .row-chip-edit:hover {
+    background: $accent-soft;
+}
+
+S3ConnectionsPanel .row-chip-delete {
+    width: 3;
+    min-width: 3;
+    height: 1;
+    background: $bg-elev;
+    color: $accent;
+    text-style: bold;
+    border: none;
+}
+
+S3ConnectionsPanel .row-chip-delete:hover {
+    background: $danger;
+    color: $bg;
+}
+
+S3ConnectionsPanel .empty-state Static {
+    color: $text-muted;
+}
+
+S3ConnectionsPanel _AddButton {
+    background: $bg-elev;
+    color: $accent;
+    border: round $rule-dim;
+    padding: 0 2;
+    height: 3;
+}
+
+/* ─── ServicesMenuFooter ──────────────────────────────────────── */
+
+ServicesMenuFooter {
+    background: $bg-elev;
+    border-top: solid $rule-dim;
+}
+
+ServicesMenuFooter _GearButton {
+    background: $bg-elev;
+    color: $accent;
+    border: none;
+    width: 1fr;
+    height: 1;
+}
+
+ServicesMenuFooter _GearButton:hover {
+    background: $accent-soft;
+}
