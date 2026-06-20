@@ -223,10 +223,8 @@ class AwsTuiApp(App[None]):
         ctx.confirm_vm.construct()
         ctx.quick_look_vm.construct()
         ctx.command_palette_vm.construct()
-        if ctx.s3_connections_vm is not None:
-            ctx.s3_connections_vm.construct()
-        if ctx.settings_vm is not None:
-            ctx.settings_vm.construct()
+        ctx.s3_connections_vm.construct()
+        ctx.settings_vm.construct()
 
         self._apply_initial_theme()
 
@@ -798,8 +796,6 @@ class AwsTuiApp(App[None]):
     def action_open_settings(self) -> None:
         """Push the SettingsModal. Bound to comma + the gear button."""
         ctx = self._app_ctx
-        if ctx.settings_vm is None:
-            return
         self.push_screen(
             SettingsModal(vm=ctx.settings_vm, hub=ctx.hub),
             callback=lambda _result: self._reload_after_settings(),
@@ -814,8 +810,6 @@ class AwsTuiApp(App[None]):
         modal teardown isn't blocked.
         """
         ctx = self._app_ctx
-        if ctx.settings_vm is None:
-            return
         dirty = ctx.settings_vm.dirty_connection_names
         if not dirty:
             return
@@ -1178,10 +1172,8 @@ class AwsTuiApp(App[None]):
                 self._connection_list_sub.dispose()
                 self._connection_list_sub = None
         with contextlib.suppress(Exception):
-            if ctx.settings_vm is not None:
-                ctx.settings_vm.dispose()
-            if ctx.s3_connections_vm is not None:
-                ctx.s3_connections_vm.dispose()
+            ctx.settings_vm.dispose()
+            ctx.s3_connections_vm.dispose()
         with contextlib.suppress(Exception):
             ctx.command_palette_vm.dispose()
             ctx.quick_look_vm.dispose()

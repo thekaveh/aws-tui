@@ -93,8 +93,8 @@ class AppContext:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         initial_theme: str,
-        s3_connections_vm: S3ConnectionsVM | None = None,
-        settings_vm: SettingsVM | None = None,
+        s3_connections_vm: S3ConnectionsVM,
+        settings_vm: SettingsVM,
         unreachable_connections: set[tuple[str, str]] | None = None,
     ) -> None:
         self.root_vm = root_vm
