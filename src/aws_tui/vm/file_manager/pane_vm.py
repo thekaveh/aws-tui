@@ -165,6 +165,7 @@ class PaneVM:
         id_prefix: str = "pane",
         identity_label: str | None = None,
         path_protocol: str = "",
+        connection_key: tuple[str, str] | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
@@ -179,6 +180,11 @@ class PaneVM:
         # rendered title becomes ``s3://bucket/folder`` for S3 and just
         # ``/Users/kaveh/...`` for local.
         self._path_protocol: str = path_protocol
+        # (kind, name) key identifying the remote connection backing this
+        # pane. None for local panes. Updated atomically inside
+        # swap_provider BEFORE _reload() runs so hub subscribers always
+        # see the correct key when a state change fires.
+        self._connection_key: tuple[str, str] | None = connection_key
 
         self._entries: list[EntryVM] = []
         self._filtered: tuple[int, ...] = ()  # indices into self._entries
@@ -299,6 +305,19 @@ class PaneVM:
         position among the available sources without parsing the
         subtitle out of the viewmodel."""
         return self._identity_label
+
+    @property
+    def current_connection_key(self) -> tuple[str, str] | None:
+        """``(kind, name)`` identifying the remote connection backing this
+        pane, or ``None`` for local panes.
+
+        Updated atomically inside :meth:`swap_provider` (before
+        ``_reload`` runs) so hub subscribers observing a
+        ``PropertyChangedMessage`` for ``"state"`` always read the key
+        that corresponds to the *new* provider — eliminating the
+        attribution race that existed when the App tracked keys
+        separately in ``_left_pane_conn_key`` / ``_right_pane_conn_key``."""
+        return self._connection_key
 
     @property
     def entries(self) -> tuple[EntryVM, ...]:
@@ -467,6 +486,7 @@ class PaneVM:
         *,
         identity_label: str | None = None,
         path_protocol: str | None = None,
+        connection_key: tuple[str, str] | None = None,
     ) -> None:
         """Replace this pane's filesystem provider at runtime.
 
@@ -475,12 +495,20 @@ class PaneVM:
         (local, local) combinations in the dual-pane. Resets path to
         root and re-lists so the pane reflects the new provider's
         contents from the top.
+
+        ``connection_key`` is updated BEFORE ``_reload()`` is called so
+        that the ``PropertyChangedMessage("state")`` the hub fires during
+        the reload carries the new key — eliminating the attribution race
+        that existed when the App tracked keys in separate instance vars.
         """
         self._provider = provider
         if identity_label is not None:
             self._identity_label = identity_label
         if path_protocol is not None:
             self._path_protocol = path_protocol
+        # Update the key ATOMICALLY before _reload so hub subscribers
+        # see the correct connection when the state-change fires.
+        self._connection_key = connection_key
         self._path = _ROOT_PATH
         self._cursor_index = 0
         self._filter_text = ""

@@ -14,7 +14,12 @@ import os
 import sys
 from collections import deque
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+from reactivex.abc import DisposableBase
+
+if TYPE_CHECKING:
+    from aws_tui.vm.file_manager.pane_vm import PaneState
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
@@ -47,6 +52,53 @@ from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 from aws_tui.vm.messages import ThemeChangedMessage
 
 _ACTION_RING_SIZE = 100
+
+
+def _build_swap_candidates(
+    ctx: AppContext,
+) -> tuple[list[tuple[str, str | Connection]], list[str]]:
+    """Build the (label, payload) ring for ``action_swap_source``,
+    filtering out connections in ``ctx.unreachable_connections``.
+
+    Returns ``(candidates, skipped_names)`` where ``skipped_names`` is
+    the list of TOML section names / profile names that were filtered
+    out (used by ``_raise_skip_toast`` to inform the user).
+    """
+    from aws_tui.services.s3.service import _format_pane_title
+
+    candidates: list[tuple[str, str | Connection]] = [("local", "local")]
+    skipped: list[str] = []
+    for conn in ctx.connection_resolver.list():
+        if (conn.kind, conn.name) in ctx.unreachable_connections:
+            skipped.append(conn.name)
+            continue
+        candidates.append((_format_pane_title(conn), conn))
+    return candidates, skipped
+
+
+def _raise_skip_toast(ctx: AppContext, skipped: list[str]) -> None:
+    """Raise a one-line INFO toast naming the skipped connections.
+
+    No-op if ``skipped`` is empty. The toast id is built from a SORTED
+    join so it is stable regardless of the iteration order of
+    ``ConnectionResolver.list()``.
+    """
+    if not skipped:
+        return
+    # Keep displayed text in original (config-file) order; sort only the id.
+    text = f"Skipped unreachable: {', '.join(skipped)}"
+    toast_id = f"swap-skip-{','.join(sorted(skipped))}"
+    ctx.root_vm.chrome.toast_stack.raise_toast(
+        ToastModel(
+            id=toast_id,
+            text=text,
+            level=ToastLevel.INFO,
+            sticky=False,
+            timeout_seconds=3.0,
+            action_label=None,
+            action_action=None,
+        )
+    )
 
 
 def _join_path(base: str, name: str) -> str:
@@ -131,6 +183,10 @@ class AwsTuiApp(App[None]):
         # unhandled exception so ``main()`` can print the dump path and
         # re-raise after the app has torn down.
         self._crash_report: CrashReport | None = None
+        self._pane_state_sub: DisposableBase | None = None
+        # Tracks the last frozenset of skipped connection names shown in a
+        # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
+        self._last_skip_toast_set: frozenset[str] | None = None
 
     @property
     def app_ctx(self) -> AppContext:
@@ -166,6 +222,11 @@ class AwsTuiApp(App[None]):
         ctx.command_palette_vm.construct()
 
         self._apply_initial_theme()
+
+        # Subscribe to PaneVM state transitions BEFORE switch_service so the
+        # initial UNREACHABLE state-change (if the connection is offline) is
+        # not missed (Bug 2: initial mount UNREACHABLE silently missed).
+        self._pane_state_sub = ctx.hub.messages.subscribe(on_next=self._on_hub_message_pane_state)
 
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
@@ -230,6 +291,9 @@ class AwsTuiApp(App[None]):
 
         ``switch_service`` updates the VM tree; the View layer has to follow
         explicitly — Textual won't infer that from VMx state.
+
+        Connection attribution is now carried by ``PaneVM.current_connection_key``
+        (set by ``S3Service.build_vm``), so no per-pane tracker is needed here.
         """
         ctx = self._app_ctx
         try:
@@ -650,26 +714,31 @@ class AwsTuiApp(App[None]):
         try:
             from aws_tui.domain.local_fs import LocalFS
             from aws_tui.domain.s3_fs import S3FS
-            from aws_tui.services.s3.service import (
-                _aioboto3_session_for,
-                _format_pane_title,
-            )
+            from aws_tui.services.s3.service import _aioboto3_session_for
         except Exception:
             return
 
         _LOCAL_LABEL = "local"
-
-        # Build the candidate ring: local first, then every connection
-        # the resolver knows about. Each entry carries its display
-        # label and a factory that returns ``(provider, path_protocol)``
-        # ready to feed into ``swap_provider``. Connection captures use
-        # default-arg binding so the closure doesn't latch onto the
-        # loop variable.
-        candidates: list[tuple[str, object]] = [(_LOCAL_LABEL, "local")]
-        for conn in ctx.connection_resolver.list():
-            candidates.append((_format_pane_title(conn), conn))
+        candidates, skipped = _build_swap_candidates(ctx)
+        # Bug 4 fix: deduplicate skip toasts — only raise when the skipped
+        # set changes (avoid stacking N identical toasts on repeated Shift+S).
+        skipped_fs = frozenset(skipped)
+        if skipped_fs != self._last_skip_toast_set:
+            _raise_skip_toast(ctx, skipped)
+            self._last_skip_toast_set = skipped_fs if skipped else None
         if len(candidates) <= 1:
-            self.notify("No connections configured — can't swap source.", severity="warning")
+            # Only local — either no connections configured, or every
+            # configured connection has been observed unreachable.
+            if skipped:
+                self.notify(
+                    "All connections unreachable — staying on local.",
+                    severity="warning",
+                )
+            else:
+                self.notify(
+                    "No connections configured — can't swap source.",
+                    severity="warning",
+                )
             return
 
         current_label = focused.identity_label or _LOCAL_LABEL
@@ -685,8 +754,8 @@ class AwsTuiApp(App[None]):
             new_provider = LocalFS()
             new_protocol = ""
         else:
-            assert not isinstance(payload, str)  # narrowed for mypy
-            conn = payload  # type: ignore[assignment]
+            assert not isinstance(payload, str)  # narrows payload to Connection
+            conn = payload
             session = _aioboto3_session_for(conn)
             new_provider = S3FS(
                 session=session,
@@ -699,8 +768,22 @@ class AwsTuiApp(App[None]):
         swap = getattr(focused, "swap_provider", None)
         if swap is None:
             return
+        # Compute the connection_key passed to swap_provider so it is stored
+        # atomically BEFORE _reload() fires — eliminating the attribution race
+        # (Bug 1) where _on_hub_message_pane_state would read a stale key.
+        new_conn_key: tuple[str, str] | None
+        if payload == "local":
+            new_conn_key = None
+        else:
+            assert not isinstance(payload, str)  # narrows payload to Connection
+            new_conn_key = (payload.kind, payload.name)
         ctx.log_sink.info("pane.swap_source", to=next_label)
-        await swap(new_provider, identity_label=next_label, path_protocol=new_protocol)
+        await swap(
+            new_provider,
+            identity_label=next_label,
+            path_protocol=new_protocol,
+            connection_key=new_conn_key,
+        )
 
     async def action_themes(self) -> None:
         """Open the keyboard-navigable theme picker modal."""
@@ -784,6 +867,67 @@ class AwsTuiApp(App[None]):
 
         # 3. Broadcast for Python-side palettes (e.g. the banner).
         ctx.hub.send(ThemeChangedMessage(name=name))
+
+    # ── Connection-reachability tracking ───────────────────────────────────
+
+    def _mark_connection_unreachable(self, kind: str, name: str) -> None:
+        """Add ``(kind, name)`` to the unreachable set so subsequent
+        Shift+S cycles skip this connection. Idempotent.
+        """
+        self._app_ctx.unreachable_connections.add((kind, name))
+        self._app_ctx.log_sink.info("connection.unreachable.mark", kind=kind, name=name)
+
+    def _clear_connection_unreachable(self, kind: str, name: str) -> None:
+        """Remove ``(kind, name)`` from the unreachable set so it
+        re-enters the swap-source ring. Idempotent.
+        """
+        self._app_ctx.unreachable_connections.discard((kind, name))
+        self._app_ctx.log_sink.info("connection.unreachable.clear", kind=kind, name=name)
+
+    def _on_pane_state_changed(
+        self,
+        *,
+        kind: str,
+        name: str,
+        new_state: PaneState,
+    ) -> None:
+        """Hub-subscriber dispatch. When an active pane's state hits
+        UNREACHABLE, mark its connection. When it transitions to
+        IDLE / EMPTY from UNREACHABLE, clear the mark.
+        """
+        from aws_tui.vm.file_manager.pane_vm import PaneState
+
+        was_marked = (kind, name) in self._app_ctx.unreachable_connections
+        if new_state is PaneState.UNREACHABLE:
+            self._mark_connection_unreachable(kind, name)
+        elif was_marked and new_state in (PaneState.IDLE, PaneState.EMPTY):
+            self._clear_connection_unreachable(kind, name)
+
+    def _on_hub_message_pane_state(self, msg: object) -> None:
+        """Hub subscriber: route PaneVM state changes to the reachability set.
+
+        Reads ``PaneVM.current_connection_key`` directly — the key is stored
+        atomically inside ``swap_provider`` BEFORE ``_reload()`` runs, so
+        there is no race between the state-change notification and the key
+        update (Bug 1 fix). The subscription is established BEFORE
+        ``switch_service`` in ``on_mount`` so the initial UNREACHABLE
+        state-change is never missed (Bug 2 fix).
+        """
+        from vmx import PropertyChangedMessage
+
+        from aws_tui.vm.file_manager.pane_vm import PaneVM
+
+        if not isinstance(msg, PropertyChangedMessage):
+            return
+        if msg.property_name != "state":
+            return
+        if not isinstance(msg.sender_object, PaneVM):
+            return
+        sender_vm = msg.sender_object
+        key = sender_vm.current_connection_key
+        if key is None:
+            return  # local pane — never tracked
+        self._on_pane_state_changed(kind=key[0], name=key[1], new_state=sender_vm.state)
 
     # ── Crash handling ─────────────────────────────────────────────────────
 
@@ -893,6 +1037,10 @@ class AwsTuiApp(App[None]):
         with contextlib.suppress(Exception):
             ctx.log_sink.flush()
             ctx.log_sink.close()
+        with contextlib.suppress(Exception):
+            if self._pane_state_sub is not None:
+                self._pane_state_sub.dispose()
+                self._pane_state_sub = None
         with contextlib.suppress(Exception):
             ctx.command_palette_vm.dispose()
             ctx.quick_look_vm.dispose()

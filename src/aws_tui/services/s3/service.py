@@ -142,6 +142,7 @@ class S3Service:
             id_prefix="pane.s3",
             identity_label=_format_pane_title(connection),
             path_protocol="s3:",
+            connection_key=(connection.kind, connection.name),
         )
         right = PaneVM(
             provider=local_provider,
@@ -150,6 +151,7 @@ class S3Service:
             id_prefix="pane.local",
             identity_label="local",
             path_protocol="",
+            connection_key=None,
         )
         return DualPaneVM(
             left=left,
