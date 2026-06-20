@@ -15,7 +15,7 @@ from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneVM
-from aws_tui.vm.messages import TransferProgressMessage
+from aws_tui.vm.messages import TransferProgressMessage, TransferState
 from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
@@ -108,6 +108,51 @@ async def test_dual_copy_across_publishes_transfer_progress(tmp_path: Path) -> N
     )
     assert sample.destination_label.startswith("/"), (
         f"local pane destination must emit unprefixed posix path, got {sample.destination_label!r}"
+    )
+    dp.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dual_copy_across_pre_registers_all_pending_before_running(
+    tmp_path: Path,
+) -> None:
+    """Pre-PR: copy_across registered each transfer one at a time, so the
+    user only saw the currently-running transfer (+ the most recent
+    completed one lingering). With N marked entries, the overlay
+    appeared to handle them in pairs (one running + one done) — masking
+    that N-2 more were queued.
+
+    Post-PR: every marked entry sends a PENDING TransferProgressMessage
+    upfront, BEFORE the loop starts running any copy. The user sees
+    all N rows immediately; each one transitions RUNNING → COMPLETED
+    in order.
+
+    Test verifies: every PENDING message fires before the first RUNNING
+    message.
+    """
+    dp, hub = await _make_dual(tmp_path)
+    received: list[TransferProgressMessage] = []
+    hub.messages.subscribe(
+        on_next=lambda m: received.append(m) if isinstance(m, TransferProgressMessage) else None
+    )
+    # Mark BOTH entries.
+    dp.left.enter_multiselect_command.execute()
+    dp.left.select_all_command.execute()
+    assert len(dp.left.marked_entries) == 2
+    await dp.copy_across()
+
+    pending_indexes = [i for i, m in enumerate(received) if m.state == TransferState.PENDING]
+    running_indexes = [i for i, m in enumerate(received) if m.state == TransferState.RUNNING]
+    assert len(pending_indexes) == 2, (
+        f"expected 2 PENDING messages (one per marked entry); got {len(pending_indexes)}"
+    )
+    assert running_indexes, "expected at least one RUNNING message"
+    # The critical assertion: every PENDING message arrives BEFORE
+    # the first RUNNING message. That's what makes the overlay show
+    # all queued transfers upfront.
+    assert max(pending_indexes) < min(running_indexes), (
+        "all PENDING messages should fire before any RUNNING — got "
+        f"pending at {pending_indexes}, running at {running_indexes}"
     )
     dp.dispose()
 

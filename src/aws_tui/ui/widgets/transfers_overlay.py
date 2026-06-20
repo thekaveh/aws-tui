@@ -192,7 +192,14 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         return _last_segment(self._vm.model.source_label)
 
     def _dest_text(self) -> str:
-        return f"→ {_last_segment(self._vm.model.destination_label)}"
+        # Show the FULL destination URL (with scheme) rather than just
+        # the trailing segment. The trailing segment is usually
+        # identical to the source name, making the row ambiguous —
+        # showing "s3://bucket/path/Snowpiercer" is unambiguous about
+        # where the file is going. Long URLs are truncated with
+        # ellipsis by the per-theme CSS (`text-wrap: nowrap;
+        # text-overflow: ellipsis` on `.transfer-dest-row`).
+        return f"→ {self._vm.model.destination_label}"
 
     def _state_word(self) -> str:
         state = self._vm.state
@@ -210,6 +217,13 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         return "..."
 
     def _bar_text(self) -> str:
+        # Terminal states drive the bar directly so we never show an
+        # empty bar on a done/failed/cancelled transfer just because
+        # the underlying entry had no bytes_total (e.g. a directory
+        # copy where LocalFS doesn't populate dir size).
+        state = self._vm.state
+        if state is TransferState.COMPLETED:
+            return _BAR_FILLED * _BAR_CELLS
         pct = self._percentage()
         if pct is None:
             return _BAR_EMPTY * _BAR_CELLS
@@ -220,6 +234,17 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
     def _bytes_text(self) -> str:
         done = self._vm.model.bytes_done
         total = self._vm.model.bytes_total
+        state = self._vm.state
+        # Terminal-state messaging is honest about what we know:
+        # COMPLETED with no total → "✓ done"; FAILED / CANCELLED with
+        # no progress → just the state word (the bar + left bar already
+        # convey what happened).
+        if state is TransferState.COMPLETED and (total is None or total <= 0):
+            return "✓ done"
+        if state in (TransferState.FAILED, TransferState.CANCELLED) and (
+            total is None or total <= 0
+        ):
+            return ""
         if total is None or total <= 0:
             return f"{humanize_bytes(done)} · streaming…"
         return f"{humanize_bytes(done)} / {humanize_bytes(total)}"
