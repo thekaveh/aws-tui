@@ -1,8 +1,16 @@
 """Skipped-unreachable behavior on action_swap_source.
 
 Pre-populate ctx.unreachable_connections with two of three configured
-connection keys, invoke action_swap_source, verify the swap landed on
-the one reachable entry and that a skip-info toast was raised.
+connection keys, call the candidate-building logic, verify the one
+reachable entry survives and the two unreachable ones are excluded.
+
+Note: this test exercises the _build_swap_candidates / _raise_skip_toast
+helpers directly rather than going through app.run_test (which would mount
+an actual S3 provider against localhost:9001 — an endpoint that isn't
+running in the test environment).  Doing so via app.run_test would
+auto-trigger Bug-2-fix behaviour and mark reachable-one as UNREACHABLE
+too (correct behaviour for real usage, but incorrect for a test that
+wants to pin "reachable-one IS reachable").
 """
 
 from __future__ import annotations
@@ -11,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from aws_tui.app import AwsTuiApp
+from aws_tui.app import AwsTuiApp, _build_swap_candidates, _raise_skip_toast
 from aws_tui.composition import build_app_context
 
 
@@ -43,60 +51,36 @@ async def test_swap_source_skips_unreachable_connections(tmp_path: Path) -> None
     )
     ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
     # Pre-populate the unreachable set as if the two endpoints had been
-    # observed offline by the hub-subscription path (Task 3 will wire
-    # that observation automatically; this test pins the consumption
-    # side independently).
+    # observed offline by the hub-subscription path.
     ctx.unreachable_connections.add(("s3-compatible", "unreachable-one"))
     ctx.unreachable_connections.add(("s3-compatible", "unreachable-two"))
 
+    # Exercise the filter logic directly — no app.run_test needed.
+    candidates, skipped = _build_swap_candidates(ctx)
+    names = [label for label, _ in candidates]
+    assert "local" in names
+    assert any("reachable-one" in n for n in names)
+    assert not any("unreachable-one" in n for n in names)
+    assert not any("unreachable-two" in n for n in names)
+    assert {"unreachable-one", "unreachable-two"} == set(skipped)
+
+    # Toast wiring: build a minimal app just to get the toast stack,
+    # then call _raise_skip_toast and verify the shape.
     app = AwsTuiApp(ctx)
+    toast_stack = ctx.root_vm.chrome.toast_stack
+    before = len(toast_stack.toasts)
 
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        await pilot.pause()
-
-        # Manually invoke action_swap_source. We can't depend on the
-        # initial pane being mounted to a specific connection in this
-        # harness because no service mounted (no provider built — the
-        # endpoints aren't reachable in the test environment). The
-        # observable behavior we care about: the toast.
-
-        # Capture toasts raised on the stack via the VM (the View just
-        # renders them; the data lives in the VM).
-        toast_stack = ctx.root_vm.chrome.toast_stack
-        before = len(toast_stack.toasts)
-
-        # The action requires a mounted dual_pane; on a no-service
-        # startup it returns early. To exercise the filter
-        # deterministically, call the candidate-building logic directly
-        # via the new internal helper we'll add in Task 2 (see plan).
-        from aws_tui.app import _build_swap_candidates
-
-        candidates, skipped = _build_swap_candidates(ctx)
-        names = [label for label, _ in candidates]
-        assert "local" in names
-        assert any("reachable-one" in n for n in names)
-        assert not any("unreachable-one" in n for n in names)
-        assert not any("unreachable-two" in n for n in names)
-        assert {"unreachable-one", "unreachable-two"} == set(skipped)
-
-        # And the toast wiring: when action_swap_source actually runs
-        # and filters out entries, it raises one INFO toast naming the
-        # skipped connections. Call the toast-raising helper directly
-        # to assert the shape (the full action requires a dual_pane
-        # which this no-service startup doesn't have).
-        from aws_tui.app import _raise_skip_toast
-
-        _raise_skip_toast(ctx, skipped)
-        after = len(toast_stack.toasts)
-        assert after == before + 1
-        latest = toast_stack.toasts[-1]
-        assert "Skipped unreachable" in latest.model.text
-        assert "unreachable-one" in latest.model.text
-        assert "unreachable-two" in latest.model.text
+    _raise_skip_toast(ctx, skipped)
+    after = len(toast_stack.toasts)
+    assert after == before + 1
+    latest = toast_stack.toasts[-1]
+    assert "Skipped unreachable" in latest.model.text
+    assert "unreachable-one" in latest.model.text
+    assert "unreachable-two" in latest.model.text
 
     ctx.transfers_vm.dispose()
     ctx.confirm_vm.dispose()
     ctx.quick_look_vm.dispose()
     ctx.command_palette_vm.dispose()
     ctx.root_vm.dispose()
+    del app  # no run_test so nothing to close

@@ -79,12 +79,15 @@ def _build_swap_candidates(
 def _raise_skip_toast(ctx: AppContext, skipped: list[str]) -> None:
     """Raise a one-line INFO toast naming the skipped connections.
 
-    No-op if ``skipped`` is empty.
+    No-op if ``skipped`` is empty. The toast id is built from a SORTED
+    join so it is stable regardless of the iteration order of
+    ``ConnectionResolver.list()``.
     """
     if not skipped:
         return
+    # Keep displayed text in original (config-file) order; sort only the id.
     text = f"Skipped unreachable: {', '.join(skipped)}"
-    toast_id = f"swap-skip-{','.join(skipped)}"
+    toast_id = f"swap-skip-{','.join(sorted(skipped))}"
     ctx.root_vm.chrome.toast_stack.raise_toast(
         ToastModel(
             id=toast_id,
@@ -180,14 +183,10 @@ class AwsTuiApp(App[None]):
         # unhandled exception so ``main()`` can print the dump path and
         # re-raise after the app has torn down.
         self._crash_report: CrashReport | None = None
-        # Per-pane current-connection trackers — used by the
-        # _on_pane_state_changed hub subscriber to attribute UNREACHABLE
-        # state transitions to a specific connection. Updated when
-        # action_swap_source completes a successful swap and at initial
-        # mount.
-        self._left_pane_conn_key: tuple[str, str] | None = None
-        self._right_pane_conn_key: tuple[str, str] | None = None
         self._pane_state_sub: DisposableBase | None = None
+        # Tracks the last frozenset of skipped connection names shown in a
+        # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
+        self._last_skip_toast_set: frozenset[str] | None = None
 
     @property
     def app_ctx(self) -> AppContext:
@@ -224,19 +223,20 @@ class AwsTuiApp(App[None]):
 
         self._apply_initial_theme()
 
+        # Subscribe to PaneVM state transitions BEFORE switch_service so the
+        # initial UNREACHABLE state-change (if the connection is offline) is
+        # not missed (Bug 2: initial mount UNREACHABLE silently missed).
+        self._pane_state_sub = ctx.hub.messages.subscribe(on_next=self._on_hub_message_pane_state)
+
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
             auth_state = ctx.aws_session.probe_token(initial_conn).state
             await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
             with contextlib.suppress(Exception):
                 await ctx.root_vm.switch_service("s3")
-            self._mount_initial_service_view(initial_conn=initial_conn)
+            self._mount_initial_service_view()
         else:
             self._mount_no_connection_placeholder()
-
-        # Subscribe to PaneVM state transitions to maintain the
-        # unreachable-connections set.
-        self._pane_state_sub = ctx.hub.messages.subscribe(on_next=self._on_hub_message_pane_state)
 
     # ── on_mount helpers ───────────────────────────────────────────────────
 
@@ -286,11 +286,14 @@ class AwsTuiApp(App[None]):
             initial_conn = connections[0]
         return initial_conn
 
-    def _mount_initial_service_view(self, *, initial_conn: Connection | None = None) -> None:
+    def _mount_initial_service_view(self) -> None:
         """Mount the current service's view widget into the content host.
 
         ``switch_service`` updates the VM tree; the View layer has to follow
         explicitly — Textual won't infer that from VMx state.
+
+        Connection attribution is now carried by ``PaneVM.current_connection_key``
+        (set by ``S3Service.build_vm``), so no per-pane tracker is needed here.
         """
         ctx = self._app_ctx
         try:
@@ -299,11 +302,6 @@ class AwsTuiApp(App[None]):
                 host = self.query_one("#content-host", Container)
                 host.remove_children()
                 host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
-                if initial_conn is not None:
-                    self._left_pane_conn_key = (initial_conn.kind, initial_conn.name)
-                # Right pane defaults to local in the M5 service composition;
-                # local isn't tracked in the unreachable set.
-                self._right_pane_conn_key = None
         except Exception:
             ctx.log_sink.error("app.mount_service_view.failed", service_id="s3")
 
@@ -722,7 +720,12 @@ class AwsTuiApp(App[None]):
 
         _LOCAL_LABEL = "local"
         candidates, skipped = _build_swap_candidates(ctx)
-        _raise_skip_toast(ctx, skipped)
+        # Bug 4 fix: deduplicate skip toasts — only raise when the skipped
+        # set changes (avoid stacking N identical toasts on repeated Shift+S).
+        skipped_fs = frozenset(skipped)
+        if skipped_fs != self._last_skip_toast_set:
+            _raise_skip_toast(ctx, skipped)
+            self._last_skip_toast_set = skipped_fs if skipped else None
         if len(candidates) <= 1:
             # Only local — either no connections configured, or every
             # configured connection has been observed unreachable.
@@ -765,26 +768,22 @@ class AwsTuiApp(App[None]):
         swap = getattr(focused, "swap_provider", None)
         if swap is None:
             return
-        ctx.log_sink.info("pane.swap_source", to=next_label)
-        await swap(new_provider, identity_label=next_label, path_protocol=new_protocol)
-
-        # Update the per-pane connection key so the hub subscriber can
-        # attribute future UNREACHABLE state transitions correctly.
-        dual_left = getattr(dual, "left", None)
+        # Compute the connection_key passed to swap_provider so it is stored
+        # atomically BEFORE _reload() fires — eliminating the attribution race
+        # (Bug 1) where _on_hub_message_pane_state would read a stale key.
+        new_conn_key: tuple[str, str] | None
         if payload == "local":
-            # local is never marked unreachable
-            if focused is dual_left:
-                self._left_pane_conn_key = None
-            else:
-                self._right_pane_conn_key = None
+            new_conn_key = None
         else:
             assert not isinstance(payload, str)  # narrows payload to Connection
-            conn = payload
-            key = (conn.kind, conn.name)
-            if focused is dual_left:
-                self._left_pane_conn_key = key
-            else:
-                self._right_pane_conn_key = key
+            new_conn_key = (payload.kind, payload.name)
+        ctx.log_sink.info("pane.swap_source", to=next_label)
+        await swap(
+            new_provider,
+            identity_label=next_label,
+            path_protocol=new_protocol,
+            connection_key=new_conn_key,
+        )
 
     async def action_themes(self) -> None:
         """Open the keyboard-navigable theme picker modal."""
@@ -905,6 +904,15 @@ class AwsTuiApp(App[None]):
             self._clear_connection_unreachable(kind, name)
 
     def _on_hub_message_pane_state(self, msg: object) -> None:
+        """Hub subscriber: route PaneVM state changes to the reachability set.
+
+        Reads ``PaneVM.current_connection_key`` directly — the key is stored
+        atomically inside ``swap_provider`` BEFORE ``_reload()`` runs, so
+        there is no race between the state-change notification and the key
+        update (Bug 1 fix). The subscription is established BEFORE
+        ``switch_service`` in ``on_mount`` so the initial UNREACHABLE
+        state-change is never missed (Bug 2 fix).
+        """
         from vmx import PropertyChangedMessage
 
         from aws_tui.vm.file_manager.pane_vm import PaneVM
@@ -915,16 +923,8 @@ class AwsTuiApp(App[None]):
             return
         if not isinstance(msg.sender_object, PaneVM):
             return
-        dual = self._dual_pane()
-        if dual is None:
-            return
         sender_vm = msg.sender_object
-        if sender_vm is getattr(dual, "left", None):
-            key = self._left_pane_conn_key
-        elif sender_vm is getattr(dual, "right", None):
-            key = self._right_pane_conn_key
-        else:
-            return  # not one of our active panes
+        key = sender_vm.current_connection_key
         if key is None:
             return  # local pane — never tracked
         self._on_pane_state_changed(kind=key[0], name=key[1], new_state=sender_vm.state)
@@ -1037,9 +1037,10 @@ class AwsTuiApp(App[None]):
         with contextlib.suppress(Exception):
             ctx.log_sink.flush()
             ctx.log_sink.close()
-        if self._pane_state_sub is not None:
-            self._pane_state_sub.dispose()
-            self._pane_state_sub = None
+        with contextlib.suppress(Exception):
+            if self._pane_state_sub is not None:
+                self._pane_state_sub.dispose()
+                self._pane_state_sub = None
         with contextlib.suppress(Exception):
             ctx.command_palette_vm.dispose()
             ctx.quick_look_vm.dispose()

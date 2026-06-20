@@ -105,7 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persistence across runs. Identity key is
   ``(connection.kind, connection.name)`` so an AWS profile and an
   s3-compatible connection with the same name are tracked
-  independently.
+  independently. AWS profiles participate as well, but only when the
+  failure is a true network/endpoint error (expired SSO or permission
+  denied transitions to ``AUTH_REQUIRED`` / ``FORBIDDEN``, which are
+  NOT skipped).
 - **Cross-platform support — runs on macOS, Linux, and Windows.**
   Replaced hardcoded `~/.config/aws-tui` and `~/.cache/aws-tui` paths
   with `platformdirs`-resolved per-OS native locations:
