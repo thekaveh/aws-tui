@@ -90,12 +90,12 @@ class SettingsModal(ModalScreen[None]):
         if section_id == self._vm.active_section:
             return
         self._vm.change_section(section_id)
-        self._swap_body()
+        self.run_worker(self._swap_body(), exclusive=True)
 
-    def _swap_body(self) -> None:
+    async def _swap_body(self) -> None:
         body = self.query_one("#settings-body", Vertical)
-        body.remove_children()
-        body.mount(self._build_body())
+        await body.remove_children()
+        await body.mount(self._build_body())
 
     def on_click(self, event: Click) -> None:
         """Handle close button clicks.

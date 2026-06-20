@@ -98,7 +98,7 @@ def test_remove_connection_persists(config_path: Path) -> None:
 
 def test_remove_unknown_connection_raises(config_path: Path) -> None:
     store = ConfigStore(path=config_path)
-    with pytest.raises(KeyError, match="nope"):
+    with pytest.raises(ConfigError, match="unknown"):
         store.remove_connection("nope")
 
 
@@ -238,8 +238,17 @@ def test_update_connection_unknown_name_raises(tmp_path: Path) -> None:
 
 def test_remove_connection_unknown_name_raises(tmp_path: Path) -> None:
     store = ConfigStore(path=tmp_path / "config.toml")
-    with pytest.raises(KeyError, match="missing"):
+    with pytest.raises(ConfigError, match="unknown"):
         store.remove_connection("missing")
+
+
+def test_remove_connection_clears_default_if_it_was_the_default(tmp_path: Path) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    store.add_connection(_seed_entry("default-conn"))
+    store.set_default_connection("default-conn")
+    assert store.load().defaults.connection == "default-conn"
+    store.remove_connection("default-conn")
+    assert store.load().defaults.connection is None
 
 
 def test_update_connection_rename_disallowed(tmp_path: Path) -> None:

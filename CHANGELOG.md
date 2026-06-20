@@ -91,6 +91,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are deliberately preserved — they're records of project state at
   that point in time, not active declarations.
 
+### Known gaps
+
+- The settings-overlay reload-on-close flow (`_reload_after_settings`,
+  `_reload_panes_async`, `_rebind_pane_to_local`,
+  `_rebind_pane_to_connection` in `app.py`) is verified by unit tests
+  on the dirty-set contract but not by an end-to-end pilot integration
+  test. The `pilot.run_test()` harness can't safely exercise the
+  `swap_source`-style pane-rebind path because S3 connection probes
+  would block on unreachable seed endpoints. Manual verification
+  required when touching the rebind helpers.
+
 ### Added
 
 - **Shift+S now skips connections observed unreachable.** If a pane

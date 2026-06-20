@@ -297,16 +297,22 @@ class ConfigStore:
     def remove_connection(self, name: str) -> None:
         """Atomic removal of a connection.
 
-        Raises ``KeyError`` if no connection with that name exists.
+        Raises ``ConfigError`` if no connection with that name exists.
+        If the removed connection was the default, ``defaults.connection``
+        is cleared to ``None``.
         """
         cfg = self.load()
         if name not in cfg.connections:
-            raise KeyError(name)
+            raise ConfigError(f"unknown connection: {name!r}")
         new_conns = {k: v for k, v in cfg.connections.items() if k != name}
+        if cfg.defaults.connection == name:
+            new_defaults = Defaults(connection=None, theme=cfg.defaults.theme)
+        else:
+            new_defaults = cfg.defaults
         self.save(
             Config(
                 connections=new_conns,
-                defaults=cfg.defaults,
+                defaults=new_defaults,
                 keybindings=cfg.keybindings,
             )
         )

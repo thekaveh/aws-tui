@@ -101,3 +101,24 @@ def test_lifecycle_status(tmp_path: Path) -> None:
     assert vm.status == ConstructionStatus.CONSTRUCTED
     vm.dispose()
     assert vm.status == ConstructionStatus.DISPOSED
+
+
+def test_dirty_set_accumulates_then_clears_for_reload_flow(tmp_path: Path) -> None:
+    """Pins the contract AwsTuiApp._reload_after_settings depends on:
+    dirty_connection_names accumulates 'updated' and 'deleted' names
+    during the modal's lifetime; clear_dirty() resets atomically after
+    the reload worker is scheduled."""
+    vm, hub, _ = _make_vm(tmp_path)
+    # Simulate three CRUD events during the modal's lifetime
+    hub.send(ConnectionListChangedMessage(names=("a",), change="updated"))
+    hub.send(ConnectionListChangedMessage(names=("b",), change="deleted"))
+    hub.send(ConnectionListChangedMessage(names=("c",), change="added"))  # ignored
+    # AwsTuiApp reads this snapshot before scheduling the reload worker
+    snapshot = vm.dirty_connection_names
+    assert snapshot == frozenset({"a", "b"})
+    # Then immediately calls clear_dirty so the next modal open starts fresh
+    vm.clear_dirty()
+    assert vm.dirty_connection_names == frozenset()
+    # Snapshot taken before clear is unaffected (frozenset is immutable)
+    assert snapshot == frozenset({"a", "b"})
+    vm.dispose()
