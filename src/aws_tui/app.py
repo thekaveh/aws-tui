@@ -345,8 +345,15 @@ class AwsTuiApp(App[None]):
         self.exit()
 
     def _dual_pane(self) -> object | None:
-        """Return the currently-hosted ``DualPaneVM`` (or None)."""
-        return self._app_ctx.root_vm.content_host.current
+        """Return the currently-hosted ``DualPaneVM`` (or None).
+
+        Returns None when the content host is showing a non-file-manager
+        view (e.g. SettingsView).
+        """
+        from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
+
+        current = self._app_ctx.root_vm.content_host.current
+        return current if isinstance(current, DualPaneVM) else None
 
     def action_switch_focus(self) -> None:
         dual = self._dual_pane()
