@@ -3,7 +3,7 @@
 The root owns:
 
 - the :class:`MessageHub` for the whole VM tree;
-- the three direct children (:class:`ServicesMenuVM`, :class:`ContentHostVM`,
+- the three direct children (:class:`NavMenuVM`, :class:`ContentHostVM`,
   :class:`ChromeVM`);
 - the orchestration of connection / service / theme switches.
 
@@ -32,7 +32,7 @@ from aws_tui.vm.messages import (
     FocusChangedMessage,
     ThemeChangedMessage,
 )
-from aws_tui.vm.services_menu_vm import ServicesMenuVM
+from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceRegistry
 
 
@@ -64,7 +64,7 @@ class RootVM:
         self._focused_vm_id: str | None = None
         self._theme_name: str = "carbon"
 
-        self._services_menu: ServicesMenuVM = ServicesMenuVM(
+        self._services_menu: NavMenuVM = NavMenuVM(
             registry=registry, hub=self._hub, dispatcher=self._dispatcher
         )
         self._content_host: ContentHostVM = ContentHostVM(
@@ -79,7 +79,13 @@ class RootVM:
     # ── Children accessors ──────────────────────────────────────────────────
 
     @property
-    def services_menu(self) -> ServicesMenuVM:
+    def services_menu(self) -> NavMenuVM:
+        # Legacy property name preserved deliberately. The underlying VM
+        # was renamed ServicesMenuVM → NavMenuVM when Settings became a
+        # peer of S3 in the rail; the property accessor is left as
+        # ``services_menu`` to avoid touching every call site
+        # (composition.py, app.py, integration tests). Rename queued for
+        # a future minor-version-bump cleanup.
         return self._services_menu
 
     @property
@@ -146,7 +152,7 @@ class RootVM:
         await self._content_host.set_content(None, service_id=None)
         self._connection = connection
         self._auth_state = auth_state
-        # Send the message; ServicesMenuVM and StatusBarVM are subscribed.
+        # Send the message; NavMenuVM and StatusBarVM are subscribed.
         self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
 
     async def switch_service(self, service_id: str) -> None:

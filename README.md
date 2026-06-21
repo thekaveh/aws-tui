@@ -52,6 +52,13 @@ Linux, and Windows. Powered by
   banner gradient at launch and on every `T` cycle. User overrides
   via `~/.config/aws-tui/theme.tcss` or full `.tcss` themes under
   `~/.config/aws-tui/themes/`.
+- **In-app S3 connection settings.** The left rail's `⚙ Settings`
+  nav peer opens a scrollable settings page (no modal overlay) with
+  a Connections section that lists every configured s3-compatible
+  endpoint and an inline form for add/edit (Save commits + reloads
+  affected panes immediately; Delete prompts for confirmation).
+  Keyboard: `,` selects Settings. No more hand-editing
+  `~/.config/aws-tui/config.toml` for routine endpoint changes.
 - **Fully customizable keymap.** Action ↔ keystroke is config-driven —
   rebind anything in `[keybindings]` without touching code.
 - **Streaming Quick Look.** `Space` on a file streams the first 64 KB
@@ -65,7 +72,7 @@ Linux, and Windows. Powered by
 - **Strict layered architecture.** View ▸ ViewModel ▸ Service ▸ Domain
   ▸ Infra; enforced by `scripts/check-layers.sh` (a ruff
   `flake8-tidy-imports` migration is queued — see
-  `docs/architecture.md` §2). Mypy strict-clean. 613 default-tier tests
+  `docs/architecture.md` §2). Mypy strict-clean. 814 default-tier tests
   (unit / in-process integration / snapshot / e2e), plus 9 opt-in MinIO
   integration tests (`uv run pytest -m integration`).
 

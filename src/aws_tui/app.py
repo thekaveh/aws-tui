@@ -37,11 +37,9 @@ from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
+from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.services_hamburger import ServicesHamburger
-from aws_tui.ui.widgets.services_menu import (
-    ServicesMenu,
-)
-from aws_tui.ui.widgets.settings_modal import SettingsModal
+from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
@@ -187,6 +185,7 @@ class AwsTuiApp(App[None]):
         self._crash_report: CrashReport | None = None
         self._pane_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
+        self._nav_selection_sub: DisposableBase | None = None
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -209,7 +208,7 @@ class AwsTuiApp(App[None]):
         )
         with Horizontal(id="main-area"):
             yield ServicesHamburger(id="services-hamburger")
-            yield ServicesMenu(ctx.root_vm.services_menu, hub=ctx.hub, id="services-menu")
+            yield NavMenu(vm=ctx.root_vm.services_menu, hub=ctx.hub, id="nav-menu")
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
         yield ToastStack(ctx.root_vm.chrome.toast_stack, hub=ctx.hub, id="toast-stack")
@@ -235,6 +234,7 @@ class AwsTuiApp(App[None]):
         self._connection_list_sub = ctx.hub.messages.subscribe(
             on_next=self._on_connection_list_changed
         )
+        self._nav_selection_sub = ctx.hub.messages.subscribe(on_next=self._on_nav_selection_changed)
 
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
@@ -345,8 +345,15 @@ class AwsTuiApp(App[None]):
         self.exit()
 
     def _dual_pane(self) -> object | None:
-        """Return the currently-hosted ``DualPaneVM`` (or None)."""
-        return self._app_ctx.root_vm.content_host.current
+        """Return the currently-hosted ``DualPaneVM`` (or None).
+
+        Returns None when the content host is showing a non-file-manager
+        view (e.g. SettingsView).
+        """
+        from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
+
+        current = self._app_ctx.root_vm.content_host.current
+        return current if isinstance(current, DualPaneVM) else None
 
     def action_switch_focus(self) -> None:
         dual = self._dual_pane()
@@ -625,9 +632,16 @@ class AwsTuiApp(App[None]):
                     entry.set_marked(False)  # type: ignore[attr-defined]
 
     def action_toggle_services(self) -> None:
-        """Collapse/expand the left services rail."""
-        for menu in self.query(ServicesMenu):
-            menu.toggle_collapsed()
+        """Collapse/expand the left nav rail."""
+        try:
+            nav = self.query_one("#nav-menu", NavMenu)
+        except Exception:
+            return
+        if nav.has_class("-expanded"):
+            nav.remove_class("-expanded")
+        else:
+            nav.add_class("-expanded")
+        nav.toggle_collapsed()
 
     def action_cycle_theme(self) -> None:
         """Cycle to the next theme without opening the picker modal —
@@ -794,53 +808,9 @@ class AwsTuiApp(App[None]):
         )
 
     def action_open_settings(self) -> None:
-        """Push the SettingsModal. Bound to comma + the gear button."""
-        ctx = self._app_ctx
-        self.push_screen(
-            SettingsModal(vm=ctx.settings_vm, hub=ctx.hub),
-            callback=lambda _result: self._reload_after_settings(),
-        )
-
-    def _reload_after_settings(self) -> None:
-        """Reload any pane bound to a connection that changed during the
-        settings modal's lifetime, then clear the dirty set.
-
-        The synchronous dismiss callback schedules the async reload via
-        ``self.run_worker`` so the callback returns immediately and the
-        modal teardown isn't blocked.
-        """
-        ctx = self._app_ctx
-        dirty = ctx.settings_vm.dirty_connection_names
-        if not dirty:
-            return
-        self.run_worker(self._reload_panes_async(dirty))
-        ctx.settings_vm.clear_dirty()
-
-    async def _reload_panes_async(self, dirty: frozenset[str]) -> None:
-        """Walk both panes; rebind any bound to a dirty connection."""
-        dual = self._dual_pane()
-        if dual is None:
-            return
-        reloaded: list[tuple[str, str]] = []  # (side_label, detail)
-        for side_label, pane in (("Left", dual.left), ("Right", dual.right)):  # type: ignore[attr-defined]
-            key = pane.current_connection_key
-            if key is None:
-                continue
-            _, name = key
-            if name not in dirty:
-                continue
-            try:
-                conn = self._app_ctx.connection_resolver.resolve(name)
-            except Exception:
-                # ``resolve`` raises if the connection no longer exists —
-                # treat as deletion and revert to local.
-                await self._rebind_pane_to_local(pane)
-                reloaded.append((side_label, f"{name} deleted → local"))
-                continue
-            await self._rebind_pane_to_connection(pane, conn)
-            reloaded.append((side_label, f"{name} updated"))
-        if reloaded:
-            self._raise_settings_reload_toast(reloaded)
+        """Select the Settings entry in the nav menu (programmatic equivalent
+        of clicking it). Bound to ``,`` (comma)."""
+        self._app_ctx.root_vm.services_menu.switch_service_command.execute("settings")
 
     async def _rebind_pane_to_local(self, pane: object) -> None:
         """Rebind a pane to the local filesystem provider.
@@ -885,20 +855,6 @@ class AwsTuiApp(App[None]):
             identity_label=_format_pane_title(conn),  # type: ignore[arg-type]
             path_protocol="s3:",
             connection_key=(conn.kind, conn.name),  # type: ignore[attr-defined]
-        )
-
-    def _raise_settings_reload_toast(self, reloaded: list[tuple[str, str]]) -> None:
-        summary = "; ".join(f"{side}: {detail}" for side, detail in reloaded)
-        self._app_ctx.root_vm.chrome.toast_stack.raise_toast(
-            ToastModel(
-                id=f"settings-reload-{','.join(sorted(side for side, _ in reloaded))}",
-                text=f"Settings — {summary}",
-                level=ToastLevel.INFO,
-                sticky=False,
-                timeout_seconds=4.0,
-                action_label=None,
-                action_action=None,
-            )
         )
 
     async def action_themes(self) -> None:
@@ -1021,13 +977,43 @@ class AwsTuiApp(App[None]):
 
     def _on_connection_list_changed(self, msg: object) -> None:
         """Hub subscriber: drop deleted connection names from the
-        unreachable set so stale entries don't block the swap-source ring."""
+        unreachable set AND reload any pane bound to a changed connection."""
         if not isinstance(msg, ConnectionListChangedMessage):
             return
-        if msg.change != "deleted":
+        if msg.change == "deleted":
+            for name in msg.names:
+                self._app_ctx.unreachable_connections.discard(("s3-compatible", name))
+        # Schedule pane reload for affected connections (immediate, not
+        # deferred). Skip on 'added' — new connections aren't bound yet.
+        if msg.change == "added":
             return
-        for name in msg.names:
-            self._app_ctx.unreachable_connections.discard(("s3-compatible", name))
+        self.run_worker(
+            self._reload_panes_for(msg.names, deleted=(msg.change == "deleted")),
+            exclusive=True,
+            group="settings-reload",
+        )
+
+    async def _reload_panes_for(self, names: tuple[str, ...], *, deleted: bool) -> None:
+        """Walk both panes; rebind any pane bound to a connection in ``names``."""
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        for pane in (dual.left, dual.right):  # type: ignore[attr-defined]
+            key = pane.current_connection_key
+            if key is None:
+                continue
+            _, pane_name = key
+            if pane_name not in names:
+                continue
+            if deleted:
+                await self._rebind_pane_to_local(pane)
+            else:
+                try:
+                    conn = self._app_ctx.connection_resolver.resolve(pane_name)
+                except Exception:
+                    await self._rebind_pane_to_local(pane)
+                else:
+                    await self._rebind_pane_to_connection(pane, conn)
 
     def _on_hub_message_pane_state(self, msg: object) -> None:
         """Hub subscriber: route PaneVM state changes to the reachability set.
@@ -1054,6 +1040,66 @@ class AwsTuiApp(App[None]):
         if key is None:
             return  # local pane — never tracked
         self._on_pane_state_changed(kind=key[0], name=key[1], new_state=sender_vm.state)
+
+    def _on_nav_selection_changed(self, msg: object) -> None:
+        """Hub subscriber: route NavMenuVM selected_id changes to the content host.
+
+        When "settings" is selected, calls ``ContentHostVM.set_content`` with
+        ``settings_vm`` and mounts ``SettingsView`` in the content host.
+        For any other service id, rebuilds the DualPane-based S3 view.
+        """
+        from vmx import PropertyChangedMessage
+
+        from aws_tui.vm.nav_menu_vm import NavMenuVM
+
+        if not isinstance(msg, PropertyChangedMessage):
+            return
+        if msg.property_name != "selected_id":
+            return
+        if not isinstance(msg.sender_object, NavMenuVM):
+            return
+        ctx = self._app_ctx
+        selected = ctx.root_vm.services_menu.selected_id
+        if selected is None:
+            return
+        if selected == "settings":
+            self.run_worker(self._mount_settings_view())
+        else:
+            # Re-use the S3 content if it's already hosted; switch_service
+            # is idempotent on the same service_id.
+            self.run_worker(self._mount_service_view(selected))
+
+    async def _mount_settings_view(self) -> None:
+        """Swap the content host to show SettingsView."""
+        ctx = self._app_ctx
+        await ctx.root_vm.content_host.set_content(ctx.settings_vm, service_id="settings")
+        with contextlib.suppress(Exception):
+            host = self.query_one("#content-host", Container)
+            host.remove_children()
+            host.mount(SettingsView(vm=ctx.settings_vm, hub=ctx.hub))
+
+    async def _mount_service_view(self, service_id: str) -> None:
+        """Swap the content host to show the DualPane for ``service_id``."""
+        ctx = self._app_ctx
+        if ctx.root_vm.content_host.current_id == service_id:
+            # Already showing this service — just re-mount if the widget
+            # is missing (e.g. first time after settings was shown).
+            with contextlib.suppress(Exception):
+                host = self.query_one("#content-host", Container)
+                if not host.query(DualPane):
+                    current_vm = ctx.root_vm.content_host.current
+                    if current_vm is not None:
+                        host.remove_children()
+                        host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+            return
+        with contextlib.suppress(Exception):
+            await ctx.root_vm.switch_service(service_id)
+        with contextlib.suppress(Exception):
+            host = self.query_one("#content-host", Container)
+            current_vm = ctx.root_vm.content_host.current
+            if current_vm is not None:
+                host.remove_children()
+                host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
 
     # ── Crash handling ─────────────────────────────────────────────────────
 
@@ -1171,6 +1217,10 @@ class AwsTuiApp(App[None]):
             if self._connection_list_sub is not None:
                 self._connection_list_sub.dispose()
                 self._connection_list_sub = None
+        with contextlib.suppress(Exception):
+            if self._nav_selection_sub is not None:
+                self._nav_selection_sub.dispose()
+                self._nav_selection_sub = None
         with contextlib.suppress(Exception):
             ctx.settings_vm.dispose()
             ctx.s3_connections_vm.dispose()

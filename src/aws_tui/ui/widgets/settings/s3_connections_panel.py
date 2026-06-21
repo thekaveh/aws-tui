@@ -10,13 +10,18 @@ from textual.widgets import Button, Static
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
-from aws_tui.ui.widgets.first_run_modal import S3CompatFormModal
+from aws_tui.ui.widgets.settings.connection_form import (
+    ConnectionFormCancelled,
+    ConnectionFormInline,
+    ConnectionFormSubmitted,
+)
 from aws_tui.vm.chrome.confirm_vm import (
     ConfirmationVM,
     ConfirmPath,
     ConfirmRequest,
 )
 from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 
@@ -76,6 +81,7 @@ class S3ConnectionsPanel(Widget):
 
     def compose(self) -> ComposeResult:
         yield Vertical(*self._render_children(), id="panel-body")
+        yield ConnectionFormInline(hub=self._hub)
 
     def _render_children(self) -> list[Widget]:
         """Build the body's children as constructed widget instances.
@@ -127,24 +133,21 @@ class S3ConnectionsPanel(Widget):
     @on(Button.Pressed, "#add-empty, #add-populated")
     def _on_add(self, event: Button.Pressed) -> None:
         event.stop()
-        self._do_add()
+        self._on_add_clicked()
 
-    @work(exclusive=False)
-    async def _do_add(self) -> None:
-        result = await self.app.push_screen_wait(
-            S3CompatFormModal(hub=self._hub, defaults=None, name_locked=False)
-        )
-        if result is None:
-            return
-        self._vm.add(self._vm.entry_from_form(result))
-        await self.refresh_rows()
+    def _on_add_clicked(self) -> None:
+        form = self.query_one(ConnectionFormInline)
+        form.open_for_add()
 
     @on(Button.Pressed, ".row-chip-edit")
     def _on_edit(self, event: Button.Pressed) -> None:
         event.stop()
         btn_id = event.button.id or ""
         name = btn_id.removeprefix("edit-")
-        existing = next((c for c in self._vm.connections if c.name == name), None)
+        self._on_edit_clicked(name)
+
+    def _on_edit_clicked(self, name: str) -> None:
+        existing = self._vm.find_by_name(name)
         if existing is None:
             return
         defaults = S3CompatForm(
@@ -156,17 +159,8 @@ class S3ConnectionsPanel(Widget):
             force_path_style=existing.force_path_style,
             verify_tls=existing.verify_tls,
         )
-        self._do_edit(name, defaults)
-
-    @work(exclusive=False)
-    async def _do_edit(self, name: str, defaults: S3CompatForm) -> None:
-        result = await self.app.push_screen_wait(
-            S3CompatFormModal(hub=self._hub, defaults=defaults, name_locked=True)
-        )
-        if result is None:
-            return
-        self._vm.update(name, self._vm.entry_from_form(result))
-        await self.refresh_rows()
+        form = self.query_one(ConnectionFormInline)
+        form.open_for_edit(name=name, defaults=defaults)
 
     @on(Button.Pressed, ".row-chip-delete")
     def _on_delete(self, event: Button.Pressed) -> None:
@@ -175,8 +169,12 @@ class S3ConnectionsPanel(Widget):
         name = btn_id.removeprefix("delete-")
         self._do_delete(name)
 
-    @work(exclusive=False)
+    @work(exclusive=True, group="s3-connections-delete")
     async def _do_delete(self, name: str) -> None:
+        # exclusive=True + group serializes rapid double-clicks on the
+        # same (or different) delete chip — without it, two concurrent
+        # workers can both pass the confirm dialog and the second's
+        # vm.remove() crashes with a missing-entry error.
         confirm_vm = ConfirmationVM(hub=self._hub, dispatcher=self._vm.dispatcher)
         confirm_vm.construct()
         try:
@@ -193,9 +191,89 @@ class S3ConnectionsPanel(Widget):
             )
         finally:
             confirm_vm.dispose()
-        if confirmed:
+        if not confirmed:
+            return
+        try:
             self._vm.remove(name)
-            await self.refresh_rows()
+        except Exception as exc:
+            # The connection vanished between the dialog opening and our
+            # remove() call (concurrent edit, file corruption, etc.).
+            # Surface the failure rather than letting it crash the worker.
+            self._surface_error_toast(
+                f"Could not delete {name!r}: {exc}",
+                toast_id=f"delete-error-{name}",
+            )
+            return
+        await self.refresh_rows()
+
+    def _surface_error_toast(self, text: str, toast_id: str) -> None:
+        """Show an ERROR-level toast if the app context is available."""
+        if hasattr(self.app, "_app_ctx"):
+            self.app._app_ctx.root_vm.chrome.toast_stack.raise_toast(
+                ToastModel(
+                    id=toast_id,
+                    text=text,
+                    level=ToastLevel.ERROR,
+                    sticky=False,
+                    timeout_seconds=4.0,
+                    action_label=None,
+                    action_action=None,
+                )
+            )
+
+    async def on_connection_form_submitted(self, event: ConnectionFormSubmitted) -> None:
+        """Handle a Save from the inline form.
+
+        The form stays open until *this* handler decides the persistence
+        step succeeded.  On success we call ``form.close()`` then refresh
+        the row list.  On failure we keep the form open and surface an
+        error (mark name field + toast).
+
+        Async so we can ``await self.refresh_rows()`` directly; using
+        ``run_worker`` would silently swallow any exception from the
+        refresh (e.g., panel not yet mounted) and the user would see
+        the form close without the list updating.
+        """
+        form = self.query_one(ConnectionFormInline)
+        entry = self._vm.entry_from_form(event.form)
+        if event.mode == "add":
+            try:
+                self._vm.add(entry)
+            except ValueError:
+                # Duplicate name — keep form open, mark the field invalid.
+                form.mark_name_invalid()
+                self._surface_error_toast(
+                    f"Connection {event.form.name!r} already exists.",
+                    toast_id=f"duplicate-{event.form.name}",
+                )
+                return
+            except Exception as exc:
+                # ConfigError (invalid kind), OSError (disk full / read-only),
+                # or anything else from ConfigStore.save(). Keep the form
+                # open so the user doesn't lose their entered values; surface
+                # the error so they understand why it didn't save.
+                self._surface_error_toast(
+                    f"Could not save {event.form.name!r}: {exc}",
+                    toast_id=f"add-error-{event.form.name}",
+                )
+                return
+        else:  # "edit"
+            assert event.original_name is not None
+            try:
+                self._vm.update(event.original_name, entry)
+            except Exception as exc:
+                self._surface_error_toast(
+                    f"Could not save {event.form.name!r}: {exc}",
+                    toast_id=f"edit-error-{event.form.name}",
+                )
+                return
+        # Persistence succeeded — close the form and refresh the list.
+        form.close()
+        await self.refresh_rows()
+
+    def on_connection_form_cancelled(self, event: ConnectionFormCancelled) -> None:
+        """Form closed itself on cancel; nothing to do here."""
+        return
 
 
 __all__ = ["S3ConnectionsPanel"]

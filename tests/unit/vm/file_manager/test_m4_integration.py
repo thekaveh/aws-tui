@@ -189,7 +189,7 @@ async def test_m4_switch_connection_clears_dual_pane(tmp_path: Path) -> None:
     # clears, and the menu still includes s3 (which supports both kinds).
     await root.switch_connection_with(_minio_conn(), TokenState.CONNECTED)
     assert root.content_host.current is None
-    assert {i.descriptor.id for i in root.services_menu.items} == {"s3"}
+    assert {i.descriptor.id for i in root.services_menu.items} == {"s3", "settings"}
 
     # Rebuilding s3 against the new connection produces a fresh DualPaneVM.
     await root.switch_service("s3")

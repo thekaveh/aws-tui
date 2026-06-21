@@ -18,7 +18,7 @@ class S3ConnectionsVM:
     The CRUD verbs (``add`` / ``update`` / ``remove``) validate, persist
     via :class:`ConfigStore`, then publish a
     :class:`ConnectionListChangedMessage` on the hub. Subscribers
-    (``SettingsVM``, ``ServicesMenuVM``, ``AwsTuiApp``) react to the
+    (``SettingsVM``, ``NavMenuVM``, ``AwsTuiApp``) react to the
     message; this VM never tells them directly.
     """
 
@@ -104,6 +104,13 @@ class S3ConnectionsVM:
         self._hub.send(ConnectionListChangedMessage(names=(name,), change="deleted"))
 
     # ── Form helpers ───────────────────────────────────────────────────────
+
+    def find_by_name(self, name: str) -> Connection | None:
+        """Look up a connection by name; returns None if not found."""
+        for c in self.connections:
+            if c.name == name:
+                return c
+        return None
 
     def entry_from_form(self, form: S3CompatForm) -> ConnectionEntry:
         """Convert a filled :class:`S3CompatForm` to a :class:`ConnectionEntry`.

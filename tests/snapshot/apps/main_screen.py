@@ -18,13 +18,13 @@ from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.hint_legend import HintLegend
-from aws_tui.ui.widgets.services_menu import ServicesMenu
+from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.status_bar import StatusBar
 from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
 from aws_tui.vm.chrome.status_bar_vm import StatusBarVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
-from aws_tui.vm.services_menu_vm import ServicesMenuVM
+from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 from tests.snapshot.apps._seed import seed_left, seed_right
 
@@ -107,7 +107,7 @@ class MainScreenApp(App[None]):
         # StatusBar at top
         yield StatusBar(self._status_vm, hub=self._hub, id="status-bar")
         with Horizontal(id="main-area"):
-            yield ServicesMenu(self._menu_vm, hub=self._hub, id="services-menu")
+            yield NavMenu(vm=self._menu_vm, hub=self._hub, id="services-menu")
             # Placeholder for dual pane — actually populated in on_mount after
             # we've awaited the seeds.
             yield Container(id="dual-pane-host")

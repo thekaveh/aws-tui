@@ -91,17 +91,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are deliberately preserved — they're records of project state at
   that point in time, not active declarations.
 
-### Known gaps
-
-- The settings-overlay reload-on-close flow (`_reload_after_settings`,
-  `_reload_panes_async`, `_rebind_pane_to_local`,
-  `_rebind_pane_to_connection` in `app.py`) is verified by unit tests
-  on the dirty-set contract but not by an end-to-end pilot integration
-  test. The `pilot.run_test()` harness can't safely exercise the
-  `swap_source`-style pane-rebind path because S3 connection probes
-  would block on unreachable seed endpoints. Manual verification
-  required when touching the rebind helpers.
-
 ### Added
 
 - **Shift+S now skips connections observed unreachable.** If a pane
@@ -203,29 +192,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the first-auto fallback — fixes the "aws s3 ls works on the CLI
   but the TUI shows access denied" SSO setup where `[default]` has no
   creds and the working profile lives in the env.
-- **App Settings overlay** with first panel: full CRUD for s3-compatible
-  connections. New ``⚙  Settings`` gear button pinned to the bottom of
-  the services column (keyboard ``,``) opens a themed ``SettingsModal``
-  with a left-sidebar nav. Sub-project A of three: the sidebar shows
-  ``Connections`` (active), ``Themes (soon)`` and ``Keymap (soon)`` —
-  the disabled rows will go live in sub-projects B and C. The S3 panel
-  reads from ``ConnectionResolver`` (filtered to ``kind = "s3-compatible"``)
-  and writes through new ``ConfigStore.update_connection`` /
-  ``remove_connection`` methods (atomic via ``tempfile + os.replace``).
-  Add and Edit reuse the existing ``S3CompatFormModal`` with a new
-  ``name_locked`` parameter for edit mode (rename disallowed). Delete
-  uses the polished ``ConfirmModal``. Credentials are stored inline in
-  TOML (cross-platform; existing keychain-referencing entries are read
-  transparently and re-written inline on first edit — documented
-  one-way conversion). New ``ConnectionListChangedMessage`` published
-  on every CRUD; subscribers include ``ServicesMenuVM`` (filter
-  refresh) and ``AwsTuiApp`` (drops deleted names from
-  ``AppContext.unreachable_connections``). Affected panes reload
-  exactly once on modal dismiss; single summary toast describes what
-  reloaded. New per-theme CSS for all 10 themes + 50 new snapshots.
+- **App Settings as a first-class nav page** with full CRUD for
+  s3-compatible connections. The left rail is now a generic vertical
+  nav (Textual ``OptionList``) with peer items ``S3`` and ``Settings``;
+  selection-highlight matches the file-pane row cursor (``$bg-sel`` +
+  ``$accent``). Selecting Settings swaps the main area to a VS Code-style
+  scrollable page of ``Collapsible`` sections. Sub-project A populates
+  the ``S3-Compatible Connections`` section; ``Themes (coming in v0.8)``
+  and ``Keymap (coming in v0.8)`` are visible-disabled placeholders.
+  Add/Edit S3 connection form expands inline within the Connections
+  section, below the rows — no more modal-on-modal layering. Save
+  commits + reloads any affected pane + collapses the form, all
+  immediately. Cancel just collapses. Delete still uses the polished
+  ``ConfirmModal`` (destructive ops keep the modal interruption
+  pattern). Credentials remain inline in TOML (cross-platform, no
+  keychain dependency). Keyboard: ``,`` selects the Settings nav item;
+  ``m`` toggles the rail's collapsed/expanded state. Per-theme CSS for
+  all 10 themes. Every new snapshot test is paired with a content-
+  presence guard (per the PR #53 lesson: a uniformly-blank rendering
+  can pass parametric snapshot match across all themes; guards read
+  the generated SVG and assert a user-visible glyph/label is present).
+  This is a rework of the PR #52 modal pattern, not an extension —
+  ``SettingsModal``, the gear footer band, and ``S3CompatFormModal``
+  are all deleted. The two surviving VMs (``SettingsVM`` simplified,
+  ``S3ConnectionsVM`` unchanged) plus the ``ConfigStore`` extensions
+  plus ``ConnectionListChangedMessage`` all carry over.
 
 ### Fixed
 
+- **Config directory permission hardened to ``0o700`` on save.** The
+  ``config.toml`` file itself was already created mode ``0o600`` via
+  ``tempfile.mkstemp``, but the parent directory ``~/.config/aws-tui``
+  inherited the user's umask (typically ``0o755``) which leaked the
+  directory listing to other local users on shared systems. Credentials
+  are still protected at the file level; tightening the parent dir to
+  ``0o700`` keeps the existence of the config private too. The chmod
+  is best-effort (wrapped in ``contextlib.suppress(OSError,
+  NotImplementedError)``) so filesystems without POSIX permission bits
+  don't break the save path. Pinned by
+  ``test_save_chmods_parent_dir_to_0o700``.
+- **NavMenu now subscribes to NavMenuVM property changes.** The
+  widget's ``_rebuild_options`` docstring claimed it ran "whenever
+  the VM's items change" but no subscription was wired up. As a
+  result the rail would silently show stale items after a connection
+  switch caused ``NavMenuVM._rebuild_items`` to filter services
+  differently. ``on_mount`` now subscribes to the hub and re-renders
+  on ``PropertyChangedMessage("items")`` / ``("selected_id")``.
+- **S3 connections CRUD error paths hardened.** ``_do_delete`` is now
+  ``@work(exclusive=True)`` so rapid double-clicks serialize instead
+  of racing on ``vm.remove``; ``vm.remove`` is wrapped in try/except
+  so a connection that vanishes between dialog and remove call
+  surfaces an error toast instead of crashing the worker. Inline-form
+  add path now catches all exceptions (not just ``ValueError``) so
+  disk-full / permission errors surface to the user instead of
+  silently dismissing the form.
 - **Transfers overlay now shows all queued transfers upfront.** When
   the user marked N entries and pressed `c` / `m`, ``DualPaneVM``
   registered each transfer one-at-a-time as the loop reached it —

@@ -63,40 +63,6 @@ StatusBar > .status-transfers {
     color: $accent-hot;
 }
 
-ServicesMenu {
-    width: 16;
-    background: $bg;
-    color: $text;
-    border: solid $rule-dim;
-    border-title-color: $text-dim;
-    padding: 0 1;
-}
-
-ServicesMenu > .service-item {
-    color: $text;
-    height: 1;
-}
-
-ServicesMenu > .service-item.-selected {
-    color: $accent-soft;
-    background: $bg-sel;
-    text-style: bold;
-}
-
-ServicesMenu > .service-item.-focused {
-    color: $accent;
-    text-style: bold;
-}
-
-ServicesMenu > .service-item.-dimmed {
-    color: $text-dim;
-}
-
-ServicesMenu > .title {
-    color: $accent-hot;
-    text-style: bold;
-}
-
 Pane {
     background: $bg;
     color: $text;
@@ -510,69 +476,6 @@ ServicesHamburger:hover {
     color: $bg;
 }
 
-/* ─── SettingsModal ───────────────────────────────────────────── */
-
-SettingsModal {
-    align: center middle;
-    background: $bg 60%;
-}
-
-SettingsModal > #settings-frame {
-    background: $bg-elev;
-    color: $text;
-    border: round $rule-dim;
-    padding: 0 2;
-    width: 80;
-    height: 28;
-    max-height: 90%;
-}
-
-SettingsModal > #settings-frame > #settings-title {
-    color: $accent;
-    text-style: bold;
-    padding: 0 0 1 0;
-}
-
-SettingsModal > #settings-frame > #settings-content {
-    height: 1fr;
-}
-
-SettingsModal #settings-sidebar {
-    width: 22;
-    background: $bg;
-    border-right: solid $rule-dim;
-}
-
-SettingsModal #settings-sidebar ListView {
-    background: $bg;
-}
-
-SettingsModal #settings-sidebar ListItem {
-    padding: 0 1;
-    color: $text;
-}
-
-SettingsModal #settings-sidebar ListItem.-disabled {
-    color: $text-muted;
-    text-style: italic;
-}
-
-SettingsModal #settings-sidebar ListItem.-active {
-    background: $accent-soft;
-    color: $accent;
-    text-style: bold;
-}
-
-SettingsModal #settings-body {
-    width: 1fr;
-    padding: 0 1;
-}
-
-SettingsModal > #settings-frame > #settings-footer {
-    height: 3;
-    align: right middle;
-}
-
 /* ─── S3ConnectionsPanel ──────────────────────────────────────── */
 
 S3ConnectionsPanel .connection-row {
@@ -641,27 +544,100 @@ S3ConnectionsPanel _AddButton {
     height: 3;
 }
 
-/* ─── ServicesMenuFooter ──────────────────────────────────────── */
+/* ─── NavMenu ─────────────────────────────────────────────────── */
 
-ServicesMenuFooter {
-    background: $bg-elev;
-    border-top: solid $rule-dim;
+NavMenu {
+    background: $bg;
 }
 
-ServicesMenuFooter _GearButton {
+NavMenu > #menu-header {
+    background: $bg;
+    color: $text-muted;
+    padding: 0 1;
+    text-style: bold;
+}
+
+NavMenu > OptionList {
+    background: $bg;
+    color: $text;
+    border: none;
+    padding: 0;
+}
+
+NavMenu > OptionList > .option-list--option-highlighted {
+    background: $bg-sel;
+    color: $accent;
+    text-style: bold;
+}
+
+/* ─── SettingsView ────────────────────────────────────────────── */
+
+SettingsView {
+    background: $bg;
+}
+
+SettingsView > #settings-title {
+    background: $bg;
+    color: $accent;
+    padding: 0 2 1 2;
+    text-style: bold;
+}
+
+SettingsView > VerticalScroll {
+    background: $bg;
+    padding: 0 2;
+}
+
+SettingsView Collapsible {
+    background: $bg-elev;
+    margin-bottom: 1;
+}
+
+SettingsView Collapsible:disabled {
+    color: $text-muted;
+    text-style: italic;
+}
+
+SettingsView Collapsible > CollapsibleTitle {
     background: $bg-elev;
     color: $accent;
+}
+
+/* ─── ConnectionFormInline ────────────────────────────────────── */
+
+ConnectionFormInline {
+    background: $bg-elev;
+}
+
+ConnectionFormInline > Container {
+    background: $bg-elev;
+    color: $text;
+    padding: 1 2;
+}
+
+ConnectionFormInline .form-title {
+    color: $accent;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+ConnectionFormInline .form-label {
+    color: $text-muted;
+}
+
+ConnectionFormInline Input {
+    background: $bg;
+    color: $text;
     border: none;
-    width: 1fr;
-    height: 1;
+    padding: 0 1;
+    margin-bottom: 1;
 }
 
-ServicesMenuFooter _GearButton:hover {
-    background: $accent-soft;
-}
-
-/* ─── S3CompatFormModal ─────────────────────────────────────────── */
-
-S3CompatFormModal Input.-invalid {
+ConnectionFormInline Input.-invalid {
     border: tall $danger;
+}
+
+ConnectionFormInline .form-footer {
+    height: 3;
+    align: right middle;
 }

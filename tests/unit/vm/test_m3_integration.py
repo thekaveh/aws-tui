@@ -102,7 +102,7 @@ async def test_m3_full_lifecycle() -> None:
     assert len(seen_conn) == 1
 
     # Both services qualify under aws.
-    assert {i.descriptor.id for i in root.services_menu.items} == {"s3", "ec2"}
+    assert {i.descriptor.id for i in root.services_menu.items} == {"s3", "ec2", "settings"}
 
     # Switch service builds and hosts the new VM.
     await root.switch_service("s3")
@@ -123,7 +123,7 @@ async def test_m3_full_lifecycle() -> None:
 
     # Switch connection to s3-compat: menu collapses, hosted content cleared.
     await root.switch_connection_with(_minio_conn(), TokenState.CONNECTED)
-    assert {i.descriptor.id for i in root.services_menu.items} == {"s3"}
+    assert {i.descriptor.id for i in root.services_menu.items} == {"s3", "settings"}
     assert root.content_host.current is None
     assert ec2.dispose_count == 1
 
