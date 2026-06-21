@@ -401,15 +401,23 @@ When the user clicks Save on the inline form:
    helpers from PR #52 are reused (they're independent of the modal flow).
 5. `S3ConnectionsPanel.refresh_rows()` rebuilds the row list.
 6. The form collapses (`display: none`).
-7. A toast confirms the action (`Saved 'minio-local'.`).
+7. No success toast — the form-close + new-row visibility are
+   sufficient user feedback. Error toasts surface only on failure
+   (duplicate name, persistence error). This is a deliberate
+   low-noise UX choice; future iterations may add success toasts if
+   the row-update isn't enough for user confidence.
 
-Delete path: confirm via ConfirmModal → call `vm.remove(name)` → same
-publish + pane-reload + toast.
+Delete path: confirm via ConfirmModal → call `vm.remove(name)` →
+publish `ConnectionListChangedMessage("deleted")` → pane-reload via
+the hub subscriber (revert to local). No success toast on the
+delete path either — the row disappears, that's confirmation.
 
 ## 7. Keyboard
 
 - `,` (comma) — selects the Settings nav item (equivalent to clicking it).
-  Implementation: `action_open_settings` calls `nav_menu_vm.select("settings")`.
+  Implementation: `action_open_settings` calls
+  `ctx.root_vm.services_menu.switch_service_command.execute("settings")`
+  (legacy property name; the underlying type is `NavMenuVM`).
 - `m` — toggles the rail collapsed/expanded state (unchanged).
 - Inside `SettingsView`:
   - `Tab` / `Shift+Tab` — Textual's default focus traversal between the
