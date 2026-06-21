@@ -96,7 +96,11 @@ class ConnectionFormInline(Widget):
 
     Hidden by default (``display: none``). Call ``open_for_add()`` or
     ``open_for_edit(name, defaults)`` to populate fields and show.
-    Click Save → emits :class:`ConnectionFormSubmitted` and hides.
+
+    Click Save → emits :class:`ConnectionFormSubmitted`.  The form does
+    **not** close itself; the parent panel calls :meth:`close` only when
+    the persistence step succeeds, so that errors can keep the form open.
+
     Click Cancel or Esc → emits :class:`ConnectionFormCancelled` and
     hides.
     """
@@ -242,7 +246,23 @@ class ConnectionFormInline(Widget):
                 break
         save_btn.disabled = invalid
 
+    def mark_name_invalid(self, message: str) -> None:
+        """Add ``-invalid`` to the name Input so the user sees the error.
+
+        ``message`` is accepted for forward-compatibility (tooltip / status
+        bar) but is not surfaced in the widget itself — callers should also
+        show a toast with the message.
+        """
+        self.query_one("#form-name", Input).add_class("-invalid")
+
     def _submit(self) -> None:
+        """Validate fields and post :class:`ConnectionFormSubmitted`.
+
+        The form does **not** close itself here — the parent panel is
+        responsible for calling :meth:`close` only when the persistence step
+        succeeds.  On a duplicate-name or other persistence error the parent
+        keeps the form open and surfaces an appropriate error message.
+        """
         if self._ctx is None:
             return
         # Final validation pass — refuse if anything regressed.
@@ -262,7 +282,6 @@ class ConnectionFormInline(Widget):
             verify_tls=True,
         )
         ctx = self._ctx
-        self.close()
         self.post_message(
             ConnectionFormSubmitted(form=form, mode=ctx.mode, original_name=ctx.original_name)
         )

@@ -21,6 +21,7 @@ from aws_tui.vm.chrome.confirm_vm import (
     ConfirmRequest,
 )
 from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 
@@ -190,19 +191,54 @@ class S3ConnectionsPanel(Widget):
             self._vm.remove(name)
             await self.refresh_rows()
 
+    def _surface_error_toast(self, text: str, toast_id: str) -> None:
+        """Show an ERROR-level toast if the app context is available."""
+        if hasattr(self.app, "_app_ctx"):
+            self.app._app_ctx.root_vm.chrome.toast_stack.raise_toast(
+                ToastModel(
+                    id=toast_id,
+                    text=text,
+                    level=ToastLevel.ERROR,
+                    sticky=False,
+                    timeout_seconds=4.0,
+                    action_label=None,
+                    action_action=None,
+                )
+            )
+
     def on_connection_form_submitted(self, event: ConnectionFormSubmitted) -> None:
-        """Handle a Save from the inline form."""
+        """Handle a Save from the inline form.
+
+        The form stays open until *this* handler decides the persistence
+        step succeeded.  On success we call ``form.close()`` then refresh
+        the row list.  On failure we keep the form open and surface an
+        error (mark name field + toast).
+        """
+        form = self.query_one(ConnectionFormInline)
         entry = self._vm.entry_from_form(event.form)
         if event.mode == "add":
             try:
                 self._vm.add(entry)
             except ValueError:
-                # Duplicate name — re-open the form so the user sees the error.
+                # Duplicate name — keep form open, mark the field invalid.
+                form.mark_name_invalid(f"Connection {event.form.name!r} already exists.")
+                self._surface_error_toast(
+                    f"Connection {event.form.name!r} already exists.",
+                    toast_id=f"duplicate-{event.form.name}",
+                )
                 return
         else:  # "edit"
             assert event.original_name is not None
-            self._vm.update(event.original_name, entry)
-        # Synchronous-friendly call into refresh:
+            try:
+                self._vm.update(event.original_name, entry)
+            except Exception as exc:
+                self._surface_error_toast(
+                    f"Could not save {event.form.name!r}: {exc}",
+                    toast_id=f"edit-error-{event.form.name}",
+                )
+                return
+        # Persistence succeeded — close the form and refresh the list.
+        form.close()
         self.run_worker(self.refresh_rows())
 
     def on_connection_form_cancelled(self, event: ConnectionFormCancelled) -> None:
