@@ -169,8 +169,12 @@ class S3ConnectionsPanel(Widget):
         name = btn_id.removeprefix("delete-")
         self._do_delete(name)
 
-    @work(exclusive=False)
+    @work(exclusive=True, group="s3-connections-delete")
     async def _do_delete(self, name: str) -> None:
+        # exclusive=True + group serializes rapid double-clicks on the
+        # same (or different) delete chip — without it, two concurrent
+        # workers can both pass the confirm dialog and the second's
+        # vm.remove() crashes with a missing-entry error.
         confirm_vm = ConfirmationVM(hub=self._hub, dispatcher=self._vm.dispatcher)
         confirm_vm.construct()
         try:
@@ -187,9 +191,20 @@ class S3ConnectionsPanel(Widget):
             )
         finally:
             confirm_vm.dispose()
-        if confirmed:
+        if not confirmed:
+            return
+        try:
             self._vm.remove(name)
-            await self.refresh_rows()
+        except Exception as exc:
+            # The connection vanished between the dialog opening and our
+            # remove() call (concurrent edit, file corruption, etc.).
+            # Surface the failure rather than letting it crash the worker.
+            self._surface_error_toast(
+                f"Could not delete {name!r}: {exc}",
+                toast_id=f"delete-error-{name}",
+            )
+            return
+        await self.refresh_rows()
 
     def _surface_error_toast(self, text: str, toast_id: str) -> None:
         """Show an ERROR-level toast if the app context is available."""
@@ -206,13 +221,18 @@ class S3ConnectionsPanel(Widget):
                 )
             )
 
-    def on_connection_form_submitted(self, event: ConnectionFormSubmitted) -> None:
+    async def on_connection_form_submitted(self, event: ConnectionFormSubmitted) -> None:
         """Handle a Save from the inline form.
 
         The form stays open until *this* handler decides the persistence
         step succeeded.  On success we call ``form.close()`` then refresh
         the row list.  On failure we keep the form open and surface an
         error (mark name field + toast).
+
+        Async so we can ``await self.refresh_rows()`` directly; using
+        ``run_worker`` would silently swallow any exception from the
+        refresh (e.g., panel not yet mounted) and the user would see
+        the form close without the list updating.
         """
         form = self.query_one(ConnectionFormInline)
         entry = self._vm.entry_from_form(event.form)
@@ -227,6 +247,16 @@ class S3ConnectionsPanel(Widget):
                     toast_id=f"duplicate-{event.form.name}",
                 )
                 return
+            except Exception as exc:
+                # ConfigError (invalid kind), OSError (disk full / read-only),
+                # or anything else from ConfigStore.save(). Keep the form
+                # open so the user doesn't lose their entered values; surface
+                # the error so they understand why it didn't save.
+                self._surface_error_toast(
+                    f"Could not save {event.form.name!r}: {exc}",
+                    toast_id=f"add-error-{event.form.name}",
+                )
+                return
         else:  # "edit"
             assert event.original_name is not None
             try:
@@ -239,7 +269,7 @@ class S3ConnectionsPanel(Widget):
                 return
         # Persistence succeeded — close the form and refresh the list.
         form.close()
-        self.run_worker(self.refresh_rows())
+        await self.refresh_rows()
 
     def on_connection_form_cancelled(self, event: ConnectionFormCancelled) -> None:
         """Form closed itself on cancel; nothing to do here."""
