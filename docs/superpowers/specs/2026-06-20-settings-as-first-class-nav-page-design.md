@@ -219,24 +219,25 @@ Public surface essentially unchanged from today:
 class NavMenuVM:
     items: tuple[NavItemVM, ...]
     selected_id: str | None
-    is_collapsed: bool
+    switch_service_command: RelayCommandOf[str]
 
     def construct(self) -> None: ...
     def dispose(self) -> None: ...
-    def select(self, item_id: str) -> None: ...
-    def toggle_collapsed(self) -> None: ...
+    def update_connection(self, conn: Connection | None) -> None: ...
 ```
 
-The `items` list is built as: every registered service item (today: just
-S3) PLUS a hard-coded `Settings` item at the end. `NavItemVM` gets a
-`kind: Literal["service", "page"]` discriminator so the View can route
-selection differently if needed (in practice both kinds drop into
-`ContentHost.set_content`, so the discriminator is informational).
+The `items` list is built as: every registered service item that supports
+the current connection PLUS a hard-coded `Settings` item appended at the
+end (always present, regardless of connection). `NavItemVM` carries the
+service-or-Settings descriptor; the View doesn't need a kind discriminator
+because both routes go through the same `ContentHost.set_content` call
+upstream.
 
-`select(item_id)` is what the View's `OptionList.OptionSelected` handler
-calls. The VM then publishes a `PropertyChangedMessage("selected_id")`
-which the existing app-level subscriber turns into a
-`ContentHost.set_content(...)` call.
+Selection from the View side is `switch_service_command.execute(item_id)`
+(the canonical VMx command pattern, inherited from the legacy
+`ServicesMenuVM`). The command sets `selected_id` and publishes a
+`PropertyChangedMessage("selected_id")`, which the app-level subscriber
+turns into a `ContentHost.set_content(...)` call.
 
 ### 4.2 `SettingsVM` (kept; simplified)
 

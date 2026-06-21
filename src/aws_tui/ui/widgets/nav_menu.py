@@ -5,9 +5,23 @@ Items rendered come from :class:`NavMenuVM.items`; selecting one
 calls ``vm.switch_service_command.execute(item_id)``, which the app
 routes to ``ContentHostVM.set_content``.
 
-Collapsed mode shows icon glyphs only (e.g. ``S3``, ``⚙``). Expanded
-mode shows full labels (``S3``, ``Settings``). The hamburger button
-in the app's title bar calls :meth:`toggle_collapsed`.
+The widget has two orthogonal CSS axes that combine to produce the
+visible layout:
+
+- ``.-expanded`` — visibility. Without it, the rail is
+  ``display: none; width: 0``. Owned by the app's
+  ``action_toggle_services`` (bound to ``m``).
+- ``.-collapsed`` — label density. ``-collapsed`` means icons-only
+  (e.g. ``⚙`` for Settings); without ``-collapsed`` the rail renders
+  full labels. Owned by this widget via :meth:`toggle_collapsed`.
+
+The app's hamburger handler currently toggles both axes in lock-step
+(it flips ``-expanded`` *and* calls ``toggle_collapsed``), so the
+hamburger cycle reduces to invisible ↔ wide-labels in practice.
+The narrow icons-only state is reachable programmatically (used by
+snapshot tests) but not via the hamburger today; a follow-up may
+expose it through a separate keybinding or a 3-state cycle if the
+nav grows enough items to need denser display.
 """
 
 from __future__ import annotations
