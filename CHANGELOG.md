@@ -220,6 +220,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Config directory permission hardened to ``0o700`` on save.** The
+  ``config.toml`` file itself was already created mode ``0o600`` via
+  ``tempfile.mkstemp``, but the parent directory ``~/.config/aws-tui``
+  inherited the user's umask (typically ``0o755``) which leaked the
+  directory listing to other local users on shared systems. Credentials
+  are still protected at the file level; tightening the parent dir to
+  ``0o700`` keeps the existence of the config private too. The chmod
+  is best-effort (wrapped in ``contextlib.suppress(OSError,
+  NotImplementedError)``) so filesystems without POSIX permission bits
+  don't break the save path. Pinned by
+  ``test_save_chmods_parent_dir_to_0o700``.
+- **NavMenu now subscribes to NavMenuVM property changes.** The
+  widget's ``_rebuild_options`` docstring claimed it ran "whenever
+  the VM's items change" but no subscription was wired up. As a
+  result the rail would silently show stale items after a connection
+  switch caused ``NavMenuVM._rebuild_items`` to filter services
+  differently. ``on_mount`` now subscribes to the hub and re-renders
+  on ``PropertyChangedMessage("items")`` / ``("selected_id")``.
+- **S3 connections CRUD error paths hardened.** ``_do_delete`` is now
+  ``@work(exclusive=True)`` so rapid double-clicks serialize instead
+  of racing on ``vm.remove``; ``vm.remove`` is wrapped in try/except
+  so a connection that vanishes between dialog and remove call
+  surfaces an error toast instead of crashing the worker. Inline-form
+  add path now catches all exceptions (not just ``ValueError``) so
+  disk-full / permission errors surface to the user instead of
+  silently dismissing the form.
 - **Transfers overlay now shows all queued transfers upfront.** When
   the user marked N entries and pressed `c` / `m`, ``DualPaneVM``
   registered each transfer one-at-a-time as the loop reached it —
