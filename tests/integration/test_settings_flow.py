@@ -208,3 +208,67 @@ async def test_dual_pane_mounts_at_startup_without_blank_screen(tmp_path: Path) 
             )
     finally:
         _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_expired_sso_does_not_call_switch_service_at_startup(tmp_path: Path) -> None:
+    """Regression: when probe_token returns EXPIRED for the resolved AWS
+    connection, on_mount MUST NOT call switch_service("s3") — because
+    building the DualPane drives S3FS.list which asks boto3 to refresh
+    the SSO access token over the network, and an expired refresh
+    token / unreachable SSO OIDC endpoint hangs the whole startup.
+
+    The fix is to detect EXPIRED/MISSING from probe_token (offline,
+    cheap) BEFORE switch_service runs, and mount an auth-required
+    placeholder instead.
+    """
+    import contextlib as _contextlib
+
+    from aws_tui.infra.aws_session import TokenProbeResult, TokenState
+    from aws_tui.infra.connection_resolver import Connection
+
+    config_dir = _prep(tmp_path)  # empty config — we'll seed via monkey-patch
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+
+    # Force a single AWS-kind connection to be the resolved initial,
+    # and force probe_token to return EXPIRED for it.
+    fake_conn = Connection(
+        name="dev-sso",
+        kind="aws",
+        region="us-east-1",
+        source="auto-aws-profile",
+        profile="dev-sso",
+    )
+    ctx.connection_resolver.list = lambda: [fake_conn]  # type: ignore[assignment,method-assign]
+    ctx.aws_session.probe_token = lambda _c: TokenProbeResult(  # type: ignore[assignment,method-assign]
+        state=TokenState.EXPIRED
+    )
+
+    # Track whether switch_service was called — that's the hang path.
+    called: list[str] = []
+    original_switch = ctx.root_vm.switch_service
+
+    async def _watching_switch(service_id: str) -> None:
+        called.append(service_id)
+        await original_switch(service_id)
+
+    ctx.root_vm.switch_service = _watching_switch  # type: ignore[assignment,method-assign]
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert called == [], (
+                f"switch_service must NOT be called when probe_token returns "
+                f"EXPIRED — the build path drives S3FS.list → boto3 SSO token "
+                f"refresh → network hang. Got call(s): {called}"
+            )
+            # Placeholder content must be visible to the user.
+            host = pilot.app.query_one("#content-host")
+            placeholder = host.query("#content-placeholder")
+            assert len(placeholder) == 1, (
+                f"expected #content-placeholder mounted in content-host but got {len(placeholder)}"
+            )
+    finally:
+        with _contextlib.suppress(Exception):
+            _dispose(ctx)
