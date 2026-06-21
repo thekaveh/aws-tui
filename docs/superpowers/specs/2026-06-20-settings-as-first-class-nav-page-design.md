@@ -507,8 +507,12 @@ These apply to every task in the implementation plan:
 - **10-theme parity** for all new CSS (`NavMenu`, `SettingsView`,
   `Collapsible` override, `ConnectionFormInline`).
 - **Content-presence guards** mandatory on every new snapshot test (per
-  PR #53's lesson — see `[Snapshot test content guards](snapshot-test-content-guards.md)`
-  in the memory notes).
+  PR #53's lesson: pytest-textual-snapshot parity-match alone can pass a
+  uniformly-blank rendering across all themes, since identical-to-self
+  matches succeed. Pair every new snapshot with a guard test that reads
+  the generated SVG and asserts a user-visible glyph/label is actually
+  present in the rendered text — see `tests/snapshot/test_nav_menu.py`
+  and `tests/snapshot/test_settings_view.py` for the pattern).
 - **No new third-party dependencies.** Everything uses existing Textual
   widgets (`OptionList`, `Collapsible`, `VerticalScroll`, `Input`,
   `Button`, `Container`).

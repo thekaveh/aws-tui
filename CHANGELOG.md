@@ -209,7 +209,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keychain dependency). Keyboard: ``,`` selects the Settings nav item;
   ``m`` toggles the rail's collapsed/expanded state. Per-theme CSS for
   all 10 themes. Every new snapshot test is paired with a content-
-  presence guard per the [snapshot-test-content-guards lesson](docs/superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md).
+  presence guard (per the PR #53 lesson: a uniformly-blank rendering
+  can pass parametric snapshot match across all themes; guards read
+  the generated SVG and assert a user-visible glyph/label is present).
   This is a rework of the PR #52 modal pattern, not an extension —
   ``SettingsModal``, the gear footer band, and ``S3CompatFormModal``
   are all deleted. The two surviving VMs (``SettingsVM`` simplified,

@@ -1,5 +1,5 @@
 """ServicesHamburger — top-left ``[≡]`` button that toggles the
-services rail open/closed.
+nav rail open/closed.
 
 Mounted as the first child of ``#main-area`` (next to the file panes,
 *below* the brand banner) so its visual position reads as "the
@@ -8,9 +8,13 @@ brand banner. A fixed-width ``3`` column with no border so the panes
 reclaim the rest of the row.
 
 Clicking fires :meth:`AwsTuiApp.action_toggle_services`. We
-intentionally avoid reaching into ``ServicesMenu`` directly so the
-rail can be ``display: none`` when collapsed (truly zero column) and
-still reachable.
+intentionally avoid reaching into ``NavMenu`` directly so the rail
+can be ``display: none`` when collapsed (truly zero column) and still
+reachable. (The widget keeps the ``ServicesHamburger`` and
+``action_toggle_services`` names for backwards-compat with the
+keybinding config; the rail itself was renamed to ``NavMenu`` when
+Settings became a peer of S3 — see
+``docs/superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md``.)
 """
 
 from __future__ import annotations
@@ -38,9 +42,8 @@ class ServicesHamburger(Static):
         # Re-export the click as an app action so AwsTuiApp owns the
         # actual collapsed/expanded state — the widget is a pure
         # affordance. ``event.stop()`` is critical: without it, the
-        # click also bubbles to ``ServicesMenu``'s own ``on_click`` and
-        # the user gets an immediate re-toggle ("expands then
-        # collapses").
+        # click also bubbles to ``NavMenu``'s own ``on_click`` and the
+        # user gets an immediate re-toggle ("expands then collapses").
         stop = getattr(event, "stop", None)
         if callable(stop):
             stop()

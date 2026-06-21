@@ -80,6 +80,12 @@ class RootVM:
 
     @property
     def services_menu(self) -> NavMenuVM:
+        # Legacy property name preserved deliberately. The underlying VM
+        # was renamed ServicesMenuVM → NavMenuVM when Settings became a
+        # peer of S3 in the rail; the property accessor is left as
+        # ``services_menu`` to avoid touching every call site
+        # (composition.py, app.py, integration tests). Rename queued for
+        # a future minor-version-bump cleanup.
         return self._services_menu
 
     @property
