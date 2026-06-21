@@ -38,7 +38,6 @@ from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
-from aws_tui.vm.settings.settings_vm import SettingsVM
 from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
@@ -161,11 +160,6 @@ def app_context_factory() -> AppContextBuilder:
             hub=hub,
             dispatcher=dispatcher,
         )
-        settings_vm = SettingsVM(
-            s3=s3_connections_vm,
-            hub=hub,
-            dispatcher=dispatcher,
-        )
 
         return AppContext(
             root_vm=root,
@@ -185,7 +179,6 @@ def app_context_factory() -> AppContextBuilder:
             dispatcher=dispatcher,
             initial_theme=initial_theme,
             s3_connections_vm=s3_connections_vm,
-            settings_vm=settings_vm,
         )
 
     return _build

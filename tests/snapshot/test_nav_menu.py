@@ -35,9 +35,14 @@ def test_nav_menu_collapsed(theme: str, snap_compare) -> None:  # type: ignore[n
 
 @pytest.mark.parametrize("theme", THEMES)
 def test_nav_menu_expanded_renders_visible_settings_label(theme: str) -> None:
-    """Content-presence guard: an expanded NavMenu MUST render the
-    'Settings' label text. Pure snapshot-match can pass a uniformly
-    blank render across all themes; this catches that."""
+    """Content-presence guard: an expanded NavMenu MUST render both
+    the 'S3' service item and the 'Settings' label, with Settings
+    visually below S3 (docked at the bottom).
+
+    Pure snapshot-match can pass a uniformly blank render across all
+    themes; this catches that. The S3-below-Settings ordering check
+    catches a regression where the dock:bottom rule on #menu-pinned
+    gets dropped or overridden."""
     p = (
         Path(__file__).parent
         / "__snapshots__"
@@ -50,7 +55,15 @@ def test_nav_menu_expanded_renders_visible_settings_label(theme: str) -> None:
     assert "Settings" in svg, (
         f"'Settings' label missing from expanded NavMenu SVG for theme {theme!r}"
     )
+    assert "S3" in svg, f"'S3' service label missing for theme {theme!r}"
     assert "menu" in svg, f"'menu' header missing for theme {theme!r}"
+    # SVG text elements appear in document order — top-to-bottom. So
+    # the first occurrence of "Settings" must come AFTER the first
+    # occurrence of "S3" iff Settings is docked at the bottom.
+    assert svg.index("S3") < svg.index("Settings"), (
+        f"Settings should appear below S3 in the rendered NavMenu "
+        f"(docked-bottom layout) but came first in SVG for theme {theme!r}"
+    )
 
 
 @pytest.mark.parametrize("theme", THEMES)

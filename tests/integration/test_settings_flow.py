@@ -33,7 +33,6 @@ def _prep(tmp_path: Path, toml_text: str = "") -> Path:
 def _dispose(ctx: object) -> None:
     """Standard teardown — mirrors the pattern in build_app_context order."""
     for attr in [
-        "settings_vm",
         "s3_connections_vm",
         "transfers_vm",
         "confirm_vm",
@@ -48,6 +47,48 @@ def _dispose(ctx: object) -> None:
     if root is not None and hasattr(root, "dispose"):
         with contextlib.suppress(Exception):
             root.dispose()
+
+
+@pytest.mark.asyncio
+async def test_toggle_settings_s3_settings_does_not_crash(tmp_path: Path) -> None:
+    """Regression: clicking Settings → S3 → Settings used to crash with
+    ``StatusTransitionError('Cannot construct from state Disposed.')``.
+
+    Root cause: ``ctx.settings_vm`` was a singleton; ``ContentHostVM``
+    calls ``vm.dispose()`` on swap-out and ``vm.construct()`` on
+    swap-in, so the second Settings click tried to re-construct an
+    already-Disposed VM. Fix: build a fresh ``SettingsVM`` per mount.
+    """
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    (config_dir / "config.toml").write_text(
+        _MINIO_LOCAL_TOML + '\n[defaults]\nconnection = "minio-local"\n'
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            menu = ctx.root_vm.services_menu
+            # 1st: settings
+            menu.switch_service_command.execute("settings")
+            await pilot.pause()
+            # 2nd: back to s3
+            menu.switch_service_command.execute("s3")
+            await pilot.pause()
+            # 3rd: settings again — this was the crash path.
+            menu.switch_service_command.execute("settings")
+            await pilot.pause()
+
+            from aws_tui.vm.settings.settings_vm import SettingsVM
+
+            assert isinstance(ctx.root_vm.content_host.current, SettingsVM), (
+                "Settings VM should be re-mounted; if the singleton was reused "
+                "it would have been Disposed after the s3 swap and the second "
+                "Settings switch would have crashed in ContentHostVM.set_content "
+                "while calling vm.construct()."
+            )
+    finally:
+        _dispose(ctx)
 
 
 @pytest.mark.asyncio

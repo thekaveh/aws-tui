@@ -563,6 +563,11 @@ NavMenu > OptionList > .option-list--option-highlighted {
     text-style: bold;
 }
 
+NavMenu > #menu-pinned {
+    border-top: solid $rule-dim;
+}
+
+
 /* ─── SettingsView ────────────────────────────────────────────── */
 
 SettingsView {
