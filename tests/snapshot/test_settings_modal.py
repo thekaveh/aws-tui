@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from tests.snapshot.apps.settings import (
-    SettingsModalEmptyApp,
-    SettingsModalPopulatedApp,
+from tests.snapshot.apps.settings import SettingsModalEmptyApp, SettingsModalPopulatedApp
+
+pytestmark = pytest.mark.skip(
+    reason="SettingsVM simplified in plan task 1; replaced by "
+    "tests/integration/test_settings_flow.py in task 10. "
+    "This file is deleted in task 11."
 )
 
 THEMES = [

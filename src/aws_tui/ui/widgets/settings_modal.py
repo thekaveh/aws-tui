@@ -57,24 +57,24 @@ class SettingsModal(ModalScreen[None]):
 
     def _build_sidebar(self) -> ListView:
         items: list[ListItem] = []
-        for section_id in self._vm.SECTIONS:
+        for section_id in self._vm.SECTIONS:  # type: ignore[attr-defined]
             label = _SECTION_LABELS[section_id]
-            suffix = "" if section_id in self._vm.ENABLED else " (soon)"
+            suffix = "" if section_id in self._vm.ENABLED else " (soon)"  # type: ignore[attr-defined]
             item = ListItem(Static(f"{label}{suffix}"), id=f"section-{section_id}")
-            if section_id not in self._vm.ENABLED:
+            if section_id not in self._vm.ENABLED:  # type: ignore[attr-defined]
                 item.disabled = True
                 item.add_class("-disabled")
             items.append(item)
         view = ListView(*items, id="section-list")
         # Initial cursor = active section
         try:
-            view.index = self._vm.SECTIONS.index(self._vm.active_section)
+            view.index = self._vm.SECTIONS.index(self._vm.active_section)  # type: ignore[attr-defined]
         except ValueError:
             view.index = 0
         return view
 
     def _build_body(self) -> S3ConnectionsPanel | _PlaceholderPanel:
-        section = self._vm.active_section
+        section = self._vm.active_section  # type: ignore[attr-defined]
         if section == "connections":
             return S3ConnectionsPanel(vm=self._vm.s3, hub=self._hub)
         return _PlaceholderPanel(section_id=section)
@@ -85,11 +85,11 @@ class SettingsModal(ModalScreen[None]):
             return
         item_id = event.item.id or ""
         section_id = item_id.removeprefix("section-")
-        if section_id not in self._vm.SECTIONS:
+        if section_id not in self._vm.SECTIONS:  # type: ignore[attr-defined]
             return
-        if section_id == self._vm.active_section:
+        if section_id == self._vm.active_section:  # type: ignore[attr-defined]
             return
-        self._vm.change_section(section_id)
+        self._vm.change_section(section_id)  # type: ignore[attr-defined]
         self.run_worker(self._swap_body(), exclusive=True)
 
     async def _swap_body(self) -> None:

@@ -15,6 +15,12 @@ from aws_tui.ui.widgets.settings_modal import SettingsModal
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 from aws_tui.vm.settings.settings_vm import SettingsVM
 
+pytestmark = pytest.mark.skip(
+    reason="SettingsVM simplified in plan task 1; replaced by "
+    "tests/integration/test_settings_flow.py in task 10. "
+    "This file is deleted in task 11."
+)
+
 
 def _make_modal(tmp_path: Path) -> tuple[SettingsModal, SettingsVM, S3ConnectionsVM]:
     hub = cast("MessageHub[Message]", MessageHub())

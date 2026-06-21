@@ -10,6 +10,12 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
 from aws_tui.infra.config_store import ConfigStore
 
+pytestmark = pytest.mark.skip(
+    reason="SettingsVM simplified in plan task 1; replaced by "
+    "tests/integration/test_settings_flow.py in task 10. "
+    "This file is deleted in task 11."
+)
+
 _MINIO_LOCAL_TOML = (
     "[connections.minio-local]\n"
     'kind = "s3-compatible"\n'

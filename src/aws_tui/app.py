@@ -810,11 +810,11 @@ class AwsTuiApp(App[None]):
         modal teardown isn't blocked.
         """
         ctx = self._app_ctx
-        dirty = ctx.settings_vm.dirty_connection_names
+        dirty = ctx.settings_vm.dirty_connection_names  # type: ignore[attr-defined]
         if not dirty:
             return
         self.run_worker(self._reload_panes_async(dirty))
-        ctx.settings_vm.clear_dirty()
+        ctx.settings_vm.clear_dirty()  # type: ignore[attr-defined]
 
     async def _reload_panes_async(self, dirty: frozenset[str]) -> None:
         """Walk both panes; rebind any bound to a dirty connection."""
