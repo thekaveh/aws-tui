@@ -686,3 +686,101 @@ ServicesMenuFooter _GearButton:hover {
 S3CompatFormModal Input.-invalid {
     border: tall $danger;
 }
+
+/* ─── NavMenu ─────────────────────────────────────────────────── */
+
+NavMenu {
+    background: $bg;
+}
+
+NavMenu > #menu-header {
+    background: $bg;
+    color: $text-muted;
+    padding: 0 1;
+    text-style: bold;
+}
+
+NavMenu > OptionList {
+    background: $bg;
+    color: $text;
+    border: none;
+    padding: 0;
+}
+
+NavMenu > OptionList > .option-list--option-highlighted {
+    background: $bg-sel;
+    color: $accent;
+    text-style: bold;
+}
+
+/* ─── SettingsView ────────────────────────────────────────────── */
+
+SettingsView {
+    background: $bg;
+}
+
+SettingsView > #settings-title {
+    background: $bg;
+    color: $accent;
+    padding: 0 2 1 2;
+    text-style: bold;
+}
+
+SettingsView > VerticalScroll {
+    background: $bg;
+    padding: 0 2;
+}
+
+SettingsView Collapsible {
+    background: $bg-elev;
+    margin-bottom: 1;
+}
+
+SettingsView Collapsible:disabled {
+    color: $text-muted;
+    text-style: italic;
+}
+
+SettingsView Collapsible > CollapsibleTitle {
+    background: $bg-elev;
+    color: $accent;
+}
+
+/* ─── ConnectionFormInline ────────────────────────────────────── */
+
+ConnectionFormInline {
+    background: $bg-elev;
+}
+
+ConnectionFormInline > Container {
+    background: $bg-elev;
+    color: $text;
+    padding: 1 2;
+}
+
+ConnectionFormInline .form-title {
+    color: $accent;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+ConnectionFormInline .form-label {
+    color: $text-muted;
+}
+
+ConnectionFormInline Input {
+    background: $bg;
+    color: $text;
+    border: none;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+ConnectionFormInline Input.-invalid {
+    border: tall $danger;
+}
+
+ConnectionFormInline .form-footer {
+    height: 3;
+    align: right middle;
+}
