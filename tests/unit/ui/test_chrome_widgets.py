@@ -21,7 +21,7 @@ from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
 from aws_tui.vm.chrome.status_bar_vm import StatusBarVM
 from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
-from aws_tui.vm.services_menu_vm import ServicesMenuVM
+from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 
 
@@ -212,7 +212,7 @@ async def test_services_menu_renders_items_and_marks_selected() -> None:
             from aws_tui.ui.widgets.services_menu import ServiceItemView
 
             views = app.query(ServiceItemView)
-            assert len(views) == 2
+            assert len(views) == 3  # s3, ec2, settings
             vm.switch_service_command.execute("s3")
             await pilot.pause()
             await pilot.pause()

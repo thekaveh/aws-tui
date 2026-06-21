@@ -18,7 +18,7 @@ class S3ConnectionsVM:
     The CRUD verbs (``add`` / ``update`` / ``remove``) validate, persist
     via :class:`ConfigStore`, then publish a
     :class:`ConnectionListChangedMessage` on the hub. Subscribers
-    (``SettingsVM``, ``ServicesMenuVM``, ``AwsTuiApp``) react to the
+    (``SettingsVM``, ``NavMenuVM``, ``AwsTuiApp``) react to the
     message; this VM never tells them directly.
     """
 

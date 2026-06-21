@@ -44,7 +44,7 @@ class TransferState(StrEnum):
 class ConnectionChangedMessage:
     """Published by ``RootVM`` after a successful connection switch.
 
-    Subscribers: :class:`ServicesMenuVM`, :class:`StatusBarVM`, every service
+    Subscribers: :class:`NavMenuVM`, :class:`StatusBarVM`, every service
     content VM, the active :class:`ContentHostVM` swap orchestrator.
     """
 
@@ -149,7 +149,7 @@ class ConnectionListChangedMessage:
 
     Subscribers:
     - :class:`ConnectionResolver` (cache invalidation if applicable),
-    - :class:`ServicesMenuVM` (re-derive the service filter),
+    - :class:`NavMenuVM` (re-derive the service filter),
     - :class:`AwsTuiApp` (drop deleted names from
       :attr:`AppContext.unreachable_connections`),
     - :class:`SettingsVM` (accumulate names for the reload-on-close

@@ -1,9 +1,12 @@
-"""ServicesMenuVM — left-rail service picker.
+"""NavMenuVM — left-rail nav picker.
 
 The menu filters the global :class:`ServiceRegistry` by the active
-:class:`Connection` (via :meth:`Service.supports`). Selecting a service
-fires the :attr:`switch_service_command`; the actual swap of
-``ContentHostVM`` happens in :class:`RootVM`.
+:class:`Connection` (via :meth:`Service.supports`). A hard-coded Settings
+entry is always appended last so it appears as a top-level nav peer to
+service items regardless of the active connection.
+
+Selecting a service fires the :attr:`switch_service_command`; the actual
+swap of ``ContentHostVM`` happens in :class:`RootVM`.
 """
 
 from __future__ import annotations
@@ -25,8 +28,8 @@ from aws_tui.vm.messages import ConnectionChangedMessage, ConnectionListChangedM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 
 
-class ServiceItemVM:
-    """A single row in the services menu."""
+class NavItemVM:
+    """A single row in the nav menu."""
 
     def __init__(
         self,
@@ -43,7 +46,7 @@ class ServiceItemVM:
         self._inner: ComponentVMOf[ServiceDescriptor] = (
             ComponentVMOf[ServiceDescriptor]
             .builder()
-            .name(f"service_item.{descriptor.id}")
+            .name(f"nav_item.{descriptor.id}")
             .model(descriptor)
             .services(hub, dispatcher)
             .build()
@@ -77,7 +80,7 @@ class ServiceItemVM:
 
     @property
     def inner(self) -> ComponentVMOf[ServiceDescriptor]:
-        """Underlying VMx component. ``ServicesMenuVM`` composes a
+        """Underlying VMx component. ``NavMenuVM`` composes a
         parent ``CompositeVM`` over the live items via this accessor,
         which matches the public ``inner`` pattern on the other VM
         facades (``EntryVM`` / ``TransferVM`` / ``PaneVM`` / ``ToastVM``).
@@ -110,8 +113,8 @@ class ServiceItemVM:
         self._hub.send(PropertyChangedMessage.create(self, self.name, "is_selected"))
 
 
-class ServicesMenuVM:
-    """Left-rail service-picker viewmodel."""
+class NavMenuVM:
+    """Left-rail nav-picker viewmodel."""
 
     def __init__(
         self,
@@ -125,7 +128,7 @@ class ServicesMenuVM:
         self._dispatcher: Dispatcher = dispatcher
 
         self._connection: Connection | None = None
-        self._items: list[ServiceItemVM] = []
+        self._items: list[NavItemVM] = []
         self._selected_id: str | None = None
 
         # CompositeVM tracks the inner VMx instances of each item so the view
@@ -133,7 +136,7 @@ class ServicesMenuVM:
         self._inner: CompositeVM[ComponentVMOf[ServiceDescriptor]] = (
             CompositeVM[ComponentVMOf[ServiceDescriptor]]
             .builder()
-            .name("services_menu")
+            .name("nav_menu")
             .services(hub, dispatcher)
             .children(self._initial_children)
             .auto_construct_on_add(True)
@@ -152,7 +155,7 @@ class ServicesMenuVM:
     # ── Properties ──────────────────────────────────────────────────────────
 
     @property
-    def items(self) -> tuple[ServiceItemVM, ...]:
+    def items(self) -> tuple[NavItemVM, ...]:
         return tuple(self._items)
 
     @property
@@ -236,13 +239,36 @@ class ServicesMenuVM:
     def _rebuild_items(self) -> None:
         desired_ids = self._desired_service_ids()
         current_ids = [item.descriptor.id for item in self._items]
-        if desired_ids == current_ids:
+        # The Settings item is always last; compare only service-derived items.
+        current_service_ids = [id_ for id_ in current_ids if id_ != "settings"]
+        if desired_ids == current_service_ids and any(
+            item.descriptor.id == "settings" for item in self._items
+        ):
             return
         self._clear_items()
         self._repopulate_items(desired_ids)
 
+        # Hard-coded Settings nav peer — always present, always last.
+        # Built from a synthetic ``ServiceDescriptor`` so the item shares the
+        # render/select machinery with service items but doesn't require the
+        # ServiceRegistry to know about it.
+        settings_descriptor = ServiceDescriptor(
+            id="settings",
+            label="Settings",
+            icon="⚙",
+        )
+        settings_item = NavItemVM(
+            descriptor=settings_descriptor,
+            hub=self._hub,
+            dispatcher=self._dispatcher,
+        )
+        self._items.append(settings_item)
+        if self._inner.is_constructed:
+            settings_item.construct()
+        self._inner.append(settings_item.inner)
+
         # Notify subscribers that the items collection changed so the View
-        # layer can re-mount the rows. Without this, the ServicesMenu widget
+        # layer can re-mount the rows. Without this, the NavMenu widget
         # binds to the initial (empty) item set at mount and never re-renders
         # when the connection resolution adds entries.
         self._hub.send(PropertyChangedMessage.create(self, self.name, "items"))
@@ -262,7 +288,7 @@ class ServicesMenuVM:
         return [s.descriptor.id for s in self._registry.all() if s.supports(conn)]
 
     def _clear_items(self) -> None:
-        """Detach + dispose every current ``ServiceItemVM``."""
+        """Detach + dispose every current ``NavItemVM``."""
         for item in list(self._items):
             if item.inner in self._inner:
                 self._inner.remove(item.inner)
@@ -270,12 +296,12 @@ class ServicesMenuVM:
         self._items.clear()
 
     def _repopulate_items(self, desired_ids: list[str]) -> None:
-        """Build new ``ServiceItemVM`` rows for ``desired_ids`` in registry order."""
+        """Build new ``NavItemVM`` rows for ``desired_ids`` in registry order."""
         desired = set(desired_ids)
         for service in self._registry.all():
             if service.descriptor.id not in desired:
                 continue
-            item = ServiceItemVM(
+            item = NavItemVM(
                 descriptor=service.descriptor,
                 hub=self._hub,
                 dispatcher=self._dispatcher,
@@ -286,4 +312,4 @@ class ServicesMenuVM:
             self._inner.append(item.inner)
 
 
-__all__ = ["ServiceItemVM", "ServicesMenuVM"]
+__all__ = ["NavItemVM", "NavMenuVM"]

@@ -24,7 +24,7 @@ from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
 from aws_tui.vm.chrome.status_bar_vm import StatusBarVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
-from aws_tui.vm.services_menu_vm import ServicesMenuVM
+from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 from tests.snapshot.apps._seed import seed_left, seed_right
 

@@ -17,7 +17,8 @@ from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets.services_menu_footer import ServicesMenuFooter
-from aws_tui.vm.services_menu_vm import ServiceItemVM, ServicesMenuVM
+from aws_tui.vm.nav_menu_vm import NavItemVM as ServiceItemVM
+from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
 
 
 class ServiceItemView(Widget):

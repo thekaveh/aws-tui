@@ -92,7 +92,7 @@ async def test_switch_connection_updates_status_and_menu() -> None:
     await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
     assert root.chrome.status_bar.connection_label == "kaveh-dev (aws)"
     ids = {item.descriptor.id for item in root.services_menu.items}
-    assert ids == {"s3", "ec2"}
+    assert ids == {"s3", "ec2", "settings"}
     root.dispose()
 
 
@@ -102,7 +102,7 @@ async def test_switch_connection_to_s3_collapses_menu() -> None:
     root = _build_root(s3, ec2)
     await root.switch_connection_with(_minio_conn(), TokenState.CONNECTED)
     ids = {item.descriptor.id for item in root.services_menu.items}
-    assert ids == {"s3"}
+    assert ids == {"s3", "settings"}
     root.dispose()
 
 

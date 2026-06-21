@@ -1,4 +1,4 @@
-"""Tests for ServicesMenuVM, Service protocol, and ServiceRegistry."""
+"""Tests for NavMenuVM, Service protocol, and ServiceRegistry."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.connection_resolver import Connection
-from aws_tui.vm.services_menu_vm import ServiceItemVM, ServicesMenuVM
+from aws_tui.vm.nav_menu_vm import NavItemVM as ServiceItemVM
+from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
 from aws_tui.vm.services_protocol import (
     Service,
     ServiceDescriptor,
@@ -100,7 +101,7 @@ def test_service_descriptor_is_frozen() -> None:
         d.label = "x"  # type: ignore[misc]
 
 
-# -------------------- ServicesMenuVM --------------------
+# -------------------- NavMenuVM --------------------
 
 
 def _menu(registry: ServiceRegistry) -> ServicesMenuVM:
@@ -124,7 +125,7 @@ def test_menu_lists_compatible_services_for_aws_connection() -> None:
     menu = _menu(reg)
     menu.update_connection(_aws_conn())
     ids = {item.descriptor.id for item in menu.items}
-    assert ids == {"s3", "ec2", "iam"}
+    assert ids == {"s3", "ec2", "iam", "settings"}
     menu.dispose()
 
 
@@ -136,7 +137,7 @@ def test_menu_collapses_for_s3_compatible_connection() -> None:
     menu = _menu(reg)
     menu.update_connection(_minio_conn())
     ids = {item.descriptor.id for item in menu.items}
-    assert ids == {"s3"}
+    assert ids == {"s3", "settings"}
     menu.dispose()
 
 
@@ -168,9 +169,9 @@ def test_menu_re_filters_on_connection_change() -> None:
     reg.register(FakeService("ec2", "EC2", accepts_aws=True, accepts_s3_compat=False))
     menu = _menu(reg)
     menu.update_connection(_aws_conn())
-    assert len(menu.items) == 2
+    assert len(menu.items) == 3  # s3, ec2, settings
     menu.update_connection(_minio_conn())
-    assert {item.descriptor.id for item in menu.items} == {"s3"}
+    assert {item.descriptor.id for item in menu.items} == {"s3", "settings"}
     menu.dispose()
 
 
@@ -208,9 +209,32 @@ def test_fake_service_satisfies_protocol() -> None:
 # -------------------- ConnectionListChangedMessage subscription --------------------
 
 
-def test_services_menu_vm_refreshes_on_connection_list_change() -> None:
+def test_nav_menu_always_includes_settings_item_last() -> None:
+    """Settings is a hard-coded nav peer to the service items; it
+    appears as the LAST item in the menu regardless of which services
+    are registered."""
+    from aws_tui.vm.nav_menu_vm import NavMenuVM
+
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    hub = _hub()
+    vm = NavMenuVM(registry=reg, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    try:
+        vm.update_connection(_aws_conn())
+        assert vm.items[-1].descriptor.id == "settings"
+        assert vm.items[-1].descriptor.label == "Settings"
+        assert vm.items[-1].descriptor.icon == "⚙"
+        # select("settings") via the canonical API.
+        vm.switch_service_command.execute("settings")
+        assert vm.selected_id == "settings"
+    finally:
+        vm.dispose()
+
+
+def test_nav_menu_vm_refreshes_on_connection_list_change() -> None:
     """When a ConnectionListChangedMessage arrives on the hub, the
-    services menu re-derives its filter — same path that
+    nav menu re-derives its filter — same path that
     ConnectionChangedMessage already triggers."""
     from unittest.mock import MagicMock
 
@@ -233,7 +257,7 @@ def test_services_menu_vm_refreshes_on_connection_list_change() -> None:
         # that ConnectionChangedMessage uses — at minimum, registry.all
         # (used by _desired_service_ids) is called.
         assert registry.all.called, (
-            "ServicesMenuVM did not re-derive its filter after ConnectionListChangedMessage"
+            "NavMenuVM did not re-derive its filter after ConnectionListChangedMessage"
         )
     finally:
         vm.dispose()
