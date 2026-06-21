@@ -47,7 +47,6 @@ class NavMenu(Widget):
     NavMenu {
         display: none;
         width: 0;
-        height: 1fr;
     }
     NavMenu.-expanded {
         display: block;

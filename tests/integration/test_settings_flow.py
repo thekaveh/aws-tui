@@ -153,3 +153,58 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
 
     cfg = ConfigStore(path=config_dir / "config.toml").load()
     assert "minio-local" not in cfg.connections
+
+
+@pytest.mark.asyncio
+async def test_dual_pane_mounts_at_startup_without_blank_screen(tmp_path: Path) -> None:
+    """Regression: startup with an S3 connection MUST render the DualPane in
+    the content host. Without the ``_boot_in_flight`` guard on
+    ``_on_nav_selection_changed``, the seed selected_id change that
+    ``switch_service("s3")`` fires during ``on_mount`` would spawn a
+    ``_mount_service_view`` worker that races against on_mount's own
+    ``_mount_initial_service_view``. Both call ``host.remove_children()`` +
+    ``host.mount()`` on the same container; whichever runs second silently
+    clobbers the other and the user sees a blank screen at startup.
+
+    This test asserts the DualPane is actually mounted (not just that the
+    VM is set), which is the user-visible outcome.
+    """
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    # Mark the seeded connection as the default so on_mount picks it up.
+    (config_dir / "config.toml").write_text(
+        _MINIO_LOCAL_TOML + '\n[defaults]\nconnection = "minio-local"\n'
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Boot guard must release after on_mount completes.
+            assert app._boot_in_flight is False
+            # DualPane must be mounted in #content-host.
+            from textual.containers import Container
+
+            from aws_tui.ui.widgets.dual_pane import DualPane
+
+            host = pilot.app.query_one("#content-host", Container)
+            dual_panes = host.query(DualPane)
+            assert len(dual_panes) == 1, (
+                f"expected exactly one DualPane in #content-host but got "
+                f"{len(dual_panes)} — the seed selected_id change may be "
+                f"racing _mount_initial_service_view again"
+            )
+            # Content host MUST have non-zero rendered width.  Without
+            # the AwsTuiApp.CSS rule giving ``#content-host`` an
+            # explicit ``width: 1fr``, the Horizontal layout doesn't
+            # allocate the remaining space (NavMenu starts collapsed
+            # at width 0), so the content host renders at zero width
+            # and the DualPane mounted inside is invisible — the
+            # user-reported "blank screen at launch" symptom.
+            assert host.region.width > 0, (
+                "#content-host rendered at zero width — DualPane is "
+                "mounted but invisible. AwsTuiApp.CSS must give "
+                "#content-host an explicit width:1fr so it takes the "
+                "space the collapsed (display:none) NavMenu leaves."
+            )
+    finally:
+        _dispose(ctx)

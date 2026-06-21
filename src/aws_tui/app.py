@@ -123,9 +123,30 @@ class AwsTuiApp(App[None]):
 
     # Declare the notifications layer so ToastStack floats above the
     # main layout instead of consuming flow space.
+    #
+    # ``#main-area`` and ``#content-host`` need explicit ``1fr`` sizing
+    # because:
+    #   - The NavMenu starts ``display: none; width: 0`` (collapsed) and
+    #     the ServicesHamburger is fixed ``width: 3``.
+    #   - Without an explicit ``width: 1fr`` rule on ``#content-host``,
+    #     Textual's Horizontal layout doesn't allocate the remaining
+    #     space to the content host — the DualPane (or SettingsView)
+    #     mounted inside renders at zero width and the user sees a
+    #     blank screen at startup. The legacy ServicesMenu's per-theme
+    #     ``width: 16`` rule made the layout work by accident; the
+    #     NavMenu rework moved the width rule into the widget's
+    #     DEFAULT_CSS and the content-host lost its implicit sizing.
     CSS = """
     Screen {
         layers: base notifications;
+    }
+    #main-area {
+        height: 1fr;
+        width: 1fr;
+    }
+    #content-host {
+        height: 1fr;
+        width: 1fr;
     }
     """
 
@@ -186,6 +207,11 @@ class AwsTuiApp(App[None]):
         self._pane_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
         self._nav_selection_sub: DisposableBase | None = None
+        # True while ``on_mount`` is driving the initial service mount —
+        # gates ``_on_nav_selection_changed`` so the seed selected_id
+        # change doesn't spawn a duplicate mount worker that races the
+        # on_mount direct mount (blank-screen-at-startup regression).
+        self._boot_in_flight: bool = False
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -240,9 +266,21 @@ class AwsTuiApp(App[None]):
         if initial_conn is not None:
             auth_state = ctx.aws_session.probe_token(initial_conn).state
             await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
-            with contextlib.suppress(Exception):
-                await ctx.root_vm.switch_service("s3")
-            self._mount_initial_service_view()
+            # Mark the boot sequence as in-flight so the new nav-selection
+            # hub subscriber (_on_nav_selection_changed) skips the worker
+            # mount it would otherwise spawn in response to the
+            # selected_id change that switch_service is about to fire.
+            # Without this guard, two concurrent mount paths race against
+            # the same #content-host (the worker's remove_children/mount
+            # + _mount_initial_service_view's direct mount) and one
+            # silently clobbers the other — the user sees a blank screen.
+            self._boot_in_flight = True
+            try:
+                with contextlib.suppress(Exception):
+                    await ctx.root_vm.switch_service("s3")
+                self._mount_initial_service_view()
+            finally:
+                self._boot_in_flight = False
         else:
             self._mount_no_connection_placeholder()
 
@@ -1057,6 +1095,14 @@ class AwsTuiApp(App[None]):
         if msg.property_name != "selected_id":
             return
         if not isinstance(msg.sender_object, NavMenuVM):
+            return
+        # Skip the seed selected_id change that on_mount fires while
+        # priming the initial service. on_mount drives that mount
+        # synchronously via _mount_initial_service_view; if we ALSO
+        # spawn a mount worker here, the two race against the same
+        # #content-host and one silently clobbers the other → blank
+        # screen at startup.
+        if self._boot_in_flight:
             return
         ctx = self._app_ctx
         selected = ctx.root_vm.services_menu.selected_id
