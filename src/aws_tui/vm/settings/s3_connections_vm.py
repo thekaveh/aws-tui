@@ -105,6 +105,13 @@ class S3ConnectionsVM:
 
     # ── Form helpers ───────────────────────────────────────────────────────
 
+    def find_by_name(self, name: str) -> Connection | None:
+        """Look up a connection by name; returns None if not found."""
+        for c in self.connections:
+            if c.name == name:
+                return c
+        return None
+
     def entry_from_form(self, form: S3CompatForm) -> ConnectionEntry:
         """Convert a filled :class:`S3CompatForm` to a :class:`ConnectionEntry`.
 

@@ -10,7 +10,11 @@ from textual.widgets import Button, Static
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
-from aws_tui.ui.widgets.first_run_modal import S3CompatFormModal
+from aws_tui.ui.widgets.settings.connection_form import (
+    ConnectionFormCancelled,
+    ConnectionFormInline,
+    ConnectionFormSubmitted,
+)
 from aws_tui.vm.chrome.confirm_vm import (
     ConfirmationVM,
     ConfirmPath,
@@ -76,6 +80,7 @@ class S3ConnectionsPanel(Widget):
 
     def compose(self) -> ComposeResult:
         yield Vertical(*self._render_children(), id="panel-body")
+        yield ConnectionFormInline(hub=self._hub)
 
     def _render_children(self) -> list[Widget]:
         """Build the body's children as constructed widget instances.
@@ -127,24 +132,21 @@ class S3ConnectionsPanel(Widget):
     @on(Button.Pressed, "#add-empty, #add-populated")
     def _on_add(self, event: Button.Pressed) -> None:
         event.stop()
-        self._do_add()
+        self._on_add_clicked()
 
-    @work(exclusive=False)
-    async def _do_add(self) -> None:
-        result = await self.app.push_screen_wait(
-            S3CompatFormModal(hub=self._hub, defaults=None, name_locked=False)
-        )
-        if result is None:
-            return
-        self._vm.add(self._vm.entry_from_form(result))
-        await self.refresh_rows()
+    def _on_add_clicked(self) -> None:
+        form = self.query_one(ConnectionFormInline)
+        form.open_for_add()
 
     @on(Button.Pressed, ".row-chip-edit")
     def _on_edit(self, event: Button.Pressed) -> None:
         event.stop()
         btn_id = event.button.id or ""
         name = btn_id.removeprefix("edit-")
-        existing = next((c for c in self._vm.connections if c.name == name), None)
+        self._on_edit_clicked(name)
+
+    def _on_edit_clicked(self, name: str) -> None:
+        existing = self._vm.find_by_name(name)
         if existing is None:
             return
         defaults = S3CompatForm(
@@ -156,17 +158,8 @@ class S3ConnectionsPanel(Widget):
             force_path_style=existing.force_path_style,
             verify_tls=existing.verify_tls,
         )
-        self._do_edit(name, defaults)
-
-    @work(exclusive=False)
-    async def _do_edit(self, name: str, defaults: S3CompatForm) -> None:
-        result = await self.app.push_screen_wait(
-            S3CompatFormModal(hub=self._hub, defaults=defaults, name_locked=True)
-        )
-        if result is None:
-            return
-        self._vm.update(name, self._vm.entry_from_form(result))
-        await self.refresh_rows()
+        form = self.query_one(ConnectionFormInline)
+        form.open_for_edit(name=name, defaults=defaults)
 
     @on(Button.Pressed, ".row-chip-delete")
     def _on_delete(self, event: Button.Pressed) -> None:
@@ -196,6 +189,25 @@ class S3ConnectionsPanel(Widget):
         if confirmed:
             self._vm.remove(name)
             await self.refresh_rows()
+
+    def on_connection_form_submitted(self, event: ConnectionFormSubmitted) -> None:
+        """Handle a Save from the inline form."""
+        entry = self._vm.entry_from_form(event.form)
+        if event.mode == "add":
+            try:
+                self._vm.add(entry)
+            except ValueError:
+                # Duplicate name — re-open the form so the user sees the error.
+                return
+        else:  # "edit"
+            assert event.original_name is not None
+            self._vm.update(event.original_name, entry)
+        # Synchronous-friendly call into refresh:
+        self.run_worker(self.refresh_rows())
+
+    def on_connection_form_cancelled(self, event: ConnectionFormCancelled) -> None:
+        """Form closed itself on cancel; nothing to do here."""
+        return
 
 
 __all__ = ["S3ConnectionsPanel"]
