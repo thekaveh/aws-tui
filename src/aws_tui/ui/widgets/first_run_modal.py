@@ -104,14 +104,23 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
 
     @on(ConnectionFormSubmitted)
     def on_connection_form_submitted(self, event: ConnectionFormSubmitted) -> None:
-        """Persist the new connection then dismiss the modal."""
+        """Persist the new connection then dismiss the modal.
+
+        On persistence failure, the form stays open and an error toast is
+        surfaced — the modal is NOT dismissed.
+        """
         from aws_tui.composition import add_s3_compat_connection
 
         try:
             ctx = self.app._app_ctx  # type: ignore[attr-defined]
             add_s3_compat_connection(config_store=ctx.config_store, form=event.form)
-        except Exception:
-            pass
+        except Exception as exc:
+            self.notify(
+                f"Couldn't save connection: {exc}",
+                severity="error",
+                timeout=8,
+            )
+            return
         self.query_one(ConnectionFormInline).close()
         self._vm.add_s3_compat_command.execute()
         self.dismiss(FirstRunAction.ADD_S3_COMPAT)

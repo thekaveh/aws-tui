@@ -61,40 +61,6 @@ StatusBar > .status-transfers {
     color: $accent-soft;
 }
 
-ServicesMenu {
-    width: 16;
-    background: $bg;
-    color: $text;
-    border: solid $rule-dim;
-    border-title-color: $text-dim;
-    padding: 0 1;
-}
-
-ServicesMenu > .service-item {
-    color: $text;
-    height: 1;
-}
-
-ServicesMenu > .service-item.-selected {
-    color: $accent-soft;
-    background: $bg-sel;
-    text-style: bold;
-}
-
-ServicesMenu > .service-item.-focused {
-    color: $accent;
-    text-style: bold;
-}
-
-ServicesMenu > .service-item.-dimmed {
-    color: $text-dim;
-}
-
-ServicesMenu > .title {
-    color: $text-dim;
-    text-style: bold;
-}
-
 Pane {
     background: $bg;
     color: $text;

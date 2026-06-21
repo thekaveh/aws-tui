@@ -987,7 +987,11 @@ class AwsTuiApp(App[None]):
         # deferred). Skip on 'added' — new connections aren't bound yet.
         if msg.change == "added":
             return
-        self.run_worker(self._reload_panes_for(msg.names, deleted=(msg.change == "deleted")))
+        self.run_worker(
+            self._reload_panes_for(msg.names, deleted=(msg.change == "deleted")),
+            exclusive=True,
+            group="settings-reload",
+        )
 
     async def _reload_panes_for(self, names: tuple[str, ...], *, deleted: bool) -> None:
         """Walk both panes; rebind any pane bound to a connection in ``names``."""

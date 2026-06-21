@@ -47,7 +47,6 @@ def test_builtin_theme_styles_widgets(name: str) -> None:
     for widget in (
         "Screen",
         "StatusBar",
-        "ServicesMenu",
         "Pane",
         "HintLegend",
         "CommandPalette",
