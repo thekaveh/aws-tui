@@ -198,7 +198,6 @@ def test_service_item_default_flags() -> None:
         hub=_hub(),
         dispatcher=NULL_DISPATCHER,
     )
-    assert item.is_focused is False
     assert item.is_selected is False
 
 

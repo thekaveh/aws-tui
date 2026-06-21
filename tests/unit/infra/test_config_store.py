@@ -257,3 +257,38 @@ def test_update_connection_rename_disallowed(tmp_path: Path) -> None:
     renamed = _seed_entry(name="new")
     with pytest.raises(ValueError, match="cannot be renamed"):
         store.update_connection("old", renamed)
+
+
+# ── Defense-in-depth: parent dir permission tightening ──────────────────────
+
+
+def test_save_chmods_parent_dir_to_0o700(tmp_path: Path) -> None:
+    """Regression: ConfigStore.save() must chmod the config parent dir to 0o700
+    (defense-in-depth — the config.toml file itself is 0o600 via mkstemp, but
+    the parent dir would otherwise inherit umask 0o755 and leak the dir
+    listing). If a future change silently drops the chmod call, this catches it.
+
+    Skipped on Windows / filesystems that do not preserve permission bits."""
+    import stat
+    import sys
+
+    if sys.platform.startswith("win"):
+        pytest.skip("POSIX permission bits not enforced on Windows")
+    config_path = tmp_path / "nested" / "aws-tui" / "config.toml"
+    store = ConfigStore(path=config_path)
+    store.add_connection(
+        ConnectionEntry(
+            name="test",
+            kind="s3-compatible",
+            region="us-east-1",
+            endpoint_url="http://localhost:9000",
+            access_key_id="K",
+            secret_access_key="S",
+            force_path_style=True,
+            verify_tls=True,
+        )
+    )
+    parent_mode = stat.S_IMODE(config_path.parent.stat().st_mode)
+    assert parent_mode == 0o700, (
+        f"config parent dir should be 0o700 (defense-in-depth) but is 0o{parent_mode:o}"
+    )

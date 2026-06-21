@@ -40,7 +40,6 @@ class NavItemVM:
     ) -> None:
         self._descriptor: ServiceDescriptor = descriptor
         self._hub: MessageHub[Message] = hub
-        self._is_focused: bool = False
         self._is_selected: bool = False
 
         self._inner: ComponentVMOf[ServiceDescriptor] = (
@@ -57,10 +56,6 @@ class NavItemVM:
     @property
     def descriptor(self) -> ServiceDescriptor:
         return self._descriptor
-
-    @property
-    def is_focused(self) -> bool:
-        return self._is_focused
 
     @property
     def is_selected(self) -> bool:
@@ -99,12 +94,6 @@ class NavItemVM:
         self._inner.dispose()
 
     # ── Mutation ────────────────────────────────────────────────────────────
-
-    def set_focused(self, value: bool) -> None:
-        if self._is_focused == value:
-            return
-        self._is_focused = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "is_focused"))
 
     def set_selected(self, value: bool) -> None:
         if self._is_selected == value:

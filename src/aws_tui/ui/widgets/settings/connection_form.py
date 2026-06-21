@@ -246,12 +246,12 @@ class ConnectionFormInline(Widget):
                 break
         save_btn.disabled = invalid
 
-    def mark_name_invalid(self, message: str) -> None:
+    def mark_name_invalid(self) -> None:
         """Add ``-invalid`` to the name Input so the user sees the error.
 
-        ``message`` is accepted for forward-compatibility (tooltip / status
-        bar) but is not surfaced in the widget itself — callers should also
-        show a toast with the message.
+        Callers should also surface the specific error message (e.g. via
+        a toast) — this method only paints the field; it does not show
+        the reason.
         """
         self.query_one("#form-name", Input).add_class("-invalid")
 

@@ -241,7 +241,7 @@ class S3ConnectionsPanel(Widget):
                 self._vm.add(entry)
             except ValueError:
                 # Duplicate name — keep form open, mark the field invalid.
-                form.mark_name_invalid(f"Connection {event.form.name!r} already exists.")
+                form.mark_name_invalid()
                 self._surface_error_toast(
                     f"Connection {event.form.name!r} already exists.",
                     toast_id=f"duplicate-{event.form.name}",
