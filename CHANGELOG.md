@@ -91,17 +91,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are deliberately preserved — they're records of project state at
   that point in time, not active declarations.
 
-### Known gaps
-
-- The settings-overlay reload-on-close flow (`_reload_after_settings`,
-  `_reload_panes_async`, `_rebind_pane_to_local`,
-  `_rebind_pane_to_connection` in `app.py`) is verified by unit tests
-  on the dirty-set contract but not by an end-to-end pilot integration
-  test. The `pilot.run_test()` harness can't safely exercise the
-  `swap_source`-style pane-rebind path because S3 connection probes
-  would block on unreachable seed endpoints. Manual verification
-  required when touching the rebind helpers.
-
 ### Added
 
 - **Shift+S now skips connections observed unreachable.** If a pane
@@ -203,26 +192,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the first-auto fallback — fixes the "aws s3 ls works on the CLI
   but the TUI shows access denied" SSO setup where `[default]` has no
   creds and the working profile lives in the env.
-- **App Settings overlay** with first panel: full CRUD for s3-compatible
-  connections. New ``⚙  Settings`` gear button pinned to the bottom of
-  the services column (keyboard ``,``) opens a themed ``SettingsModal``
-  with a left-sidebar nav. Sub-project A of three: the sidebar shows
-  ``Connections`` (active), ``Themes (soon)`` and ``Keymap (soon)`` —
-  the disabled rows will go live in sub-projects B and C. The S3 panel
-  reads from ``ConnectionResolver`` (filtered to ``kind = "s3-compatible"``)
-  and writes through new ``ConfigStore.update_connection`` /
-  ``remove_connection`` methods (atomic via ``tempfile + os.replace``).
-  Add and Edit reuse the existing ``S3CompatFormModal`` with a new
-  ``name_locked`` parameter for edit mode (rename disallowed). Delete
-  uses the polished ``ConfirmModal``. Credentials are stored inline in
-  TOML (cross-platform; existing keychain-referencing entries are read
-  transparently and re-written inline on first edit — documented
-  one-way conversion). New ``ConnectionListChangedMessage`` published
-  on every CRUD; subscribers include ``ServicesMenuVM`` (filter
-  refresh) and ``AwsTuiApp`` (drops deleted names from
-  ``AppContext.unreachable_connections``). Affected panes reload
-  exactly once on modal dismiss; single summary toast describes what
-  reloaded. New per-theme CSS for all 10 themes + 50 new snapshots.
+- **App Settings as a first-class nav page** with full CRUD for
+  s3-compatible connections. The left rail is now a generic vertical
+  nav (Textual ``OptionList``) with peer items ``S3`` and ``Settings``;
+  selection-highlight matches the file-pane row cursor (``$bg-sel`` +
+  ``$accent``). Selecting Settings swaps the main area to a VS Code-style
+  scrollable page of ``Collapsible`` sections. Sub-project A populates
+  the ``S3-Compatible Connections`` section; ``Themes (coming in v0.8)``
+  and ``Keymap (coming in v0.8)`` are visible-disabled placeholders.
+  Add/Edit S3 connection form expands inline within the Connections
+  section, below the rows — no more modal-on-modal layering. Save
+  commits + reloads any affected pane + collapses the form, all
+  immediately. Cancel just collapses. Delete still uses the polished
+  ``ConfirmModal`` (destructive ops keep the modal interruption
+  pattern). Credentials remain inline in TOML (cross-platform, no
+  keychain dependency). Keyboard: ``,`` selects the Settings nav item;
+  ``m`` toggles the rail's collapsed/expanded state. Per-theme CSS for
+  all 10 themes. Every new snapshot test is paired with a content-
+  presence guard per the [snapshot-test-content-guards lesson](docs/superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md).
+  This is a rework of the PR #52 modal pattern, not an extension —
+  ``SettingsModal``, the gear footer band, and ``S3CompatFormModal``
+  are all deleted. The two surviving VMs (``SettingsVM`` simplified,
+  ``S3ConnectionsVM`` unchanged) plus the ``ConfigStore`` extensions
+  plus ``ConnectionListChangedMessage`` all carry over.
 
 ### Fixed
 
