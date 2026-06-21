@@ -27,6 +27,7 @@ from textual.containers import Container, Horizontal
 from textual.widgets import Static
 
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.ui.actions import ActionRegistry
@@ -123,9 +124,30 @@ class AwsTuiApp(App[None]):
 
     # Declare the notifications layer so ToastStack floats above the
     # main layout instead of consuming flow space.
+    #
+    # ``#main-area`` and ``#content-host`` need explicit ``1fr`` sizing
+    # because:
+    #   - The NavMenu starts ``display: none; width: 0`` (collapsed) and
+    #     the ServicesHamburger is fixed ``width: 3``.
+    #   - Without an explicit ``width: 1fr`` rule on ``#content-host``,
+    #     Textual's Horizontal layout doesn't allocate the remaining
+    #     space to the content host — the DualPane (or SettingsView)
+    #     mounted inside renders at zero width and the user sees a
+    #     blank screen at startup. The legacy ServicesMenu's per-theme
+    #     ``width: 16`` rule made the layout work by accident; the
+    #     NavMenu rework moved the width rule into the widget's
+    #     DEFAULT_CSS and the content-host lost its implicit sizing.
     CSS = """
     Screen {
         layers: base notifications;
+    }
+    #main-area {
+        height: 1fr;
+        width: 1fr;
+    }
+    #content-host {
+        height: 1fr;
+        width: 1fr;
     }
     """
 
@@ -186,6 +208,11 @@ class AwsTuiApp(App[None]):
         self._pane_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
         self._nav_selection_sub: DisposableBase | None = None
+        # True while ``on_mount`` is driving the initial service mount —
+        # gates ``_on_nav_selection_changed`` so the seed selected_id
+        # change doesn't spawn a duplicate mount worker that races the
+        # on_mount direct mount (blank-screen-at-startup regression).
+        self._boot_in_flight: bool = False
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -240,9 +267,42 @@ class AwsTuiApp(App[None]):
         if initial_conn is not None:
             auth_state = ctx.aws_session.probe_token(initial_conn).state
             await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
-            with contextlib.suppress(Exception):
-                await ctx.root_vm.switch_service("s3")
-            self._mount_initial_service_view()
+            # If the resolved AWS connection's SSO token is EXPIRED at
+            # boot, do NOT call switch_service — building the DualPane
+            # drives ``PaneVM.setup() → S3FS.list(...)`` which asks
+            # boto3 to refresh the SSO access token. With an expired
+            # refresh token (or unreachable SSO OIDC endpoint), boto3
+            # blocks on its default network timeout and the user sees
+            # a hung-then-crash launch. Mount an explicit "auth
+            # required" placeholder instead so the user gets a clear
+            # prompt to run ``aws sso login`` and relaunch.
+            #
+            # MISSING is intentionally NOT in this set: probe_token
+            # returns MISSING for both "SSO configured but no cache"
+            # and "no SSO at all (static creds)". The latter is
+            # legitimate and should proceed; the former fails faster
+            # than EXPIRED (NoCredentialsError, not a network hang).
+            needs_auth = initial_conn.kind == "aws" and auth_state is TokenState.EXPIRED
+            if needs_auth:
+                self._mount_auth_required_placeholder(initial_conn, auth_state)
+            else:
+                # Mark the boot sequence as in-flight so the new
+                # nav-selection hub subscriber
+                # (_on_nav_selection_changed) skips the worker mount it
+                # would otherwise spawn in response to the selected_id
+                # change that switch_service is about to fire. Without
+                # this guard, two concurrent mount paths race against
+                # the same #content-host (the worker's
+                # remove_children/mount + _mount_initial_service_view's
+                # direct mount) and one silently clobbers the other —
+                # the user sees a blank screen.
+                self._boot_in_flight = True
+                try:
+                    with contextlib.suppress(Exception):
+                        await ctx.root_vm.switch_service("s3")
+                    self._mount_initial_service_view()
+                finally:
+                    self._boot_in_flight = False
         else:
             self._mount_no_connection_placeholder()
 
@@ -328,6 +388,37 @@ class AwsTuiApp(App[None]):
                     "    3. Edit [b]~/.config/aws-tui/config.toml[/]     (add an AWS or S3-compatible connection)\n\n"
                     "  See [b]docs/connections.md[/] in the repo for the [b][connections.<name>][/] schema and\n"
                     "  vendor quirks (MinIO, R2, B2, Wasabi).\n\n"
+                    "  Press [b]q[/] to quit.",
+                    id="content-placeholder",
+                    classes="content-placeholder",
+                    markup=True,
+                )
+            )
+
+    def _mount_auth_required_placeholder(self, conn: Connection, auth_state: TokenState) -> None:
+        """Render an "SSO session expired / missing" placeholder when the
+        resolved AWS connection's token isn't usable at startup.
+
+        Calling ``switch_service("s3")`` here would build a DualPane
+        whose ``PaneVM.setup`` immediately drives ``S3FS.list(...)`` —
+        and boto3 would then try to refresh the SSO access token over
+        the network. With an expired refresh token or unreachable SSO
+        OIDC endpoint, that call blocks on its default timeout, the
+        whole on_mount hangs, and the app eventually crashes. The
+        placeholder avoids that path and gives the user a clear action.
+        """
+        reason = "expired" if auth_state is TokenState.EXPIRED else "missing"
+        profile = conn.profile or conn.name
+        with contextlib.suppress(Exception):
+            host = self.query_one("#content-host", Container)
+            host.mount(
+                Static(
+                    f"\n  AWS SSO session for profile [b]{profile}[/] is "
+                    f"[b]{reason}[/].\n\n"
+                    "  Refresh it in another terminal, then relaunch:\n\n"
+                    f"    [b]aws sso login --profile {profile}[/]\n\n"
+                    "  Or pick a different profile via [b]$AWS_PROFILE[/] / "
+                    "[b]~/.config/aws-tui/config.toml[/].\n\n"
                     "  Press [b]q[/] to quit.",
                     id="content-placeholder",
                     classes="content-placeholder",
@@ -1057,6 +1148,14 @@ class AwsTuiApp(App[None]):
         if msg.property_name != "selected_id":
             return
         if not isinstance(msg.sender_object, NavMenuVM):
+            return
+        # Skip the seed selected_id change that on_mount fires while
+        # priming the initial service. on_mount drives that mount
+        # synchronously via _mount_initial_service_view; if we ALSO
+        # spawn a mount worker here, the two race against the same
+        # #content-host and one silently clobbers the other → blank
+        # screen at startup.
+        if self._boot_in_flight:
             return
         ctx = self._app_ctx
         selected = ctx.root_vm.services_menu.selected_id
