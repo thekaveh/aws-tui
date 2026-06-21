@@ -184,6 +184,15 @@ class NavMenuVM:
         self._inner.construct()
         if self._sub is None:
             self._sub = self._hub.messages.subscribe(on_next=self._on_message)
+        # Populate the items list (including the hard-coded Settings entry)
+        # immediately so it is never empty after construct(), even when no
+        # connection has been set yet.  _desired_service_ids() already guards
+        # against a None connection, so this is safe to call unconditionally.
+        # Pass notify=False: the View hasn't mounted yet, so there are no
+        # subscribers that need the PropertyChangedMessage; suppressing it
+        # avoids a spurious "items" notification that would race with the
+        # "items" notification sent once the real connection is resolved.
+        self._rebuild_items(notify=False)
 
     def destruct(self) -> None:
         if self._sub is not None:
@@ -236,7 +245,7 @@ class NavMenuVM:
         self._selected_id = service_id
         self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
 
-    def _rebuild_items(self) -> None:
+    def _rebuild_items(self, *, notify: bool = True) -> None:
         desired_ids = self._desired_service_ids()
         current_ids = [item.descriptor.id for item in self._items]
         # The Settings item is always last; compare only service-derived items.
@@ -267,18 +276,20 @@ class NavMenuVM:
             settings_item.construct()
         self._inner.append(settings_item.inner)
 
-        # Notify subscribers that the items collection changed so the View
-        # layer can re-mount the rows. Without this, the NavMenu widget
-        # binds to the initial (empty) item set at mount and never re-renders
-        # when the connection resolution adds entries.
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "items"))
+        if notify:
+            # Notify subscribers that the items collection changed so the View
+            # layer can re-mount the rows. Without this, the NavMenu widget
+            # binds to the initial (empty) item set at mount and never re-renders
+            # when the connection resolution adds entries.
+            self._hub.send(PropertyChangedMessage.create(self, self.name, "items"))
 
         # Clear stale selection if the active id is no longer in the menu.
         if self._selected_id is not None and not any(
             item.descriptor.id == self._selected_id for item in self._items
         ):
             self._selected_id = None
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
+            if notify:
+                self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
 
     def _desired_service_ids(self) -> list[str]:
         """Service ids the current connection supports, in registry order."""

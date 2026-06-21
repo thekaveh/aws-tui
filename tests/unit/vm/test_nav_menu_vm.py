@@ -110,10 +110,15 @@ def _menu(registry: ServiceRegistry) -> ServicesMenuVM:
     return vm
 
 
-def test_menu_initially_empty() -> None:
+def test_menu_initially_has_settings_only() -> None:
+    """After construct() with no connection set and no services registered,
+    the menu contains exactly one item — the hard-coded Settings entry.
+    See test_settings_item_is_present_immediately_after_construct for the
+    regression that locks this invariant."""
     reg = ServiceRegistry()
     menu = _menu(reg)
-    assert menu.items == ()
+    assert len(menu.items) == 1
+    assert menu.items[0].descriptor.id == "settings"
     menu.dispose()
 
 
@@ -228,6 +233,28 @@ def test_nav_menu_always_includes_settings_item_last() -> None:
         # select("settings") via the canonical API.
         vm.switch_service_command.execute("settings")
         assert vm.selected_id == "settings"
+    finally:
+        vm.dispose()
+
+
+def test_settings_item_is_present_immediately_after_construct() -> None:
+    """Regression: ``vm.items`` MUST include the Settings nav item right
+    after ``construct()`` returns, BEFORE any ConnectionChangedMessage
+    arrives.  The first-time user (no connection configured) must still be
+    able to navigate to Settings to add their first s3-compatible
+    connection."""
+    from aws_tui.vm.nav_menu_vm import NavMenuVM
+
+    # Empty registry — no services, no connection.
+    reg = ServiceRegistry()
+    hub = _hub()
+    vm = NavMenuVM(registry=reg, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    try:
+        assert len(vm.items) >= 1, "vm.items must be non-empty immediately after construct()"
+        assert vm.items[-1].descriptor.id == "settings", (
+            "The last nav item must be the hard-coded Settings entry"
+        )
     finally:
         vm.dispose()
 
