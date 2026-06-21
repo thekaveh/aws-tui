@@ -23,7 +23,7 @@ class ServicesMenuFooter(Widget):
 
     DEFAULT_CSS = """
     ServicesMenuFooter {
-        height: 1;
+        height: 2;
         width: 1fr;
         dock: bottom;
     }
