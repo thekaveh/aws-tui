@@ -557,17 +557,12 @@ S3ConnectionsPanel _AddButton {
 
 NavMenu {
     background: $bg;
-}
-
-NavMenu > #menu-header {
-    background: $bg;
-    color: $text-muted;
-    padding: 0 1;
-    text-style: bold;
+    border: solid $rule-dim;
+    border-title-color: $text-dim;
 }
 
 NavMenu > OptionList {
-    background: $bg;
+    background: transparent;
     color: $text;
     border: none;
     padding: 0;

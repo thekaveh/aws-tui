@@ -70,19 +70,23 @@ class NavMenu(Widget):
     /* Always visible. Two width states: collapsed (icon-only) is the
        default; ``-expanded`` widens to fit the labels. The rest of
        the layout (content host) gets ``width: 1fr`` so it absorbs
-       the difference automatically. */
+       the difference automatically. Background and border colors
+       come from per-theme ``.tcss`` (using ``$bg`` / ``$rule-dim``
+       project tokens, not Textual-core variables) so the rail
+       matches the file-pane chrome. Sub-widgets use
+       ``background: transparent`` so the NavMenu's themed
+       background shows through uniformly. */
     NavMenu {
         display: block;
-        /* Width 6 fits: 1-cell padding + 1-cell ribbon glyph
-           (``▌``) + 2-cell emoji (most are 2 cells wide in
-           monospace terminals — e.g. ``🪣``, ``⚙️``) + 2-cell
-           OptionList right padding. The previous width 4 truncated
-           emojis on render. */
-        width: 6;
-        background: $background;
+        /* Width 8 fits, after the per-theme single-cell border
+           (``border: solid $rule-dim``) takes 2 columns: 2-cell
+           border reserve + 1-cell ribbon (``▌``) + 2-cell emoji
+           (most are 2 cells wide in monospace terminals — e.g.
+           ``🪣``, ``⚙️``) + 3-cell OptionList padding/spacer. */
+        width: 8;
     }
     NavMenu.-expanded {
-        width: 18;
+        width: 20;
     }
     /* Hamburger at the top — one row, click-to-toggle. The glyph
        itself switches between "+" (collapsed → click to expand) and
@@ -91,28 +95,25 @@ class NavMenu(Widget):
         height: 1;
         padding: 0 1;
         text-style: bold;
-        background: $background;
+        background: transparent;
     }
     NavMenu > #menu-hamburger:hover {
         text-style: bold reverse;
     }
     NavMenu > #menu-services {
         height: 1fr;
-        background: $background;
+        background: transparent;
     }
     /* Pinned (Settings) list docks to the bottom of the rail so it
        sits visually separated from the service-item list above it,
        matching the macOS Settings-app / VS Code activity-bar pattern.
        The explicit ``height: auto`` lets the single Settings row
        size itself to one line; without it the OptionList would
-       default to ``1fr`` and fight ``#menu-services`` for space.
-       Per-theme border-top is added in each theme's ``.tcss`` (using
-       ``$rule-dim``) — DEFAULT_CSS keeps to Textual-core variables
-       only. */
+       default to ``1fr`` and fight ``#menu-services`` for space. */
     NavMenu > #menu-pinned {
         dock: bottom;
         height: auto;
-        background: $background;
+        background: transparent;
     }
     """
 

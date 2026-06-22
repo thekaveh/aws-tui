@@ -209,6 +209,15 @@ class AwsTuiApp(App[None]):
         # change doesn't spawn a duplicate mount worker that races the
         # on_mount direct mount (blank-screen-at-startup regression).
         self._boot_in_flight: bool = False
+        # While True, an UNREACHABLE / AUTH_REQUIRED transition on
+        # the focused (left) pane auto-falls-back to LocalFS so the
+        # user isn't staring at a giant error pane when their
+        # initial connection happens to be down. Cleared either on
+        # successful initial load (left pane reaches IDLE/EMPTY) or
+        # the first time we trigger the fallback. NOT triggered on
+        # user-driven Shift+S swaps (they explicitly chose that
+        # connection, so an error is the right surface).
+        self._auto_fallback_pending: bool = False
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -329,9 +338,17 @@ class AwsTuiApp(App[None]):
         boto3 takes 10-15s to time out. The user sees the rail and
         an empty content-host instead of a hung blank terminal; the
         pane(s) transition to UNREACHABLE state when boto3 finally
-        fails and the existing error placeholder appears.
+        fails — and the auto-fallback path (see
+        ``_on_pane_state_changed``) swaps the left pane to ``LocalFS``
+        so both panes show the local filesystem instead of a giant
+        error placeholder.
         """
         ctx = self._app_ctx
+        # Arm the auto-fallback BEFORE switch_service so the eventual
+        # UNREACHABLE state (if any) triggers it. The flag is one-shot:
+        # ``_on_pane_state_changed`` clears it on the first fallback or
+        # the first successful IDLE transition.
+        self._auto_fallback_pending = True
         try:
             with contextlib.suppress(Exception):
                 await ctx.root_vm.switch_service("s3")
@@ -1069,7 +1086,19 @@ class AwsTuiApp(App[None]):
         )
 
     async def action_themes(self) -> None:
-        """Open the keyboard-navigable theme picker modal."""
+        """Open the keyboard-navigable theme picker modal.
+
+        Idempotent — if a ThemePickerModal is already on the screen
+        stack (user pressed ``t`` more than once), this is a no-op.
+        Previously each ``t`` press stacked another picker on top,
+        requiring N ``Esc`` presses to clear N stacked modals.
+        """
+        # ``self.screen_stack`` is ordered: the active screen is last.
+        # Walk it and bail if any layer is already a ThemePickerModal.
+        for screen in self.screen_stack:
+            if isinstance(screen, ThemePickerModal):
+                return
+
         ctx = self._app_ctx
 
         def _pick_with_toast(name: str) -> None:
@@ -1177,6 +1206,16 @@ class AwsTuiApp(App[None]):
         """Hub-subscriber dispatch. When an active pane's state hits
         UNREACHABLE, mark its connection. When it transitions to
         IDLE / EMPTY from UNREACHABLE, clear the mark.
+
+        Also handles the **startup auto-fallback**: if
+        ``_auto_fallback_pending`` is True (set by
+        ``_initial_mount_worker``) and the LEFT pane reaches
+        UNREACHABLE / AUTH_REQUIRED / FORBIDDEN, swap that pane's
+        provider to ``LocalFS`` so the user gets a usable file
+        manager on both sides instead of a giant error pane. The
+        fallback is one-shot — it doesn't fire on subsequent
+        Shift+S failures (those were user-driven; the error pane is
+        the right surface).
         """
         from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -1185,6 +1224,58 @@ class AwsTuiApp(App[None]):
             self._mark_connection_unreachable(kind, name)
         elif was_marked and new_state in (PaneState.IDLE, PaneState.EMPTY):
             self._clear_connection_unreachable(kind, name)
+
+        # Startup auto-fallback. One-shot: cleared on first fire OR
+        # on first successful IDLE/EMPTY transition. Only applies to
+        # the LEFT pane (initial S3 pane); the right pane is already
+        # LocalFS by construction.
+        if self._auto_fallback_pending:
+            unusable = new_state in (
+                PaneState.UNREACHABLE,
+                PaneState.AUTH_REQUIRED,
+                PaneState.FORBIDDEN,
+            )
+            usable = new_state in (PaneState.IDLE, PaneState.EMPTY)
+            if unusable:
+                self._auto_fallback_pending = False
+                self.run_worker(
+                    self._fallback_left_pane_to_local(kind=kind, name=name),
+                    exclusive=True,
+                    group="auto-fallback",
+                )
+            elif usable:
+                # Connection worked — no fallback needed; arm-off.
+                self._auto_fallback_pending = False
+
+    async def _fallback_left_pane_to_local(self, *, kind: str, name: str) -> None:
+        """Swap the left pane to ``LocalFS`` as a one-shot startup
+        recovery when the initial S3 connection isn't usable. Raises
+        a one-line info toast so the user knows what happened.
+        """
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        left = getattr(dual, "left", None)
+        if left is None:
+            return
+        ctx = self._app_ctx
+        ctx.log_sink.info("app.auto_fallback.left_to_local", kind=kind, name=name)
+        # Mark the connection as unreachable in the swap-source ring
+        # so Shift+S skips it until the user explicitly retries.
+        self._mark_connection_unreachable(kind, name)
+        with contextlib.suppress(Exception):
+            await self._rebind_pane_to_local(left)
+        ctx.root_vm.chrome.toast_stack.raise_toast(
+            ToastModel(
+                id=f"auto-fallback-{kind}-{name}",
+                text=f"{name} unreachable — left pane fell back to local",
+                level=ToastLevel.INFO,
+                sticky=False,
+                timeout_seconds=4.0,
+                action_label=None,
+                action_action=None,
+            )
+        )
 
     def _on_connection_list_changed(self, msg: object) -> None:
         """Hub subscriber: drop deleted connection names from the
@@ -1333,8 +1424,16 @@ class AwsTuiApp(App[None]):
             return
         try:
             host = self.query_one("#content-host", Container)
-            host.remove_children()
-            host.mount(SettingsView(vm=settings_vm, hub=ctx.hub))
+            # ``await`` both the remove and the mount so a cancelled
+            # worker (e.g. user toggling Settings ↔ S3 rapidly) can't
+            # leave the host with a half-attached widget. Without the
+            # awaits, ``mount`` returns an AwaitMount that's never
+            # consumed — if the worker is cancelled between remove and
+            # mount completion, the pending mount still fires after the
+            # next worker's remove_children, leaving BOTH widgets in
+            # the DOM.
+            await host.remove_children()
+            await host.mount(SettingsView(vm=settings_vm, hub=ctx.hub))
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_settings_view.mount_failed",
@@ -1353,8 +1452,8 @@ class AwsTuiApp(App[None]):
                 if not host.query(DualPane):
                     current_vm = ctx.root_vm.content_host.current
                     if current_vm is not None:
-                        host.remove_children()
-                        host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+                        await host.remove_children()
+                        await host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
             except Exception as exc:
                 ctx.log_sink.error(
                     "app.mount_service_view.remount_failed",
@@ -1377,8 +1476,8 @@ class AwsTuiApp(App[None]):
             host = self.query_one("#content-host", Container)
             current_vm = ctx.root_vm.content_host.current
             if current_vm is not None:
-                host.remove_children()
-                host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+                await host.remove_children()
+                await host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.mount_failed",
