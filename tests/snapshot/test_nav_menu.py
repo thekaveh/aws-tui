@@ -49,8 +49,15 @@ def test_nav_menu_expanded_renders_visible_settings_label(theme: str) -> None:
         / "test_nav_menu"
         / f"test_nav_menu_expanded[{theme}].raw"
     )
-    if not p.is_file():
-        pytest.skip(f"snapshot not yet generated for theme {theme!r}")
+    # FAIL (don't skip) when the snapshot is absent. The snapshot
+    # test in the same suite always produces it; absence means the
+    # guard has silently no-op'd — exactly the failure mode this
+    # guard was added to prevent.
+    assert p.is_file(), (
+        f"expected snapshot {p.name} on disk; the matching snap_compare "
+        f"test should have generated it. Did the snapshot file path or "
+        f"name change?"
+    )
     svg = p.read_text()
     assert "Settings" in svg, (
         f"'Settings' label missing from expanded NavMenu SVG for theme {theme!r}"
@@ -76,7 +83,10 @@ def test_nav_menu_collapsed_renders_visible_settings_icon(theme: str) -> None:
         / "test_nav_menu"
         / f"test_nav_menu_collapsed[{theme}].raw"
     )
-    if not p.is_file():
-        pytest.skip(f"snapshot not yet generated for theme {theme!r}")
+    assert p.is_file(), (
+        f"expected snapshot {p.name} on disk; the matching snap_compare "
+        f"test should have generated it. Did the snapshot file path or "
+        f"name change?"
+    )
     svg = p.read_text()
     assert "⚙" in svg, f"gear glyph missing from collapsed NavMenu SVG for theme {theme!r}"

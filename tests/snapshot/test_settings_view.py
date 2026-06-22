@@ -52,8 +52,11 @@ def test_settings_view_empty_renders_title_and_section_header(theme: str) -> Non
         / "test_settings_view"
         / f"test_settings_view_empty[{theme}].raw"
     )
-    if not p.is_file():
-        pytest.skip(f"snapshot not yet generated for theme {theme!r}")
+    assert p.is_file(), (
+        f"expected snapshot {p.name} on disk; the matching snap_compare "
+        f"test should have generated it. Did the snapshot file path or "
+        f"name change?"
+    )
     # Normalise non-breaking spaces (U+00A0 / &#160;) before asserting.
     svg = p.read_text().replace("&#160;", " ")
     assert "Settings" in svg, f"title 'Settings' missing for theme {theme!r}"
@@ -72,8 +75,11 @@ def test_settings_view_populated_renders_rows(theme: str) -> None:
         / "test_settings_view"
         / f"test_settings_view_populated[{theme}].raw"
     )
-    if not p.is_file():
-        pytest.skip(f"snapshot not yet generated for theme {theme!r}")
+    assert p.is_file(), (
+        f"expected snapshot {p.name} on disk; the matching snap_compare "
+        f"test should have generated it. Did the snapshot file path or "
+        f"name change?"
+    )
     svg = p.read_text()
     # The seed data uses names "conn-0", "conn-1"
     assert "conn-0" in svg, f"row 'conn-0' missing for theme {theme!r}"
@@ -90,8 +96,11 @@ def test_settings_view_form_open_renders_input_labels(theme: str) -> None:
         / "test_settings_view"
         / f"test_settings_view_form_open[{theme}].raw"
     )
-    if not p.is_file():
-        pytest.skip(f"snapshot not yet generated for theme {theme!r}")
+    assert p.is_file(), (
+        f"expected snapshot {p.name} on disk; the matching snap_compare "
+        f"test should have generated it. Did the snapshot file path or "
+        f"name change?"
+    )
     # Normalise non-breaking spaces (U+00A0 / &#160;) before asserting.
     svg = p.read_text().replace("&#160;", " ")
     assert "Endpoint URL" in svg, f"form label 'Endpoint URL' missing for theme {theme!r}"
