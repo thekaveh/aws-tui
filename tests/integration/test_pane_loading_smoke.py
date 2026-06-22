@@ -87,7 +87,6 @@ async def test_panes_populate_with_entries_after_mount() -> None:
         return s3_fs
 
     s3_service = S3Service(
-        aws_session=aws_session,
         transfer_journal=journal,
         hub=hub,
         dispatcher=dispatcher,

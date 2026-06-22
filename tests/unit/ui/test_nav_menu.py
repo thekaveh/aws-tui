@@ -44,9 +44,11 @@ def test_nav_menu_can_be_constructed(tmp_path: Path) -> None:
     vm, hub = _make_vm_with_hub(tmp_path)
     try:
         widget = NavMenu(vm=vm, hub=hub)
-        assert widget is not None
-        assert widget.is_collapsed is True  # default starts collapsed
-        assert len(vm.items) >= 1  # Settings is always present
+        # Default state: rail is collapsed (icons-only); the synthetic
+        # Settings nav peer is always present so a first-time user with
+        # no connection configured can still reach Settings to add one.
+        assert widget.is_collapsed is True
+        assert len(vm.items) >= 1
     finally:
         vm.dispose()
 
@@ -78,7 +80,9 @@ async def test_nav_menu_renders_settings_item_in_options(tmp_path: Path) -> None
             # Force-expand so labels (not just icons) are present.
             nav.toggle_collapsed()
             await pilot.pause()
-            prompts = [str(opt.prompt) for opt in pinned._options]
+            prompts = [
+                str(pinned.get_option_at_index(i).prompt) for i in range(pinned.option_count)
+            ]
             assert any("Settings" in p for p in prompts), prompts
     finally:
         vm.dispose()
@@ -107,7 +111,9 @@ async def test_nav_menu_collapsed_shows_icon_only(tmp_path: Path) -> None:
             from textual.widgets import OptionList
 
             pinned = nav.query_one("#menu-pinned", OptionList)
-            prompts = [str(opt.prompt) for opt in pinned._options]
+            prompts = [
+                str(pinned.get_option_at_index(i).prompt) for i in range(pinned.option_count)
+            ]
             # In collapsed mode, "Settings" should NOT appear; "⚙" SHOULD.
             assert not any("Settings" in p for p in prompts), prompts
             assert any("⚙" in p for p in prompts), prompts
@@ -167,27 +173,45 @@ async def test_nav_menu_rebuilds_options_when_vm_items_change(tmp_path: Path) ->
 
     nav = NavMenu(vm=vm, hub=hub)
     app = _Host(nav)
+    # Spy on _rebuild_options so the assertion proves the
+    # PropertyChangedMessage subscription actually invoked the
+    # widget's rebuild handler. Counting calls is robust against
+    # refactors that change option_count behaviour (e.g. caching
+    # in the inner OptionList).
+    rebuild_calls: list[None] = []
+    original_rebuild = nav._rebuild_options
+
+    def _spy() -> None:
+        rebuild_calls.append(None)
+        original_rebuild()
+
+    nav._rebuild_options = _spy  # type: ignore[method-assign]
     try:
         async with app.run_test() as pilot:
             await pilot.pause()
             from textual.widgets import OptionList
+            from vmx import PropertyChangedMessage
 
             # Settings lives in #menu-pinned; service items (none here
             # because no service is registered) would land in #menu-services.
             pinned = nav.query_one("#menu-pinned", OptionList)
-            initial_pinned_count = pinned.option_count
-            # Force the VM to rebuild its items list — this broadcasts
-            # PropertyChangedMessage("items") which the widget should
-            # observe and re-render against.
-            hub.send(ConnectionListChangedMessage(names=("minio-local",), change="added"))
+            calls_before = len(rebuild_calls)
+            # Fire the exact message NavMenuVM._rebuild_items emits when
+            # its items collection changes. Calling _rebuild_items via
+            # ConnectionListChangedMessage doesn't help in this setup
+            # because no service is registered, so the desired vs current
+            # diff is empty and _rebuild_items early-returns. Driving the
+            # PropertyChangedMessage directly tests the SUBSCRIBER path
+            # in isolation — which is what the regression is about.
+            hub.send(PropertyChangedMessage.create(vm, vm.name, "items"))
             await pilot.pause()
-            # The Settings item is always present; the test only proves
-            # the rebuild path was triggered (option_count unchanged today
-            # because no service was registered to filter against, but the
-            # rebuild ran). To make the assertion robust we just confirm
-            # the widget didn't crash and still shows Settings in the
-            # pinned (bottom) list.
-            assert pinned.option_count == initial_pinned_count
+            assert len(rebuild_calls) > calls_before, (
+                "NavMenu._rebuild_options was not called after a "
+                "PropertyChangedMessage('items') from the VM — the hub "
+                "subscription wired in on_mount is missing or broken."
+            )
+            # Settings is still present in the pinned list (rebuild
+            # was non-destructive — same VM items, same render).
             prompts = [
                 str(pinned.get_option_at_index(i).prompt) for i in range(pinned.option_count)
             ]

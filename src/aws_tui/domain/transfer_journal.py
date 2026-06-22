@@ -68,7 +68,13 @@ class TransferJournal:
 
     def __init__(self, *, base_dir: Path | None = None) -> None:
         self._dir = base_dir if base_dir is not None else _default_journal_dir()
-        self._dir.mkdir(parents=True, exist_ok=True)
+        # 0o700: transfer journals embed S3 source/destination URIs
+        # and multipart upload IDs that shouldn't be readable by other
+        # local users on shared systems. Match ConfigStore.save's
+        # defense-in-depth.
+        from aws_tui.infra.paths import ensure_private_dir
+
+        ensure_private_dir(self._dir)
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -50,6 +50,7 @@ from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 from aws_tui.vm.messages import ConnectionListChangedMessage, ThemeChangedMessage
+from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 _ACTION_RING_SIZE = 100
 
@@ -313,11 +314,18 @@ class AwsTuiApp(App[None]):
     # ── on_mount helpers ───────────────────────────────────────────────────
 
     def _apply_initial_theme(self) -> None:
-        """Layer the active theme `.tcss` on top of Textual's defaults."""
+        """Layer the active theme `.tcss` on top of Textual's defaults.
+
+        Uses the same ``read_from=self._THEME_SOURCE_KEY`` keyed
+        source that ``switch_theme`` uses, so the first runtime theme
+        swap REPLACES this initial source instead of stacking on top
+        of an anonymous one (which would leave a dead entry the
+        stylesheet would still re-parse on every refresh).
+        """
         ctx = self._app_ctx
         try:
             theme_css = ctx.theme_store.load(ctx.initial_theme)
-            self.stylesheet.add_source(theme_css)
+            self.stylesheet.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
             self.stylesheet.parse()
             self.stylesheet.update(self)
         except Exception:
@@ -432,12 +440,38 @@ class AwsTuiApp(App[None]):
 
     # ── Action handlers ────────────────────────────────────────────────────
 
-    async def action_app_quit(self) -> None:
+    async def action_quit(self) -> None:
+        """Override Textual's built-in ``action_quit`` so every exit path
+        (the ``q`` and ``ctrl+c`` BINDINGS above, plus Textual's own
+        SIGINT handler, plus the action-registry ``app.quit`` bridge
+        once the input-router lands) flows through the async shutdown
+        defined at :meth:`_aws_tui_shutdown`.
+
+        Previously ``BINDINGS`` mapped ``q`` / ``ctrl+c`` to the bare
+        ``"quit"`` action which Textual resolved to its sync
+        :meth:`App.action_quit` (just ``self.exit()``), bypassing
+        :meth:`_aws_tui_shutdown` entirely — aioboto3 client closures,
+        in-flight transfer cancellation, log-sink flush, and VM
+        disposal all leaked at exit. The async coroutine
+        :meth:`action_app_quit` was wired but never invoked because no
+        binding routed to it.
+        """
         await self._aws_tui_shutdown()
         self.exit()
 
+    # Retained for the deferred BindingResolver's ``app.quit`` bridge
+    # so user-defined ``[keybindings].app.quit`` entries reach the
+    # same shutdown path. Production today goes through ``action_quit``
+    # above; this alias becomes load-bearing when the input-router
+    # ships.
+    async def action_app_quit(self) -> None:
+        await self.action_quit()
+
     def _handle_quit(self) -> None:
-        self.exit()
+        # Synchronous fallback for the BindingResolver bridge that
+        # cannot await. Schedule the async path on the event loop
+        # so cleanup still runs instead of being silently dropped.
+        self.run_worker(self.action_quit(), exclusive=True, group="shutdown")
 
     def _dual_pane(self) -> object | None:
         """Return the currently-hosted ``DualPaneVM`` (or None).
@@ -641,11 +675,10 @@ class AwsTuiApp(App[None]):
             for entry in targets:
                 entry.set_marked(True)  # type: ignore[attr-defined]
         try:
-            try:
-                await copy_across()
-            except Exception as exc:
-                ctx.log_sink.error("copy.failed", error=str(exc))
-                self.notify(f"Copy failed: {exc}", severity="error", timeout=8)
+            await copy_across()
+        except Exception as exc:
+            ctx.log_sink.error("copy.failed", error=str(exc))
+            self.notify(f"Copy failed: {exc}", severity="error", timeout=8)
         finally:
             if used_cursor_fallback:
                 for entry in targets:
@@ -716,11 +749,10 @@ class AwsTuiApp(App[None]):
             for entry in targets:
                 entry.set_marked(True)  # type: ignore[attr-defined]
         try:
-            try:
-                await delete_in_focused()
-            except Exception as exc:
-                ctx.log_sink.error("delete.failed", error=str(exc))
-                self.notify(f"Delete failed: {exc}", severity="error", timeout=8)
+            await delete_in_focused()
+        except Exception as exc:
+            ctx.log_sink.error("delete.failed", error=str(exc))
+            self.notify(f"Delete failed: {exc}", severity="error", timeout=8)
         finally:
             if used_cursor_fallback:
                 for entry in targets:
@@ -905,7 +937,7 @@ class AwsTuiApp(App[None]):
     def action_open_settings(self) -> None:
         """Select the Settings entry in the nav menu (programmatic equivalent
         of clicking it). Bound to ``,`` (comma)."""
-        self._app_ctx.root_vm.services_menu.switch_service_command.execute("settings")
+        self._app_ctx.root_vm.services_menu.switch_service_command.execute(SETTINGS_NAV_ID)
 
     async def _rebind_pane_to_local(self, pane: object) -> None:
         """Rebind a pane to the local filesystem provider.
@@ -1178,7 +1210,7 @@ class AwsTuiApp(App[None]):
         # everywhere). ``exclusive=True`` + a shared group name makes
         # Textual cancel any in-flight worker in the group before
         # starting the new one.
-        if selected == "settings":
+        if selected == SETTINGS_NAV_ID:
             self.run_worker(self._mount_settings_view(), exclusive=True, group="content-mount")
         else:
             # Re-use the S3 content if it's already hosted; switch_service
@@ -1206,11 +1238,25 @@ class AwsTuiApp(App[None]):
 
         ctx = self._app_ctx
         settings_vm = SettingsVM(s3=ctx.s3_connections_vm, hub=ctx.hub, dispatcher=ctx.dispatcher)
-        await ctx.root_vm.content_host.set_content(settings_vm, service_id="settings")
-        with contextlib.suppress(Exception):
+        try:
+            await ctx.root_vm.content_host.set_content(settings_vm, service_id=SETTINGS_NAV_ID)
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.mount_settings_view.set_content_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+        try:
             host = self.query_one("#content-host", Container)
             host.remove_children()
             host.mount(SettingsView(vm=settings_vm, hub=ctx.hub))
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.mount_settings_view.mount_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     async def _mount_service_view(self, service_id: str) -> None:
         """Swap the content host to show the DualPane for ``service_id``."""
@@ -1218,22 +1264,44 @@ class AwsTuiApp(App[None]):
         if ctx.root_vm.content_host.current_id == service_id:
             # Already showing this service — just re-mount if the widget
             # is missing (e.g. first time after settings was shown).
-            with contextlib.suppress(Exception):
+            try:
                 host = self.query_one("#content-host", Container)
                 if not host.query(DualPane):
                     current_vm = ctx.root_vm.content_host.current
                     if current_vm is not None:
                         host.remove_children()
                         host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+            except Exception as exc:
+                ctx.log_sink.error(
+                    "app.mount_service_view.remount_failed",
+                    service_id=service_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
             return
-        with contextlib.suppress(Exception):
+        try:
             await ctx.root_vm.switch_service(service_id)
-        with contextlib.suppress(Exception):
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.mount_service_view.switch_service_failed",
+                service_id=service_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+        try:
             host = self.query_one("#content-host", Container)
             current_vm = ctx.root_vm.content_host.current
             if current_vm is not None:
                 host.remove_children()
                 host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.mount_service_view.mount_failed",
+                service_id=service_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     # ── Crash handling ─────────────────────────────────────────────────────
 

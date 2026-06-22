@@ -11,6 +11,8 @@ swap of ``ContentHostVM`` happens in :class:`RootVM`.
 
 from __future__ import annotations
 
+from typing import Final
+
 from reactivex.abc import DisposableBase
 from vmx import (
     ComponentVMOf,
@@ -26,6 +28,12 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.messages import ConnectionChangedMessage, ConnectionListChangedMessage
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
+
+#: Canonical id for the synthetic Settings nav peer. Lives on the VM
+#: layer so the View (``NavMenu``) and the App's
+#: ``action_open_settings`` dispatch can share one source of truth
+#: instead of each carrying the bare ``"settings"`` literal.
+SETTINGS_NAV_ID: Final[str] = "settings"
 
 
 class NavItemVM:
@@ -238,9 +246,9 @@ class NavMenuVM:
         desired_ids = self._desired_service_ids()
         current_ids = [item.descriptor.id for item in self._items]
         # The Settings item is always last; compare only service-derived items.
-        current_service_ids = [id_ for id_ in current_ids if id_ != "settings"]
+        current_service_ids = [id_ for id_ in current_ids if id_ != SETTINGS_NAV_ID]
         if desired_ids == current_service_ids and any(
-            item.descriptor.id == "settings" for item in self._items
+            item.descriptor.id == SETTINGS_NAV_ID for item in self._items
         ):
             return
         self._clear_items()
@@ -251,7 +259,7 @@ class NavMenuVM:
         # render/select machinery with service items but doesn't require the
         # ServiceRegistry to know about it.
         settings_descriptor = ServiceDescriptor(
-            id="settings",
+            id=SETTINGS_NAV_ID,
             label="Settings",
             icon="⚙",
         )
@@ -312,4 +320,4 @@ class NavMenuVM:
             self._inner.append(item.inner)
 
 
-__all__ = ["NavItemVM", "NavMenuVM"]
+__all__ = ["SETTINGS_NAV_ID", "NavItemVM", "NavMenuVM"]

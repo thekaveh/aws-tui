@@ -34,6 +34,8 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 from vmx import Message, MessageHub, PropertyChangedMessage
 
+from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
+
 if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
 
@@ -174,8 +176,8 @@ class NavMenu(Widget):
         services.clear_options()
         pinned.clear_options()
 
-        service_items = [item for item in self._vm.items if item.descriptor.id != "settings"]
-        pinned_items = [item for item in self._vm.items if item.descriptor.id == "settings"]
+        service_items = [item for item in self._vm.items if item.descriptor.id != SETTINGS_NAV_ID]
+        pinned_items = [item for item in self._vm.items if item.descriptor.id == SETTINGS_NAV_ID]
 
         def _add_to(target: OptionList, items: list[NavItemVM]) -> None:
             for item in items:

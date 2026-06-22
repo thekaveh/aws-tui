@@ -11,7 +11,6 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.transfer_journal import TransferJournal
-from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.s3 import S3Service
 from aws_tui.services.s3.service import _aioboto3_session_for
@@ -50,7 +49,6 @@ def _minio_conn() -> Connection:
 
 def _service(tmp_path: Path) -> S3Service:
     return S3Service(
-        aws_session=AwsSession(),
         transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
         hub=_hub(),
         dispatcher=NULL_DISPATCHER,

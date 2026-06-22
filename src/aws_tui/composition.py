@@ -163,7 +163,6 @@ def build_app_context(
     # ── Registry ───────────────────────────────────────────────────────────
     registry = ServiceRegistry()
     s3_service = S3Service(
-        aws_session=aws_session,
         transfer_journal=transfer_journal,
         hub=hub,
         dispatcher=dispatcher,

@@ -561,3 +561,102 @@ pattern (replacing the PR #52 bullet, NOT augmenting it).
 
 This is destructive of PR #52's surface — by design. The architecture
 shipped in #52 was wrong for the TUI's idiom; this rework gets it right.
+
+## 13. Post-ship amendments (PR #55 + PR #56)
+
+Recorded after the original PR #54 landed at `a7bd050` and the
+follow-up fixes shipped on `main`. Both items below override the
+corresponding sub-sections above and are the current authoritative
+behavior.
+
+### 13.1. SettingsVM is per-mount, not a singleton (PR #56)
+
+§5.1 originally proposed an `AppContext.settings_vm` field
+constructed once in `composition.build_app_context`. That was wrong:
+`ContentHostVM.set_content` calls `vm.dispose()` on the outgoing VM
+and `vm.construct()` on the incoming one, so after the first
+`Settings → S3` swap the singleton was in `Disposed` state and the
+second `Settings` click raised
+`WorkerFailed: StatusTransitionError('Cannot construct from state Disposed.')`.
+
+Current behavior:
+
+- `AppContext.settings_vm` field is **removed**.
+- `AwsTuiApp._mount_settings_view` builds a fresh `SettingsVM` per
+  mount: `SettingsVM(s3=ctx.s3_connections_vm, hub=ctx.hub, dispatcher=ctx.dispatcher)`.
+- `S3ConnectionsVM` stays a singleton on `AppContext` — `SettingsVM.dispose()`
+  intentionally does NOT cascade to its `_s3` child (see
+  `vm/settings/settings_vm.py:68-69`), so the shared connection
+  list/selection state survives across `SettingsVM` rebuilds. Only
+  the thin `ComponentVM` wrapper is recreated each mount.
+- Regression test: `tests/integration/test_settings_flow.py::test_toggle_settings_s3_settings_does_not_crash`.
+
+This is the standard factory pattern `S3Service.build_vm` already
+uses for the per-mount `DualPaneVM`. Any future ContentHost
+destination (Themes panel, Keymap panel) must follow the same
+factory pattern — never store the hosted VM on `AppContext`.
+
+### 13.2. Settings is docked to the bottom of the rail (PR #56)
+
+§3.3 and §5.1 originally proposed a single `OptionList` for the rail
+items (services + Settings, with Settings last). User feedback after
+PR #54 shipped: that put Settings directly under `S3` with empty
+rows below, when Settings was supposed to read as a separate pinned
+item at the bottom of the rail (macOS Settings.app / VS Code
+activity-bar idiom).
+
+Current `NavMenu` widget compose:
+
+```python
+def compose(self) -> ComposeResult:
+    yield Static("menu", id="menu-header")
+    yield OptionList(id="menu-services")  # services, height: 1fr (top)
+    yield OptionList(id="menu-pinned")    # Settings, dock: bottom
+```
+
+- `#menu-services` (top): every service item the active connection
+  supports, `height: 1fr`.
+- `#menu-pinned` (bottom): the synthetic Settings item, `dock: bottom`,
+  `height: auto`.
+- Per-theme `border-top: solid $rule-dim` on `#menu-pinned` for a
+  subtle separator (defined in each `*.tcss`, not in `DEFAULT_CSS`,
+  because `$rule-dim` is an aws-tui theme variable not a Textual
+  core variable).
+- `NavMenuVM` is unchanged — it still owns ONE ordered items list
+  with Settings as the last entry. The split is purely a View
+  concern; the widget filters items by id (`item.descriptor.id == "settings"`)
+  when populating each list.
+- Snapshot scaffolding in `tests/snapshot/apps/nav_menu.py` registers
+  a fake S3 service AND seeds an active connection so both lists are
+  populated; otherwise the rail rendered only Settings and the
+  docking layout was indistinguishable from a single-item list.
+- Content-presence guard `test_nav_menu_expanded_renders_visible_settings_label`
+  asserts `svg.index("S3") < svg.index("Settings")` to catch a
+  regression where the `dock: bottom` rule gets dropped.
+
+### 13.3. Nav-mount workers are serialized via an exclusive worker group (PR #56 follow-up)
+
+Not originally specified. CI on Windows py3.11 exposed a race that
+back-to-back `Settings → S3 → Settings` clicks could trigger:
+`_mount_service_view` and `_mount_settings_view` both `await`
+`ContentHostVM.set_content`, and the service worker could resume
+after the settings worker had replaced `ContentHost.current` with a
+`SettingsVM`, then wrap it in `DualPane(self._vm.left, ...)` →
+`AttributeError: 'SettingsVM' object has no attribute 'left'`.
+
+Fix: both `run_worker` calls are now scoped to a shared
+`group="content-mount"` with `exclusive=True` so Textual cancels any
+in-flight worker in the group before starting the new one. Any
+future ContentHost mount path must follow the same group.
+
+### 13.4. SSO probe + auth-required placeholder at startup (PR #55)
+
+Not originally specified. PR #55 added an offline SSO-token freshness
+probe BEFORE `switch_service("s3")` runs at startup, so an expired
+AWS SSO token does not hang the launch on a boto3 token-refresh
+network call. The probe runs in `on_mount` via
+`AwsSession.probe_token(connection)`; on `TokenState.EXPIRED` for an
+`aws`-kind connection, `_mount_auth_required_placeholder` is called
+instead of `switch_service`. `TokenState.MISSING` is NOT gated
+because it conflates "SSO configured but no cache" with "no SSO at
+all (static creds)" — the latter is legitimate and must proceed.

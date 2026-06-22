@@ -6,8 +6,8 @@ the active connection (AWS or S3-compatible) and whose right pane is a
 agnostic to where the dispatcher / message hub came from — it consumes
 them via :meth:`build_vm` and stitches the rest itself.
 
-Construction strategy: the service holds the long-lived ``AwsSession``,
-``TransferJournal``, and ``MessageHub`` references. ``build_vm`` is called
+Construction strategy: the service holds the long-lived
+``TransferJournal`` and ``MessageHub`` references. ``build_vm`` is called
 by :class:`RootVM` after every connection switch and produces a *fresh*
 ``DualPaneVM`` for that connection. The caller is responsible for
 disposing the previous DualPaneVM via the :class:`ContentHostVM` swap.
@@ -27,7 +27,6 @@ from aws_tui.domain.filesystem import FileSystemProvider
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.s3_fs import S3FS
 from aws_tui.domain.transfer_journal import TransferJournal
-from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
@@ -63,11 +62,6 @@ class S3Service:
 
     Parameters
     ----------
-    aws_session:
-        The session factory the higher layer owns (kept for parity with
-        future services that need richer aioboto3 client management; the
-        S3Service itself doesn't use it for the pane since :class:`S3FS`
-        manages its own clients).
     transfer_journal:
         Shared journal — every DualPaneVM the service builds will route
         copy/move bookkeeping through it.
@@ -94,14 +88,12 @@ class S3Service:
     def __init__(
         self,
         *,
-        aws_session: AwsSession,
         transfer_journal: TransferJournal,
         hub: MessageHub[Message] | None = None,
         dispatcher: Dispatcher,
         local_root: Path | None = None,
         s3_fs_factory: S3FsFactory | None = None,
     ) -> None:
-        self._aws_session: AwsSession = aws_session
         self._journal: TransferJournal = transfer_journal
         self._hub: MessageHub[Message] | None = hub
         self._dispatcher: Dispatcher = dispatcher

@@ -184,7 +184,7 @@ class ConnectionResolver:
 
         cfg_parser = configparser.ConfigParser()
         if self._aws_config_path.is_file():
-            cfg_parser.read(self._aws_config_path)
+            cfg_parser.read(self._aws_config_path, encoding="utf-8")
             for section in cfg_parser.sections():
                 if section == "default":
                     name = "default"
@@ -198,7 +198,7 @@ class ConnectionResolver:
 
         creds_parser = configparser.ConfigParser()
         if self._aws_credentials_path.is_file():
-            creds_parser.read(self._aws_credentials_path)
+            creds_parser.read(self._aws_credentials_path, encoding="utf-8")
             for section in creds_parser.sections():
                 profiles.setdefault(section, None)
 
@@ -241,7 +241,7 @@ class ConnectionResolver:
         if not self._aws_credentials_path.is_file():
             return None, None
         parser = configparser.ConfigParser()
-        parser.read(self._aws_credentials_path)
+        parser.read(self._aws_credentials_path, encoding="utf-8")
         if not parser.has_section(profile):
             return None, None
         return (

@@ -17,6 +17,7 @@ configurable per call:
 
 from __future__ import annotations
 
+import contextlib
 from enum import StrEnum
 from typing import Final
 
@@ -82,12 +83,23 @@ class CrossFsCopy:
             return  # SKIP
 
         stream = await self._source.read_stream(src)
-        await self._destination.write_stream(
-            effective_dst,
-            stream,
-            total_size=src_entry.size,
-            progress=progress,
-        )
+        try:
+            await self._destination.write_stream(
+                effective_dst,
+                stream,
+                total_size=src_entry.size,
+                progress=progress,
+            )
+        finally:
+            # Explicit aclose if the stream is an async generator —
+            # write_stream may have raised before/after fully iterating
+            # it, and Python's GC-based aclose can race with event-loop
+            # shutdown. Belt-and-suspenders: deterministic close here,
+            # GC as fallback for non-generator iterables.
+            aclose = getattr(stream, "aclose", None)
+            if callable(aclose):
+                with contextlib.suppress(Exception):
+                    await aclose()
 
     async def _copy_directory(
         self,

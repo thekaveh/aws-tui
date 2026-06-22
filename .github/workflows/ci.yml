@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-22.04, windows-latest]
+        os: [macos-14, ubuntu-24.04, windows-latest]
         python: ["3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -46,7 +46,7 @@ jobs:
 
   integration:
     name: integration (MinIO testcontainer)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -61,7 +61,7 @@ jobs:
 
   snapshot:
     name: snapshot (Textual SVG goldens)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -76,7 +76,7 @@ jobs:
 
   e2e:
     name: e2e (5 user journeys)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -91,7 +91,7 @@ jobs:
 
   lint-type:
     name: lint + type
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -101,26 +101,22 @@ jobs:
         run: uv python install 3.12
       - name: sync
         run: uv sync --python 3.12
-      - name: ruff
-        run: uv run ruff check .
-      - name: ruff format check
-        run: uv run ruff format --check .
-      - name: mypy
-        run: uv run mypy
       - name: layer rules
         run: ./scripts/check-layers.sh
-      # Surfaces every hook defined in .pre-commit-config.yaml that
-      # isn't already covered by the dedicated steps above
-      # (end-of-file-fixer, trailing-whitespace, check-yaml,
-      # check-toml, mixed-line-ending, taplo-format, taplo-lint). A
-      # contributor who skips ``pre-commit install`` or commits with
-      # ``--no-verify`` is still gated by CI.
+      # Surfaces every hook defined in .pre-commit-config.yaml:
+      # ruff, ruff-format, mypy, end-of-file-fixer, trailing-whitespace,
+      # check-yaml, check-toml, mixed-line-ending, taplo-format,
+      # taplo-lint. Single source of truth — when a hook fails CI fails;
+      # a contributor who skips ``pre-commit install`` or commits with
+      # ``--no-verify`` is still gated. Previously CI ran ruff / ruff
+      # format / mypy as dedicated steps AND again via this hook
+      # invocation, doubling the slowest gate (mypy) on every push.
       - name: pre-commit (all hooks)
         run: uv run pre-commit run --all-files --show-diff-on-failure
 
   pkg:
     name: package build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3

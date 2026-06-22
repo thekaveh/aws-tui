@@ -412,6 +412,14 @@ class S3FS:
             ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            # Outer catch for ClientErrors raised by delete_object,
+            # list_objects_v2, or delete_objects after the initial
+            # head_object probe — e.g. a bucket policy that grants
+            # s3:GetObject but denies s3:DeleteObject. Without this
+            # the raw botocore exception would bypass the
+            # ProviderError taxonomy DualPaneVM expects.
+            raise _map_client_error(exc, key) from exc
 
     async def rename(self, src: PathRef, dst: PathRef) -> None:
         src_bucket, src_key = self._resolve(src)
@@ -450,6 +458,12 @@ class S3FS:
             ) from exc
         except EndpointConnectionError as exc:
             raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            # Outer catch for the post-copy `delete_object(src_key)`
+            # on line 441 — a partial rename (copy succeeded, source
+            # delete denied) otherwise propagates raw botocore
+            # ClientError instead of going through ProviderError.
+            raise _map_client_error(exc, src_key) from exc
 
     # ------------------------------------------------------------------
     # Streaming I/O

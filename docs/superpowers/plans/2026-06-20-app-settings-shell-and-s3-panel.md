@@ -1,5 +1,13 @@
 # App Settings Shell + S3 Connections Panel Implementation Plan
 
+> **SUPERSEDED** by
+> [`2026-06-20-settings-as-first-class-nav-page.md`](2026-06-20-settings-as-first-class-nav-page.md)
+> (PR #54 rework). This plan describes the modal-overlay architecture
+> that shipped in PR #52 and was reworked away. `SettingsModal`,
+> `ServicesMenuFooter`, `S3CompatFormModal`, `_PlaceholderPanel`, and
+> `ServicesMenuVM` no longer exist. Retained for git-history
+> continuity only — do **not** implement against this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an in-app App Settings overlay (sidebar nav, gear-button entry in the services column footer, keyboard `,`) shipping its first panel — full CRUD over `kind = "s3-compatible"` connections backed by atomic TOML writes, with affected panes reloading on modal dismiss.

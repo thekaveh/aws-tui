@@ -127,6 +127,12 @@ class LocalFS:
             raise NotFoundError(host.as_posix()) from exc
         except PermissionError as exc:
             raise PermissionDeniedError(host.as_posix()) from exc
+        except OSError as exc:
+            # ELOOP / ENAMETOOLONG / EIO / etc. were leaking unmapped
+            # through the lstat probe, violating the FileSystemProvider
+            # error-taxonomy contract. The second try-block below
+            # already had this catch; add the same here.
+            raise _map_os_error(exc, host.as_posix()) from exc
 
         try:
             if stat.S_ISDIR(host_stat.st_mode) and not stat.S_ISLNK(host_stat.st_mode):

@@ -36,7 +36,12 @@ def test_settings_view_can_be_constructed(tmp_path: Path) -> None:
     vm, s3 = _make_vm(tmp_path)
     try:
         view = SettingsView(vm=vm, hub=_hub())
-        assert view is not None
+        # The widget exposes its VM via the public ``vm`` property
+        # (used by inline-form submitters to read s3 state). Locking
+        # the identity here means a refactor that swaps the VM
+        # reference would surface immediately, not only when the
+        # downstream submit path breaks.
+        assert view.vm is vm
     finally:
         vm.dispose()
         s3.dispose()

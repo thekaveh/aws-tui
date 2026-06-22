@@ -4,10 +4,52 @@
 |---|---|
 | Date | 2026-06-13 |
 | Author | Kaveh Razavi (brainstorming with Claude) |
-| Status | Draft, ready for implementation plan |
-| Target version | v0.1.0 |
-| Repo | `thekaveh/aws-tui` (to be created on implementation Step 1) |
+| Status | Shipped through M6 / v0.7.0; post-tag train of PRs on `main` toward v0.8 |
+| Target version | v0.1.0 (this doc); see CHANGELOG.md for v0.7.0+ post-ship changes |
+| Repo | `thekaveh/aws-tui` |
 | Companion | VMx (`thekaveh/VMx`) — PyPI dependency `vmx>=2.6.0,<3.0.0` |
+
+> **Amendments since v0.1.0** — this spec is preserved as the canonical
+> v0.1.0 design and is mostly accurate, but several sections have been
+> superseded or extended by post-ship work. Treat the following as
+> non-authoritative and consult the linked source instead:
+>
+> - **§3 file map** — `vendor/vmx` submodule wiring was removed when VMx
+>   moved to PyPI (CHANGELOG `[Unreleased]`); `ui/widgets/services_menu.py`
+>   and `vm/services_menu_vm.py` were renamed to `nav_menu.py` /
+>   `nav_menu_vm.py` in PR #54; `vm/settings/` (`SettingsVM`,
+>   `S3ConnectionsVM`) and the in-app Settings page were added in PR
+>   #52/#54.
+> - **§5.1 VM tree** — `ServicesMenuVM` → `NavMenuVM` (with the legacy
+>   `RootVM.services_menu` property preserved as an alias); the
+>   `SettingsVM` lives in `vm/settings/` and is built per-mount, not as a
+>   singleton (PR #56). See
+>   [`2026-06-20-settings-as-first-class-nav-page-design.md` §13](2026-06-20-settings-as-first-class-nav-page-design.md)
+>   for the full amendment.
+> - **§5.4 lifecycle + §6.4 Flow 6** — graceful shutdown drain
+>   (`asyncio.wait(in_flight_tasks, timeout=5)`) is partially wired:
+>   `AwsTuiApp.action_quit` is overridden to call `_aws_tui_shutdown`
+>   (which awaits `aws_session.aclose_all_clients`, flushes the log
+>   sink, disposes overlay VMs), but the full per-task drain step
+>   described in §5.4 is deferred to v0.8.
+> - **§4.2 input router** — the keymap→action indirection
+>   (`BindingResolver`) is built but unwired; `BINDINGS` on
+>   `AwsTuiApp` is the active source. Tracked in `CHANGELOG.md`
+>   `[Unreleased]` ▸ `Deferred / v0.8 roadmap`.
+> - **§4.2 keymap table** — the table itself lists several defaults
+>   that no `BINDINGS` entry currently routes: `Ctrl+K` /
+>   `Ctrl+P` / `/` / `n` / `v` / `a`, and the original `m` = move
+>   / `s` = services rail mapping (now `m` = toggle nav menu and
+>   `s` is unbound; see [`docs/keybindings.md`](../../keybindings.md)
+>   for the live key map). New since v0.1.0: `,` opens Settings
+>   (PR #54). These entries become active when the BindingResolver
+>   lands; consult `keybindings.md` for the authoritative current
+>   set.
+> - **§6.5 example** — the illustrative `class S3Service: def supports(self, conn): return True` collapses the kind filter that
+>   the shipping `S3Service.supports` actually applies
+>   (`connection.kind in {"aws", "s3-compatible"}`). The §6.5 prose
+>   about the menu collapsing to S3 still reads correctly under the
+>   real filter.
 
 ---
 

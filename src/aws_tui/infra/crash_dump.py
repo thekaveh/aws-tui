@@ -66,7 +66,13 @@ class CrashDump:
 
     def __init__(self, *, base_dir: Path | None = None) -> None:
         self._dir = base_dir if base_dir is not None else _default_crash_dir()
-        self._dir.mkdir(parents=True, exist_ok=True)
+        # 0o700: crash dumps embed the last 1000 log lines + the last
+        # 100 user actions, which may include endpoint URLs and
+        # presigned-URL query strings. Match ConfigStore.save's
+        # defense-in-depth on the parent directory.
+        from aws_tui.infra.paths import ensure_private_dir
+
+        ensure_private_dir(self._dir)
 
     @property
     def base_dir(self) -> Path:
