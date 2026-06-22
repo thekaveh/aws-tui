@@ -47,7 +47,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Action | Default | Notes |
 |---|---|---|
 | Copy across panes | `c` | Streams through `CrossFsCopy`, shows confirm modal |
-| Move across panes | `pane.move` action — *(deferred)* | `m` is currently bound to the services-rail toggle (§1.5); the move handler is not yet wired in `AwsTuiApp` |
+| Move across panes | `pane.move` action — *(deferred)* | `m` is currently bound to the nav-menu toggle (§1.5); the move handler is not yet wired in `AwsTuiApp` |
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
 | New folder | `pane.new` action — *(deferred)* | No handler wired in v0.7.x |
 | Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
@@ -69,7 +69,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 
 | Action | Default | Notes |
 |---|---|---|
-| Toggle services rail (collapsed ↔ expanded) | `m` | Also toggles via the `+`/`−` hamburger glyph on the rail's top-left |
+| Toggle nav menu (collapsed ↔ expanded) | `m` | The left rail shows services on top and Settings docked at the bottom. Also toggles via the hamburger glyph on the rail's top-left. |
 | Swap focused pane source (S3 ↔ local) | `Shift+S` (`S`) | Enables any of `{S3, local} × {S3, local}` dual-pane combos |
 
 ### 1.6. Connection / auth
@@ -149,7 +149,7 @@ lands (see the §1 status note).
 | `pane.toggle_select` | `space` (multi-select) | *(deferred)* | Add / remove from selection |
 | `pane.select_all` | `a` | *(deferred)* | Select all in pane |
 | `pane.copy` | `c` | ✓ | Copy marked entries to other pane |
-| `pane.move` | `m` | *(deferred)* — `m` is in use by the services-rail toggle | Move marked entries (or rename one) |
+| `pane.move` | `m` | *(deferred)* — `m` is in use by the nav-menu toggle | Move marked entries (or rename one) |
 | `pane.delete` | `d` | ✓ | Delete marked entries (confirms) |
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
 | `pane.refresh` | `r` | ✓ | Re-run `provider.list()` |
@@ -160,7 +160,7 @@ These are the action IDs `KeymapStore.DEFAULT_BINDINGS` actually
 registers. Overlay any of them in your `[keybindings]` table; any other
 id raises `UnknownAction` at startup.
 
-`Shift+↑` / `Shift+↓` (extend-selection) and `m` (services rail
+`Shift+↑` / `Shift+↓` (extend-selection) and `m` (nav menu
 toggle) are wired directly in `AwsTuiApp.BINDINGS` rather than the
 keymap store, because they're either modifier combinations or static
 UI toggles. They are not currently rebindable through `[keybindings]`.

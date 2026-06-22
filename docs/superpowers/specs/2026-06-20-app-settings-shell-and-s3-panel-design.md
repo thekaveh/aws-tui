@@ -1,7 +1,16 @@
 # App Settings Shell + S3 Connections Panel — Design Spec
 
+> **SUPERSEDED** by
+> [`2026-06-20-settings-as-first-class-nav-page-design.md`](2026-06-20-settings-as-first-class-nav-page-design.md)
+> (PR #54 rework, merged at `a7bd050`). This spec describes the
+> modal-overlay architecture (`SettingsModal` opened via a gear-band
+> footer, `S3CompatFormModal` opened on top of it) that shipped in
+> PR #52 and was reworked away. `SettingsModal`, `ServicesMenuFooter`,
+> and `S3CompatFormModal` no longer exist in `src/`. Retained for
+> git-history continuity only — do **not** implement against this spec.
+
 **Date:** 2026-06-20
-**Status:** Approved (sub-project A of three)
+**Status:** Superseded — see PR #54 rework spec.
 **Branch:** `feat/app-settings-shell-and-s3-panel`
 **Author:** Kaveh + Claude
 

@@ -81,6 +81,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Adding another `[connections.r2-prod]` block to `config.toml`
   surfaces it as a candidate in the swap-source ring automatically;
   the section name is what shows up in the pane title.
+- **Settings nav peer now docks to the bottom of the left rail**
+  (PR #56, user-reported). Previously Settings was the last entry in a
+  single ``OptionList`` taking all the vertical space, so it sat
+  directly under ``S3`` with empty rows below it. The ``NavMenu``
+  widget's compose was split into two ``OptionList`` children —
+  ``#menu-services`` (top, ``height: 1fr``) for service items, and
+  ``#menu-pinned`` (``dock: bottom``, ``height: auto``) for the
+  Settings nav peer. ``NavMenuVM`` is unchanged; the split is purely
+  a View concern (filters items by id). Per-theme
+  ``border-top: solid $rule-dim`` added to ``#menu-pinned`` across all
+  10 themes for a subtle separator. Matches the macOS Settings-app /
+  VS Code activity-bar pattern. Content-presence guard asserts
+  ``svg.index("S3") < svg.index("Settings")`` to catch a regression
+  where the ``dock: bottom`` rule gets dropped.
 - **Relicensed from MIT to Apache License 2.0.** ``LICENSE`` now
   carries the canonical Apache 2.0 text and is paired with a new
   ``NOTICE`` file (Apache convention for attribution). ``pyproject.toml``
@@ -220,6 +234,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Blank screen on launch — defensive hardening** (PR #55). After PR
+  #54's nav-page rework, some users saw a blank main area at startup.
+  Could not be reproduced in any headless test, but three belt-and-
+  suspenders changes shipped: (a) explicit ``width: 1fr; height: 1fr``
+  on ``#main-area`` and ``#content-host`` in ``AwsTuiApp.CSS`` — the
+  legacy ``ServicesMenu``'s per-theme ``width: 16`` rule made the
+  Horizontal layout work by accident; the new ``NavMenu`` moved that
+  rule into ``DEFAULT_CSS`` and left the content host implicit; (b)
+  ``_boot_in_flight`` guard on the new
+  ``_on_nav_selection_changed`` subscriber so on_mount's
+  ``switch_service("s3")`` does not spawn a mount worker that races
+  the direct ``_mount_initial_service_view`` call; (c) drop
+  ``height: 1fr`` from the ``NavMenu`` root rule to match the legacy
+  rail's shape. Regression: ``test_dual_pane_mounts_at_startup_without_blank_screen``.
+- **Expired AWS SSO hang at startup** (PR #55, user-reported). When
+  the resolved AWS connection's SSO access token was expired, on_mount
+  built the DualPane → ``PaneVM.setup`` → ``S3FS.list`` → boto3 tried
+  to refresh the token over the network and blocked on its default
+  timeout; the whole launch hung then crashed. Now ``on_mount``
+  probes the token offline via
+  ``AwsSession.probe_token`` (reads ``~/.aws/sso/cache``) BEFORE
+  ``switch_service`` runs; on ``TokenState.EXPIRED`` it mounts an
+  ``"aws sso login --profile X"`` placeholder instead of building the
+  DualPane. ``MISSING`` is intentionally NOT gated —
+  ``probe_token`` returns ``MISSING`` for both "SSO configured but no
+  cache" AND "no SSO at all (static creds)"; the latter is legitimate
+  and must proceed. Regression:
+  ``test_expired_sso_does_not_call_switch_service_at_startup``
+  (mutation-tested).
+- **Settings → S3 → Settings re-toggle crash** (PR #56,
+  user-reported). ``ctx.settings_vm`` was a singleton built once at
+  composition and pre-constructed in ``on_mount``. ``ContentHostVM.set_content``
+  calls ``vm.dispose()`` on swap-out and ``vm.construct()`` on
+  swap-in; after the first Settings → S3 swap the singleton was in
+  ``Disposed`` state, and the second Settings click raised
+  ``WorkerFailed: StatusTransitionError('Cannot construct from state Disposed.')``.
+  Fix: build a fresh ``SettingsVM`` per mount in
+  ``_mount_settings_view`` (factory pattern, matching how
+  ``S3Service.build_vm`` already returns a fresh ``DualPaneVM`` per
+  call). ``SettingsVM.dispose()`` does NOT cascade to its
+  ``S3ConnectionsVM`` child, so the shared connection list/selection
+  state survives across rebuilds — only the thin ComponentVM wrapper
+  is recreated. The ``settings_vm`` field was dropped from
+  ``AppContext``. Regression:
+  ``test_toggle_settings_s3_settings_does_not_crash``
+  (mutation-tested).
+- **Windows py3.11 nav-mount worker race** (PR #56 follow-up exposed
+  by the new toggle test). ``_mount_service_view`` and
+  ``_mount_settings_view`` are workers that both touch
+  ``ContentHostVM`` via an ``await``. With back-to-back clicks the
+  service worker could resume after the settings worker had replaced
+  ``ContentHost.current``, read the now-``SettingsVM``, and try to
+  wrap it in ``DualPane(self._vm.left, ...)`` →
+  ``AttributeError: 'SettingsVM' object has no attribute 'left'``.
+  Fix: scope both ``run_worker`` calls to a shared
+  ``group="content-mount"`` with ``exclusive=True`` so Textual cancels
+  any in-flight worker in the group before starting the new one.
 - **Config directory permission hardened to ``0o700`` on save.** The
   ``config.toml`` file itself was already created mode ``0o600`` via
   ``tempfile.mkstemp``, but the parent directory ``~/.config/aws-tui``
@@ -549,6 +620,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`SettingsModal`, `ServicesMenuFooter`, `S3CompatFormModal`,
+  `_PlaceholderPanel`, `ServicesMenuVM`** (PR #54 rework). The PR #52
+  modal-overlay pattern was reworked into the first-class nav-page
+  pattern: ``SettingsModal`` → ``SettingsView`` (mounted in the
+  content host), ``ServicesMenuFooter`` (gear band) → removed
+  (Settings is now a peer nav item docked at the rail's bottom — see
+  PR #56), ``S3CompatFormModal`` → ``ConnectionFormInline`` (expands
+  inline within the Connections section), ``_PlaceholderPanel`` →
+  removed (disabled ``Collapsible`` sections handle the
+  "coming-soon" treatment), ``ServicesMenuVM`` → ``NavMenuVM``
+  (renamed; legacy ``RootVM.services_menu`` property preserved as an
+  alias awaiting a future minor-version cleanup).
+- **`AppContext.settings_vm` field** (PR #56). Removed because the
+  singleton-VM pattern is fundamentally incompatible with
+  ``ContentHostVM.set_content``'s dispose-on-swap-out behavior — see
+  the matching entry under Fixed. ``SettingsVM`` is now constructed
+  per-mount inside ``AwsTuiApp._mount_settings_view``.
 - `StatusBar` widget. Profile / region / auth indicator moved to the
   left pane's `border_subtitle`. The chrome VM stays so hub
   subscribers continue to receive updates.

@@ -9,12 +9,14 @@ Linux, and Windows. Powered by
 [Textual](https://textual.textualize.io/) and the
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
-> **Status: v0.7.0** — feature-complete pre-PyPI release. All seven
-> milestones (M0 scaffold ▸ M6 polish) shipped, plus a post-tag
-> usability train (passes 7–12) that hardened the chrome, fixed the
-> S3→local copy crash, added theme cycling + source swap + multi-select
-> + a transfers overlay, and locked everything in with 41 new
-> regression tests. See `CHANGELOG.md` for the per-pass delta.
+> **Status: v0.7.0 + an unreleased train of fixes & features on `main`
+> toward v0.8.** Highlights since the tag: Apache 2.0 relicense, full
+> cross-platform support (macOS + Linux + Windows), App Settings as a
+> first-class nav page with inline CRUD for s3-compatible connections,
+> Settings docked at the bottom of the rail, six additional themes,
+> VMx consumed from PyPI, plus a steady stream of UX polish and crash
+> fixes. See [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` for the
+> full per-PR delta.
 
 ## 1. Features
 
@@ -72,9 +74,11 @@ Linux, and Windows. Powered by
 - **Strict layered architecture.** View ▸ ViewModel ▸ Service ▸ Domain
   ▸ Infra; enforced by `scripts/check-layers.sh` (a ruff
   `flake8-tidy-imports` migration is queued — see
-  `docs/architecture.md` §2). Mypy strict-clean. 814 default-tier tests
-  (unit / in-process integration / snapshot / e2e), plus 9 opt-in MinIO
-  integration tests (`uv run pytest -m integration`).
+  [`docs/architecture.md`](docs/architecture.md) §6). Mypy strict-clean.
+  See [`docs/architecture.md`](docs/architecture.md) §5 for the current
+  test-tier table; the default tier runs unit / in-process integration /
+  snapshot / e2e, with a 9-test MinIO tier opt-in via
+  `uv run pytest -m integration`.
 
 ## 2. Install
 
@@ -136,7 +140,7 @@ Pick one to get going.
 
 ## 4. Documentation
 
-Numbered hierarchically per the project's `NUMBERED_DOCS` mandate.
+Numbered hierarchically for navigation.
 
 1. **User-facing**
    1. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
@@ -144,13 +148,17 @@ Numbered hierarchically per the project's `NUMBERED_DOCS` mandate.
    3. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
    4. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to MinIO, switch theme on the fly, customize bindings, resume after a crash).
    5. [Supported platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
+   6. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — MinIO Docker Compose + seed for offline development.
 2. **Contributor-facing**
    1. [Architecture](docs/architecture.md) — five-layer model + composition root + lifecycle + messaging primer.
    2. [Adding a new service](docs/adding-a-service.md) — the `Service` protocol + per-layer wiring.
    3. [VMx Python cheatsheet](docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md) — facade pattern, message-protocol shape, lifecycle gotchas.
 3. **Spec + plans**
-   1. [Design spec (v0.1.0)](docs/superpowers/specs/2026-06-13-aws-tui-design.md) — authoritative source for behavior + acceptance.
-   2. [Implementation plans (M0–M6)](docs/superpowers/plans/) — per-milestone breakdown, end-of-pass revisions captured in-tree.
+   1. [v0.1.0 design spec](docs/superpowers/specs/2026-06-13-aws-tui-design.md) — authoritative source for behavior + acceptance.
+   2. [Settings as a first-class nav page](docs/superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md) — design + post-ship amendments (PR #54 / #55 / #56). Supersedes the modal-overlay design at [`docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md`](docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md) (kept for git-history continuity, marked SUPERSEDED in-file).
+   3. [Modal & toast polish](docs/superpowers/specs/2026-06-19-modal-toast-polish-design.md) — PR #47 modal/toast surface rework.
+   4. [Graceful unreachable connections](docs/superpowers/specs/2026-06-19-graceful-unreachable-connections.md) — PR #48/#49 design.
+   5. [Implementation plans (M0–M6 and post-tag specs)](docs/superpowers/plans/) — per-milestone breakdowns + per-spec implementation plans; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
 5. **Project meta**

@@ -25,11 +25,17 @@ yet wired (the empty config block would be a no-op).
   notifications.
 - **ViewModel** — VMx-based viewmodels with reactive commands and
   property-changed messages (`src/aws_tui/vm/`). Never imports
-  Textual; tests run headless. Two subtrees:
+  Textual; tests run headless. Subtrees:
   - `vm/chrome/` — persistent shell (status bar, hint legend, toasts,
     overlays like command palette / confirm / quick look / crash /
     resume / first-run).
   - `vm/file_manager/` — pane / dual-pane / entry / transfer VMs.
+  - `vm/settings/` — `SettingsVM` (built per-mount when the user
+    selects the Settings nav peer) and `S3ConnectionsVM` (singleton
+    on `AppContext`, drives the in-app Connections CRUD).
+  - Top-level `vm/nav_menu_vm.py` — `NavMenuVM` (renamed from
+    `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias),
+    `vm/content_host_vm.py`, `vm/root_vm.py`.
 - **Service plugins** — One folder per top-level service
   (`src/aws_tui/services/`). v0.7.0 ships `s3`. Each service implements
   the `Service` protocol (declared in `vm/services_protocol.py`,
@@ -86,11 +92,14 @@ the same observable plus dispose-on-unmount.
 ## 5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
-| Unit | 474 | VM, domain, infra behavior; no I/O |
-| Snapshot | 104 | View rendering against golden SVGs per theme × screen-state combination |
+| Unit | 538 | VM, domain, infra behavior; no I/O |
+| Snapshot | 234 | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards (per PR #53 lesson) |
+| Integration (in-process) | 40 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
 | E2E | 5 | Pilot-driven user journeys |
-| Integration (in-process) | 30 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, etc.) |
 | Integration (MinIO) | 9 | MinIO via testcontainers (opt-in, `-m integration`) |
+
+Default tier total: **817** (`uv run pytest`). Opt-in MinIO tier:
+**9** (`uv run pytest -m integration`).
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)
 with `uv run pytest`. Opt into the MinIO tier with
@@ -112,3 +121,11 @@ composition root and `app.py` are deliberately excluded — they live at
    between any pair of `FileSystemProvider`s.
 5. `src/aws_tui/ui/widgets/` — pure Textual widgets; per-VM smoke
    tests in `tests/unit/ui/`.
+6. `src/aws_tui/vm/nav_menu_vm.py` + `src/aws_tui/ui/widgets/nav_menu.py` —
+   the left-rail nav: services list on top, Settings docked at the
+   bottom (split into two `OptionList`s in the widget).
+7. `src/aws_tui/vm/settings/settings_vm.py` +
+   `src/aws_tui/ui/widgets/settings_view.py` — the in-app Settings
+   page (built per-mount, not as an `AppContext` singleton — see the
+   PR #56 post-ship amendment in the
+   [Settings-as-nav-page design spec](superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md)).
