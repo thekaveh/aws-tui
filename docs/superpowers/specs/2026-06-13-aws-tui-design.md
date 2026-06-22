@@ -36,6 +36,20 @@
 >   (`BindingResolver`) is built but unwired; `BINDINGS` on
 >   `AwsTuiApp` is the active source. Tracked in `CHANGELOG.md`
 >   `[Unreleased]` ▸ `Deferred / v0.8 roadmap`.
+> - **§4.2 keymap table** — the table itself lists several defaults
+>   that no `BINDINGS` entry currently routes: `Ctrl+K` /
+>   `Ctrl+P` / `/` / `n` / `v` / `a`, and the original `m` = move
+>   / `s` = services rail mapping (now `m` = toggle nav menu and
+>   `s` is unbound; see [`docs/keybindings.md`](../../keybindings.md)
+>   for the live key map). New since v0.1.0: `,` opens Settings
+>   (PR #54). These entries become active when the BindingResolver
+>   lands; consult `keybindings.md` for the authoritative current
+>   set.
+> - **§6.5 example** — the illustrative `class S3Service: def supports(self, conn): return True` collapses the kind filter that
+>   the shipping `S3Service.supports` actually applies
+>   (`connection.kind in {"aws", "s3-compatible"}`). The §6.5 prose
+>   about the menu collapsing to S3 still reads correctly under the
+>   real filter.
 
 ---
 

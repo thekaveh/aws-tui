@@ -21,7 +21,7 @@ from vmx.lifecycle.status import ConstructionStatus
 
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
-from aws_tui.infra.aws_session import AwsSession, TokenState
+from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.log_sink import LogSink
@@ -112,7 +112,6 @@ async def test_m4_switch_to_s3_hosts_dual_pane_vm(tmp_path: Path) -> None:
         return seeded[-1]
 
     s3_service = S3Service(
-        aws_session=AwsSession(),
         transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
         # Hub is set later by RootVM — we use RootVM's hub via the service.
         # S3Service is constructed before RootVM here so we pull the hub
@@ -160,7 +159,6 @@ async def test_m4_switch_connection_clears_dual_pane(tmp_path: Path) -> None:
     fs = await _seed_fs()
 
     s3_service = S3Service(
-        aws_session=AwsSession(),
         transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
         hub=None,
         dispatcher=NULL_DISPATCHER,
@@ -206,7 +204,6 @@ async def test_m4_switching_to_other_service_disposes_dual_pane(tmp_path: Path) 
     fs = await _seed_fs()
 
     s3_service = S3Service(
-        aws_session=AwsSession(),
         transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
         hub=None,
         dispatcher=NULL_DISPATCHER,
