@@ -30,6 +30,27 @@ def _prep(tmp_path: Path, toml_text: str = "") -> Path:
     return config_dir
 
 
+async def _await_boot(pilot: object, app: object) -> None:
+    """Wait for the initial-mount worker to clear ``_boot_in_flight``.
+
+    Tests previously relied on a single ``pilot.pause()`` because
+    ``on_mount`` did the initial mount synchronously — it awaited
+    ``switch_service`` inline, which awaited ``PaneVM.setup`` →
+    ``S3FS.list`` → boto3 connection-refused (7-15s wall-clock on
+    the unreachable ``127.0.0.1:1`` test endpoint). Slow tests but
+    deterministic.
+
+    The mount now runs in a worker spawned by ``on_mount`` so the
+    chrome paints immediately, but a single ``pilot.pause()`` no
+    longer reaches the post-mount state. We wait for the
+    ``content-mount`` group of workers to drain instead.
+    """
+    await app.workers.wait_for_complete(  # type: ignore[attr-defined]
+        list(app.workers._workers)  # type: ignore[attr-defined]
+    )
+    await pilot.pause()  # type: ignore[attr-defined]
+
+
 def _dispose(ctx: object) -> None:
     """Standard teardown — mirrors the pattern in build_app_context order."""
     for attr in [
@@ -67,7 +88,7 @@ async def test_toggle_settings_s3_settings_does_not_crash(tmp_path: Path) -> Non
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _await_boot(pilot, app)
             menu = ctx.root_vm.services_menu
             # 1st: settings
             menu.switch_service_command.execute("settings")
@@ -99,7 +120,7 @@ async def test_comma_selects_settings_and_swaps_main_area(tmp_path: Path) -> Non
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _await_boot(pilot, app)
             await pilot.press("comma")
             await pilot.pause()
             # NavMenuVM should now have settings selected.
@@ -121,7 +142,7 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _await_boot(pilot, app)
             await pilot.press("comma")
             await pilot.pause()
 
@@ -179,7 +200,7 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _await_boot(pilot, app)
             await pilot.press("comma")
             await pilot.pause()
             await pilot.click("#delete-minio-local")
@@ -219,7 +240,7 @@ async def test_dual_pane_mounts_at_startup_without_blank_screen(tmp_path: Path) 
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _await_boot(pilot, app)
             # Boot guard must release after on_mount completes.
             assert app._boot_in_flight is False
             # DualPane must be mounted in #content-host.
@@ -298,7 +319,7 @@ async def test_expired_sso_does_not_call_switch_service_at_startup(tmp_path: Pat
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await _await_boot(pilot, app)
             assert called == [], (
                 f"switch_service must NOT be called when probe_token returns "
                 f"EXPIRED — the build path drives S3FS.list → boto3 SSO token "

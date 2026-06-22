@@ -288,25 +288,56 @@ class AwsTuiApp(App[None]):
             if needs_auth:
                 self._mount_auth_required_placeholder(initial_conn, auth_state)
             else:
-                # Mark the boot sequence as in-flight so the new
-                # nav-selection hub subscriber
-                # (_on_nav_selection_changed) skips the worker mount it
-                # would otherwise spawn in response to the selected_id
-                # change that switch_service is about to fire. Without
-                # this guard, two concurrent mount paths race against
-                # the same #content-host (the worker's
-                # remove_children/mount + _mount_initial_service_view's
-                # direct mount) and one silently clobbers the other —
-                # the user sees a blank screen.
+                # Run the initial DualPane build in a background worker
+                # so on_mount returns immediately and Textual paints
+                # the chrome (banner, nav rail, hint legend, etc.)
+                # without waiting for boto3.
+                #
+                # Why this matters: ``switch_service("s3")`` calls
+                # ``ContentHostVM.set_content`` which awaits the
+                # hosted VM's ``setup()`` — which calls ``S3FS.list``
+                # — which makes a real boto3 connection. On an
+                # unreachable endpoint (stopped MinIO container,
+                # offline VPN, etc.) boto3 retries with exponential
+                # backoff before giving up, and the entire
+                # on_mount blocks for 10-15s. Textual has already
+                # entered alt-screen mode, so the terminal looks
+                # blank for the duration — users assume the app is
+                # broken and kill it. The auth-required placeholder
+                # path (PR #55) fixed this for AWS+EXPIRED but
+                # ``s3-compatible`` connections never got the same
+                # treatment.
+                #
+                # The ``_boot_in_flight`` flag still gates the
+                # nav-selection subscriber so the worker doesn't
+                # race against the seed selected_id change.
                 self._boot_in_flight = True
-                try:
-                    with contextlib.suppress(Exception):
-                        await ctx.root_vm.switch_service("s3")
-                    self._mount_initial_service_view()
-                finally:
-                    self._boot_in_flight = False
+                self.run_worker(
+                    self._initial_mount_worker(),
+                    exclusive=True,
+                    group="content-mount",
+                )
         else:
             self._mount_no_connection_placeholder()
+
+    async def _initial_mount_worker(self) -> None:
+        """Build the initial DualPane in a background worker.
+
+        Lifts the previously-inline ``switch_service`` await out of
+        ``on_mount`` so the screen renders the chrome immediately even
+        when the resolved s3-compatible endpoint is unreachable and
+        boto3 takes 10-15s to time out. The user sees the rail and
+        an empty content-host instead of a hung blank terminal; the
+        pane(s) transition to UNREACHABLE state when boto3 finally
+        fails and the existing error placeholder appears.
+        """
+        ctx = self._app_ctx
+        try:
+            with contextlib.suppress(Exception):
+                await ctx.root_vm.switch_service("s3")
+            self._mount_initial_service_view()
+        finally:
+            self._boot_in_flight = False
 
     # ── on_mount helpers ───────────────────────────────────────────────────
 
