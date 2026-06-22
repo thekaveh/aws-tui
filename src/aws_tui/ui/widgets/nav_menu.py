@@ -90,10 +90,16 @@ class NavMenu(Widget):
     }
     /* Hamburger at the top — one row, click-to-toggle. The glyph
        itself switches between "+" (collapsed → click to expand) and
-       "-" (expanded → click to collapse) inside ``_rebuild_hamburger``. */
+       "-" (expanded → click to collapse) inside ``_rebuild_hamburger``.
+       ``content-align: center middle`` centers the single-char glyph
+       in the row (matches how the emoji icons read after PR #59's
+       width bump to 8). ``margin-bottom: 1`` puts breathing room
+       between the hamburger and the first service icon so the rail
+       doesn't read as one continuous column. */
     NavMenu > #menu-hamburger {
         height: 1;
-        padding: 0 1;
+        margin-bottom: 1;
+        content-align: center middle;
         text-style: bold;
         background: transparent;
     }
@@ -158,8 +164,12 @@ class NavMenu(Widget):
     def compose(self) -> ComposeResult:
         # Hamburger at the top, click-to-toggle. The glyph reflects
         # the NEXT action: '+' when collapsed (click expands), '-'
-        # when expanded (click collapses).
-        yield Static("+", id="menu-hamburger", markup=False)
+        # when expanded (click collapses). Tooltip surfaces the
+        # action since the glyph alone is ambiguous, especially in
+        # the collapsed icon-only state.
+        ham = Static("+", id="menu-hamburger", markup=False)
+        ham.tooltip = "Toggle nav menu (expand / collapse)"
+        yield ham
         # Two OptionLists: services live in #menu-services at the top;
         # the Settings nav peer lives in #menu-pinned which is docked
         # to the bottom (see DEFAULT_CSS). Splitting the rail this way
@@ -250,7 +260,13 @@ class NavMenu(Widget):
                 # and flip the rendering to text presentation.
                 glyph = descriptor.icon or descriptor.label or "?"
                 if self._collapsed:
-                    prompt = f"{ribbon}{glyph}"
+                    # Leading space centers the ribbon+emoji in the
+                    # collapsed-mode 6-cell content area (rail width
+                    # 8 minus 2-cell border): space(1) + ribbon(1) +
+                    # emoji(2) + OptionList right-padding(2) = 6.
+                    # Without the leading space, the prompt left-aligns
+                    # and the row reads as offset to the left.
+                    prompt = f" {ribbon}{glyph}"
                 else:
                     prompt = f"{ribbon}{glyph} {descriptor.label}"
                 target.add_option(Option(prompt, id=descriptor.id))
@@ -293,6 +309,33 @@ class NavMenu(Widget):
         widget = getattr(event, "widget", None)
         if widget is not None and getattr(widget, "id", None) == "menu-hamburger":
             self.toggle_collapsed()
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        """Sync the OptionList's tooltip to the currently-highlighted
+        option's full label.
+
+        Textual's :class:`OptionList` doesn't support per-option
+        tooltips natively, so we approximate it by retargeting the
+        whole list's tooltip whenever the cursor moves. With the
+        rail collapsed (icon-only prompts), hovering or arrow-keying
+        to an option pops up a tooltip carrying the human-readable
+        label — same UX as a tooltip-per-item with one fewer widget.
+        """
+        list_widget = event.option_list
+        idx = event.option_index
+        if idx is None or idx < 0:
+            list_widget.tooltip = None
+            return
+        # Map index → NavItemVM via the VM's items split (services vs
+        # pinned), the same split _rebuild_options does. Done lazily
+        # to avoid keeping a stale mapping around.
+        services = [item for item in self._vm.items if item.descriptor.id != _SETTINGS_NAV_ID]
+        pinned = [item for item in self._vm.items if item.descriptor.id == _SETTINGS_NAV_ID]
+        items = services if getattr(list_widget, "id", None) == "menu-services" else pinned
+        if idx >= len(items):
+            list_widget.tooltip = None
+            return
+        list_widget.tooltip = items[idx].descriptor.label
 
 
 __all__ = ["NavMenu"]
