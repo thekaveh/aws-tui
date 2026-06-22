@@ -466,16 +466,6 @@ Toast.-success { border: round $success;  color: $success; }
 Toast.-warning { border: round $warning;  color: $warning; }
 Toast.-error   { border: round $danger;   color: $danger; }
 
-/* ── Services hamburger (top-left toggle) ────────────────────────────── */
-ServicesHamburger {
-    background: $bg-elev;
-    color: $accent;
-}
-ServicesHamburger:hover {
-    background: $accent;
-    color: $bg;
-}
-
 /* ─── S3ConnectionsPanel ──────────────────────────────────────── */
 
 S3ConnectionsPanel .connection-row {

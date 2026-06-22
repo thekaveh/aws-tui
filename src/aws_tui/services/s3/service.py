@@ -82,7 +82,11 @@ class S3Service:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="s3",
         label="S3",
-        icon="S3",
+        # Cloud-emoji icon for the collapsed-rail render. Two visual
+        # columns in most monospace fonts (matches the gear `⚙` glyph
+        # the Settings nav peer uses, so the icon column has a
+        # consistent width across rows).
+        icon="☁",
     )
 
     def __init__(

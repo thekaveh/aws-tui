@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Container, Horizontal
-from textual.widgets import Static
+from textual.widgets import OptionList, Static
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.infra.aws_session import TokenState
@@ -39,7 +39,6 @@ from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.nav_menu import NavMenu
-from aws_tui.ui.widgets.services_hamburger import ServicesHamburger
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
@@ -127,17 +126,13 @@ class AwsTuiApp(App[None]):
     # main layout instead of consuming flow space.
     #
     # ``#main-area`` and ``#content-host`` need explicit ``1fr`` sizing
-    # because:
-    #   - The NavMenu starts ``display: none; width: 0`` (collapsed) and
-    #     the ServicesHamburger is fixed ``width: 3``.
-    #   - Without an explicit ``width: 1fr`` rule on ``#content-host``,
-    #     Textual's Horizontal layout doesn't allocate the remaining
-    #     space to the content host — the DualPane (or SettingsView)
-    #     mounted inside renders at zero width and the user sees a
-    #     blank screen at startup. The legacy ServicesMenu's per-theme
-    #     ``width: 16`` rule made the layout work by accident; the
-    #     NavMenu rework moved the width rule into the widget's
-    #     DEFAULT_CSS and the content-host lost its implicit sizing.
+    # so the Horizontal layout allocates the remaining width to the
+    # content host after the always-visible NavMenu takes its fixed 4
+    # (collapsed) or 18 (expanded) cells. Without this, the DualPane
+    # mounted inside renders at zero width and the user sees a blank
+    # screen at startup. The standalone ServicesHamburger widget was
+    # removed in the always-visible nav rework — the hamburger now
+    # lives inside the NavMenu itself.
     CSS = """
     Screen {
         layers: base notifications;
@@ -235,7 +230,9 @@ class AwsTuiApp(App[None]):
             id="brand-banner",
         )
         with Horizontal(id="main-area"):
-            yield ServicesHamburger(id="services-hamburger")
+            # NavMenu owns its own inline hamburger now (top row of the
+            # rail); the standalone ServicesHamburger widget was
+            # removed in the always-visible nav rework.
             yield NavMenu(vm=ctx.root_vm.services_menu, hub=ctx.hub, id="nav-menu")
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
@@ -485,10 +482,63 @@ class AwsTuiApp(App[None]):
         return current if isinstance(current, DualPaneVM) else None
 
     def action_switch_focus(self) -> None:
+        """Tab cycle: leftPane → rightPane → NavMenu → leftPane.
+
+        The NavMenu is the third focus target now that the rail is
+        always visible. Within the dual-pane portion of the cycle the
+        DualPaneVM's ``switch_focus_command`` still owns the left↔right
+        toggle; the NavMenu step is a View-level focus jump that the
+        VM doesn't need to know about. Settings-only mounts (where
+        ``_dual_pane()`` returns None) collapse the cycle to
+        ``content ↔ NavMenu``.
+        """
+        try:
+            nav = self.query_one("#nav-menu", NavMenu)
+        except Exception:
+            nav = None
+        currently_on_nav = (
+            nav is not None
+            and self.focused is not None
+            and (self.focused is nav or nav in self.focused.ancestors_with_self)
+        )
+        if currently_on_nav:
+            # Step OUT of the nav rail back into the content area.
+            dual = self._dual_pane()
+            if dual is not None:
+                # Re-mount focus on whichever pane the VM thinks is
+                # active so the cycle resumes from a consistent place.
+                from aws_tui.ui.widgets.dual_pane import DualPane
+
+                with contextlib.suppress(Exception):
+                    dp = self.query_one("#content-dual-pane", DualPane)
+                    dp.focus_focused_pane()
+                return
+            # Settings is hosted (no dual pane) — just refocus the
+            # content host so subsequent keystrokes land somewhere
+            # sensible.
+            with contextlib.suppress(Exception):
+                host = self.query_one("#content-host", Container)
+                host.focus()
+            return
+
         dual = self._dual_pane()
         if dual is None:
+            # Content host is showing Settings (or a placeholder); only
+            # two focus targets exist (content + NavMenu). Cycle to nav.
+            if nav is not None:
+                with contextlib.suppress(Exception):
+                    nav.query_one("#menu-services", OptionList).focus()
             return
+
         cmd = getattr(dual, "switch_focus_command", None)
+        # If the focus is already on the right pane (VM-tracked), Tab
+        # jumps to the NavMenu instead of bouncing back to the left.
+        from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
+
+        if getattr(dual, "focused", None) is FocusedPane.RIGHT and nav is not None:
+            with contextlib.suppress(Exception):
+                nav.query_one("#menu-services", OptionList).focus()
+            return
         if cmd is not None:
             cmd.execute()
 
@@ -759,15 +809,18 @@ class AwsTuiApp(App[None]):
                     entry.set_marked(False)  # type: ignore[attr-defined]
 
     def action_toggle_services(self) -> None:
-        """Collapse/expand the left nav rail."""
+        """Toggle the nav rail between collapsed (icon-only) and
+        expanded (icon + label). The rail is always visible —
+        previously this method also flipped a separate ``-expanded``
+        visibility class that toggled the rail between
+        ``display: none`` and ``display: block``; that state was
+        dropped so a minimally collapsed icon column is always
+        present, mirroring the macOS Settings sidebar / VS Code
+        activity-bar idiom the user asked for."""
         try:
             nav = self.query_one("#nav-menu", NavMenu)
         except Exception:
             return
-        if nav.has_class("-expanded"):
-            nav.remove_class("-expanded")
-        else:
-            nav.add_class("-expanded")
         nav.toggle_collapsed()
 
     def action_cycle_theme(self) -> None:

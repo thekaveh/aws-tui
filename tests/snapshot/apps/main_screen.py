@@ -30,7 +30,9 @@ from tests.snapshot.apps._seed import seed_left, seed_right
 
 
 class _S3Stub:
-    descriptor = ServiceDescriptor(id="s3", label="S3", icon="S3")
+    # Cloud emoji matches the real S3Service.descriptor.icon so the
+    # snapshot reflects what production renders.
+    descriptor = ServiceDescriptor(id="s3", label="S3", icon="☁")
 
     def supports(self, conn: object) -> bool:
         return True
@@ -40,7 +42,9 @@ class _S3Stub:
 
 
 class _EC2Stub:
-    descriptor = ServiceDescriptor(id="ec2", label="EC2", icon="EC2")
+    # Server-rack glyph stands in for a future EC2 service icon —
+    # matches the icons-only vision for the collapsed rail.
+    descriptor = ServiceDescriptor(id="ec2", label="EC2", icon="🖳")
 
     def supports(self, conn: object) -> bool:
         return getattr(conn, "kind", None) == "aws"
