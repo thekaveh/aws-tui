@@ -70,7 +70,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Action | Default | Notes |
 |---|---|---|
 | Toggle nav menu (collapsed ↔ expanded) | `m` | The left rail shows services on top and Settings docked at the bottom. Also toggles via the hamburger glyph on the rail's top-left. |
-| Swap focused pane source (S3 ↔ local) | `Shift+S` (`S`) | Enables any of `{S3, local} × {S3, local}` dual-pane combos |
+| Cycle focused pane source | `Shift+S` (`S`) | Steps through `local` → each AWS profile (`aws s3 · {profile} · {region}`) → each `s3-compatible` connection (`s3-compatible · {name} · {endpoint}`) → wrap. The fastest way to jump between AWS accounts or s3-compatible endpoints — one keystroke per source, no command-palette modal. New connections added via the in-app Settings page (or `~/.config/aws-tui/config.toml`) join the cycle automatically. Either pane can be on any of the four `{S3-class, local}` combinations independently. |
 
 ### 1.6. Connection / auth
 
@@ -136,7 +136,7 @@ lands (see the §1 status note).
 | `app.help` | `?` | ✓ | Help overlay |
 | `app.themes` | `t` | ✓ | Open theme picker modal |
 | `app.cycle_theme` | `T` (`shift+t`) | ✓ | Cycle to next theme without opening the modal |
-| `app.swap_source` | `S` (`shift+s`) | ✓ | Swap the focused pane between S3 and local |
+| `app.swap_source` | `S` (`shift+s`) | ✓ | Cycle the focused pane: `local` → each AWS profile → each `s3-compatible` connection → wrap |
 | `pane.move_up` / `pane.move_down` | `↑` / `↓` (also `j` / `k`) | ✓ | Move cursor |
 | `pane.descend` | `enter` | ✓ | Descend into folder / bucket |
 | `pane.ascend` | `backspace` / `←` | ✓ | Parent path |
