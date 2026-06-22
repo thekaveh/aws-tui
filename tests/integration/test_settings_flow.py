@@ -273,21 +273,31 @@ async def test_dual_pane_mounts_at_startup_without_blank_screen(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_expired_sso_does_not_call_switch_service_at_startup(tmp_path: Path) -> None:
+async def test_expired_sso_proactively_falls_back_to_local(tmp_path: Path) -> None:
     """Regression: when probe_token returns EXPIRED for the resolved AWS
-    connection, on_mount MUST NOT call switch_service("s3") — because
-    building the DualPane drives S3FS.list which asks boto3 to refresh
-    the SSO access token over the network, and an expired refresh
-    token / unreachable SSO OIDC endpoint hangs the whole startup.
+    connection at startup, the app MUST mount a LocalFS-on-both-panes
+    DualPane (not a giant error placeholder) and surface a sticky
+    recovery toast — proactive graceful degradation.
 
-    The fix is to detect EXPIRED/MISSING from probe_token (offline,
-    cheap) BEFORE switch_service runs, and mount an auth-required
-    placeholder instead.
+    The history: PR #55 originally mounted an "auth required" Static
+    placeholder when SSO was expired (because going through
+    switch_service would block 15s on boto3 trying to refresh the
+    expired token). User feedback after the v0.7 nav rework was that
+    an error-message-instead-of-panes is worse UX than
+    panes-with-graceful-fallback; this fix replaces the placeholder
+    with a LocalFS-only DualPane + recovery-hint toast, and the
+    boto3 wait is short-circuited entirely (no S3FS construction →
+    no network call).
+
+    The test asserts BOTH that switch_service is NOT called (which
+    would block 15s) AND that a DualPane is actually mounted in
+    #content-host (not the old static placeholder).
     """
     import contextlib as _contextlib
 
     from aws_tui.infra.aws_session import TokenProbeResult, TokenState
     from aws_tui.infra.connection_resolver import Connection
+    from aws_tui.ui.widgets.dual_pane import DualPane
 
     config_dir = _prep(tmp_path)  # empty config — we'll seed via monkey-patch
     ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
@@ -322,15 +332,20 @@ async def test_expired_sso_does_not_call_switch_service_at_startup(tmp_path: Pat
             await _await_boot(pilot, app)
             assert called == [], (
                 f"switch_service must NOT be called when probe_token returns "
-                f"EXPIRED — the build path drives S3FS.list → boto3 SSO token "
-                f"refresh → network hang. Got call(s): {called}"
+                f"EXPIRED — the S3 build path drives S3FS.list → boto3 SSO "
+                f"token refresh → 15s network hang. Got call(s): {called}"
             )
-            # Placeholder content must be visible to the user.
+            # DualPane MUST be mounted (graceful degradation — no
+            # error-message-instead-of-panes UX regression).
             host = pilot.app.query_one("#content-host")
-            placeholder = host.query("#content-placeholder")
-            assert len(placeholder) == 1, (
-                f"expected #content-placeholder mounted in content-host but got {len(placeholder)}"
+            assert len(host.query(DualPane)) == 1, (
+                "expected exactly one DualPane mounted in #content-host "
+                "(local-only graceful fallback); got "
+                f"{len(host.query(DualPane))}"
             )
+            # Connection marked unreachable so Shift+S skips it until
+            # the user runs aws sso login + relaunches.
+            assert (fake_conn.kind, fake_conn.name) in ctx.unreachable_connections
     finally:
         with _contextlib.suppress(Exception):
             _dispose(ctx)

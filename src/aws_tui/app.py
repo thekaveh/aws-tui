@@ -279,57 +279,33 @@ class AwsTuiApp(App[None]):
             auth_state = ctx.aws_session.probe_token(initial_conn).state
             await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
             # If the resolved AWS connection's SSO token is EXPIRED at
-            # boot, do NOT call switch_service — building the DualPane
-            # drives ``PaneVM.setup() → S3FS.list(...)`` which asks
-            # boto3 to refresh the SSO access token. With an expired
-            # refresh token (or unreachable SSO OIDC endpoint), boto3
-            # blocks on its default network timeout and the user sees
-            # a hung-then-crash launch. Mount an explicit "auth
-            # required" placeholder instead so the user gets a clear
-            # prompt to run ``aws sso login`` and relaunch.
+            # Run the initial DualPane build in a background worker
+            # so on_mount returns immediately and Textual paints the
+            # chrome (banner, nav rail, hint legend, etc.) without
+            # waiting for boto3 — see the worker docstring for the
+            # blank-screen-on-launch history.
             #
-            # MISSING is intentionally NOT in this set: probe_token
-            # returns MISSING for both "SSO configured but no cache"
-            # and "no SSO at all (static creds)". The latter is
-            # legitimate and should proceed; the former fails faster
-            # than EXPIRED (NoCredentialsError, not a network hang).
-            needs_auth = initial_conn.kind == "aws" and auth_state is TokenState.EXPIRED
-            if needs_auth:
-                self._mount_auth_required_placeholder(initial_conn, auth_state)
-            else:
-                # Run the initial DualPane build in a background worker
-                # so on_mount returns immediately and Textual paints
-                # the chrome (banner, nav rail, hint legend, etc.)
-                # without waiting for boto3.
-                #
-                # Why this matters: ``switch_service("s3")`` calls
-                # ``ContentHostVM.set_content`` which awaits the
-                # hosted VM's ``setup()`` — which calls ``S3FS.list``
-                # — which makes a real boto3 connection. On an
-                # unreachable endpoint (stopped MinIO container,
-                # offline VPN, etc.) boto3 retries with exponential
-                # backoff before giving up, and the entire
-                # on_mount blocks for 10-15s. Textual has already
-                # entered alt-screen mode, so the terminal looks
-                # blank for the duration — users assume the app is
-                # broken and kill it. The auth-required placeholder
-                # path (PR #55) fixed this for AWS+EXPIRED but
-                # ``s3-compatible`` connections never got the same
-                # treatment.
-                #
-                # The ``_boot_in_flight`` flag still gates the
-                # nav-selection subscriber so the worker doesn't
-                # race against the seed selected_id change.
-                self._boot_in_flight = True
-                self.run_worker(
-                    self._initial_mount_worker(),
-                    exclusive=True,
-                    group="content-mount",
-                )
+            # AWS+EXPIRED is NOT routed to a special "auth required"
+            # placeholder anymore (PR #55 originally did that). User
+            # feedback after PR #59: an error-message-instead-of-panes
+            # is a worse UX than panes-with-graceful-fallback. The
+            # worker checks the auth state itself and, when EXPIRED,
+            # skips the S3 build entirely (which would otherwise
+            # block 15s on boto3 trying to refresh the SSO token) and
+            # builds a LocalFS-only DualPane directly with a toast
+            # telling the user how to recover.
+            self._boot_in_flight = True
+            self.run_worker(
+                self._initial_mount_worker(initial_conn=initial_conn, auth_state=auth_state),
+                exclusive=True,
+                group="content-mount",
+            )
         else:
             self._mount_no_connection_placeholder()
 
-    async def _initial_mount_worker(self) -> None:
+    async def _initial_mount_worker(
+        self, *, initial_conn: Connection, auth_state: TokenState
+    ) -> None:
         """Build the initial DualPane in a background worker.
 
         Lifts the previously-inline ``switch_service`` await out of
@@ -342,19 +318,153 @@ class AwsTuiApp(App[None]):
         ``_on_pane_state_changed``) swaps the left pane to ``LocalFS``
         so both panes show the local filesystem instead of a giant
         error placeholder.
+
+        For AWS+EXPIRED specifically, the boto3 wait is short-circuited
+        entirely. probe_token already confirmed the token cache is
+        expired offline; there is no point asking boto3 to refresh it
+        only to time out 15s later. The worker builds a
+        ``LocalFS``-only DualPane directly (no S3FS construction →
+        no boto3 → no wait) and raises a toast with the ``aws sso
+        login`` recovery hint. Other failure modes (unreachable
+        endpoint, AUTH_REQUIRED arriving mid-list, FORBIDDEN, etc.)
+        keep going through the reactive auto-fallback path because
+        we can't know upfront whether they'll fail.
         """
         ctx = self._app_ctx
-        # Arm the auto-fallback BEFORE switch_service so the eventual
-        # UNREACHABLE state (if any) triggers it. The flag is one-shot:
-        # ``_on_pane_state_changed`` clears it on the first fallback or
-        # the first successful IDLE transition.
-        self._auto_fallback_pending = True
         try:
-            with contextlib.suppress(Exception):
-                await ctx.root_vm.switch_service("s3")
-            self._mount_initial_service_view()
+            if initial_conn.kind == "aws" and auth_state is TokenState.EXPIRED:
+                # Proactive fallback. probe_token already told us the
+                # SSO token is expired; skip the 15s boto3 dance.
+                await self._mount_local_only_dual_pane(
+                    initial_conn=initial_conn,
+                    reason="aws-sso-expired",
+                )
+            else:
+                # Normal path. Arm the auto-fallback BEFORE
+                # switch_service so the eventual UNREACHABLE state
+                # (if any) triggers it. The flag is one-shot.
+                self._auto_fallback_pending = True
+                with contextlib.suppress(Exception):
+                    await ctx.root_vm.switch_service("s3")
+                self._mount_initial_service_view()
         finally:
             self._boot_in_flight = False
+
+    async def _mount_local_only_dual_pane(self, *, initial_conn: Connection, reason: str) -> None:
+        """Mount a DualPane with ``LocalFS`` on BOTH panes, bypassing
+        ``S3Service.build_vm`` so we never construct an S3FS provider
+        that would block 15s on boto3.
+
+        Used by the AWS+EXPIRED proactive-fallback path. The
+        ``initial_conn`` is still in ``ctx.unreachable_connections``
+        so ``Shift+S`` skips it until the user runs
+        ``aws sso login --profile X`` and relaunches (or until the
+        ``r`` retry path clears the mark).
+        """
+        from aws_tui.domain.local_fs import LocalFS
+        from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
+        from aws_tui.vm.file_manager.pane_vm import PaneVM
+
+        ctx = self._app_ctx
+        # Mark the connection unreachable so the swap-source ring
+        # skips it (consistent with the reactive auto-fallback path).
+        self._mark_connection_unreachable(initial_conn.kind, initial_conn.name)
+
+        # Reach into the S3Service for its local_root configuration —
+        # tests inject a custom root via this field, production
+        # defaults to None (current working dir). Without this the
+        # LocalFS would always start at CWD even in tests.
+        s3_service = ctx.registry.get("s3")
+        local_root = getattr(s3_service, "_local_root", None)
+
+        def _make_local() -> LocalFS:
+            return LocalFS(root=local_root) if local_root else LocalFS()
+
+        left = PaneVM(
+            provider=_make_local(),
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+            id_prefix="pane.local",
+            identity_label="local",
+            path_protocol="",
+            connection_key=None,
+        )
+        right = PaneVM(
+            provider=_make_local(),
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+            id_prefix="pane.local",
+            identity_label="local",
+            path_protocol="",
+            connection_key=None,
+        )
+        # Defensive: keep S3Service satisfied even if it inspects
+        # local_root later.
+        _ = s3_service
+        # Pull the transfer journal from the S3Service the same way
+        # build_vm does so cross-pane copy/move journals stay
+        # consistent across the fallback.
+        journal = getattr(s3_service, "_journal", None)
+        if journal is None:
+            # Shouldn't happen — S3Service always has a journal — but
+            # bail cleanly if it does.
+            ctx.log_sink.error("app.local_only_mount.missing_journal")
+            return
+        dual = DualPaneVM(
+            left=left,
+            right=right,
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+            transfer_journal=journal,
+        )
+        try:
+            await ctx.root_vm.content_host.set_content(dual, service_id="s3")
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.local_only_mount.set_content_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+        # Mount the widget.
+        try:
+            host = self.query_one("#content-host", Container)
+            await host.remove_children()
+            await host.mount(DualPane(dual, hub=ctx.hub, id="content-dual-pane"))
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.local_only_mount.mount_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+        # Recovery-hint toast. Sticky for AWS-SSO-expired so the user
+        # can read the recovery command at their own pace.
+        profile = initial_conn.profile or initial_conn.name
+        text = {
+            "aws-sso-expired": (
+                f"AWS SSO expired for [b]{profile}[/]. Both panes fell back to "
+                f"local — refresh with [b]aws sso login --profile {profile}[/] "
+                f"and relaunch."
+            ),
+        }.get(reason, f"{initial_conn.name} unavailable — both panes are local.")
+        ctx.root_vm.chrome.toast_stack.raise_toast(
+            ToastModel(
+                id=f"initial-fallback-{reason}-{initial_conn.name}",
+                text=text,
+                level=ToastLevel.WARNING,
+                sticky=True,
+                timeout_seconds=0.0,
+                action_label=None,
+                action_action=None,
+            )
+        )
+        ctx.log_sink.info(
+            "app.local_only_mount.success",
+            reason=reason,
+            kind=initial_conn.kind,
+            name=initial_conn.name,
+        )
 
     # ── on_mount helpers ───────────────────────────────────────────────────
 
@@ -445,37 +555,6 @@ class AwsTuiApp(App[None]):
                     "    3. Edit [b]~/.config/aws-tui/config.toml[/]     (add an AWS or S3-compatible connection)\n\n"
                     "  See [b]docs/connections.md[/] in the repo for the [b][connections.<name>][/] schema and\n"
                     "  vendor quirks (MinIO, R2, B2, Wasabi).\n\n"
-                    "  Press [b]q[/] to quit.",
-                    id="content-placeholder",
-                    classes="content-placeholder",
-                    markup=True,
-                )
-            )
-
-    def _mount_auth_required_placeholder(self, conn: Connection, auth_state: TokenState) -> None:
-        """Render an "SSO session expired / missing" placeholder when the
-        resolved AWS connection's token isn't usable at startup.
-
-        Calling ``switch_service("s3")`` here would build a DualPane
-        whose ``PaneVM.setup`` immediately drives ``S3FS.list(...)`` —
-        and boto3 would then try to refresh the SSO access token over
-        the network. With an expired refresh token or unreachable SSO
-        OIDC endpoint, that call blocks on its default timeout, the
-        whole on_mount hangs, and the app eventually crashes. The
-        placeholder avoids that path and gives the user a clear action.
-        """
-        reason = "expired" if auth_state is TokenState.EXPIRED else "missing"
-        profile = conn.profile or conn.name
-        with contextlib.suppress(Exception):
-            host = self.query_one("#content-host", Container)
-            host.mount(
-                Static(
-                    f"\n  AWS SSO session for profile [b]{profile}[/] is "
-                    f"[b]{reason}[/].\n\n"
-                    "  Refresh it in another terminal, then relaunch:\n\n"
-                    f"    [b]aws sso login --profile {profile}[/]\n\n"
-                    "  Or pick a different profile via [b]$AWS_PROFILE[/] / "
-                    "[b]~/.config/aws-tui/config.toml[/].\n\n"
                     "  Press [b]q[/] to quit.",
                     id="content-placeholder",
                     classes="content-placeholder",
