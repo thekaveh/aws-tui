@@ -1165,12 +1165,27 @@ class AwsTuiApp(App[None]):
         selected = ctx.root_vm.services_menu.selected_id
         if selected is None:
             return
+        # Serialize the two mount workers via an exclusive worker
+        # group so a rapid Settings → S3 → Settings toggle can't race
+        # against itself. Without exclusivity, the awaited
+        # ``switch_service`` inside ``_mount_service_view`` would
+        # interleave with a later ``_mount_settings_view`` task: the
+        # service worker would resume after the settings worker
+        # replaced ContentHost.current, read the now-SettingsVM, and
+        # try to wrap it in a DualPane — which then crashes with
+        # ``AttributeError: 'SettingsVM' object has no attribute 'left'``
+        # (observed on Windows py3.11 in CI; rarer but possible
+        # everywhere). ``exclusive=True`` + a shared group name makes
+        # Textual cancel any in-flight worker in the group before
+        # starting the new one.
         if selected == "settings":
-            self.run_worker(self._mount_settings_view())
+            self.run_worker(self._mount_settings_view(), exclusive=True, group="content-mount")
         else:
             # Re-use the S3 content if it's already hosted; switch_service
             # is idempotent on the same service_id.
-            self.run_worker(self._mount_service_view(selected))
+            self.run_worker(
+                self._mount_service_view(selected), exclusive=True, group="content-mount"
+            )
 
     async def _mount_settings_view(self) -> None:
         """Swap the content host to show SettingsView.
