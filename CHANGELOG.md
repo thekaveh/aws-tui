@@ -298,6 +298,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path now leaves a triage signal instead of silently rendering
   blank. Mirrors the existing observability in
   `_mount_initial_service_view`.
+- **(second maintenance loop, pass 10)** `CrossFsCopy.copy()` now
+  wraps the destination's `write_stream` call in `try/finally` that
+  explicitly awaits `stream.aclose()` when the source's
+  `read_stream` returned an async generator. Previously a
+  `write_stream` failure (or normal completion) relied on Python's
+  GC-driven `aclose` for source-side cleanup, which can race
+  event-loop shutdown on abort paths. Belt-and-suspenders
+  deterministic close; GC remains the fallback for non-generator
+  iterables.
+- **(second maintenance loop, pass 10)** `LocalFS.delete()`'s
+  initial `lstat` probe now catches the generic `OSError` branch in
+  addition to `FileNotFoundError` / `PermissionError`. Without it,
+  `ELOOP` / `ENAMETOOLONG` / `EIO` errors leaked past the
+  `FileSystemProvider` error-taxonomy contract; the matching catch
+  was already present in the same method's second try-block.
+  Same bug-class as the Pass 4 S3FS `delete` / `rename`
+  outer-except gap.
 - **Blank screen on launch — defensive hardening** (PR #55). After PR
   #54's nav-page rework, some users saw a blank main area at startup.
   Could not be reproduced in any headless test, but three belt-and-
