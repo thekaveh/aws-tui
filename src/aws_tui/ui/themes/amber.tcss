@@ -560,6 +560,8 @@ NavMenu > #menu-pinned {
 
 SettingsView {
     background: $bg;
+    border: solid $rule-dim;
+    border-title-color: $text-dim;
 }
 
 SettingsView > #settings-title {

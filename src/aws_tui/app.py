@@ -609,63 +609,83 @@ class AwsTuiApp(App[None]):
         return current if isinstance(current, DualPaneVM) else None
 
     def action_switch_focus(self) -> None:
-        """Tab cycle: leftPane → rightPane → NavMenu → leftPane.
+        """Tab cycle: leftPane → rightPane → nav-services → nav-pinned → leftPane.
 
-        The NavMenu is the third focus target now that the rail is
-        always visible. Within the dual-pane portion of the cycle the
-        DualPaneVM's ``switch_focus_command`` still owns the left↔right
-        toggle; the NavMenu step is a View-level focus jump that the
-        VM doesn't need to know about. Settings-only mounts (where
-        ``_dual_pane()`` returns None) collapse the cycle to
-        ``content ↔ NavMenu``.
+        Decoupled from Textual focus (Pane widgets don't accept
+        Textual focus anyway — they use a CSS ``-focused`` class
+        toggled by the DualPaneVM). State is derived from:
+
+        - ``dual.focused`` (VM-tracked LEFT / RIGHT pane highlight)
+        - Whether Textual focus is currently inside the NavMenu and
+          which of its OptionLists has it
+
+        Transitions:
+        - LEFT pane → RIGHT pane (toggle DualPaneVM).
+        - RIGHT pane → NAV services OptionList (Textual focus).
+        - NAV services → NAV pinned (Textual focus).
+        - NAV pinned → LEFT pane (clear Textual focus; toggle VM to
+          LEFT if it had drifted to RIGHT).
+
+        Settings-only mounts (no DualPane) collapse to a 2-way cycle
+        between the two nav OptionLists, with the content host (which
+        owns the SettingsView) as the third slot.
         """
         try:
             nav = self.query_one("#nav-menu", NavMenu)
         except Exception:
             nav = None
+
         currently_on_nav = (
             nav is not None
             and self.focused is not None
             and (self.focused is nav or nav in self.focused.ancestors_with_self)
         )
-        if currently_on_nav:
-            # Step OUT of the nav rail back into the content area.
-            dual = self._dual_pane()
-            if dual is not None:
-                # Re-mount focus on whichever pane the VM thinks is
-                # active so the cycle resumes from a consistent place.
-                from aws_tui.ui.widgets.dual_pane import DualPane
+        dual = self._dual_pane()
 
+        if currently_on_nav and nav is not None:
+            # Inside nav. Step through services → pinned → exit.
+            focused_id = getattr(self.focused, "id", None)
+            if focused_id == "menu-services":
+                # services → pinned (Settings).
                 with contextlib.suppress(Exception):
-                    dp = self.query_one("#content-dual-pane", DualPane)
-                    dp.focus_focused_pane()
+                    nav.query_one("#menu-pinned", OptionList).focus()
                 return
-            # Settings is hosted (no dual pane) — just refocus the
-            # content host so subsequent keystrokes land somewhere
-            # sensible.
+            # On pinned (Settings) — or anywhere else inside nav. Exit.
+            if dual is not None:
+                from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
+
+                if getattr(dual, "focused", None) is FocusedPane.RIGHT:
+                    # Toggle VM back to LEFT so the visual highlight
+                    # matches the cycle position when we land.
+                    cmd = getattr(dual, "switch_focus_command", None)
+                    if cmd is not None:
+                        cmd.execute()
+            # Yield Textual focus so the App's priority Up/Down/Enter
+            # bindings drive the pane cursor uniformly (no fight with
+            # OptionList's own navigation).
             with contextlib.suppress(Exception):
-                host = self.query_one("#content-host", Container)
-                host.focus()
+                self.set_focus(None)
             return
 
-        dual = self._dual_pane()
         if dual is None:
-            # Content host is showing Settings (or a placeholder); only
-            # two focus targets exist (content + NavMenu). Cycle to nav.
+            # No dual pane (Settings hosted) — cycle into nav.
             if nav is not None:
                 with contextlib.suppress(Exception):
                     nav.query_one("#menu-services", OptionList).focus()
             return
 
-        cmd = getattr(dual, "switch_focus_command", None)
-        # If the focus is already on the right pane (VM-tracked), Tab
-        # jumps to the NavMenu instead of bouncing back to the left.
+        # On a pane (Textual focus NOT in nav). Advance.
         from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
 
-        if getattr(dual, "focused", None) is FocusedPane.RIGHT and nav is not None:
-            with contextlib.suppress(Exception):
-                nav.query_one("#menu-services", OptionList).focus()
+        cmd = getattr(dual, "switch_focus_command", None)
+        if getattr(dual, "focused", None) is FocusedPane.RIGHT:
+            # RIGHT → NAV services.
+            if nav is not None:
+                with contextlib.suppress(Exception):
+                    nav.query_one("#menu-services", OptionList).focus()
             return
+        # LEFT → RIGHT (toggle VM; ``_sync_focus`` flips the
+        # ``-focused`` CSS class on the two Pane widgets).
         if cmd is not None:
             cmd.execute()
 
@@ -695,6 +715,20 @@ class AwsTuiApp(App[None]):
         self._move_cursor(1)
 
     def _move_cursor(self, delta: int) -> None:
+        # If Textual focus is in the NavMenu's OptionList, Up/Down
+        # should navigate THAT list, not the pane cursor. Textual's
+        # ``priority=True`` on the App binding steals the keystroke
+        # before the OptionList sees it; we manually forward the
+        # cursor action so OptionList navigation still works while
+        # nav is the active Tab-cycle slot.
+        if self._nav_has_focus():
+            focused_list = self._focused_optionlist()
+            if focused_list is not None:
+                if delta < 0:
+                    focused_list.action_cursor_up()
+                else:
+                    focused_list.action_cursor_down()
+            return
         dual = self._dual_pane()
         if dual is None:
             return
@@ -704,6 +738,35 @@ class AwsTuiApp(App[None]):
         cmd = getattr(pane, "move_cursor_command", None)
         if cmd is not None:
             cmd.execute(delta)
+
+    def _nav_has_focus(self) -> bool:
+        """True if Textual focus is currently on the NavMenu or any of
+        its descendants (the two OptionLists or the hamburger).
+
+        Used to gate priority bindings (Up/Down/Enter) so they don't
+        steal keystrokes from the NavMenu's OptionList navigation when
+        the user has Tab-cycled focus to the rail.
+        """
+        try:
+            nav = self.query_one("#nav-menu", NavMenu)
+        except Exception:
+            return False
+        focused = self.focused
+        if focused is None:
+            return False
+        return focused is nav or nav in focused.ancestors_with_self
+
+    def _focused_optionlist(self) -> OptionList | None:
+        """Return the currently-focused OptionList if it's a NavMenu
+        child, else None. Used by the Up/Down/Enter forwarding path
+        so priority App bindings can drive the OptionList that has
+        Textual focus instead of the pane cursor."""
+        if not self._nav_has_focus():
+            return None
+        focused = self.focused
+        if isinstance(focused, OptionList):
+            return focused
+        return None
 
     async def action_descend(self) -> None:
         # Forward Enter to the active modal first. Most of our modals
@@ -715,6 +778,17 @@ class AwsTuiApp(App[None]):
         # arrow-key focus — checked first so it wins over the plain
         # ``confirm`` fallback.
         if self._forward_to_modal("action_commit_focused", "action_confirm", "action_apply"):
+            return
+        # If Textual focus is in the NavMenu's OptionList, Enter is
+        # the user picking a service — forward to the OptionList's
+        # action_select so it fires its OptionSelected event (handled
+        # by NavMenu.on_option_list_option_selected →
+        # switch_service_command). Without this forward, the App's
+        # priority=True Enter binding steals the keystroke.
+        if self._nav_has_focus():
+            focused_list = self._focused_optionlist()
+            if focused_list is not None:
+                focused_list.action_select()
             return
         dual = self._dual_pane()
         if dual is None:
