@@ -450,13 +450,6 @@ class DualPaneVM:
         # cancel_command path in TransferVM._cancel, so no progress
         # message is needed here — the overlay already shows
         # ``⊘ cancelled`` from the moment the user clicked.
-        # Cancel won the race. Kill the copy task so the underlying
-        # provider (aioboto3 client, file write) bails at its next
-        # await point. Mark journal aborted. The TransferVM has
-        # already transitioned to CANCELLED via the immediate
-        # cancel_command path in TransferVM._cancel, so no progress
-        # message is needed here — the overlay already shows
-        # ``⊘ cancelled`` from the moment the user clicked.
         copy_task.cancel()
         with contextlib.suppress(Exception, asyncio.CancelledError):
             await copy_task
