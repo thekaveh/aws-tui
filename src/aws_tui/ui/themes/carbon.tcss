@@ -485,16 +485,6 @@ Toast.-warning { border: round $warning;  color: $warning; }
 Toast.-error   { border: round $danger;   color: $danger; }
 
 
-/* ── Services hamburger (top-left toggle) ────────────────────────────── */
-ServicesHamburger {
-    background: $bg-elev;
-    color: $accent;
-}
-ServicesHamburger:hover {
-    background: $accent;
-    color: $bg;
-}
-
 /* ─── S3ConnectionsPanel ──────────────────────────────────────── */
 
 S3ConnectionsPanel .connection-row {
@@ -567,17 +557,12 @@ S3ConnectionsPanel _AddButton {
 
 NavMenu {
     background: $bg;
-}
-
-NavMenu > #menu-header {
-    background: $bg;
-    color: $text-muted;
-    padding: 0 1;
-    text-style: bold;
+    border: solid $rule-dim;
+    border-title-color: $text-dim;
 }
 
 NavMenu > OptionList {
-    background: $bg;
+    background: transparent;
     color: $text;
     border: none;
     padding: 0;

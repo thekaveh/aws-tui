@@ -33,7 +33,7 @@ class _FakeS3Service:
     the row; ``build_vm`` / ``supports`` are stubs.
     """
 
-    descriptor = ServiceDescriptor(id="s3", label="S3", icon="☁")
+    descriptor = ServiceDescriptor(id="s3", label="S3", icon="🪣")
 
     def supports(self, _connection: Connection) -> bool:
         return True

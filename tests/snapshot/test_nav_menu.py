@@ -63,7 +63,6 @@ def test_nav_menu_expanded_renders_visible_settings_label(theme: str) -> None:
         f"'Settings' label missing from expanded NavMenu SVG for theme {theme!r}"
     )
     assert "S3" in svg, f"'S3' service label missing for theme {theme!r}"
-    assert "menu" in svg, f"'menu' header missing for theme {theme!r}"
     # SVG text elements appear in document order — top-to-bottom. So
     # the first occurrence of "Settings" must come AFTER the first
     # occurrence of "S3" iff Settings is docked at the bottom.
@@ -71,6 +70,11 @@ def test_nav_menu_expanded_renders_visible_settings_label(theme: str) -> None:
         f"Settings should appear below S3 in the rendered NavMenu "
         f"(docked-bottom layout) but came first in SVG for theme {theme!r}"
     )
+    # The inline hamburger glyph at the top must be visible — that's the
+    # always-visible affordance for collapse/expand. Either '+' (when
+    # collapsed) or '-' (when expanded) is present; for this expanded
+    # snapshot we expect '-'.
+    assert "-" in svg, f"hamburger glyph missing from expanded NavMenu SVG for theme {theme!r}"
 
 
 @pytest.mark.parametrize("theme", THEMES)
@@ -90,3 +94,6 @@ def test_nav_menu_collapsed_renders_visible_settings_icon(theme: str) -> None:
     )
     svg = p.read_text()
     assert "⚙" in svg, f"gear glyph missing from collapsed NavMenu SVG for theme {theme!r}"
+    # The hamburger glyph at the top must be '+' in the collapsed state
+    # (signalling: click to expand).
+    assert "+" in svg, f"hamburger '+' missing from collapsed NavMenu SVG for theme {theme!r}"

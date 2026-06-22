@@ -95,5 +95,18 @@ class DualPane(HubSubscriberMixin, Widget):
         self._left_widget.set_focused(focused is FocusedPane.LEFT)
         self._right_widget.set_focused(focused is FocusedPane.RIGHT)
 
+    def focus_focused_pane(self) -> None:
+        """Move Textual focus to whichever pane the VM marks active.
+
+        Used by ``AwsTuiApp.action_switch_focus`` when Tab cycles
+        back from the NavMenu into the dual-pane area: the focus
+        should land on the VM-tracked active pane so subsequent
+        keystrokes go where the user expects.
+        """
+        focused = self._vm.focused
+        target = self._left_widget if focused is FocusedPane.LEFT else self._right_widget
+        if target is not None:
+            target.focus()
+
 
 __all__ = ["DualPane"]

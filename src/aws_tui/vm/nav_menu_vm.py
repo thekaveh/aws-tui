@@ -261,7 +261,12 @@ class NavMenuVM:
         settings_descriptor = ServiceDescriptor(
             id=SETTINGS_NAV_ID,
             label="Settings",
-            icon="⚙",
+            # Gear emoji (U+2699 GEAR + U+FE0F VARIATION SELECTOR-16).
+            # The trailing VS-16 is what flips terminal rendering from
+            # the text-style outline (often a tiny grey line-art glyph)
+            # to the colored emoji presentation — without it, ``⚙``
+            # alone is treated as a text symbol per Unicode TR51.
+            icon="⚙️",
         )
         settings_item = NavItemVM(
             descriptor=settings_descriptor,

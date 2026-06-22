@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Container, Horizontal
-from textual.widgets import Static
+from textual.widgets import OptionList, Static
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.infra.aws_session import TokenState
@@ -39,7 +39,6 @@ from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.nav_menu import NavMenu
-from aws_tui.ui.widgets.services_hamburger import ServicesHamburger
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
@@ -127,17 +126,13 @@ class AwsTuiApp(App[None]):
     # main layout instead of consuming flow space.
     #
     # ``#main-area`` and ``#content-host`` need explicit ``1fr`` sizing
-    # because:
-    #   - The NavMenu starts ``display: none; width: 0`` (collapsed) and
-    #     the ServicesHamburger is fixed ``width: 3``.
-    #   - Without an explicit ``width: 1fr`` rule on ``#content-host``,
-    #     Textual's Horizontal layout doesn't allocate the remaining
-    #     space to the content host — the DualPane (or SettingsView)
-    #     mounted inside renders at zero width and the user sees a
-    #     blank screen at startup. The legacy ServicesMenu's per-theme
-    #     ``width: 16`` rule made the layout work by accident; the
-    #     NavMenu rework moved the width rule into the widget's
-    #     DEFAULT_CSS and the content-host lost its implicit sizing.
+    # so the Horizontal layout allocates the remaining width to the
+    # content host after the always-visible NavMenu takes its fixed 4
+    # (collapsed) or 18 (expanded) cells. Without this, the DualPane
+    # mounted inside renders at zero width and the user sees a blank
+    # screen at startup. The standalone ServicesHamburger widget was
+    # removed in the always-visible nav rework — the hamburger now
+    # lives inside the NavMenu itself.
     CSS = """
     Screen {
         layers: base notifications;
@@ -214,6 +209,15 @@ class AwsTuiApp(App[None]):
         # change doesn't spawn a duplicate mount worker that races the
         # on_mount direct mount (blank-screen-at-startup regression).
         self._boot_in_flight: bool = False
+        # While True, an UNREACHABLE / AUTH_REQUIRED transition on
+        # the focused (left) pane auto-falls-back to LocalFS so the
+        # user isn't staring at a giant error pane when their
+        # initial connection happens to be down. Cleared either on
+        # successful initial load (left pane reaches IDLE/EMPTY) or
+        # the first time we trigger the fallback. NOT triggered on
+        # user-driven Shift+S swaps (they explicitly chose that
+        # connection, so an error is the right surface).
+        self._auto_fallback_pending: bool = False
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -235,7 +239,9 @@ class AwsTuiApp(App[None]):
             id="brand-banner",
         )
         with Horizontal(id="main-area"):
-            yield ServicesHamburger(id="services-hamburger")
+            # NavMenu owns its own inline hamburger now (top row of the
+            # rail); the standalone ServicesHamburger widget was
+            # removed in the always-visible nav rework.
             yield NavMenu(vm=ctx.root_vm.services_menu, hub=ctx.hub, id="nav-menu")
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
@@ -291,25 +297,64 @@ class AwsTuiApp(App[None]):
             if needs_auth:
                 self._mount_auth_required_placeholder(initial_conn, auth_state)
             else:
-                # Mark the boot sequence as in-flight so the new
-                # nav-selection hub subscriber
-                # (_on_nav_selection_changed) skips the worker mount it
-                # would otherwise spawn in response to the selected_id
-                # change that switch_service is about to fire. Without
-                # this guard, two concurrent mount paths race against
-                # the same #content-host (the worker's
-                # remove_children/mount + _mount_initial_service_view's
-                # direct mount) and one silently clobbers the other —
-                # the user sees a blank screen.
+                # Run the initial DualPane build in a background worker
+                # so on_mount returns immediately and Textual paints
+                # the chrome (banner, nav rail, hint legend, etc.)
+                # without waiting for boto3.
+                #
+                # Why this matters: ``switch_service("s3")`` calls
+                # ``ContentHostVM.set_content`` which awaits the
+                # hosted VM's ``setup()`` — which calls ``S3FS.list``
+                # — which makes a real boto3 connection. On an
+                # unreachable endpoint (stopped MinIO container,
+                # offline VPN, etc.) boto3 retries with exponential
+                # backoff before giving up, and the entire
+                # on_mount blocks for 10-15s. Textual has already
+                # entered alt-screen mode, so the terminal looks
+                # blank for the duration — users assume the app is
+                # broken and kill it. The auth-required placeholder
+                # path (PR #55) fixed this for AWS+EXPIRED but
+                # ``s3-compatible`` connections never got the same
+                # treatment.
+                #
+                # The ``_boot_in_flight`` flag still gates the
+                # nav-selection subscriber so the worker doesn't
+                # race against the seed selected_id change.
                 self._boot_in_flight = True
-                try:
-                    with contextlib.suppress(Exception):
-                        await ctx.root_vm.switch_service("s3")
-                    self._mount_initial_service_view()
-                finally:
-                    self._boot_in_flight = False
+                self.run_worker(
+                    self._initial_mount_worker(),
+                    exclusive=True,
+                    group="content-mount",
+                )
         else:
             self._mount_no_connection_placeholder()
+
+    async def _initial_mount_worker(self) -> None:
+        """Build the initial DualPane in a background worker.
+
+        Lifts the previously-inline ``switch_service`` await out of
+        ``on_mount`` so the screen renders the chrome immediately even
+        when the resolved s3-compatible endpoint is unreachable and
+        boto3 takes 10-15s to time out. The user sees the rail and
+        an empty content-host instead of a hung blank terminal; the
+        pane(s) transition to UNREACHABLE state when boto3 finally
+        fails — and the auto-fallback path (see
+        ``_on_pane_state_changed``) swaps the left pane to ``LocalFS``
+        so both panes show the local filesystem instead of a giant
+        error placeholder.
+        """
+        ctx = self._app_ctx
+        # Arm the auto-fallback BEFORE switch_service so the eventual
+        # UNREACHABLE state (if any) triggers it. The flag is one-shot:
+        # ``_on_pane_state_changed`` clears it on the first fallback or
+        # the first successful IDLE transition.
+        self._auto_fallback_pending = True
+        try:
+            with contextlib.suppress(Exception):
+                await ctx.root_vm.switch_service("s3")
+            self._mount_initial_service_view()
+        finally:
+            self._boot_in_flight = False
 
     # ── on_mount helpers ───────────────────────────────────────────────────
 
@@ -485,10 +530,63 @@ class AwsTuiApp(App[None]):
         return current if isinstance(current, DualPaneVM) else None
 
     def action_switch_focus(self) -> None:
+        """Tab cycle: leftPane → rightPane → NavMenu → leftPane.
+
+        The NavMenu is the third focus target now that the rail is
+        always visible. Within the dual-pane portion of the cycle the
+        DualPaneVM's ``switch_focus_command`` still owns the left↔right
+        toggle; the NavMenu step is a View-level focus jump that the
+        VM doesn't need to know about. Settings-only mounts (where
+        ``_dual_pane()`` returns None) collapse the cycle to
+        ``content ↔ NavMenu``.
+        """
+        try:
+            nav = self.query_one("#nav-menu", NavMenu)
+        except Exception:
+            nav = None
+        currently_on_nav = (
+            nav is not None
+            and self.focused is not None
+            and (self.focused is nav or nav in self.focused.ancestors_with_self)
+        )
+        if currently_on_nav:
+            # Step OUT of the nav rail back into the content area.
+            dual = self._dual_pane()
+            if dual is not None:
+                # Re-mount focus on whichever pane the VM thinks is
+                # active so the cycle resumes from a consistent place.
+                from aws_tui.ui.widgets.dual_pane import DualPane
+
+                with contextlib.suppress(Exception):
+                    dp = self.query_one("#content-dual-pane", DualPane)
+                    dp.focus_focused_pane()
+                return
+            # Settings is hosted (no dual pane) — just refocus the
+            # content host so subsequent keystrokes land somewhere
+            # sensible.
+            with contextlib.suppress(Exception):
+                host = self.query_one("#content-host", Container)
+                host.focus()
+            return
+
         dual = self._dual_pane()
         if dual is None:
+            # Content host is showing Settings (or a placeholder); only
+            # two focus targets exist (content + NavMenu). Cycle to nav.
+            if nav is not None:
+                with contextlib.suppress(Exception):
+                    nav.query_one("#menu-services", OptionList).focus()
             return
+
         cmd = getattr(dual, "switch_focus_command", None)
+        # If the focus is already on the right pane (VM-tracked), Tab
+        # jumps to the NavMenu instead of bouncing back to the left.
+        from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
+
+        if getattr(dual, "focused", None) is FocusedPane.RIGHT and nav is not None:
+            with contextlib.suppress(Exception):
+                nav.query_one("#menu-services", OptionList).focus()
+            return
         if cmd is not None:
             cmd.execute()
 
@@ -759,15 +857,18 @@ class AwsTuiApp(App[None]):
                     entry.set_marked(False)  # type: ignore[attr-defined]
 
     def action_toggle_services(self) -> None:
-        """Collapse/expand the left nav rail."""
+        """Toggle the nav rail between collapsed (icon-only) and
+        expanded (icon + label). The rail is always visible —
+        previously this method also flipped a separate ``-expanded``
+        visibility class that toggled the rail between
+        ``display: none`` and ``display: block``; that state was
+        dropped so a minimally collapsed icon column is always
+        present, mirroring the macOS Settings sidebar / VS Code
+        activity-bar idiom the user asked for."""
         try:
             nav = self.query_one("#nav-menu", NavMenu)
         except Exception:
             return
-        if nav.has_class("-expanded"):
-            nav.remove_class("-expanded")
-        else:
-            nav.add_class("-expanded")
         nav.toggle_collapsed()
 
     def action_cycle_theme(self) -> None:
@@ -985,7 +1086,19 @@ class AwsTuiApp(App[None]):
         )
 
     async def action_themes(self) -> None:
-        """Open the keyboard-navigable theme picker modal."""
+        """Open the keyboard-navigable theme picker modal.
+
+        Idempotent — if a ThemePickerModal is already on the screen
+        stack (user pressed ``t`` more than once), this is a no-op.
+        Previously each ``t`` press stacked another picker on top,
+        requiring N ``Esc`` presses to clear N stacked modals.
+        """
+        # ``self.screen_stack`` is ordered: the active screen is last.
+        # Walk it and bail if any layer is already a ThemePickerModal.
+        for screen in self.screen_stack:
+            if isinstance(screen, ThemePickerModal):
+                return
+
         ctx = self._app_ctx
 
         def _pick_with_toast(name: str) -> None:
@@ -1093,6 +1206,16 @@ class AwsTuiApp(App[None]):
         """Hub-subscriber dispatch. When an active pane's state hits
         UNREACHABLE, mark its connection. When it transitions to
         IDLE / EMPTY from UNREACHABLE, clear the mark.
+
+        Also handles the **startup auto-fallback**: if
+        ``_auto_fallback_pending`` is True (set by
+        ``_initial_mount_worker``) and the LEFT pane reaches
+        UNREACHABLE / AUTH_REQUIRED / FORBIDDEN, swap that pane's
+        provider to ``LocalFS`` so the user gets a usable file
+        manager on both sides instead of a giant error pane. The
+        fallback is one-shot — it doesn't fire on subsequent
+        Shift+S failures (those were user-driven; the error pane is
+        the right surface).
         """
         from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -1101,6 +1224,58 @@ class AwsTuiApp(App[None]):
             self._mark_connection_unreachable(kind, name)
         elif was_marked and new_state in (PaneState.IDLE, PaneState.EMPTY):
             self._clear_connection_unreachable(kind, name)
+
+        # Startup auto-fallback. One-shot: cleared on first fire OR
+        # on first successful IDLE/EMPTY transition. Only applies to
+        # the LEFT pane (initial S3 pane); the right pane is already
+        # LocalFS by construction.
+        if self._auto_fallback_pending:
+            unusable = new_state in (
+                PaneState.UNREACHABLE,
+                PaneState.AUTH_REQUIRED,
+                PaneState.FORBIDDEN,
+            )
+            usable = new_state in (PaneState.IDLE, PaneState.EMPTY)
+            if unusable:
+                self._auto_fallback_pending = False
+                self.run_worker(
+                    self._fallback_left_pane_to_local(kind=kind, name=name),
+                    exclusive=True,
+                    group="auto-fallback",
+                )
+            elif usable:
+                # Connection worked — no fallback needed; arm-off.
+                self._auto_fallback_pending = False
+
+    async def _fallback_left_pane_to_local(self, *, kind: str, name: str) -> None:
+        """Swap the left pane to ``LocalFS`` as a one-shot startup
+        recovery when the initial S3 connection isn't usable. Raises
+        a one-line info toast so the user knows what happened.
+        """
+        dual = self._dual_pane()
+        if dual is None:
+            return
+        left = getattr(dual, "left", None)
+        if left is None:
+            return
+        ctx = self._app_ctx
+        ctx.log_sink.info("app.auto_fallback.left_to_local", kind=kind, name=name)
+        # Mark the connection as unreachable in the swap-source ring
+        # so Shift+S skips it until the user explicitly retries.
+        self._mark_connection_unreachable(kind, name)
+        with contextlib.suppress(Exception):
+            await self._rebind_pane_to_local(left)
+        ctx.root_vm.chrome.toast_stack.raise_toast(
+            ToastModel(
+                id=f"auto-fallback-{kind}-{name}",
+                text=f"{name} unreachable — left pane fell back to local",
+                level=ToastLevel.INFO,
+                sticky=False,
+                timeout_seconds=4.0,
+                action_label=None,
+                action_action=None,
+            )
+        )
 
     def _on_connection_list_changed(self, msg: object) -> None:
         """Hub subscriber: drop deleted connection names from the
@@ -1249,8 +1424,16 @@ class AwsTuiApp(App[None]):
             return
         try:
             host = self.query_one("#content-host", Container)
-            host.remove_children()
-            host.mount(SettingsView(vm=settings_vm, hub=ctx.hub))
+            # ``await`` both the remove and the mount so a cancelled
+            # worker (e.g. user toggling Settings ↔ S3 rapidly) can't
+            # leave the host with a half-attached widget. Without the
+            # awaits, ``mount`` returns an AwaitMount that's never
+            # consumed — if the worker is cancelled between remove and
+            # mount completion, the pending mount still fires after the
+            # next worker's remove_children, leaving BOTH widgets in
+            # the DOM.
+            await host.remove_children()
+            await host.mount(SettingsView(vm=settings_vm, hub=ctx.hub))
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_settings_view.mount_failed",
@@ -1269,8 +1452,8 @@ class AwsTuiApp(App[None]):
                 if not host.query(DualPane):
                     current_vm = ctx.root_vm.content_host.current
                     if current_vm is not None:
-                        host.remove_children()
-                        host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+                        await host.remove_children()
+                        await host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
             except Exception as exc:
                 ctx.log_sink.error(
                     "app.mount_service_view.remount_failed",
@@ -1293,8 +1476,8 @@ class AwsTuiApp(App[None]):
             host = self.query_one("#content-host", Container)
             current_vm = ctx.root_vm.content_host.current
             if current_vm is not None:
-                host.remove_children()
-                host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+                await host.remove_children()
+                await host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.mount_failed",
