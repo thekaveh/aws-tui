@@ -128,7 +128,6 @@ exclude_lines = [
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
-extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
 select = [

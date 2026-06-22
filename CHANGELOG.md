@@ -67,6 +67,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `astral-sh/ruff-pre-commit` bumped from `v0.15.0` to `v0.15.17`
   to match `uv.lock` (closes the patch-level drift the M1 fix
   `91f6040` left at the minor level).
+- **(second maintenance loop, passes 1–4)** Cache subdirectories
+  (`<cache_home>/log/`, `<cache_home>/crash/`, `<cache_home>/transfers/`)
+  now chmod 0o700 on creation. Matches the config-dir hardening
+  applied in PR #54's first maintenance loop — these subdirs carry
+  log lines (endpoint URLs, request IDs), crash dumps (last 1000
+  log lines + last 100 user actions), and transfer journals
+  (S3 source/destination URIs + multipart upload IDs); none should
+  be readable by other local users on shared systems. Best-effort
+  (filesystems without POSIX permission bits silently fall back).
+- **(second maintenance loop, passes 1–4)** All runtime
+  dependencies in `pyproject.toml` now carry next-major upper
+  bounds (e.g. `textual<9`, `boto3<2`, `aioboto3<16`). Matches the
+  long-standing vmx posture (`>=2.6.0,<3.0.0`). Insulates
+  downstream `pip install aws-tui` from a transitive breaking
+  change between releases. `uv.lock` unchanged — every cap covers
+  the currently-resolved version. Build-system requirement
+  (`hatchling>=1.21,<2`) also capped.
+- **(second maintenance loop, passes 1–4)** All `configparser.read()`
+  calls on `~/.aws/{config,credentials}` now pass `encoding="utf-8"`
+  explicitly (default was `locale.getencoding()`, platform-
+  dependent). Matches the explicit utf-8 used elsewhere in
+  `infra/`. Niche but real on non-UTF-8 POSIX locales.
+- **(second maintenance loop, passes 1–4)** CI `lint-type` job
+  no longer runs `ruff`, `ruff format --check`, and `mypy` twice
+  per push (once as dedicated steps, once via `pre-commit run
+  --all-files`). The pre-commit step is now the single source of
+  truth for those hooks. Net: lint-type wall-clock dropped ~30s.
+  All runners moved from `ubuntu-22.04` to `ubuntu-24.04` ahead
+  of the upstream image's deprecation window.
+- **(second maintenance loop, passes 1–4)** `S3Service` no longer
+  takes an `aws_session` constructor parameter — the field was
+  held but never read (the S3FS factory uses its own
+  `aioboto3.Session` per build_vm). Composition + 4 test
+  modules simplified.
 - **Pane border-subtitle format is now connection-kind-aware.**
   - `aws`           → `aws s3 · {profile} · {region}` (was `aws · …`)
   - `s3-compatible` → `s3-compatible · {name} · {endpoint}`
@@ -234,6 +268,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **(second maintenance loop, passes 1–4)** `AwsTuiApp.action_quit`
+  is now overridden to await `_aws_tui_shutdown` on `q` / `ctrl+c`.
+  Previously every normal exit silently bypassed
+  `aws_session.aclose_all_clients`, `transfers_vm.cancel_all_command`,
+  and `log_sink.flush()` — Textual's sync `App.action_quit` was
+  called instead. Each leaked aioboto3 sockets, abandoned in-flight
+  copy tasks (left their journal entries as 'crashed' so the next
+  launch's resume modal would surface them), and dropped buffered
+  log records.
+- **(second maintenance loop, passes 1–4)** `S3FS.delete` and
+  `S3FS.rename` now wrap their outer `try` with
+  `except ClientError → _map_client_error`. Previously a bucket
+  policy that allowed `s3:GetObject` but denied `s3:DeleteObject`
+  produced a raw botocore `ClientError` with verbose XML instead
+  of a `PermissionDeniedError`; the UI's pretty toast path was
+  skipped. The `rename` fix also handles the partial-rename case
+  (copy succeeded, source delete denied).
+- **(second maintenance loop, passes 1–4)** `DualPaneVM._pre_register_pending`
+  no longer leaks partial `_cancel_events` entries when
+  `TransferJournal.begin` raises mid-batch (e.g. disk-full on
+  entry N of M). The new inner `try/except` reaps the
+  registrations from entries 1..N-1 before re-raising.
+- **(second maintenance loop, passes 1–4)**
+  `AwsTuiApp._mount_settings_view` and `_mount_service_view`
+  replaced their bare `contextlib.suppress(Exception)` blocks with
+  `try/except + log_sink.error(...)` so a `set_content` /
+  `switch_service` / `host.mount` failure on the content-host nav
+  path now leaves a triage signal instead of silently rendering
+  blank. Mirrors the existing observability in
+  `_mount_initial_service_view`.
 - **Blank screen on launch — defensive hardening** (PR #55). After PR
   #54's nav-page rework, some users saw a blank main area at startup.
   Could not be reproduced in any headless test, but three belt-and-
