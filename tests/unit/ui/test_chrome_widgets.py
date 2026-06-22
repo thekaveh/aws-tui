@@ -211,9 +211,12 @@ async def test_services_menu_renders_items_and_marks_selected() -> None:
             await pilot.pause()
             from textual.widgets import OptionList
 
-            ol = app.query_one(OptionList)
-            # s3, ec2, settings
-            assert ol.option_count == 3
+            # Services live in #menu-services (s3 + ec2); Settings is
+            # pinned at the bottom in #menu-pinned. Sum across both.
+            services = app.query_one("#menu-services", OptionList)
+            pinned = app.query_one("#menu-pinned", OptionList)
+            assert services.option_count == 2  # s3, ec2
+            assert pinned.option_count == 1  # settings
     finally:
         vm.dispose()
         hub.dispose()

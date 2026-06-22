@@ -37,7 +37,7 @@ from vmx import Message, MessageHub, PropertyChangedMessage
 if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
 
-    from aws_tui.vm.nav_menu_vm import NavMenuVM
+    from aws_tui.vm.nav_menu_vm import NavItemVM, NavMenuVM
 
 
 class NavMenu(Widget):
@@ -59,8 +59,22 @@ class NavMenu(Widget):
         padding: 0 1;
         text-style: bold;
     }
-    NavMenu > OptionList {
+    NavMenu > #menu-services {
         height: 1fr;
+        background: $background;
+    }
+    /* Pinned (Settings) list docks to the bottom of the rail so it
+       sits visually separated from the service-item list above it,
+       matching the macOS Settings-app / VS Code activity-bar pattern
+       the user asked for. The explicit ``height: auto`` lets the
+       single Settings row size itself to one line; without it the
+       OptionList would default to ``1fr`` and fight ``#menu-services``
+       for space. Per-theme border-top is added in each theme's
+       ``.tcss`` (using ``$rule-dim``) — DEFAULT_CSS keeps to
+       Textual-core variables only. */
+    NavMenu > #menu-pinned {
+        dock: bottom;
+        height: auto;
         background: $background;
     }
     """
@@ -103,7 +117,15 @@ class NavMenu(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static("menu", id="menu-header")
-        yield OptionList(id="menu-options")
+        # Two OptionLists: services live in #menu-services at the top;
+        # the Settings nav peer lives in #menu-pinned which is docked
+        # to the bottom (see DEFAULT_CSS). Splitting the rail this way
+        # is the only way to visually separate "primary navigation"
+        # from the always-present Settings entry — a single OptionList
+        # would render Settings immediately below the last service
+        # with empty rows trailing it.
+        yield OptionList(id="menu-services")
+        yield OptionList(id="menu-pinned")
 
     def on_mount(self) -> None:
         self._rebuild_options()
@@ -135,32 +157,53 @@ class NavMenu(Widget):
     # ── Internal ───────────────────────────────────────────────────────────
 
     def _rebuild_options(self) -> None:
-        """Rebuild the OptionList options to reflect the current
-        items + collapsed state. Called on mount, on toggle, and
-        whenever the VM's items or selected_id changes (via the hub
-        subscription set up in :meth:`on_mount`)."""
+        """Rebuild both OptionLists to reflect the current items +
+        collapsed state. Called on mount, on toggle, and whenever the
+        VM's items or selected_id changes (via the hub subscription
+        set up in :meth:`on_mount`).
+
+        Services go into ``#menu-services`` (top); the Settings nav
+        peer goes into ``#menu-pinned`` (docked bottom). The split is
+        purely a View concern — :class:`NavMenuVM` still owns ONE
+        ordered items list with Settings as the last entry."""
         try:
-            ol = self.query_one("#menu-options", OptionList)
+            services = self.query_one("#menu-services", OptionList)
+            pinned = self.query_one("#menu-pinned", OptionList)
         except Exception:
             return  # Not mounted yet.
-        ol.clear_options()
-        for item in self._vm.items:
-            descriptor = item.descriptor
-            if self._collapsed:
-                # icon is always a str on ServiceDescriptor, but guard
-                # defensively for any future optional variants.
-                glyph = (descriptor.icon or descriptor.label or "?")[:2]
-                prompt = glyph
-            else:
-                glyph = descriptor.icon or "·"
-                prompt = f"{glyph} {descriptor.label}"
-            ol.add_option(Option(prompt, id=descriptor.id))
-        # Restore the highlight to the currently-selected item if any.
-        if self._vm.selected_id is not None:
-            for idx, item in enumerate(self._vm.items):
-                if item.descriptor.id == self._vm.selected_id:
-                    ol.highlighted = idx
-                    break
+        services.clear_options()
+        pinned.clear_options()
+
+        service_items = [item for item in self._vm.items if item.descriptor.id != "settings"]
+        pinned_items = [item for item in self._vm.items if item.descriptor.id == "settings"]
+
+        def _add_to(target: OptionList, items: list[NavItemVM]) -> None:
+            for item in items:
+                descriptor = item.descriptor
+                if self._collapsed:
+                    # icon is always a str on ServiceDescriptor, but guard
+                    # defensively for any future optional variants.
+                    glyph = (descriptor.icon or descriptor.label or "?")[:2]
+                    prompt = glyph
+                else:
+                    glyph = descriptor.icon or "·"
+                    prompt = f"{glyph} {descriptor.label}"
+                target.add_option(Option(prompt, id=descriptor.id))
+
+        _add_to(services, service_items)
+        _add_to(pinned, pinned_items)
+
+        # Restore the highlight on whichever list owns the selected id.
+        selected_id = self._vm.selected_id
+        if selected_id is not None:
+            for idx, item in enumerate(service_items):
+                if item.descriptor.id == selected_id:
+                    services.highlighted = idx
+                    return
+            for idx, item in enumerate(pinned_items):
+                if item.descriptor.id == selected_id:
+                    pinned.highlighted = idx
+                    return
 
     # ── Event handlers ─────────────────────────────────────────────────────
 

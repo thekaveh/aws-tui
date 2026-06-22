@@ -53,7 +53,7 @@ def test_nav_menu_can_be_constructed(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_nav_menu_renders_settings_item_in_options(tmp_path: Path) -> None:
-    """The Settings nav item must be visible in the OptionList prompts."""
+    """The Settings nav item must be visible in the pinned OptionList."""
     vm, hub = _make_vm_with_hub(tmp_path)
 
     class _Host(App[None]):
@@ -71,12 +71,14 @@ async def test_nav_menu_renders_settings_item_in_options(tmp_path: Path) -> None
             await pilot.pause()
             from textual.widgets import OptionList
 
-            ol = nav.query_one(OptionList)
+            # Settings lives in the docked-bottom pinned list, not in
+            # the services list. The split into two OptionLists is what
+            # gives the rail its "Settings docked at the bottom" layout.
+            pinned = nav.query_one("#menu-pinned", OptionList)
             # Force-expand so labels (not just icons) are present.
             nav.toggle_collapsed()
             await pilot.pause()
-            prompts = [str(opt.prompt) for opt in ol._options]
-            # The Settings prompt should contain "Settings" when expanded.
+            prompts = [str(opt.prompt) for opt in pinned._options]
             assert any("Settings" in p for p in prompts), prompts
     finally:
         vm.dispose()
@@ -104,8 +106,8 @@ async def test_nav_menu_collapsed_shows_icon_only(tmp_path: Path) -> None:
             assert nav.is_collapsed is True
             from textual.widgets import OptionList
 
-            ol = nav.query_one(OptionList)
-            prompts = [str(opt.prompt) for opt in ol._options]
+            pinned = nav.query_one("#menu-pinned", OptionList)
+            prompts = [str(opt.prompt) for opt in pinned._options]
             # In collapsed mode, "Settings" should NOT appear; "⚙" SHOULD.
             assert not any("Settings" in p for p in prompts), prompts
             assert any("⚙" in p for p in prompts), prompts
@@ -133,10 +135,10 @@ async def test_nav_menu_selection_updates_vm(tmp_path: Path) -> None:
             await pilot.pause()
             from textual.widgets import OptionList
 
-            ol = nav.query_one(OptionList)
-            # No connection is set so only the Settings item is present (index 0).
-            settings_option = ol.get_option_at_index(0)
-            ol.post_message(OptionList.OptionSelected(ol, settings_option, 0))
+            # Settings lives in the pinned (bottom) list now.
+            pinned = nav.query_one("#menu-pinned", OptionList)
+            settings_option = pinned.get_option_at_index(0)
+            pinned.post_message(OptionList.OptionSelected(pinned, settings_option, 0))
             await pilot.pause()
             # selected_id reflects the item's descriptor.id after command runs.
             assert vm.selected_id == "settings"
@@ -170,8 +172,10 @@ async def test_nav_menu_rebuilds_options_when_vm_items_change(tmp_path: Path) ->
             await pilot.pause()
             from textual.widgets import OptionList
 
-            ol = nav.query_one(OptionList)
-            initial_count = ol.option_count
+            # Settings lives in #menu-pinned; service items (none here
+            # because no service is registered) would land in #menu-services.
+            pinned = nav.query_one("#menu-pinned", OptionList)
+            initial_pinned_count = pinned.option_count
             # Force the VM to rebuild its items list — this broadcasts
             # PropertyChangedMessage("items") which the widget should
             # observe and re-render against.
@@ -181,9 +185,12 @@ async def test_nav_menu_rebuilds_options_when_vm_items_change(tmp_path: Path) ->
             # the rebuild path was triggered (option_count unchanged today
             # because no service was registered to filter against, but the
             # rebuild ran). To make the assertion robust we just confirm
-            # the widget didn't crash and still shows Settings.
-            assert ol.option_count == initial_count
-            prompts = [str(ol.get_option_at_index(i).prompt) for i in range(ol.option_count)]
+            # the widget didn't crash and still shows Settings in the
+            # pinned (bottom) list.
+            assert pinned.option_count == initial_pinned_count
+            prompts = [
+                str(pinned.get_option_at_index(i).prompt) for i in range(pinned.option_count)
+            ]
             assert any("⚙" in p or "Settings" in p for p in prompts), prompts
     finally:
         vm.dispose()

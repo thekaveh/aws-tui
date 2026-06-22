@@ -250,7 +250,11 @@ class AwsTuiApp(App[None]):
         ctx.quick_look_vm.construct()
         ctx.command_palette_vm.construct()
         ctx.s3_connections_vm.construct()
-        ctx.settings_vm.construct()
+        # NOTE: SettingsVM is intentionally NOT constructed here. It's
+        # now built fresh per mount in ``_mount_settings_view`` because
+        # ContentHostVM disposes its hosted VM on swap-out, and a
+        # singleton would crash on the second Settings switch with
+        # ``StatusTransitionError('Cannot construct from state Disposed.')``.
 
         self._apply_initial_theme()
 
@@ -1161,21 +1165,52 @@ class AwsTuiApp(App[None]):
         selected = ctx.root_vm.services_menu.selected_id
         if selected is None:
             return
+        # Serialize the two mount workers via an exclusive worker
+        # group so a rapid Settings → S3 → Settings toggle can't race
+        # against itself. Without exclusivity, the awaited
+        # ``switch_service`` inside ``_mount_service_view`` would
+        # interleave with a later ``_mount_settings_view`` task: the
+        # service worker would resume after the settings worker
+        # replaced ContentHost.current, read the now-SettingsVM, and
+        # try to wrap it in a DualPane — which then crashes with
+        # ``AttributeError: 'SettingsVM' object has no attribute 'left'``
+        # (observed on Windows py3.11 in CI; rarer but possible
+        # everywhere). ``exclusive=True`` + a shared group name makes
+        # Textual cancel any in-flight worker in the group before
+        # starting the new one.
         if selected == "settings":
-            self.run_worker(self._mount_settings_view())
+            self.run_worker(self._mount_settings_view(), exclusive=True, group="content-mount")
         else:
             # Re-use the S3 content if it's already hosted; switch_service
             # is idempotent on the same service_id.
-            self.run_worker(self._mount_service_view(selected))
+            self.run_worker(
+                self._mount_service_view(selected), exclusive=True, group="content-mount"
+            )
 
     async def _mount_settings_view(self) -> None:
-        """Swap the content host to show SettingsView."""
+        """Swap the content host to show SettingsView.
+
+        Build a fresh :class:`SettingsVM` per mount. The previous
+        singleton pattern crashed on the second Settings switch:
+        ``ContentHostVM.set_content`` calls ``vm.dispose()`` on the
+        outgoing VM and ``vm.construct()`` on the incoming one, so
+        after the first Settings → S3 swap the singleton was in
+        ``Disposed`` state and re-mounting raised
+        ``StatusTransitionError('Cannot construct from state Disposed.')``.
+        ``SettingsVM.dispose()`` does NOT cascade to its
+        :class:`S3ConnectionsVM` child (per ``SettingsVM.dispose``),
+        so the shared connection list/selection state survives across
+        rebuilds — only the thin ComponentVM wrapper is recreated.
+        """
+        from aws_tui.vm.settings.settings_vm import SettingsVM
+
         ctx = self._app_ctx
-        await ctx.root_vm.content_host.set_content(ctx.settings_vm, service_id="settings")
+        settings_vm = SettingsVM(s3=ctx.s3_connections_vm, hub=ctx.hub, dispatcher=ctx.dispatcher)
+        await ctx.root_vm.content_host.set_content(settings_vm, service_id="settings")
         with contextlib.suppress(Exception):
             host = self.query_one("#content-host", Container)
             host.remove_children()
-            host.mount(SettingsView(vm=ctx.settings_vm, hub=ctx.hub))
+            host.mount(SettingsView(vm=settings_vm, hub=ctx.hub))
 
     async def _mount_service_view(self, service_id: str) -> None:
         """Swap the content host to show the DualPane for ``service_id``."""
@@ -1321,7 +1356,8 @@ class AwsTuiApp(App[None]):
                 self._nav_selection_sub.dispose()
                 self._nav_selection_sub = None
         with contextlib.suppress(Exception):
-            ctx.settings_vm.dispose()
+            # Currently-hosted SettingsVM (if any) is disposed by the
+            # ContentHostVM tree teardown via ``root_vm.shutdown()``.
             ctx.s3_connections_vm.dispose()
         with contextlib.suppress(Exception):
             ctx.command_palette_vm.dispose()
