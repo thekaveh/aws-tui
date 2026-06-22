@@ -92,13 +92,13 @@ the same observable plus dispose-on-unmount.
 ## 5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
-| Unit | 538 | VM, domain, infra behavior; no I/O |
+| Unit | 537 | VM, domain, infra behavior; no I/O |
 | Snapshot | 234 | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards (per PR #53 lesson) |
 | Integration (in-process) | 40 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
 | E2E | 5 | Pilot-driven user journeys |
 | Integration (MinIO) | 9 | MinIO via testcontainers (opt-in, `-m integration`) |
 
-Default tier total: **817** (`uv run pytest`). Opt-in MinIO tier:
+Default tier total: **816** (`uv run pytest`). Opt-in MinIO tier:
 **9** (`uv run pytest -m integration`).
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)

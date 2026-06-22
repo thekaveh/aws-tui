@@ -318,29 +318,42 @@ class DualPaneVM:
         copied).
         """
         transfer_ids: list[tuple[EntryVM, str]] = []
-        for entry in targets:
-            src_uri = _pane_uri(src_pane, entry.entry.name)
-            dst_uri = _pane_uri(dst_pane, entry.entry.name)
-            transfer_id = self._journal.begin(
-                source_uri=src_uri,
-                destination_uri=dst_uri,
-                bytes_total=entry.entry.size,
-            )
-            transfer_ids.append((entry, transfer_id))
-            # An asyncio.Event per transfer — set by the hub
-            # subscriber when the user clicks the cancel chip; raced
-            # against the copy task inside ``_run_one_transfer``.
-            self._cancel_events[transfer_id] = asyncio.Event()
-            self._hub.send(
-                TransferProgressMessage(
-                    transfer_id=transfer_id,
-                    bytes_transferred=0,
+        try:
+            for entry in targets:
+                src_uri = _pane_uri(src_pane, entry.entry.name)
+                dst_uri = _pane_uri(dst_pane, entry.entry.name)
+                transfer_id = self._journal.begin(
+                    source_uri=src_uri,
+                    destination_uri=dst_uri,
                     bytes_total=entry.entry.size,
-                    state=TransferState.PENDING,
-                    source_label=src_uri,
-                    destination_label=dst_uri,
                 )
-            )
+                transfer_ids.append((entry, transfer_id))
+                # An asyncio.Event per transfer — set by the hub
+                # subscriber when the user clicks the cancel chip; raced
+                # against the copy task inside ``_run_one_transfer``.
+                self._cancel_events[transfer_id] = asyncio.Event()
+                self._hub.send(
+                    TransferProgressMessage(
+                        transfer_id=transfer_id,
+                        bytes_transferred=0,
+                        bytes_total=entry.entry.size,
+                        state=TransferState.PENDING,
+                        source_label=src_uri,
+                        destination_label=dst_uri,
+                    )
+                )
+        except Exception:
+            # Disk-full / permission-denied on ``_journal.begin`` (or
+            # any other failure mid-loop) leaves entries 1..N-1 with
+            # cancel-event registrations that the caller's ``finally``
+            # block would otherwise never clean up — the caller only
+            # iterates the RETURNED ``transfer_ids``, which never
+            # materializes when this method raises. Reap them here so
+            # the dict can't grow unboundedly across many failed
+            # batches.
+            for _, transfer_id in transfer_ids:
+                self._cancel_events.pop(transfer_id, None)
+            raise
         return transfer_ids
 
     async def _run_one_transfer(
