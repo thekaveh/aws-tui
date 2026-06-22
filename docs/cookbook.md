@@ -10,7 +10,15 @@
 
 ---
 
-## 1. Connect to a local MinIO
+## 1. Connect to and switch between data sources
+
+Walks through three setups people hit on day one:
+
+- **§1.1–§1.5** — connect to a local MinIO from scratch (the
+  canonical "first s3-compatible endpoint" walkthrough).
+- **§1.6** — jump between AWS profiles with one keystroke
+  (multi-account flows).
+- **§1.7** — run several `s3-compatible` endpoints side-by-side.
 You have a MinIO running on `http://localhost:9000` with the dev
 credentials `minioadmin / minioadmin`. Goal: a `minio-local`
 connection in aws-tui that points at it.
@@ -128,6 +136,102 @@ connection → wrap. AWS profiles auto-discovered from
 `~/.aws/credentials` show up as `aws s3 · {profile} · {region}`;
 TOML `s3-compatible` entries show up as
 `s3-compatible · {name} · {endpoint}`.
+
+---
+
+### 1.6. Jump between AWS profiles with one keystroke
+
+If you have several `[profile *]` blocks in `~/.aws/config` (typical
+for orgs with multiple AWS accounts or SSO permission sets), `Shift+S`
+is the fastest way to flip between them. Each press re-mounts the
+focused pane on the next profile in the cycle; the pane's bottom
+border subtitle (`aws s3 · {profile} · {region}`) tells you which
+identity you're on.
+
+```text
+~/.aws/config:
+  [profile dev]
+  region = us-east-1
+  sso_session = my-org
+
+  [profile staging]
+  region = us-east-1
+  sso_session = my-org
+
+  [profile prod]
+  region = us-west-2
+  sso_session = my-org
+```
+
+In-app:
+
+- Shift+S → left pane re-mounts on `aws s3 · dev · us-east-1`.
+- Shift+S → `aws s3 · staging · us-east-1`.
+- Shift+S → `aws s3 · prod · us-west-2`.
+
+Per-pane independence: put `dev` on the left and `prod` on the right,
+then `c` to copy an object between them — `CrossFsCopy` streams S3→S3
+without an intermediate local hop.
+
+The cycle also includes any `s3-compatible` entries from
+`config.toml` and the local filesystem. Add MinIO / R2 / B2 / Wasabi
+connections via the in-app **Settings** nav page (`,`) — they join
+the cycle immediately, no relaunch.
+
+> Expired SSO tokens are detected offline at launch via the SSO
+> cache freshness probe (see
+> [connections.md §3](connections.md#3-auto-discovery--sso-cache-probe));
+> a profile with an expired token surfaces an "auth required"
+> placeholder instead of hanging.
+
+---
+
+### 1.7. Run several s3-compatible endpoints side-by-side
+
+There's no fixed limit on how many `s3-compatible` connections you
+can configure. Each one shows up in the swap-source cycle and in
+the in-app Settings page. Example config covering a local MinIO, a
+Cloudflare R2 production bucket, and a Backblaze B2 archive:
+
+```toml
+# ~/.config/aws-tui/config.toml
+
+[connections.minio-local]
+kind = "s3-compatible"
+endpoint_url = "http://localhost:9000"
+region = "us-east-1"
+access_key_id = "minioadmin"
+secret_access_key = "minioadmin"
+force_path_style = true
+verify_tls = false
+
+[connections.r2-prod]
+kind = "s3-compatible"
+endpoint_url = "https://<account>.r2.cloudflarestorage.com"
+region = "auto"
+access_key_id = "<r2-key-id>"
+secret_access_key = "<r2-secret>"
+force_path_style = false
+
+[connections.b2-archive]
+kind = "s3-compatible"
+endpoint_url = "https://s3.us-west-002.backblazeb2.com"
+region = "us-west-002"
+access_key_id = "<b2-key-id>"
+secret_access_key = "<b2-secret>"
+force_path_style = false
+```
+
+Then `Shift+S` cycles through all three (plus your AWS profiles and
+local) on the focused pane. If you'd rather edit interactively, open
+**Settings** (`,`) → "S3-Compatible Connections" section → "+ Add"
+to enter the same data through the inline form, or use the per-row
+Edit / Delete chips to manage entries already there. Saves are
+atomic (`tempfile` + `os.replace`) so the config can't end up
+half-written.
+
+See [`docs/connections.md` §4](connections.md#4-switching-between-connections-at-runtime)
+for the full source-cycle semantics and the unreachable-skip behavior.
 
 ---
 
@@ -273,7 +377,7 @@ rm -f ~/.cache/aws-tui/transfers/*.jsonl
 ```
 
 (But: this leaves orphaned MPUs on the server. The
-[1-day MPU abort lifecycle rule](connections.md#5-recommended-1-day-mpu-abort-lifecycle-rule)
+[1-day MPU abort lifecycle rule](connections.md#6-recommended-1-day-mpu-abort-lifecycle-rule)
 is your backstop.)
 
 ### 4.4. What gets dumped on a crash

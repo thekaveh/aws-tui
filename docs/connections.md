@@ -76,7 +76,56 @@ cheap freshness check **without calling AWS**:
 
 Total cost: one `os.stat` + one ~1 KB JSON read. Sub-millisecond.
 
-## 4. Vendor quirks (manual checklist)
+## 4. Switching between connections at runtime
+
+Every connection the resolver returns — AWS profiles, manually-configured
+`s3-compatible` entries, and auto-discovered AWS profiles alike — joins
+a single in-app source-cycle on the focused pane. Press **`Shift+S`** (or
+`S`) on a pane to step through it in this order:
+
+```
+local
+  → aws s3 · profile-1 · us-east-1
+  → aws s3 · profile-2 · us-west-2
+  → ... (every other AWS profile)
+  → s3-compatible · minio-local · localhost:9000
+  → s3-compatible · r2-prod · <account>.r2.cloudflarestorage.com
+  → ... (every other s3-compatible connection)
+  → local   ← wraps
+```
+
+Why this is useful day-to-day:
+
+- **Multi-account AWS work** — if you have several `[profile *]` blocks
+  in `~/.aws/config` (typical for orgs with multiple AWS accounts or
+  SSO permission sets), `Shift+S` is the fastest way to jump between
+  them. One keystroke per profile; the pane re-mounts in place with
+  the new identity in the bottom border subtitle. No command palette,
+  no modal, no re-launch.
+- **Multiple `s3-compatible` endpoints** — there's no fixed limit. Add
+  as many MinIO, Cloudflare R2, Backblaze B2, Wasabi, Ceph, SeaweedFS
+  endpoints as you want (in the in-app Settings nav page, or by hand
+  via additional `[connections.<name>]` blocks). Every new entry joins
+  the cycle automatically on next launch (or immediately if added
+  through Settings — the rail's `ConnectionListChangedMessage`
+  refreshes the candidate ring without a relaunch).
+- **Cross-account / cross-vendor transfers** — put one account on the
+  left pane, a different account on the right pane (each pane cycles
+  independently), then `c` (copy) or `m` (move) streams between them
+  via `CrossFsCopy` / `CrossFsMove` — no intermediate local hop
+  required.
+
+The `,` key opens **Settings** where you can add, edit, or delete
+`s3-compatible` connections (see [`docs/cookbook.md`](cookbook.md) §1
+for the MinIO walkthrough). AWS profiles are read-only from aws-tui's
+perspective — manage those through the standard `~/.aws/` tooling.
+
+`Shift+S` filters out connections that have been observed unreachable
+during the session (e.g. a stopped MinIO container). A one-line info
+toast names what was skipped on the first press; pressing `r` on the
+unreachable pane and recovering it clears the mark.
+
+## 5. Vendor quirks (manual checklist)
 - **Cloudflare R2** — no bucket versioning, no replication;
   `region = "auto"`; uses HTTPS at
   `https://<account>.r2.cloudflarestorage.com`.
@@ -89,7 +138,7 @@ Total cost: one `os.stat` + one ~1 KB JSON read. Sub-millisecond.
   us-east-2 buckets).
 - **Ceph RGW / SeaweedFS** — typically path-style + custom region.
 
-## 5. Recommended: 1-day MPU abort lifecycle rule
+## 6. Recommended: 1-day MPU abort lifecycle rule
 Set a 1-day lifecycle rule to abort incomplete multipart uploads on
 every bucket you write to from aws-tui (or any other tool). aws-tui
 aborts MPUs on user cancel and on the resume modal's `abort all`,
@@ -113,7 +162,7 @@ aws s3api put-bucket-lifecycle-configuration \
     --bucket <name> --lifecycle-configuration file://lifecycle.json
 ```
 
-## 6. First-run flow
+## 7. First-run flow
 If `ConfigStore.load()` returns no `[connections.*]` and
 `~/.aws/{config,credentials}` is also empty, aws-tui shows a welcome
 modal on launch (per spec §6.4 Flow 5):
@@ -132,7 +181,7 @@ s3-compatible` opens an in-TUI form prompting for name, endpoint URL,
 region, access key, secret key. `skip` proceeds to the main screen
 with no connection selected.
 
-## 7. Crash-recovery transfer journal
+## 8. Crash-recovery transfer journal
 aws-tui appends a JSONL line per completed multipart part to
 `~/.cache/aws-tui/transfers/<id>.jsonl`. On launch it scans the
 directory for journals lacking a terminal `finished` / `aborted`

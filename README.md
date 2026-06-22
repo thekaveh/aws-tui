@@ -24,9 +24,18 @@ Linux, and Windows. Powered by
   on one side, your local filesystem on the other. Copy, move, rename,
   delete across panes with `c`, `m`, `r`, `d` (multi-select with `v` +
   `Space`, or modifier+click, or `Shift+↑/↓`).
-- **Swappable pane source.** `Shift+S` flips the focused pane between
-  S3 and local, so the four combos `{S3, local} × {S3, local}` are all
-  reachable in the same session.
+- **One-key source switcher.** `Shift+S` cycles the focused pane
+  through **every available source** in order: `local` → each AWS
+  profile (`aws s3 · {profile} · {region}`) → each `s3-compatible`
+  connection (`s3-compatible · {name} · {endpoint}`) → wrap. With
+  multiple AWS profiles configured locally, this is the fastest way
+  to jump between accounts: one keystroke per profile, the pane
+  re-mounts in place — no `:` command palette, no modal. The
+  s3-compatible side is open-ended: add as many MinIO / R2 / B2 /
+  Wasabi / Ceph endpoints as you like via the in-app **Settings**
+  nav page (or by hand in `~/.config/aws-tui/config.toml`) and they
+  join the cycle automatically. The four combos `{S3, local} ×
+  {S3, local}` are reachable per pane independently.
 - **First-class S3-compatible support.** MinIO, Cloudflare R2,
   Backblaze B2, Wasabi, Ceph, SeaweedFS — same code path as native
   AWS. Path-style addressing toggle and per-vendor docs.
