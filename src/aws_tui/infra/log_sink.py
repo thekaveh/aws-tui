@@ -61,7 +61,12 @@ class LogSink:
             from aws_tui.infra.paths import cache_home
 
             base_dir = cache_home() / "log"
-        base_dir.mkdir(parents=True, exist_ok=True)
+        # 0o700 matches ConfigStore.save — log lines can carry endpoint
+        # URLs and request IDs that shouldn't be readable by other
+        # local users on shared systems.
+        from aws_tui.infra.paths import ensure_private_dir
+
+        ensure_private_dir(base_dir)
 
         self._base_dir: Path = base_dir
         self._log_path: Path = base_dir / _FILE_NAME

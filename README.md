@@ -183,6 +183,10 @@ Numbered hierarchically for navigation.
 |---|---|---|
 | `AWS_PROFILE` | unset | Pick this AWS profile at launch when `[defaults].connection` is unset. Honored between config and first-auto-discovered fallback. |
 | `AWS_DEFAULT_REGION` | unset | Standard boto3 region override. |
+| `AWS_REGION` | unset | boto3 region override, equivalent to `AWS_DEFAULT_REGION` (and wins if both are set, per boto3's resolution order). |
+| `${PREFIX}_ACCESS_KEY_ID` / `${PREFIX}_SECRET_ACCESS_KEY` | per-connection | Read by `ConnectionResolver` when a `[connections.<name>]` entry in `config.toml` sets `credentials = "env:PREFIX_"`. See [`docs/connections.md`](docs/connections.md) for the full pattern. |
+| `XDG_CONFIG_HOME` | per-OS default | Linux: overrides the config root (`$XDG_CONFIG_HOME/aws-tui`). macOS and Windows use the platform-native location regardless. |
+| `XDG_CACHE_HOME` | per-OS default | Linux: overrides the cache root (`$XDG_CACHE_HOME/aws-tui`). macOS and Windows use the platform-native location regardless. |
 | `AWS_TUI_TRANSFER_LINGER` | `3.0` | Seconds a finished transfer's row stays visible in the transfers overlay before it fades. Test-only knob — short values make `pytest` runs faster. |
 
 Any `$PAGER` / `$EDITOR` semantics during the AWS-CLI shell-out for

@@ -17,11 +17,30 @@ is absent. Tests can override both via the keyword arguments on
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 from platformdirs import user_cache_dir, user_config_dir
 
 _APP_NAME = "aws-tui"
+
+
+def ensure_private_dir(path: Path) -> None:
+    """Create ``path`` (parents included) and chmod it to ``0o700``.
+
+    Mirrors ``ConfigStore.save``'s defense-in-depth for the config
+    directory: aws-tui's cache subdirectories (log, transfers, crash)
+    contain endpoint URLs, partial-upload identifiers, and crash dumps
+    with the last 1000 log lines + last 100 user actions — none of
+    which should be readable by other local users on a shared system.
+
+    The chmod is best-effort: filesystems that don't support POSIX
+    permission bits (FAT, exFAT) raise ``NotImplementedError`` or
+    ``OSError`` and the call silently falls back to the user's umask.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError, NotImplementedError):
+        path.chmod(0o700)
 
 
 def _legacy_xdg_config() -> Path:
@@ -56,4 +75,4 @@ def cache_home() -> Path:
     return Path(user_cache_dir(_APP_NAME, appauthor=False))
 
 
-__all__ = ["cache_home", "config_home"]
+__all__ = ["cache_home", "config_home", "ensure_private_dir"]
