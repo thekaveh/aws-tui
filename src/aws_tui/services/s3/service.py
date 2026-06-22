@@ -82,11 +82,16 @@ class S3Service:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="s3",
         label="S3",
-        # Cloud-emoji icon for the collapsed-rail render. Two visual
-        # columns in most monospace fonts (matches the gear `⚙` glyph
-        # the Settings nav peer uses, so the icon column has a
-        # consistent width across rows).
-        icon="☁",
+        # Bucket emoji — thematic for S3 (the service is "Simple
+        # Storage Service" and buckets are its primary abstraction).
+        # U+1FAA3 BUCKET — true emoji codepoint, renders as a colored
+        # picture in any terminal with a modern emoji font (Apple
+        # Color Emoji on macOS, Noto Color Emoji on Linux, Segoe UI
+        # Emoji on Windows). The previous ``☁`` (U+2601 CLOUD)
+        # without a variation selector rendered as the text-style
+        # outline, often as a tiny grey line-art glyph — not what
+        # the user asked for.
+        icon="🪣",
     )
 
     def __init__(

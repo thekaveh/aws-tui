@@ -73,7 +73,12 @@ class NavMenu(Widget):
        the difference automatically. */
     NavMenu {
         display: block;
-        width: 4;
+        /* Width 6 fits: 1-cell padding + 1-cell ribbon glyph
+           (``▌``) + 2-cell emoji (most are 2 cells wide in
+           monospace terminals — e.g. ``🪣``, ``⚙️``) + 2-cell
+           OptionList right padding. The previous width 4 truncated
+           emojis on render. */
+        width: 6;
         background: $background;
     }
     NavMenu.-expanded {
@@ -234,13 +239,18 @@ class NavMenu(Widget):
             for item in items:
                 descriptor = item.descriptor
                 ribbon = _RIBBON_GLYPH if descriptor.id == selected_id else _RIBBON_SPACER
+                # ``icon`` is always a str on ServiceDescriptor; the
+                # ``or "?"`` guard is defensive for any future
+                # optional variant. We pass the full icon string
+                # through (no ``[:2]`` truncation) so emojis that
+                # include a U+FE0F VARIATION SELECTOR-16 (e.g.
+                # ``⚙️``, ``☁️``) survive — truncating at 2 Python
+                # chars would silently drop the variation selector
+                # and flip the rendering to text presentation.
+                glyph = descriptor.icon or descriptor.label or "?"
                 if self._collapsed:
-                    # icon is always a str on ServiceDescriptor, but guard
-                    # defensively for any future optional variants.
-                    glyph = (descriptor.icon or descriptor.label or "?")[:2]
                     prompt = f"{ribbon}{glyph}"
                 else:
-                    glyph = descriptor.icon or "·"
                     prompt = f"{ribbon}{glyph} {descriptor.label}"
                 target.add_option(Option(prompt, id=descriptor.id))
 

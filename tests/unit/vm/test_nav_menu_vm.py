@@ -237,7 +237,9 @@ def test_nav_menu_always_includes_settings_item_last() -> None:
         vm.update_connection(_aws_conn())
         assert vm.items[-1].descriptor.id == "settings"
         assert vm.items[-1].descriptor.label == "Settings"
-        assert vm.items[-1].descriptor.icon == "⚙"
+        # ``⚙️`` = U+2699 GEAR + U+FE0F VARIATION SELECTOR-16 — the
+        # VS-16 forces terminal emoji-presentation rendering.
+        assert vm.items[-1].descriptor.icon == "⚙️"
         # select("settings") via the canonical API.
         vm.switch_service_command.execute("settings")
         assert vm.selected_id == "settings"
