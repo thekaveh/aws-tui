@@ -160,5 +160,15 @@ class MainScreenApp(App[None]):
 
         self._hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
 
+    def on_ready(self) -> None:
+        # Mirror the real app's startup focus: no Textual-focused descendant
+        # in NavMenu — the left pane is the active slot via VM focus +
+        # priority bindings. Without this, Textual auto-focuses NavMenu's
+        # first OptionList and the :focus-within rule paints the rail's
+        # accent border, polluting the chrome snapshot. Done in on_ready
+        # rather than on_mount so the focus-drop happens AFTER Textual's
+        # own initial focus-grant pass.
+        self.set_focus(None)
+
 
 __all__ = ["MainScreenApp"]

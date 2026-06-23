@@ -535,6 +535,10 @@ NavMenu {
     border-title-color: $text-dim;
 }
 
+NavMenu:focus-within {
+    border: solid $accent;
+}
+
 NavMenu > OptionList {
     background: transparent;
     color: $text;
