@@ -30,7 +30,7 @@ from aws_tui.domain.transfer_journal import TransferJournal, TransferJournalEntr
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
-from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
 from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
@@ -143,11 +143,36 @@ def build_app_context(
 
     log_sink = LogSink(base_dir=cache_dir / "log")
     config_store = ConfigStore(path=config_dir / "config.toml")
+    keybindings_overlay: dict[str, str | list[str]] = {}
     try:
-        initial_theme = config_store.load().defaults.theme
-    except Exception:
+        _cfg = config_store.load()
+        initial_theme = _cfg.defaults.theme
+        keybindings_overlay = _cfg.keybindings.bindings
+    except Exception as exc:
+        # Falling back silently is dishonest — first-run with a
+        # malformed config.toml looks identical to a clean install.
+        # Log once so an operator can find the cause in the log.
+        _logger.warning(
+            "composition.initial_theme.load_failed",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
         initial_theme = "carbon"
-    keymap_store = KeymapStore()
+    # The CHANGELOG ``### Deferred / v0.8 roadmap`` entry promises
+    # that ``[keybindings]`` overlays in ``config.toml`` "parse and
+    # validate but do not yet affect the live keymap" — wiring the
+    # overlay into ``KeymapStore`` is what delivers the parse-and-
+    # validate half. The live-keymap half is gated on the deferred
+    # ``BindingResolver`` work. A malformed overlay (unknown action
+    # id, etc.) is caught and logged rather than crashing startup;
+    # the keymap silently falls back to defaults.
+    try:
+        keymap_store = KeymapStore(overlay=keybindings_overlay)
+    except UnknownAction as exc:
+        _logger.warning(
+            "composition.keymap_overlay.invalid",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
+        keymap_store = KeymapStore()
     theme_store = ThemeStore(
         user_themes_dir=config_dir / "themes",
         user_overlay=config_dir / "theme.tcss",
@@ -312,12 +337,23 @@ def needs_first_run(
         cfg = config_store.load()
         if cfg.connections:
             return False
-    except Exception:
+    except Exception as exc:
+        # Treat a broken config as "user already has setup, just
+        # can't read it" rather than dropping them into the first-run
+        # wizard which would overwrite whatever is there.
+        _logger.warning(
+            "composition.needs_first_run.config_load_failed",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
         return False
     # Auto-discovered AWS profiles.
     try:
         discovered = connection_resolver.list()
-    except Exception:
+    except Exception as exc:
+        _logger.warning(
+            "composition.needs_first_run.resolver_list_failed",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
         return True
     return not discovered
 

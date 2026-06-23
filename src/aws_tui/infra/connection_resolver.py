@@ -33,9 +33,17 @@ class ConnectionNotFound(Exception):
     """Raised when ``resolve`` or ``materialize`` cannot find a connection."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Connection:
-    """Fully-resolved connection ready for an :class:`AwsSession`."""
+    """Fully-resolved connection ready for an :class:`AwsSession`.
+
+    A custom ``__repr__`` redacts ``access_key_id`` and
+    ``secret_access_key`` — the default dataclass repr inlines every
+    field verbatim, so an unhandled exception that surfaces a
+    ``Connection`` (logger, REPL, traceback) would otherwise leak
+    plaintext credentials. ``eq``, ``hash``, and slot layout are
+    unchanged.
+    """
 
     name: str
     kind: str
@@ -47,6 +55,23 @@ class Connection:
     secret_access_key: str | None = None
     force_path_style: bool = False
     verify_tls: bool = True
+
+    def __repr__(self) -> str:
+        # Mirror the dataclass-default shape but mask the two secret
+        # fields. ``"***"`` if a value is present, ``None`` otherwise —
+        # the presence/absence is itself useful debugging information
+        # and doesn't leak the secret.
+        masked_id = "***" if self.access_key_id else None
+        masked_secret = "***" if self.secret_access_key else None
+        return (
+            f"Connection(name={self.name!r}, kind={self.kind!r}, "
+            f"region={self.region!r}, source={self.source!r}, "
+            f"profile={self.profile!r}, endpoint_url={self.endpoint_url!r}, "
+            f"access_key_id={masked_id!r}, "
+            f"secret_access_key={masked_secret!r}, "
+            f"force_path_style={self.force_path_style!r}, "
+            f"verify_tls={self.verify_tls!r})"
+        )
 
 
 def _default_aws_config_path() -> Path:
@@ -184,7 +209,7 @@ class ConnectionResolver:
 
         cfg_parser = configparser.ConfigParser()
         if self._aws_config_path.is_file():
-            cfg_parser.read(self._aws_config_path, encoding="utf-8")
+            cfg_parser.read(self._aws_config_path, encoding="utf-8-sig")
             for section in cfg_parser.sections():
                 if section == "default":
                     name = "default"
@@ -198,7 +223,7 @@ class ConnectionResolver:
 
         creds_parser = configparser.ConfigParser()
         if self._aws_credentials_path.is_file():
-            creds_parser.read(self._aws_credentials_path, encoding="utf-8")
+            creds_parser.read(self._aws_credentials_path, encoding="utf-8-sig")
             for section in creds_parser.sections():
                 profiles.setdefault(section, None)
 
@@ -241,7 +266,7 @@ class ConnectionResolver:
         if not self._aws_credentials_path.is_file():
             return None, None
         parser = configparser.ConfigParser()
-        parser.read(self._aws_credentials_path, encoding="utf-8")
+        parser.read(self._aws_credentials_path, encoding="utf-8-sig")
         if not parser.has_section(profile):
             return None, None
         return (

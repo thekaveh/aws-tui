@@ -112,6 +112,12 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
         from aws_tui.composition import add_s3_compat_connection
 
         try:
+            # Reach in via ``_app_ctx`` (not the ``app_ctx`` property) so
+            # the unit-test harness can mount this modal under a vanilla
+            # Textual ``App`` patched with ``_app_ctx = SimpleNamespace(...)``.
+            # ``hasattr`` gating would skip the persist step in tests;
+            # the test harness explicitly sets the private name to drive
+            # the persist path.
             ctx = self.app._app_ctx  # type: ignore[attr-defined]
             add_s3_compat_connection(config_store=ctx.config_store, form=event.form)
         except Exception as exc:

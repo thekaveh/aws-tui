@@ -179,9 +179,13 @@ def entry_summary(entry: TransferJournalEntry) -> str:
     """One-line summary used by the resume modal body.
 
     Mirrors the format in spec §7.6 (filename, bytes done / total, %).
-    Bytes-done is approximated as ``parts * (total / max(parts, 1))``
-    when no per-part byte totals are available — good enough for the
-    preview, exact bytes come from the resumed transfer itself.
+    Bytes-done is approximated as
+    ``total * parts / (parts + 1)`` when no per-part byte totals
+    are available: an asymptotic ``parts / (parts + 1)`` fraction
+    of the total that approaches but never reaches 100% — enough
+    to drive the preview's "how far through this was I" display
+    without overstating. Exact bytes come from the resumed
+    transfer itself once the user picks RESUME_ALL.
     """
     name = _basename(entry.destination_uri)
     parts = len(entry.completed_parts)

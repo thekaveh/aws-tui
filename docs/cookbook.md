@@ -127,15 +127,20 @@ instead.
 aws-tui
 ```
 
-Then in-app: `:` `connection switch ▸ minio-local` `Enter`. The S3
-pane should list your buckets.
+Then in-app, press `Shift+S` on the focused pane to **cycle
+through every available source** — `local` → every TOML /
+auto-discovered connection → wrap. AWS profiles auto-discovered
+from `~/.aws/credentials` show up as
+`aws s3 · {profile} · {region}`; TOML `s3-compatible` entries
+show up as `s3-compatible · {name} · {endpoint}`. Tap
+`Shift+S` until the pane title reads
+`s3-compatible · minio-local · {endpoint}` — the bucket list
+should populate immediately.
 
-Press `Shift+S` on the focused pane to **cycle through every
-available source** — `local` → every TOML / auto-discovered
-connection → wrap. AWS profiles auto-discovered from
-`~/.aws/credentials` show up as `aws s3 · {profile} · {region}`;
-TOML `s3-compatible` entries show up as
-`s3-compatible · {name} · {endpoint}`.
+> The dedicated command-palette path (`: connection switch ▸ minio-local`)
+> is spec'd but deferred to v0.8 — in v0.7.x ``:`` opens the
+> help overlay as a placeholder. ``Shift+S`` is the one-keystroke
+> equivalent today.
 
 ---
 
@@ -315,7 +320,11 @@ Set the action to an empty list:
 "pane.delete" = []   # nope, no quick delete
 ```
 
-You can still trigger it via the command palette (`:` then search "delete").
+In a future release you'll be able to trigger the action through
+the command palette (`:` then search "delete"); the palette is
+spec'd but deferred to v0.8, so for v0.7.x an empty
+`[keybindings]` value effectively removes the action until you
+rebind it.
 
 ### 3.2. See the active map
 The full list of action IDs lives in

@@ -100,16 +100,19 @@ Strict one-way dependencies. Each layer only knows the layer beneath it.
 ┌────────────────────────────────────────────────────────────────────┐
 │  View Layer  (Textual widgets, .tcss themes)                       │
 │                                                                    │
-│    AppScreen ── ServicesMenu  ·  DualPaneFileManager               │
+│    AwsTuiApp ── NavMenu  ·  DualPane                               │
 │              ·  CommandPalette  ·  HintLegend  ·  StatusBar        │
 │              ·  QuickLookModal  ·  ConfirmModal  ·  ToastStack     │
+│              ·  SettingsView                                       │
 └──────────────────────────────┬─────────────────────────────────────┘
                                │  reactive bindings, RelayCommands
 ┌──────────────────────────────▼─────────────────────────────────────┐
 │  ViewModel Layer  (VMx hierarchy)                                  │
 │                                                                    │
 │    RootVM : AggregateVM3                                           │
-│     ├── ServicesMenuVM   : CompositeVM<ServiceItemVM>              │
+│     ├── NavMenuVM        : CompositeVM<ServiceItemVM>              │
+│     │                       (renamed from ServicesMenuVM, PR #54;  │
+│     │                       RootVM.services_menu alias kept)       │
 │     ├── ContentHostVM    : ComponentVM (swaps per-service content) │
 │     └── ChromeVM         : AggregateVM3 (hint, status, toasts)     │
 │                                                                    │

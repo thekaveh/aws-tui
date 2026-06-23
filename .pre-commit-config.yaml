@@ -1,6 +1,15 @@
 # pre-commit hooks. Install with:  uv run pre-commit install
 # Run on all files:                uv run pre-commit run --all-files
 
+# Pin the language runtime for hooks so pre-commit doesn't pick up
+# whichever interpreter happens to be on $PATH. Matches
+# pyproject.toml [project] requires-python lower bound + [tool.mypy]
+# python_version. The local mypy hook runs via `uv run` which uses
+# the project's resolved interpreter; this default applies to any
+# future Python-language hook added below.
+default_language_version:
+  python: python3.11
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0

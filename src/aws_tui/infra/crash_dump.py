@@ -14,6 +14,7 @@ sits cleanly in the infra layer.
 
 from __future__ import annotations
 
+import contextlib
 import traceback
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -123,6 +124,16 @@ class CrashDump:
             f"{log_tail.rstrip()}\n"
         )
         path.write_text(body, encoding="utf-8")
+        # Crash dumps carry the last 1000 log lines + last 100 user
+        # actions, which can include endpoint URLs, request IDs, and
+        # partial upload identifiers. Tighten to owner-only (0o600) so
+        # other local users on a shared system can't read them. Matches
+        # the chmod 0o700 the cache-dir helper applies to the parent.
+        # Suppressed because filesystems without POSIX permission bits
+        # (FAT32, some network mounts) silently no-op the chmod and
+        # raising would lose the dump path we just returned.
+        with contextlib.suppress(OSError, NotImplementedError):
+            path.chmod(0o600)
         return path
 
     @staticmethod

@@ -229,10 +229,24 @@ class DualPaneVM:
             return
         copier = CrossFsCopy(source=src_pane.provider, destination=dst_pane.provider)
         transfer_ids = self._pre_register_pending(targets, src_pane, dst_pane)
+        # Track which ``transfer_id`` the loop has actually consumed
+        # (success, fail, or user-cancel). If an entry's
+        # ``_run_one_transfer`` raises, the loop exits early and the
+        # remaining ids never get a terminal marker — their PENDING
+        # journal files would otherwise outlive the session and
+        # eventually fan out into the deferred resume modal as
+        # phantom restartable transfers.
+        consumed: set[str] = set()
         try:
             for entry, transfer_id in transfer_ids:
                 src_path = src_pane.path.join(entry.entry.name)
                 dst_path = dst_pane.path.join(entry.entry.name)
+                # Mark BEFORE awaiting so a raise from
+                # ``_run_one_transfer`` (which has already
+                # ``mark_aborted``-ed its own transfer's journal
+                # before re-raising) still counts this id as
+                # consumed and we don't re-mark it in the finally.
+                consumed.add(transfer_id)
                 completed = await self._run_one_transfer(
                     operation=copier.copy,
                     src_path=src_path,
@@ -254,6 +268,11 @@ class DualPaneVM:
         finally:
             for _, transfer_id in transfer_ids:
                 self._cancel_events.pop(transfer_id, None)
+                if transfer_id not in consumed:
+                    # Loop never reached this entry — mark its
+                    # journal file ABORTED so ``find_unfinished``
+                    # doesn't surface it on next launch.
+                    self._journal.mark_aborted(transfer_id)
         await dst_pane.refresh()
 
     async def move_across(
@@ -267,10 +286,16 @@ class DualPaneVM:
             return
         mover = CrossFsMove(source=src_pane.provider, destination=dst_pane.provider)
         transfer_ids = self._pre_register_pending(targets, src_pane, dst_pane)
+        # See ``copy_across`` for the rationale on the ``consumed``
+        # set — mid-batch failure must not strand PENDING journal
+        # entries for ids the loop never reached.
+        consumed: set[str] = set()
         try:
             for entry, transfer_id in transfer_ids:
                 src_path = src_pane.path.join(entry.entry.name)
                 dst_path = dst_pane.path.join(entry.entry.name)
+                # See ``copy_across`` for why consumed.add precedes the await.
+                consumed.add(transfer_id)
                 completed = await self._run_one_transfer(
                     operation=mover.move,
                     src_path=src_path,
@@ -292,6 +317,8 @@ class DualPaneVM:
         finally:
             for _, transfer_id in transfer_ids:
                 self._cancel_events.pop(transfer_id, None)
+                if transfer_id not in consumed:
+                    self._journal.mark_aborted(transfer_id)
         await src_pane.refresh()
         await dst_pane.refresh()
 

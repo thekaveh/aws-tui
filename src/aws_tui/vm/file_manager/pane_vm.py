@@ -50,7 +50,27 @@ _ROOT_PATH: PathRef = PathRef(())
 
 
 class PaneState(StrEnum):
-    """Render state surfaced by ``PaneViewModel`` per spec §7.7."""
+    """Render state surfaced by ``PaneViewModel`` per spec §7.7.
+
+    State entry conditions (single source of truth for the state
+    machine — keep in sync with :meth:`PaneVM._reload` and
+    :meth:`PaneVM.set_auth_required`):
+
+    - ``IDLE`` — Entries available (success path with non-empty listing,
+      or initial construction before the first reload).
+    - ``LOADING`` — Listing in progress; entered at the start of every
+      ``_reload`` cycle.
+    - ``EMPTY`` — Success with zero entries, OR ``NotFoundError`` at the
+      root path (treated as an empty bucket / mount point). No
+      ``_error_text`` is set on the EMPTY-via-NotFoundError path because
+      the user-facing copy is just "empty", not an error.
+    - ``AUTH_REQUIRED`` — Injected externally by ``RootVM`` after it
+      observes an ``AuthExpiredMessage``; never reached from ``_reload``.
+    - ``FORBIDDEN`` — ``PermissionDeniedError`` during ``list()``.
+    - ``UNREACHABLE`` — ``ProviderUnreachableError`` during ``list()``.
+    - ``ERROR`` — Generic ``ProviderError``, OR ``NotFoundError`` on a
+      non-root path (a missing prefix is a real failure, not "empty").
+    """
 
     IDLE = "idle"
     LOADING = "loading"
@@ -333,7 +353,15 @@ class PaneVM:
 
     @property
     def marked_entries(self) -> tuple[EntryVM, ...]:
-        return tuple(e for e in self._entries if e.is_marked)
+        # Snapshot first — _entries is the same list ``_reload`` rewrites
+        # under ``_replace_entries``. ``filtered_entries`` already takes
+        # this precaution; apply it here for parity. Belt-and-braces
+        # filter on ``is_parent_link`` — ``mark_at`` refuses to mark
+        # ".." today, but a future input adapter could regress that
+        # invariant; an unfiltered ".." would translate into a
+        # meaningless copy/move/delete target downstream.
+        snapshot = tuple(self._entries)
+        return tuple(e for e in snapshot if e.is_marked and not e.is_parent_link)
 
     @property
     def viewmodel(self) -> PaneViewModel:
@@ -561,10 +589,19 @@ class PaneVM:
         is a no-op). Used by shift+arrow extend-selection where toggle
         semantics produce the wrong result: walking back through an
         already-marked row would un-mark it, leaving "holes" mid-range.
+
+        The synthetic ".." parent-link row is non-markable — silently
+        skipping it here keeps ``marked_entries`` free of an entry that
+        would translate to a meaningless copy/move/delete target. The
+        click path (``EntryRow.on_click``) already filters it; this
+        plugs the shift+arrow path, where ``_extend_selection`` walks
+        the cursor without consulting the row widget.
         """
         if not (0 <= target_index < len(self._filtered)):
             return
         entry_vm = self._entries[self._filtered[target_index]]
+        if entry_vm.is_parent_link:
+            return
         if entry_vm.is_marked == marked:
             return
         if marked and not self._is_multiselect_mode:
@@ -624,7 +661,12 @@ class PaneVM:
             raw = await self._provider.list(self._path)
         except NotFoundError as exc:
             # Root listing: an unknown path at root means empty (e.g. an
-            # empty bucket); deeper paths surface as ERROR.
+            # empty bucket); deeper paths surface as ERROR. The root
+            # branch intentionally leaves ``_error_text`` UNCHANGED
+            # (versus the three sibling handlers below, which set it
+            # from ``str(exc)``) so the placeholder reads as the plain
+            # "empty" copy rather than carrying the underlying error
+            # string. See :class:`PaneState` docstring for the contract.
             if self._path.is_root:
                 self._replace_entries([])
                 self._set_state(PaneState.EMPTY)

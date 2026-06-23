@@ -177,16 +177,33 @@ class HintLegendVM:
 
     def _rebuild_actions(self) -> None:
         chips: list[HintAction] = []
+        # ``seen`` dedups action_ids across the focused-pane block and
+        # the ``_FALLBACK_ACTIONS`` block. Without it, a focused-pane
+        # registration that includes a fallback id
+        # (e.g. ``("pane.descend", "pane.copy", ...)``) would render
+        # the chip twice — once in the focused row, once in the
+        # fallback row. The wiring is currently exercised only by
+        # tests (``register_focusable`` isn't called at runtime
+        # pending the deferred ``BindingResolver`` work), but the
+        # bug is real enough that a future caller hitting it would
+        # land on duplicate chips in the bottom legend.
+        seen: set[str] = set()
         focused = self._focused_vm_id
         if focused is not None:
             for action_id in self._registry.get(focused, ()):
+                if action_id in seen:
+                    continue
                 chip = self._resolve(action_id)
                 if chip is not None:
                     chips.append(chip)
+                    seen.add(action_id)
         for action_id in _FALLBACK_ACTIONS:
+            if action_id in seen:
+                continue
             chip = self._resolve(action_id)
             if chip is not None:
                 chips.append(chip)
+                seen.add(action_id)
         new_actions = tuple(chips)
         if new_actions == self._actions:
             return

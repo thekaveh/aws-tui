@@ -9,6 +9,344 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **NavMenu is now always visible** (PR #59). The left rail
+  collapses to a minimally-wide icon-only column instead of
+  disappearing — Tab focuses the menu, arrow keys navigate, Enter
+  selects. Discoverability of the nav peers (S3 + Settings) is
+  always present without the user having to remember the
+  toggle key.
+- **README documentation rewritten for accuracy** (third
+  maintenance loop, pass 1). The Features bullets for "Multi-select",
+  "Streaming Quick Look", and "Command palette" now match what is
+  actually wired in v0.7.x. Previously they claimed `v` + `Space`,
+  `Space` for streaming preview, and `:` / `Ctrl+K` for the
+  command palette — none of which have BINDINGS or action handlers
+  in `AwsTuiApp.BINDINGS`. The CHANGELOG `### Added` and
+  `### Deferred / v0.8 roadmap` were corrected in lockstep.
+- **`Shift+S` Features bullet expanded in the README** (PR #58) to
+  highlight the cycler's full ring — every AWS profile + every
+  s3-compatible connection, all reachable with one keystroke per
+  step. Reflects the existing behavior from PR #43/#49; no code
+  change.
+
+- **(third maintenance loop, pass 1)**
+  `[dependency-groups].dev` in `pyproject.toml` now carries an
+  explicit rationale comment that next-major caps are intentionally
+  omitted (unlike the runtime-deps block above). Dev tooling does
+  not reach downstream `pip install aws-tui`, and the lockfile
+  already pins each version — capping would have actively rolled
+  back working majors (mypy 2.x, pytest 9.x, pre-commit 9.x).
+- **(third maintenance loop, pass 1)**
+  `.pre-commit-config.yaml` declares
+  `default_language_version.python: python3.11` so pre-commit
+  picks the same interpreter as `requires-python` /
+  `tool.mypy.python_version` regardless of `$PATH`.
+- **(third maintenance loop, pass 2)** Six snapshot suites
+  (`test_main_screen`, `test_modals`, `test_theme_picker`,
+  `test_toast`, `test_transfers`, `test_pane_states`) now each
+  have a content-presence guard pair test (per PR #53 lesson).
+  Each guard reads the generated SVG off disk and asserts that
+  the user-facing text actually rendered — a uniformly-blank
+  render across all 10 themes (which `snap_compare` parity-match
+  would silently pass) now fails the guard. Adds 134 new tests;
+  total default-tier count goes 817 → 951.
+- **(third maintenance loop, pass 2)** `docs/architecture.md`
+  test-count + message-list updated: default total now 817 (was
+  816); `TransferCancelRequestedMessage` and
+  `ConnectionListChangedMessage` added to the messages list.
+- **(third maintenance loop, pass 2)** v0.1.0 design-spec ASCII
+  five-layer diagram updated for the post-ship renames:
+  `AppScreen → AwsTuiApp`, `ServicesMenu → NavMenu`,
+  `ServicesMenuVM → NavMenuVM`, and `DualPaneFileManager`
+  collapsed to the actual widget name `DualPane`. Adds an
+  inline rename note next to `NavMenuVM` referencing PR #54.
+  The amendments preface already covered the rename in prose;
+  this aligns the diagram with the prose.
+- **(third maintenance loop, pass 2)** `docs/adding-a-service.md`
+  `Service` protocol code-quote now matches
+  `services_protocol.py` exactly — `build_vm(...) -> Any` (was
+  `-> ComponentVM`); the surrounding prose explains why the
+  protocol is structurally typed as `Any` while the §2 template
+  uses a concrete VM type. Prevents reader confusion when
+  cross-referencing the doc against the actual protocol.
+- **(third maintenance loop, pass 2)**
+  `S3ConnectionsPanel._surface_error_toast` now reaches the app
+  context through the public `app_ctx` property instead of the
+  private `_app_ctx` name; the `hasattr` gate is updated in
+  lockstep so test harnesses mounting the panel under a vanilla
+  Textual `App` (without the property) still no-op cleanly.
+- **(third maintenance loop, pass 3)** `PaneState` enum docstring
+  now spells out the per-state entry condition (single source of
+  truth for the state machine, kept in sync with
+  ``PaneVM._reload`` and ``PaneVM.set_auth_required``). Catches the
+  one non-uniform branch — ``NotFoundError`` at the root path
+  enters ``EMPTY`` without setting ``_error_text``, unlike the
+  three sibling handlers — with an inline comment at the call
+  site as well.
+- **(third maintenance loop, pass 3)** `AwsTuiApp.action_modal_left_or_ascend`
+  and `AwsTuiApp.action_modal_right` now carry one-line docstrings
+  (the names are non-obvious, the behavior switches on modal
+  presence). The other unannotated action_* handlers are
+  self-documenting (move/mark/refresh) or carry sufficient inline
+  comments already.
+- **(third maintenance loop, pass 3)** Fixed a "Wiring lands with
+  the BindingResolver work above" → "below" typo in the
+  `Quick Look (entire feature)` Deferred entry; the
+  `BindingResolver` description sits later in the same section.
+- **(third maintenance loop, pass 4)** Fixed a regression
+  introduced in pass 2: `docs/architecture.md` test-count footer
+  said "817" but should have been "951" once pass 2's 134
+  snapshot guards landed. Pass 2 edited the doc and added the
+  tests in the same pass but didn't loop back to update the
+  footer. Now bumped to 951 with a note pointing at the
+  third-loop additions for the source of the drift.
+- **(third maintenance loop, pass 4)** `AwsTuiApp.action_copy`
+  and `AwsTuiApp.action_delete` error logs now carry
+  `error_type` and `file_count` fields, so an operator reading
+  the log can tell whether a copy of 1 file vs 50 failed without
+  cross-referencing the toast. Event names also normalized to
+  the `app.<action>.failed` dotted-hierarchy convention used
+  elsewhere in the file: `copy.failed` → `app.copy.failed`,
+  `delete.failed` → `app.delete.failed`, and
+  `theme.load.failed` → `app.theme.load_failed`. No test
+  references existed for the old names.
+- **(third maintenance loop, pass 5)** `tests/integration/conftest.py`
+  ``app_context_factory`` fixture now yields its builder (was a
+  plain `def` returning a callable) and cleans up every temp dir
+  the builder created when the test finishes. Previously a raise
+  inside an integration test stranded one
+  `tempfile.mkdtemp(prefix="aws-tui-ictx-")` directory under
+  ``$TMPDIR`` per call. Uses `shutil.rmtree(..., ignore_errors=True)`
+  so a partially-cleaned dir on Windows (background worker still
+  holding a file open) doesn't fail the teardown.
+- **(third maintenance loop, pass 7)** `PaneVM.mark_at` now refuses
+  to mark the synthetic ".." parent-link row, and
+  `PaneVM.marked_entries` filters it out as a belt-and-braces
+  guard. The click path (`EntryRow.on_click`) already filtered
+  parent links, but the shift+arrow extend-selection path
+  (`AwsTuiApp._extend_selection`) walked through `mark_at` without
+  the same check — so `Shift+↑` while the cursor was on ".." would
+  flip the parent row's mark flag and a subsequent `c`/`d` would
+  include ".." in its target list. The fallback path
+  (single-cursor target) already had its own ``is_parent_link``
+  filter; this brings the marked path to parity.
+- **(third maintenance loop, pass 8)** Crash-dump files
+  (``~/.cache/aws-tui/crash/<ts>.txt``) now chmod 0o600 after
+  write. Previously the parent directory was 0o700 (from the
+  second-loop cache-dir hardening) but the dump file itself
+  inherited the process umask — typically 0o644, world-readable.
+  Dumps carry the last 1000 log lines + 100 user actions, which
+  can include endpoint URLs, request IDs, and partial upload
+  identifiers; tightening to owner-only matches the existing
+  hardening posture. Best-effort: filesystems without POSIX
+  permission bits silently no-op the chmod.
+- **(third maintenance loop, pass 9)** ``TransferJournal._append``
+  now ``flush()`` + ``os.fsync()`` each line before the file
+  handle closes. The module docstring already promised "fsync
+  semantics" but the code only relied on a natural close, which
+  flushes stdio buffers without forcing the FS journal/metadata
+  to disk. On power loss between a ``mark_completed`` write and
+  the OS's background flush (~30s), the journal would lose the
+  terminal marker and the resume modal would replay the whole
+  transfer on relaunch. fsync closes that window for one syscall
+  per append — negligible against the network I/O the surrounding
+  multipart upload pays per part.
+- **(third maintenance loop, pass 9)** ``TransfersOverlay._arm_linger``
+  now tracks a ``_pending_linger_ids`` set so successive
+  ``_rebuild`` calls for the same finished transfer don't queue
+  a fan of independent ``set_timer`` callbacks. The docstring
+  claimed "idempotent on repeat calls" but the early-return on
+  ``_expired_ids`` only fired AFTER the first timer had expired.
+  A rapid sequence of rebuilds (e.g. a transfer + a hub message
+  + a focus-change in quick succession) would spawn multiple
+  staggered linger timers, each independently re-calling
+  ``_rebuild`` when they fired.
+- **(third maintenance loop, pass 10)** ``ThemeStore.load`` now
+  refuses to follow a symlink at
+  ``~/.config/aws-tui/themes/<name>.tcss`` that resolves outside
+  the user-themes directory. A malicious (or accidental) symlink
+  to a file like ``/etc/passwd`` would previously have its
+  contents inlined into the active stylesheet and surfaced on
+  screen as Textual tried to parse it. Local-only threat model,
+  but a defensive-coding fix that matches the path-confinement
+  posture used elsewhere in ``infra/``.
+- **(third maintenance loop, pass 10)** ``AwsTuiApp.switch_theme``
+  error log now carries ``error`` and ``error_type`` fields,
+  matching the same fix applied to ``_apply_initial_theme`` in
+  pass 1. Pass 1 missed this second site — a runtime
+  ``Esc``-rollback or ``t``-picker theme switch that hit an
+  exception still landed in the log with only the theme name
+  attached.
+- **(third maintenance loop, pass 11)** ``ConnectionResolver``
+  now reads ``~/.aws/config`` and ``~/.aws/credentials`` with
+  ``encoding="utf-8-sig"`` (was ``"utf-8"``). A UTF-8 file with
+  a leading byte-order mark (BOM ``0xEF 0xBB 0xBF``) was causing
+  ``configparser`` to raise ``MissingSectionHeaderError`` —
+  ``﻿[default]`` is not a recognized section header. BOM
+  prefixes are common when files are edited on Windows (Notepad
+  saves UTF-8 with BOM by default). ``utf-8-sig`` transparently
+  strips the BOM if present and is otherwise identical to
+  ``utf-8``. Three call sites updated:
+  ``_discover_aws_profiles`` (config + credentials) and
+  ``_read_aws_credentials_profile``.
+- **(third maintenance loop, pass 15)** ``composition.build_app_context``
+  now passes ``config.keybindings.bindings`` to ``KeymapStore``
+  as the ``overlay`` argument. The Deferred-section entry
+  promised "`[keybindings]` overlays in `config.toml` parse and
+  validate but do not yet affect the live keymap" — the live-
+  keymap half is gated on the deferred ``BindingResolver`` work,
+  but the parse-and-validate half wasn't actually happening
+  because ``KeymapStore()`` was constructed with no args.
+  Users who had a ``[keybindings]`` block in their config saw it
+  silently ignored. A malformed overlay (``UnknownAction``) is
+  now caught and logged rather than crashing startup; the
+  keymap falls back to defaults.
+- **(third maintenance loop, pass 18)** ``CrossFsCopy.copy`` now
+  deletes the partial destination on a mid-stream write failure
+  (or worker cancellation). Previously a copy that raised after
+  any bytes had been written left a truncated junk file on the
+  destination — visible to the user on the next pane refresh
+  with no way to distinguish a failed copy's leftover from a
+  legitimate small file. The source stream is still closed
+  first (so it can release its handle/connection before we
+  re-enter the destination), then ``destination.delete`` runs
+  best-effort with ``contextlib.suppress(Exception)`` so the
+  ORIGINAL write error reaches the caller, not a secondary
+  cleanup error. The catch is ``BaseException`` so worker
+  cancellation (``asyncio.CancelledError``) also triggers
+  cleanup. ``CrossFsMove`` inherits the behavior automatically
+  (it calls ``copy`` and only deletes the source on success).
+- **(third maintenance loop, pass 19)** ``LogSink`` now writes
+  ``~/.cache/aws-tui/log/aws-tui.log`` (and its rotated backups
+  ``aws-tui.log.1`` … ``aws-tui.log.5``) with ``0o600`` instead
+  of the umask-default ``0o644``. The parent directory was
+  already ``0o700`` (from the second-loop cache-dir hardening)
+  but the rotating-file handler created the files with
+  world-readable permissions. Log lines can carry endpoint
+  URLs, request IDs, and structured error context that
+  shouldn't be ``cat``-able by other local users on shared
+  systems — same posture as the crash-dump fix from pass 8.
+  Implemented via a ``_PrivateRotatingFileHandler`` subclass
+  that overrides ``_open`` (initial + post-rotation) and
+  ``doRollover`` (rotated backups) with a best-effort
+  ``chmod 0o600``. Filesystems without POSIX permission bits
+  silently no-op.
+- **(third maintenance loop, pass 20)** ``Keyring.get`` now
+  catches ``KeyringError`` and returns ``None`` instead of
+  letting the exception escape. A locked keychain, a headless
+  Linux system without ``gnome-keyring``/``kwallet`` configured,
+  or a transient OS error on credential lookup previously
+  crashed startup — ``ConnectionResolver._dispatch_s3_credentials``
+  is the only caller, called from ``ConnectionResolver.list()``,
+  called from ``AwsTuiApp._resolve_initial_connection`` with no
+  try/except guard upstream. Returning ``None`` instead leaves
+  the connection in ``AUTH_REQUIRED`` once it's used (the same
+  state the resolver lands in when env-var lookups miss the
+  expected ``${PREFIX}_ACCESS_KEY_ID``). ``Keyring.set`` does
+  NOT suppress: the caller explicitly asked to persist and a
+  silent drop would mislead the UI. ``Keyring.delete`` extends
+  its existing ``PasswordDeleteError`` suppression to cover the
+  general ``KeyringError`` for the same reason as ``get``.
+- **(third maintenance loop, pass 20)** ``Connection`` dataclass
+  now declares ``repr=False`` and ships a custom ``__repr__``
+  that masks ``access_key_id`` and ``secret_access_key``
+  (``"***"`` if present, ``None`` if not). The default dataclass
+  repr inlined every field verbatim — any logger, REPL print,
+  or traceback that surfaced a ``Connection`` instance leaked
+  plaintext credentials. ``eq``, ``hash``, and the ``slots``
+  layout are unchanged.
+- **(third maintenance loop, pass 27)** ``S3FS`` now translates
+  the full family of botocore transport-layer failures to
+  ``ProviderUnreachableError``, not just ``EndpointConnectionError``.
+  The original chain of ``except EndpointConnectionError`` blocks
+  (8 sites) missed ``ConnectTimeoutError`` and ``ReadTimeoutError``
+  — both subclasses of ``HTTPClientError``, NOT subclasses of
+  ``EndpointConnectionError`` — so the 10s connect / 60s read
+  timeouts configured on the botocore client (matching the
+  spec §6.3 + §7.3 policy) propagated as raw botocore exceptions
+  whenever they fired. The pane VM's
+  ``except ProviderUnreachableError`` then never matched and the
+  state machine landed in the generic ``ERROR`` placeholder
+  instead of ``UNREACHABLE``. Replaced with a single
+  ``_TRANSPORT_FAILURE_EXCEPTIONS`` tuple containing
+  ``EndpointConnectionError``, ``ConnectTimeoutError``,
+  ``ReadTimeoutError``, and the base ``BotoConnectionError``
+  (catches future-introduced sibling shapes).
+- **(third maintenance loop, pass 27)** ``_map_client_error``
+  now maps S3 service-side transient codes
+  (``ServiceUnavailable``, ``RequestTimeout``, ``SlowDown``,
+  ``InternalError``, ``503``, ``504``) to
+  ``ProviderUnreachableError``. Botocore's adaptive retry
+  budget (``max_attempts=6``) usually absorbs these but a
+  sustained ``SlowDown`` storm can still exhaust it; from the
+  user's perspective the bucket is unreachable — same recovery
+  action as a DNS/timeout failure (press ``r``, or wait + try
+  again). Previously these surfaced as the generic
+  ``ProviderError`` and the pane landed in the ``ERROR``
+  placeholder instead of ``UNREACHABLE``.
+- **(third maintenance loop, pass 54)** ``HintLegendVM._rebuild_actions``
+  now dedupes ``action_id`` across the focused-pane block and the
+  ``_FALLBACK_ACTIONS`` block via a ``seen: set[str]``. Without it,
+  a focused-pane registration that included a fallback id (e.g.
+  ``("pane.descend", "pane.copy", "pane.move", "pane.delete")``)
+  produced duplicate chips in the bottom legend — the first three
+  ids appeared once in the focused row and again in the fallback
+  row. The wiring is currently exercised only by tests
+  (``register_focusable`` isn't called at runtime pending the
+  deferred ``BindingResolver`` work), but the bug was real enough
+  that a future caller hitting it would have landed on a
+  visibly-doubled legend. Regenerated the 10 ``test_main_screen``
+  snapshots in the same pass — the snapshot fixture
+  (``tests/snapshot/apps/main_screen.py``) was already exercising
+  the duplicating path, so the goldens carried the duplicate
+  chips. The matching guard tests still pass because they assert
+  on user-visible labels (``copy``, ``delete``, ``aws.tui``), not
+  on chip count.
+- **(third maintenance loop, pass 50)** ``.github/dependabot.yml``
+  now declares a ``package-ecosystem: pre-commit`` entry tracking
+  the pinned hook versions in ``.pre-commit-config.yaml``
+  (``pre-commit-hooks``, ``astral-sh/ruff-pre-commit``,
+  ``ComPWA/taplo-pre-commit``). The first maintenance loop bumped
+  ``ruff`` from ``v0.15.0`` to ``v0.15.17`` by hand to close patch-
+  level drift Dependabot wasn't catching; the new entry catches
+  the next such drift on a weekly cadence without manual triage.
+  Weekly Monday schedule + 2 PR cap + ``["dependencies", "tooling"]``
+  labels match the existing ecosystem entries' shape.
+- **(third maintenance loop, pass 49)** ``DualPaneVM.copy_across``
+  and ``move_across`` no longer leave PENDING journal entries
+  behind when a batch transfer raises mid-loop. The previous
+  flow was: ``_pre_register_pending`` opened a fresh journal
+  file for every target up front (one ``begin`` line per id);
+  the loop then ran ``_run_one_transfer`` for each one and
+  appended the terminal ``finished`` / ``aborted`` line. If an
+  entry's ``_run_one_transfer`` raised (its own journal already
+  marked aborted before the re-raise), the for-loop exited and
+  any UNREACHED entries had no terminal marker — those journal
+  files sat in ``~/.cache/aws-tui/transfers/`` indefinitely and
+  would resurface in the deferred resume modal as phantom
+  pending transfers on next launch. Tracked entries via a
+  ``consumed: set[str]`` that the loop adds to BEFORE awaiting
+  ``_run_one_transfer`` (so a raise still counts as consumed —
+  ``_run_one_transfer`` already marked that id), and in the
+  ``finally`` block any id NOT in consumed gets
+  ``mark_aborted``.
+- **(third maintenance loop, pass 47)** ``ToastStackVM.raise_toast``
+  now dismisses any prior toast carrying the same ``model.id``
+  before adding the new one. The intent (per the inline comment
+  on ``_schedule_auto_dismiss``) was that re-raising the same
+  id should refresh the existing toast — and the timer dict
+  was already being keyed on id so the old auto-dismiss got
+  cancelled — but the old toast itself stayed in
+  ``_toasts`` forever. When the new toast's timer eventually
+  fired, ``_on_toast_dismissed`` walked ``_toasts`` via
+  ``_find`` (which returns the FIRST match) and removed the
+  ORIGINAL toast instead of the new one. The new toast then
+  sat on screen sticky. Re-raising twice could leak a card
+  indefinitely. The fix is a single
+  ``self._on_toast_dismissed(existing)`` call at the top of
+  ``raise_toast`` so the duplicate id always replaces, never
+  stacks.
+
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
   originally-active theme; `Enter` commits the cursored theme.
@@ -216,11 +554,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the next theme without a modal; both refresh the stylesheet via
   Textual's own `refresh_css(animate=False)` + a stable `read_from`
   key so theme sources don't accumulate.
-- **Multi-select** via `v` + `Space`, `Shift+↑/↓` (extend selection),
-  and modifier+click (`Shift`, `Cmd`, or `Ctrl` — `Shift+Click` is
+- **Multi-select** via `Shift+↑/↓` (extend selection) and
+  modifier+click (`Shift`, `Cmd`, or `Ctrl` — `Shift+Click` is
   often consumed by macOS terminals for native text-select, so
   `Cmd+Click` is the reliable path there). Marked-byte total surfaces
-  in the pane footer (`N obj · M marked · X selected`).
+  in the pane footer (`N obj · M marked · X selected`). The `v` +
+  `Space` mode-entry shortcut is spec'd but deferred to v0.8 (see
+  `### Deferred / v0.8 roadmap`).
 - **Collapsible services rail.** `s` toggles between 6-wide icon-only
   and 16-wide full-label mode; clicking the rail also toggles.
 - **Pane source swap** via `Shift+S` and `PaneVM.swap_provider`. Any of
@@ -267,6 +607,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus ``ConnectionListChangedMessage`` all carry over.
 
 ### Fixed
+
+- **3-slot Tab cycle + visible NavMenu focus border** (PR #62).
+  Folded the earlier 4-slot Tab cycle (left → right → nav-services →
+  nav-pinned) into a single NAV slot (left → right → NAV → wrap) so
+  successive Tab presses don't read as "two idle switches" across
+  the narrow rail column. NavMenu now gains a visible focus border
+  via Textual-native `:focus-within` rather than a Python
+  `watch_has_focus_within` reactive (which doesn't exist on
+  `has_focus_within` — it's a property, not a reactive).
+- **Tab cycle + SettingsView border + nav polish** (PR #61).
+  Hamburger margin, icon centering, and tooltips on the NavMenu;
+  SettingsView gets a proper border so it doesn't read as floating
+  text inside the content host.
+- **AWS+EXPIRED at startup mounts LocalFS-only DualPane + toast,
+  not error placeholder** (PR #60). When the initial connection
+  resolves to an AWS profile whose SSO token is expired, the app
+  now mounts a degraded DualPane (LocalFS on both sides) plus a
+  sticky warning toast naming the recovery command, instead of
+  rendering the no-connection error placeholder. Mirrors the
+  graceful-unreachable design from PR #48/#49.
+
+- **(third maintenance loop, pass 1)** Several bare
+  `except Exception:` blocks in `composition.py` and `app.py`
+  startup helpers now log the error (with type) before falling
+  back. Previously a malformed `config.toml` looked identical to a
+  clean install (`needs_first_run` returned False on the swallowed
+  load failure), and `_apply_initial_theme` / `_resolve_initial_connection`
+  / `_mount_initial_service_view` lost the failure cause. The
+  service-view mount now also surfaces a sticky error toast so the
+  user gets some explanation instead of a blank pane.
+- **(third maintenance loop, pass 1)** `S3FS._list_objects` now
+  raises `ProviderError` instead of `assert target_bucket is not None`
+  when called bucketless without an explicit `bucket=` arg.
+  `assert` is stripped under `python -O`, which would convert a
+  runtime invariant breach into a confusing botocore `ParamValidationError`
+  much later in the call chain.
+- **(third maintenance loop, pass 1)** `PaneVM.marked_entries` now
+  snapshots `self._entries` before iterating, matching the
+  precaution already in `filtered_entries`. Prevents a race against
+  `_reload`'s `_replace_entries` rewrite that could skip or
+  duplicate marked entries during a concurrent refresh.
+- **(third maintenance loop, pass 1)** `action_copy` and
+  `action_delete` workers now use `exclusive=True, group="transfer-ops"`
+  so a user pressing `c` then `d` in quick succession can no longer
+  interleave the two flows on the focused pane's mark state or the
+  shared transfer journal.
 
 - **(second maintenance loop, passes 1–4)** `AwsTuiApp.action_quit`
   is now overridden to await `_aws_tui_shutdown` on `q` / `ctrl+c`.
@@ -816,9 +1202,23 @@ provenance.)
 These items are spec'd but explicitly not wired in v0.7.x. They are
 tracked so the next minor release can pick them up without rediscovery:
 
-- **Quick Look full-file `$PAGER` shell-out** — `Space` currently
-  streams the first 64 KB with a syntax tint; full-file pager hand-off
-  per the design spec is pending.
+- **Quick Look (entire feature)** — `Space` on a file is spec'd to
+  stream the first 64 KB with a syntax tint, then offer a full-file
+  `$PAGER` shell-out. `QuickLookVM` is built, the `QuickLook` modal
+  is built and snapshot-tested, and `PaneVM` emits
+  `preview_requested` on file-cursor `Enter`/`Space`, but no
+  subscriber consumes the signal and no `Binding("space", …)` lives
+  in `AwsTuiApp.BINDINGS`, so end-to-end the feature is unreachable
+  at runtime. Wiring lands with the `BindingResolver` work below.
+- **`pane.enter_multiselect` action** — `v` is spec'd as the
+  mode-entry shortcut for multi-select; the handler is not wired in
+  v0.7.x. `Shift+↑/↓` and modifier+click cover the actual
+  multi-select paths today.
+- **Command palette (entire feature)** — `:` or `Ctrl+K` is spec'd
+  as a fuzzy-filterable list of every action (including dynamic
+  ones like `connection switch <name>`). `CommandPaletteVM` and the
+  modal exist; in v0.7.x `:` opens the help overlay as a
+  placeholder and `Ctrl+K` is unbound.
 - **`BindingResolver` is constructed but unwired** — `AwsTuiApp`
   builds it from `KeymapStore` and the `ActionRegistry`, but
   `BINDINGS` is still a hard-coded `ClassVar`. User `[keybindings]`

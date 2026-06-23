@@ -100,7 +100,22 @@ class ThemeStore:
         """
         user_path = self._user_theme_path(name)
         if user_path.is_file():
-            base = user_path.read_text(encoding="utf-8")
+            # Refuse to follow a symlink that points outside the
+            # user-themes directory — a malicious symlink at
+            # ``~/.config/aws-tui/themes/foo.tcss → /etc/passwd``
+            # would otherwise have its contents inlined into the
+            # active stylesheet (and surface on screen, since
+            # Textual will try to parse it as CSS). Local-only
+            # threat model, but a TUI shouldn't open arbitrary
+            # paths just because the symlink target is readable.
+            try:
+                resolved = user_path.resolve(strict=True)
+                themes_root = self._user_themes_dir.resolve()
+            except OSError as exc:  # pragma: no cover - extremely rare
+                raise ThemeNotFound(name) from exc
+            if not resolved.is_relative_to(themes_root):
+                raise ThemeNotFound(f"{name}: resolves outside {themes_root}")
+            base = resolved.read_text(encoding="utf-8")
         elif name in self.BUILTIN_NAMES:
             base = self._read_builtin(name)
         else:

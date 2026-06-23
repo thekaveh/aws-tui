@@ -147,13 +147,22 @@ class ConnectionListChangedMessage:
     """Published by :class:`S3ConnectionsVM` after each successful CRUD
     on the s3-compatible connection list.
 
-    Subscribers:
-    - :class:`ConnectionResolver` (cache invalidation if applicable),
-    - :class:`NavMenuVM` (re-derive the service filter),
-    - :class:`AwsTuiApp` (drop deleted names from
-      :attr:`AppContext.unreachable_connections`),
-    - :class:`SettingsVM` (accumulate names for the reload-on-close
-      logic).
+    Subscribers (verified in production wiring):
+
+    - :class:`NavMenuVM` — re-derives the service filter so a newly
+      added connection becomes a candidate (or a removed one is
+      dropped) on the next ``Shift+S`` cycle.
+    - :class:`AwsTuiApp` — on ``deleted``, drops the name from
+      :attr:`AppContext.unreachable_connections` so a future
+      re-addition isn't pre-filtered; on ``updated``, schedules a
+      pane reload if the affected name is currently mounted.
+
+    :class:`ConnectionResolver` does NOT subscribe — it is
+    cacheless and re-reads ``ConfigStore`` on every ``list()``.
+    :class:`SettingsVM` does NOT subscribe — the inline
+    ``S3ConnectionsPanel`` updates its own row list directly off
+    the same :class:`S3ConnectionsVM` it shares with the rest of
+    the app, no message round-trip needed.
     """
 
     names: tuple[str, ...]

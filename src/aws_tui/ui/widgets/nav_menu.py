@@ -8,9 +8,9 @@ routes to ``ContentHostVM.set_content``.
 The rail is **always visible** with two width states toggled via the
 inline hamburger at the top (or the ``m`` keybinding):
 
-- **Collapsed** (default, width 4): icons / emoji only — one column
+- **Collapsed** (default, width 8): icons / emoji only — one column
   per service plus the gear at the bottom for Settings.
-- **Expanded** (width 18): icon + 1-2 word label per row.
+- **Expanded** (width 20): icon + 1-2 word label per row.
 
 The legacy ``display: none`` state was dropped in this rework: a
 minimally collapsed icon-only column is always shown so users can

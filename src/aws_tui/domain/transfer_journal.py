@@ -20,6 +20,7 @@ operations can call it from anywhere.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -166,6 +167,19 @@ class TransferJournal:
         line = json.dumps(record, separators=(",", ":"))
         with path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+            # The module docstring promises "fsync semantics are
+            # clearer without async indirection" — deliver them. A
+            # natural file-close flushes stdio buffers but does NOT
+            # force the FS journal/metadata to disk. On power loss
+            # between an ``mark_completed`` write and the OS's
+            # background flush (~30s), the journal would lose the
+            # terminal marker and the resume-modal would replay the
+            # whole transfer on next launch. fsync is the durability
+            # primitive that closes that window. The cost is one
+            # syscall per append; negligible against the network I/O
+            # the surrounding multipart upload pays per part.
+            fh.flush()
+            os.fsync(fh.fileno())
 
     def _replay(self, path: Path) -> TransferJournalEntry | None:
         lines = _iter_jsonl(path)

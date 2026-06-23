@@ -307,6 +307,14 @@ class TransfersOverlay(Widget):
         self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
         self._expired_ids: set[str] = set()
+        # Tracks transfer ids whose linger timer is currently armed
+        # but hasn't fired yet. Without this, every ``_rebuild`` call
+        # would re-arm a fresh ``set_timer`` for the same id (the
+        # early-return on ``_expired_ids`` only catches state AFTER
+        # the timer has fired). A rapid sequence of rebuilds would
+        # spawn a fan of independent timers all expiring at staggered
+        # offsets.
+        self._pending_linger_ids: set[str] = set()
 
     @property
     def vm(self) -> TransfersVM:
@@ -370,8 +378,17 @@ class TransfersOverlay(Widget):
         configured linger interval. Idempotent on repeat calls."""
         if transfer_id in self._expired_ids:
             return
+        if transfer_id in self._pending_linger_ids:
+            # A previous ``_rebuild`` already armed a timer for this id
+            # — let it ride. Without this guard the docstring's
+            # "idempotent" claim was a lie: every ``_rebuild`` for a
+            # finished transfer queued a fresh timer, so a fan of
+            # them all fired at staggered offsets.
+            return
+        self._pending_linger_ids.add(transfer_id)
 
         def _expire() -> None:
+            self._pending_linger_ids.discard(transfer_id)
             self._expired_ids.add(transfer_id)
             self.call_after_refresh(self._rebuild)
 

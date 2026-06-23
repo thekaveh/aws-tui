@@ -483,8 +483,13 @@ class AwsTuiApp(App[None]):
             self.stylesheet.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
             self.stylesheet.parse()
             self.stylesheet.update(self)
-        except Exception:
-            ctx.log_sink.error("theme.load.failed", name=ctx.initial_theme)
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.theme.load_failed",
+                name=ctx.initial_theme,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     def _resolve_initial_connection(self) -> Connection | None:
         """Pick the initial connection in this order:
@@ -501,7 +506,12 @@ class AwsTuiApp(App[None]):
         ctx = self._app_ctx
         try:
             cfg = ctx.config_store.load()
-        except Exception:
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.config_load.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             cfg = None
         connections = ctx.connection_resolver.list()
         initial_conn = None
@@ -537,8 +547,32 @@ class AwsTuiApp(App[None]):
                 host = self.query_one("#content-host", Container)
                 host.remove_children()
                 host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
-        except Exception:
-            ctx.log_sink.error("app.mount_service_view.failed", service_id="s3")
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.mount_service_view.failed",
+                service_id="s3",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            # Surface the failure as a sticky toast so the user gets
+            # *some* explanation instead of a blank screen. Suppressed
+            # because the toast stack may not be mounted yet during
+            # startup; the log entry above is the durable record.
+            with contextlib.suppress(Exception):
+                ctx.root_vm.chrome.toast_stack.raise_toast(
+                    ToastModel(
+                        id="mount-service-failed",
+                        text=(
+                            f"Could not mount the S3 view: {type(exc).__name__}. "
+                            "See ~/.cache/aws-tui/log/aws-tui.log for details."
+                        ),
+                        level=ToastLevel.ERROR,
+                        sticky=True,
+                        timeout_seconds=0.0,
+                        action_label=None,
+                        action_action=None,
+                    )
+                )
 
     def _mount_no_connection_placeholder(self) -> None:
         """Render a clear "configure one and relaunch" message when no
@@ -842,6 +876,7 @@ class AwsTuiApp(App[None]):
         await pane.navigate_to(pane.path.parent())
 
     async def action_modal_left_or_ascend(self) -> None:
+        """In modals, move focus to the previous button; in panes, ascend to parent."""
         # In a modal: Left moves arrow-key focus to the previous footer
         # button (or whatever the modal exposes as ``action_focus_prev``).
         # Outside any modal: behaves like ``ascend`` so file-pane
@@ -851,6 +886,7 @@ class AwsTuiApp(App[None]):
         await self.action_ascend()
 
     def action_modal_right(self) -> None:
+        """In modals, move focus to the next button. No-op in panes."""
         # In a modal: Right moves arrow-key focus to the next footer
         # button. Outside any modal: no-op (panes don't currently bind
         # Right to anything).
@@ -923,9 +959,17 @@ class AwsTuiApp(App[None]):
         def _after_decision(decision: bool | None) -> None:
             if not decision:
                 return
+            # Serialize against the delete worker — both mutate the
+            # focused pane's mark state and the shared transfer journal.
+            # Without exclusive+group, a user pressing `c` then `d` in
+            # quick succession can interleave the two flows on the same
+            # DualPaneVM._journal / pane entries (see Textual worker race
+            # rule: shared-state workers must use exclusive=True,
+            # group="<name>").
             self.run_worker(
                 self._run_copy(dual, list(targets), used_cursor_fallback),
-                exclusive=False,
+                exclusive=True,
+                group="transfer-ops",
             )
 
         self.push_screen(modal, _after_decision)
@@ -948,7 +992,12 @@ class AwsTuiApp(App[None]):
         try:
             await copy_across()
         except Exception as exc:
-            ctx.log_sink.error("copy.failed", error=str(exc))
+            ctx.log_sink.error(
+                "app.copy.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                file_count=len(targets),
+            )
             self.notify(f"Copy failed: {exc}", severity="error", timeout=8)
         finally:
             if used_cursor_fallback:
@@ -998,9 +1047,12 @@ class AwsTuiApp(App[None]):
         def _after_decision(decision: bool | None) -> None:
             if not decision:
                 return
+            # Shares the "transfer-ops" group with copy so the two flows
+            # can't interleave on the focused pane's mark state.
             self.run_worker(
                 self._run_delete(dual, list(targets), used_cursor_fallback),
-                exclusive=False,
+                exclusive=True,
+                group="transfer-ops",
             )
 
         self.push_screen(modal, _after_decision)
@@ -1022,7 +1074,12 @@ class AwsTuiApp(App[None]):
         try:
             await delete_in_focused()
         except Exception as exc:
-            ctx.log_sink.error("delete.failed", error=str(exc))
+            ctx.log_sink.error(
+                "app.delete.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                file_count=len(targets),
+            )
             self.notify(f"Delete failed: {exc}", severity="error", timeout=8)
         finally:
             if used_cursor_fallback:
@@ -1335,8 +1392,13 @@ class AwsTuiApp(App[None]):
         ctx = self._app_ctx
         try:
             theme_css = ctx.theme_store.load(name)
-        except Exception:
-            ctx.log_sink.error("theme.load.failed", name=name)
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.theme.load_failed",
+                name=name,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             return
 
         # 1. Replace, don't accumulate.
