@@ -161,6 +161,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   + a focus-change in quick succession) would spawn multiple
   staggered linger timers, each independently re-calling
   ``_rebuild`` when they fired.
+- **(third maintenance loop, pass 10)** ``ThemeStore.load`` now
+  refuses to follow a symlink at
+  ``~/.config/aws-tui/themes/<name>.tcss`` that resolves outside
+  the user-themes directory. A malicious (or accidental) symlink
+  to a file like ``/etc/passwd`` would previously have its
+  contents inlined into the active stylesheet and surfaced on
+  screen as Textual tried to parse it. Local-only threat model,
+  but a defensive-coding fix that matches the path-confinement
+  posture used elsewhere in ``infra/``.
+- **(third maintenance loop, pass 10)** ``AwsTuiApp.switch_theme``
+  error log now carries ``error`` and ``error_type`` fields,
+  matching the same fix applied to ``_apply_initial_theme`` in
+  pass 1. Pass 1 missed this second site — a runtime
+  ``Esc``-rollback or ``t``-picker theme switch that hit an
+  exception still landed in the log with only the theme name
+  attached.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the

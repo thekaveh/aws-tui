@@ -1392,8 +1392,13 @@ class AwsTuiApp(App[None]):
         ctx = self._app_ctx
         try:
             theme_css = ctx.theme_store.load(name)
-        except Exception:
-            ctx.log_sink.error("app.theme.load_failed", name=name)
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.theme.load_failed",
+                name=name,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             return
 
         # 1. Replace, don't accumulate.
