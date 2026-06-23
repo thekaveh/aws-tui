@@ -438,8 +438,13 @@ class AwsTuiApp(App[None]):
                 error_type=type(exc).__name__,
             )
 
-        # Recovery-hint toast. Sticky for AWS-SSO-expired so the user
-        # can read the recovery command at their own pace.
+        # Recovery-hint toast. Originally sticky so the user could read
+        # the recovery command at their own pace; the user reported the
+        # sticky behavior felt intrusive ("remains there which is not
+        # something I want, I want it to disappear after a count down"),
+        # so switched to a non-sticky toast with a generous 12-second
+        # timeout. That's long enough to read a one-line command,
+        # short enough not to crowd subsequent toasts.
         profile = initial_conn.profile or initial_conn.name
         text = {
             "aws-sso-expired": (
@@ -453,8 +458,8 @@ class AwsTuiApp(App[None]):
                 id=f"initial-fallback-{reason}-{initial_conn.name}",
                 text=text,
                 level=ToastLevel.WARNING,
-                sticky=True,
-                timeout_seconds=0.0,
+                sticky=False,
+                timeout_seconds=12.0,
                 action_label=None,
                 action_action=None,
             )
@@ -643,37 +648,32 @@ class AwsTuiApp(App[None]):
         return current if isinstance(current, DualPaneVM) else None
 
     def action_switch_focus(self) -> None:
-        """3-slot Tab cycle: leftPane → rightPane → NAV → leftPane → ...
+        """2-slot Tab cycle on the S3 screen: LEFT pane ↔ RIGHT pane.
 
-        Earlier 4-slot variant (PR #61) stepped nav-services → nav-pinned
-        as separate Tab presses, which read as "two idle switches"
-        because both transitions happened entirely in the rail's
-        narrow column with no obvious visual change. Folded into a
-        single NAV slot: Tab enters the rail by focusing whichever
-        OptionList contains the active service, Tab exits back to the
-        LEFT pane. Within the rail, arrow keys navigate (the
-        ``_move_cursor`` forwarder handles Up/Down on the focused
-        OptionList; jumping between #menu-services and #menu-pinned
-        when the cursor falls off either end is a separate concern,
-        handled via the OptionList's natural behaviour or user click).
+        Earlier variants (PRs #59 → #61 → #62) folded the NavMenu into
+        the Tab cycle so users could reach the rail without the mouse.
+        In practice the rail steps read as "idle switches" — the user
+        is operating in the panes, and being yanked into a narrow column
+        full of icons that ALSO had no obvious visual focus indicator
+        broke the mental model. The user explicitly asked: "let's keep
+        the tab switching to cycle through the left and right tabs only
+        for now and let's not cause it to focus the menu column." So
+        Tab on the S3 screen is now a simple toggle between LEFT and
+        RIGHT panes — nothing else.
+
+        The NavMenu remains reachable via the ``m`` keybinding (toggles
+        collapsed/expanded) and via direct click; arrow keys still
+        navigate the rail once it has Textual focus from those entry
+        points.
+
+        For the Settings-only screen (no DualPane mounted) the existing
+        2-way cycle between the content host and the NavMenu is kept
+        so keyboard users can still leave the Settings page without a
+        mouse.
 
         Decoupled from Textual focus on the pane side (Pane widgets
         don't accept Textual focus; they use a CSS ``-focused`` class
-        toggled by the DualPaneVM). State sources:
-
-        - ``dual.focused`` (VM-tracked LEFT / RIGHT pane highlight)
-        - ``_nav_has_focus()`` (Textual focus inside the NavMenu)
-
-        Transitions:
-        - LEFT pane → RIGHT pane (toggle DualPaneVM).
-        - RIGHT pane → NAV (focus the OptionList that owns the
-          currently-selected service; if Settings is selected that's
-          #menu-pinned, otherwise #menu-services).
-        - NAV (any sub-widget) → LEFT pane (clear Textual focus +
-          force the VM back to LEFT for visual consistency).
-
-        Settings-only mounts (no DualPane) collapse to a 2-way cycle
-        between the content host and the NavMenu.
+        toggled by ``DualPaneVM``).
         """
         try:
             nav = self.query_one("#nav-menu", NavMenu)
@@ -681,43 +681,30 @@ class AwsTuiApp(App[None]):
             nav = None
         dual = self._dual_pane()
 
-        # NAV slot → exit back to LEFT pane.
+        # If the NavMenu currently has Textual focus, give it back to
+        # the panes. Two callers can land us here: (a) the user
+        # arrow-keyed into the rail and now wants to leave it, or (b)
+        # the Settings page is mounted and the user is cycling back to
+        # the content host.
         if nav is not None and self._nav_has_focus():
-            if dual is not None:
-                from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
-
-                if getattr(dual, "focused", None) is FocusedPane.RIGHT:
-                    # Toggle VM back to LEFT so the visual highlight
-                    # matches where Tab dropped us.
-                    cmd = getattr(dual, "switch_focus_command", None)
-                    if cmd is not None:
-                        cmd.execute()
-            # Yield Textual focus so App's priority Up/Down/Enter
-            # bindings drive the pane cursor uniformly.
             with contextlib.suppress(Exception):
                 self.set_focus(None)
             return
 
         if dual is None:
-            # No dual pane (Settings hosted) — 2-way cycle: just
-            # enter the nav.
+            # No dual pane (Settings hosted) — keep the 2-way
+            # content-host ↔ NavMenu cycle so keyboard users can
+            # leave the Settings page.
             if nav is not None:
                 with contextlib.suppress(Exception):
                     self._focus_active_nav_list(nav)
             return
 
-        # On a pane (Textual focus NOT in nav). Advance.
-        from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
-
+        # S3 screen, neither pane has Textual focus (Pane widgets
+        # decline it by design). Toggle the VM-tracked focused pane;
+        # ``DualPane._sync_focus`` flips the ``-focused`` CSS class on
+        # the two Pane widgets so the active one lights up.
         cmd = getattr(dual, "switch_focus_command", None)
-        if getattr(dual, "focused", None) is FocusedPane.RIGHT:
-            # RIGHT → NAV.
-            if nav is not None:
-                with contextlib.suppress(Exception):
-                    self._focus_active_nav_list(nav)
-            return
-        # LEFT → RIGHT (toggle VM; ``DualPane._sync_focus`` flips the
-        # ``-focused`` CSS class on the two Pane widgets).
         if cmd is not None:
             cmd.execute()
 
@@ -1677,26 +1664,30 @@ class AwsTuiApp(App[None]):
             )
 
     async def _mount_service_view(self, service_id: str) -> None:
-        """Swap the content host to show the DualPane for ``service_id``."""
+        """Swap the content host to show the DualPane for ``service_id``.
+
+        Always runs the full ``switch_service`` + ``remove_children``
+        + ``mount`` sequence. An earlier ``current_id == service_id``
+        early-return shortcut was meant to skip a no-op rebuild on a
+        same-service reselect, but it raced the Settings ↔ S3 toggle:
+        if the user clicked S3 → Settings → S3 quickly enough, the
+        Settings worker could be cancelled mid-``set_content`` before
+        ``current_id`` flipped to ``"settings"``, leaving
+        ``current_id == "s3"`` while the DOM held a partially-mounted
+        ``SettingsView``. The next ``_mount_service_view("s3")`` would
+        then hit the shortcut, see ``current_id == "s3"``, check
+        ``host.query(DualPane)`` (which returned nothing because
+        SettingsView was in the DOM), and re-mount using whatever
+        ``content_host.current`` was — possibly the disposed DualPaneVM
+        from the original mount, possibly the SettingsVM, possibly
+        nothing — and the user saw "S3 selected but Settings still on
+        screen". ``switch_service`` is idempotent on a matching
+        ``service_id``, so always running it is cheap; always tearing
+        the host children down and re-mounting forces the DOM into
+        agreement with the VM regardless of which intermediate state
+        a cancelled worker may have left behind.
+        """
         ctx = self._app_ctx
-        if ctx.root_vm.content_host.current_id == service_id:
-            # Already showing this service — just re-mount if the widget
-            # is missing (e.g. first time after settings was shown).
-            try:
-                host = self.query_one("#content-host", Container)
-                if not host.query(DualPane):
-                    current_vm = ctx.root_vm.content_host.current
-                    if current_vm is not None:
-                        await host.remove_children()
-                        await host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
-            except Exception as exc:
-                ctx.log_sink.error(
-                    "app.mount_service_view.remount_failed",
-                    service_id=service_id,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                )
-            return
         try:
             await ctx.root_vm.switch_service(service_id)
         except Exception as exc:
