@@ -66,7 +66,18 @@ def _build_vm() -> NavMenuVM:
     return vm
 
 
-class NavMenuExpandedApp(App[None]):
+class _UnfocusedMixin:
+    """When NavMenu is the only widget, Textual auto-focuses its first
+    OptionList, which trips the ``:focus-within`` rule and paints the
+    rail's accent border. These layout snapshots want the unfocused
+    state; drop Textual focus in ``on_ready`` so the focus pass has
+    already run before we clear it."""
+
+    def on_ready(self) -> None:  # type: ignore[no-untyped-def]
+        self.set_focus(None)  # type: ignore[attr-defined]
+
+
+class NavMenuExpandedApp(_UnfocusedMixin, App[None]):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)
@@ -80,7 +91,7 @@ class NavMenuExpandedApp(App[None]):
         yield nav
 
 
-class NavMenuCollapsedApp(App[None]):
+class NavMenuCollapsedApp(_UnfocusedMixin, App[None]):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)

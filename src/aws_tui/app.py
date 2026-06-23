@@ -609,69 +609,67 @@ class AwsTuiApp(App[None]):
         return current if isinstance(current, DualPaneVM) else None
 
     def action_switch_focus(self) -> None:
-        """Tab cycle: leftPane → rightPane → nav-services → nav-pinned → leftPane.
+        """3-slot Tab cycle: leftPane → rightPane → NAV → leftPane → ...
 
-        Decoupled from Textual focus (Pane widgets don't accept
-        Textual focus anyway — they use a CSS ``-focused`` class
-        toggled by the DualPaneVM). State is derived from:
+        Earlier 4-slot variant (PR #61) stepped nav-services → nav-pinned
+        as separate Tab presses, which read as "two idle switches"
+        because both transitions happened entirely in the rail's
+        narrow column with no obvious visual change. Folded into a
+        single NAV slot: Tab enters the rail by focusing whichever
+        OptionList contains the active service, Tab exits back to the
+        LEFT pane. Within the rail, arrow keys navigate (the
+        ``_move_cursor`` forwarder handles Up/Down on the focused
+        OptionList; jumping between #menu-services and #menu-pinned
+        when the cursor falls off either end is a separate concern,
+        handled via the OptionList's natural behaviour or user click).
+
+        Decoupled from Textual focus on the pane side (Pane widgets
+        don't accept Textual focus; they use a CSS ``-focused`` class
+        toggled by the DualPaneVM). State sources:
 
         - ``dual.focused`` (VM-tracked LEFT / RIGHT pane highlight)
-        - Whether Textual focus is currently inside the NavMenu and
-          which of its OptionLists has it
+        - ``_nav_has_focus()`` (Textual focus inside the NavMenu)
 
         Transitions:
         - LEFT pane → RIGHT pane (toggle DualPaneVM).
-        - RIGHT pane → NAV services OptionList (Textual focus).
-        - NAV services → NAV pinned (Textual focus).
-        - NAV pinned → LEFT pane (clear Textual focus; toggle VM to
-          LEFT if it had drifted to RIGHT).
+        - RIGHT pane → NAV (focus the OptionList that owns the
+          currently-selected service; if Settings is selected that's
+          #menu-pinned, otherwise #menu-services).
+        - NAV (any sub-widget) → LEFT pane (clear Textual focus +
+          force the VM back to LEFT for visual consistency).
 
         Settings-only mounts (no DualPane) collapse to a 2-way cycle
-        between the two nav OptionLists, with the content host (which
-        owns the SettingsView) as the third slot.
+        between the content host and the NavMenu.
         """
         try:
             nav = self.query_one("#nav-menu", NavMenu)
         except Exception:
             nav = None
-
-        currently_on_nav = (
-            nav is not None
-            and self.focused is not None
-            and (self.focused is nav or nav in self.focused.ancestors_with_self)
-        )
         dual = self._dual_pane()
 
-        if currently_on_nav and nav is not None:
-            # Inside nav. Step through services → pinned → exit.
-            focused_id = getattr(self.focused, "id", None)
-            if focused_id == "menu-services":
-                # services → pinned (Settings).
-                with contextlib.suppress(Exception):
-                    nav.query_one("#menu-pinned", OptionList).focus()
-                return
-            # On pinned (Settings) — or anywhere else inside nav. Exit.
+        # NAV slot → exit back to LEFT pane.
+        if nav is not None and self._nav_has_focus():
             if dual is not None:
                 from aws_tui.vm.file_manager.dual_pane_vm import FocusedPane
 
                 if getattr(dual, "focused", None) is FocusedPane.RIGHT:
                     # Toggle VM back to LEFT so the visual highlight
-                    # matches the cycle position when we land.
+                    # matches where Tab dropped us.
                     cmd = getattr(dual, "switch_focus_command", None)
                     if cmd is not None:
                         cmd.execute()
-            # Yield Textual focus so the App's priority Up/Down/Enter
-            # bindings drive the pane cursor uniformly (no fight with
-            # OptionList's own navigation).
+            # Yield Textual focus so App's priority Up/Down/Enter
+            # bindings drive the pane cursor uniformly.
             with contextlib.suppress(Exception):
                 self.set_focus(None)
             return
 
         if dual is None:
-            # No dual pane (Settings hosted) — cycle into nav.
+            # No dual pane (Settings hosted) — 2-way cycle: just
+            # enter the nav.
             if nav is not None:
                 with contextlib.suppress(Exception):
-                    nav.query_one("#menu-services", OptionList).focus()
+                    self._focus_active_nav_list(nav)
             return
 
         # On a pane (Textual focus NOT in nav). Advance.
@@ -679,15 +677,37 @@ class AwsTuiApp(App[None]):
 
         cmd = getattr(dual, "switch_focus_command", None)
         if getattr(dual, "focused", None) is FocusedPane.RIGHT:
-            # RIGHT → NAV services.
+            # RIGHT → NAV.
             if nav is not None:
                 with contextlib.suppress(Exception):
-                    nav.query_one("#menu-services", OptionList).focus()
+                    self._focus_active_nav_list(nav)
             return
-        # LEFT → RIGHT (toggle VM; ``_sync_focus`` flips the
+        # LEFT → RIGHT (toggle VM; ``DualPane._sync_focus`` flips the
         # ``-focused`` CSS class on the two Pane widgets).
         if cmd is not None:
             cmd.execute()
+
+    def _focus_active_nav_list(self, nav: NavMenu) -> None:
+        """Focus whichever NavMenu OptionList owns the currently-
+        selected service. If Settings is selected, focus
+        #menu-pinned; otherwise focus #menu-services. Lets the user
+        Tab-into-nav and immediately see the highlight on the active
+        item without arrow-keying around."""
+        selected_id = nav.vm.selected_id
+        target_id = "#menu-pinned" if selected_id == "settings" else "#menu-services"
+        try:
+            target = nav.query_one(target_id, OptionList)
+        except Exception:
+            return
+        # If the target OptionList is empty (e.g. no services yet),
+        # fall back to whichever one has options.
+        if target.option_count == 0:
+            other_id = "#menu-services" if target_id == "#menu-pinned" else "#menu-pinned"
+            try:
+                target = nav.query_one(other_id, OptionList)
+            except Exception:
+                return
+        target.focus()
 
     def _forward_to_modal(self, *action_names: str) -> bool:
         """When a modal is active, try each ``action_name`` on the active
