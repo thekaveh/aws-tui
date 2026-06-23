@@ -50,7 +50,27 @@ _ROOT_PATH: PathRef = PathRef(())
 
 
 class PaneState(StrEnum):
-    """Render state surfaced by ``PaneViewModel`` per spec §7.7."""
+    """Render state surfaced by ``PaneViewModel`` per spec §7.7.
+
+    State entry conditions (single source of truth for the state
+    machine — keep in sync with :meth:`PaneVM._reload` and
+    :meth:`PaneVM.set_auth_required`):
+
+    - ``IDLE`` — Entries available (success path with non-empty listing,
+      or initial construction before the first reload).
+    - ``LOADING`` — Listing in progress; entered at the start of every
+      ``_reload`` cycle.
+    - ``EMPTY`` — Success with zero entries, OR ``NotFoundError`` at the
+      root path (treated as an empty bucket / mount point). No
+      ``_error_text`` is set on the EMPTY-via-NotFoundError path because
+      the user-facing copy is just "empty", not an error.
+    - ``AUTH_REQUIRED`` — Injected externally by ``RootVM`` after it
+      observes an ``AuthExpiredMessage``; never reached from ``_reload``.
+    - ``FORBIDDEN`` — ``PermissionDeniedError`` during ``list()``.
+    - ``UNREACHABLE`` — ``ProviderUnreachableError`` during ``list()``.
+    - ``ERROR`` — Generic ``ProviderError``, OR ``NotFoundError`` on a
+      non-root path (a missing prefix is a real failure, not "empty").
+    """
 
     IDLE = "idle"
     LOADING = "loading"
@@ -628,7 +648,12 @@ class PaneVM:
             raw = await self._provider.list(self._path)
         except NotFoundError as exc:
             # Root listing: an unknown path at root means empty (e.g. an
-            # empty bucket); deeper paths surface as ERROR.
+            # empty bucket); deeper paths surface as ERROR. The root
+            # branch intentionally leaves ``_error_text`` UNCHANGED
+            # (versus the three sibling handlers below, which set it
+            # from ``str(exc)``) so the placeholder reads as the plain
+            # "empty" copy rather than carrying the underlying error
+            # string. See :class:`PaneState` docstring for the contract.
             if self._path.is_root:
                 self._replace_entries([])
                 self._set_state(PaneState.EMPTY)

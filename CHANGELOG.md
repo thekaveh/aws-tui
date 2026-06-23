@@ -75,6 +75,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   private `_app_ctx` name; the `hasattr` gate is updated in
   lockstep so test harnesses mounting the panel under a vanilla
   Textual `App` (without the property) still no-op cleanly.
+- **(third maintenance loop, pass 3)** `PaneState` enum docstring
+  now spells out the per-state entry condition (single source of
+  truth for the state machine, kept in sync with
+  ``PaneVM._reload`` and ``PaneVM.set_auth_required``). Catches the
+  one non-uniform branch — ``NotFoundError`` at the root path
+  enters ``EMPTY`` without setting ``_error_text``, unlike the
+  three sibling handlers — with an inline comment at the call
+  site as well.
+- **(third maintenance loop, pass 3)** `AwsTuiApp.action_modal_left_or_ascend`
+  and `AwsTuiApp.action_modal_right` now carry one-line docstrings
+  (the names are non-obvious, the behavior switches on modal
+  presence). The other unannotated action_* handlers are
+  self-documenting (move/mark/refresh) or carry sufficient inline
+  comments already.
+- **(third maintenance loop, pass 3)** Fixed a "Wiring lands with
+  the BindingResolver work above" → "below" typo in the
+  `Quick Look (entire feature)` Deferred entry; the
+  `BindingResolver` description sits later in the same section.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
@@ -938,7 +956,7 @@ tracked so the next minor release can pick them up without rediscovery:
   `preview_requested` on file-cursor `Enter`/`Space`, but no
   subscriber consumes the signal and no `Binding("space", …)` lives
   in `AwsTuiApp.BINDINGS`, so end-to-end the feature is unreachable
-  at runtime. Wiring lands with the `BindingResolver` work above.
+  at runtime. Wiring lands with the `BindingResolver` work below.
 - **`pane.enter_multiselect` action** — `v` is spec'd as the
   mode-entry shortcut for multi-select; the handler is not wired in
   v0.7.x. `Shift+↑/↓` and modifier+click cover the actual

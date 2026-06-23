@@ -876,6 +876,7 @@ class AwsTuiApp(App[None]):
         await pane.navigate_to(pane.path.parent())
 
     async def action_modal_left_or_ascend(self) -> None:
+        """In modals, move focus to the previous button; in panes, ascend to parent."""
         # In a modal: Left moves arrow-key focus to the previous footer
         # button (or whatever the modal exposes as ``action_focus_prev``).
         # Outside any modal: behaves like ``ascend`` so file-pane
@@ -885,6 +886,7 @@ class AwsTuiApp(App[None]):
         await self.action_ascend()
 
     def action_modal_right(self) -> None:
+        """In modals, move focus to the next button. No-op in panes."""
         # In a modal: Right moves arrow-key focus to the next footer
         # button. Outside any modal: no-op (panes don't currently bind
         # Right to anything).
