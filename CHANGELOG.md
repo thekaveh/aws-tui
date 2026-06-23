@@ -231,6 +231,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``doRollover`` (rotated backups) with a best-effort
   ``chmod 0o600``. Filesystems without POSIX permission bits
   silently no-op.
+- **(third maintenance loop, pass 20)** ``Keyring.get`` now
+  catches ``KeyringError`` and returns ``None`` instead of
+  letting the exception escape. A locked keychain, a headless
+  Linux system without ``gnome-keyring``/``kwallet`` configured,
+  or a transient OS error on credential lookup previously
+  crashed startup — ``ConnectionResolver._dispatch_s3_credentials``
+  is the only caller, called from ``ConnectionResolver.list()``,
+  called from ``AwsTuiApp._resolve_initial_connection`` with no
+  try/except guard upstream. Returning ``None`` instead leaves
+  the connection in ``AUTH_REQUIRED`` once it's used (the same
+  state the resolver lands in when env-var lookups miss the
+  expected ``${PREFIX}_ACCESS_KEY_ID``). ``Keyring.set`` does
+  NOT suppress: the caller explicitly asked to persist and a
+  silent drop would mislead the UI. ``Keyring.delete`` extends
+  its existing ``PasswordDeleteError`` suppression to cover the
+  general ``KeyringError`` for the same reason as ``get``.
+- **(third maintenance loop, pass 20)** ``Connection`` dataclass
+  now declares ``repr=False`` and ships a custom ``__repr__``
+  that masks ``access_key_id`` and ``secret_access_key``
+  (``"***"`` if present, ``None`` if not). The default dataclass
+  repr inlined every field verbatim — any logger, REPL print,
+  or traceback that surfaced a ``Connection`` instance leaked
+  plaintext credentials. ``eq``, ``hash``, and the ``slots``
+  layout are unchanged.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
