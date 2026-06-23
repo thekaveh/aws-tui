@@ -554,9 +554,13 @@ NavMenu > OptionList {
 }
 
 NavMenu > OptionList > .option-list--option-highlighted {
+    /* Mirror ``Pane .entry-row.-selected`` so the rail highlight
+       reads the same as the file-pane cursor row: ``$bg-sel``
+       background, softer ``$accent-soft`` text, no bold. The user
+       asked for "the exact same style used for the selected items
+       on the panes" applied here. */
     background: $bg-sel;
-    color: $accent;
-    text-style: bold;
+    color: $accent-soft;
 }
 
 NavMenu > #menu-pinned {

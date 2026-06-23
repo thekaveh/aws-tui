@@ -57,9 +57,17 @@ class S3ConnectionsPanel(Widget):
         height: 1;
         width: 1fr;
     }
+    /* Empty state used to stretch to ``height: 1fr`` and centre
+       vertically, which made the Settings page's first Collapsible
+       (S3-Compatible Connections) read as "sloppy" — a huge blank
+       region with one centered helper line — when the user hadn't
+       added any connections yet. Pin the empty-state to a compact
+       block so the surrounding panel-body shows its real (empty)
+       size and the second + third Collapsibles aren't pushed off
+       screen. The non-empty form-open case is unaffected because it
+       doesn't render the empty state. */
     S3ConnectionsPanel .empty-state {
-        align: center middle;
-        height: 1fr;
+        height: auto;
         padding: 1 2;
     }
     S3ConnectionsPanel .empty-state Static {
