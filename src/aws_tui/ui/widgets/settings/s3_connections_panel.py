@@ -207,9 +207,15 @@ class S3ConnectionsPanel(Widget):
         await self.refresh_rows()
 
     def _surface_error_toast(self, text: str, toast_id: str) -> None:
-        """Show an ERROR-level toast if the app context is available."""
-        if hasattr(self.app, "_app_ctx"):
-            self.app._app_ctx.root_vm.chrome.toast_stack.raise_toast(
+        """Show an ERROR-level toast if the app context is available.
+
+        Uses the public ``app_ctx`` property instead of reaching into
+        ``_app_ctx``. The ``hasattr`` gate still covers tests / harnesses
+        that mount this panel under a vanilla Textual ``App`` without
+        the ``AwsTuiApp`` wrapper.
+        """
+        if hasattr(self.app, "app_ctx"):
+            self.app.app_ctx.root_vm.chrome.toast_stack.raise_toast(
                 ToastModel(
                     id=toast_id,
                     text=text,
