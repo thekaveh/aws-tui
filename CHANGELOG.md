@@ -177,6 +177,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``Esc``-rollback or ``t``-picker theme switch that hit an
   exception still landed in the log with only the theme name
   attached.
+- **(third maintenance loop, pass 11)** ``ConnectionResolver``
+  now reads ``~/.aws/config`` and ``~/.aws/credentials`` with
+  ``encoding="utf-8-sig"`` (was ``"utf-8"``). A UTF-8 file with
+  a leading byte-order mark (BOM ``0xEF 0xBB 0xBF``) was causing
+  ``configparser`` to raise ``MissingSectionHeaderError`` —
+  ``﻿[default]`` is not a recognized section header. BOM
+  prefixes are common when files are edited on Windows (Notepad
+  saves UTF-8 with BOM by default). ``utf-8-sig`` transparently
+  strips the BOM if present and is otherwise identical to
+  ``utf-8``. Three call sites updated:
+  ``_discover_aws_profiles`` (config + credentials) and
+  ``_read_aws_credentials_profile``.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
