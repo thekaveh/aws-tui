@@ -63,6 +63,13 @@ def _build_vm() -> NavMenuVM:
             source="snapshot",
         )
     )
+    # Drive ``selected_id`` to ``"s3"`` — matches what the real app's
+    # ``on_mount`` does via ``RootVM.switch_service`` and what
+    # ``_rebuild_options`` reads to decide which row gets the ``▌``
+    # ribbon prefix. The fixture used to skip this step, so the
+    # ribbon code path went untested and the snapshot rendered with
+    # spaces in both rows instead of the active-service indicator.
+    vm.switch_service_command.execute("s3")
     return vm
 
 
