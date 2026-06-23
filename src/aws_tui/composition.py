@@ -145,7 +145,14 @@ def build_app_context(
     config_store = ConfigStore(path=config_dir / "config.toml")
     try:
         initial_theme = config_store.load().defaults.theme
-    except Exception:
+    except Exception as exc:
+        # Falling back silently is dishonest — first-run with a
+        # malformed config.toml looks identical to a clean install.
+        # Log once so an operator can find the cause in the log.
+        _logger.warning(
+            "composition.initial_theme.load_failed",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
         initial_theme = "carbon"
     keymap_store = KeymapStore()
     theme_store = ThemeStore(
@@ -312,12 +319,23 @@ def needs_first_run(
         cfg = config_store.load()
         if cfg.connections:
             return False
-    except Exception:
+    except Exception as exc:
+        # Treat a broken config as "user already has setup, just
+        # can't read it" rather than dropping them into the first-run
+        # wizard which would overwrite whatever is there.
+        _logger.warning(
+            "composition.needs_first_run.config_load_failed",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
         return False
     # Auto-discovered AWS profiles.
     try:
         discovered = connection_resolver.list()
-    except Exception:
+    except Exception as exc:
+        _logger.warning(
+            "composition.needs_first_run.resolver_list_failed",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
         return True
     return not discovered
 

@@ -209,7 +209,15 @@ class S3FS:
         # When the caller passes ``bucket`` explicitly (virtual-root navigation
         # via the bucketless service FS), use that instead of ``self._bucket``.
         target_bucket = bucket if bucket is not None else self._bucket
-        assert target_bucket is not None
+        if target_bucket is None:
+            # ``assert`` is removable under ``python -O``; raise so the
+            # invariant survives optimized builds. The caller must
+            # either be bucket-rooted (``self._bucket``) or pass an
+            # explicit bucket via virtual-root navigation.
+            raise ProviderError(
+                "S3FS._list_objects requires a bucket — instance is "
+                "bucketless and no explicit bucket= was passed."
+            )
         entries: list[FileEntry] = []
         try:
             async with self._client() as s3:

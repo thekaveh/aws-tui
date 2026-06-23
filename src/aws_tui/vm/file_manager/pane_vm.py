@@ -333,7 +333,11 @@ class PaneVM:
 
     @property
     def marked_entries(self) -> tuple[EntryVM, ...]:
-        return tuple(e for e in self._entries if e.is_marked)
+        # Snapshot first — _entries is the same list ``_reload`` rewrites
+        # under ``_replace_entries``. ``filtered_entries`` already takes
+        # this precaution; apply it here for parity.
+        snapshot = tuple(self._entries)
+        return tuple(e for e in snapshot if e.is_marked)
 
     @property
     def viewmodel(self) -> PaneViewModel:
