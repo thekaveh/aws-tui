@@ -284,6 +284,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again). Previously these surfaced as the generic
   ``ProviderError`` and the pane landed in the ``ERROR``
   placeholder instead of ``UNREACHABLE``.
+- **(third maintenance loop, pass 49)** ``DualPaneVM.copy_across``
+  and ``move_across`` no longer leave PENDING journal entries
+  behind when a batch transfer raises mid-loop. The previous
+  flow was: ``_pre_register_pending`` opened a fresh journal
+  file for every target up front (one ``begin`` line per id);
+  the loop then ran ``_run_one_transfer`` for each one and
+  appended the terminal ``finished`` / ``aborted`` line. If an
+  entry's ``_run_one_transfer`` raised (its own journal already
+  marked aborted before the re-raise), the for-loop exited and
+  any UNREACHED entries had no terminal marker — those journal
+  files sat in ``~/.cache/aws-tui/transfers/`` indefinitely and
+  would resurface in the deferred resume modal as phantom
+  pending transfers on next launch. Tracked entries via a
+  ``consumed: set[str]`` that the loop adds to BEFORE awaiting
+  ``_run_one_transfer`` (so a raise still counts as consumed —
+  ``_run_one_transfer`` already marked that id), and in the
+  ``finally`` block any id NOT in consumed gets
+  ``mark_aborted``.
 - **(third maintenance loop, pass 47)** ``ToastStackVM.raise_toast``
   now dismisses any prior toast carrying the same ``model.id``
   before adding the new one. The intent (per the inline comment
