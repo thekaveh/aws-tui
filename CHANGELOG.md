@@ -110,6 +110,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `delete.failed` → `app.delete.failed`, and
   `theme.load.failed` → `app.theme.load_failed`. No test
   references existed for the old names.
+- **(third maintenance loop, pass 5)** `tests/integration/conftest.py`
+  ``app_context_factory`` fixture now yields its builder (was a
+  plain `def` returning a callable) and cleans up every temp dir
+  the builder created when the test finishes. Previously a raise
+  inside an integration test stranded one
+  `tempfile.mkdtemp(prefix="aws-tui-ictx-")` directory under
+  ``$TMPDIR`` per call. Uses `shutil.rmtree(..., ignore_errors=True)`
+  so a partially-cleaned dir on Windows (background worker still
+  holding a file open) doesn't fail the teardown.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the

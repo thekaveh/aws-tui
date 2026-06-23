@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import contextlib
+import shutil
 import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -77,9 +78,10 @@ AppContextBuilder = Callable[..., AppContext]
 
 
 @pytest.fixture
-def app_context_factory() -> AppContextBuilder:
-    """Return a callable that builds a wired :class:`AppContext` for
-    integration tests.
+def app_context_factory() -> Iterator[AppContextBuilder]:
+    """Yield a callable that builds a wired :class:`AppContext` for
+    integration tests, then clean up every temp directory the builder
+    created when the test finishes (pass or fail).
 
     Usage::
 
@@ -99,6 +101,12 @@ def app_context_factory() -> AppContextBuilder:
         initial_theme: theme name set on the returned context.
             Defaults to ``"carbon"``.
     """
+    # Track every ``tempfile.mkdtemp`` the builder produces so the
+    # fixture's teardown can purge them. Previously the builder
+    # leaked one directory per call on every test path — the fixture
+    # was a plain ``def`` returning a callable with no teardown hook,
+    # so a raise inside the test stranded the dir under ``$TMPDIR``.
+    created_tmpdirs: list[Path] = []
 
     def _build(
         *,
@@ -106,6 +114,7 @@ def app_context_factory() -> AppContextBuilder:
         initial_theme: str = "carbon",
     ) -> AppContext:
         tmp = Path(tempfile.mkdtemp(prefix="aws-tui-ictx-"))
+        created_tmpdirs.append(tmp)
         hub: MessageHub = MessageHub()
         dispatcher = RxDispatcher.immediate()
 
@@ -180,4 +189,11 @@ def app_context_factory() -> AppContextBuilder:
             s3_connections_vm=s3_connections_vm,
         )
 
-    return _build
+    try:
+        yield _build
+    finally:
+        for tmp in created_tmpdirs:
+            # ignore_errors=True so a partially-cleaned dir (e.g. a
+            # background worker still holding a file open at teardown
+            # time on Windows) doesn't fail the whole test.
+            shutil.rmtree(tmp, ignore_errors=True)
