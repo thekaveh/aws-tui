@@ -30,10 +30,15 @@ import aioboto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import (
     ClientError,
+    ConnectTimeoutError,
     EndpointConnectionError,
     NoCredentialsError,
     PartialCredentialsError,
     ProfileNotFound,
+    ReadTimeoutError,
+)
+from botocore.exceptions import (
+    ConnectionError as BotoConnectionError,
 )
 
 from aws_tui.domain.filesystem import (
@@ -47,6 +52,26 @@ from aws_tui.domain.filesystem import (
     ProviderError,
     ProviderUnreachableError,
     TransferProgress,
+)
+
+# Family of transport-layer failures that the user should see as
+# "endpoint unreachable" rather than a generic provider error. We
+# build a single tuple so every site that translates a connection
+# failure to ``ProviderUnreachableError`` catches the same shapes.
+# - ``EndpointConnectionError`` — DNS / TCP-connect / TLS-handshake
+#   failure (most common cause of "S3 unreachable" today).
+# - ``ConnectTimeoutError`` / ``ReadTimeoutError`` — the connect/read
+#   timeouts configured on the botocore client (10s / 60s) firing.
+#   Subclasses of ``HTTPClientError``, NOT subclasses of
+#   ``EndpointConnectionError`` — the original ``except
+#   EndpointConnectionError`` chain missed them.
+# - ``BotoConnectionError`` — the base ``ConnectionError`` for any
+#   other transport failure shape botocore introduces in the future.
+_TRANSPORT_FAILURE_EXCEPTIONS = (
+    EndpointConnectionError,
+    ConnectTimeoutError,
+    ReadTimeoutError,
+    BotoConnectionError,
 )
 
 if TYPE_CHECKING:
@@ -188,7 +213,7 @@ class S3FS:
                 "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
                 "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
             ) from exc
-        except EndpointConnectionError as exc:
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
             raise _map_client_error(exc, "buckets") from exc
@@ -271,7 +296,7 @@ class S3FS:
                 "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
                 "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
             ) from exc
-        except EndpointConnectionError as exc:
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
             raise _map_client_error(exc, prefix) from exc
@@ -319,7 +344,7 @@ class S3FS:
                 "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
                 "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
             ) from exc
-        except EndpointConnectionError as exc:
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         return FileEntry(
             name=path.name,
@@ -355,7 +380,7 @@ class S3FS:
                 "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
                 "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
             ) from exc
-        except EndpointConnectionError as exc:
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
             raise _map_client_error(exc, key) from exc
@@ -418,7 +443,7 @@ class S3FS:
                 "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
                 "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
             ) from exc
-        except EndpointConnectionError as exc:
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
             # Outer catch for ClientErrors raised by delete_object,
@@ -464,7 +489,7 @@ class S3FS:
                 "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
                 "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
             ) from exc
-        except EndpointConnectionError as exc:
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
             # Outer catch for the post-copy `delete_object(src_key)`
@@ -511,7 +536,7 @@ class S3FS:
                 "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
                 "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
             ) from exc
-        except EndpointConnectionError as exc:
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
 
     async def write_stream(
@@ -557,7 +582,7 @@ class S3FS:
                 "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
                 "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
             ) from exc
-        except EndpointConnectionError as exc:
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
 
 
@@ -620,6 +645,24 @@ def _map_client_error(exc: ClientError, target: str) -> ProviderError:
         return NotFoundError(target)
     if code in {"AccessDenied", "403", "Forbidden", "SignatureDoesNotMatch"}:
         return PermissionDeniedError(target)
+    # S3 service-side transient failures map to ``ProviderUnreachableError``
+    # so the UI surfaces them with the "endpoint unreachable" placeholder
+    # rather than the generic error one. Botocore's adaptive retry policy
+    # (max_attempts=6) usually absorbs these, but a sustained
+    # ``ServiceUnavailable`` / ``SlowDown`` storm can still exhaust the
+    # retry budget. From the user's perspective the bucket is unreachable
+    # — same recovery action as a DNS / timeout failure (press ``r`` to
+    # retry, or wait + try again).
+    if code in {
+        "ServiceUnavailable",
+        "RequestTimeout",
+        "RequestTimeoutException",
+        "SlowDown",
+        "InternalError",
+        "503",
+        "504",
+    }:
+        return ProviderUnreachableError(f"{code}: {target}")
     return ProviderError(f"{code}: {target}")
 
 

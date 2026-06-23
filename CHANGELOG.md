@@ -255,6 +255,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or traceback that surfaced a ``Connection`` instance leaked
   plaintext credentials. ``eq``, ``hash``, and the ``slots``
   layout are unchanged.
+- **(third maintenance loop, pass 27)** ``S3FS`` now translates
+  the full family of botocore transport-layer failures to
+  ``ProviderUnreachableError``, not just ``EndpointConnectionError``.
+  The original chain of ``except EndpointConnectionError`` blocks
+  (8 sites) missed ``ConnectTimeoutError`` and ``ReadTimeoutError``
+  — both subclasses of ``HTTPClientError``, NOT subclasses of
+  ``EndpointConnectionError`` — so the 10s connect / 60s read
+  timeouts configured on the botocore client (matching the
+  spec §6.3 + §7.3 policy) propagated as raw botocore exceptions
+  whenever they fired. The pane VM's
+  ``except ProviderUnreachableError`` then never matched and the
+  state machine landed in the generic ``ERROR`` placeholder
+  instead of ``UNREACHABLE``. Replaced with a single
+  ``_TRANSPORT_FAILURE_EXCEPTIONS`` tuple containing
+  ``EndpointConnectionError``, ``ConnectTimeoutError``,
+  ``ReadTimeoutError``, and the base ``BotoConnectionError``
+  (catches future-introduced sibling shapes).
+- **(third maintenance loop, pass 27)** ``_map_client_error``
+  now maps S3 service-side transient codes
+  (``ServiceUnavailable``, ``RequestTimeout``, ``SlowDown``,
+  ``InternalError``, ``503``, ``504``) to
+  ``ProviderUnreachableError``. Botocore's adaptive retry
+  budget (``max_attempts=6``) usually absorbs these but a
+  sustained ``SlowDown`` storm can still exhaust it; from the
+  user's perspective the bucket is unreachable — same recovery
+  action as a DNS/timeout failure (press ``r``, or wait + try
+  again). Previously these surfaced as the generic
+  ``ProviderError`` and the pane landed in the ``ERROR``
+  placeholder instead of ``UNREACHABLE``.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
