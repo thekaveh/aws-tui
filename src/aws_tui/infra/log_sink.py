@@ -10,6 +10,7 @@ in M3); it is the only writer to its base directory.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from datetime import UTC, datetime
@@ -43,6 +44,45 @@ class _JsonLineFormatter(logging.Formatter):
         return json.dumps(payload, default=str, separators=(",", ":"))
 
 
+class _PrivateRotatingFileHandler(RotatingFileHandler):
+    """``RotatingFileHandler`` that tightens the active log file and its
+    rotated backups to ``0o600``.
+
+    Log lines can carry endpoint URLs, request IDs, and structured
+    error context that shouldn't be readable by other local users on
+    shared systems. The parent directory is already chmod'd ``0o700``
+    by :func:`ensure_private_dir`; this brings the files themselves in
+    line. Best-effort: filesystems without POSIX permission bits
+    silently no-op the chmod (matches the crash-dump posture from the
+    second loop).
+    """
+
+    @staticmethod
+    def _chmod_owner_only(path: Path) -> None:
+        with contextlib.suppress(OSError, NotImplementedError):
+            path.chmod(0o600)
+
+    def _open(self):  # type: ignore[no-untyped-def]
+        # Untyped to match ``logging.FileHandler._open``'s actual
+        # return — the stdlib's annotation is ``TextIOWrapper`` (a
+        # private generic that's awkward to spell), and we're only
+        # forwarding the value.
+        stream = super()._open()
+        self._chmod_owner_only(Path(self.baseFilename))
+        return stream
+
+    def doRollover(self) -> None:
+        super().doRollover()
+        # ``doRollover`` creates a fresh ``baseFilename`` and renames the
+        # prior one to ``.1`` (shifting any pre-existing backups). Both
+        # the new file and every existing backup need owner-only bits.
+        self._chmod_owner_only(Path(self.baseFilename))
+        for i in range(1, self.backupCount + 1):
+            backup = Path(f"{self.baseFilename}.{i}")
+            if backup.exists():
+                self._chmod_owner_only(backup)
+
+
 class LogSink:
     """JSON-lines log writer with rotation.
 
@@ -70,7 +110,7 @@ class LogSink:
 
         self._base_dir: Path = base_dir
         self._log_path: Path = base_dir / _FILE_NAME
-        self._handler: RotatingFileHandler = RotatingFileHandler(
+        self._handler: RotatingFileHandler = _PrivateRotatingFileHandler(
             self._log_path,
             maxBytes=max_bytes,
             backupCount=backup_count,

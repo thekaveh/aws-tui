@@ -216,6 +216,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancellation (``asyncio.CancelledError``) also triggers
   cleanup. ``CrossFsMove`` inherits the behavior automatically
   (it calls ``copy`` and only deletes the source on success).
+- **(third maintenance loop, pass 19)** ``LogSink`` now writes
+  ``~/.cache/aws-tui/log/aws-tui.log`` (and its rotated backups
+  ``aws-tui.log.1`` … ``aws-tui.log.5``) with ``0o600`` instead
+  of the umask-default ``0o644``. The parent directory was
+  already ``0o700`` (from the second-loop cache-dir hardening)
+  but the rotating-file handler created the files with
+  world-readable permissions. Log lines can carry endpoint
+  URLs, request IDs, and structured error context that
+  shouldn't be ``cat``-able by other local users on shared
+  systems — same posture as the crash-dump fix from pass 8.
+  Implemented via a ``_PrivateRotatingFileHandler`` subclass
+  that overrides ``_open`` (initial + post-rotation) and
+  ``doRollover`` (rotated backups) with a best-effort
+  ``chmod 0o600``. Filesystems without POSIX permission bits
+  silently no-op.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
