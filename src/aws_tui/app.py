@@ -485,7 +485,7 @@ class AwsTuiApp(App[None]):
             self.stylesheet.update(self)
         except Exception as exc:
             ctx.log_sink.error(
-                "theme.load.failed",
+                "app.theme.load_failed",
                 name=ctx.initial_theme,
                 error=str(exc),
                 error_type=type(exc).__name__,
@@ -992,7 +992,12 @@ class AwsTuiApp(App[None]):
         try:
             await copy_across()
         except Exception as exc:
-            ctx.log_sink.error("copy.failed", error=str(exc))
+            ctx.log_sink.error(
+                "app.copy.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                file_count=len(targets),
+            )
             self.notify(f"Copy failed: {exc}", severity="error", timeout=8)
         finally:
             if used_cursor_fallback:
@@ -1069,7 +1074,12 @@ class AwsTuiApp(App[None]):
         try:
             await delete_in_focused()
         except Exception as exc:
-            ctx.log_sink.error("delete.failed", error=str(exc))
+            ctx.log_sink.error(
+                "app.delete.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                file_count=len(targets),
+            )
             self.notify(f"Delete failed: {exc}", severity="error", timeout=8)
         finally:
             if used_cursor_fallback:
@@ -1383,7 +1393,7 @@ class AwsTuiApp(App[None]):
         try:
             theme_css = ctx.theme_store.load(name)
         except Exception:
-            ctx.log_sink.error("theme.load.failed", name=name)
+            ctx.log_sink.error("app.theme.load_failed", name=name)
             return
 
         # 1. Replace, don't accumulate.

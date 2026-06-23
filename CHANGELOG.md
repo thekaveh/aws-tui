@@ -93,6 +93,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the BindingResolver work above" → "below" typo in the
   `Quick Look (entire feature)` Deferred entry; the
   `BindingResolver` description sits later in the same section.
+- **(third maintenance loop, pass 4)** Fixed a regression
+  introduced in pass 2: `docs/architecture.md` test-count footer
+  said "817" but should have been "951" once pass 2's 134
+  snapshot guards landed. Pass 2 edited the doc and added the
+  tests in the same pass but didn't loop back to update the
+  footer. Now bumped to 951 with a note pointing at the
+  third-loop additions for the source of the drift.
+- **(third maintenance loop, pass 4)** `AwsTuiApp.action_copy`
+  and `AwsTuiApp.action_delete` error logs now carry
+  `error_type` and `file_count` fields, so an operator reading
+  the log can tell whether a copy of 1 file vs 50 failed without
+  cross-referencing the toast. Event names also normalized to
+  the `app.<action>.failed` dotted-hierarchy convention used
+  elsewhere in the file: `copy.failed` → `app.copy.failed`,
+  `delete.failed` → `app.delete.failed`, and
+  `theme.load.failed` → `app.theme.load_failed`. No test
+  references existed for the old names.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
