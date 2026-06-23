@@ -78,6 +78,35 @@ async def test_dual_switch_focus(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_focused_and_other_pane_swap_with_focus(tmp_path: Path) -> None:
+    """``focused_pane`` and ``other_pane`` track ``focused`` correctly.
+
+    ``AwsTuiApp.action_copy`` reads these two properties to decide the
+    copy direction — ``src_pane = dual.focused_pane`` and
+    ``dst_pane = dual.other_pane``. The user reported a bug where Tab-
+    switching to the right pane and then pressing ``c`` still copied
+    LEFT → RIGHT; the root cause turned out to be the 3-slot Tab cycle
+    stranding ``focused`` at LEFT after a NAV detour, NOT a VM-level
+    direction bug. Lock the VM contract in so any future regression
+    that breaks the swap surfaces here without needing a full app
+    pilot.
+    """
+    dp, _ = await _make_dual(tmp_path)
+    # Initial: LEFT focused → focused_pane = left, other = right.
+    assert dp.focused_pane is dp.left
+    assert dp.other_pane is dp.right
+    # Toggle: RIGHT focused → focused_pane = right, other = left.
+    dp.switch_focus_command.execute()
+    assert dp.focused_pane is dp.right
+    assert dp.other_pane is dp.left
+    # Toggle back: LEFT focused again.
+    dp.switch_focus_command.execute()
+    assert dp.focused_pane is dp.left
+    assert dp.other_pane is dp.right
+    dp.dispose()
+
+
+@pytest.mark.asyncio
 async def test_dual_copy_across_publishes_transfer_progress(tmp_path: Path) -> None:
     dp, hub = await _make_dual(tmp_path)
     received: list[TransferProgressMessage] = []
