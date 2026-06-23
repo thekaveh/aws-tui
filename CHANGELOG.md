@@ -201,6 +201,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently ignored. A malformed overlay (``UnknownAction``) is
   now caught and logged rather than crashing startup; the
   keymap falls back to defaults.
+- **(third maintenance loop, pass 18)** ``CrossFsCopy.copy`` now
+  deletes the partial destination on a mid-stream write failure
+  (or worker cancellation). Previously a copy that raised after
+  any bytes had been written left a truncated junk file on the
+  destination — visible to the user on the next pane refresh
+  with no way to distinguish a failed copy's leftover from a
+  legitimate small file. The source stream is still closed
+  first (so it can release its handle/connection before we
+  re-enter the destination), then ``destination.delete`` runs
+  best-effort with ``contextlib.suppress(Exception)`` so the
+  ORIGINAL write error reaches the caller, not a secondary
+  cleanup error. The catch is ``BaseException`` so worker
+  cancellation (``asyncio.CancelledError``) also triggers
+  cleanup. ``CrossFsMove`` inherits the behavior automatically
+  (it calls ``copy`` and only deletes the source on success).
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the

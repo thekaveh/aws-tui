@@ -83,6 +83,7 @@ class CrossFsCopy:
             return  # SKIP
 
         stream = await self._source.read_stream(src)
+        write_failed = False
         try:
             await self._destination.write_stream(
                 effective_dst,
@@ -90,6 +91,15 @@ class CrossFsCopy:
                 total_size=src_entry.size,
                 progress=progress,
             )
+        except BaseException:
+            # Includes ``asyncio.CancelledError`` so a worker cancellation
+            # mid-copy also cleans up the partial destination. Mark the
+            # failure so the ``finally`` block can run the destination
+            # delete after closing the source stream (closing first lets
+            # the source release any file handle / network connection
+            # before we hit the destination again).
+            write_failed = True
+            raise
         finally:
             # Explicit aclose if the stream is an async generator —
             # write_stream may have raised before/after fully iterating
@@ -100,6 +110,19 @@ class CrossFsCopy:
             if callable(aclose):
                 with contextlib.suppress(Exception):
                     await aclose()
+            if write_failed:
+                # Leave no partial file behind on copy failure. On
+                # LocalFS this removes the truncated file ``aiofiles``
+                # left behind when ``write_stream`` raised mid-iteration.
+                # On S3 destinations the in-flight multipart upload
+                # never committed (``upload_fileobj`` aborts on its
+                # own exception path), so the DELETE is typically a
+                # no-op on a missing key; we suppress
+                # ``NotFoundError`` and every other delete failure so
+                # the user sees the ORIGINAL write error, not a
+                # secondary cleanup error.
+                with contextlib.suppress(Exception):
+                    await self._destination.delete(effective_dst)
 
     async def _copy_directory(
         self,
