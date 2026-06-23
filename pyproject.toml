@@ -71,6 +71,12 @@ packages = ["src/aws_tui"]
 
 [dependency-groups]
 dev = [
+  # Deliberately uncapped on the upper side. Unlike the runtime
+  # dependencies above, dev tooling does NOT ship to downstream
+  # `pip install aws-tui` — uv.lock is the reproducibility floor
+  # here, and capping next-major would actively roll back working
+  # versions when uv has already moved to them (e.g. mypy 2.x,
+  # pytest 9.x, pre-commit 9.x in the resolved lock).
   "pytest>=8",
   "pytest-asyncio>=0.23",
   "pytest-cov>=4",
