@@ -21,9 +21,13 @@ Linux, and Windows. Powered by
 ## 1. Features
 
 - **Norton-Commander–style dual pane.** S3 (or any S3-compatible bucket)
-  on one side, your local filesystem on the other. Copy, move, rename,
-  delete across panes with `c`, `m`, `r`, `d` (multi-select with `v` +
-  `Space`, or modifier+click, or `Shift+↑/↓`).
+  on one side, your local filesystem on the other. Copy and delete
+  across panes with `c` and `d` (confirm modal first); multi-select via
+  `Shift+↑/↓` cursor extension, modifier+click, or persistent marks.
+  `m` toggles the left-rail nav menu. Move, rename, and the dedicated
+  `v` multi-select-mode entry point are spec'd but deferred to v0.8 —
+  see [`docs/keybindings.md`](docs/keybindings.md) §1.4 and the
+  `[Unreleased] Deferred` block of `CHANGELOG.md`.
 - **One-key source switcher.** `Shift+S` cycles the focused pane
   through **every available source** in order: `local` → each AWS
   profile (`aws s3 · {profile} · {region}`) → each `s3-compatible`
@@ -72,14 +76,17 @@ Linux, and Windows. Powered by
   `~/.config/aws-tui/config.toml` for routine endpoint changes.
 - **Fully customizable keymap.** Action ↔ keystroke is config-driven —
   rebind anything in `[keybindings]` without touching code.
-- **Streaming Quick Look.** `Space` on a file streams the first 64 KB
-  with a syntax tint for a fast peek without downloading the whole
-  object. A full-file `$PAGER` shell-out is in the spec but not yet
-  wired in v0.7.x (tracked under the `[Unreleased] Deferred` section
-  of `CHANGELOG.md`).
-- **Command palette.** `:` or `Ctrl+K`. Fuzzy-filterable list of every
-  action — including dynamic ones like `connection switch <name>` and
-  `theme switch <name>`.
+- **Streaming Quick Look (deferred).** Spec'd on `Space` to stream the
+  first 64 KB with a syntax tint, plus a full-file `$PAGER` shell-out.
+  The `pane.quick_look` action handler isn't wired in v0.7.x — tracked
+  under `[Unreleased] Deferred` in `CHANGELOG.md` and
+  [`docs/keybindings.md`](docs/keybindings.md) §1.4.
+- **Command palette (deferred).** Spec'd on `:` or `Ctrl+K` as a
+  fuzzy-filterable list of every action — including dynamic ones like
+  `connection switch <name>` and `theme switch <name>`. In v0.7.x `:`
+  opens the help overlay as a placeholder and `Ctrl+K` is unbound; the
+  full palette ships post-v0.7. See `[Unreleased] Deferred` in
+  `CHANGELOG.md` and `keybindings.md` §1.4.
 - **Strict layered architecture.** View ▸ ViewModel ▸ Service ▸ Domain
   ▸ Infra; enforced by `scripts/check-layers.sh` (a ruff
   `flake8-tidy-imports` migration is queued — see

@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **NavMenu is now always visible** (PR #59). The left rail
+  collapses to a minimally-wide icon-only column instead of
+  disappearing — Tab focuses the menu, arrow keys navigate, Enter
+  selects. Discoverability of the nav peers (S3 + Settings) is
+  always present without the user having to remember the
+  toggle key.
+- **README documentation rewritten for accuracy** (third
+  maintenance loop, pass 1). The Features bullets for "Multi-select",
+  "Streaming Quick Look", and "Command palette" now match what is
+  actually wired in v0.7.x. Previously they claimed `v` + `Space`,
+  `Space` for streaming preview, and `:` / `Ctrl+K` for the
+  command palette — none of which have BINDINGS or action handlers
+  in `AwsTuiApp.BINDINGS`. The CHANGELOG `### Added` and
+  `### Deferred / v0.8 roadmap` were corrected in lockstep.
+- **`Shift+S` Features bullet expanded in the README** (PR #58) to
+  highlight the cycler's full ring — every AWS profile + every
+  s3-compatible connection, all reachable with one keystroke per
+  step. Reflects the existing behavior from PR #43/#49; no code
+  change.
+
+- **(third maintenance loop, pass 1)**
+  `[dependency-groups].dev` in `pyproject.toml` now carries an
+  explicit rationale comment that next-major caps are intentionally
+  omitted (unlike the runtime-deps block above). Dev tooling does
+  not reach downstream `pip install aws-tui`, and the lockfile
+  already pins each version — capping would have actively rolled
+  back working majors (mypy 2.x, pytest 9.x, pre-commit 9.x).
+- **(third maintenance loop, pass 1)**
+  `.pre-commit-config.yaml` declares
+  `default_language_version.python: python3.11` so pre-commit
+  picks the same interpreter as `requires-python` /
+  `tool.mypy.python_version` regardless of `$PATH`.
+
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
   originally-active theme; `Enter` commits the cursored theme.
@@ -216,11 +249,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the next theme without a modal; both refresh the stylesheet via
   Textual's own `refresh_css(animate=False)` + a stable `read_from`
   key so theme sources don't accumulate.
-- **Multi-select** via `v` + `Space`, `Shift+↑/↓` (extend selection),
-  and modifier+click (`Shift`, `Cmd`, or `Ctrl` — `Shift+Click` is
+- **Multi-select** via `Shift+↑/↓` (extend selection) and
+  modifier+click (`Shift`, `Cmd`, or `Ctrl` — `Shift+Click` is
   often consumed by macOS terminals for native text-select, so
   `Cmd+Click` is the reliable path there). Marked-byte total surfaces
-  in the pane footer (`N obj · M marked · X selected`).
+  in the pane footer (`N obj · M marked · X selected`). The `v` +
+  `Space` mode-entry shortcut is spec'd but deferred to v0.8 (see
+  `### Deferred / v0.8 roadmap`).
 - **Collapsible services rail.** `s` toggles between 6-wide icon-only
   and 16-wide full-label mode; clicking the rail also toggles.
 - **Pane source swap** via `Shift+S` and `PaneVM.swap_provider`. Any of
@@ -267,6 +302,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus ``ConnectionListChangedMessage`` all carry over.
 
 ### Fixed
+
+- **3-slot Tab cycle + visible NavMenu focus border** (PR #62).
+  Folded the earlier 4-slot Tab cycle (left → right → nav-services →
+  nav-pinned) into a single NAV slot (left → right → NAV → wrap) so
+  successive Tab presses don't read as "two idle switches" across
+  the narrow rail column. NavMenu now gains a visible focus border
+  via Textual-native `:focus-within` rather than a Python
+  `watch_has_focus_within` reactive (which doesn't exist on
+  `has_focus_within` — it's a property, not a reactive).
+- **Tab cycle + SettingsView border + nav polish** (PR #61).
+  Hamburger margin, icon centering, and tooltips on the NavMenu;
+  SettingsView gets a proper border so it doesn't read as floating
+  text inside the content host.
+- **AWS+EXPIRED at startup mounts LocalFS-only DualPane + toast,
+  not error placeholder** (PR #60). When the initial connection
+  resolves to an AWS profile whose SSO token is expired, the app
+  now mounts a degraded DualPane (LocalFS on both sides) plus a
+  sticky warning toast naming the recovery command, instead of
+  rendering the no-connection error placeholder. Mirrors the
+  graceful-unreachable design from PR #48/#49.
+
+- **(third maintenance loop, pass 1)** Several bare
+  `except Exception:` blocks in `composition.py` and `app.py`
+  startup helpers now log the error (with type) before falling
+  back. Previously a malformed `config.toml` looked identical to a
+  clean install (`needs_first_run` returned False on the swallowed
+  load failure), and `_apply_initial_theme` / `_resolve_initial_connection`
+  / `_mount_initial_service_view` lost the failure cause. The
+  service-view mount now also surfaces a sticky error toast so the
+  user gets some explanation instead of a blank pane.
+- **(third maintenance loop, pass 1)** `S3FS._list_objects` now
+  raises `ProviderError` instead of `assert target_bucket is not None`
+  when called bucketless without an explicit `bucket=` arg.
+  `assert` is stripped under `python -O`, which would convert a
+  runtime invariant breach into a confusing botocore `ParamValidationError`
+  much later in the call chain.
+- **(third maintenance loop, pass 1)** `PaneVM.marked_entries` now
+  snapshots `self._entries` before iterating, matching the
+  precaution already in `filtered_entries`. Prevents a race against
+  `_reload`'s `_replace_entries` rewrite that could skip or
+  duplicate marked entries during a concurrent refresh.
+- **(third maintenance loop, pass 1)** `action_copy` and
+  `action_delete` workers now use `exclusive=True, group="transfer-ops"`
+  so a user pressing `c` then `d` in quick succession can no longer
+  interleave the two flows on the focused pane's mark state or the
+  shared transfer journal.
 
 - **(second maintenance loop, passes 1–4)** `AwsTuiApp.action_quit`
   is now overridden to await `_aws_tui_shutdown` on `q` / `ctrl+c`.
@@ -816,9 +897,23 @@ provenance.)
 These items are spec'd but explicitly not wired in v0.7.x. They are
 tracked so the next minor release can pick them up without rediscovery:
 
-- **Quick Look full-file `$PAGER` shell-out** — `Space` currently
-  streams the first 64 KB with a syntax tint; full-file pager hand-off
-  per the design spec is pending.
+- **Quick Look (entire feature)** — `Space` on a file is spec'd to
+  stream the first 64 KB with a syntax tint, then offer a full-file
+  `$PAGER` shell-out. `QuickLookVM` is built, the `QuickLook` modal
+  is built and snapshot-tested, and `PaneVM` emits
+  `preview_requested` on file-cursor `Enter`/`Space`, but no
+  subscriber consumes the signal and no `Binding("space", …)` lives
+  in `AwsTuiApp.BINDINGS`, so end-to-end the feature is unreachable
+  at runtime. Wiring lands with the `BindingResolver` work above.
+- **`pane.enter_multiselect` action** — `v` is spec'd as the
+  mode-entry shortcut for multi-select; the handler is not wired in
+  v0.7.x. `Shift+↑/↓` and modifier+click cover the actual
+  multi-select paths today.
+- **Command palette (entire feature)** — `:` or `Ctrl+K` is spec'd
+  as a fuzzy-filterable list of every action (including dynamic
+  ones like `connection switch <name>`). `CommandPaletteVM` and the
+  modal exist; in v0.7.x `:` opens the help overlay as a
+  placeholder and `Ctrl+K` is unbound.
 - **`BindingResolver` is constructed but unwired** — `AwsTuiApp`
   builds it from `KeymapStore` and the `ActionRegistry`, but
   `BINDINGS` is still a hard-coded `ClassVar`. User `[keybindings]`
