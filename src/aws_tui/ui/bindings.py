@@ -86,12 +86,21 @@ class BindingResolver:
     def to_textual_bindings(self) -> list[Binding]:
         """Materialize the Textual ``Binding`` list for the active keymap.
 
-        For each ``(action_id, keys)`` in the keymap we emit one Binding per
-        keystroke. ``action`` is the action id itself — the App routes that
-        through :meth:`ActionRegistry.invoke`. Visible only when the action
-        id is among the chip-worthy app/pane actions; auxiliary aliases
-        (``ctrl+c`` for quit, ``shift+tab`` for back-focus) are emitted with
-        ``show=False`` so the help footer stays clean.
+        For each ``(action_id, keys)`` in the keymap we emit one Binding
+        per keystroke. ``action`` on the emitted ``Binding`` is the
+        Textual-style name produced by :meth:`_textual_action_name`
+        (dots → underscores, e.g. ``"app.quit"`` → ``"app_quit"``);
+        Textual then invokes the matching ``action_<name>`` method on
+        the ``App``. The :class:`ActionRegistry` is the eventual
+        indirection point for that dispatch — it is constructed by
+        ``AwsTuiApp`` today but the BINDINGS field is still a
+        hard-coded ``ClassVar``, so ``ActionRegistry.invoke`` does not
+        yet sit on the runtime path (tracked in
+        ``CHANGELOG.md`` ▸ ``[Unreleased] Deferred / v0.8 roadmap``).
+        Visible only when the action id is among the chip-worthy
+        app/pane actions; auxiliary aliases (``ctrl+c`` for quit,
+        ``shift+tab`` for back-focus) are emitted with ``show=False``
+        so the help footer stays clean.
         """
         bindings: list[Binding] = []
         for action_id, keys in self._keymap.all().items():
