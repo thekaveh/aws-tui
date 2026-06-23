@@ -284,6 +284,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again). Previously these surfaced as the generic
   ``ProviderError`` and the pane landed in the ``ERROR``
   placeholder instead of ``UNREACHABLE``.
+- **(third maintenance loop, pass 54)** ``HintLegendVM._rebuild_actions``
+  now dedupes ``action_id`` across the focused-pane block and the
+  ``_FALLBACK_ACTIONS`` block via a ``seen: set[str]``. Without it,
+  a focused-pane registration that included a fallback id (e.g.
+  ``("pane.descend", "pane.copy", "pane.move", "pane.delete")``)
+  produced duplicate chips in the bottom legend — the first three
+  ids appeared once in the focused row and again in the fallback
+  row. The wiring is currently exercised only by tests
+  (``register_focusable`` isn't called at runtime pending the
+  deferred ``BindingResolver`` work), but the bug was real enough
+  that a future caller hitting it would have landed on a
+  visibly-doubled legend. Regenerated the 10 ``test_main_screen``
+  snapshots in the same pass — the snapshot fixture
+  (``tests/snapshot/apps/main_screen.py``) was already exercising
+  the duplicating path, so the goldens carried the duplicate
+  chips. The matching guard tests still pass because they assert
+  on user-visible labels (``copy``, ``delete``, ``aws.tui``), not
+  on chip count.
 - **(third maintenance loop, pass 50)** ``.github/dependabot.yml``
   now declares a ``package-ecosystem: pre-commit`` entry tracking
   the pinned hook versions in ``.pre-commit-config.yaml``
