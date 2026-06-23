@@ -13,9 +13,8 @@ Declared in `src/aws_tui/vm/services_protocol.py`, re-exported from
 `src/aws_tui/services/__init__.py`:
 
 ```python
-from typing import Protocol
+from typing import Any, Protocol
 from aws_tui.infra.connection_resolver import Connection
-from vmx import ComponentVM
 
 class Service(Protocol):
     descriptor: ServiceDescriptor  # id, label, icon
@@ -23,13 +22,16 @@ class Service(Protocol):
     def supports(self, connection: Connection) -> bool:
         """True if this service can run against the given connection."""
 
-    def build_vm(self, connection: Connection) -> ComponentVM:
+    def build_vm(self, connection: Connection) -> Any:
         """Construct the service's content VM tree for this connection."""
 ```
 
 The `descriptor` is a `ClassVar` so the registry can introspect it
-without instantiating. `build_vm` returns whatever facade /
-`ComponentVM` the service decides to host — `ContentHostVM` only
+without instantiating. `build_vm` is structurally typed as
+`-> Any` on the protocol so the `vm/` layer never has to import
+`vmx.ComponentVM` just to spell the bound; concrete services return
+whatever VMx VM they actually host (`S3Service.build_vm` returns
+`DualPaneVM`, see the §2 template below). `ContentHostVM` only
 needs a `construct → destruct → dispose` surface.
 
 ## 2. Steps

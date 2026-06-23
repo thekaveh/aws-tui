@@ -41,6 +41,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `default_language_version.python: python3.11` so pre-commit
   picks the same interpreter as `requires-python` /
   `tool.mypy.python_version` regardless of `$PATH`.
+- **(third maintenance loop, pass 2)** Six snapshot suites
+  (`test_main_screen`, `test_modals`, `test_theme_picker`,
+  `test_toast`, `test_transfers`, `test_pane_states`) now each
+  have a content-presence guard pair test (per PR #53 lesson).
+  Each guard reads the generated SVG off disk and asserts that
+  the user-facing text actually rendered — a uniformly-blank
+  render across all 10 themes (which `snap_compare` parity-match
+  would silently pass) now fails the guard. Adds 134 new tests;
+  total default-tier count goes 817 → 951.
+- **(third maintenance loop, pass 2)** `docs/architecture.md`
+  test-count + message-list updated: default total now 817 (was
+  816); `TransferCancelRequestedMessage` and
+  `ConnectionListChangedMessage` added to the messages list.
+- **(third maintenance loop, pass 2)** v0.1.0 design-spec ASCII
+  five-layer diagram updated for the post-ship renames:
+  `AppScreen → AwsTuiApp`, `ServicesMenu → NavMenu`,
+  `ServicesMenuVM → NavMenuVM`, and `DualPaneFileManager`
+  collapsed to the actual widget name `DualPane`. Adds an
+  inline rename note next to `NavMenuVM` referencing PR #54.
+  The amendments preface already covered the rename in prose;
+  this aligns the diagram with the prose.
+- **(third maintenance loop, pass 2)** `docs/adding-a-service.md`
+  `Service` protocol code-quote now matches
+  `services_protocol.py` exactly — `build_vm(...) -> Any` (was
+  `-> ComponentVM`); the surrounding prose explains why the
+  protocol is structurally typed as `Any` while the §2 template
+  uses a concrete VM type. Prevents reader confusion when
+  cross-referencing the doc against the actual protocol.
+- **(third maintenance loop, pass 2)**
+  `S3ConnectionsPanel._surface_error_toast` now reaches the app
+  context through the public `app_ctx` property instead of the
+  private `_app_ctx` name; the `hasattr` gate is updated in
+  lockstep so test harnesses mounting the panel under a vanilla
+  Textual `App` (without the property) still no-op cleanly.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
