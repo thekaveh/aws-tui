@@ -103,7 +103,20 @@ class ToastStackVM:
         """Add a new toast to the stack and start its auto-dismiss timer (if any).
 
         Returns the constructed :class:`ToastVM` so callers may keep a reference.
+
+        Re-raising the same ``model.id`` (e.g. ``"missing-credentials"`` re-
+        published as the user keeps interacting) is treated as a refresh of
+        the existing toast — the prior instance is dismissed first so the
+        stack ends with exactly one toast per id. Without this guard the
+        first toast leaked: the second call cancelled its auto-dismiss
+        timer (the dict keys on id) but never removed it from
+        ``_toasts``, so the old card sat on screen forever and only
+        ``_on_toast_dismissed`` for the NEW toast ran — finding the OLD
+        toast via ``_find`` and removing it instead.
         """
+        existing = self._find(model.id)
+        if existing is not None:
+            self._on_toast_dismissed(existing)
         toast = ToastVM(
             model,
             hub=self._hub,

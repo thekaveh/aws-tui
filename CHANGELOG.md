@@ -284,6 +284,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again). Previously these surfaced as the generic
   ``ProviderError`` and the pane landed in the ``ERROR``
   placeholder instead of ``UNREACHABLE``.
+- **(third maintenance loop, pass 47)** ``ToastStackVM.raise_toast``
+  now dismisses any prior toast carrying the same ``model.id``
+  before adding the new one. The intent (per the inline comment
+  on ``_schedule_auto_dismiss``) was that re-raising the same
+  id should refresh the existing toast — and the timer dict
+  was already being keyed on id so the old auto-dismiss got
+  cancelled — but the old toast itself stayed in
+  ``_toasts`` forever. When the new toast's timer eventually
+  fired, ``_on_toast_dismissed`` walked ``_toasts`` via
+  ``_find`` (which returns the FIRST match) and removed the
+  ORIGINAL toast instead of the new one. The new toast then
+  sat on screen sticky. Re-raising twice could leak a card
+  indefinitely. The fix is a single
+  ``self._on_toast_dismissed(existing)`` call at the top of
+  ``raise_toast`` so the duplicate id always replaces, never
+  stacks.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
