@@ -63,8 +63,15 @@ follow-up step is to move the credentials to the keychain via
    `source = "auto"`.
 
 Explicit entries win on name collision. Auto-discovered entries show
-an `(auto)` badge in the picker; `: connection materialize <name>`
-writes a real entry into `config.toml`.
+an `(auto)` badge in the picker.
+
+> The dedicated command-palette path
+> (`: connection materialize <name>`) for promoting an
+> auto-discovered AWS profile into a real `[connections.*]` block is
+> spec'd but deferred to v0.8 — the palette doesn't register
+> connection-management entries in v0.7.x. To materialize today, add
+> the `[connections.<name>]` block to `~/.config/aws-tui/config.toml`
+> by hand (the schema is shown in §2 above).
 
 For each AWS connection, `AwsSession.probe_token(conn)` performs a
 cheap freshness check **without calling AWS**:
