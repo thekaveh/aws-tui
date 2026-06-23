@@ -130,6 +130,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   include ".." in its target list. The fallback path
   (single-cursor target) already had its own ``is_parent_link``
   filter; this brings the marked path to parity.
+- **(third maintenance loop, pass 8)** Crash-dump files
+  (``~/.cache/aws-tui/crash/<ts>.txt``) now chmod 0o600 after
+  write. Previously the parent directory was 0o700 (from the
+  second-loop cache-dir hardening) but the dump file itself
+  inherited the process umask — typically 0o644, world-readable.
+  Dumps carry the last 1000 log lines + 100 user actions, which
+  can include endpoint URLs, request IDs, and partial upload
+  identifiers; tightening to owner-only matches the existing
+  hardening posture. Best-effort: filesystems without POSIX
+  permission bits silently no-op the chmod.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
