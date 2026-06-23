@@ -355,9 +355,13 @@ class PaneVM:
     def marked_entries(self) -> tuple[EntryVM, ...]:
         # Snapshot first — _entries is the same list ``_reload`` rewrites
         # under ``_replace_entries``. ``filtered_entries`` already takes
-        # this precaution; apply it here for parity.
+        # this precaution; apply it here for parity. Belt-and-braces
+        # filter on ``is_parent_link`` — ``mark_at`` refuses to mark
+        # ".." today, but a future input adapter could regress that
+        # invariant; an unfiltered ".." would translate into a
+        # meaningless copy/move/delete target downstream.
         snapshot = tuple(self._entries)
-        return tuple(e for e in snapshot if e.is_marked)
+        return tuple(e for e in snapshot if e.is_marked and not e.is_parent_link)
 
     @property
     def viewmodel(self) -> PaneViewModel:
@@ -585,10 +589,19 @@ class PaneVM:
         is a no-op). Used by shift+arrow extend-selection where toggle
         semantics produce the wrong result: walking back through an
         already-marked row would un-mark it, leaving "holes" mid-range.
+
+        The synthetic ".." parent-link row is non-markable — silently
+        skipping it here keeps ``marked_entries`` free of an entry that
+        would translate to a meaningless copy/move/delete target. The
+        click path (``EntryRow.on_click``) already filters it; this
+        plugs the shift+arrow path, where ``_extend_selection`` walks
+        the cursor without consulting the row widget.
         """
         if not (0 <= target_index < len(self._filtered)):
             return
         entry_vm = self._entries[self._filtered[target_index]]
+        if entry_vm.is_parent_link:
+            return
         if entry_vm.is_marked == marked:
             return
         if marked and not self._is_multiselect_mode:

@@ -119,6 +119,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``$TMPDIR`` per call. Uses `shutil.rmtree(..., ignore_errors=True)`
   so a partially-cleaned dir on Windows (background worker still
   holding a file open) doesn't fail the teardown.
+- **(third maintenance loop, pass 7)** `PaneVM.mark_at` now refuses
+  to mark the synthetic ".." parent-link row, and
+  `PaneVM.marked_entries` filters it out as a belt-and-braces
+  guard. The click path (`EntryRow.on_click`) already filtered
+  parent links, but the shift+arrow extend-selection path
+  (`AwsTuiApp._extend_selection`) walked through `mark_at` without
+  the same check — so `Shift+↑` while the cursor was on ".." would
+  flip the parent row's mark flag and a subsequent `c`/`d` would
+  include ".." in its target list. The fallback path
+  (single-cursor target) already had its own ``is_parent_link``
+  filter; this brings the marked path to parity.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
