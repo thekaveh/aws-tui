@@ -140,6 +140,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identifiers; tightening to owner-only matches the existing
   hardening posture. Best-effort: filesystems without POSIX
   permission bits silently no-op the chmod.
+- **(third maintenance loop, pass 9)** ``TransferJournal._append``
+  now ``flush()`` + ``os.fsync()`` each line before the file
+  handle closes. The module docstring already promised "fsync
+  semantics" but the code only relied on a natural close, which
+  flushes stdio buffers without forcing the FS journal/metadata
+  to disk. On power loss between a ``mark_completed`` write and
+  the OS's background flush (~30s), the journal would lose the
+  terminal marker and the resume modal would replay the whole
+  transfer on relaunch. fsync closes that window for one syscall
+  per append — negligible against the network I/O the surrounding
+  multipart upload pays per part.
+- **(third maintenance loop, pass 9)** ``TransfersOverlay._arm_linger``
+  now tracks a ``_pending_linger_ids`` set so successive
+  ``_rebuild`` calls for the same finished transfer don't queue
+  a fan of independent ``set_timer`` callbacks. The docstring
+  claimed "idempotent on repeat calls" but the early-return on
+  ``_expired_ids`` only fired AFTER the first timer had expired.
+  A rapid sequence of rebuilds (e.g. a transfer + a hub message
+  + a focus-change in quick succession) would spawn multiple
+  staggered linger timers, each independently re-calling
+  ``_rebuild`` when they fired.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
