@@ -160,6 +160,14 @@ class RootVM:
 
         Idempotent if ``service_id`` matches the currently hosted id.
         Raises :class:`ServiceNotFound` if the registry is unaware.
+
+        The menu's ``selected_id`` is updated BEFORE ``set_content``
+        returns so the nav-rail ribbon reflects user intent instantly,
+        even when the hosted VM's ``setup()`` is slow (e.g. S3 listing
+        on an unreachable endpoint). ``ContentHostVM.set_content`` now
+        dispatches ``setup`` as a background task; the await here
+        returns as soon as adoption + the ``"current"`` message fire,
+        not when the slow setup completes.
         """
         if self._content_host.current_id == service_id:
             return
@@ -174,9 +182,14 @@ class RootVM:
         # facade (or VMx VM) the service decides to host. We just need a
         # construct/destruct/dispose surface.
         vm = service.build_vm(self._connection)
-        await self._content_host.set_content(vm, service_id=service_id)
-        # Reflect the selection in the menu so the view layer can highlight.
+        # Reflect the selection in the menu BEFORE adoption — the user
+        # clicked S3, the ribbon should jump to S3 the next render
+        # tick, not after a 60-second botocore retry budget. The
+        # previously-final position (after the await) was the root
+        # cause of the "ribbon never appears for the active service"
+        # user report.
         self._services_menu.switch_service_command.execute(service_id)
+        await self._content_host.set_content(vm, service_id=service_id)
 
     async def switch_theme(self, name: str) -> None:
         """Publish a theme-changed message; the view layer reloads ``.tcss``."""
