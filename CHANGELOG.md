@@ -189,6 +189,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``utf-8``. Three call sites updated:
   ``_discover_aws_profiles`` (config + credentials) and
   ``_read_aws_credentials_profile``.
+- **(third maintenance loop, pass 15)** ``composition.build_app_context``
+  now passes ``config.keybindings.bindings`` to ``KeymapStore``
+  as the ``overlay`` argument. The Deferred-section entry
+  promised "`[keybindings]` overlays in `config.toml` parse and
+  validate but do not yet affect the live keymap" — the live-
+  keymap half is gated on the deferred ``BindingResolver`` work,
+  but the parse-and-validate half wasn't actually happening
+  because ``KeymapStore()`` was constructed with no args.
+  Users who had a ``[keybindings]`` block in their config saw it
+  silently ignored. A malformed overlay (``UnknownAction``) is
+  now caught and logged rather than crashing startup; the
+  keymap falls back to defaults.
 
 - **Theme picker now previews themes live as the cursor moves**
   through the picker; pressing `Esc` rolls back to the
