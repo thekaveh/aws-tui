@@ -284,6 +284,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again). Previously these surfaced as the generic
   ``ProviderError`` and the pane landed in the ``ERROR``
   placeholder instead of ``UNREACHABLE``.
+- **(third maintenance loop, pass 50)** ``.github/dependabot.yml``
+  now declares a ``package-ecosystem: pre-commit`` entry tracking
+  the pinned hook versions in ``.pre-commit-config.yaml``
+  (``pre-commit-hooks``, ``astral-sh/ruff-pre-commit``,
+  ``ComPWA/taplo-pre-commit``). The first maintenance loop bumped
+  ``ruff`` from ``v0.15.0`` to ``v0.15.17`` by hand to close patch-
+  level drift Dependabot wasn't catching; the new entry catches
+  the next such drift on a weekly cadence without manual triage.
+  Weekly Monday schedule + 2 PR cap + ``["dependencies", "tooling"]``
+  labels match the existing ecosystem entries' shape.
 - **(third maintenance loop, pass 49)** ``DualPaneVM.copy_across``
   and ``move_across`` no longer leave PENDING journal entries
   behind when a batch transfer raises mid-loop. The previous
