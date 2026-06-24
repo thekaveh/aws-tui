@@ -363,6 +363,82 @@ async def test_expired_sso_proactively_falls_back_to_local(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_settings_to_s3_toggle_preserves_chain_local_fallback(tmp_path: Path) -> None:
+    """When the boot chain ran out of candidates and mounted local
+    on both panes, a subsequent Settings → S3 toggle must NOT
+    rebuild the S3 DualPane (which would re-attempt the same
+    failed connections and dump the user back on the same
+    UNREACHABLE error pane the chain already navigated past).
+
+    User report against the post-PR-71 build: "shows how the S3
+    screen is again showing incorrect content despite recent
+    fixes after switching to settings and then back again to
+    S3 where it's supposed to fall back". The screenshot shows
+    the LEFT pane back in ``s3://`` mode rendering "endpoint
+    unreachable - press r to retry".
+    """
+    import contextlib as _contextlib
+
+    from aws_tui.domain.local_fs import LocalFS
+    from aws_tui.infra.aws_session import TokenProbeResult, TokenState
+    from aws_tui.infra.connection_resolver import Connection
+    from aws_tui.ui.widgets.dual_pane import DualPane
+
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+
+    fake_conn = Connection(
+        name="dev-sso",
+        kind="aws",
+        region="us-east-1",
+        source="auto-aws-profile",
+        profile="dev-sso",
+    )
+    ctx.connection_resolver.list = lambda: [fake_conn]  # type: ignore[assignment,method-assign]
+    ctx.aws_session.probe_token = lambda _c: TokenProbeResult(  # type: ignore[assignment,method-assign]
+        state=TokenState.MISSING
+    )
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+            # Sanity: boot ended in local-fallback.
+            assert app._chain_resolved_to_local is True
+
+            # Toggle Settings → S3 via the NavMenu VM (same path the
+            # ``comma`` keybinding takes, but VM-direct keeps the
+            # test off keymap-routing concerns).
+            from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
+
+            ctx.root_vm.services_menu.switch_service_command.execute(SETTINGS_NAV_ID)
+            await app.workers.wait_for_complete(  # type: ignore[attr-defined]
+                list(app.workers._workers)  # type: ignore[attr-defined]
+            )
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("s3")
+            await app.workers.wait_for_complete(  # type: ignore[attr-defined]
+                list(app.workers._workers)  # type: ignore[attr-defined]
+            )
+            await pilot.pause()
+
+            host = pilot.app.query_one("#content-host")
+            dual_panes = host.query(DualPane)
+            assert len(dual_panes) == 1
+            dual_vm = ctx.root_vm.content_host.current
+            # LEFT pane MUST still be LocalFS — the toggle must
+            # NOT have rebuilt an S3FS provider.
+            assert isinstance(dual_vm.left._provider, LocalFS), (  # type: ignore[union-attr]
+                f"expected LEFT pane provider to remain LocalFS after the "
+                f"Settings → S3 toggle (chain-fallback state persists for "
+                f"the session); got {type(dual_vm.left._provider).__name__}"  # type: ignore[union-attr]
+            )
+    finally:
+        with _contextlib.suppress(Exception):
+            _dispose(ctx)
+
+
+@pytest.mark.asyncio
 async def test_boot_chain_narrates_failure_then_local_fallback(tmp_path: Path) -> None:
     """The post-PR-70 boot-chain UX: when the only configured
     connection's offline probe says "no working session", the chain
