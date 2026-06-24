@@ -72,5 +72,21 @@ class SettingsView(Widget):
             ):
                 yield Static("This section is coming in v0.8.")
 
+    def on_mount(self) -> None:
+        # Land focus on the first (non-disabled) Collapsible so the
+        # per-theme ``Collapsible:focus-within { border: $accent }``
+        # rule paints it as the active pane on entry. The user
+        # explicitly wants the first section to "come selected with
+        # the current theme's accent" — matching how the file-pane
+        # row already paints its cursor row on launch.
+        try:
+            first = self.query_one("#section-connections", Collapsible)
+        except Exception:
+            return
+        # ``call_after_refresh`` so the focus call lands AFTER the
+        # widget tree finishes its initial focus pass; otherwise
+        # Textual's own first-focus walk overwrites this.
+        self.call_after_refresh(first.focus)
+
 
 __all__ = ["SettingsView"]

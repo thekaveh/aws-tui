@@ -45,27 +45,28 @@ class S3ConnectionsPanel(Widget):
     """Renders the list of s3-compatible connections + CRUD chips."""
 
     DEFAULT_CSS = """
+    /* Auto-size to content (rows + optional inline form). The earlier
+       ``1fr`` posture stretched the panel to absorb whatever
+       VerticalScroll handed it, leaving a tall blank region when the
+       user hadn't added any connections yet. With the post-PR-67
+       per-Collapsible borders on the Settings page, the surrounding
+       Collapsible now gives the panel a proper visual frame; the
+       panel itself just needs to fit its content. The form-open
+       case sizes naturally tall — VerticalScroll above will scroll
+       to reach the Save button when total content exceeds the
+       viewport. */
     S3ConnectionsPanel {
-        height: 1fr;
+        height: auto;
         width: 1fr;
     }
     S3ConnectionsPanel > #panel-body {
-        height: 1fr;
+        height: auto;
         padding: 0 1;
     }
     S3ConnectionsPanel .connection-row {
         height: 1;
         width: 1fr;
     }
-    /* Empty state used to stretch to ``height: 1fr`` and centre
-       vertically, which made the Settings page's first Collapsible
-       (S3-Compatible Connections) read as "sloppy" — a huge blank
-       region with one centered helper line — when the user hadn't
-       added any connections yet. Pin the empty-state to a compact
-       block so the surrounding panel-body shows its real (empty)
-       size and the second + third Collapsibles aren't pushed off
-       screen. The non-empty form-open case is unaffected because it
-       doesn't render the empty state. */
     S3ConnectionsPanel .empty-state {
         height: auto;
         padding: 1 2;

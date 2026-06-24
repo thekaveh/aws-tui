@@ -580,8 +580,20 @@ SettingsView > VerticalScroll {
 }
 
 SettingsView Collapsible {
+    /* Mirror ``Pane`` chrome so each Settings section reads as a
+       framed pane: ``$rule-dim`` resting border, swap to ``$accent``
+       when focus lands inside (``:focus-within`` — the same
+       Textual pseudo-class the NavMenu rail uses for its focus
+       indicator). The user explicitly asked for "panes that are
+       enveloped by borders with the exact same style and
+       foreground / background coloring used for the s3 page". */
     background: $bg-elev;
+    border: solid $rule-dim;
     margin-bottom: 1;
+}
+
+SettingsView Collapsible:focus-within {
+    border: solid $accent;
 }
 
 SettingsView Collapsible:disabled {
