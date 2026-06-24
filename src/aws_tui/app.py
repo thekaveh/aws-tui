@@ -303,6 +303,18 @@ class AwsTuiApp(App[None]):
         else:
             self._mount_no_connection_placeholder()
 
+        # Drop Textual's automatic first-focus pass. By default Textual
+        # focuses the first focusable widget on mount, which on the S3
+        # screen is the NavMenu's services OptionList — the user then
+        # has to press Tab once just to MOVE focus off the rail before
+        # the second Tab actually toggles LEFT ↔ RIGHT. User report:
+        # "the menu box comes focused / selected when the app is
+        # launched". Same ``set_focus(None)`` trick the snapshot
+        # fixtures already use (``_UnfocusedMixin``); deferred via
+        # ``call_after_refresh`` so it runs AFTER Textual's first
+        # focus pass instead of being silently undone by it.
+        self.call_after_refresh(lambda: self.set_focus(None))
+
     async def _initial_mount_worker(
         self, *, initial_conn: Connection, auth_state: TokenState
     ) -> None:

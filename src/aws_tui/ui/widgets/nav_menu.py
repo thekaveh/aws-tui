@@ -260,13 +260,17 @@ class NavMenu(Widget):
                 # and flip the rendering to text presentation.
                 glyph = descriptor.icon or descriptor.label or "?"
                 if self._collapsed:
-                    # Leading space centers the ribbon+emoji in the
-                    # collapsed-mode 6-cell content area (rail width
-                    # 8 minus 2-cell border): space(1) + ribbon(1) +
-                    # emoji(2) + OptionList right-padding(2) = 6.
-                    # Without the leading space, the prompt left-aligns
-                    # and the row reads as offset to the left.
-                    prompt = f" {ribbon}{glyph}"
+                    # User feedback after PR #67: the collapsed prompt
+                    # used to be ``f" {ribbon}{glyph}"`` (leading space)
+                    # which pushed the ribbon well off the rail's left
+                    # border. The file-pane row puts the cursor glyph
+                    # at column 0 — flush against the pane's left
+                    # border — and the user explicitly asked for that
+                    # same treatment here: "they should all look like
+                    # how it is on the left or right pane as the
+                    # standard". Drop the leading space; the right side
+                    # of the content area absorbs the empty cells.
+                    prompt = f"{ribbon}{glyph}"
                 else:
                     prompt = f"{ribbon}{glyph} {descriptor.label}"
                 target.add_option(Option(prompt, id=descriptor.id))
