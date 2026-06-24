@@ -57,7 +57,18 @@ class ConfirmModal(ModalScreen[bool]):
         # most common case where the user is about to hit Enter to
         # accept. For danger dialogs we start on Cancel instead so a
         # reflex Enter doesn't nuke data.
+        #
+        # The class that lights up the button visually (``-focused``)
+        # is NOT applied on mount — both buttons start looking
+        # deselected. The user must hover (CSS ``:hover``) or press
+        # an arrow / Tab to make the focus visible. The logical
+        # default is still kept here so a reflex Enter still routes
+        # to the safe side without any navigation, but it doesn't
+        # paint a "this button is selected" border at mount time
+        # which the user found confusing because two buttons read
+        # as "both selected" at a glance.
         self._focused_button_id: str = "cancel" if request.danger else "confirm"
+        self._focus_visible: bool = False
         if request.danger:
             self.add_class("-danger")
 
@@ -91,7 +102,10 @@ class ConfirmModal(ModalScreen[bool]):
                 )
 
     def on_mount(self) -> None:
-        self._apply_focus_class()
+        # No focus class on mount — both buttons start neutral.
+        # The first arrow / Tab press flips ``_focus_visible`` True
+        # and lights up the default-focused button.
+        return
 
     def action_cancel(self) -> None:
         self._vm.cancel_command.execute()
@@ -109,12 +123,26 @@ class ConfirmModal(ModalScreen[bool]):
             self.action_cancel()
 
     def action_focus_next(self) -> None:
-        self._focused_button_id = "confirm" if self._focused_button_id == "cancel" else "cancel"
+        # right / tab is directional — first press lands on the
+        # RIGHT button (confirm) regardless of which side was the
+        # logical default. The user pressing ``right`` clearly
+        # wants the right button. Subsequent presses toggle.
+        if not self._focus_visible:
+            self._focus_visible = True
+            self._focused_button_id = "confirm"
+        else:
+            self._focused_button_id = "confirm" if self._focused_button_id == "cancel" else "cancel"
         self._apply_focus_class()
 
     def action_focus_prev(self) -> None:
-        # Only two buttons, so prev == next.
-        self.action_focus_next()
+        # left / shift+tab — first press lands on the LEFT button
+        # (cancel). Same toggle behaviour on subsequent presses.
+        if not self._focus_visible:
+            self._focus_visible = True
+            self._focused_button_id = "cancel"
+        else:
+            self._focused_button_id = "confirm" if self._focused_button_id == "cancel" else "cancel"
+        self._apply_focus_class()
 
     def on_click(self, event: Click) -> None:
         # Walk up from the click target to find the button (if any).
@@ -129,8 +157,12 @@ class ConfirmModal(ModalScreen[bool]):
             node = getattr(node, "parent", None)
 
     def _apply_focus_class(self) -> None:
+        # When focus isn't visible yet (mount + before any arrow
+        # press) we strip the class from every button — both look
+        # deselected. Once the user navigates, the focused button
+        # gets the class.
         for btn in self.query(_ModalButton):
-            if btn.button_id == self._focused_button_id:
+            if self._focus_visible and btn.button_id == self._focused_button_id:
                 btn.add_class("-focused")
             else:
                 btn.remove_class("-focused")
