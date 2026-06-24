@@ -219,6 +219,18 @@ class AwsTuiApp(App[None]):
         # for the next attempt.
         self._attempt_conn_key: tuple[str, str] | None = None
         self._attempt_future: asyncio.Future[str] | None = None
+        # Sticky for the session once the boot chain ran out of
+        # candidates and we mounted local-on-both-panes. Subsequent
+        # Settings → S3 toggles route through
+        # ``_mount_local_only_dual_pane`` instead of rebuilding the
+        # S3 DualPane (which would re-attempt the same failed
+        # connections and force the user back into the same
+        # 60s-then-error pane the chain already negotiated past).
+        # The user can still press ``r`` on a pane or ``Shift+S``
+        # to re-bind to a specific connection — those are the
+        # explicit recovery paths.
+        self._chain_resolved_to_local: bool = False
+        self._chain_initial_conn: Connection | None = None
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -409,8 +421,14 @@ class AwsTuiApp(App[None]):
                     attempt=index,
                     outcome=outcome,
                 )
-            # Chain exhausted — mount local on both panes.
+            # Chain exhausted — mount local on both panes and
+            # remember the decision so a subsequent Settings → S3
+            # toggle reproduces the local-on-both state instead of
+            # walking the chain again (which would just replay the
+            # same failures the user already saw).
             self._raise_local_fallback_toast()
+            self._chain_resolved_to_local = True
+            self._chain_initial_conn = initial_conn
             await self._mount_local_only_dual_pane(
                 initial_conn=initial_conn,
                 reason="chain-exhausted",
@@ -1722,6 +1740,12 @@ class AwsTuiApp(App[None]):
             self._mark_connection_unreachable(kind, name)
         elif was_marked and new_state in (PaneState.IDLE, PaneState.EMPTY):
             self._clear_connection_unreachable(kind, name)
+            # ``r`` retry (or any post-boot rebind) that actually
+            # reached IDLE/EMPTY means the user has a working live
+            # connection again — drop the chain-fallback memo so
+            # Settings → S3 toggles return to the real DualPane
+            # instead of staying pinned to local-on-both.
+            self._chain_resolved_to_local = False
 
         # Boot-chain attempt narrator: resolve the awaited future on
         # first terminal state for the matching connection key. The
@@ -1934,6 +1958,23 @@ class AwsTuiApp(App[None]):
         a cancelled worker may have left behind.
         """
         ctx = self._app_ctx
+        # Honor the boot-chain's local-fallback decision on
+        # Settings → S3 toggle. Without this, re-mounting the s3
+        # DualPane re-attempts every chain-failed connection
+        # (60s+ wait per unreachable s3 endpoint) and lands on the
+        # same UNREACHABLE error pane the chain just navigated past.
+        # The session-sticky flag is cleared by ``r`` retries on a
+        # pane that actually succeed (see ``_on_pane_state_changed``).
+        if (
+            service_id == "s3"
+            and self._chain_resolved_to_local
+            and self._chain_initial_conn is not None
+        ):
+            await self._mount_local_only_dual_pane(
+                initial_conn=self._chain_initial_conn,
+                reason="chain-exhausted",
+            )
+            return
         try:
             await ctx.root_vm.switch_service(service_id)
         except Exception as exc:

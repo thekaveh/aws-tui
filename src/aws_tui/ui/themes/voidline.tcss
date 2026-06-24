@@ -227,6 +227,12 @@ ConfirmModal > Container > .modal-path-value {
     text-wrap: nowrap;
     text-overflow: ellipsis;
 }
+ConfirmModal > Container > .modal-title {
+    color: $accent;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
 ConfirmModal > Container > .modal-footer {
     height: 3;
     align: right middle;
@@ -234,13 +240,14 @@ ConfirmModal > Container > .modal-footer {
 }
 
 /* ── Modal action buttons ──────────────────────────────────────────────
-   Outlined, no spillover. The user's reference is the Copy dialog's
-   Cancel button: $bg fill, $rule-dim round border, hovers to $bg-elev
-   with accent text + border. Generalized from the old ConfirmModal-
-   scoped rules so the same look applies across every modal that uses
-   ModalButton (Copy/Delete confirm, FirstRun, Resume, inline form).
-   Variants differentiate via border + text color only — never via a
-   solid background fill that would spill into the modal container. */
+   Outlined, no spillover, no resting colour. Every variant looks
+   identical at rest (the Cancel-button look the user called out
+   as the standard in PR #70). Variant identity — primary or
+   danger — only shows on hover / focus: the active button picks
+   up its colour while the inactive sibling stays neutral, so the
+   user never sees both buttons coloured at the same time.
+   Applies to every modal that uses ModalButton (ConfirmModal,
+   FirstRunModal, ResumeModal, inline ConnectionForm). */
 ModalButton {
     background: $bg;
     color: $text;
@@ -253,47 +260,20 @@ ModalButton {
     text-style: bold;
     margin: 0 1;
 }
-ModalButton:hover {
-    background: $bg-elev;
-    border: round $accent;
-    color: $accent;
-}
-ModalButton.-focused {
-    background: $bg-elev;
-    border: round $accent;
-    color: $accent;
-}
-ModalButton.-primary {
-    background: $bg;
-    color: $accent;
-    border: round $accent;
-}
-ModalButton.-primary:hover {
-    background: $bg-elev;
-    border: round $accent-hot;
-    color: $accent-hot;
-}
+ModalButton:hover,
+ModalButton.-focused,
+ModalButton.-primary:hover,
 ModalButton.-primary.-focused {
     background: $bg-elev;
-    border: round $accent-hot;
-    color: $accent-hot;
+    border: round $accent;
+    color: $accent;
 }
-ModalButton.-danger {
-    background: $bg;
-    color: $danger;
-    border: round $danger;
-}
-ModalButton.-danger:hover {
-    background: $bg-elev;
-    border: round $danger;
-    color: $accent-hot;
-}
+ModalButton.-danger:hover,
 ModalButton.-danger.-focused {
     background: $bg-elev;
     border: round $danger;
-    color: $accent-hot;
+    color: $danger;
 }
-
 ConfirmModal > Container > .modal-footer.-danger > ModalButton.-danger {
     margin-right: 2;
 }
