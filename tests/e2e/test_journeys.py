@@ -53,9 +53,20 @@ def _aws_connection() -> Connection:
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
-async def test_journey_1_silent_sso(app_context: AppContext, tmp_path: Path) -> None:
-    """Cold start with a valid SSO token = silent S3 view, no toast/modal."""
-    # Build a fake SSO cache entry with future expiry.
+async def test_journey_1_silent_sso(
+    app_context: AppContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cold start with a valid SSO token = silent S3 view, no toast/modal.
+
+    The on-disk fake SSO cache is kept for symmetry, but the real
+    contract is that ``AwsSession.probe_token`` returns ``CONNECTED``
+    for this connection — boto's ``SSOTokenLoader`` resolves caches
+    via the user's HOME, not via ``tmp_path``, so without the
+    monkeypatch the probe quietly returns ``MISSING`` and (post-PR-69)
+    fires the fast-fallback path including its toast. The test would
+    then assert "no toast" against the silent-SSO contract while
+    actually exercising the no-creds fallback.
+    """
     sso_cache = tmp_path / ".aws" / "sso" / "cache"
     sso_cache.mkdir(parents=True)
     (sso_cache / "fake.json").write_text(
@@ -67,6 +78,18 @@ async def test_journey_1_silent_sso(app_context: AppContext, tmp_path: Path) -> 
             }
         )
     )
+
+    from datetime import UTC, datetime
+
+    from aws_tui.infra.aws_session import TokenProbeResult
+
+    def _probe(_conn: Connection) -> TokenProbeResult:
+        return TokenProbeResult(
+            state=TokenState.CONNECTED,
+            expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        )
+
+    monkeypatch.setattr(app_context.aws_session, "probe_token", _probe)
 
     app = AwsTuiApp(app_context)
     async with app.run_test(size=(120, 40)) as pilot:
