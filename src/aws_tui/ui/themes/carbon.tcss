@@ -242,7 +242,16 @@ ConfirmModal > Container > .modal-footer {
     align: right middle;
     padding: 0;
 }
-ConfirmModal > Container > .modal-footer > ModalButton {
+
+/* ── Modal action buttons ──────────────────────────────────────────────
+   Outlined, no spillover. The user's reference is the Copy dialog's
+   Cancel button: $bg fill, $rule-dim round border, hovers to $bg-elev
+   with accent text + border. Generalized from the old ConfirmModal-
+   scoped rules so the same look applies across every modal that uses
+   ModalButton (Copy/Delete confirm, FirstRun, Resume, inline form).
+   Variants differentiate via border + text color only — never via a
+   solid background fill that would spill into the modal container. */
+ModalButton {
     background: $bg;
     color: $text;
     border: round $rule-dim;
@@ -251,57 +260,48 @@ ConfirmModal > Container > .modal-footer > ModalButton {
     height: 3;
     padding: 0 2;
     content-align: center middle;
+    text-style: bold;
+    margin: 0 1;
 }
-ConfirmModal > Container > .modal-footer > ModalButton:hover {
+ModalButton:hover {
     background: $bg-elev;
     border: round $accent;
     color: $accent;
 }
-ConfirmModal > Container > .modal-footer > ModalButton.-primary {
-    background: $accent;
-    color: $bg;
-    border: round $accent;
-}
-ConfirmModal > Container > .modal-footer > ModalButton.-primary:hover {
-    background: $accent-soft;
-    border: round $accent-soft;
-}
-ConfirmModal > Container > .modal-footer > ModalButton.-focused {
+ModalButton.-focused {
     background: $bg-elev;
     border: round $accent;
     color: $accent;
 }
-ConfirmModal > Container > .modal-footer > ModalButton.-primary.-focused {
-    background: $accent;
-    color: $bg;
+ModalButton.-primary {
+    background: $bg;
+    color: $accent;
+    border: round $accent;
+}
+ModalButton.-primary:hover {
+    background: $bg-elev;
     border: round $accent-hot;
+    color: $accent-hot;
 }
-ConfirmModal > Container > .modal-footer > ModalButton.-danger.-focused {
-    background: $danger;
-    color: $bg;
-    border: round $accent;
+ModalButton.-primary.-focused {
+    background: $bg-elev;
+    border: round $accent-hot;
+    color: $accent-hot;
 }
-ConfirmModal > Container > .modal-footer > ModalButton.-danger {
-    background: $danger;
-    color: $bg;
+ModalButton.-danger {
+    background: $bg;
+    color: $danger;
     border: round $danger;
 }
-ConfirmModal > Container > .modal-footer > ModalButton.-danger:hover {
-    background: $danger;
+ModalButton.-danger:hover {
+    background: $bg-elev;
+    border: round $danger;
+    color: $accent-hot;
 }
-
-ConfirmModal > Container > .modal-title {
-    color: $accent;
-    text-style: bold;
-}
-
-ConfirmModal.-danger > Container {
-    border: solid $danger;
-}
-
-ConfirmModal.-danger > Container > .modal-title {
-    color: $danger;
-    text-style: bold;
+ModalButton.-danger.-focused {
+    background: $bg-elev;
+    border: round $danger;
+    color: $accent-hot;
 }
 
 ConfirmModal > Container > .modal-footer.-danger > ModalButton.-danger {
