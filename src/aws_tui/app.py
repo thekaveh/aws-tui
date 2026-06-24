@@ -209,15 +209,16 @@ class AwsTuiApp(App[None]):
         # change doesn't spawn a duplicate mount worker that races the
         # on_mount direct mount (blank-screen-at-startup regression).
         self._boot_in_flight: bool = False
-        # While True, an UNREACHABLE / AUTH_REQUIRED transition on
-        # the focused (left) pane auto-falls-back to LocalFS so the
-        # user isn't staring at a giant error pane when their
-        # initial connection happens to be down. Cleared either on
-        # successful initial load (left pane reaches IDLE/EMPTY) or
-        # the first time we trigger the fallback. NOT triggered on
-        # user-driven Shift+S swaps (they explicitly chose that
-        # connection, so an error is the right surface).
-        self._auto_fallback_pending: bool = False
+        # Set to the active connection key while ``_initial_mount_worker``
+        # is waiting for the LEFT pane to reach a terminal state for
+        # that connection. ``_on_pane_state_changed`` resolves
+        # ``_attempt_future`` when an UNREACHABLE / AUTH_REQUIRED /
+        # FORBIDDEN / IDLE / EMPTY transition arrives for that key.
+        # Filtering by key keeps stale messages from a just-disposed
+        # PaneVM (the prior failed attempt) from resolving the future
+        # for the next attempt.
+        self._attempt_conn_key: tuple[str, str] | None = None
+        self._attempt_future: asyncio.Future[str] | None = None
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -318,68 +319,302 @@ class AwsTuiApp(App[None]):
     async def _initial_mount_worker(
         self, *, initial_conn: Connection, auth_state: TokenState
     ) -> None:
-        """Build the initial DualPane in a background worker.
+        """Walk the configured-connections chain, narrating each step
+        via toasts, until one succeeds OR all fail (→ local-only).
 
-        Lifts the previously-inline ``switch_service`` await out of
-        ``on_mount`` so the screen renders the chrome immediately even
-        when the resolved s3-compatible endpoint is unreachable and
-        boto3 takes 10-15s to time out. The user sees the rail and
-        an empty content-host instead of a hung blank terminal; the
-        pane(s) transition to UNREACHABLE state when boto3 finally
-        fails — and the auto-fallback path (see
-        ``_on_pane_state_changed``) swaps the left pane to ``LocalFS``
-        so both panes show the local filesystem instead of a giant
-        error placeholder.
+        Boot UX history. v0.7 single-shot: try the resolved initial
+        connection; on terminal-bad pane state, swap LEFT to LocalFS
+        with a one-line toast. The user complaint after PR #69:
+        "since it takes such a long time loading the proper content
+        on the left side on app launch when it goes through all the
+        fallbacks, I think we'd better show toast notifications
+        when each source is about to be tried. And if that source
+        turns out not available, we show another toast that it's
+        not or that it failed, and then show another one about
+        trying the next option and so on". So: build an ORDERED
+        chain (initial first, then the rest in resolver order),
+        and for each candidate raise a "▸ Trying <name>…" sticky
+        INFO toast, attempt, dismiss it on outcome, raise a success
+        SUCCESS or failure WARNING outcome toast. On chain
+        exhaustion, raise a WARNING fallback toast and mount
+        LocalFS-on-both-panes.
 
-        For AWS+EXPIRED specifically, the boto3 wait is short-circuited
-        entirely. probe_token already confirmed the token cache is
-        expired offline; there is no point asking boto3 to refresh it
-        only to time out 15s later. The worker builds a
-        ``LocalFS``-only DualPane directly (no S3FS construction →
-        no boto3 → no wait) and raises a toast with the ``aws sso
-        login`` recovery hint. Other failure modes (unreachable
-        endpoint, AUTH_REQUIRED arriving mid-list, FORBIDDEN, etc.)
-        keep going through the reactive auto-fallback path because
-        we can't know upfront whether they'll fail.
+        AWS+(EXPIRED|MISSING) is short-circuited via offline
+        ``probe_token`` so we don't burn the 15s SSO-refresh wait
+        on a candidate we already know has no working session;
+        s3-compatible and AWS+CONNECTED candidates are attempted
+        live via ``switch_service("s3")`` and the LEFT pane's
+        terminal state (IDLE / EMPTY = success; UNREACHABLE /
+        AUTH_REQUIRED / FORBIDDEN = failure) signals the outcome
+        through ``_attempt_future`` (resolved by
+        ``_on_pane_state_changed`` for the matching connection key).
+
+        ``auth_state`` is kept as a parameter for back-compat
+        (caller in ``on_mount`` already probed the initial
+        connection); we re-probe each AWS candidate in the chain
+        instead of relying on the value because the chain may
+        include connections the caller never probed.
+        """
+        _ = auth_state  # caller probed `initial_conn`; chain re-probes each AWS candidate
+        ctx = self._app_ctx
+        try:
+            chain = self._build_attempt_chain(initial_conn)
+            ctx.log_sink.info(
+                "app.boot_chain.start",
+                length=len(chain),
+                initial=initial_conn.name,
+            )
+            for index, conn in enumerate(chain, start=1):
+                # Defer the "▸ Trying X…" toast so a fast happy boot
+                # (e.g. silent SSO succeeds in <500ms) stays silent.
+                # The deferred task self-cancels if the attempt
+                # resolves before the grace window. We then ONLY
+                # raise the success toast if the pre-attempt toast
+                # was visible — otherwise the success is implicit
+                # (panes populated) and a redundant success toast
+                # would just flash by.
+                pre_attempt_visible = False
+                pre_attempt_task = asyncio.create_task(
+                    self._raise_attempt_toast_after_grace(conn, index=index, total=len(chain))
+                )
+                try:
+                    outcome = await self._try_connection(conn)
+                finally:
+                    pre_attempt_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await pre_attempt_task
+                    # If the grace window elapsed and the toast was
+                    # actually raised, dismiss it before emitting the
+                    # outcome toast.
+                    if pre_attempt_task.done() and not pre_attempt_task.cancelled():
+                        pre_attempt_visible = bool(pre_attempt_task.result())
+                if pre_attempt_visible:
+                    self._dismiss_attempt_toast(conn)
+                if outcome == "ok":
+                    if pre_attempt_visible:
+                        self._raise_success_toast(conn)
+                    ctx.log_sink.info(
+                        "app.boot_chain.success",
+                        kind=conn.kind,
+                        name=conn.name,
+                        attempt=index,
+                    )
+                    return
+                self._mark_connection_unreachable(conn.kind, conn.name)
+                self._raise_failure_toast(conn, outcome)
+                ctx.log_sink.info(
+                    "app.boot_chain.attempt_failed",
+                    kind=conn.kind,
+                    name=conn.name,
+                    attempt=index,
+                    outcome=outcome,
+                )
+            # Chain exhausted — mount local on both panes.
+            self._raise_local_fallback_toast()
+            await self._mount_local_only_dual_pane(
+                initial_conn=initial_conn,
+                reason="chain-exhausted",
+            )
+            ctx.log_sink.info("app.boot_chain.local_fallback", initial=initial_conn.name)
+        finally:
+            self._boot_in_flight = False
+
+    def _build_attempt_chain(self, initial: Connection) -> list[Connection]:
+        """Order the resolver's connection list with ``initial`` first.
+
+        Per-launch ``unreachable_connections`` starts empty — nothing
+        to skip on a cold start. If a previous attempt in this same
+        boot marked a candidate unreachable, it's still in the chain
+        but the pre-flight ``probe_token`` (for AWS) or the live
+        attempt outcome will surface the same failure again, which
+        is fine — the chain decides termination, not a static skip
+        list. We DO de-duplicate so the initial isn't tried twice
+        when it also appears in the resolver list.
         """
         ctx = self._app_ctx
         try:
-            if initial_conn.kind == "aws" and auth_state in (
-                TokenState.EXPIRED,
-                TokenState.MISSING,
-            ):
-                # Proactive fallback for AWS profiles that either
-                # already-expired (``EXPIRED``) OR have no cached SSO
-                # token in ``~/.aws/sso/cache`` (``MISSING``). Both
-                # cases are user-visible "no working AWS session";
-                # falling through to the reactive auto-fallback path
-                # below would otherwise burn the full botocore retry
-                # budget (~60s on an unreachable endpoint) before the
-                # pane transitions to UNREACHABLE and we swap to
-                # LocalFS. User report after PR #68: "the app takes
-                # way too long to load and fall back to the local
-                # option". The MISSING case CAN false-positive for
-                # users running static-credentials profiles
-                # (env-var or ``~/.aws/credentials`` AKID pairs) —
-                # probe_token reports MISSING because no SSO cache
-                # exists, even though boto3 would happily authenticate
-                # against env vars. Those users press ``r`` to retry
-                # and the pane re-binds against the working creds.
-                reason = "aws-sso-expired" if auth_state is TokenState.EXPIRED else "aws-no-creds"
-                await self._mount_local_only_dual_pane(
-                    initial_conn=initial_conn,
-                    reason=reason,
+            others = ctx.connection_resolver.list()
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.boot_chain.resolver_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            others = []
+        chain: list[Connection] = [initial]
+        seen = {(initial.kind, initial.name)}
+        for conn in others:
+            key = (conn.kind, conn.name)
+            if key in seen:
+                continue
+            chain.append(conn)
+            seen.add(key)
+        return chain
+
+    async def _try_connection(self, conn: Connection) -> str:
+        """Attempt to mount ``conn`` as the LEFT pane's source.
+
+        Returns one of: ``"ok"``, ``"aws-sso-expired"``,
+        ``"aws-no-creds"``, ``"unreachable"``, ``"auth-required"``,
+        ``"forbidden"``, ``"timeout"``, ``"error"``. The chain
+        narrator maps these into toast text.
+        """
+        ctx = self._app_ctx
+        if conn.kind == "aws":
+            try:
+                state = ctx.aws_session.probe_token(conn).state
+            except Exception as exc:
+                ctx.log_sink.error(
+                    "app.boot_chain.probe_failed",
+                    name=conn.name,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
                 )
-            else:
-                # Normal path. Arm the auto-fallback BEFORE
-                # switch_service so the eventual UNREACHABLE state
-                # (if any) triggers it. The flag is one-shot.
-                self._auto_fallback_pending = True
-                with contextlib.suppress(Exception):
-                    await ctx.root_vm.switch_service("s3")
-                self._mount_initial_service_view()
+                return "error"
+            if state is TokenState.EXPIRED:
+                return "aws-sso-expired"
+            if state is TokenState.MISSING:
+                return "aws-no-creds"
+        loop = asyncio.get_event_loop()
+        self._attempt_future = loop.create_future()
+        self._attempt_conn_key = (conn.kind, conn.name)
+        try:
+            try:
+                await ctx.root_vm.switch_connection_with(conn, TokenState.CONNECTED)
+                await ctx.root_vm.switch_service("s3")
+            except Exception as exc:
+                ctx.log_sink.error(
+                    "app.boot_chain.switch_failed",
+                    name=conn.name,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                return "error"
+            self._mount_initial_service_view()
+            try:
+                return await asyncio.wait_for(self._attempt_future, timeout=90.0)
+            except TimeoutError:
+                return "timeout"
         finally:
-            self._boot_in_flight = False
+            self._attempt_future = None
+            self._attempt_conn_key = None
+
+    # ── Boot-chain narration (toasts) ──────────────────────────────────────
+
+    @staticmethod
+    def _attempt_toast_id(conn: Connection) -> str:
+        return f"boot-attempt-{conn.kind}-{conn.name}"
+
+    @staticmethod
+    def _outcome_toast_id(conn: Connection) -> str:
+        return f"boot-outcome-{conn.kind}-{conn.name}"
+
+    # Grace window before the "▸ Trying X…" toast appears, so a fast
+    # happy boot (silent SSO succeeds in well under this) stays
+    # silent. The slow-boot UX the user actually asked for narration
+    # of is well above this threshold (a single boto SSO refresh or
+    # an unreachable s3 endpoint takes seconds, not hundreds of ms).
+    _ATTEMPT_TOAST_GRACE_SECONDS: ClassVar[float] = 0.5
+
+    async def _raise_attempt_toast_after_grace(
+        self, conn: Connection, *, index: int, total: int
+    ) -> bool:
+        """Raise the pre-attempt toast after a grace window.
+
+        Returns True if the toast was raised (caller will dismiss
+        it on outcome), False otherwise. The outer caller cancels
+        this task when the attempt's outcome arrives — a cancel
+        before the grace window elapses means no toast was raised,
+        so success is silent.
+        """
+        await asyncio.sleep(self._ATTEMPT_TOAST_GRACE_SECONDS)
+        ctx = self._app_ctx
+        with contextlib.suppress(Exception):
+            ctx.root_vm.chrome.toast_stack.raise_toast(
+                ToastModel(
+                    id=self._attempt_toast_id(conn),
+                    text=(
+                        f"▸ Trying [b]{conn.name}[/] "
+                        f"({self._friendly_kind(conn.kind)}) — {index}/{total}…"
+                    ),
+                    level=ToastLevel.INFO,
+                    sticky=True,
+                    timeout_seconds=None,
+                    action_label=None,
+                    action_action=None,
+                )
+            )
+        return True
+
+    def _dismiss_attempt_toast(self, conn: Connection) -> None:
+        with contextlib.suppress(Exception):
+            self._app_ctx.root_vm.chrome.toast_stack.dismiss(self._attempt_toast_id(conn))
+
+    def _raise_success_toast(self, conn: Connection) -> None:
+        ctx = self._app_ctx
+        with contextlib.suppress(Exception):
+            ctx.root_vm.chrome.toast_stack.raise_toast(
+                ToastModel(
+                    id=self._outcome_toast_id(conn),
+                    text=f"✓ Connected to [b]{conn.name}[/]",
+                    level=ToastLevel.SUCCESS,
+                    sticky=False,
+                    timeout_seconds=4.0,
+                    action_label=None,
+                    action_action=None,
+                )
+            )
+
+    def _raise_failure_toast(self, conn: Connection, outcome: str) -> None:
+        ctx = self._app_ctx
+        reason = self._friendly_outcome(outcome)
+        with contextlib.suppress(Exception):
+            ctx.root_vm.chrome.toast_stack.raise_toast(
+                ToastModel(
+                    id=self._outcome_toast_id(conn),
+                    text=f"✗ [b]{conn.name}[/] {reason} — trying next…",
+                    level=ToastLevel.WARNING,
+                    sticky=False,
+                    timeout_seconds=6.0,
+                    action_label=None,
+                    action_action=None,
+                )
+            )
+
+    def _raise_local_fallback_toast(self) -> None:
+        ctx = self._app_ctx
+        with contextlib.suppress(Exception):
+            ctx.root_vm.chrome.toast_stack.raise_toast(
+                ToastModel(
+                    id="boot-fallback-local",
+                    text=(
+                        "All configured sources unavailable — "
+                        "both panes fell back to local. Press [b]r[/] "
+                        "inside a pane to retry."
+                    ),
+                    level=ToastLevel.WARNING,
+                    sticky=False,
+                    timeout_seconds=12.0,
+                    action_label=None,
+                    action_action=None,
+                )
+            )
+
+    @staticmethod
+    def _friendly_kind(kind: str) -> str:
+        return {"aws": "AWS", "s3-compatible": "S3-compatible"}.get(kind, kind)
+
+    @staticmethod
+    def _friendly_outcome(outcome: str) -> str:
+        return {
+            "aws-sso-expired": "SSO token expired",
+            "aws-no-creds": "no AWS credentials",
+            "unreachable": "endpoint unreachable",
+            "auth-required": "authentication required",
+            "forbidden": "access denied",
+            "timeout": "timed out",
+            "error": "errored",
+        }.get(outcome, outcome)
 
     async def _mount_local_only_dual_pane(self, *, initial_conn: Connection, reason: str) -> None:
         """Mount a DualPane with ``LocalFS`` on BOTH panes, bypassing
@@ -491,17 +726,22 @@ class AwsTuiApp(App[None]):
                 f"retry without relaunching."
             ),
         }.get(reason, f"{initial_conn.name} unavailable — both panes are local.")
-        ctx.root_vm.chrome.toast_stack.raise_toast(
-            ToastModel(
-                id=f"initial-fallback-{reason}-{initial_conn.name}",
-                text=text,
-                level=ToastLevel.WARNING,
-                sticky=False,
-                timeout_seconds=12.0,
-                action_label=None,
-                action_action=None,
+        # ``chain-exhausted`` callers (``_initial_mount_worker``)
+        # already raised the boot-chain's own local-fallback toast;
+        # don't double-up. Other callers (legacy direct invocation)
+        # still get the per-reason recovery hint.
+        if reason != "chain-exhausted":
+            ctx.root_vm.chrome.toast_stack.raise_toast(
+                ToastModel(
+                    id=f"initial-fallback-{reason}-{initial_conn.name}",
+                    text=text,
+                    level=ToastLevel.WARNING,
+                    sticky=False,
+                    timeout_seconds=12.0,
+                    action_label=None,
+                    action_action=None,
+                )
             )
-        )
         ctx.log_sink.info(
             "app.local_only_mount.success",
             reason=reason,
@@ -1467,15 +1707,13 @@ class AwsTuiApp(App[None]):
         UNREACHABLE, mark its connection. When it transitions to
         IDLE / EMPTY from UNREACHABLE, clear the mark.
 
-        Also handles the **startup auto-fallback**: if
-        ``_auto_fallback_pending`` is True (set by
-        ``_initial_mount_worker``) and the LEFT pane reaches
-        UNREACHABLE / AUTH_REQUIRED / FORBIDDEN, swap that pane's
-        provider to ``LocalFS`` so the user gets a usable file
-        manager on both sides instead of a giant error pane. The
-        fallback is one-shot — it doesn't fire on subsequent
-        Shift+S failures (those were user-driven; the error pane is
-        the right surface).
+        Also resolves ``_attempt_future`` for the boot-time chain
+        narrator when the LEFT pane reaches a terminal state for the
+        currently-attempting connection key. ``_initial_mount_worker``
+        is awaiting that future to decide success vs. failure vs.
+        move-to-next-candidate. Filtering by ``_attempt_conn_key``
+        keeps stale messages from a prior disposed PaneVM from
+        resolving the next attempt's future.
         """
         from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -1485,57 +1723,27 @@ class AwsTuiApp(App[None]):
         elif was_marked and new_state in (PaneState.IDLE, PaneState.EMPTY):
             self._clear_connection_unreachable(kind, name)
 
-        # Startup auto-fallback. One-shot: cleared on first fire OR
-        # on first successful IDLE/EMPTY transition. Only applies to
-        # the LEFT pane (initial S3 pane); the right pane is already
-        # LocalFS by construction.
-        if self._auto_fallback_pending:
-            unusable = new_state in (
-                PaneState.UNREACHABLE,
-                PaneState.AUTH_REQUIRED,
-                PaneState.FORBIDDEN,
-            )
-            usable = new_state in (PaneState.IDLE, PaneState.EMPTY)
-            if unusable:
-                self._auto_fallback_pending = False
-                self.run_worker(
-                    self._fallback_left_pane_to_local(kind=kind, name=name),
-                    exclusive=True,
-                    group="auto-fallback",
-                )
-            elif usable:
-                # Connection worked — no fallback needed; arm-off.
-                self._auto_fallback_pending = False
-
-    async def _fallback_left_pane_to_local(self, *, kind: str, name: str) -> None:
-        """Swap the left pane to ``LocalFS`` as a one-shot startup
-        recovery when the initial S3 connection isn't usable. Raises
-        a one-line info toast so the user knows what happened.
-        """
-        dual = self._dual_pane()
-        if dual is None:
-            return
-        left = getattr(dual, "left", None)
-        if left is None:
-            return
-        ctx = self._app_ctx
-        ctx.log_sink.info("app.auto_fallback.left_to_local", kind=kind, name=name)
-        # Mark the connection as unreachable in the swap-source ring
-        # so Shift+S skips it until the user explicitly retries.
-        self._mark_connection_unreachable(kind, name)
-        with contextlib.suppress(Exception):
-            await self._rebind_pane_to_local(left)
-        ctx.root_vm.chrome.toast_stack.raise_toast(
-            ToastModel(
-                id=f"auto-fallback-{kind}-{name}",
-                text=f"{name} unreachable — left pane fell back to local",
-                level=ToastLevel.INFO,
-                sticky=False,
-                timeout_seconds=4.0,
-                action_label=None,
-                action_action=None,
-            )
-        )
+        # Boot-chain attempt narrator: resolve the awaited future on
+        # first terminal state for the matching connection key. The
+        # chain owns the user-facing fallback decision (no reactive
+        # auto-fallback anymore — the chain walks every candidate
+        # explicitly and falls back to local on exhaustion).
+        if (
+            self._attempt_future is not None
+            and not self._attempt_future.done()
+            and self._attempt_conn_key == (kind, name)
+        ):
+            outcome: str | None = None
+            if new_state in (PaneState.IDLE, PaneState.EMPTY):
+                outcome = "ok"
+            elif new_state is PaneState.UNREACHABLE:
+                outcome = "unreachable"
+            elif new_state is PaneState.AUTH_REQUIRED:
+                outcome = "auth-required"
+            elif new_state is PaneState.FORBIDDEN:
+                outcome = "forbidden"
+            if outcome is not None:
+                self._attempt_future.set_result(outcome)
 
     def _on_connection_list_changed(self, msg: object) -> None:
         """Hub subscriber: drop deleted connection names from the
