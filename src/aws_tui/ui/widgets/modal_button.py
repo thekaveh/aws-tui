@@ -23,6 +23,14 @@ class ModalButton(Static):
     - ``-danger``: the destructive variant (theme danger color).
     """
 
+    # Structural defaults only — every color / border lives in the
+    # per-theme ``.tcss`` (see ``ModalButton {...}`` blocks across all 10
+    # themes). The earlier ``text-style: bold reverse`` on ``-focused``
+    # silently inverted the theme's foreground/background and produced
+    # the "solid block of accent" effect the user called "spillover";
+    # focus styling now comes from the theme rules (border + text
+    # colour changes only, ``$bg`` unchanged so the button never blends
+    # into the modal container).
     DEFAULT_CSS = """
     ModalButton {
         width: auto;
@@ -32,12 +40,6 @@ class ModalButton(Static):
         content-align: center middle;
         text-style: bold;
         margin: 0 1;
-    }
-    ModalButton.-primary {
-        text-style: bold;
-    }
-    ModalButton.-focused {
-        text-style: bold reverse;
     }
     """
 
