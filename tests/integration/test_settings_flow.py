@@ -44,10 +44,21 @@ async def _await_boot(pilot: object, app: object) -> None:
     chrome paints immediately, but a single ``pilot.pause()`` no
     longer reaches the post-mount state. We wait for the
     ``content-mount`` group of workers to drain instead.
+
+    Then we dismiss any boot-chain narration toasts the worker
+    raised — they dock right and would cover Settings-panel click
+    targets the test then exercises. The narration is real-user
+    UX; tests interact post-boot and don't need it.
     """
     await app.workers.wait_for_complete(  # type: ignore[attr-defined]
         list(app.workers._workers)  # type: ignore[attr-defined]
     )
+    await pilot.pause()  # type: ignore[attr-defined]
+    stack = app.app_ctx.root_vm.chrome.toast_stack  # type: ignore[attr-defined]
+    for toast in tuple(stack.toasts):
+        tid = toast.model.id
+        if tid.startswith("boot-") or tid.startswith("initial-fallback-"):
+            stack.dismiss(tid)
     await pilot.pause()  # type: ignore[attr-defined]
 
 
@@ -345,6 +356,85 @@ async def test_expired_sso_proactively_falls_back_to_local(tmp_path: Path) -> No
             )
             # Connection marked unreachable so Shift+S skips it until
             # the user runs aws sso login + relaunches.
+            assert (fake_conn.kind, fake_conn.name) in ctx.unreachable_connections
+    finally:
+        with _contextlib.suppress(Exception):
+            _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_boot_chain_narrates_failure_then_local_fallback(tmp_path: Path) -> None:
+    """The post-PR-70 boot-chain UX: when the only configured
+    connection's offline probe says "no working session", the chain
+    raises a failure WARNING toast (not silent), then the
+    local-fallback WARNING toast, then mounts LocalFS on both panes.
+
+    The user explicitly asked for this narration after PR #70:
+    "show toast notifications when each source is about to be tried.
+    And if that source turns out not available, we show another toast
+    that it's not or that it failed, and then show another one about
+    trying the next option and so on. This way the app and its UX
+    becomes more usable and tolerable to the user."
+
+    This test pins the WARNING-toast contract (a failure happened
+    AND the local fallback fired) without depending on the
+    transient pre-attempt INFO toast — the chain's grace window
+    means a fast offline probe (AWS+MISSING) resolves before the
+    pre-attempt toast is raised, which is intentional: we don't
+    flash chrome at users on a fast-resolving boot.
+    """
+    import contextlib as _contextlib
+
+    from aws_tui.infra.aws_session import TokenProbeResult, TokenState
+    from aws_tui.infra.connection_resolver import Connection
+    from aws_tui.ui.widgets.dual_pane import DualPane
+    from aws_tui.vm.chrome.toast_vm import ToastLevel
+
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+
+    fake_conn = Connection(
+        name="dev-sso",
+        kind="aws",
+        region="us-east-1",
+        source="auto-aws-profile",
+        profile="dev-sso",
+    )
+    ctx.connection_resolver.list = lambda: [fake_conn]  # type: ignore[assignment,method-assign]
+    ctx.aws_session.probe_token = lambda _c: TokenProbeResult(  # type: ignore[assignment,method-assign]
+        state=TokenState.MISSING
+    )
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            # Drive boot WITHOUT the helper — the helper dismisses
+            # boot-* toasts so test interactions aren't covered by
+            # them, but here we want to inspect those exact toasts
+            # before they're dismissed.
+            await app.workers.wait_for_complete(  # type: ignore[attr-defined]
+                list(app.workers._workers)  # type: ignore[attr-defined]
+            )
+            await pilot.pause()
+
+            stack = ctx.root_vm.chrome.toast_stack
+            ids = {t.model.id for t in stack.toasts}
+            warning_levels = {
+                t.model.level for t in stack.toasts if t.model.level is ToastLevel.WARNING
+            }
+
+            # Per-attempt failure toast raised AND chain's
+            # local-fallback toast raised. Two WARNING entries with
+            # distinct ids — the user sees "✗ dev-sso no AWS
+            # credentials" then "All configured sources unavailable
+            # — both panes fell back to local".
+            assert any(i.startswith("boot-outcome-aws-dev-sso") for i in ids), ids
+            assert "boot-fallback-local" in ids, ids
+            assert warning_levels == {ToastLevel.WARNING}, warning_levels
+
+            # And the panes are usable: both LocalFS.
+            host = pilot.app.query_one("#content-host")
+            assert len(host.query(DualPane)) == 1
             assert (fake_conn.kind, fake_conn.name) in ctx.unreachable_connections
     finally:
         with _contextlib.suppress(Exception):
