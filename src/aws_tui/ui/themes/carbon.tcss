@@ -615,7 +615,7 @@ SettingsView Collapsible {
        indicator). The user explicitly asked for "panes that are
        enveloped by borders with the exact same style and
        foreground / background coloring used for the s3 page". */
-    background: $bg-elev;
+    background: $bg;
     border: solid $rule-dim;
     margin-bottom: 1;
 }
@@ -630,18 +630,18 @@ SettingsView Collapsible:disabled {
 }
 
 SettingsView Collapsible > CollapsibleTitle {
-    background: $bg-elev;
+    background: $bg;
     color: $accent;
 }
 
 /* ─── ConnectionFormInline ────────────────────────────────────── */
 
 ConnectionFormInline {
-    background: $bg-elev;
+    background: $bg;
 }
 
 ConnectionFormInline > Container {
-    background: $bg-elev;
+    background: $bg;
     color: $text;
     padding: 1 2;
 }

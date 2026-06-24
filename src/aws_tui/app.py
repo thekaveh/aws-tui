@@ -344,12 +344,31 @@ class AwsTuiApp(App[None]):
         """
         ctx = self._app_ctx
         try:
-            if initial_conn.kind == "aws" and auth_state is TokenState.EXPIRED:
-                # Proactive fallback. probe_token already told us the
-                # SSO token is expired; skip the 15s boto3 dance.
+            if initial_conn.kind == "aws" and auth_state in (
+                TokenState.EXPIRED,
+                TokenState.MISSING,
+            ):
+                # Proactive fallback for AWS profiles that either
+                # already-expired (``EXPIRED``) OR have no cached SSO
+                # token in ``~/.aws/sso/cache`` (``MISSING``). Both
+                # cases are user-visible "no working AWS session";
+                # falling through to the reactive auto-fallback path
+                # below would otherwise burn the full botocore retry
+                # budget (~60s on an unreachable endpoint) before the
+                # pane transitions to UNREACHABLE and we swap to
+                # LocalFS. User report after PR #68: "the app takes
+                # way too long to load and fall back to the local
+                # option". The MISSING case CAN false-positive for
+                # users running static-credentials profiles
+                # (env-var or ``~/.aws/credentials`` AKID pairs) —
+                # probe_token reports MISSING because no SSO cache
+                # exists, even though boto3 would happily authenticate
+                # against env vars. Those users press ``r`` to retry
+                # and the pane re-binds against the working creds.
+                reason = "aws-sso-expired" if auth_state is TokenState.EXPIRED else "aws-no-creds"
                 await self._mount_local_only_dual_pane(
                     initial_conn=initial_conn,
-                    reason="aws-sso-expired",
+                    reason=reason,
                 )
             else:
                 # Normal path. Arm the auto-fallback BEFORE
@@ -463,6 +482,13 @@ class AwsTuiApp(App[None]):
                 f"AWS SSO expired for [b]{profile}[/]. Both panes fell back to "
                 f"local — refresh with [b]aws sso login --profile {profile}[/] "
                 f"and relaunch."
+            ),
+            "aws-no-creds": (
+                f"No AWS session for [b]{profile}[/]. Both panes fell back to "
+                f"local — run [b]aws sso login --profile {profile}[/] (or set "
+                f"$AWS_PROFILE / static creds in ~/.aws/credentials) and "
+                f"relaunch. Press [b]r[/] inside the pane after fixing to "
+                f"retry without relaunching."
             ),
         }.get(reason, f"{initial_conn.name} unavailable — both panes are local.")
         ctx.root_vm.chrome.toast_stack.raise_toast(
