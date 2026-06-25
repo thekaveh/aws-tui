@@ -21,7 +21,6 @@ from aws_tui.vm.chrome.confirm_vm import (
     ConfirmRequest,
 )
 from aws_tui.vm.chrome.first_run_vm import S3CompatForm
-from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 
@@ -224,16 +223,13 @@ class S3ConnectionsPanel(Widget):
         the ``AwsTuiApp`` wrapper.
         """
         if hasattr(self.app, "app_ctx"):
-            self.app.app_ctx.root_vm.chrome.toast_stack.raise_toast(
-                ToastModel(
-                    id=toast_id,
-                    text=text,
-                    level=ToastLevel.ERROR,
-                    sticky=False,
-                    timeout_seconds=4.0,
-                    action_label=None,
-                    action_action=None,
-                )
+            from aws_tui.ui import notifications
+
+            notifications.error(
+                self.app.app_ctx.root_vm.chrome.toast_stack,
+                subject="Settings",
+                message=text,
+                toast_id=toast_id,
             )
 
     async def on_connection_form_submitted(self, event: ConnectionFormSubmitted) -> None:

@@ -30,6 +30,7 @@ from aws_tui.composition import AppContext, build_app_context
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
 from aws_tui.ui.widgets.brand_banner import BrandBanner
@@ -47,7 +48,6 @@ from aws_tui.version import __version__
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
-from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 from aws_tui.vm.messages import ConnectionListChangedMessage, ThemeChangedMessage
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
@@ -86,18 +86,11 @@ def _raise_skip_toast(ctx: AppContext, skipped: list[str]) -> None:
     if not skipped:
         return
     # Keep displayed text in original (config-file) order; sort only the id.
-    text = f"Skipped unreachable: {', '.join(skipped)}"
-    toast_id = f"swap-skip-{','.join(sorted(skipped))}"
-    ctx.root_vm.chrome.toast_stack.raise_toast(
-        ToastModel(
-            id=toast_id,
-            text=text,
-            level=ToastLevel.INFO,
-            sticky=False,
-            timeout_seconds=3.0,
-            action_label=None,
-            action_action=None,
-        )
+    notifications.advise(
+        ctx.root_vm.chrome.toast_stack,
+        subject="Source",
+        message=f"skipped unreachable {', '.join(skipped)}",
+        toast_id=f"swap-skip-{','.join(sorted(skipped))}",
     )
 
 
@@ -521,7 +514,9 @@ class AwsTuiApp(App[None]):
 
     @staticmethod
     def _attempt_toast_id(conn: Connection) -> str:
-        return f"boot-attempt-{conn.kind}-{conn.name}"
+        # Must match the ``progress`` helper's id shape:
+        # ``f"progress-{key}"``.
+        return f"progress-boot-attempt-{conn.kind}-{conn.name}"
 
     @staticmethod
     def _outcome_toast_id(conn: Connection) -> str:
@@ -548,19 +543,13 @@ class AwsTuiApp(App[None]):
         await asyncio.sleep(self._ATTEMPT_TOAST_GRACE_SECONDS)
         ctx = self._app_ctx
         with contextlib.suppress(Exception):
-            ctx.root_vm.chrome.toast_stack.raise_toast(
-                ToastModel(
-                    id=self._attempt_toast_id(conn),
-                    text=(
-                        f"▸ Trying [b]{conn.name}[/] "
-                        f"({self._friendly_kind(conn.kind)}) — {index}/{total}…"
-                    ),
-                    level=ToastLevel.INFO,
-                    sticky=True,
-                    timeout_seconds=None,
-                    action_label=None,
-                    action_action=None,
-                )
+            notifications.progress(
+                ctx.root_vm.chrome.toast_stack,
+                key=f"boot-attempt-{conn.kind}-{conn.name}",
+                subject="Connection",
+                message=(
+                    f"trying {conn.name} ({self._friendly_kind(conn.kind)}) — {index}/{total}"
+                ),
             )
         return True
 
@@ -571,51 +560,34 @@ class AwsTuiApp(App[None]):
     def _raise_success_toast(self, conn: Connection) -> None:
         ctx = self._app_ctx
         with contextlib.suppress(Exception):
-            ctx.root_vm.chrome.toast_stack.raise_toast(
-                ToastModel(
-                    id=self._outcome_toast_id(conn),
-                    text=f"✓ Connected to [b]{conn.name}[/]",
-                    level=ToastLevel.SUCCESS,
-                    sticky=False,
-                    timeout_seconds=4.0,
-                    action_label=None,
-                    action_action=None,
-                )
+            notifications.success(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Connection",
+                message=f"{conn.name} connected",
+                toast_id=self._outcome_toast_id(conn),
             )
 
     def _raise_failure_toast(self, conn: Connection, outcome: str) -> None:
         ctx = self._app_ctx
         reason = self._friendly_outcome(outcome)
         with contextlib.suppress(Exception):
-            ctx.root_vm.chrome.toast_stack.raise_toast(
-                ToastModel(
-                    id=self._outcome_toast_id(conn),
-                    text=f"✗ [b]{conn.name}[/] {reason} — trying next…",
-                    level=ToastLevel.WARNING,
-                    sticky=False,
-                    timeout_seconds=6.0,
-                    action_label=None,
-                    action_action=None,
-                )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message=f"{conn.name} {reason}",
+                action="trying next",
+                toast_id=self._outcome_toast_id(conn),
             )
 
     def _raise_local_fallback_toast(self) -> None:
         ctx = self._app_ctx
         with contextlib.suppress(Exception):
-            ctx.root_vm.chrome.toast_stack.raise_toast(
-                ToastModel(
-                    id="boot-fallback-local",
-                    text=(
-                        "All configured sources unavailable — "
-                        "both panes fell back to local. Press [b]r[/] "
-                        "inside a pane to retry."
-                    ),
-                    level=ToastLevel.WARNING,
-                    sticky=False,
-                    timeout_seconds=12.0,
-                    action_label=None,
-                    action_action=None,
-                )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Fallback",
+                message="all sources unavailable, both panes set to local",
+                action="press r in a pane to retry",
+                toast_id="boot-fallback-local",
             )
 
     @staticmethod
@@ -746,35 +718,30 @@ class AwsTuiApp(App[None]):
         # timeout. That's long enough to read a one-line command,
         # short enough not to crowd subsequent toasts.
         profile = initial_conn.profile or initial_conn.name
-        text = {
+        message, action = {
             "aws-sso-expired": (
-                f"AWS SSO expired for [b]{profile}[/]. Both panes fell back to "
-                f"local — refresh with [b]aws sso login --profile {profile}[/] "
-                f"and relaunch."
+                f"SSO expired for [b]{profile}[/], both panes set to local",
+                f"refresh with [b]aws sso login --profile {profile}[/] and relaunch",
             ),
             "aws-no-creds": (
-                f"No AWS session for [b]{profile}[/]. Both panes fell back to "
-                f"local — run [b]aws sso login --profile {profile}[/] (or set "
-                f"$AWS_PROFILE / static creds in ~/.aws/credentials) and "
-                f"relaunch. Press [b]r[/] inside the pane after fixing to "
-                f"retry without relaunching."
+                f"no session for [b]{profile}[/], both panes set to local",
+                f"run [b]aws sso login --profile {profile}[/] (or set $AWS_PROFILE) and relaunch",
             ),
-        }.get(reason, f"{initial_conn.name} unavailable — both panes are local.")
+        }.get(
+            reason,
+            (f"{initial_conn.name} unavailable, both panes set to local", None),
+        )
         # ``chain-exhausted`` callers (``_initial_mount_worker``)
         # already raised the boot-chain's own local-fallback toast;
         # don't double-up. Other callers (legacy direct invocation)
         # still get the per-reason recovery hint.
         if reason != "chain-exhausted":
-            ctx.root_vm.chrome.toast_stack.raise_toast(
-                ToastModel(
-                    id=f"initial-fallback-{reason}-{initial_conn.name}",
-                    text=text,
-                    level=ToastLevel.WARNING,
-                    sticky=False,
-                    timeout_seconds=12.0,
-                    action_label=None,
-                    action_action=None,
-                )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Auth",
+                message=message,
+                action=action,
+                toast_id=f"initial-fallback-{reason}-{initial_conn.name}",
             )
         ctx.log_sink.info(
             "app.local_only_mount.success",
@@ -871,24 +838,17 @@ class AwsTuiApp(App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
-            # Surface the failure as a sticky toast so the user gets
-            # *some* explanation instead of a blank screen. Suppressed
-            # because the toast stack may not be mounted yet during
-            # startup; the log entry above is the durable record.
+            # Surface the failure so the user gets *some* explanation
+            # instead of a blank screen. Suppressed because the toast
+            # stack may not be mounted yet during startup; the log
+            # entry above is the durable record.
             with contextlib.suppress(Exception):
-                ctx.root_vm.chrome.toast_stack.raise_toast(
-                    ToastModel(
-                        id="mount-service-failed",
-                        text=(
-                            f"Could not mount the S3 view: {type(exc).__name__}. "
-                            "See ~/.cache/aws-tui/log/aws-tui.log for details."
-                        ),
-                        level=ToastLevel.ERROR,
-                        sticky=True,
-                        timeout_seconds=0.0,
-                        action_label=None,
-                        action_action=None,
-                    )
+                notifications.error(
+                    ctx.root_vm.chrome.toast_stack,
+                    subject="Mount",
+                    message=f"S3 view failed: {type(exc).__name__}",
+                    action="see ~/.cache/aws-tui/log/aws-tui.log",
+                    toast_id="mount-service-failed",
                 )
 
     def _mount_no_connection_placeholder(self) -> None:
@@ -1650,21 +1610,15 @@ class AwsTuiApp(App[None]):
             self.call_after_refresh(picker.dispose)
 
     def _raise_theme_changed_toast(self, theme_name: str) -> None:
-        """Raise a top-right, theme-conformant toast announcing the
-        switch. Routed through :class:`ToastStackVM` (notifications
-        overlay layer) rather than ``self.notify()`` (Textual's
-        built-in bottom-center notify, which wrecks the footer)."""
+        """Routed through :class:`ToastStackVM` (notifications overlay
+        layer) rather than ``self.notify()`` (Textual's built-in
+        bottom-center notify, which wrecks the footer)."""
         ctx = self._app_ctx
-        ctx.root_vm.chrome.toast_stack.raise_toast(
-            ToastModel(
-                id=f"theme-changed-{theme_name}",
-                text=f"Theme changed to: [{theme_name}]",
-                level=ToastLevel.INFO,
-                sticky=False,
-                timeout_seconds=2.0,
-                action_label=None,
-                action_action=None,
-            )
+        notifications.announce(
+            ctx.root_vm.chrome.toast_stack,
+            subject="Theme",
+            message=f"switched to {theme_name}",
+            toast_id=f"theme-changed-{theme_name}",
         )
 
     # Stable read_from key for the aws-tui theme source — re-using it on
