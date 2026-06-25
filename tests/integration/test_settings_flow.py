@@ -363,6 +363,175 @@ async def test_expired_sso_proactively_falls_back_to_local(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_boot_chain_with_mixed_failures_populates_both_panes(tmp_path: Path) -> None:
+    """User report: AWS profile + an s3-compatible connection BOTH
+    unavailable. After boot, neither pane shows content. After
+    Settings → S3 toggle, the local source appears. The toggle path
+    works because ``content_host.current_id`` is ``"settings"`` so
+    ``set_content`` adopts the new local DualPaneVM. The boot path
+    is broken because the failed s3-compatible attempt during the
+    chain already set ``current_id = "s3"``, and the chain's
+    closing ``_mount_local_only_dual_pane`` call asks for the same
+    ``service_id="s3"`` — the idempotent ``set_content`` early-return
+    short-circuits the swap and the failed S3FS DualPane stays in
+    ``content_host.current``. The DualPane WIDGET gets re-mounted
+    over the host, but it's bound to a stale local-only VM (or no
+    VM at all if the path doesn't even mount the widget) and the
+    panes look empty.
+    """
+    import contextlib as _contextlib
+
+    from aws_tui.infra.aws_session import TokenProbeResult, TokenState
+    from aws_tui.infra.connection_resolver import Connection
+
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+
+    aws_conn = Connection(
+        name="dev-sso",
+        kind="aws",
+        region="us-east-1",
+        source="auto-aws-profile",
+        profile="dev-sso",
+    )
+    # The minio-local entry from _MINIO_LOCAL_TOML provides the
+    # s3-compatible candidate; the resolver returns AWS first so the
+    # chain probes AWS+MISSING (fast-fail), then attempts the
+    # s3-compatible against 127.0.0.1:1 (UNREACHABLE).
+    real_list = ctx.connection_resolver.list
+
+    def _list_with_aws_first() -> list[Connection]:
+        return [aws_conn, *real_list()]
+
+    ctx.connection_resolver.list = _list_with_aws_first  # type: ignore[assignment,method-assign]
+    ctx.aws_session.probe_token = lambda _c: TokenProbeResult(  # type: ignore[assignment,method-assign]
+        state=TokenState.MISSING
+    )
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+            for _ in range(5):
+                await pilot.pause()
+
+            dual_vm = ctx.root_vm.content_host.current
+            assert dual_vm is not None
+            # The current VM must be the LOCAL DualPaneVM. If
+            # ``set_content`` short-circuited the swap during chain
+            # exhaustion, ``current`` will still be the FAILED S3 VM
+            # whose left pane is UNREACHABLE.
+            from aws_tui.domain.local_fs import LocalFS
+
+            left_provider = dual_vm.left._provider  # type: ignore[union-attr]
+            assert isinstance(left_provider, LocalFS), (
+                f"after chain exhaustion the LEFT pane should be LocalFS "
+                f"but is {type(left_provider).__name__} — "
+                f"``set_content(service_id='s3')`` was a no-op because "
+                f"the failed s3-compatible attempt earlier in the chain "
+                f"already set current_id to 's3'"
+            )
+
+            # And the rendered DOM must reflect populated panes.
+            from aws_tui.ui.widgets.pane import EntryRow, Pane
+
+            panes = pilot.app.query(Pane)
+            assert len(panes) == 2
+            for pane in panes:
+                rows = list(pane.query(EntryRow))
+                assert len(rows) > 0, (
+                    f"Pane #{pane.id} has 0 EntryRows. VM state: "
+                    f"{getattr(pane._vm, 'state', '?')}. This is the "  # type: ignore[attr-defined]
+                    f"user-visible empty-panes bug."
+                )
+    finally:
+        with _contextlib.suppress(Exception):
+            _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_boot_chain_local_fallback_populates_both_panes(tmp_path: Path) -> None:
+    """User report against PR #73: "upon launching the app, neither pane
+    shows any content when neither aws s3 nor s3-compatible are
+    available. Only when I browse the settings and come back to S3,
+    it shows the local source."
+
+    The mount-the-widget contract (asserted in
+    ``test_boot_chain_narrates_failure_then_local_fallback``) is not
+    the same as the panes-actually-show-files contract. The DualPane
+    is mounted with two LocalFS panes but their entries are empty
+    on user-visible screen at boot, even though a subsequent
+    Settings → S3 toggle through the SAME ``_mount_local_only_dual_pane``
+    code path populates them. This test pins the boot-time contract
+    so any future regression on this UX gap fails fast.
+    """
+    import contextlib as _contextlib
+
+    from aws_tui.infra.aws_session import TokenProbeResult, TokenState
+    from aws_tui.infra.connection_resolver import Connection
+
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+
+    fake_conn = Connection(
+        name="dev-sso",
+        kind="aws",
+        region="us-east-1",
+        source="auto-aws-profile",
+        profile="dev-sso",
+    )
+    ctx.connection_resolver.list = lambda: [fake_conn]  # type: ignore[assignment,method-assign]
+    ctx.aws_session.probe_token = lambda _c: TokenProbeResult(  # type: ignore[assignment,method-assign]
+        state=TokenState.MISSING
+    )
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+            # Give the background setup tasks a couple of ticks
+            # (LocalFS.list is microseconds but the setup task is
+            # dispatched via ``asyncio.create_task`` so it has to
+            # yield through the event loop first).
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            dual_vm = ctx.root_vm.content_host.current
+            assert dual_vm is not None
+            # VM-side entries must be populated.
+            left_entries = list(dual_vm.left.entries)
+            right_entries = list(dual_vm.right.entries)
+            assert len(left_entries) > 0, (
+                f"LEFT pane VM is empty after boot-chain local-fallback. "
+                f"VM state: {dual_vm.left.state}."
+            )
+            assert len(right_entries) > 0, "RIGHT pane VM is empty after boot-chain local-fallback."
+
+            # DOM-side EntryRow widgets must be rendered. The user's
+            # report is "neither pane shows any content" — that's the
+            # widget contract, not the VM contract. The VM having
+            # entries doesn't help if the Pane widget never re-rendered
+            # them.
+            from aws_tui.ui.widgets.pane import EntryRow, Pane
+
+            panes = pilot.app.query(Pane)
+            assert len(panes) == 2, f"expected 2 Pane widgets, got {len(panes)}"
+            for pane in panes:
+                rows = list(pane.query(EntryRow))
+                assert len(rows) > 0, (
+                    f"Pane widget #{pane.id} mounted with no EntryRow "
+                    f"children — VM has {len(dual_vm.left.entries) if pane.id == 'pane-left' else len(dual_vm.right.entries)} "
+                    f"entries but they aren't rendered in the DOM. "
+                    f"This is the user-visible 'neither pane shows any "
+                    f"content' bug after boot-chain local-fallback."
+                )
+    finally:
+        with _contextlib.suppress(Exception):
+            _dispose(ctx)
+
+
+@pytest.mark.asyncio
 async def test_settings_to_s3_toggle_preserves_chain_local_fallback(tmp_path: Path) -> None:
     """When the boot chain ran out of candidates and mounted local
     on both panes, a subsequent Settings → S3 toggle must NOT

@@ -702,6 +702,22 @@ class AwsTuiApp(App[None]):
             transfer_journal=journal,
         )
         try:
+            # ContentHostVM.set_content is idempotent on a matching
+            # ``service_id`` — it returns early if ``current_id`` is
+            # already the same. When the boot chain falls back to
+            # local-on-both AFTER an s3-compatible attempt failed,
+            # ``current_id`` is already "s3" (the failed attempt's
+            # service id) and the idempotent check would silently skip
+            # adopting the new local DualPaneVM, leaving the host
+            # bound to the failed S3FS panes. User-visible symptom:
+            # "upon launching the app, neither pane shows any content
+            # when neither aws s3 nor s3-compatible are available.
+            # Only when I browse the settings and come back to S3, it
+            # shows the local source." (The toggle path worked because
+            # ``current_id`` flipped to ``"settings"`` in between,
+            # invalidating the idempotent skip.) Force the swap by
+            # clearing first.
+            await ctx.root_vm.content_host.set_content(None, service_id=None)
             await ctx.root_vm.content_host.set_content(dual, service_id="s3")
         except Exception as exc:
             ctx.log_sink.error(
