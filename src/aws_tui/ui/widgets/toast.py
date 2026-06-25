@@ -62,7 +62,13 @@ class Toast(Widget):
         return self._toast_vm
 
     def render(self) -> Text:
-        text = Text(self._toast_vm.model.text)
+        # Parse Rich markup so the canonical ``[b]Subject:[/]`` shape
+        # from :mod:`aws_tui.ui.notifications` actually renders bold.
+        # Before PR #75 the body was passed to ``Text()`` which
+        # treats its input as PLAIN text, so the markup leaked
+        # through as literal ``[b]…[/]`` characters next to the
+        # rendered text.
+        text = Text.from_markup(self._toast_vm.model.text)
         action_label = self._toast_vm.model.action_label
         if action_label:
             text.append("  [")

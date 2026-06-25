@@ -74,7 +74,10 @@ async def test_swap_source_skips_unreachable_connections(tmp_path: Path) -> None
     after = len(toast_stack.toasts)
     assert after == before + 1
     latest = toast_stack.toasts[-1]
-    assert "Skipped unreachable" in latest.model.text
+    # Post-PR-75 unified-notifications grammar: advise() shape.
+    assert latest.model.text.startswith("⚠")
+    assert "[b]Source:[/]" in latest.model.text
+    assert "skipped unreachable" in latest.model.text
     assert "unreachable-one" in latest.model.text
     assert "unreachable-two" in latest.model.text
 

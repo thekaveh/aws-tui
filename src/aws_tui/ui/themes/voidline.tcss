@@ -441,7 +441,7 @@ TransferRowWidget .transfer-rate  { color: $text-muted; }
 
 /* ── Toast stack (top-right notifications layer) ─────────────────────────── */
 
-Toast.-info    { border: round $rule-dim; }
+Toast.-info    { border: round $accent;   color: $accent; }
 Toast.-success { border: round $success;  color: $success; }
 Toast.-warning { border: round $warning;  color: $warning; }
 Toast.-error   { border: round $danger;   color: $danger; }
