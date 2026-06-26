@@ -11,6 +11,7 @@ WIDGET-level binding contract — pressing ``1`` actually reaches
 from __future__ import annotations
 
 from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
 from textual.widgets import Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
@@ -18,6 +19,7 @@ from vmx.messages.protocols import Message
 from aws_tui.domain.emr_serverless import JobRunState
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
@@ -127,3 +129,101 @@ async def test_chip_row_renders_all_five_chips() -> None:
         ):
             chips = pane.query(f"#runs-chip-{state.value.lower()}")
             assert len(chips) == 1, f"Expected exactly one chip for {state.value}; got {len(chips)}"
+
+
+# ── Placeholder rendering: PROVIDER-error states beat empty-cache fallback ───
+#
+# Pass-2 H-1: prior branch order checked ``EMPTY or not runs`` before
+# UNREACHABLE / AUTH_REQUIRED, so a pane in an error state with an
+# empty cache (the typical post-error case) silently rendered
+# ``(no runs)`` instead of the actionable placeholder. FORBIDDEN /
+# ERROR were not handled at all. The fix mirrors
+# ``JobRunDetailPane._refresh``'s ordering: error states FIRST, then
+# LOADING, then EMPTY / empty-cache fallback.
+
+
+def _placeholder_text(pane: JobRunsPane) -> str:
+    body = pane.query_one("#runs-body", VerticalScroll)
+    placeholders = body.query(".runs-placeholder")
+    assert len(placeholders) == 1, f"Expected exactly one placeholder; got {len(placeholders)}"
+    return str(placeholders[0].render())
+
+
+async def test_unreachable_state_renders_endpoint_unreachable_placeholder() -> None:
+    vm, hub, _fake = _make_vm()
+    async with _PaneApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        pane = pilot.app.query_one(JobRunsPane)
+        vm._state = PaneState.UNREACHABLE  # type: ignore[attr-defined]
+        vm._error_text = None  # type: ignore[attr-defined]
+        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pilot.pause()
+        text = _placeholder_text(pane)
+        assert "unreachable" in text
+        assert "no runs" not in text
+
+
+async def test_unreachable_uses_vm_error_text_when_set() -> None:
+    vm, hub, _fake = _make_vm()
+    async with _PaneApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        pane = pilot.app.query_one(JobRunsPane)
+        vm._state = PaneState.UNREACHABLE  # type: ignore[attr-defined]
+        vm._error_text = "boom: dns lookup failed"  # type: ignore[attr-defined]
+        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pilot.pause()
+        text = _placeholder_text(pane)
+        assert "boom: dns lookup failed" in text
+
+
+async def test_auth_required_state_renders_sso_login_placeholder() -> None:
+    vm, hub, _fake = _make_vm()
+    async with _PaneApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        pane = pilot.app.query_one(JobRunsPane)
+        vm._state = PaneState.AUTH_REQUIRED  # type: ignore[attr-defined]
+        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pilot.pause()
+        text = _placeholder_text(pane)
+        assert "authentication required" in text
+        assert "no runs" not in text
+
+
+async def test_forbidden_state_renders_permission_denied_placeholder() -> None:
+    vm, hub, _fake = _make_vm()
+    async with _PaneApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        pane = pilot.app.query_one(JobRunsPane)
+        vm._state = PaneState.FORBIDDEN  # type: ignore[attr-defined]
+        vm._error_text = None  # type: ignore[attr-defined]
+        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pilot.pause()
+        text = _placeholder_text(pane)
+        assert "permission denied" in text
+        assert "no runs" not in text
+
+
+async def test_error_state_renders_generic_error_placeholder() -> None:
+    vm, hub, _fake = _make_vm()
+    async with _PaneApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        pane = pilot.app.query_one(JobRunsPane)
+        vm._state = PaneState.ERROR  # type: ignore[attr-defined]
+        vm._error_text = None  # type: ignore[attr-defined]
+        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pilot.pause()
+        text = _placeholder_text(pane)
+        assert "error" in text
+        assert "no runs" not in text
+
+
+async def test_loading_state_renders_loading_placeholder() -> None:
+    vm, hub, _fake = _make_vm()
+    async with _PaneApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        pane = pilot.app.query_one(JobRunsPane)
+        vm._state = PaneState.LOADING  # type: ignore[attr-defined]
+        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pilot.pause()
+        text = _placeholder_text(pane)
+        assert "loading" in text

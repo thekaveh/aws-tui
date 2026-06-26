@@ -7,7 +7,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.emr_serverless import JobRunState
-from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
+from aws_tui.vm.emr_serverless.job_runs_vm import _ACTIVE_STATES, JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
@@ -95,14 +95,7 @@ async def test_set_application_with_none_clears_list() -> None:
 
 @pytest.mark.parametrize(
     "active_state",
-    [
-        JobRunState.SUBMITTED,
-        JobRunState.PENDING,
-        JobRunState.SCHEDULED,
-        JobRunState.QUEUED,
-        JobRunState.RUNNING,
-        JobRunState.CANCELLING,
-    ],
+    sorted(_ACTIVE_STATES, key=lambda s: s.value),
 )
 async def test_has_active_runs_true_for_each_active_state(
     active_state: JobRunState,
@@ -111,7 +104,12 @@ async def test_has_active_runs_true_for_each_active_state(
     pre-terminal state — the page-VM poller uses this to switch
     between the 10-s and 60-s cadence (see ``_ACTIVE_STATES`` in
     ``job_runs_vm.py``). One run in the given pre-terminal state is
-    sufficient to count as active."""
+    sufficient to count as active.
+
+    Pass-2 L-2 (test-review): the parametrize iterates the imported
+    ``_ACTIVE_STATES`` frozenset so a new pre-terminal state added
+    upstream (e.g. a future ``PROVISIONING``) is automatically
+    exercised without a parallel edit here."""
     vm, fake = _make()
     fake.add_application(app_id="a1", name="etl")
     fake.add_job_run(application_id="a1", job_run_id="r1", state=active_state)

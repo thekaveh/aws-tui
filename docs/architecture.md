@@ -104,13 +104,16 @@ the same observable plus dispose-on-unmount.
 | E2E | 5 | Pilot-driven user journeys |
 | Integration (MinIO) | 9 | MinIO via testcontainers (opt-in, `-m integration`) |
 
-Default tier total: **1072** (`uv run pytest`). Opt-in MinIO tier:
+Default tier total: **1149** (`uv run pytest`). Opt-in MinIO tier:
 **9** (`uv run pytest -m integration`). Per-tier counts in the table
 above are the M6 / v0.7.0 snapshot; the totals drift with each post-
 tag PR (e.g. the third overnight-maintenance loop added 134 snapshot
 content-presence guard tests, and the EMR Serverless PR-A landing
 plus its four follow-ups added ~120 more — ~85 unit + ~35 snapshot /
-content-presence). Recount with `uv run pytest --collect-only -q`.
+content-presence; the fourth overnight-maintenance loop added another
+~80 — EMR widget / VM coverage in pass 1 plus `map_provider_error`
+direct tests and `JobRunsPane` placeholder branches in pass 2).
+Recount with `uv run pytest --collect-only -q`.
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)
 with `uv run pytest`. Opt into the MinIO tier with

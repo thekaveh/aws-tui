@@ -185,12 +185,16 @@ def test_concurrent_transfers_aggregate_bytes() -> None:
     vm.dispose()
 
 
-def test_idle_aggregate_is_none_not_zero() -> None:
-    """M17: when active-transfer dict becomes empty, the internal
-    aggregate bytes are ``None`` (idle render contract)."""
+def test_idle_renders_idle_summary_after_active_drains() -> None:
+    """M17 contract surfaced via the public ``transfers_summary``:
+    when the active-transfer count drops to 0 the bar renders the
+    idle copy (``"transfers idle"``) — NOT a "0 active . 0 / 0"
+    formatted string. The internal aggregate dropping to ``None``
+    is implementation detail; the user-visible contract is the
+    summary string. Pass-2 M-1 (test-review): previous form
+    asserted on private ``_bytes_done`` / ``_bytes_total`` slots,
+    coupling the test to a slot rename."""
     vm, _ = _build()
     vm.update_transfers(active_count=0, bytes_done=0, bytes_total=0)
-    assert vm._bytes_done is None
-    assert vm._bytes_total is None
     assert vm.transfers_summary == "transfers idle"
     vm.dispose()

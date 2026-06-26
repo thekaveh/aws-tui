@@ -102,6 +102,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and reloads the pane in ``finally`` (was silent partial failure
   on mid-batch error — first failing target raised, leaving
   subsequent entries un-attempted and the pane stale).
+- **(fourth overnight-maintenance loop, pass 1, Medium-batch)**
+  Internal refactors with no user-visible behavior change:
+  ``map_provider_error`` extracted to
+  ``vm/emr_serverless/_errors.py`` and shared by all three EMR
+  VMs (single source of truth for the ProviderError → PaneState
+  ladder). ``ConfigStore._mutate`` Template Method extracted —
+  the four mutators (``add_connection`` / ``update_connection`` /
+  ``remove_connection`` / ``set_default_connection``) now
+  delegate to a single load/save framing helper, preserving each
+  public signature. ``CrashModal`` migrated to ``ModalButton`` so
+  every modal uses the same button class. ``StatusBarVM``
+  switched to a per-id aggregate dict for multi-transfer byte
+  totals (drops on terminal events; idle aggregate is ``None``,
+  not ``0``). ``RootVM.shutdown`` is now sync (was async with
+  nothing awaiting it). ``nav_menu._split_items`` extracted from
+  ``_rebuild_options``.
 
 - **NavMenu is now always visible** (PR #59). The left rail
   collapses to a minimally-wide icon-only column instead of
@@ -701,6 +717,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus ``ConnectionListChangedMessage`` all carry over.
 
 ### Fixed
+
+- **(fourth overnight-maintenance loop, pass 1, Medium-batch)**
+  Resume modal no longer reports a fake percentage on
+  single-part transfers. ``ResumeVM.entry_summary`` now renders
+  honest ``"<parts> parts / <total>"`` text instead of inventing
+  a "50 % done" string when there is no real progress signal —
+  the cancelled-then-resumed path was the worst offender.
+- **(fourth overnight-maintenance loop, pass 1, Medium-batch)**
+  A stale ``RUNNING`` progress event arriving after a transfer
+  has already settled to ``CANCELLED`` / ``FAILED`` /
+  ``SUCCEEDED`` is now ignored. ``TransferVM.apply_update``
+  refuses non-terminal transitions on a finished transfer
+  (terminal-state stickiness); ``_apply_update_unchecked`` stays
+  as the retry escape hatch for genuine re-attempts. Previously
+  a late RUNNING event could "un-cancel" a CANCELLED transfer in
+  the UI status bar.
 
 - **EMR icon VS-16 alignment** (PR #77). U+26A1 alone defaults to
   text-style in monospace terminals (1 cell, mis-aligning the
