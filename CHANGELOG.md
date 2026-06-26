@@ -103,6 +103,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on mid-batch error — first failing target raised, leaving
   subsequent entries un-attempted and the pane stale).
 - **(fourth overnight-maintenance loop, pass 1, Medium-batch)**
+  Two user-visible fixes: (1) Nav-rail ribbon no longer "lies"
+  about the live service when a content-host adoption raises
+  during ``RootVM.switch_service`` — the prior selection is now
+  captured before the menu command runs and reverted if
+  ``set_content`` raises (was: ribbon advanced to a service that
+  never actually mounted). (2) Status-bar concurrent-transfer
+  totals are now true aggregates (per-id ``(done, total)`` dict
+  summed across active entries), not last-event-wins — two
+  parallel transfers no longer toggle the displayed totals back
+  and forth based on whichever message landed last. Idle
+  aggregate is ``None`` instead of ``0`` so the
+  ``humanize_bytes(None) → "?"`` placeholder still renders.
+
   Internal refactors with no user-visible behavior change:
   ``map_provider_error`` extracted to
   ``vm/emr_serverless/_errors.py`` and shared by all three EMR
@@ -112,12 +125,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``remove_connection`` / ``set_default_connection``) now
   delegate to a single load/save framing helper, preserving each
   public signature. ``CrashModal`` migrated to ``ModalButton`` so
-  every modal uses the same button class. ``StatusBarVM``
-  switched to a per-id aggregate dict for multi-transfer byte
-  totals (drops on terminal events; idle aggregate is ``None``,
-  not ``0``). ``RootVM.shutdown`` is now sync (was async with
-  nothing awaiting it). ``nav_menu._split_items`` extracted from
-  ``_rebuild_options``.
+  every modal uses the same button class. ``RootVM.shutdown`` is
+  now sync (was async with nothing awaiting it).
+  ``nav_menu._split_items`` extracted from ``_rebuild_options``.
 
 - **NavMenu is now always visible** (PR #59). The left rail
   collapses to a minimally-wide icon-only column instead of
