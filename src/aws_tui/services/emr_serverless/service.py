@@ -53,18 +53,28 @@ class EmrServerlessService:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="emr-serverless",
         label="EMR",
-        # ⚡️ U+26A1 HIGH VOLTAGE + U+FE0F VARIATION SELECTOR-16 —
-        # Spark's literal primitive glyph. The bare U+26A1 renders as
-        # a narrow 1-cell text-style symbol in most monospace
-        # terminals; only the colour-emoji presentation produces the
-        # familiar yellow lightning, and a 1-cell glyph mis-aligns
-        # against the nav-rail's 2-cell emoji column (per
-        # ``nav_menu.py`` "col 2-3: emoji 2 cells wide"). VS-16 forces
-        # emoji presentation so it renders 2-cell colourful, matching
-        # ⚙️ Settings + 🖥️ EC2 which use the same VS-16 trick.
-        # Symmetric with the rail's literal-object naming: 🪣 bucket,
-        # ⚡️ spark, ⚙️ gear, 🖥️ computer.
-        icon="⚡️",
+        # 🔥 U+1F525 FIRE — SMP single-codepoint emoji with
+        # Default_Emoji_Presentation. PR #77 first tried ⚡ U+26A1
+        # then ⚡️ U+26A1 + U+FE0F VS-16, but BOTH render
+        # unreliably in monospace terminals — even with VS-16 the
+        # codepoint frequently falls back to a 1-cell text-style
+        # outline because the colour glyph isn't in the user's font
+        # fallback chain. The 1-cell width then mis-aligns against
+        # the nav-rail's 2-cell emoji column (see ``nav_menu.py``
+        # ``_format_collapsed_prompt``), garbling the whole row.
+        # SMP single-codepoint emojis (U+1F***) avoid this
+        # entirely: every monospace font with emoji support ships
+        # them as 2-cell colour glyphs because there's no text
+        # presentation alternative. 🔥 is semantically apt for
+        # Spark (the framework Apache Spark literally calls its
+        # primitive a "spark"; "fire/spark" share the same
+        # conceptual root), reliably renders 2-cell colour in
+        # every modern terminal, and visually distinct from 🪣
+        # bucket / ⚙️ gear / 🖥️ computer.
+        #
+        # General rule for nav-rail icons going forward: pick from
+        # the SMP emoji blocks (U+1F***), NOT BMP-with-VS-16.
+        icon="🔥",
     )
 
     def __init__(
