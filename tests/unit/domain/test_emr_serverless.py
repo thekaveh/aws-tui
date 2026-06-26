@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import botocore.exceptions
 import pytest
@@ -15,6 +16,7 @@ import pytest
 from aws_tui.domain.emr_serverless import (
     ApplicationState,
     ApplicationSummary,
+    EmrServerlessClient,
     JobRunDetail,
     JobRunState,
     JobRunSummary,
@@ -136,3 +138,147 @@ def test_map_boto_error_maps_to_provider_error_subclass(
 
 def test_map_boto_error_returns_none_for_unrelated_exceptions() -> None:
     assert _map_boto_error(ValueError("not an aws exception")) is None
+
+
+# ── EmrServerlessClient tests ────────────────────────────────────────────────
+
+
+def _fake_app_response(items: list[dict]) -> dict:
+    return {"applications": items, "nextToken": None}
+
+
+def _fake_run_response(items: list[dict]) -> dict:
+    return {"jobRuns": items, "nextToken": None}
+
+
+class _StubClient:
+    """Minimal aioboto3-shaped async client we can hand to
+    EmrServerlessClient for testing without touching the network."""
+
+    def __init__(self) -> None:
+        self.list_applications = AsyncMock()
+        self.list_job_runs = AsyncMock()
+        self.get_job_run = AsyncMock()
+
+    async def __aenter__(self) -> _StubClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class _StubSession:
+    """aioboto3.Session-shaped fake."""
+
+    def __init__(self, stub: _StubClient) -> None:
+        self._stub = stub
+
+    def client(self, service_name: str, **kwargs: object) -> _StubClient:
+        assert service_name == "emr-serverless"
+        return self._stub
+
+
+@pytest.mark.asyncio
+async def test_list_applications_maps_response_to_records() -> None:
+    stub = _StubClient()
+    stub.list_applications.return_value = _fake_app_response(
+        [
+            {
+                "id": "00abc",
+                "name": "etl",
+                "state": "STARTED",
+                "type": "SPARK",
+                "createdAt": datetime(2026, 6, 25, tzinfo=UTC),
+            },
+            {
+                "id": "00def",
+                "name": "ad-hoc",
+                "state": "STOPPED",
+                "type": "SPARK",
+                "createdAt": datetime(2026, 6, 24, tzinfo=UTC),
+            },
+        ]
+    )
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    apps = await client.list_applications()
+    assert len(apps) == 2
+    assert apps[0].id == "00abc"
+    assert apps[0].state.value == "STARTED"
+    assert apps[1].name == "ad-hoc"
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_filters_by_state_client_side() -> None:
+    stub = _StubClient()
+    stub.list_job_runs.return_value = _fake_run_response(
+        [
+            {
+                "applicationId": "00abc",
+                "id": "jr1",
+                "name": "n1",
+                "state": "SUCCESS",
+                "createdAt": datetime(2026, 6, 25, tzinfo=UTC),
+                "updatedAt": datetime(2026, 6, 25, tzinfo=UTC),
+            },
+            {
+                "applicationId": "00abc",
+                "id": "jr2",
+                "name": "n2",
+                "state": "FAILED",
+                "createdAt": datetime(2026, 6, 25, tzinfo=UTC),
+                "updatedAt": datetime(2026, 6, 25, tzinfo=UTC),
+            },
+            {
+                "applicationId": "00abc",
+                "id": "jr3",
+                "name": "n3",
+                "state": "RUNNING",
+                "createdAt": datetime(2026, 6, 25, tzinfo=UTC),
+                "updatedAt": datetime(2026, 6, 25, tzinfo=UTC),
+            },
+        ]
+    )
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    runs = await client.list_job_runs("00abc", states={JobRunState.SUCCESS, JobRunState.RUNNING})
+    assert [r.job_run_id for r in runs] == ["jr1", "jr3"]
+
+
+@pytest.mark.asyncio
+async def test_get_job_run_maps_detail_fields() -> None:
+    stub = _StubClient()
+    stub.get_job_run.return_value = {
+        "jobRun": {
+            "applicationId": "00abc",
+            "jobRunId": "jr1",
+            "name": "etl",
+            "state": "SUCCESS",
+            "createdAt": datetime(2026, 6, 25, 12, 0, tzinfo=UTC),
+            "updatedAt": datetime(2026, 6, 25, 12, 4, tzinfo=UTC),
+            "executionRole": "arn:aws:iam::123456789012:role/EmrJobRole",
+            "jobDriver": {
+                "sparkSubmit": {
+                    "entryPoint": "s3://b/job.py",
+                    "entryPointArguments": ["--in", "s3://b/in/"],
+                    "sparkSubmitParameters": "--conf spark.executor.instances=4",
+                },
+            },
+            "totalExecutionDurationSeconds": 240,
+        },
+    }
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    detail = await client.get_job_run("00abc", "jr1")
+    assert detail.entry_point == "s3://b/job.py"
+    assert detail.entry_point_arguments == ("--in", "s3://b/in/")
+    assert detail.spark_submit_parameters == "--conf spark.executor.instances=4"
+    assert detail.execution_role_arn == "arn:aws:iam::123456789012:role/EmrJobRole"
+    assert detail.duration_ms == 240_000
+
+
+@pytest.mark.asyncio
+async def test_list_applications_re_raises_as_provider_error_on_no_creds() -> None:
+    stub = _StubClient()
+    stub.list_applications.side_effect = botocore.exceptions.NoCredentialsError()
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    with pytest.raises(AuthRequiredError):
+        await client.list_applications()
