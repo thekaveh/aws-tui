@@ -953,6 +953,14 @@ class AwsTuiApp(App[None]):
         don't accept Textual focus; they use a CSS ``-focused`` class
         toggled by ``DualPaneVM``).
         """
+        # EMR page owns its own 2-slot Tab / Shift+Tab cycle.
+        # Delegate immediately so the App-level priority binding never
+        # falls through to the Settings/nav-rail branch below.
+        with contextlib.suppress(Exception):
+            emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
+            emr_page.action_cycle_panes_forward()
+            return
+
         try:
             nav = self.query_one("#nav-menu", NavMenu)
         except Exception:
