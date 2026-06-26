@@ -181,3 +181,10 @@ disallow_untyped_defs = false
 # layer rules to keep their usage contained.
 module = ["aioboto3", "aioboto3.*", "botocore", "botocore.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Task 5 (Service) imports Task 9 (PageVM) via TYPE_CHECKING to avoid
+# circular imports. Task 9 hasn't landed yet, so mypy can't find the
+# module. This override is temporary; it's removed once Task 9 lands.
+module = ["aws_tui.vm.emr_serverless.page_vm"]
+ignore_missing_imports = true
