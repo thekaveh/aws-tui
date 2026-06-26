@@ -718,6 +718,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **(fourth overnight-maintenance loop, pass 2)** EMR runs pane now
+  renders the actionable placeholder for ``UNREACHABLE`` /
+  ``AUTH_REQUIRED`` / ``FORBIDDEN`` / ``ERROR`` pane states instead of
+  rendering ``"(no runs)"`` or nothing at all. The branch order in
+  ``JobRunsPane._refresh_rows`` checked the empty-list state BEFORE
+  the provider-error states, so a pane that failed an API call (and
+  therefore had an empty runs cache) silently fell through to the
+  generic empty placeholder — leaving the user without the recovery
+  hint the sibling ``JobRunDetailPane`` already showed.
 - **(fourth overnight-maintenance loop, pass 1, Medium-batch)**
   Resume modal no longer reports a fake percentage on
   single-part transfers. ``ResumeVM.entry_summary`` now renders
