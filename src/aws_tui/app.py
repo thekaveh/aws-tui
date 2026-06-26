@@ -925,6 +925,37 @@ class AwsTuiApp(App[None]):
         current = self._app_ctx.root_vm.content_host.current
         return current if isinstance(current, DualPaneVM) else None
 
+    def _emr_page(self) -> EmrServerlessPage | None:
+        """Return the currently-mounted :class:`EmrServerlessPage`
+        widget, or None when EMR isn't the active service.
+
+        Mirror of :meth:`_dual_pane` for the EMR page so the global
+        priority bindings (``up``/``down``/``enter``/``r``) can route
+        keystrokes to the EMR LEFT pane the same way they route to
+        the S3 file pane via ``dual.focused_pane``.
+        """
+        with contextlib.suppress(Exception):
+            return self.query_one("#content-emr-page", EmrServerlessPage)
+        return None
+
+    def _emr_active_pane(self, emr_page: EmrServerlessPage) -> object | None:
+        """Return whichever EMR pane (LEFT or RIGHT) should receive
+        the next cursor/refresh action.
+
+        Logic: if Textual focus is currently inside one of the two
+        panes, return that pane. Otherwise default to LEFT — the
+        S3 page's analogue is ``dual.focused_pane`` defaulting to
+        LEFT before the user has Tabbed; mirroring that gives the
+        same "arrow keys work immediately after clicking ⚡ in the
+        rail" UX as S3.
+        """
+        focused = self.focused
+        if focused is not None:
+            for pane in (emr_page.left_pane, emr_page.right_pane):
+                if pane is not None and (focused is pane or pane in focused.ancestors_with_self):
+                    return pane
+        return emr_page.left_pane
+
     def action_switch_focus(self) -> None:
         """2-slot Tab cycle on the S3 screen: LEFT pane ↔ RIGHT pane.
 
@@ -1056,6 +1087,24 @@ class AwsTuiApp(App[None]):
                 else:
                     focused_list.action_cursor_down()
             return
+        # EMR page: forward Up/Down to the active EMR pane's cursor
+        # action. Mirrors the S3 path's ``dual.focused_pane`` lookup.
+        # The detail pane has no cursor concept in PR-A, so
+        # ``getattr(..., None)`` swallows the key cleanly when RIGHT
+        # holds focus (consistent with the S3 page's symmetric
+        # behaviour).
+        emr_page = self._emr_page()
+        if emr_page is not None:
+            emr_pane = self._emr_active_pane(emr_page)
+            if emr_pane is not None:
+                action = getattr(
+                    emr_pane,
+                    "action_cursor_up" if delta < 0 else "action_cursor_down",
+                    None,
+                )
+                if action is not None:
+                    action()
+            return
         dual = self._dual_pane()
         if dual is None:
             return
@@ -1117,6 +1166,18 @@ class AwsTuiApp(App[None]):
             if focused_list is not None:
                 focused_list.action_select()
             return
+        # EMR page: Enter on the LEFT pane commits the focused row
+        # (posts ``JobRunsPane.RunSelected`` → page VM forwards to
+        # ``select_job_run``). RIGHT pane has no Enter behaviour in
+        # PR-A. The ``getattr(..., None)`` guard mirrors the S3 path.
+        emr_page = self._emr_page()
+        if emr_page is not None:
+            emr_pane = self._emr_active_pane(emr_page)
+            if emr_pane is not None:
+                commit = getattr(emr_pane, "action_commit_selection", None)
+                if commit is not None:
+                    commit()
+            return
         dual = self._dual_pane()
         if dual is None:
             return
@@ -1166,6 +1227,18 @@ class AwsTuiApp(App[None]):
         self._forward_to_modal("action_focus_next")
 
     async def action_refresh(self) -> None:
+        # EMR page: ``r`` forwards to whichever pane currently holds
+        # Textual focus (LEFT or RIGHT). Each pane posts its own
+        # ``RefreshRequested`` message which the page widget routes
+        # to ``page_vm.refresh_focused(...)``.
+        emr_page = self._emr_page()
+        if emr_page is not None:
+            emr_pane = self._emr_active_pane(emr_page)
+            if emr_pane is not None:
+                refresh = getattr(emr_pane, "action_request_refresh", None)
+                if refresh is not None:
+                    refresh()
+            return
         dual = self._dual_pane()
         if dual is None:
             return
