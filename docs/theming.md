@@ -119,12 +119,13 @@ The overlay layering means you can keep the built-in look and adjust
 just one or two colors without copying the entire theme.
 
 ## 6. Snapshot tests
-The ten themes are pinned by 204 snapshot goldens in
-`tests/snapshot/__snapshots__/` across 9 scaffolding apps — main
+The ten themes are pinned by 214 snapshot goldens in
+`tests/snapshot/__snapshots__/` across 10 scaffolding apps — main
 screen, modals, nav menu, pane states, settings view, theme picker,
-toast, transfers, and EMR (added post-tag by PR #76's
-`test_emr/` subdir) — most parametrised by theme. Every
-new widget snapshot is paired with a content-presence guard test
-(per the PR #53 lesson). Updates: `uv run pytest tests/snapshot
---snapshot-update`. Snapshots are CI-gated only on Python 3.12 /
-Ubuntu to avoid tolerance flakes.
+toast, transfers, EMR (added post-tag by PR #76's `test_emr/`
+subdir), and the EMR clone-job-run modal (added by PR #83's
+`test_emr_clone_modal/` subdir — 10 themes × 1 scene) — most
+parametrised by theme. Every new widget snapshot is paired with a
+content-presence guard test (per the PR #53 lesson). Updates:
+`uv run pytest tests/snapshot --snapshot-update`. Snapshots are
+CI-gated only on Python 3.12 / Ubuntu to avoid tolerance flakes.

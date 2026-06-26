@@ -1,6 +1,6 @@
 # EMR Serverless service — v1 design
 
-**Status:** design accepted in brainstorming session 2026-06-25, awaiting user review of this spec before the implementation plan is written.
+**Status:** design accepted in brainstorming session 2026-06-25; PR-A (read-only browser) shipped via PRs #76–#82; the **clone-job-run modal originally scoped to PR-C shipped early in PR #83** alongside the user-feedback batch (it was the most-requested daily-driver action and was small enough to land out-of-band). PR-B (cancel + logs + lifecycle) and the **remainder of PR-C (vanilla blank-form submit)** are still outstanding; PR-D (E2E journey + memory) follows.
 **Author:** assistant, 2026-06-25.
 **Reviewer:** Kaveh.
 **Trigger:** user request — "Please now use your brainstorming skill so we can add the next service that makes most sense to be added. I personally lean toward emr (serverless) since I use it so much on a daily basis."
@@ -63,11 +63,23 @@ registry.register(cast("Service", emr_service))
 ServiceDescriptor(
     id="emr-serverless",
     label="EMR",
-    icon="⚡",                   # U+26A1 HIGH VOLTAGE — Spark's primitive glyph
+    icon="💥",                   # U+1F4A5 COLLISION — SMP single-codepoint, 2 cells, reliable colour
 )
 ```
 
-Single-cell, font-stack-safe (survives the VS-16 emoji-presentation gotcha that bit `⚙️`). Symmetric with the rail's existing literal-object naming: 🪣 = bucket, ⚡ = spark, ⚙️ = gear, 🖥️ = computer.
+> **Post-ship amendment (PRs #77 / #79 / #81 / #83):** the design's
+> original `⚡` (bare U+26A1) shipped in PR #76 but rendered as a
+> 1-cell text-style stroke in monospace terminals, mis-aligning the
+> nav-rail's 2-cell emoji column. PR #77 forced emoji presentation
+> with `⚡️` (BMP+VS-16); PR #79 briefly switched to `🔥`; PR #81
+> returned to `⚡️`; PR #83 finally settled on `💥` (SMP
+> single-codepoint, no VS-16 dance). The documented "icon contract"
+> for future services: **SMP single-codepoint, no variation
+> selector** — pick a glyph that reliably occupies 2 cells in
+> monospace terminals without a VS-16 trick. Symmetric with the
+> rail's literal-object naming: 🪣 = bucket, 💥 = explosion /
+> spark, ⚙️ = gear (kept on BMP+VS-16 because it's worked on the
+> user's stack), 🖥️ = computer (same).
 
 ### VMx lifecycle
 
@@ -602,13 +614,37 @@ v1 is too big for a single PR. Four pieces, each independently mergeable, each d
 **Acceptance:** user can monitor a running job, cancel a misbehaving run, lifecycle an app.
 
 #### PR-C — Submit (vanilla + clone) (~3 days, ~1.2k LOC)
+
+> **Status (post-PR-83): the clone half shipped early.** PR #83
+> landed `JobRunCloneVM` + `JobRunCloneModal` +
+> `EmrServerlessClient.start_job_run` + the `c` keybinding +
+> the `emr.clone` keymap action + the `"Job"` `Subject` literal,
+> ahead of the rest of PR-C, as part of the second post-PR-82
+> user-feedback batch. The clone modal pre-fills name / entry
+> point / IAM / args / spark params from the focused run and
+> fires `start_job_run` on save. What's still outstanding for the
+> remainder of PR-C: the vanilla blank-form submit
+> (`SubmitFormVM` + `EmrSubmitJobModal` widget + the `+` entry
+> point on the top strip) and the `submitted-via=aws-tui` tag
+> wiring.
+
 - `SubmitFormVM` with full validation
 - `EmrSubmitJobModal` widget — `ConfirmModal`-shaped layout
-- `+` (vanilla) and `c` (clone-from-focused-run) entry points
+- `+` (vanilla) — **outstanding**
+- `c` (clone-from-focused-run) — **shipped in PR #83** via the
+  separate `JobRunCloneVM` + `JobRunCloneModal` (the design's
+  original "one modal serving both entry points" simplification
+  may be revisited when the vanilla form lands; the two surfaces
+  diverged enough during PR #83 that keeping them as two
+  modals is the current direction)
 - `start_job_run` on the client with `submitted-via=aws-tui` tag
-- Snapshot + integration tests for both modes
+  — the API method shipped in PR #83 without the tag; tag wiring
+  is part of the vanilla-submit follow-up
+- Snapshot + integration tests for both modes — clone-side
+  shipped in PR #83 (`tests/snapshot/test_emr_clone_modal.py` +
+  `tests/unit/vm/emr_serverless/test_clone_vm.py`)
 
-**Acceptance:** user submits a brand-new job AND clones-and-edits an existing run. Full daily-driver loop closed.
+**Acceptance:** user submits a brand-new job AND clones-and-edits an existing run. Full daily-driver loop closed. (Half closed today — clone works; vanilla submit pending.)
 
 #### PR-D — E2E + memory updates (~half a day, no production code)
 - Journey 6 in `test_journeys.py`

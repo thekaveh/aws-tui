@@ -89,20 +89,21 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 ### 1.8. EMR Serverless
 
 These are wired by `EmrServerlessPage` (added post-tag, PR #76; arrow-
-key routing added by PR #78; layout overhaul by PR #80). The EMR page
-is mounted in place of the S3 dual-pane when the ⚡️ EMR nav peer is
-selected. Bindings are App-level `priority=True` and short-circuit
-through `_emr_active_pane()` before the dual-pane guard fires.
+key routing added by PR #78; layout overhaul by PR #80; clone-job-run
+modal added by PR #83). The EMR page is mounted in place of the S3
+dual-pane when the 💥 EMR nav peer is selected. Bindings are
+App-level `priority=True` and short-circuit through
+`_emr_active_pane()` before the dual-pane guard fires.
 
 | Action | Default | Notes |
 |---|---|---|
-| Open application picker | `a` | Opens the applications dropdown above the LEFT pane. The Commands chip on EMR re-labels `app.swap_source` ("switch app") and `Shift+S` is forwarded to the same handler so muscle memory from S3 still opens the picker. |
+| Open application picker | `a` or `Shift+S` | Opens the applications dropdown above the LEFT pane. On EMR `Shift+S` is forwarded to `EmrServerlessPage.action_open_application_picker` instead of the S3 source-cycle (`AwsTuiApp.action_swap_source` short-circuits when EMR is mounted); the Commands chip re-labels `app.swap_source` as "switch app" so the muscle memory from S3 still opens the picker. The chip with the `[s]` key shown in the Commands strip behaves identically. |
 | State filter chips | `1` `2` `3` `4` `5` | Multi-select toggles, one chip per state in this key order: `SUCCESS` / `RUNNING` / `PENDING` / `FAILED` / `CANCELLED`. Source of truth: ``_KEY_TO_STATE`` in ``ui/widgets/emr_serverless/job_runs_pane.py``. The transient pre-terminal states `SUBMITTED` / `SCHEDULED` / `QUEUED` / `CANCELLING` are NOT chip-filterable — they always render (they're members of the initial all-on default filter set and have no toggle key). |
 | Cursor up / down | `↑` `↓` (also `j` / `k`) | Moves the LEFT-pane row cursor; master-detail follows the cursor (the RIGHT pane re-loads on every cursor move, not only on `Enter`). |
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
 | Refresh | `r` | Forces an immediate poll on the active pane (apps if LEFT focused on the picker, runs if LEFT focused on the runs list, detail if RIGHT focused). |
+| Clone selected job run | `c` | Opens the `JobRunCloneModal` pre-filled from the focused run (name, entry point, IAM, args, spark params). Save fires `EmrServerlessClient.start_job_run`; success / error route through the unified `notifications.success` / `notifications.error` helpers (`Subject = "Job"`). `AwsTuiApp.action_copy` priority binding hijacks `c` to the EMR clone path when EMR is mounted — parallel to the dual-pane priority short-circuits for Tab / arrows. Added in PR #83. |
 | Cycle pane focus | `Tab` / `Shift+Tab` | 2-slot cycle (LEFT ↔ RIGHT); narrower than the S3 3-slot cycle because the EMR page has no separate nav slot. |
-| Swap source (re-purposed) | `Shift+S` (`S`) | On EMR this forwards to **open application picker** instead of the S3 connection cycle. |
 | Backspace | `Backspace` | No-op on EMR (symmetric to `Descend` having an EMR branch). |
 
 ## 2. Customizing
@@ -173,6 +174,7 @@ lands (see the §1 status note).
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
 | `pane.refresh` | `r` | ✓ | Re-run `provider.list()` |
 | `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Shell-out to `aws sso login` |
+| `emr.clone` | `c` (when EMR page mounted) | ✓ | Open the EMR clone-job-run modal pre-filled from the focused run (PR #83) |
 | `modal.cancel` | `escape` | ✓ | Cancel / close current overlay (modal-owned) |
 
 These are the action IDs `KeymapStore.DEFAULT_BINDINGS` actually
@@ -183,6 +185,16 @@ id raises `UnknownAction` at startup.
 toggle) are wired directly in `AwsTuiApp.BINDINGS` rather than the
 keymap store, because they're either modifier combinations or static
 UI toggles. They are not currently rebindable through `[keybindings]`.
+
+> **Commands strip layout (PR #83)** — the bottom legend is now ONE
+> concatenated row (single `#hint-strip` container), service-specific
+> chips first, globals after. The L/R dock split that PR #81
+> introduced (with `_hint-strip-service` / `_hint-strip-global` ids)
+> was reverted per user feedback "I want their concatenation
+> displayed at the bottom". Chips disable dynamically: a chip whose
+> action no-ops in the current selection state (e.g. `copy` /
+> `delete` when the cursor is on the `..` parent row) renders with
+> the `-disabled` class (`text-style: dim`) without losing its slot.
 
 ## 4. Modal forwarding for Enter / Esc / arrows
 

@@ -1,11 +1,12 @@
 # Adding a new service
 
-> v0.7.0 ships the `s3` service; post-tag PRs #76–#81 added
-> `emr-serverless` (read-only browser) as the second concrete
-> implementation. This doc is the pattern for the next ones
-> (EC2, IAM, Lambda, ...). For a richer reference than S3 (dedicated
-> domain client + per-service VM subtree + per-service UI widget
-> tree), read `src/aws_tui/services/emr_serverless/` alongside `s3/`.
+> v0.7.0 ships the `s3` service; post-tag PRs #76–#83 added
+> `emr-serverless` (read-only browser + clone-job-run) as the
+> second concrete implementation. This doc is the pattern for the
+> next ones (EC2, IAM, Lambda, ...). For a richer reference than S3
+> (dedicated domain client + per-service VM subtree + per-service
+> UI widget tree + service-specific modal), read
+> `src/aws_tui/services/emr_serverless/` alongside `s3/`.
 
 aws-tui's service-plugin spine is designed so adding a top-level AWS
 (or S3-compatible) service is **additive**: a new folder under
@@ -155,26 +156,45 @@ v0.7.0. Read it end-to-end (~80 lines):
 - `bind_hub(hub)` late-wires the hub since the service is registered
   before `RootVM` has its hub.
 
-### 5.2. EMR Serverless (post-tag, PR #76)
+### 5.2. EMR Serverless (post-tag, PRs #76–#83)
 `src/aws_tui/services/emr_serverless/service.py` is the second
 shipped service and demonstrates the richer per-service pattern:
 
 - `descriptor` declares `id = "emr-serverless"`, label `"EMR"`, icon
-  `"⚡️"` — U+26A1 LIGHTNING + U+FE0F VS-16 (text codepoint forced
-  into emoji presentation, 2 cells, in colour). See the
-  ``services/emr_serverless/service.py`` module docstring for the
-  full history (PR #76 bare U+26A1 → PR #77 +VS-16 → PR #79 ``🔥``
-  → PR #81 back to ⚡️ with VS-16 — the documented "icon contract"
-  future services should follow up front).
+  `"💥"` — U+1F4A5 COLLISION (SMP single-codepoint, 2 cells, in
+  colour reliably across SF Mono / JetBrains Mono / Fira Code). See
+  the ``services/emr_serverless/service.py`` module docstring for
+  the full icon saga (PR #76 bare ``⚡`` U+26A1 → PR #77 ``⚡️``
+  with VS-16 → PR #79 ``🔥`` → PR #81 back to ``⚡️`` → PR #83
+  ``💥``). The documented "icon contract" future services should
+  follow up front: **SMP single-codepoint, no VS-16 dance** — the
+  glyph must reliably occupy 2 cells in monospace terminals
+  without a variation-selector trick.
 - `supports()` is AWS-only (`connection.kind == "aws"`).
 - Domain client lives at `domain/emr_serverless.py` (async
-  `EmrServerlessClient` facade over `aioboto3`, three read-only
-  verbs, dedicated `_map_boto_error` adapter).
+  `EmrServerlessClient` facade over `aioboto3`, with read-only
+  verbs `list_applications` / `list_job_runs` / `get_job_run` plus
+  the write-side `start_job_run` (added PR #83 for the clone flow),
+  dedicated `_map_boto_error` adapter).
 - VM subtree at `vm/emr_serverless/` (`EmrServerlessPageVM`
-  orchestrates `ApplicationsVM` + `JobRunsVM` + `JobRunDetailVM`).
+  orchestrates `ApplicationsVM` + `JobRunsVM` + `JobRunDetailVM`;
+  `JobRunCloneVM` sits alongside, instantiated per modal-mount).
 - UI widget tree at `ui/widgets/emr_serverless/`
   (`ApplicationPicker` + `JobRunsPane` + `JobRunDetailPane` +
-  `EmrServerlessPage` composer).
+  `EmrServerlessPage` composer + `JobRunCloneModal`).
 - Three independent `set_interval` pollers (apps 30 s / runs 10 s
   with 6:1 decay when no active runs / detail 5 s with
   terminal-state suppression).
+- **Service-specific modal pattern** (PR #83). `JobRunCloneModal`
+  is pushed via `app.push_screen` from the page binding
+  (`Binding("c", "clone_selected_run", "Clone")`). The
+  ``app.py::action_copy`` priority binding short-circuits to the
+  EMR clone path when EMR is mounted (parallel to the dual-pane
+  hijack pattern for `Tab` / arrow keys). Service-specific
+  keymap + chip wiring: ``KeymapStore.DEFAULT_BINDINGS`` adds
+  the action id (``"emr.clone": ("c",)``);
+  ``HintLegendVM._SERVICE_ACTIONS["emr-serverless"]`` lists the
+  action id; ``_ACTION_LABELS["emr.clone"] = "clone"`` gives it
+  a human label in the Commands strip. Future services with
+  their own actions follow the same three-touch-point pattern:
+  default binding + service-actions tuple + action label.
