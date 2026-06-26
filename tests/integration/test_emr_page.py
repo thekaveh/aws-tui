@@ -12,6 +12,7 @@ import pytest
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
 from aws_tui.services.emr_serverless.service import EmrServerlessService
+from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
@@ -313,6 +314,66 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
             assert detail_vm.detail.job_run_id == "r-002", (
                 f"Click did not re-point detail. Got {detail_vm.detail.job_run_id!r}."
             )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_page_c_key_pushes_clone_modal(tmp_path: Path) -> None:
+    """Pressing ``c`` on the EMR page opens the clone-job-run modal
+    pre-populated from the currently-selected job run.
+
+    Verifies the full wiring from PR-C-clone: the page widget's
+    ``c`` binding routes to ``action_clone_selected_run``, which
+    builds a ``JobRunCloneVM`` from the page VM's
+    ``job_run_detail.detail`` and pushes ``JobRunCloneModal``
+    onto Textual's screen stack. No submit is exercised here — the
+    submit/Submit-failure paths live in the unit tests."""
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    fake.add_job_run(application_id="00emr", job_run_id="r-001", name="nightly")
+    fake.add_job_run_detail(
+        application_id="00emr",
+        job_run_id="r-001",
+        entry_point="s3://b/job.py",
+        entry_point_arguments=("--in", "s3://b/in/"),
+        spark_submit_parameters="--conf spark.executor.instances=4",
+    )
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            # The page VM should now hold a detail for r-001 via the
+            # auto-select-first-run path in ``EmrServerlessPageVM.setup``.
+            detail_vm = ctx.root_vm.content_host.current.job_run_detail
+            assert detail_vm.detail is not None, (
+                "Precondition: clone needs a selected detail before pressing c."
+            )
+
+            # Press c on the focused EMR page.
+            await pilot.press("c")
+            await pilot.pause()
+
+            # The modal should be on top of the screen stack.
+            modals = [s for s in pilot.app.screen_stack if isinstance(s, JobRunCloneModal)]
+            assert len(modals) == 1, (
+                f"Expected JobRunCloneModal pushed by 'c' binding; got stack={pilot.app.screen_stack!r}"
+            )
+            modal = modals[0]
+            # Form is pre-populated from the detail.
+            assert modal.vm.entry_point == "s3://b/job.py"
+            assert modal.vm.entry_point_arguments == ("--in", "s3://b/in/")
+            assert modal.vm.spark_submit_parameters == "--conf spark.executor.instances=4"
+            # Dismiss to leave the test in a clean state.
+            modal.dismiss(None)
+            await pilot.pause()
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

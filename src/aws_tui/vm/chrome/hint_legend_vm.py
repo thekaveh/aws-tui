@@ -52,6 +52,7 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "pane.descend",
         "pane.refresh",
         "app.swap_source",
+        "emr.clone",
     ),
     # Settings is a static configuration page — no per-item
     # affordances apply. Pre-PR-81 it showed ``pane.refresh`` but
@@ -98,6 +99,7 @@ _ACTION_LABELS: dict[str, str] = {
     "app.quit": "quit",
     "auth.authenticate": "sign in",
     "modal.cancel": "cancel",
+    "emr.clone": "clone",
 }
 
 

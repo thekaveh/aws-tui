@@ -201,6 +201,7 @@ class _StubClient:
         self.list_applications = AsyncMock()
         self.list_job_runs = AsyncMock()
         self.get_job_run = AsyncMock()
+        self.start_job_run = AsyncMock()
 
     async def __aenter__(self) -> _StubClient:
         return self
@@ -340,6 +341,120 @@ async def test_in_memory_emr_round_trips_records() -> None:
     assert detail.entry_point == "s3://b/x.py"
     # Calls are recorded so cadence tests can assert poll counts.
     assert [c[0] for c in fake.calls] == ["list_applications", "list_job_runs", "get_job_run"]
+
+
+@pytest.mark.asyncio
+async def test_start_job_run_forwards_form_fields_to_boto() -> None:
+    """The boto3 ``start_job_run`` call must receive the same
+    five-field shape the modal exposes — ``applicationId``,
+    ``executionRoleArn``, ``jobDriver.sparkSubmit`` (entry point +
+    arguments + spark submit params), and optional ``name``."""
+    stub = _StubClient()
+    stub.start_job_run.return_value = {"jobRunId": "jr-new-1"}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    new_id = await client.start_job_run(
+        "00abc",
+        execution_role_arn="arn:aws:iam::123456789012:role/EmrJobRole",
+        entry_point="s3://b/job.py",
+        entry_point_arguments=("--in", "s3://b/in/"),
+        spark_submit_parameters="--conf spark.executor.instances=4",
+        name="nightly",
+    )
+    assert new_id == "jr-new-1"
+    stub.start_job_run.assert_awaited_once()
+    kwargs = stub.start_job_run.await_args.kwargs
+    assert kwargs["applicationId"] == "00abc"
+    assert kwargs["executionRoleArn"] == "arn:aws:iam::123456789012:role/EmrJobRole"
+    assert kwargs["name"] == "nightly"
+    spark = kwargs["jobDriver"]["sparkSubmit"]
+    assert spark["entryPoint"] == "s3://b/job.py"
+    assert spark["entryPointArguments"] == ["--in", "s3://b/in/"]
+    assert spark["sparkSubmitParameters"] == "--conf spark.executor.instances=4"
+
+
+@pytest.mark.asyncio
+async def test_start_job_run_omits_name_when_unset_and_blanks_spark_params() -> None:
+    """``name`` is optional in the boto3 contract — it must be absent
+    from the kwargs when the modal leaves the field blank. A ``None``
+    ``spark_submit_parameters`` becomes an empty string so the
+    sparkSubmit driver shape stays well-formed."""
+    stub = _StubClient()
+    stub.start_job_run.return_value = {"jobRunId": "jr-new-2"}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    await client.start_job_run(
+        "00abc",
+        execution_role_arn="arn:aws:iam::123456789012:role/Role",
+        entry_point="s3://b/job.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=None,
+        name=None,
+    )
+    kwargs = stub.start_job_run.await_args.kwargs
+    assert "name" not in kwargs
+    spark = kwargs["jobDriver"]["sparkSubmit"]
+    assert spark["sparkSubmitParameters"] == ""
+    assert spark["entryPointArguments"] == []
+
+
+@pytest.mark.asyncio
+async def test_start_job_run_maps_validation_exception_to_validation_error() -> None:
+    """A boto ``ValidationException`` from a malformed entry point
+    must surface as the typed :class:`ValidationError` so the modal
+    can render an inline message instead of crashing."""
+    stub = _StubClient()
+    stub.start_job_run.side_effect = _client_error("ValidationException", op="StartJobRun")
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        await client.start_job_run(
+            "00abc",
+            execution_role_arn="arn",
+            entry_point="not-an-s3-url",
+            entry_point_arguments=(),
+            spark_submit_parameters=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_in_memory_emr_start_job_run_records_and_materializes() -> None:
+    """The fake mirrors the real client's contract — start a run,
+    get a new job_run_id back, and observe the run + detail are
+    visible through the regular ``list_job_runs`` + ``get_job_run``
+    surface."""
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="00abc", name="etl")
+    new_id = await fake.start_job_run(
+        "00abc",
+        execution_role_arn="arn:aws:iam::123456789012:role/Role",
+        entry_point="s3://b/job.py",
+        entry_point_arguments=("--in", "s3://b/in/"),
+        spark_submit_parameters="--conf x=y",
+        name="cloned",
+    )
+    assert new_id.startswith("r-clone-")
+    runs = await fake.list_job_runs("00abc")
+    assert any(r.job_run_id == new_id for r in runs)
+    detail = await fake.get_job_run("00abc", new_id)
+    assert detail.entry_point == "s3://b/job.py"
+    assert detail.state is JobRunState.SUBMITTED
+
+
+@pytest.mark.asyncio
+async def test_in_memory_emr_start_job_run_can_raise_for_failure_paths() -> None:
+    """Tests that want to drive ``submit()`` into the error branch
+    set ``start_job_run_exc`` on the fake before calling."""
+    from aws_tui.domain.filesystem import ValidationError as _VE
+
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="00abc", name="etl")
+    fake.start_job_run_exc = _VE("invalid")
+    with pytest.raises(_VE):
+        await fake.start_job_run(
+            "00abc",
+            execution_role_arn="arn",
+            entry_point="s3://b/job.py",
+            entry_point_arguments=(),
+            spark_submit_parameters=None,
+        )
 
 
 def test_emr_boto_config_pins_timeout_and_retry_shape() -> None:

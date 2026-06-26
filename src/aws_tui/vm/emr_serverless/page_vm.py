@@ -55,6 +55,26 @@ class EmrServerlessPageVM:
     def connection(self) -> Connection:
         return self._connection
 
+    @property
+    def client(self) -> Any:
+        """EMR Serverless client (``EmrServerlessClient`` or test
+        fake). Public so the page widget can hand it to per-action
+        VMs (e.g. ``JobRunCloneVM``) without re-piping through the
+        composition root."""
+        return self._client
+
+    @property
+    def dispatcher(self) -> Dispatcher:
+        """Dispatcher service the page VM was built with. Public so
+        per-action VMs (modals) can share the same dispatcher."""
+        return self._dispatcher
+
+    @property
+    def hub(self) -> MessageHub[Message]:
+        """Hub the page VM was built with. Public for the same reason
+        as :attr:`dispatcher`."""
+        return self._hub
+
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:

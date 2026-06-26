@@ -309,3 +309,45 @@ class EmrServerlessClient:
                 if mapped is None:
                     raise
                 raise mapped from exc
+
+    async def start_job_run(
+        self,
+        application_id: str,
+        *,
+        execution_role_arn: str,
+        entry_point: str,
+        entry_point_arguments: tuple[str, ...],
+        spark_submit_parameters: str | None,
+        name: str | None = None,
+    ) -> str:
+        """Submit a new job run. Returns the new ``job_run_id``.
+
+        The matching VM (``JobRunCloneVM``) pre-populates the form
+        from a :class:`JobRunDetail` then calls this to fire the
+        re-run. Errors from boto3 are mapped through
+        :func:`_map_boto_error` to the domain :class:`ProviderError`
+        hierarchy so the modal can surface a typed error inline."""
+        async with self._session.client(
+            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+        ) as c:
+            try:
+                kwargs: dict[str, Any] = {
+                    "applicationId": application_id,
+                    "executionRoleArn": execution_role_arn,
+                    "jobDriver": {
+                        "sparkSubmit": {
+                            "entryPoint": entry_point,
+                            "entryPointArguments": list(entry_point_arguments),
+                            "sparkSubmitParameters": spark_submit_parameters or "",
+                        }
+                    },
+                }
+                if name is not None:
+                    kwargs["name"] = name
+                resp = await c.start_job_run(**kwargs)
+                return cast(str, resp["jobRunId"])
+            except Exception as exc:
+                mapped = _map_boto_error(exc)
+                if mapped is None:
+                    raise
+                raise mapped from exc

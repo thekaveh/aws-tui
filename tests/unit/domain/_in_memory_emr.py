@@ -35,6 +35,13 @@ class _InMemoryEmr:
         # Counter so each call is observable in tests that pin the
         # auto-refresh cadence.
         self.calls: list[tuple[str, tuple[object, ...]]] = []
+        # Monotonic suffix so multiple ``start_job_run`` calls produce
+        # unique ids without the tests needing to seed them.
+        self._next_run_seq: int = 1
+        # Hook for tests that need ``start_job_run`` to raise — set
+        # this to a ``ProviderError`` (or any exception) to drive the
+        # error-path assertions on ``JobRunCloneVM.submit``.
+        self.start_job_run_exc: BaseException | None = None
 
     # ── Test seeding ────────────────────────────────────────────────────────
 
@@ -146,6 +153,64 @@ class _InMemoryEmr:
     async def get_job_run(self, application_id: str, job_run_id: str) -> JobRunDetail:
         self.calls.append(("get_job_run", (application_id, job_run_id)))
         return self._details[(application_id, job_run_id)]
+
+    async def start_job_run(
+        self,
+        application_id: str,
+        *,
+        execution_role_arn: str,
+        entry_point: str,
+        entry_point_arguments: tuple[str, ...],
+        spark_submit_parameters: str | None,
+        name: str | None = None,
+    ) -> str:
+        """Record the submit call + materialise a new ``SUBMITTED`` run.
+
+        Returns the synthesised ``job_run_id``. Tests that want to
+        observe failure paths set ``self.start_job_run_exc`` first —
+        that exception is raised in place of producing a new run."""
+        self.calls.append(
+            (
+                "start_job_run",
+                (
+                    application_id,
+                    execution_role_arn,
+                    entry_point,
+                    entry_point_arguments,
+                    spark_submit_parameters,
+                    name,
+                ),
+            )
+        )
+        if self.start_job_run_exc is not None:
+            raise self.start_job_run_exc
+        new_id = f"r-clone-{self._next_run_seq:03d}"
+        self._next_run_seq += 1
+        ts = datetime.fromisoformat("2026-06-26T12:00:00+00:00")
+        s = JobRunSummary(
+            application_id=application_id,
+            job_run_id=new_id,
+            name=name,
+            state=JobRunState.SUBMITTED,
+            created_at=ts,
+            updated_at=ts,
+        )
+        self._runs.setdefault(application_id, {})[new_id] = s
+        d = JobRunDetail(
+            application_id=application_id,
+            job_run_id=new_id,
+            name=name,
+            state=JobRunState.SUBMITTED,
+            created_at=ts,
+            updated_at=ts,
+            entry_point=entry_point,
+            entry_point_arguments=entry_point_arguments,
+            spark_submit_parameters=spark_submit_parameters,
+            execution_role_arn=execution_role_arn,
+            duration_ms=None,
+        )
+        self._details[(application_id, new_id)] = d
+        return new_id
 
 
 __all__ = ["_InMemoryEmr"]

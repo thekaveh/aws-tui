@@ -1302,7 +1302,19 @@ class AwsTuiApp(App[None]):
         """Copy the focused pane's marked entries (or the cursor row if
         none are marked) into the *other* pane. Pops a confirm modal
         showing source → destination paths first; only proceeds on
-        explicit confirm."""
+        explicit confirm.
+
+        EMR-page hijack: when the EMR Serverless page is the active
+        content (not S3), ``c`` reroutes to the page widget's own
+        ``action_clone_selected_run`` — same priority-binding-hijack
+        pattern PR #77 used for Tab and PR #78 used for Up/Down/Enter/r.
+        Without this short-circuit the App-level priority binding
+        swallows ``c`` before the page widget's binding can run.
+        """
+        emr_page = self._emr_page()
+        if emr_page is not None:
+            await emr_page.action_clone_selected_run()
+            return
         dual = self._dual_pane()
         if dual is None:
             return

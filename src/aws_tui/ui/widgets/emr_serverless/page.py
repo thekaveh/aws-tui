@@ -8,6 +8,7 @@ ships the static cadences from spec §6)."""
 
 from __future__ import annotations
 
+import contextlib
 from typing import ClassVar, Literal
 
 from textual.app import ComposeResult
@@ -16,9 +17,12 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from vmx import Message, MessageHub
 
+from aws_tui.ui import notifications
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
+from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
+from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 
 
@@ -49,6 +53,13 @@ class EmrServerlessPage(Widget):
         Binding("a", "open_application_picker", "Apps"),
         Binding("tab", "cycle_panes_forward", "Tab"),
         Binding("shift+tab", "cycle_panes_back", "←Tab"),
+        # ``emr.clone`` action id — re-runs the currently selected
+        # job with all fields pre-populated. The ``c`` keystroke
+        # overlaps with the file-manager's ``pane.copy`` but the two
+        # never share a focus context (the EMR page is not a
+        # DualPaneVM host), so the binding is unambiguous at the
+        # widget scope.
+        Binding("c", "clone_selected_run", "Clone"),
     ]
 
     def __init__(
@@ -177,6 +188,64 @@ class EmrServerlessPage(Widget):
 
     def action_cycle_panes_back(self) -> None:
         self._cycle("left")
+
+    async def action_clone_selected_run(self) -> None:
+        """Open the clone modal pre-populated from the currently-
+        selected job-run detail.
+
+        Silently no-ops when no detail is loaded (e.g. the user
+        pressed ``c`` before the first run was selected). On submit
+        the new ``job_run_id`` is surfaced as a success toast; a
+        :class:`ProviderError` was already shown inline by the modal
+        — we still raise an error toast here for the top-right
+        notification channel."""
+        detail = self._vm.job_run_detail.detail
+        if detail is None:
+            return
+        clone_vm = JobRunCloneVM(
+            detail,
+            client=self._vm.client,
+            hub=self._hub,
+            dispatcher=self._vm.dispatcher,
+        )
+        clone_vm.construct()
+        modal = JobRunCloneModal(clone_vm, hub=self._hub)
+        try:
+            new_id = await self.app.push_screen_wait(modal)
+        except Exception:
+            # The modal raised after dismiss (extremely rare — e.g.
+            # the test harness disposed the app mid-flight). Don't
+            # crash the page; let the user retry.
+            clone_vm.dispose()
+            return
+        try:
+            if new_id is None:
+                # User cancelled — silent (Cancel is intentional UX,
+                # not an error to advertise).
+                return
+            self._post_clone_success_toast(new_id)
+            # Re-fresh the runs list so the new SUBMITTED row appears
+            # immediately rather than waiting for the next 10-s tick.
+            self.run_worker(
+                self._vm.job_runs.refresh(),
+                exclusive=True,
+                group="emr-poll-runs",
+            )
+        finally:
+            clone_vm.dispose()
+
+    def _post_clone_success_toast(self, new_id: str) -> None:
+        """Reach the canonical ``ToastStackVM`` through the running
+        app and post the success toast. The :class:`AwsTuiApp` exposes
+        ``_app_ctx``; tests that mount the page under a vanilla
+        ``App`` may not — in which case we silently skip."""
+        with contextlib.suppress(Exception):
+            stack = self.app._app_ctx.root_vm.chrome.toast_stack  # type: ignore[attr-defined]
+            notifications.success(
+                stack,
+                subject="Job",
+                message=f"clone submitted ({new_id})",
+            )
 
     def _cycle(self, direction: Literal["left", "right"]) -> None:
         # 2-slot cycle; direction doesn't matter for 2 slots, but keep
