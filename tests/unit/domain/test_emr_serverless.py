@@ -31,6 +31,7 @@ from aws_tui.domain.filesystem import (
     ThrottledError,
     ValidationError,
 )
+from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def test_application_summary_is_frozen() -> None:
@@ -282,3 +283,19 @@ async def test_list_applications_re_raises_as_provider_error_on_no_creds() -> No
     client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
     with pytest.raises(AuthRequiredError):
         await client.list_applications()
+
+
+@pytest.mark.asyncio
+async def test_in_memory_emr_round_trips_records() -> None:
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.RUNNING)
+    fake.add_job_run_detail(application_id="a1", job_run_id="r1", entry_point="s3://b/x.py")
+    apps = await fake.list_applications()
+    runs = await fake.list_job_runs("a1")
+    detail = await fake.get_job_run("a1", "r1")
+    assert apps[0].id == "a1"
+    assert runs[0].state is JobRunState.RUNNING
+    assert detail.entry_point == "s3://b/x.py"
+    # Calls are recorded so cadence tests can assert poll counts.
+    assert [c[0] for c in fake.calls] == ["list_applications", "list_job_runs", "get_job_run"]
