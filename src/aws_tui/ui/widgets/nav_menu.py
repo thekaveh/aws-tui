@@ -53,6 +53,69 @@ if TYPE_CHECKING:
 _SETTINGS_NAV_ID: str = "settings"
 
 
+# ── Row template ────────────────────────────────────────────────────────────
+#
+# Every option in the nav rail is rendered by ONE of these two helpers.
+# Centralising the row template here means a future-tense change to the
+# nav-rail row chrome (spacing, separators, accent prefix, etc.) lives in
+# one place; previously the formatting was inlined inside
+# ``_rebuild_options`` and a new item could silently diverge.
+#
+# **Icon contract.** Both helpers assume ``glyph`` renders as exactly
+# 2 visual cells when the user's terminal/font combination is honest:
+#
+# - Use SMP single-codepoint emojis (codepoints in the U+1F***
+#   blocks — e.g. 🪣 U+1FAA3 BUCKET for S3, 🔥 U+1F525 FIRE for EMR).
+#   Every monospace font with emoji support ships these as 2-cell
+#   colour glyphs because there's no text-presentation alternative.
+# - **AVOID** BMP-plus-VS-16 combinations (e.g. ⚡ U+26A1 + ⚡️ U+26A1
+#   + U+FE0F, ⚙ U+2699 + ⚙️ U+2699 + U+FE0F). VS-16 *requests* emoji
+#   presentation but doesn't guarantee it: many monospace fonts ship
+#   only the text-style glyph for these codepoints, falling back to a
+#   1-cell outline. The collapsed-rail layout then garbles the entire
+#   row because the math assumes 2 cells and the renderer delivers 1.
+#   PR #77 + PR #78 tried ⚡ then ⚡️ for EMR and both broke; PR #79
+#   switched to 🔥 (SMP) and the issue went away.
+#
+# (Settings and the EC2 stub still use BMP+VS-16 emojis ⚙️ / 🖥️.
+# Both were chosen before this rule was clear and survive because the
+# user's terminal/font combination renders them as 2-cell colour.
+# When either is replaced, prefer an SMP alternative.)
+
+
+def _format_collapsed_prompt(*, ribbon: str, glyph: str) -> str:
+    """Collapsed-rail prompt for one nav option.
+
+    6-cell content area (rail width 8 minus the 2-cell border). Layout::
+
+        col 0: ribbon ``▌`` (selected) or space
+        col 1: gap
+        col 2-3: emoji (2 cells wide — see "Icon contract" above)
+        col 4-5: trailing empty
+
+    Keeps the ribbon flush against the rail's left border (matching
+    file-pane cursor column) and lands the emoji centred in the rail.
+    PR-history: the leading gap was dropped in PR #68 then restored in
+    PR #69 after the emoji slid left without it.
+    """
+    return f"{ribbon} {glyph}"
+
+
+def _format_expanded_prompt(*, ribbon: str, glyph: str, label: str) -> str:
+    """Expanded-rail prompt for one nav option.
+
+    Layout::
+
+        col 0: ribbon ``▌`` (selected) or space
+        col 1-2: emoji (2 cells)
+        col 3: gap
+        col 4+: 1-2 word label
+
+    Same icon contract as :func:`_format_collapsed_prompt`.
+    """
+    return f"{ribbon}{glyph} {label}"
+
+
 #: Ribbon glyph prepended to the highlighted option's prompt in each
 #: OptionList. The ``▌`` (LEFT HALF BLOCK, U+258C) is a single cell
 #: that visually reads as a vertical bar at the row's left edge —
@@ -252,28 +315,19 @@ class NavMenu(Widget):
                 ribbon = _RIBBON_GLYPH if descriptor.id == selected_id else _RIBBON_SPACER
                 # ``icon`` is always a str on ServiceDescriptor; the
                 # ``or "?"`` guard is defensive for any future
-                # optional variant. We pass the full icon string
-                # through (no ``[:2]`` truncation) so emojis that
-                # include a U+FE0F VARIATION SELECTOR-16 (e.g.
-                # ``⚙️``, ``☁️``) survive — truncating at 2 Python
-                # chars would silently drop the variation selector
-                # and flip the rendering to text presentation.
+                # optional variant. The full icon string passes
+                # through to the formatter (no ``[:2]`` truncation)
+                # so multi-codepoint emojis (e.g. ⚙️ U+2699 + VS-16)
+                # survive — truncating at 2 Python chars would
+                # silently drop the variation selector and flip the
+                # rendering to text presentation.
                 glyph = descriptor.icon or descriptor.label or "?"
                 if self._collapsed:
-                    # 6-cell content area (rail width 8 minus the
-                    # 2-cell border). Layout:
-                    #   col 0: ribbon ``▌`` (selected) or space.
-                    #   col 1: gap.
-                    #   col 2-3: emoji (2 cells wide).
-                    #   col 4-5: trailing empty.
-                    # This keeps the ribbon flush against the rail's
-                    # left border (PR #68 user ask, matching the
-                    # file-pane cursor column) AND lands the emoji
-                    # centered in the rail (PR #69 user ask after
-                    # the PR #68 change made the emoji lean left).
-                    prompt = f"{ribbon} {glyph}"
+                    prompt = _format_collapsed_prompt(ribbon=ribbon, glyph=glyph)
                 else:
-                    prompt = f"{ribbon}{glyph} {descriptor.label}"
+                    prompt = _format_expanded_prompt(
+                        ribbon=ribbon, glyph=glyph, label=descriptor.label
+                    )
                 target.add_option(Option(prompt, id=descriptor.id))
 
         _add_to(services, service_items)
