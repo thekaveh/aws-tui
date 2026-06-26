@@ -84,6 +84,29 @@ class EmrServerlessPage(Widget):
         self.set_interval(30.0, self._tick_applications, name="emr-poll-apps")
         self.set_interval(10.0, self._tick_runs, name="emr-poll-runs")
         self.set_interval(5.0, self._tick_detail, name="emr-poll-detail")
+        # Land Textual focus on the LEFT pane so the user gets the
+        # same "arrow keys move the cursor immediately" UX as the S3
+        # page. Without this, neither pane shows the
+        # ``:focus-within`` accent border and the user has to press
+        # Tab once before arrows do anything.
+        if self._left is not None:
+            self.call_after_refresh(self._left.focus)
+
+    # ── Public accessors ────────────────────────────────────────────────────
+
+    @property
+    def left_pane(self) -> JobRunsPane | None:
+        """LEFT pane (job runs list). Public so ``AwsTuiApp``'s
+        global priority key handlers can forward Up/Down/Enter/r to
+        it the same way the S3 path forwards through
+        ``dual.focused_pane``."""
+        return self._left
+
+    @property
+    def right_pane(self) -> JobRunDetailPane | None:
+        """RIGHT pane (job-run detail). Public for the same reason
+        as :attr:`left_pane`."""
+        return self._right
 
     # ── Pollers ─────────────────────────────────────────────────────────────
 

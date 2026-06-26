@@ -142,3 +142,77 @@ async def test_emr_page_tab_cycles_between_panes_not_to_nav_rail(tmp_path: Path)
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_left_pane_auto_focuses_and_arrow_keys_move_cursor(tmp_path: Path) -> None:
+    """User-reported regression: arrow keys did nothing in the EMR LEFT pane
+    AND the selected-row highlight didn't read as "active" because no pane
+    had focus by default. Two-part fix mirrors the S3 page's behaviour:
+
+    1. ``EmrServerlessPage.on_mount`` lands Textual focus on the LEFT
+       pane via ``call_after_refresh(self._left.focus)`` so the
+       ``:focus-within`` accent border kicks in immediately and the
+       user sees the same "active pane" treatment S3 gives the file
+       pane.
+    2. ``AwsTuiApp.action_move_up/down`` / ``action_descend`` /
+       ``action_refresh`` route through new ``_emr_page()`` +
+       ``_emr_active_pane()`` helpers so the App-level priority
+       bindings don't silently swallow Up/Down/Enter/r on the EMR
+       page (the same hijack we fixed for Tab in PR #77).
+    """
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    # Seed two runs so cursor movement is observable.
+    fake.add_job_run(
+        application_id="00emr",
+        job_run_id="r-001",
+        name="run-1",
+    )
+    fake.add_job_run_detail(application_id="00emr", job_run_id="r-001")
+    fake.add_job_run(
+        application_id="00emr",
+        job_run_id="r-002",
+        name="run-2",
+    )
+    fake.add_job_run_detail(application_id="00emr", job_run_id="r-002")
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            left = pilot.app.query_one(JobRunsPane)
+
+            # (1) Auto-focus: LEFT pane has Textual focus after mount
+            # without the user needing to press Tab.
+            assert left.has_focus or left.has_focus_within, (
+                f"LEFT pane should auto-focus on EMR mount (mirrors S3 "
+                f"dual.focused=LEFT default). Got {pilot.app.focused!r}."
+            )
+
+            # (2) Arrow keys move the cursor. The pane's internal
+            # cursor index starts at 0; Down should advance to 1.
+            initial_cursor = left._cursor_index  # type: ignore[attr-defined]
+            await pilot.press("down")
+            await pilot.pause()
+            assert left._cursor_index == initial_cursor + 1, (  # type: ignore[attr-defined]
+                f"Down arrow on EMR LEFT pane did not advance the cursor — "
+                f"App-level priority binding hijacked the keystroke. "
+                f"Got cursor={left._cursor_index!r}, expected {initial_cursor + 1}."  # type: ignore[attr-defined]
+            )
+
+            # And Up moves it back.
+            await pilot.press("up")
+            await pilot.pause()
+            assert left._cursor_index == initial_cursor, (  # type: ignore[attr-defined]
+                f"Up arrow did not retract the cursor. Got "
+                f"{left._cursor_index!r}, expected {initial_cursor}."  # type: ignore[attr-defined]
+            )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
