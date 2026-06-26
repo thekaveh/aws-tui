@@ -624,13 +624,38 @@ class PaneVM:
         self._notify("viewmodel")
 
     async def delete_marked(self) -> None:
-        """Delete every marked entry; refresh on success."""
+        """Delete every marked entry; reload regardless of partial failure.
+
+        Per-entry errors are collected and re-raised as an aggregate
+        once every target has been attempted. Without this, a mid-
+        batch failure (transient permission blip, network glitch)
+        used to silently abort the remaining entries AND skip the
+        reload, leaving the pane showing all M entries as marked
+        with the first ``N-1`` already gone — UI / storage drift
+        with zero diagnostic. The ``finally`` reload is guaranteed
+        so the user always sees the post-deletion truth."""
         targets = [e.entry.name for e in self._entries if e.is_marked]
         if not targets:
             return
-        for name in targets:
-            await self._provider.delete(self._path.join(name))
-        await self._reload()
+        failures: list[tuple[str, BaseException]] = []
+        try:
+            for name in targets:
+                try:
+                    await self._provider.delete(self._path.join(name))
+                except (OSError, ProviderError) as exc:
+                    failures.append((name, exc))
+        finally:
+            await self._reload()
+        if failures:
+            first_name, first_exc = failures[0]
+            if len(failures) == 1:
+                raise type(first_exc)(
+                    f"failed to delete {first_name!r}: {first_exc}"
+                ) from first_exc
+            names = ", ".join(n for n, _ in failures)
+            raise ProviderError(
+                f"failed to delete {len(failures)} of {len(targets)} entries: {names}"
+            ) from first_exc
 
     async def make_directory(self, name: str) -> None:
         if not name:

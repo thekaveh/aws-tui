@@ -15,9 +15,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
 
 import botocore.exceptions
-
-if TYPE_CHECKING:
-    import aioboto3
+from botocore.config import Config as BotoConfig
 
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
@@ -29,13 +27,33 @@ from aws_tui.domain.filesystem import (
     ValidationError,
 )
 
+if TYPE_CHECKING:
+    import aioboto3
+
+# Same timeout + adaptive-retry shape ``infra/aws_session.py`` and
+# ``domain/s3_fs.py`` use. Without an explicit config the aioboto3
+# client falls back to boto3 defaults (60 s connect, legacy retries)
+# — a flaky network would compound with the EMR-page pollers and
+# stack overlapping ``list_*`` calls.
+_EMR_BOTO_CONFIG: BotoConfig = BotoConfig(
+    connect_timeout=10,
+    read_timeout=60,
+    retries={"max_attempts": 6, "mode": "adaptive"},
+)
+
 
 class ApplicationState(StrEnum):
     """Application lifecycle states per the boto3 enum.
 
+    Mirrors the full ``ApplicationState`` shape in the botocore
+    service model (``emr-serverless/2021-07-13/service-2.json``) so
+    a freshly created application — which starts in ``CREATING`` —
+    doesn't raise ``ValueError`` from the picker poller.
+
     See https://docs.aws.amazon.com/emr-serverless/latest/APIReference/
     """
 
+    CREATING = "CREATING"
     CREATED = "CREATED"
     STARTING = "STARTING"
     STARTED = "STARTED"
@@ -45,10 +63,20 @@ class ApplicationState(StrEnum):
 
 
 class JobRunState(StrEnum):
-    """Job-run lifecycle states. ``CANCELLING`` is the transient
-    state after a cancel request before ``CANCELLED`` is observed."""
+    """Job-run lifecycle states.
 
+    Mirrors the full ``JobRunState`` shape in the botocore service
+    model. ``SUBMITTED`` / ``QUEUED`` / ``SCHEDULED`` are the three
+    pre-``RUNNING`` states a freshly submitted run cycles through;
+    omitting them used to crash the 10-s ``set_interval`` poller
+    within one tick of any new submission. ``CANCELLING`` is the
+    transient state after a cancel request before ``CANCELLED`` is
+    observed."""
+
+    SUBMITTED = "SUBMITTED"
     PENDING = "PENDING"
+    SCHEDULED = "SCHEDULED"
+    QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
@@ -124,7 +152,13 @@ _CLIENT_ERROR_CODE_MAP: dict[str, type[ProviderError]] = {
 def _map_boto_error(exc: BaseException) -> ProviderError | None:
     """Translate a boto3/botocore exception to the domain
     :class:`ProviderError` hierarchy. Returns ``None`` for anything
-    that isn't AWS — callers should re-raise those unchanged."""
+    that isn't AWS — callers should re-raise those unchanged.
+
+    ``ValueError`` and ``KeyError`` from response-shape parsing
+    (e.g. ``StrEnum`` constructors on an unrecognised state, or a
+    response dict missing a required field) are mapped to
+    :class:`ValidationError` so future AWS additions surface as a
+    typed domain error instead of a crash modal."""
     if isinstance(
         exc, botocore.exceptions.NoCredentialsError | botocore.exceptions.TokenRetrievalError
     ):
@@ -140,6 +174,8 @@ def _map_boto_error(exc: BaseException) -> ProviderError | None:
         code = exc.response.get("Error", {}).get("Code", "")
         cls = _CLIENT_ERROR_CODE_MAP.get(code, ProviderError)
         return cls(exc.response.get("Error", {}).get("Message", str(exc)))
+    if isinstance(exc, ValueError | KeyError):
+        return ValidationError(f"malformed EMR Serverless response: {exc}")
     return None
 
 
@@ -166,7 +202,9 @@ class EmrServerlessClient:
         self._region_name = region_name
 
     async def list_applications(self) -> list[ApplicationSummary]:
-        async with self._session.client("emr-serverless", region_name=self._region_name) as c:
+        async with self._session.client(
+            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+        ) as c:
             try:
                 items: list[dict[str, Any]] = []
                 next_token: str | None = None
@@ -208,7 +246,9 @@ class EmrServerlessClient:
         a single-state ``states`` parameter but multi-state requires
         client-side filtering anyway, so we fetch unfiltered and
         keep the logic in one place."""
-        async with self._session.client("emr-serverless", region_name=self._region_name) as c:
+        async with self._session.client(
+            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+        ) as c:
             try:
                 items: list[dict[str, object]] = []
                 next_token: str | None = None
@@ -243,7 +283,9 @@ class EmrServerlessClient:
                 raise mapped from exc
 
     async def get_job_run(self, application_id: str, job_run_id: str) -> JobRunDetail:
-        async with self._session.client("emr-serverless", region_name=self._region_name) as c:
+        async with self._session.client(
+            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+        ) as c:
             try:
                 resp = await c.get_job_run(applicationId=application_id, jobRunId=job_run_id)
                 r = resp["jobRun"]

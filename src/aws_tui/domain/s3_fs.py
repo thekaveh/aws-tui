@@ -205,14 +205,7 @@ class S3FS:
             async with self._client() as s3:
                 resp = await s3.list_buckets()
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            raise PermissionDeniedError(
-                f"AWS auth: {exc}.\n"
-                "If `aws s3 ls` works on the CLI but this fails, your profile likely\n"
-                "uses an auth path aioboto3 can't read directly. Try:\n"
-                "  - `aws sso login --profile <name>` to refresh SSO\n"
-                "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
-                "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
-            ) from exc
+            raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
@@ -288,14 +281,7 @@ class S3FS:
                         break
                     token = resp.get("NextContinuationToken")
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            raise PermissionDeniedError(
-                f"AWS auth: {exc}.\n"
-                "If `aws s3 ls` works on the CLI but this fails, your profile likely\n"
-                "uses an auth path aioboto3 can't read directly. Try:\n"
-                "  - `aws sso login --profile <name>` to refresh SSO\n"
-                "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
-                "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
-            ) from exc
+            raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
@@ -336,14 +322,7 @@ class S3FS:
                         raise NotFoundError(path.as_posix()) from exc
                     raise _map_client_error(exc, key) from exc
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            raise PermissionDeniedError(
-                f"AWS auth: {exc}.\n"
-                "If `aws s3 ls` works on the CLI but this fails, your profile likely\n"
-                "uses an auth path aioboto3 can't read directly. Try:\n"
-                "  - `aws sso login --profile <name>` to refresh SSO\n"
-                "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
-                "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
-            ) from exc
+            raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         return FileEntry(
@@ -372,14 +351,7 @@ class S3FS:
             async with self._client() as s3:
                 await s3.put_object(Bucket=bucket, Key=key, Body=b"")
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            raise PermissionDeniedError(
-                f"AWS auth: {exc}.\n"
-                "If `aws s3 ls` works on the CLI but this fails, your profile likely\n"
-                "uses an auth path aioboto3 can't read directly. Try:\n"
-                "  - `aws sso login --profile <name>` to refresh SSO\n"
-                "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
-                "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
-            ) from exc
+            raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
@@ -435,14 +407,7 @@ class S3FS:
                 if not deleted_any:
                     raise NotFoundError(path.as_posix())
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            raise PermissionDeniedError(
-                f"AWS auth: {exc}.\n"
-                "If `aws s3 ls` works on the CLI but this fails, your profile likely\n"
-                "uses an auth path aioboto3 can't read directly. Try:\n"
-                "  - `aws sso login --profile <name>` to refresh SSO\n"
-                "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
-                "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
-            ) from exc
+            raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
@@ -481,14 +446,7 @@ class S3FS:
                     raise _map_client_error(exc, src_key) from exc
                 await s3.delete_object(Bucket=bucket, Key=src_key)
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            raise PermissionDeniedError(
-                f"AWS auth: {exc}.\n"
-                "If `aws s3 ls` works on the CLI but this fails, your profile likely\n"
-                "uses an auth path aioboto3 can't read directly. Try:\n"
-                "  - `aws sso login --profile <name>` to refresh SSO\n"
-                "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
-                "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
-            ) from exc
+            raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
@@ -505,9 +463,32 @@ class S3FS:
     async def read_stream(
         self, path: PathRef, *, chunk_size: int = _DEFAULT_CHUNK_SIZE
     ) -> AsyncIterator[bytes]:
+        """Open a key for streaming.
+
+        Eagerly probes ``head_object`` BEFORE returning the iterator
+        so a missing source raises ``NotFoundError`` here — not later,
+        from the first ``async for``. Without the eager probe,
+        ``cross_fs.copy`` would open / partially write the destination
+        before discovering the source doesn't exist, leaving an
+        orphan mid-upload (S3) or a truncated file (local). The
+        ``head_object`` is roughly free compared to a `get_object`
+        round-trip and keeps the failure surface at the call site.
+        """
         bucket, key = self._resolve(path)
         if not key:
             raise ProviderError("cannot read a bucket — pass a key path")
+        try:
+            async with self._client() as s3:
+                try:
+                    await s3.head_object(Bucket=bucket, Key=key)
+                except ClientError as exc:
+                    if _error_code(exc) in {"NoSuchKey", "404", "NotFound"}:
+                        raise NotFoundError(path.as_posix()) from exc
+                    raise _map_client_error(exc, key) from exc
+        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
         return self._read_chunks(bucket, key, chunk_size, path.as_posix())
 
     async def _read_chunks(
@@ -528,14 +509,7 @@ class S3FS:
                         return
                     yield chunk
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            raise PermissionDeniedError(
-                f"AWS auth: {exc}.\n"
-                "If `aws s3 ls` works on the CLI but this fails, your profile likely\n"
-                "uses an auth path aioboto3 can't read directly. Try:\n"
-                "  - `aws sso login --profile <name>` to refresh SSO\n"
-                "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
-                "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
-            ) from exc
+            raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
 
@@ -574,14 +548,7 @@ class S3FS:
                 except ClientError as exc:
                     raise _map_client_error(exc, key) from exc
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            raise PermissionDeniedError(
-                f"AWS auth: {exc}.\n"
-                "If `aws s3 ls` works on the CLI but this fails, your profile likely\n"
-                "uses an auth path aioboto3 can't read directly. Try:\n"
-                "  - `aws sso login --profile <name>` to refresh SSO\n"
-                "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
-                "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
-            ) from exc
+            raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
 
@@ -637,6 +604,26 @@ def _chunks(items: list[Any], n: int) -> Iterator[list[Any]]:
 def _error_code(exc: ClientError) -> str:
     code = exc.response.get("Error", {}).get("Code", "")
     return str(code)
+
+
+# Auth-error message used across every `S3FS` operation that touches
+# AWS. The hint covers the most common "boto can read it but aioboto3
+# can't" causes (SSO refresh, ``credential_process`` chains, missing
+# env vars). Centralised so the 8 call sites stay in sync.
+_AUTH_HINT: str = (
+    "If `aws s3 ls` works on the CLI but this fails, your profile likely\n"
+    "uses an auth path aioboto3 can't read directly. Try:\n"
+    "  - `aws sso login --profile <name>` to refresh SSO\n"
+    "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
+    "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
+)
+
+
+def _auth_error(exc: BaseException) -> PermissionDeniedError:
+    """Wrap a boto auth/credentials exception in a domain error with
+    the project's canonical recovery hint. Used by every auth catch
+    site in :class:`S3FS` so the hint stays in one place."""
+    return PermissionDeniedError(f"AWS auth: {exc}.\n{_AUTH_HINT}")
 
 
 def _map_client_error(exc: ClientError, target: str) -> ProviderError:

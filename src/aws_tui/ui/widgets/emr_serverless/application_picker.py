@@ -23,6 +23,7 @@ from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 
 _APP_STATE_GLYPH: dict[ApplicationState, str] = {
+    ApplicationState.CREATING: "◌",
     ApplicationState.CREATED: "○",
     ApplicationState.STARTING: "◐",
     ApplicationState.STARTED: "●",
