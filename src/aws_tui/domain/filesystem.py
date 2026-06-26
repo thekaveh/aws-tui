@@ -188,7 +188,23 @@ class ProviderUnreachableError(ProviderError):
     """The underlying service is unreachable (network, endpoint, DNS)."""
 
 
+class AuthRequiredError(ProviderError):
+    """No usable credentials / expired SSO. UI should suggest
+    ``aws sso login --profile X`` or ``$AWS_PROFILE`` setup."""
+
+
+class ThrottledError(ProviderError):
+    """Service throttled (boto ``ThrottlingException``). Callers
+    should back off exponentially; user-facing toast is INFO-level."""
+
+
+class ValidationError(ProviderError):
+    """Request failed validation (e.g. boto ``ValidationException``
+    on ``StartJobRun``). The boto message is forwarded verbatim."""
+
+
 __all__ = [
+    "AuthRequiredError",
     "ConflictError",
     "EntryKind",
     "FileEntry",
@@ -199,5 +215,7 @@ __all__ = [
     "ProgressCallback",
     "ProviderError",
     "ProviderUnreachableError",
+    "ThrottledError",
     "TransferProgress",
+    "ValidationError",
 ]

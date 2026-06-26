@@ -13,6 +13,18 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+import botocore.exceptions
+
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    NotFoundError,
+    PermissionDeniedError,
+    ProviderError,
+    ProviderUnreachableError,
+    ThrottledError,
+    ValidationError,
+)
+
 
 class ApplicationState(StrEnum):
     """Application lifecycle states per the boto3 enum.
@@ -92,3 +104,35 @@ __all__ = [
     "JobRunState",
     "JobRunSummary",
 ]
+
+
+# ── boto3 error mapping ──────────────────────────────────────────────────
+
+_CLIENT_ERROR_CODE_MAP: dict[str, type[ProviderError]] = {
+    "AccessDeniedException": PermissionDeniedError,
+    "ThrottlingException": ThrottledError,
+    "ResourceNotFoundException": NotFoundError,
+    "ValidationException": ValidationError,
+}
+
+
+def _map_boto_error(exc: BaseException) -> ProviderError | None:
+    """Translate a boto3/botocore exception to the domain
+    :class:`ProviderError` hierarchy. Returns ``None`` for anything
+    that isn't AWS — callers should re-raise those unchanged."""
+    if isinstance(
+        exc, botocore.exceptions.NoCredentialsError | botocore.exceptions.TokenRetrievalError
+    ):
+        return AuthRequiredError(str(exc) or "no AWS credentials")
+    if isinstance(
+        exc,
+        botocore.exceptions.EndpointConnectionError
+        | botocore.exceptions.ConnectTimeoutError
+        | botocore.exceptions.ReadTimeoutError,
+    ):
+        return ProviderUnreachableError(str(exc) or "endpoint unreachable")
+    if isinstance(exc, botocore.exceptions.ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        cls = _CLIENT_ERROR_CODE_MAP.get(code, ProviderError)
+        return cls(exc.response.get("Error", {}).get("Message", str(exc)))
+    return None
