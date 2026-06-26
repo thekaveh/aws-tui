@@ -626,3 +626,96 @@ ConnectionFormInline .form-footer {
     height: 3;
     align: right middle;
 }
+
+/* ── EMR Serverless ────────────────────────────────────────────────────── */
+
+EmrServerlessPage {
+    background: $bg;
+    color: $text;
+}
+
+EmrServerlessPage > .emr-top-strip {
+    background: $bg;
+    border-bottom: solid $rule-dim;
+}
+
+ApplicationPicker > .app-trigger {
+    background: $bg;
+    color: $text;
+    border: round $rule-dim;
+}
+ApplicationPicker.-open > .app-trigger {
+    background: $bg-elev;
+    border: round $accent;
+    color: $accent;
+}
+ApplicationPicker > OptionList {
+    background: $bg-elev;
+    color: $text;
+    border: round $rule-dim;
+}
+ApplicationPicker > OptionList > .option-list--option-highlighted {
+    background: $bg-sel;
+    color: $accent-soft;
+}
+
+JobRunsPane {
+    background: $bg;
+    color: $text;
+    border: solid $rule-dim;
+}
+JobRunsPane:focus-within {
+    border: solid $accent;
+}
+JobRunsPane > .runs-chip-row {
+    background: $bg-elev;
+    color: $text-muted;
+}
+JobRunsPane > .runs-chip-row > .runs-chip {
+    background: $bg;
+    color: $text-muted;
+    border-left: solid $rule-dim;
+}
+JobRunsPane > .runs-chip-row > .runs-chip.-active {
+    background: $bg-sel;
+    color: $accent-soft;
+}
+JobRunsPane > .runs-chip-row > .runs-chip-success.-active   { color: $success; }
+JobRunsPane > .runs-chip-row > .runs-chip-running.-active   { color: $accent; }
+JobRunsPane > .runs-chip-row > .runs-chip-pending.-active   { color: $text-muted; }
+JobRunsPane > .runs-chip-row > .runs-chip-failed.-active    { color: $danger; }
+JobRunsPane > .runs-chip-row > .runs-chip-cancelled.-active { color: $text-muted; }
+JobRunsPane .runs-row {
+    background: $bg;
+    color: $text;
+}
+JobRunsPane .runs-row.-selected {
+    background: $bg-sel;
+    color: $accent-soft;
+}
+JobRunsPane .runs-placeholder {
+    background: $bg;
+    color: $text-muted;
+    padding: 1 2;
+}
+
+JobRunDetailPane {
+    background: $bg;
+    color: $text;
+    border: solid $rule-dim;
+}
+JobRunDetailPane:focus-within {
+    border: solid $accent;
+}
+JobRunDetailPane .detail-key {
+    color: $accent;
+}
+JobRunDetailPane .detail-row {
+    background: $bg;
+    color: $text;
+}
+JobRunDetailPane .detail-placeholder {
+    background: $bg;
+    color: $text-muted;
+    padding: 1 2;
+}
