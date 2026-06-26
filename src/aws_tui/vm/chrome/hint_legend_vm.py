@@ -52,6 +52,7 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "pane.descend",
         "pane.refresh",
         "app.swap_source",
+        "emr.clone",
     ),
     # Settings is a static configuration page — no per-item
     # affordances apply. Pre-PR-81 it showed ``pane.refresh`` but
@@ -98,16 +99,28 @@ _ACTION_LABELS: dict[str, str] = {
     "app.quit": "quit",
     "auth.authenticate": "sign in",
     "modal.cancel": "cancel",
+    "emr.clone": "clone",
 }
 
 
 @dataclass(frozen=True, slots=True)
 class HintAction:
-    """One chip in the hint legend."""
+    """One chip in the hint legend.
+
+    ``enabled`` controls whether the chip renders in the active
+    style (``True``) or greyed-out (``False``). The widget reads
+    this to apply the ``.-disabled`` CSS class. The actual key
+    binding is NOT suppressed when ``enabled=False`` — the
+    rendering hint and the binding live in different layers; the
+    enabled-state contract is "this chip is currently a no-op given
+    the selection state" rather than "this key is unbound right
+    now". App-level handlers do the actual no-op check.
+    """
 
     action_id: str
     key_label: str
     action_label: str
+    enabled: bool = True
 
 
 class HintLegendVM:
@@ -135,6 +148,12 @@ class HintLegendVM:
         self._current_service_id: str | None = None
         self._actions: tuple[HintAction, ...] = ()
         self._global_actions: tuple[HintAction, ...] = ()
+        # Action ids the app currently considers a no-op given the
+        # selection state (e.g. ``pane.copy`` / ``pane.delete`` when
+        # the cursor is on a ``..`` parent row). Chips for these ids
+        # render greyed-out; the actual key binding is not
+        # suppressed but the app-level handler short-circuits.
+        self._disabled_actions: frozenset[str] = frozenset()
 
         self._inner: ComponentVM = (
             ComponentVM.builder().name("hint_legend").services(hub, dispatcher).build()
@@ -165,6 +184,19 @@ class HintLegendVM:
         if self._current_service_id == service_id:
             return
         self._current_service_id = service_id
+        self._rebuild_actions()
+
+    @property
+    def disabled_actions(self) -> frozenset[str]:
+        return self._disabled_actions
+
+    def set_disabled_actions(self, action_ids: frozenset[str]) -> None:
+        """Push the set of action ids that are no-ops given the
+        current selection. Triggers a chip rebuild so the widget
+        re-renders with the new disabled flags."""
+        if action_ids == self._disabled_actions:
+            return
+        self._disabled_actions = action_ids
         self._rebuild_actions()
 
     @property
@@ -288,7 +320,12 @@ class HintLegendVM:
         if not keys:
             return None
         label = self._label_for(action_id)
-        return HintAction(action_id=action_id, key_label=keys[0], action_label=label)
+        return HintAction(
+            action_id=action_id,
+            key_label=keys[0],
+            action_label=label,
+            enabled=action_id not in self._disabled_actions,
+        )
 
     def _label_for(self, action_id: str) -> str:
         """Service-aware label lookup.

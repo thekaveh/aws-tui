@@ -33,26 +33,26 @@ class HintLegend(HubSubscriberMixin, Widget):
         layout: horizontal;
         border-title-align: left;
     }
-    HintLegend > #hint-strip-service {
+    HintLegend > #hint-strip {
         height: 1;
         width: 1fr;
         layout: horizontal;
-    }
-    HintLegend > #hint-strip-global {
-        height: 1;
-        width: auto;
-        layout: horizontal;
-        dock: right;
     }
     HintLegend .hint-key {
         width: auto;
         height: 1;
         text-style: bold;
     }
+    HintLegend .hint-key.-disabled {
+        text-style: dim;
+    }
     HintLegend .hint-label {
         width: auto;
         height: 1;
         padding: 0 1 0 1;
+    }
+    HintLegend .hint-label.-disabled {
+        text-style: dim;
     }
     HintLegend .hint-sep {
         width: auto;
@@ -84,16 +84,15 @@ class HintLegend(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        # LEFT strip — service-specific chips (S3 copy/delete etc.,
-        # EMR switch-app etc.). Rebuilt on every ``actions`` /
-        # service-id change.
-        with Horizontal(id="hint-strip-service"):
-            yield from self._build_chips(self._vm.actions)
-        # RIGHT strip — always-visible app-chrome globals (themes /
-        # help / quit). Docked right via CSS so they sit flush
-        # against the right edge of the Commands pane.
-        with Horizontal(id="hint-strip-global"):
-            yield from self._build_chips(self._vm.global_actions)
+        # Single concatenated strip — service-specific chips first
+        # (S3 copy/delete etc., EMR switch-app etc.), then the
+        # always-visible app-chrome globals (themes / help / quit).
+        # The split into left/right docks was reverted at user's
+        # explicit ask ("I want their concatenation displayed at the
+        # bottom"); one ordered row reads as a single command list,
+        # which matches user mental model better.
+        with Horizontal(id="hint-strip"):
+            yield from self._build_chips(self._all_chips())
 
     def on_mount(self) -> None:
         self.subscribe_to_vm(
@@ -109,19 +108,20 @@ class HintLegend(HubSubscriberMixin, Widget):
         if property_name == "actions":
             self.call_after_refresh(self._rebuild_chips)
 
+    def _all_chips(self) -> tuple[HintAction, ...]:
+        """Service-specific chips followed by the app-chrome globals
+        in a single ordered tuple."""
+        return tuple(self._vm.actions) + tuple(self._vm.global_actions)
+
     def _rebuild_chips(self) -> None:
-        for strip_id, chips in (
-            ("#hint-strip-service", self._vm.actions),
-            ("#hint-strip-global", self._vm.global_actions),
-        ):
-            try:
-                strip = self.query_one(strip_id, Horizontal)
-            except Exception:
-                continue
-            for child in list(strip.children):
-                child.remove()
-            for chip in self._build_chips(chips):
-                strip.mount(chip)
+        try:
+            strip = self.query_one("#hint-strip", Horizontal)
+        except Exception:
+            return
+        for child in list(strip.children):
+            child.remove()
+        for chip in self._build_chips(self._all_chips()):
+            strip.mount(chip)
 
     def _build_chips(self, chips: tuple[HintAction, ...]) -> list[Widget]:
         widgets: list[Widget] = []
@@ -140,8 +140,15 @@ class HintLegend(HubSubscriberMixin, Widget):
             # tag name (``:``, ``?``, …) would render correctly. With
             # markup disabled, every chip prints its bracketed key as
             # plain text.
-            widgets.append(Static(f"[{chip.key_label}]", classes="hint-key", markup=False))
-            widgets.append(Static(chip.action_label, classes="hint-label"))
+            disabled_suffix = " -disabled" if not chip.enabled else ""
+            widgets.append(
+                Static(
+                    f"[{chip.key_label}]",
+                    classes=f"hint-key{disabled_suffix}",
+                    markup=False,
+                )
+            )
+            widgets.append(Static(chip.action_label, classes=f"hint-label{disabled_suffix}"))
         return widgets
 
 

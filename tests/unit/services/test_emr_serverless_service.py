@@ -13,16 +13,19 @@ from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.services_protocol import ServiceDescriptor
 
 
-def test_descriptor_icon_is_high_voltage_with_vs16_label_is_emr() -> None:
-    # ⚡️ = U+26A1 HIGH VOLTAGE + U+FE0F VARIATION SELECTOR-16.
-    # User explicitly asked for lightning over the PR #79 🔥 fire
-    # (EMR/Spark is most strongly associated with the lightning
-    # bolt). VS-16 requests emoji presentation; works on macOS /
-    # Apple-Color-Emoji / Noto / Segoe fallback chains. If a
-    # regression surfaces, swap to a SMP single-codepoint emoji
-    # like 💫 or back to 🔥.
+def test_descriptor_icon_is_collision_smp_label_is_emr() -> None:
+    # 💥 = U+1F4A5 COLLISION SYMBOL — SMP single-codepoint, renders
+    # as 2-cell colour emoji reliably (no text-presentation fallback
+    # hazard the way U+26A1 has). This is the fourth icon attempt:
+    #   PR #77 ⚡    BMP, 1-cell fallback  — broke nav-rail layout
+    #   PR #79 🔥    SMP, 2-cell           — worked
+    #   PR #81 ⚡️   BMP+VS-16, fallback   — broke layout again
+    #         💥    SMP, 2-cell           — here, user pick
+    # Keeps the "spark/electricity" semantic without the BMP+VS-16
+    # rendering risk. Future icon contract: pick from the SMP block
+    # (U+1F***).
     assert EmrServerlessService.descriptor == ServiceDescriptor(
-        id="emr-serverless", label="EMR", icon="⚡️"
+        id="emr-serverless", label="EMR", icon="💥"
     )
 
 

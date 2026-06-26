@@ -51,6 +51,11 @@ class KeymapStore:
         "app.swap_source": ("S",),
         "auth.authenticate": ("a",),
         "modal.cancel": ("escape",),
+        # EMR-page-only — bound on ``EmrServerlessPage`` widget scope
+        # (does NOT collide with ``pane.copy`` which is only invoked
+        # when a file-manager pane is focused; the two never share a
+        # focus context).
+        "emr.clone": ("c",),
     }
 
     def __init__(self, *, overlay: dict[str, str | list[str]] | None = None) -> None:

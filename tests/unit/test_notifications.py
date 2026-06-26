@@ -170,6 +170,7 @@ def test_subject_literal_includes_every_call_site_subject() -> None:
         "Transfer",
         "Settings",
         "Auth",
+        "Job",
     }
 
 

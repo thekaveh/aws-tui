@@ -53,33 +53,23 @@ class EmrServerlessService:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="emr-serverless",
         label="EMR",
-        # ⚡️ U+26A1 HIGH VOLTAGE + U+FE0F VS-16 — the user
-        # explicitly asked for lightning/electricity over the
-        # previous 🔥 fire, since EMR (Spark) is most strongly
-        # associated with the lightning bolt. This is the third
-        # icon attempt (PR #77 ⚡ → PR #79 🔥 → here ⚡️) and
-        # the trade-off is documented:
-        #
-        # - ⚡ alone (PR #77 pre-fix) defaults to a 1-cell
-        #   text-style outline in many monospace fonts. Layout
-        #   garbled.
-        # - ⚡️ (with VS-16) REQUESTS emoji presentation. Apple
-        #   Color Emoji / Noto Color Emoji / Segoe UI Emoji all
-        #   render it as 2-cell colour when the system's font
-        #   fallback chain includes them — which it does on
-        #   macOS Terminal / iTerm2 / VS Code's integrated
-        #   terminal with default settings. The user is on one
-        #   of those setups (PR #79 confirmed 🔥 renders 2-cell
-        #   for them, which means SMP emojis work, which means
-        #   their emoji-font fallback chain is alive).
-        # - 🔥 (PR #79) was the safe SMP single-codepoint pick.
-        #   Worked. User now wants lightning specifically.
-        #
-        # If ⚡️ regresses on this user's setup again, fall back
-        # to the SMP emoji 💫 DIZZY (U+1F4AB, swirly motion) or
-        # back to 🔥 — both are SMP single-codepoint and
-        # reliably 2-cell colour.
-        icon="⚡️",
+        # 💥 U+1F4A5 COLLISION SYMBOL — SMP single-codepoint,
+        # renders as 2-cell colour reliably (every modern terminal
+        # with emoji-font fallback ships this as a colour glyph
+        # because there's no text-presentation alternative). Fourth
+        # icon attempt:
+        #   PR #77 ⚡  (BMP U+26A1)         → 1-cell outline, broke layout
+        #   PR #79 🔥  (SMP U+1F525)        → 2-cell colour, worked
+        #   PR #81 ⚡️ (BMP U+26A1+VS-16)   → user explicit ask, broke layout
+        #         💥  (SMP U+1F4A5)        → here, user explicit ask
+        # The user wants the "electricity/spark burst" semantic
+        # without the 1-cell fallback risk of the U+26A1 codepath.
+        # 💥 keeps the "spark" association (Spark / collision
+        # explosion) while being SMP-safe. Future icon contract:
+        # do NOT use BMP+VS-16 here; pick from the SMP block
+        # (U+1F***). See nav_menu.py docstrings for the row-layout
+        # invariant the icon column must preserve (2 cells).
+        icon="💥",
     )
 
     def __init__(

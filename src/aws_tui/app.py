@@ -129,7 +129,16 @@ class AwsTuiApp(App[None]):
     # lives inside the NavMenu itself.
     CSS = """
     Screen {
-        layers: base notifications;
+        /* ``dropdown`` is declared between ``base`` and
+           ``notifications`` so the EMR application picker's
+           OptionList renders as a true overlay above the page
+           body (not embedded in the LEFT column's flow, which
+           was the long-standing "There's no dropdown!" bug —
+           prior comments in ``application_picker.py`` already
+           identified Screen as the missing piece). ``notifications``
+           stays the top layer so toasts overlay everything,
+           including any open picker. */
+        layers: base dropdown notifications;
     }
     #main-area {
         height: 1fr;
@@ -209,6 +218,7 @@ class AwsTuiApp(App[None]):
         self._pane_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
         self._nav_selection_sub: DisposableBase | None = None
+        self._cursor_sub: DisposableBase | None = None
         # True while ``on_mount`` is driving the initial service mount —
         # gates ``_on_nav_selection_changed`` so the seed selected_id
         # change doesn't spawn a duplicate mount worker that races the
@@ -291,6 +301,12 @@ class AwsTuiApp(App[None]):
             on_next=self._on_connection_list_changed
         )
         self._nav_selection_sub = ctx.hub.messages.subscribe(on_next=self._on_nav_selection_changed)
+        # Subscribe to pane cursor / entries changes so the HintLegend can
+        # mark ``pane.copy`` / ``pane.delete`` disabled when the cursor sits
+        # on the ``..`` parent row. User feedback: "if the selected item is
+        # the '..' representing the parent folder, I shouldn't be able to
+        # invoke copy or delete commands and I expect them greyed out".
+        self._cursor_sub = ctx.hub.messages.subscribe(on_next=self._on_hub_message_cursor)
 
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
@@ -1286,7 +1302,19 @@ class AwsTuiApp(App[None]):
         """Copy the focused pane's marked entries (or the cursor row if
         none are marked) into the *other* pane. Pops a confirm modal
         showing source → destination paths first; only proceeds on
-        explicit confirm."""
+        explicit confirm.
+
+        EMR-page hijack: when the EMR Serverless page is the active
+        content (not S3), ``c`` reroutes to the page widget's own
+        ``action_clone_selected_run`` — same priority-binding-hijack
+        pattern PR #77 used for Tab and PR #78 used for Up/Down/Enter/r.
+        Without this short-circuit the App-level priority binding
+        swallows ``c`` before the page widget's binding can run.
+        """
+        emr_page = self._emr_page()
+        if emr_page is not None:
+            await emr_page.action_clone_selected_run()
+            return
         dual = self._dual_pane()
         if dual is None:
             return
@@ -1374,7 +1402,22 @@ class AwsTuiApp(App[None]):
                 error_type=type(exc).__name__,
                 file_count=len(targets),
             )
-            self.notify(f"Copy failed: {exc}", severity="error", timeout=8)
+            # User feedback: "when a copy or delete fails, I see an
+            # error box shown ON the command section at the bottom
+            # which then disappears. I want all such errors be
+            # handled gracefully and be shown as toast notifications
+            # on top right with their proper icons and emojis". The
+            # ``notifications.error`` helper routes through the
+            # canonical ``ToastStack`` (top-right, ✖ glyph,
+            # ``$danger`` colour, 30-s auto-dismiss); Textual's
+            # bare ``self.notify`` paints over the Commands strip
+            # and steals the eye there.
+            notifications.error(
+                ctx.root_vm.chrome.toast_stack,
+                toast_id="copy-failed",
+                subject="Transfer",
+                message=f"copy failed: {exc}",
+            )
         finally:
             if used_cursor_fallback:
                 for entry in targets:
@@ -1456,7 +1499,14 @@ class AwsTuiApp(App[None]):
                 error_type=type(exc).__name__,
                 file_count=len(targets),
             )
-            self.notify(f"Delete failed: {exc}", severity="error", timeout=8)
+            # See action_copy for the rationale — same Commands-strip
+            # paint-over problem when using bare ``self.notify``.
+            notifications.error(
+                ctx.root_vm.chrome.toast_stack,
+                toast_id="delete-failed",
+                subject="Transfer",
+                message=f"delete failed: {exc}",
+            )
         finally:
             if used_cursor_fallback:
                 for entry in targets:
@@ -1596,14 +1646,18 @@ class AwsTuiApp(App[None]):
             # Only local — either no connections configured, or every
             # configured connection has been observed unreachable.
             if skipped:
-                self.notify(
-                    "All connections unreachable — staying on local.",
-                    severity="warning",
+                notifications.advise(
+                    ctx.root_vm.chrome.toast_stack,
+                    toast_id="swap-source-unreachable",
+                    subject="Source",
+                    message="all connections unreachable — staying on local",
                 )
             else:
-                self.notify(
-                    "No connections configured — can't swap source.",
-                    severity="warning",
+                notifications.advise(
+                    ctx.root_vm.chrome.toast_stack,
+                    toast_id="swap-source-empty",
+                    subject="Source",
+                    message="no connections configured — can't swap source",
                 )
             return
 
@@ -1939,6 +1993,53 @@ class AwsTuiApp(App[None]):
             return  # local pane — never tracked
         self._on_pane_state_changed(kind=key[0], name=key[1], new_state=sender_vm.state)
 
+    def _on_hub_message_cursor(self, msg: object) -> None:
+        """Hub subscriber: when ANY PaneVM emits a cursor / entries
+        change, recompute which Commands chips are disabled based on
+        the focused pane's cursor target. Today's only rule: the
+        ``..`` parent row disables ``pane.copy`` and ``pane.delete``
+        (no source to copy/delete — the parent reference is
+        navigation-only). EMR panes are out of scope; their cursor
+        target is a job-run, all chips stay enabled.
+        """
+        from vmx import PropertyChangedMessage
+
+        from aws_tui.vm.file_manager.pane_vm import PaneVM
+
+        if not isinstance(msg, PropertyChangedMessage):
+            return
+        if msg.property_name not in {"cursor_index", "viewmodel", "entries"}:
+            return
+        if not isinstance(msg.sender_object, PaneVM):
+            return
+        self._recompute_hint_disables()
+
+    def _recompute_hint_disables(self) -> None:
+        """Push a fresh disabled-action set to the HintLegendVM based
+        on the focused pane's current cursor target. Safe to call at
+        any time — no-ops on EMR / Settings (no DualPaneVM mounted).
+        """
+        dual = self._dual_pane()
+        if dual is None:
+            # No file-pane context — leave whatever the EMR / Settings
+            # service set is the source of truth. Don't add disables.
+            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset())
+            return
+        pane = getattr(dual, "focused_pane", None)
+        if pane is None:
+            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset())
+            return
+        cursor_idx = getattr(pane, "cursor_index", 0)
+        entries = getattr(pane, "filtered_entries", ()) or getattr(pane, "entries", ())
+        target = entries[cursor_idx] if 0 <= cursor_idx < len(entries) else None
+        target_name = getattr(getattr(target, "entry", target), "name", None)
+        if target_name == "..":
+            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(
+                frozenset({"pane.copy", "pane.delete"})
+            )
+        else:
+            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset())
+
     def _on_nav_selection_changed(self, msg: object) -> None:
         """Hub subscriber: route NavMenuVM selected_id changes to the content host.
 
@@ -2234,6 +2335,10 @@ class AwsTuiApp(App[None]):
             if self._nav_selection_sub is not None:
                 self._nav_selection_sub.dispose()
                 self._nav_selection_sub = None
+        with contextlib.suppress(Exception):
+            if self._cursor_sub is not None:
+                self._cursor_sub.dispose()
+                self._cursor_sub = None
         with contextlib.suppress(Exception):
             # Currently-hosted SettingsVM (if any) is disposed by the
             # ContentHostVM tree teardown via ``root_vm.shutdown()``.
