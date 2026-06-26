@@ -14,6 +14,7 @@ import botocore.exceptions
 import pytest
 
 from aws_tui.domain.emr_serverless import (
+    _EMR_BOTO_CONFIG,
     ApplicationState,
     ApplicationSummary,
     EmrServerlessClient,
@@ -339,3 +340,14 @@ async def test_in_memory_emr_round_trips_records() -> None:
     assert detail.entry_point == "s3://b/x.py"
     # Calls are recorded so cadence tests can assert poll counts.
     assert [c[0] for c in fake.calls] == ["list_applications", "list_job_runs", "get_job_run"]
+
+
+def test_emr_boto_config_pins_timeout_and_retry_shape() -> None:
+    """Pin the explicit ``BotoConfig`` the EMR client opens with —
+    matching ``infra/aws_session.py`` / ``domain/s3_fs.py``. Without
+    this config the aioboto3 client falls back to boto3 defaults
+    (60-s connect, legacy retries) and the EMR pollers stack
+    overlapping ``list_*`` calls on a flaky network."""
+    assert _EMR_BOTO_CONFIG.connect_timeout == 10
+    assert _EMR_BOTO_CONFIG.read_timeout == 60
+    assert _EMR_BOTO_CONFIG.retries == {"max_attempts": 6, "mode": "adaptive"}

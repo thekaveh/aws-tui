@@ -76,6 +76,22 @@ def test_transfer_vm_retry_command_from_failed() -> None:
     vm.dispose()
 
 
+def test_transfer_vm_is_finished_property_covers_three_terminal_states() -> None:
+    """``is_finished`` is True for COMPLETED / FAILED / CANCELLED and
+    False for PENDING / RUNNING / PAUSED — the contract used by the
+    Pass-1 terminal-stickiness guard in ``apply_update``."""
+    for terminal in (TransferState.COMPLETED, TransferState.FAILED, TransferState.CANCELLED):
+        vm = TransferVM(_model(state=terminal), hub=_hub(), dispatcher=NULL_DISPATCHER)
+        vm.construct()
+        assert vm.is_finished, f"{terminal} must be finished"
+        vm.dispose()
+    for active in (TransferState.PENDING, TransferState.RUNNING, TransferState.PAUSED):
+        vm = TransferVM(_model(state=active), hub=_hub(), dispatcher=NULL_DISPATCHER)
+        vm.construct()
+        assert not vm.is_finished, f"{active} must NOT be finished"
+        vm.dispose()
+
+
 def test_transfer_vm_terminal_state_is_sticky() -> None:
     """A late RUNNING progress event after CANCELLED must not clobber
     the terminal flag — otherwise the row reverts to ``... 73 %`` after

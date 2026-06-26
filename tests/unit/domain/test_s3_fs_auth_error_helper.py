@@ -1,0 +1,42 @@
+"""Tests for the ``_auth_error`` helper extracted in the Pass-1
+refactor of ``s3_fs.py``.
+
+The helper centralises the auth-error message that used to be
+duplicated 8x verbatim across ``S3FS`` operations. Pinning it
+here ensures the recovery hint stays stable across versions —
+the message is what the user actually sees on auth failure, so
+silent drift is a UX regression."""
+
+from __future__ import annotations
+
+from botocore.exceptions import NoCredentialsError, ProfileNotFound
+
+from aws_tui.domain.filesystem import PermissionDeniedError
+from aws_tui.domain.s3_fs import _AUTH_HINT, _auth_error
+
+
+def test_auth_error_wraps_no_credentials() -> None:
+    exc = NoCredentialsError()
+    mapped = _auth_error(exc)
+    assert isinstance(mapped, PermissionDeniedError)
+    msg = str(mapped)
+    assert "AWS auth:" in msg
+    assert _AUTH_HINT in msg
+
+
+def test_auth_error_wraps_profile_not_found() -> None:
+    exc = ProfileNotFound(profile="kaveh-dev")
+    mapped = _auth_error(exc)
+    assert isinstance(mapped, PermissionDeniedError)
+    assert "kaveh-dev" in str(mapped)
+    assert _AUTH_HINT in str(mapped)
+
+
+def test_auth_hint_lists_the_three_recovery_paths() -> None:
+    """The hint must mention the three documented recovery paths so
+    the user actually has a way out: ``aws sso login`` refresh,
+    ``credential_process`` / ``source_profile`` inspection, and the
+    explicit env-var fallback."""
+    assert "aws sso login" in _AUTH_HINT
+    assert "credential_process" in _AUTH_HINT
+    assert "AWS_ACCESS_KEY_ID" in _AUTH_HINT
