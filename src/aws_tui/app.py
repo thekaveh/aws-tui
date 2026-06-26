@@ -498,7 +498,10 @@ class AwsTuiApp(App[None]):
                 return "aws-sso-expired"
             if state is TokenState.MISSING:
                 return "aws-no-creds"
-        loop = asyncio.get_event_loop()
+        # ``get_event_loop`` from inside a coroutine is deprecated in
+        # 3.12+. ``_try_connection`` is always awaited from a worker,
+        # so the running loop is the right and stable handle.
+        loop = asyncio.get_running_loop()
         self._attempt_future = loop.create_future()
         self._attempt_conn_key = (conn.kind, conn.name)
         try:
@@ -554,7 +557,8 @@ class AwsTuiApp(App[None]):
         """
         await asyncio.sleep(self._ATTEMPT_TOAST_GRACE_SECONDS)
         ctx = self._app_ctx
-        with contextlib.suppress(Exception):
+        posted = False
+        try:
             notifications.progress(
                 ctx.root_vm.chrome.toast_stack,
                 key=f"boot-attempt-{conn.kind}-{conn.name}",
@@ -563,7 +567,13 @@ class AwsTuiApp(App[None]):
                     f"trying {conn.name} ({self._friendly_kind(conn.kind)}) — {index}/{total}"
                 ),
             )
-        return True
+            posted = True
+        except Exception:
+            # Toast stack disposed / full / otherwise unhappy. Caller
+            # should NOT later try to dismiss a toast that was never
+            # raised — return ``False`` to telegraph that.
+            posted = False
+        return posted
 
     def _dismiss_attempt_toast(self, conn: Connection) -> None:
         with contextlib.suppress(Exception):
@@ -1212,6 +1222,15 @@ class AwsTuiApp(App[None]):
         # gesture (esc still works too).
         if self._forward_to_modal("action_cancel", "action_close", "action_dismiss"):
             return
+        # EMR page: Backspace is currently a deliberate no-op (the
+        # page is a 2-slot master-detail with no hierarchical
+        # navigation), but we short-circuit here so the keystroke
+        # isn't silently consumed by ``_dual_pane()``-style
+        # fallthrough. Symmetric with ``action_descend``'s EMR
+        # branch (the user reaches the EMR page through the rail,
+        # not by navigating up out of it).
+        if self._emr_page() is not None:
+            return
         dual = self._dual_pane()
         if dual is None:
             return
@@ -1540,7 +1559,17 @@ class AwsTuiApp(App[None]):
         connection picker.
 
         The current position is found by matching the focused pane's
-        identity label against each candidate's computed label."""
+        identity label against each candidate's computed label.
+
+        On the EMR page (no DualPaneVM hosted), ``Shift+S`` is the
+        "switch application" affordance — same physical key, page-
+        specific meaning. ``HintLegendVM._label_for`` already
+        relabels the chip to ``switch app`` when EMR is the active
+        service, so this just forwards to the picker."""
+        emr = self._emr_page()
+        if emr is not None:
+            emr.action_open_application_picker()
+            return
         ctx = self._app_ctx
         dual = self._dual_pane()
         if dual is None:
@@ -1834,6 +1863,13 @@ class AwsTuiApp(App[None]):
                 outcome = "auth-required"
             elif new_state is PaneState.FORBIDDEN:
                 outcome = "forbidden"
+            elif new_state is PaneState.ERROR:
+                # Generic ``ProviderError`` — without this branch the
+                # boot chain stalls the full 90-s ``wait_for`` budget
+                # instead of moving to "errored — trying next". The
+                # friendly map at ``_friendly_outcome`` already carries
+                # an ``"error"`` key.
+                outcome = "error"
             if outcome is not None:
                 self._attempt_future.set_result(outcome)
 

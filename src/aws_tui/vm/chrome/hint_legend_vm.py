@@ -53,7 +53,12 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "pane.refresh",
         "app.swap_source",
     ),
-    "settings": ("pane.refresh",),
+    # Settings is a static configuration page — no per-item
+    # affordances apply. Pre-PR-81 it showed ``pane.refresh`` but
+    # there's no handler for it on Settings (no DualPaneVM, no EMR
+    # page), so pressing ``r`` did nothing. Better to advertise no
+    # service-specific chips than to advertise a chip that no-ops.
+    "settings": (),
 }
 
 # Fallback for callers that never set ``current_service_id`` (most
