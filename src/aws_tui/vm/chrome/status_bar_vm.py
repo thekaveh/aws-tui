@@ -63,7 +63,13 @@ class StatusBarVM:
         self._connection: Connection | None = None
         self._auth_state: TokenState | None = None
         self._active_count: int = 0
-        self._bytes_done: int = 0
+        # Per-transfer (done, total) counters; the public ``_bytes_done`` /
+        # ``_bytes_total`` are the sum across every active entry so two
+        # concurrent transfers don't toggle the displayed totals based on
+        # whichever message landed last. Entries are dropped on any
+        # terminal-state event for that transfer id.
+        self._per_transfer_bytes: dict[str, tuple[int, int | None]] = {}
+        self._bytes_done: int | None = None
         self._bytes_total: int | None = None
 
         self._connection_label: str = "no connection"
@@ -135,8 +141,18 @@ class StatusBarVM:
 
     def update_transfers(self, active_count: int, bytes_done: int, bytes_total: int | None) -> None:
         self._active_count = active_count
-        self._bytes_done = bytes_done
-        self._bytes_total = bytes_total
+        # ``update_transfers`` is the legacy push-API used by external
+        # callers / tests; it sets the aggregate directly. The
+        # per-transfer dict is only authoritative on the message-driven
+        # path (``_apply_transfer_event``); here we keep the legacy
+        # behaviour where ``active_count == 0`` snaps the aggregate to
+        # the idle render contract (``None``).
+        if active_count == 0:
+            self._bytes_done = None
+            self._bytes_total = None
+        else:
+            self._bytes_done = bytes_done
+            self._bytes_total = bytes_total
         self._recompute_transfers_summary()
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -148,10 +164,12 @@ class StatusBarVM:
             self._apply_transfer_event(msg)
 
     def _apply_transfer_event(self, msg: TransferProgressMessage) -> None:
-        # We don't track per-id state — only the aggregate. Counter +1 on the
-        # first "running" we see for an id, -1 on any terminal state. Since
-        # the StatusBarVM is a denormalized projection of a small space,
-        # this simple counter is enough for the §4.1 status strip.
+        # Per-transfer state lives in ``_per_transfer_bytes`` keyed by
+        # transfer id. The aggregate ``_bytes_done`` / ``_bytes_total``
+        # is the SUM across active entries — without this, two
+        # concurrent transfers would make the summary toggle based on
+        # whichever message landed last (H8). Counter +1 on the first
+        # "active" state we see for an id, -1 on any terminal state.
         is_active = msg.state in _ACTIVE_STATES
         was_active = msg.transfer_id in self._seen_ids
         if is_active and not was_active:
@@ -160,13 +178,31 @@ class StatusBarVM:
         elif not is_active and was_active:
             self._seen_ids.discard(msg.transfer_id)
             self._active_count -= 1
-        # Track aggregate bytes (running totals; reset to zero when idle).
-        if self._active_count == 0:
-            self._bytes_done = 0
-            self._bytes_total = 0
+        # Update or drop the per-id entry.
+        if is_active:
+            self._per_transfer_bytes[msg.transfer_id] = (
+                msg.bytes_transferred,
+                msg.bytes_total,
+            )
         else:
-            self._bytes_done = msg.bytes_transferred
-            self._bytes_total = msg.bytes_total
+            # Terminal-state event for this id — drop it from the active
+            # dict so the aggregate stops counting it.
+            self._per_transfer_bytes.pop(msg.transfer_id, None)
+        # Recompute the aggregate from the per-id dict. When the dict
+        # is empty (idle render contract — M17) the aggregate is
+        # ``None``, not ``0``.
+        if not self._per_transfer_bytes:
+            self._bytes_done = None
+            self._bytes_total = None
+        else:
+            self._bytes_done = sum(done for done, _ in self._per_transfer_bytes.values())
+            # If any active transfer has an unknown total (``None``),
+            # the aggregate total is also unknown — render as ``?``.
+            totals = [total for _, total in self._per_transfer_bytes.values()]
+            if any(t is None for t in totals):
+                self._bytes_total = None
+            else:
+                self._bytes_total = sum(t for t in totals if t is not None)
         self._recompute_transfers_summary()
 
     def _recompute_connection_strings(self) -> None:

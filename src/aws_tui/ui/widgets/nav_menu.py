@@ -281,6 +281,24 @@ class NavMenu(Widget):
             return
         ham.update("+" if self._collapsed else "-")
 
+    def _split_items(self) -> tuple[list[NavItemVM], list[NavItemVM]]:
+        """Return ``(service_items, pinned_items)`` from the VM's items list.
+
+        The split point is :data:`_SETTINGS_NAV_ID` — everything else is
+        a service. Used by ``_rebuild_options`` (during rebuild) and by
+        the tooltip-on-highlight handler (mapping a list widget +
+        option index back to the originating ``NavItemVM``). Centralised
+        here so the partitioning rule lives in one place.
+        """
+        service_items: list[NavItemVM] = []
+        pinned_items: list[NavItemVM] = []
+        for item in self._vm.items:
+            if item.descriptor.id == _SETTINGS_NAV_ID:
+                pinned_items.append(item)
+            else:
+                service_items.append(item)
+        return service_items, pinned_items
+
     def _rebuild_options(self) -> None:
         """Rebuild both OptionLists to reflect the current items +
         collapsed state. Called on mount, on toggle, and whenever the
@@ -305,8 +323,7 @@ class NavMenu(Widget):
         services.clear_options()
         pinned.clear_options()
 
-        service_items = [item for item in self._vm.items if item.descriptor.id != _SETTINGS_NAV_ID]
-        pinned_items = [item for item in self._vm.items if item.descriptor.id == _SETTINGS_NAV_ID]
+        service_items, pinned_items = self._split_items()
         selected_id = self._vm.selected_id
 
         def _add_to(target: OptionList, items: list[NavItemVM]) -> None:
@@ -413,8 +430,7 @@ class NavMenu(Widget):
         # Map index → NavItemVM via the VM's items split (services vs
         # pinned), the same split _rebuild_options does. Done lazily
         # to avoid keeping a stale mapping around.
-        services = [item for item in self._vm.items if item.descriptor.id != _SETTINGS_NAV_ID]
-        pinned = [item for item in self._vm.items if item.descriptor.id == _SETTINGS_NAV_ID]
+        services, pinned = self._split_items()
         items = services if getattr(list_widget, "id", None) == "menu-services" else pinned
         if idx >= len(items):
             list_widget.tooltip = None

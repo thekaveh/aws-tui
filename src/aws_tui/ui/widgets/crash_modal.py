@@ -10,16 +10,23 @@ and the dump-file path. Buttons:
 
 Bindings: ``Esc`` and ``q`` quit, ``Enter`` selects the default action
 (``view trace`` if continue is disabled, ``continue`` otherwise).
+
+Buttons use :class:`ModalButton` (the themable Static-based replacement
+shared with ConfirmModal / ResumeModal / FirstRunModal / ThemePickerModal)
+instead of Textual's stock ``Button`` — the latter ships with ANSI color
+defaults that fight ``.tcss`` palette tokens.
 """
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
+from textual.events import Click
 from textual.screen import ModalScreen
-from textual.widgets import Button, Static
+from textual.widgets import Static
 from vmx import Message, MessageHub
 
+from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashVM
 
 
@@ -60,13 +67,19 @@ class CrashModal(ModalScreen[CrashChoice]):
             yield Static(report.traceback_short, classes="modal-body crash-trace")
             yield Static(str(report.dump_path), classes="modal-body crash-dump-path")
             with Horizontal(classes="modal-footer"):
-                yield Button("view trace", id="crash-view-btn")
-                yield Button(
+                yield ModalButton("view trace", button_id="crash-view-btn")
+                # ``continue`` is the safe-side primary action when the
+                # offending command was a read (``can_continue=True``).
+                # When unsafe (writes per spec §7.10), the ``-disabled``
+                # class signals non-interactivity; ``action_continue``
+                # also guards by checking ``can_continue`` directly.
+                continue_classes = "-primary" if self._vm.can_continue else "-disabled"
+                yield ModalButton(
                     "continue",
-                    id="crash-continue-btn",
-                    disabled=not self._vm.can_continue,
+                    button_id="crash-continue-btn",
+                    classes=continue_classes,
                 )
-                yield Button("quit", id="crash-quit-btn", variant="error")
+                yield ModalButton("quit", button_id="crash-quit-btn", classes="-danger")
 
     def action_quit(self) -> None:
         self._vm.quit_command.execute()
@@ -88,13 +101,19 @@ class CrashModal(ModalScreen[CrashChoice]):
         else:
             self.action_view_trace()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "crash-quit-btn":
-            self.action_quit()
-        elif event.button.id == "crash-view-btn":
-            self.action_view_trace()
-        elif event.button.id == "crash-continue-btn":
-            self.action_continue()
+    def on_click(self, event: Click) -> None:
+        # Walk up from the click target to find the ModalButton (if any).
+        node: object | None = event.widget if hasattr(event, "widget") else None
+        while node is not None:
+            if isinstance(node, ModalButton):
+                if node.button_id == "crash-quit-btn":
+                    self.action_quit()
+                elif node.button_id == "crash-view-btn":
+                    self.action_view_trace()
+                elif node.button_id == "crash-continue-btn":
+                    self.action_continue()
+                return
+            node = getattr(node, "parent", None)
 
 
 __all__ = ["CrashModal"]

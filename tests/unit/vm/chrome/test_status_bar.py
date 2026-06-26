@@ -148,3 +148,53 @@ def test_dispose_cancels_subscriptions() -> None:
     vm.dispose()
     # Sending another message after dispose must not crash.
     hub.send(ConnectionChangedMessage(connection=_aws_conn(), auth_state=TokenState.CONNECTED))
+
+
+def test_concurrent_transfers_aggregate_bytes() -> None:
+    """H8 regression: two concurrent transfers must SUM done/total
+    instead of toggling between the latest single-transfer values."""
+    vm, hub = _build()
+    hub.send(
+        TransferProgressMessage(
+            transfer_id="t1",
+            bytes_transferred=1_000_000,
+            bytes_total=4_000_000,
+            state="running",
+        )
+    )
+    hub.send(
+        TransferProgressMessage(
+            transfer_id="t2",
+            bytes_transferred=2_000_000,
+            bytes_total=8_000_000,
+            state="running",
+        )
+    )
+    # Both active → done = 1M + 2M = 3M, total = 4M + 8M = 12M.
+    assert vm.transfers_summary == "2 active . 3.0 M / 12.0 M"
+    # Completing t1 drops it from the per-id dict; only t2 remains.
+    hub.send(
+        TransferProgressMessage(
+            transfer_id="t1",
+            bytes_transferred=4_000_000,
+            bytes_total=4_000_000,
+            state="completed",
+        )
+    )
+    assert vm.transfers_summary == "1 active . 2.0 M / 8.0 M"
+    vm.dispose()
+
+
+def test_idle_renders_idle_summary_after_active_drains() -> None:
+    """M17 contract surfaced via the public ``transfers_summary``:
+    when the active-transfer count drops to 0 the bar renders the
+    idle copy (``"transfers idle"``) — NOT a "0 active . 0 / 0"
+    formatted string. The internal aggregate dropping to ``None``
+    is implementation detail; the user-visible contract is the
+    summary string. Pass-2 M-1 (test-review): previous form
+    asserted on private ``_bytes_done`` / ``_bytes_total`` slots,
+    coupling the test to a slot rename."""
+    vm, _ = _build()
+    vm.update_transfers(active_count=0, bytes_done=0, bytes_total=0)
+    assert vm.transfers_summary == "transfers idle"
+    vm.dispose()

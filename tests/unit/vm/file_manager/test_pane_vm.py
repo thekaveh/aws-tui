@@ -119,6 +119,47 @@ async def test_pane_delete_marked() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pane_delete_marked_partial_failure_aggregates_and_reloads() -> None:
+    """Pin the post-Pass-1 ``delete_marked`` contract: a mid-batch
+    failure (one of multiple marked entries can't be deleted) must
+    NOT silently abort the rest of the batch AND must still reload
+    the pane so the user sees the post-delete truth. Without the
+    fix, the loop bailed on the first error, the surviving deletes
+    never ran, and the UI showed all M entries as still-marked even
+    though the first N-1 were already gone."""
+
+    class _FailOnAlpha(InMemoryFS):
+        async def delete(self, path: PathRef) -> None:
+            # Refuse to delete ``a.txt`` specifically; the other
+            # marked entries still complete.
+            if path.name == "a.txt":
+                raise PermissionDeniedError("forbidden a.txt")
+            await super().delete(path)
+
+    fs = _FailOnAlpha()
+    await fs.mkdir(PathRef(("b",)))
+    await fs.write_stream(PathRef(("a.txt",)), _astream(b"alpha"))
+    await fs.write_stream(PathRef(("c.json",)), _astream(b'{"k":1}'))
+    pane = await _make_pane(fs)
+    pane.enter_multiselect_command.execute()
+    pane.move_cursor_command.execute(1)
+    pane.toggle_select_command.execute()
+    pane.move_cursor_command.execute(1)
+    pane.toggle_select_command.execute()
+    assert {e.entry.name for e in pane.marked_entries} == {"a.txt", "c.json"}
+
+    with pytest.raises(PermissionDeniedError):
+        await pane.delete_marked()
+
+    # ``c.json`` succeeded; ``a.txt`` survived. The reload in
+    # ``finally`` means the pane sees the post-delete truth.
+    names = [e.entry.name for e in pane.entries]
+    assert "c.json" not in names
+    assert "a.txt" in names
+    pane.dispose()
+
+
+@pytest.mark.asyncio
 async def test_pane_navigate_to_changes_breadcrumb() -> None:
     fs = await _seed_fs()
     pane = await _make_pane(fs)

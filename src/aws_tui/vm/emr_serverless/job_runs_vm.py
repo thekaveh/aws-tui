@@ -13,15 +13,26 @@ from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
-from aws_tui.domain.filesystem import (
-    AuthRequiredError,
-    PermissionDeniedError,
-    ProviderError,
-    ProviderUnreachableError,
-)
+from aws_tui.domain.filesystem import ProviderError
+from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 _ALL_STATES: frozenset[JobRunState] = frozenset(JobRunState)
+
+# Pre-terminal states the poller uses to keep the 10-s cadence. See
+# ``has_active_runs`` for the rationale; ``CANCELLING`` is included
+# because the user just requested a cancel and the state landing on
+# ``CANCELLED`` is the signal they're waiting on.
+_ACTIVE_STATES: frozenset[JobRunState] = frozenset(
+    {
+        JobRunState.SUBMITTED,
+        JobRunState.PENDING,
+        JobRunState.SCHEDULED,
+        JobRunState.QUEUED,
+        JobRunState.RUNNING,
+        JobRunState.CANCELLING,
+    }
+)
 
 
 class JobRunsVM:
@@ -119,21 +130,9 @@ class JobRunsVM:
         try:
             # Fetch unfiltered; filter is applied client-side via `runs` property.
             runs = await self._client.list_job_runs(self._application_id, states=None)
-        except AuthRequiredError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.AUTH_REQUIRED)
-            return
-        except ProviderUnreachableError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.UNREACHABLE)
-            return
-        except PermissionDeniedError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.FORBIDDEN)
-            return
         except ProviderError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.ERROR)
+            new_state, self._error_text = map_provider_error(exc)
+            self._set_state(new_state)
             return
         self._runs_cache = tuple(runs)
         # Drop stale selection if the run vanished.
@@ -147,8 +146,13 @@ class JobRunsVM:
 
     def has_active_runs(self) -> bool:
         """Used by the page-VM poller to choose between the 10-s and
-        60-s cadences."""
-        return any(r.state in (JobRunState.PENDING, JobRunState.RUNNING) for r in self._runs_cache)
+        60-s cadences. ``Active'' means any pre-terminal state —
+        ``SUBMITTED`` / ``PENDING`` / ``SCHEDULED`` / ``QUEUED`` /
+        ``RUNNING`` (the user expects rapid updates while these
+        churn) and ``CANCELLING`` (the user just hit cancel; the
+        state landing on ``CANCELLED`` is the signal they're
+        waiting for)."""
+        return any(r.state in _ACTIVE_STATES for r in self._runs_cache)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 

@@ -12,12 +12,8 @@ from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_serverless import ApplicationSummary
-from aws_tui.domain.filesystem import (
-    AuthRequiredError,
-    PermissionDeniedError,
-    ProviderError,
-    ProviderUnreachableError,
-)
+from aws_tui.domain.filesystem import ProviderError
+from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 
@@ -80,21 +76,9 @@ class ApplicationsVM:
         self._set_state(PaneState.LOADING)
         try:
             apps = await self._client.list_applications()
-        except AuthRequiredError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.AUTH_REQUIRED)
-            return
-        except ProviderUnreachableError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.UNREACHABLE)
-            return
-        except PermissionDeniedError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.FORBIDDEN)
-            return
         except ProviderError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.ERROR)
+            new_state, self._error_text = map_provider_error(exc)
+            self._set_state(new_state)
             return
         self._applications = tuple(apps)
         # Drop a stale selection if the app no longer exists.

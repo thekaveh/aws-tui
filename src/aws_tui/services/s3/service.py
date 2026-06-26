@@ -127,11 +127,19 @@ class S3Service:
         Returned VM is *not* constructed — :class:`ContentHostVM` calls
         ``construct()`` after the swap; callers needing to populate
         listings must subsequently ``await dual.setup()``.
+
+        Precondition: ``bind_hub`` has been called. Composition wires it
+        immediately after :class:`RootVM` construction, so by the time
+        any service-switch command can fire (the only path to
+        ``build_vm``), the hub is always present. The runtime check
+        below is a wiring-bug assertion for the test surface, not a
+        user-reachable error path — hence ``RuntimeError`` rather than
+        a typed :class:`ConfigError` / :class:`ConnectionNotFound`,
+        which the user-facing flows already raise when *they* are the
+        broken precondition.
         """
         if self._hub is None:
-            raise RuntimeError(
-                "S3Service.build_vm called before bind_hub — wire the RootVM hub first"
-            )
+            raise RuntimeError("S3Service.build_vm called before bind_hub — composition wiring bug")
         hub = self._hub
         s3_provider = self._make_s3_provider(connection)
         local_provider = LocalFS(root=self._local_root) if self._local_root else LocalFS()

@@ -40,6 +40,9 @@ _STATE_GLYPH: dict[JobRunState, str] = {
     JobRunState.SUCCESS: "✓",
     JobRunState.RUNNING: "●",
     JobRunState.PENDING: "⏸",
+    JobRunState.SUBMITTED: "↻",
+    JobRunState.SCHEDULED: "↻",
+    JobRunState.QUEUED: "↻",
     JobRunState.FAILED: "✗",
     JobRunState.CANCELLED: "⊘",
     JobRunState.CANCELLING: "⊘",
@@ -270,11 +273,16 @@ class JobRunsPane(Widget, can_focus=True):
         body.remove_children()
         state = self._vm.state
         runs = self._vm.runs
+        # Order mirrors ``JobRunDetailPane._refresh``: PROVIDER-error
+        # states FIRST (UNREACHABLE / AUTH_REQUIRED / FORBIDDEN /
+        # ERROR), then LOADING, then EMPTY / empty-cache fallback,
+        # then the rows. The old ordering checked ``EMPTY or not
+        # runs`` before the error branches, so an UNREACHABLE pane
+        # with an empty ``runs`` cache (the typical post-error case)
+        # silently rendered "(no runs)" instead of the actionable
+        # placeholder.
         if state is PaneState.LOADING:
             body.mount(Static("loading…", classes="runs-placeholder"))
-            return
-        if state is PaneState.EMPTY or not runs:
-            body.mount(Static("(no runs)", classes="runs-placeholder"))
             return
         if state is PaneState.UNREACHABLE:
             body.mount(
@@ -291,6 +299,25 @@ class JobRunsPane(Widget, can_focus=True):
                     classes="runs-placeholder",
                 )
             )
+            return
+        if state is PaneState.FORBIDDEN:
+            body.mount(
+                Static(
+                    self._vm.error_text or "permission denied — check IAM policy",
+                    classes="runs-placeholder",
+                )
+            )
+            return
+        if state is PaneState.ERROR:
+            body.mount(
+                Static(
+                    self._vm.error_text or "error — press r to retry",
+                    classes="runs-placeholder",
+                )
+            )
+            return
+        if state is PaneState.EMPTY or not runs:
+            body.mount(Static("(no runs)", classes="runs-placeholder"))
             return
         if self._cursor_index >= len(runs):
             self._cursor_index = max(0, len(runs) - 1)

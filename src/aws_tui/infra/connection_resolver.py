@@ -150,7 +150,7 @@ class ConnectionResolver:
 
     def _explicit_connections(self) -> builtins.list[Connection]:
         cfg = self._config_store.load()
-        out: builtins.list[Connection] = []
+        out: list[Connection] = []
         for entry in cfg.connections.values():
             if entry.kind == "aws":
                 out.append(

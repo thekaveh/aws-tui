@@ -14,6 +14,7 @@ import botocore.exceptions
 import pytest
 
 from aws_tui.domain.emr_serverless import (
+    _EMR_BOTO_CONFIG,
     ApplicationState,
     ApplicationSummary,
     EmrServerlessClient,
@@ -78,8 +79,13 @@ def test_job_run_detail_extends_summary_with_spark_params() -> None:
 
 
 def test_application_state_enum_values() -> None:
+    """Mirrors the full ``ApplicationState`` shape from the botocore
+    service model — including ``CREATING`` which the picker poller
+    hits on freshly-provisioned applications. See the overnight
+    maintenance loop's external-deps report for the rationale."""
     assert ApplicationState.STARTED == "STARTED"
     assert {s.value for s in ApplicationState} == {
+        "CREATING",
         "CREATED",
         "STARTING",
         "STARTED",
@@ -90,9 +96,18 @@ def test_application_state_enum_values() -> None:
 
 
 def test_job_run_state_enum_values() -> None:
+    """Mirrors the full ``JobRunState`` shape from the botocore
+    service model — ``SUBMITTED`` / ``SCHEDULED`` / ``QUEUED`` are
+    the three pre-``RUNNING`` states a fresh submission cycles
+    through; omitting them used to crash the 10-s poller within one
+    tick. See the overnight maintenance loop's external-deps report
+    for the rationale."""
     assert JobRunState.SUCCESS == "SUCCESS"
     assert {s.value for s in JobRunState} == {
+        "SUBMITTED",
         "PENDING",
+        "SCHEDULED",
+        "QUEUED",
         "RUNNING",
         "SUCCESS",
         "FAILED",
@@ -138,7 +153,33 @@ def test_map_boto_error_maps_to_provider_error_subclass(
 
 
 def test_map_boto_error_returns_none_for_unrelated_exceptions() -> None:
-    assert _map_boto_error(ValueError("not an aws exception")) is None
+    """Unmapped exceptions (anything that isn't a botocore error or a
+    response-shape ``ValueError`` / ``KeyError``) must return None so
+    the caller re-raises them unchanged."""
+    assert _map_boto_error(RuntimeError("not an aws exception")) is None
+
+
+def test_map_boto_error_wraps_value_error_as_validation_error() -> None:
+    """A ``ValueError`` from the ``StrEnum`` constructor (or any other
+    response-shape parse) becomes a typed ``ValidationError`` instead
+    of crashing the worker / crash modal. This is the defensive layer
+    behind the enum-completeness fix — even when AWS adds a new state
+    we don't yet model, the user sees a typed domain error, not a
+    raw ``ValueError`` traceback."""
+    from aws_tui.domain.filesystem import ValidationError
+
+    mapped = _map_boto_error(ValueError("unknown EMR state: SOMETHING_NEW"))
+    assert isinstance(mapped, ValidationError)
+    assert "malformed EMR Serverless response" in str(mapped)
+
+
+def test_map_boto_error_wraps_key_error_as_validation_error() -> None:
+    """Same defensive shape — a ``KeyError`` from a response missing a
+    required field is a malformed-response signal."""
+    from aws_tui.domain.filesystem import ValidationError
+
+    mapped = _map_boto_error(KeyError("createdAt"))
+    assert isinstance(mapped, ValidationError)
 
 
 # ── EmrServerlessClient tests ────────────────────────────────────────────────
@@ -299,3 +340,14 @@ async def test_in_memory_emr_round_trips_records() -> None:
     assert detail.entry_point == "s3://b/x.py"
     # Calls are recorded so cadence tests can assert poll counts.
     assert [c[0] for c in fake.calls] == ["list_applications", "list_job_runs", "get_job_run"]
+
+
+def test_emr_boto_config_pins_timeout_and_retry_shape() -> None:
+    """Pin the explicit ``BotoConfig`` the EMR client opens with —
+    matching ``infra/aws_session.py`` / ``domain/s3_fs.py``. Without
+    this config the aioboto3 client falls back to boto3 defaults
+    (60-s connect, legacy retries) and the EMR pollers stack
+    overlapping ``list_*`` calls on a flaky network."""
+    assert _EMR_BOTO_CONFIG.connect_timeout == 10
+    assert _EMR_BOTO_CONFIG.read_timeout == 60
+    assert _EMR_BOTO_CONFIG.retries == {"max_attempts": 6, "mode": "adaptive"}

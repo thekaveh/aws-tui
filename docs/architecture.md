@@ -30,6 +30,9 @@ yet wired (the empty config block would be a no-op).
     overlays like command palette / confirm / quick look / crash /
     resume / first-run).
   - `vm/file_manager/` — pane / dual-pane / entry / transfer VMs.
+  - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
+    `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` children
+    (added post-tag by PR #76; the read-only EMR Serverless browser).
   - `vm/settings/` — `SettingsVM` (built per-mount when the user
     selects the Settings nav peer) and `S3ConnectionsVM` (singleton
     on `AppContext`, drives the in-app Connections CRUD).
@@ -37,9 +40,11 @@ yet wired (the empty config block would be a no-op).
     `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias),
     `vm/content_host_vm.py`, `vm/root_vm.py`.
 - **Service plugins** — One folder per top-level service
-  (`src/aws_tui/services/`). v0.7.0 ships `s3`. Each service implements
-  the `Service` protocol (declared in `vm/services_protocol.py`,
-  re-exported from `services/__init__.py`).
+  (`src/aws_tui/services/`). v0.7.0 ships `s3`; post-tag PRs #76–#81
+  add `emr-serverless` (read-only browser — applications listing,
+  job-runs master-detail, state-filter chips, no cancel/submit yet).
+  Each service implements the `Service` protocol (declared in
+  `vm/services_protocol.py`, re-exported from `services/__init__.py`).
 - **Domain** — `FileSystemProvider` protocol with `LocalFS` and `S3FS`
   implementations + the cross-FS copy/move engine + the transfer
   journal (`src/aws_tui/domain/`). The Norton-Commander unifier; the
@@ -99,12 +104,18 @@ the same observable plus dispose-on-unmount.
 | E2E | 5 | Pilot-driven user journeys |
 | Integration (MinIO) | 9 | MinIO via testcontainers (opt-in, `-m integration`) |
 
-Default tier total: **951** (`uv run pytest`). Opt-in MinIO tier:
+Default tier total: **~1150+** (`uv run pytest` — exact count drifts as
+each post-tag PR lands tests; the live number is `uv run pytest
+--collect-only -q | tail -1`). Opt-in MinIO tier:
 **9** (`uv run pytest -m integration`). Per-tier counts in the table
 above are the M6 / v0.7.0 snapshot; the totals drift with each post-
 tag PR (e.g. the third overnight-maintenance loop added 134 snapshot
-content-presence guard tests). Recount with
-`uv run pytest --collect-only -q`.
+content-presence guard tests, and the EMR Serverless PR-A landing
+plus its four follow-ups added ~120 more — ~85 unit + ~35 snapshot /
+content-presence; the fourth overnight-maintenance loop added another
+~80 — EMR widget / VM coverage in pass 1 plus `map_provider_error`
+direct tests and `JobRunsPane` placeholder branches in pass 2).
+Recount with `uv run pytest --collect-only -q`.
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)
 with `uv run pytest`. Opt into the MinIO tier with
@@ -120,16 +131,27 @@ composition root and `app.py` are deliberately excluded — they live at
 ## 7. Where to start reading the code
 1. `src/aws_tui/composition.py` — see how everything wires.
 2. `src/aws_tui/vm/root_vm.py` — top of the VM tree.
-3. `src/aws_tui/services/s3/service.py` — the only concrete service in
-   v0.7.0; pattern for future ones.
-4. `src/aws_tui/domain/cross_fs.py` — the engine that moves bytes
+3. `src/aws_tui/vm/file_manager/dual_pane_vm.py` — the first concrete
+   page VM (S3 service hosts it).
+   `src/aws_tui/vm/emr_serverless/page_vm.py::EmrServerlessPageVM` —
+   the second concrete page VM (post-tag, PR #76); a richer pattern
+   that orchestrates three child VMs (`ApplicationsVM`,
+   `JobRunsVM`, `JobRunDetailVM`) and runs three independent
+   pollers.
+4. `src/aws_tui/services/s3/service.py` — the first concrete service
+   in v0.7.0; pattern for future ones.
+   `src/aws_tui/services/emr_serverless/service.py` — the second
+   shipped service (post-tag), using the richer per-service
+   subtree pattern (dedicated domain client + VM subtree + UI
+   widget tree).
+5. `src/aws_tui/domain/cross_fs.py` — the engine that moves bytes
    between any pair of `FileSystemProvider`s.
-5. `src/aws_tui/ui/widgets/` — pure Textual widgets; per-VM smoke
+6. `src/aws_tui/ui/widgets/` — pure Textual widgets; per-VM smoke
    tests in `tests/unit/ui/`.
-6. `src/aws_tui/vm/nav_menu_vm.py` + `src/aws_tui/ui/widgets/nav_menu.py` —
+7. `src/aws_tui/vm/nav_menu_vm.py` + `src/aws_tui/ui/widgets/nav_menu.py` —
    the left-rail nav: services list on top, Settings docked at the
    bottom (split into two `OptionList`s in the widget).
-7. `src/aws_tui/vm/settings/settings_vm.py` +
+8. `src/aws_tui/vm/settings/settings_vm.py` +
    `src/aws_tui/ui/widgets/settings_view.py` — the in-app Settings
    page (built per-mount, not as an `AppContext` singleton — see the
    PR #56 post-ship amendment in the

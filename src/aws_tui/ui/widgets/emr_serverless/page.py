@@ -105,8 +105,13 @@ class EmrServerlessPage(Widget):
             box.border_title = "applications"
         except Exception:
             pass
-        # Initial load: applications + first-app's runs + first-run detail.
-        self.run_worker(self._vm.setup(), exclusive=True, group="emr-setup")
+        # NOTE: ``ContentHostVM.set_content`` already dispatches
+        # ``EmrServerlessPageVM.setup()`` as a background asyncio
+        # task when the page VM is adopted (see PR #67 — and the
+        # follow-up of the maintenance loop confirming the double
+        # dispatch). We do NOT re-launch a second setup worker here:
+        # that would race the host's task and double the boot-time
+        # ``list_applications`` API call on every EMR mount.
         # Set up the three pollers per spec §6.
         self.set_interval(30.0, self._tick_applications, name="emr-poll-apps")
         self.set_interval(10.0, self._tick_runs, name="emr-poll-runs")
@@ -138,19 +143,23 @@ class EmrServerlessPage(Widget):
     # ── Pollers ─────────────────────────────────────────────────────────────
 
     def _tick_applications(self) -> None:
-        self.run_worker(self._vm.applications.refresh(), exclusive=False, group="emr-poll-apps")
+        # ``exclusive=True`` so a slow ``list_applications`` doesn't
+        # have a second tick land while the first is mid-flight —
+        # Textual silently skips overlapping ticks rather than
+        # queueing them, which is the right semantic for a poller.
+        self.run_worker(self._vm.applications.refresh(), exclusive=True, group="emr-poll-apps")
 
     def _tick_runs(self) -> None:
-        # Cadence-decay: when no PENDING/RUNNING, only refresh every 6th tick (~60 s).
+        # Cadence-decay: when no active runs, only refresh every 6th tick (~60 s).
         if not self._vm.job_runs.has_active_runs() and self._poll_runs_decay():
             return
-        self.run_worker(self._vm.job_runs.refresh(), exclusive=False, group="emr-poll-runs")
+        self.run_worker(self._vm.job_runs.refresh(), exclusive=True, group="emr-poll-runs")
 
     def _tick_detail(self) -> None:
         # Only poll while the run is non-terminal.
         if self._vm.job_run_detail.is_terminal_state():
             return
-        self.run_worker(self._vm.job_run_detail.refresh(), exclusive=False, group="emr-poll-detail")
+        self.run_worker(self._vm.job_run_detail.refresh(), exclusive=True, group="emr-poll-detail")
 
     def _poll_runs_decay(self) -> bool:
         """Return True if THIS tick should be skipped (6:1 decay)."""
