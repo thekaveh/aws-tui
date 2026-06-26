@@ -9,8 +9,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **EMR Serverless: clone-job-run modal** (PR #83, item #7 of the
+  user-feedback batch; lands ahead of the rest of PR-C). New
+  ``vm/emr_serverless/clone_vm.py::JobRunCloneVM`` +
+  ``ui/widgets/emr_serverless/clone_modal.py::JobRunCloneModal``;
+  ``EmrServerlessClient.start_job_run`` API. Bound to ``c`` on the
+  EMR page (``Binding("c", "clone_selected_run", "Clone")``);
+  ``app.py::action_copy`` hijacks ``c`` to the EMR clone path when
+  EMR is mounted, parallel to the existing dual-pane priority
+  short-circuits. ``KeymapStore.DEFAULT_BINDINGS`` adds
+  ``"emr.clone": ("c",)``;
+  ``HintLegendVM._SERVICE_ACTIONS["emr-serverless"]`` gains
+  ``"emr.clone"`` and ``_ACTION_LABELS["emr.clone"] = "clone"``
+  so the Commands strip shows a ``[c] clone`` chip when EMR is
+  active. ``notifications.Subject`` literal gains ``"Job"`` for
+  the success / error toasts.
+
+### Changed
+
+- **Screen layers gain ``dropdown``** (PR #83, items #1 + #2).
+  ``Screen { layers: base dropdown notifications }`` (was
+  ``base notifications``) so the EMR ``ApplicationPicker``'s
+  ``OptionList`` lands on its own stacking context — the
+  "There's no dropdown!" symptom from PR #81 is resolved.
+  ``Shift+S`` on the EMR page already forwarded to
+  ``EmrServerlessPage.action_open_application_picker``; with the
+  popover now actually visible the keystroke produces the
+  expected affordance.
+- **EMR Serverless icon settled on ``💥`` COLLISION** (PR #83,
+  item #3). U+1F4A5 — fourth icon attempt (PR #77 bare ``⚡`` →
+  PR #79 ``🔥`` → PR #81 ``⚡️`` with VS-16 → PR #83 ``💥``).
+  SMP single-codepoint, 2-cell colour reliably, keeps the
+  spark / electricity / explosion semantic without the
+  BMP+VS-16 fallback risk that PR #81's ``⚡️`` carried on a
+  user's terminal. Updated at the descriptor in
+  ``services/emr_serverless/service.py`` and the dropdown
+  labels in ``ui/widgets/emr_serverless/application_picker.py``;
+  the documented icon contract in ``nav_menu.py`` is now
+  satisfied (SMP single-codepoint, no VS-16 dance).
+- **EMR error / advisory paths now route through the unified
+  toast helpers** (PR #83, item #4). ``AwsTuiApp.action_copy`` /
+  ``action_delete`` / ``action_swap_source`` no-config /
+  no-target paths now use ``notifications.error(...)`` /
+  ``notifications.advise(...)`` instead of Textual's bare
+  ``self.notify`` — the latter paints over the Commands strip
+  and disappears with the wrong glyph / wrong colour / wrong
+  countdown. Errors get the ✖ glyph + ``$danger`` colour + 30 s
+  countdown; advisories get the ⚠ glyph + ``$warning`` colour +
+  8 s countdown. Same routing as every other toast in the app.
+- **HintLegend chips now reflect selection-state disable rules**
+  (PR #83, item #5). ``HintAction`` gains an ``enabled: bool``
+  field; ``HintLegendVM`` gains ``set_disabled_actions(frozenset)``;
+  an app-level ``_on_hub_message_cursor`` subscriber listens for
+  ``PaneVM`` cursor / viewmodel / entries changes and pushes the
+  disabled action set. Today's only rule: cursor on the ``..``
+  parent-link row disables ``pane.copy`` and ``pane.delete``. The
+  widget renders disabled chips with the ``-disabled`` CSS class
+  (``text-style: dim``). The existing app-handler short-circuit
+  on ``is_parent_link`` stays as the actual no-op gate; the
+  disable flag is the visible affordance.
+- **Commands strip is now ONE concatenated row** (PR #83, item
+  #6). PR #81's left / right dock split is gone; service-specific
+  chips come first, globals follow, in a single ordered
+  ``#hint-strip`` row. The ``_hint-strip-service`` and
+  ``_hint-strip-global`` ids are removed. User feedback: "I want
+  their concatenation displayed at the bottom" — same chip set,
+  single ordered list. ``test_main_screen`` snapshots
+  regenerated across all 10 themes.
+
+### Added (prior entries)
+
 - **EMR Serverless read-only browser** (PR #76, service PR-A). New
-  ``⚡️`` nav-rail entry next to S3, gated to AWS-only connections.
+  ``💥`` nav-rail entry next to S3, gated to AWS-only connections.
   Applications dropdown, master-detail Job Runs pane + Job Run Detail
   pane with multi-select state-filter chips, three independent
   pollers (apps 30 s / runs 10 s with 6:1 decay when no active runs /
@@ -41,14 +111,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Commands"; the strip is also split into a service-actions row
   (focused-pane block) and a global row, with hamburger margin /
   border alignment tightened in the same PR.
-- **EMR Serverless icon settled on the ⚡️ lightning bolt** (BMP
-  U+26A1 + VS-16 variation selector, PR #77 / PR #81). The earlier
-  bare `⚡` (PR #76) rendered as a narrow 1-cell text-style stroke in
-  SF Mono / JetBrains Mono / Fira Code, mis-aligning the nav-rail's
-  2-cell emoji column. PR #79 briefly tried `🔥` (SMP, reliable
-  2-cell colour) before PR #81 returned to ⚡️ with VS-16 — the
-  documented icon contract is now codified in
-  `nav_menu.py::_format_collapsed_prompt` / `_format_expanded_prompt`.
+- **EMR Serverless icon — the ⚡️ ↔ 🔥 ↔ ⚡ ↔ 💥 saga** (PR #77 /
+  #79 / #81 / #83). Bare `⚡` (PR #76) rendered as a narrow 1-cell
+  text-style stroke in SF Mono / JetBrains Mono / Fira Code,
+  mis-aligning the nav-rail's 2-cell emoji column. PR #77 forced
+  emoji presentation with `⚡️` (BMP U+26A1 + U+FE0F VS-16);
+  PR #79 briefly tried `🔥` (SMP, reliable 2-cell colour);
+  PR #81 returned to `⚡️` with VS-16 per user ask; PR #83 picked
+  `💥` (SMP U+1F4A5 COLLISION) as the final settled glyph after
+  the BMP+VS-16 form broke layout again on the user's stack. The
+  documented icon contract is codified in
+  `nav_menu.py::_format_collapsed_prompt` /
+  `_format_expanded_prompt` — SMP single-codepoint, no VS-16.
 - **(fourth overnight-maintenance loop, pass 1)** EMR Serverless
   client made production-tight without changing user-facing
   behavior. ``JobRunState`` gains ``SUBMITTED`` / ``SCHEDULED`` /

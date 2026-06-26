@@ -33,6 +33,9 @@ yet wired (the empty config block would be a no-op).
   - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
     `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` children
     (added post-tag by PR #76; the read-only EMR Serverless browser).
+    `JobRunCloneVM` (PR #83) backs the clone-job-run modal — a
+    sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
+    per modal-mount with the focused run as the source.
   - `vm/settings/` — `SettingsVM` (built per-mount when the user
     selects the Settings nav peer) and `S3ConnectionsVM` (singleton
     on `AppContext`, drives the in-app Connections CRUD).
@@ -40,9 +43,11 @@ yet wired (the empty config block would be a no-op).
     `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias),
     `vm/content_host_vm.py`, `vm/root_vm.py`.
 - **Service plugins** — One folder per top-level service
-  (`src/aws_tui/services/`). v0.7.0 ships `s3`; post-tag PRs #76–#81
-  add `emr-serverless` (read-only browser — applications listing,
-  job-runs master-detail, state-filter chips, no cancel/submit yet).
+  (`src/aws_tui/services/`). v0.7.0 ships `s3`; post-tag PRs #76–#83
+  add `emr-serverless` (read-only browser + clone-job-run —
+  applications listing, job-runs master-detail, state-filter chips,
+  clone-and-edit modal via `c`; no cancel / logs / vanilla submit
+  yet — PR-B / remainder-of-PR-C follow).
   Each service implements the `Service` protocol (declared in
   `vm/services_protocol.py`, re-exported from `services/__init__.py`).
 - **Domain** — `FileSystemProvider` protocol with `LocalFS` and `S3FS`
@@ -99,23 +104,24 @@ the same observable plus dispose-on-unmount.
 | Tier | Count | What it proves |
 |---|---|---|
 | Unit | 537 | VM, domain, infra behavior; no I/O |
-| Snapshot | 234 | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards (per PR #53 lesson) |
+| Snapshot | 214 (10 themes × 21 scenes + content-presence guards) | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards (per PR #53 lesson) |
 | Integration (in-process) | 40 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
 | E2E | 5 | Pilot-driven user journeys |
 | Integration (MinIO) | 9 | MinIO via testcontainers (opt-in, `-m integration`) |
 
-Default tier total: **~1150+** (`uv run pytest` — exact count drifts as
-each post-tag PR lands tests; the live number is `uv run pytest
---collect-only -q | tail -1`). Opt-in MinIO tier:
-**9** (`uv run pytest -m integration`). Per-tier counts in the table
-above are the M6 / v0.7.0 snapshot; the totals drift with each post-
-tag PR (e.g. the third overnight-maintenance loop added 134 snapshot
-content-presence guard tests, and the EMR Serverless PR-A landing
-plus its four follow-ups added ~120 more — ~85 unit + ~35 snapshot /
-content-presence; the fourth overnight-maintenance loop added another
-~80 — EMR widget / VM coverage in pass 1 plus `map_provider_error`
-direct tests and `JobRunsPane` placeholder branches in pass 2).
-Recount with `uv run pytest --collect-only -q`.
+Default tier total: **1193** (`uv run pytest --collect-only -q | tail -1`
+as of PR #83 — the live count drifts with each post-tag PR). Opt-in
+MinIO tier: **9** (`uv run pytest -m integration`). Per-tier counts in
+the table above are the M6 / v0.7.0 snapshot; the totals drift with
+each post-tag PR (e.g. the third overnight-maintenance loop added 134
+snapshot content-presence guard tests, the EMR Serverless PR-A
+landing plus its four follow-ups added ~120 more, the fourth
+overnight-maintenance loop added another ~80, and PR #83 added 37
+unit / integration / snapshot tests around the clone-job-run modal
+plus the hint-legend disabled-chip wiring — bringing the snapshot
+golden file count to 214 across 10 subdirectories in
+`tests/snapshot/__snapshots__/`). Recount with
+`uv run pytest --collect-only -q`.
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)
 with `uv run pytest`. Opt into the MinIO tier with

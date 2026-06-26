@@ -14,10 +14,11 @@ Linux, and Windows. Powered by
 > cross-platform support (macOS + Linux + Windows), App Settings as a
 > first-class nav page with inline CRUD for s3-compatible connections,
 > Settings docked at the bottom of the rail, six additional themes,
-> VMx consumed from PyPI, **EMR Serverless (read-only browser) as the
-> second shipped service** (PRs #76–#81 — applications listing, job
-> runs master-detail, state-filter chips), plus a steady stream of UX
-> polish and crash fixes. See [`CHANGELOG.md`](CHANGELOG.md)
+> VMx consumed from PyPI, **EMR Serverless (read-only browser +
+> clone-job-run) as the second shipped service** (PRs #76–#83 —
+> applications listing, job runs master-detail, state-filter chips,
+> clone-and-edit modal for re-running a finished job), plus a steady
+> stream of UX polish and crash fixes. See [`CHANGELOG.md`](CHANGELOG.md)
 > `[Unreleased]` for the full per-PR delta.
 
 ## 1. Features
@@ -45,15 +46,19 @@ Linux, and Windows. Powered by
 - **First-class S3-compatible support.** MinIO, Cloudflare R2,
   Backblaze B2, Wasabi, Ceph, SeaweedFS — same code path as native
   AWS. Path-style addressing toggle and per-vendor docs.
-- **EMR Serverless (read-only browser).** Second shipped service,
-  alongside S3. Pick the ⚡️ EMR nav peer to browse applications,
-  drive a master-detail Job Runs pane with state-filter chips,
-  inspect job-run details (driver, spark params, execution
-  duration) — all driven by three independent pollers (apps 30 s /
-  runs 10 s with 6:1 decay when no active runs / detail 5 s with
-  terminal-state suppression). Cancel / logs / submit ship in the
-  PR-B / PR-C follow-ups. AWS-only (does not surface for
-  s3-compatible connections).
+- **EMR Serverless (read-only browser + clone-job-run).** Second
+  shipped service, alongside S3. Pick the 💥 EMR nav peer to
+  browse applications, drive a master-detail Job Runs pane with
+  state-filter chips, inspect job-run details (driver, spark
+  params, execution duration) — all driven by three independent
+  pollers (apps 30 s / runs 10 s with 6:1 decay when no active
+  runs / detail 5 s with terminal-state suppression). Press `c`
+  on a finished job run to open a clone-and-edit modal that
+  pre-fills every field from the source run and fires
+  ``start_job_run`` on save (PR #83 — landed ahead of the rest
+  of PR-C). Cancel / logs / vanilla submit form ship in the
+  PR-B / remainder-of-PR-C follow-ups. AWS-only (does not
+  surface for s3-compatible connections).
 - **Silent SSO.** Auto-discovers every AWS profile from
   `~/.aws/{config,credentials}` and cheaply probes the SSO token cache
   on launch (one `stat`, one ~1 KB JSON read, sub-millisecond).
@@ -185,7 +190,7 @@ Numbered hierarchically for navigation.
    2. [Settings as a first-class nav page](docs/superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md) — design + post-ship amendments (PR #54 / #55 / #56). Supersedes the modal-overlay design at [`docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md`](docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md) (kept for git-history continuity, marked SUPERSEDED in-file).
    3. [Modal & toast polish](docs/superpowers/specs/2026-06-19-modal-toast-polish-design.md) — PR #47 modal/toast surface rework.
    4. [Graceful unreachable connections](docs/superpowers/specs/2026-06-19-graceful-unreachable-connections.md) — PR #48/#49 design.
-   5. [EMR Serverless service v1 design](docs/superpowers/specs/2026-06-25-emr-serverless-service-design.md) — decomposed PR-A read-only browser, PR-B cancel + logs, PR-C submit, PR-D E2E. Shipped through PRs #76–#81.
+   5. [EMR Serverless service v1 design](docs/superpowers/specs/2026-06-25-emr-serverless-service-design.md) — decomposed PR-A read-only browser, PR-B cancel + logs, PR-C submit (vanilla + clone), PR-D E2E. Shipped through PRs #76–#83 (PR-A read-only browser landed via #76–#82; PR #83 shipped the clone-job-run modal early — see the spec's "Status" note).
    6. [Implementation plans (M0–M6 and post-tag specs)](docs/superpowers/plans/) — per-milestone breakdowns + per-spec implementation plans; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
