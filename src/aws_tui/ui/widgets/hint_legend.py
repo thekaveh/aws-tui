@@ -16,7 +16,7 @@ from textual.widgets import Static
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
-from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
+from aws_tui.vm.chrome.hint_legend_vm import HintAction, HintLegendVM
 
 
 class HintLegend(HubSubscriberMixin, Widget):
@@ -30,13 +30,19 @@ class HintLegend(HubSubscriberMixin, Widget):
     HintLegend {
         height: 3;
         margin: 0 1 1 1;
-        align: center middle;
+        layout: horizontal;
         border-title-align: left;
     }
-    HintLegend > #hint-strip {
+    HintLegend > #hint-strip-service {
+        height: 1;
+        width: 1fr;
+        layout: horizontal;
+    }
+    HintLegend > #hint-strip-global {
         height: 1;
         width: auto;
-        align-horizontal: center;
+        layout: horizontal;
+        dock: right;
     }
     HintLegend .hint-key {
         width: auto;
@@ -66,17 +72,28 @@ class HintLegend(HubSubscriberMixin, Widget):
         super().__init__(id=id, classes=classes)
         self._vm: HintLegendVM = vm
         self._hub: MessageHub[Message] = hub
-        # Border title at top-left — matches the genai-vanilla reference
-        # where the keymap footer is framed by a labelled rule.
-        self.border_title = "Shortcuts"
+        # Border title at top-left — renamed from "Shortcuts" to
+        # "Commands" per user feedback ("I want the Bottom pane fr
+        # Shortcuts to be renamed to 'Commands'"). The chips are
+        # actionable commands, not keyboard shortcuts as such — the
+        # name "Commands" reads honestly.
+        self.border_title = "Commands"
 
     @property
     def vm(self) -> HintLegendVM:
         return self._vm
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="hint-strip"):
-            yield from self._build_chips()
+        # LEFT strip — service-specific chips (S3 copy/delete etc.,
+        # EMR switch-app etc.). Rebuilt on every ``actions`` /
+        # service-id change.
+        with Horizontal(id="hint-strip-service"):
+            yield from self._build_chips(self._vm.actions)
+        # RIGHT strip — always-visible app-chrome globals (themes /
+        # help / quit). Docked right via CSS so they sit flush
+        # against the right edge of the Commands pane.
+        with Horizontal(id="hint-strip-global"):
+            yield from self._build_chips(self._vm.global_actions)
 
     def on_mount(self) -> None:
         self.subscribe_to_vm(
@@ -93,18 +110,22 @@ class HintLegend(HubSubscriberMixin, Widget):
             self.call_after_refresh(self._rebuild_chips)
 
     def _rebuild_chips(self) -> None:
-        try:
-            strip = self.query_one("#hint-strip", Horizontal)
-        except Exception:
-            return
-        for child in list(strip.children):
-            child.remove()
-        for chip in self._build_chips():
-            strip.mount(chip)
+        for strip_id, chips in (
+            ("#hint-strip-service", self._vm.actions),
+            ("#hint-strip-global", self._vm.global_actions),
+        ):
+            try:
+                strip = self.query_one(strip_id, Horizontal)
+            except Exception:
+                continue
+            for child in list(strip.children):
+                child.remove()
+            for chip in self._build_chips(chips):
+                strip.mount(chip)
 
-    def _build_chips(self) -> list[Widget]:
+    def _build_chips(self, chips: tuple[HintAction, ...]) -> list[Widget]:
         widgets: list[Widget] = []
-        for i, chip in enumerate(self._vm.actions):
+        for i, chip in enumerate(chips):
             if i > 0:
                 widgets.append(Static("·", classes="hint-sep"))
             # Wrap the key in ``[...]`` brackets — same visual treatment

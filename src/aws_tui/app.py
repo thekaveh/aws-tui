@@ -134,6 +134,17 @@ class AwsTuiApp(App[None]):
     #main-area {
         height: 1fr;
         width: 1fr;
+        /* Match HintLegend's ``margin: 0 1 1 1`` and BrandBanner's
+           (override below) horizontal margin so all three pieces of
+           top-level chrome line up on the same x-axis. User
+           feedback: "I want the top border pane … the bottom border
+           pane … and all that is in between to have the similar
+           length and margins from the left and right edges of the
+           screen". */
+        margin: 0 1;
+    }
+    BrandBanner {
+        margin: 1 1 0 1;
     }
     #content-host {
         height: 1fr;
@@ -1921,6 +1932,12 @@ class AwsTuiApp(App[None]):
         selected = ctx.root_vm.services_menu.selected_id
         if selected is None:
             return
+        # Push the active service id down to the HintLegend so the
+        # bottom Commands pane re-renders its service-specific chips
+        # (S3 → copy/delete/swap-src; EMR → switch-app/refresh; …).
+        # The legend's right-hand globals (themes/help/quit) are
+        # independent of this.
+        ctx.root_vm.chrome.hint_legend.set_current_service(selected)
         # Serialize the two mount workers via an exclusive worker
         # group so a rapid Settings → S3 → Settings toggle can't race
         # against itself. Without exclusivity, the awaited

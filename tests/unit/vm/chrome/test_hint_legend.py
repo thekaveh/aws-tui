@@ -28,18 +28,18 @@ def _build(
     return legend, hub
 
 
-def test_initial_actions_are_app_fallbacks() -> None:
+def test_initial_globals_include_command_palette_and_help() -> None:
+    # Post-PR-81: app-level fallbacks (themes/help/quit) live on the
+    # ``.global_actions`` (RIGHT side of the Commands pane) NOT on
+    # ``.actions`` (LEFT, service-specific).
     legend, _hub = _build()
-    actions = legend.actions
-    # Without a registered focus target, only the always-visible app-level
-    # actions are surfaced.
-    action_ids = {a.action_id for a in actions}
-    assert "app.command_palette" in action_ids
-    assert "app.help" in action_ids
+    global_ids = {a.action_id for a in legend.global_actions}
+    assert "app.command_palette" in global_ids
+    assert "app.help" in global_ids
     legend.dispose()
 
 
-def test_focus_on_pane_swaps_actions() -> None:
+def test_focus_on_pane_swaps_service_actions() -> None:
     legend, hub = _build(
         actions={
             "pane.left": (
@@ -52,9 +52,9 @@ def test_focus_on_pane_swaps_actions() -> None:
         }
     )
     hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
-    actions = legend.actions
-    action_ids = [a.action_id for a in actions]
-    # The pane's own actions are listed first, then app fallbacks.
+    action_ids = [a.action_id for a in legend.actions]
+    # The pane's own (focused) actions are listed first, then the
+    # active service's chip set — both live on ``.actions`` (LEFT).
     assert action_ids[:5] == [
         "pane.descend",
         "pane.quick_look",
@@ -62,10 +62,10 @@ def test_focus_on_pane_swaps_actions() -> None:
         "pane.move",
         "pane.delete",
     ]
-    # App-level fallbacks follow the pane actions; the trailing tail is the
-    # static fallback set (`pane.switch_focus`, `pane.descend`, `pane.ascend`,
-    # `pane.refresh`, `app.command_palette`, `app.help`, `app.quit`).
-    assert action_ids[-3:] == ["app.command_palette", "app.help", "app.quit"]
+    # App-level globals (themes/help/quit) live on ``.global_actions``
+    # post-PR-81 — NOT on ``.actions``.
+    global_ids = [a.action_id for a in legend.global_actions]
+    assert global_ids[-3:] == ["app.command_palette", "app.help", "app.quit"]
     legend.dispose()
 
 
@@ -78,13 +78,15 @@ def test_focus_actions_resolve_key_labels() -> None:
     legend.dispose()
 
 
-def test_focus_unknown_vm_falls_back_to_defaults() -> None:
+def test_focus_unknown_vm_falls_back_to_globals() -> None:
     legend, hub = _build()
     hub.send(FocusChangedMessage(focused_vm_id="unregistered"))
-    # No actions registered, only app fallbacks remain.
-    action_ids = {a.action_id for a in legend.actions}
-    assert "app.command_palette" in action_ids
-    assert "app.help" in action_ids
+    # No focused-VM registration → ``.actions`` carries only the
+    # default fallback-service chip set, and the always-visible
+    # globals (themes/help/quit) live on ``.global_actions``.
+    global_ids = {a.action_id for a in legend.global_actions}
+    assert "app.command_palette" in global_ids
+    assert "app.help" in global_ids
     legend.dispose()
 
 
@@ -140,3 +142,35 @@ def test_dispose_unsubscribes() -> None:
     legend.dispose()
     # Sending after dispose must not crash.
     hub.send(FocusChangedMessage(focused_vm_id="x"))
+
+
+def test_set_current_service_swaps_to_emr_chips_and_relabels_swap_source() -> None:
+    """User asked for "switch source → switch application" when EMR
+    is the active service. The action_id (``app.swap_source``) stays
+    the same — only the chip label flips."""
+    legend, _hub = _build()
+    legend.set_current_service("emr-serverless")
+    swap_chip = next(a for a in legend.actions if a.action_id == "app.swap_source")
+    assert swap_chip.action_label == "switch app", (
+        f"Expected 'switch app' label for app.swap_source on EMR; got {swap_chip.action_label!r}."
+    )
+    # On S3 the label stays "swap src".
+    legend.set_current_service("s3")
+    swap_chip = next(a for a in legend.actions if a.action_id == "app.swap_source")
+    assert swap_chip.action_label == "swap src"
+    legend.dispose()
+
+
+def test_globals_remain_stable_across_service_switches() -> None:
+    """The RIGHT-side globals (themes / help / quit) shouldn't move
+    when the active service changes."""
+    legend, _hub = _build()
+    legend.set_current_service("s3")
+    s3_global_ids = tuple(a.action_id for a in legend.global_actions)
+    legend.set_current_service("emr-serverless")
+    emr_global_ids = tuple(a.action_id for a in legend.global_actions)
+    assert s3_global_ids == emr_global_ids, (
+        "Global chips must stay identical across S3/EMR — "
+        f"S3 globals: {s3_global_ids}, EMR globals: {emr_global_ids}."
+    )
+    legend.dispose()

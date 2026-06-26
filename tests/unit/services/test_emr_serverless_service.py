@@ -13,17 +13,16 @@ from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.services_protocol import ServiceDescriptor
 
 
-def test_descriptor_icon_is_fire_smp_emoji_label_is_emr() -> None:
-    # 🔥 = U+1F525 FIRE — SMP single-codepoint emoji. Picked over
-    # ⚡ / ⚡️ (U+26A1 / U+26A1 + VS-16) after PR #77's VS-16 fix
-    # ALSO failed: BMP codepoints with VS-16 still fall back to a
-    # 1-cell text glyph in many monospace fonts, mis-aligning the
-    # nav-rail's 2-cell emoji column and garbling the whole row.
-    # SMP emojis ship as 2-cell colour reliably because there's no
-    # text-presentation alternative. See ``service.py:descriptor``
-    # docstring for the general rule.
+def test_descriptor_icon_is_high_voltage_with_vs16_label_is_emr() -> None:
+    # ⚡️ = U+26A1 HIGH VOLTAGE + U+FE0F VARIATION SELECTOR-16.
+    # User explicitly asked for lightning over the PR #79 🔥 fire
+    # (EMR/Spark is most strongly associated with the lightning
+    # bolt). VS-16 requests emoji presentation; works on macOS /
+    # Apple-Color-Emoji / Noto / Segoe fallback chains. If a
+    # regression surfaces, swap to a SMP single-codepoint emoji
+    # like 💫 or back to 🔥.
     assert EmrServerlessService.descriptor == ServiceDescriptor(
-        id="emr-serverless", label="EMR", icon="🔥"
+        id="emr-serverless", label="EMR", icon="⚡️"
     )
 
 

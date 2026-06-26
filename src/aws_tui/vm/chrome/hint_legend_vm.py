@@ -21,26 +21,48 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
 from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
 
-# Always-visible chips appended to the end of the legend; the spec calls them
-# "App-level fallbacks" — shown in the hint legend when no widget has
-# announced focus. These cover the keyboard bindings actually wired in
-# `AwsTuiApp.BINDINGS` so the bottom row tells the user something useful
-# even before focus tracking is wired (the full input router is deferred
-# per memory `deferred-from-m6`). Keep ordering consistent with the
-# spec §4.1 chip sequence.
-_FALLBACK_ACTIONS: tuple[str, ...] = (
-    "pane.switch_focus",
-    "pane.descend",
-    "pane.copy",
-    "pane.delete",
-    "pane.refresh",
-    "app.swap_source",
+# Always-visible global chips — shown regardless of which service is
+# active and what is selected. Themes / help / quit / etc. — the "app
+# chrome" controls. User feedback after PR #80 asked for these on the
+# RIGHT side of the Commands pane while the service-specific chips
+# (S3 / EMR / etc.) sit on the LEFT.
+_GLOBAL_ACTIONS: tuple[str, ...] = (
     "app.themes",
     "app.cycle_theme",
     "app.command_palette",
     "app.help",
     "app.quit",
 )
+
+# Per-service chip sets — what the user sees on the LEFT side of the
+# Commands pane depends on which service is active. Refresh stays on
+# every service. PR-B/C will extend the EMR set with the cancel / clone
+# / submit / lifecycle action ids once those handlers ship.
+_SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
+    "s3": (
+        "pane.switch_focus",
+        "pane.descend",
+        "pane.copy",
+        "pane.delete",
+        "pane.refresh",
+        "app.swap_source",
+    ),
+    "emr-serverless": (
+        "pane.switch_focus",
+        "pane.descend",
+        "pane.refresh",
+        "app.swap_source",
+    ),
+    "settings": ("pane.refresh",),
+}
+
+# Fallback for callers that never set ``current_service_id`` (most
+# tests, and the early boot window before the first nav selection
+# fires). Keeps the existing S3-shaped chip row visible so the
+# bottom legend isn't blank — same set the pre-PR-81 hardcoded
+# ``_FALLBACK_ACTIONS`` exposed minus the globals (which now own
+# their own right-hand column).
+_FALLBACK_SERVICE_ACTIONS: tuple[str, ...] = _SERVICE_ACTIONS["s3"]
 
 # Human-readable labels per action id. Anything not listed falls back to the
 # tail-segment of the action id (e.g. "pane.copy" -> "copy"). Keeping this
@@ -64,6 +86,10 @@ _ACTION_LABELS: dict[str, str] = {
     "app.themes": "themes",
     "app.cycle_theme": "cycle",
     "app.swap_source": "swap src",
+    # Service-specific label overrides handled by ``_label_for`` (the
+    # user asked for "switch source" → "switch application" when EMR
+    # is active). Kept here so the generic fall-back stays "swap src"
+    # for S3.
     "app.quit": "quit",
     "auth.authenticate": "sign in",
     "modal.cancel": "cancel",
@@ -101,7 +127,9 @@ class HintLegendVM:
 
         self._registry: dict[str, tuple[str, ...]] = {}
         self._focused_vm_id: str | None = None
+        self._current_service_id: str | None = None
         self._actions: tuple[HintAction, ...] = ()
+        self._global_actions: tuple[HintAction, ...] = ()
 
         self._inner: ComponentVM = (
             ComponentVM.builder().name("hint_legend").services(hub, dispatcher).build()
@@ -112,7 +140,27 @@ class HintLegendVM:
 
     @property
     def actions(self) -> tuple[HintAction, ...]:
+        """Service-specific chips — LEFT side of the Commands pane.
+
+        Includes any focused-VM-registered ids and the active
+        service's chip set (S3 / EMR / Settings / fallback)."""
         return self._actions
+
+    @property
+    def global_actions(self) -> tuple[HintAction, ...]:
+        """Always-visible globals — RIGHT side of the Commands pane.
+
+        Themes / help / quit / etc. — the app-chrome controls that
+        apply regardless of which service is active."""
+        return self._global_actions
+
+    def set_current_service(self, service_id: str | None) -> None:
+        """Caller pushes the active service id whenever the nav rail
+        selection changes. Triggers a chip rebuild."""
+        if self._current_service_id == service_id:
+            return
+        self._current_service_id = service_id
+        self._rebuild_actions()
 
     @property
     def focused_vm_id(self) -> str | None:
@@ -176,18 +224,17 @@ class HintLegendVM:
             self._rebuild_actions()
 
     def _rebuild_actions(self) -> None:
-        chips: list[HintAction] = []
-        # ``seen`` dedups action_ids across the focused-pane block and
-        # the ``_FALLBACK_ACTIONS`` block. Without it, a focused-pane
-        # registration that includes a fallback id
-        # (e.g. ``("pane.descend", "pane.copy", ...)``) would render
-        # the chip twice — once in the focused row, once in the
-        # fallback row. The wiring is currently exercised only by
-        # tests (``register_focusable`` isn't called at runtime
-        # pending the deferred ``BindingResolver`` work), but the
-        # bug is real enough that a future caller hitting it would
-        # land on duplicate chips in the bottom legend.
+        # ── Service-specific (LEFT column) ──────────────────────────
+        #
+        # ``seen`` dedups across the focused-pane block, the service
+        # block, and (downstream) the globals — without it a chip
+        # registered both as focused-pane and as a service action
+        # would render twice. The focused-pane registration is
+        # exercised only by tests today (BindingResolver wiring is
+        # deferred per the [[deferred-from-m6]] memo) but kept so
+        # the contract is honest.
         seen: set[str] = set()
+        chips: list[HintAction] = []
         focused = self._focused_vm_id
         if focused is not None:
             for action_id in self._registry.get(focused, ()):
@@ -197,7 +244,10 @@ class HintLegendVM:
                 if chip is not None:
                     chips.append(chip)
                     seen.add(action_id)
-        for action_id in _FALLBACK_ACTIONS:
+        service_set = _SERVICE_ACTIONS.get(
+            self._current_service_id or "", _FALLBACK_SERVICE_ACTIONS
+        )
+        for action_id in service_set:
             if action_id in seen:
                 continue
             chip = self._resolve(action_id)
@@ -205,10 +255,25 @@ class HintLegendVM:
                 chips.append(chip)
                 seen.add(action_id)
         new_actions = tuple(chips)
-        if new_actions == self._actions:
-            return
-        self._actions = new_actions
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "actions"))
+        # ── Globals (RIGHT column) ──────────────────────────────────
+        global_chips: list[HintAction] = []
+        for action_id in _GLOBAL_ACTIONS:
+            if action_id in seen:
+                continue
+            chip = self._resolve(action_id)
+            if chip is not None:
+                global_chips.append(chip)
+                seen.add(action_id)
+        new_globals = tuple(global_chips)
+        changed = False
+        if new_actions != self._actions:
+            self._actions = new_actions
+            changed = True
+        if new_globals != self._global_actions:
+            self._global_actions = new_globals
+            changed = True
+        if changed:
+            self._hub.send(PropertyChangedMessage.create(self, self.name, "actions"))
 
     def _resolve(self, action_id: str) -> HintAction | None:
         try:
@@ -217,8 +282,22 @@ class HintLegendVM:
             return None
         if not keys:
             return None
-        label = _ACTION_LABELS.get(action_id, action_id.rsplit(".", 1)[-1])
+        label = self._label_for(action_id)
         return HintAction(action_id=action_id, key_label=keys[0], action_label=label)
+
+    def _label_for(self, action_id: str) -> str:
+        """Service-aware label lookup.
+
+        User feedback: "I also expect the switch source command to
+        become switch application command [when EMR is active]". The
+        action_id stays ``app.swap_source`` (binding routing is by
+        id), but the chip label flips to ``switch app`` when EMR is
+        the active service. Generic fallback is the ``_ACTION_LABELS``
+        table.
+        """
+        if action_id == "app.swap_source" and self._current_service_id == "emr-serverless":
+            return "switch app"
+        return _ACTION_LABELS.get(action_id, action_id.rsplit(".", 1)[-1])
 
 
 __all__ = ["HintAction", "HintLegendVM"]
