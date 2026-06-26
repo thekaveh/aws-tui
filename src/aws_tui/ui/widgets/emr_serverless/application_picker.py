@@ -170,12 +170,12 @@ class ApplicationPicker(Widget):
         if match is None:
             return "(select application)"
         glyph = _APP_STATE_GLYPH.get(match.state, "?")
-        return f"⚡ {match.name} {glyph}{match.state.value}"
+        return f"⚡️ {match.name} {glyph}{match.state.value}"
 
     def _build_options(self) -> list[Option]:
         return [
             Option(
-                prompt=f"⚡ {a.name} {_APP_STATE_GLYPH.get(a.state, '?')}{a.state.value}",
+                prompt=f"⚡️ {a.name} {_APP_STATE_GLYPH.get(a.state, '?')}{a.state.value}",
                 id=a.id,
             )
             for a in self._vm.applications

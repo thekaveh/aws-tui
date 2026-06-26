@@ -53,11 +53,18 @@ class EmrServerlessService:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="emr-serverless",
         label="EMR",
-        # ⚡ U+26A1 HIGH VOLTAGE — Spark's literal primitive glyph.
-        # Single terminal cell, font-stack-safe, no VS-16 needed.
+        # ⚡️ U+26A1 HIGH VOLTAGE + U+FE0F VARIATION SELECTOR-16 —
+        # Spark's literal primitive glyph. The bare U+26A1 renders as
+        # a narrow 1-cell text-style symbol in most monospace
+        # terminals; only the colour-emoji presentation produces the
+        # familiar yellow lightning, and a 1-cell glyph mis-aligns
+        # against the nav-rail's 2-cell emoji column (per
+        # ``nav_menu.py`` "col 2-3: emoji 2 cells wide"). VS-16 forces
+        # emoji presentation so it renders 2-cell colourful, matching
+        # ⚙️ Settings + 🖥️ EC2 which use the same VS-16 trick.
         # Symmetric with the rail's literal-object naming: 🪣 bucket,
-        # ⚡ spark, ⚙️ gear, 🖥️ computer.
-        icon="⚡",
+        # ⚡️ spark, ⚙️ gear, 🖥️ computer.
+        icon="⚡️",
     )
 
     def __init__(
