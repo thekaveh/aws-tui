@@ -1,7 +1,11 @@
 # Adding a new service
 
-> v0.7.0 ships the `s3` service. This doc is the pattern for the next
-> ones (EC2, IAM, Lambda, ...).
+> v0.7.0 ships the `s3` service; post-tag PRs #76–#81 added
+> `emr-serverless` (read-only browser) as the second concrete
+> implementation. This doc is the pattern for the next ones
+> (EC2, IAM, Lambda, ...). For a richer reference than S3 (dedicated
+> domain client + per-service VM subtree + per-service UI widget
+> tree), read `src/aws_tui/services/emr_serverless/` alongside `s3/`.
 
 aws-tui's service-plugin spine is designed so adding a top-level AWS
 (or S3-compatible) service is **additive**: a new folder under
@@ -130,11 +134,19 @@ v1.1 promotes the registry to
 party packages can ship services without forking. The same `Service`
 protocol applies.
 
-## 5. Reference: the S3 service
-`src/aws_tui/services/s3/service.py` is the only concrete service in
+## 5. Reference: the shipped services
+
+### 5.1. S3 (v0.7.0)
+`src/aws_tui/services/s3/service.py` is the first concrete service in
 v0.7.0. Read it end-to-end (~80 lines):
 
-- `descriptor` declares `id = "s3"`, label `"S3"`, icon `"S3"`.
+- `descriptor` declares `id = "s3"`, label `"S3"`, icon `"🪣"`
+  (U+1FAA3 BUCKET — true emoji codepoint, renders coloured in any
+  terminal with a modern emoji font). The icon literal in the
+  template at §2 (``"•"``) is a placeholder — the convention is to
+  pick an emoji glyph; see the docstring on
+  ``services/s3/service.py::S3Service.descriptor`` for the icon
+  rationale.
 - `supports()` accepts both `aws` and `s3-compatible` connections.
 - `build_vm(connection)` composes
   `DualPaneVM(left=PaneVM(S3FS), right=PaneVM(LocalFS))` each call.
@@ -142,3 +154,27 @@ v0.7.0. Read it end-to-end (~80 lines):
   for `InMemoryFS` so no AWS calls leak in CI.
 - `bind_hub(hub)` late-wires the hub since the service is registered
   before `RootVM` has its hub.
+
+### 5.2. EMR Serverless (post-tag, PR #76)
+`src/aws_tui/services/emr_serverless/service.py` is the second
+shipped service and demonstrates the richer per-service pattern:
+
+- `descriptor` declares `id = "emr-serverless"`, label `"EMR"`, icon
+  `"⚡️"` — U+26A1 LIGHTNING + U+FE0F VS-16 (text codepoint forced
+  into emoji presentation, 2 cells, in colour). See the
+  ``services/emr_serverless/service.py`` module docstring for the
+  full history (PR #76 bare U+26A1 → PR #77 +VS-16 → PR #79 ``🔥``
+  → PR #81 back to ⚡️ with VS-16 — the documented "icon contract"
+  future services should follow up front).
+- `supports()` is AWS-only (`connection.kind == "aws"`).
+- Domain client lives at `domain/emr_serverless.py` (async
+  `EmrServerlessClient` facade over `aioboto3`, three read-only
+  verbs, dedicated `_map_boto_error` adapter).
+- VM subtree at `vm/emr_serverless/` (`EmrServerlessPageVM`
+  orchestrates `ApplicationsVM` + `JobRunsVM` + `JobRunDetailVM`).
+- UI widget tree at `ui/widgets/emr_serverless/`
+  (`ApplicationPicker` + `JobRunsPane` + `JobRunDetailPane` +
+  `EmrServerlessPage` composer).
+- Three independent `set_interval` pollers (apps 30 s / runs 10 s
+  with 6:1 decay when no active runs / detail 5 s with
+  terminal-state suppression).

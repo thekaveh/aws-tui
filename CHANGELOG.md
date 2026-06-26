@@ -7,7 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **EMR Serverless read-only browser** (PR #76, service PR-A). New
+  ``⚡️`` nav-rail entry next to S3, gated to AWS-only connections.
+  Applications dropdown, master-detail Job Runs pane + Job Run Detail
+  pane with multi-select state-filter chips, three independent
+  pollers (apps 30 s / runs 10 s with 6:1 decay when no active runs /
+  detail 5 s with terminal-state suppression). Hierarchical VM tree
+  (`EmrServerlessPageVM` orchestrates `ApplicationsVM` +
+  `JobRunsVM` + `JobRunDetailVM`) and a dedicated UI widget tree
+  under `ui/widgets/emr_serverless/`. PR-B (cancel + logs), PR-C
+  (submit form), PR-D (E2E journey) follow.
+- **EMR page arrow-key navigation + LEFT-pane auto-focus on mount**
+  (PR #78). Up/Down/Enter/`r` route through the EMR page when it is
+  mounted (parallel to the dual-pane hijack pattern); the LEFT pane
+  gets the `:focus-within` accent border by default, matching S3's
+  default-active-pane behavior.
+- **EMR page layout overhaul** (PR #80). Bordered apps box now
+  width-matches the LEFT pane (compose restructured into a 2-column
+  horizontal split, LEFT = `Vertical(app_box, JobRunsPane 1fr)`,
+  RIGHT = `JobRunDetailPane` full height). Columnized run rows
+  (STATUS / NAME / TIME with column header), master-detail follows
+  the cursor (not just Enter), mouse-click on rows (via
+  `_JobRunRow` subclass carrying `run_id`), and multi-line args /
+  spark params in the detail pane. Page width split tightened from
+  `1fr / 2fr` to `1fr / 1fr`.
+
 ### Changed
+
+- **"Commands" pane renamed from "Shortcuts"** (PR #81). The
+  `HintLegend` border title and all user-visible references now read
+  "Commands"; the strip is also split into a service-actions row
+  (focused-pane block) and a global row, with hamburger margin /
+  border alignment tightened in the same PR.
+- **EMR Serverless icon settled on the ⚡️ lightning bolt** (BMP
+  U+26A1 + VS-16 variation selector, PR #77 / PR #81). The earlier
+  bare `⚡` (PR #76) rendered as a narrow 1-cell text-style stroke in
+  SF Mono / JetBrains Mono / Fira Code, mis-aligning the nav-rail's
+  2-cell emoji column. PR #79 briefly tried `🔥` (SMP, reliable
+  2-cell colour) before PR #81 returned to ⚡️ with VS-16 — the
+  documented icon contract is now codified in
+  `nav_menu.py::_format_collapsed_prompt` / `_format_expanded_prompt`.
+- **(fourth overnight-maintenance loop, pass 1)** EMR Serverless
+  client made production-tight without changing user-facing
+  behavior. ``JobRunState`` gains ``SUBMITTED`` / ``SCHEDULED`` /
+  ``QUEUED`` and ``ApplicationState`` gains ``CREATING`` to close
+  the boto-service-model drift surfaced by the dependency-contract
+  pass (a freshly-submitted run no longer crashes the 10-s poller).
+  `_map_boto_error` now wraps `ValueError`/`KeyError` as
+  `ValidationError` so any future enum drift surfaces as a
+  recoverable provider error, not an uncaught exception.
+  ``EmrServerlessClient`` adopts a botocore ``Config`` with
+  ``connect_timeout=10`` / ``read_timeout=60`` /
+  ``retries.max_attempts=6, mode="adaptive"`` matching the S3
+  client's posture. ``JobRunsVM.has_active_runs`` extended to
+  include `SUBMITTED` / `SCHEDULED` / `QUEUED` / `CANCELLING` so the
+  10-s cadence stays sticky through the transient cancel window.
+- **(fourth overnight-maintenance loop, pass 1)** EMR page double-
+  setup race fixed: ``EmrServerlessPage.on_mount`` no longer launches
+  its own ``setup()`` worker — ``ContentHostVM`` already drives it,
+  the page-side worker was a double dispatch. Pollers (apps / runs /
+  detail) all switched to ``exclusive=True`` so backed-up ticks
+  serialize rather than overlap. ``Backspace`` on EMR gains a
+  symmetric no-op branch matching ``action_descend``.
+  ``action_swap_source`` on the EMR page forwards to
+  ``EmrServerlessPage.action_open_application_picker`` so the
+  Commands chip advertising "switch app" actually fires (was
+  silently no-op'ing through `_dual_pane()`).
+- **(fourth overnight-maintenance loop, pass 1)** S3FS hardening.
+  ``S3FS.read_stream`` now eagerly probes ``head_object`` so a
+  missing source raises ``NotFoundError`` at call time instead of
+  mid-stream (cleaner error surface for the transfer engine). The
+  auth-error handling block was extracted into a single
+  ``_auth_error(exc)`` helper after being duplicated 8x across the
+  list / get / put / delete / rename / head call sites.
+- **(fourth overnight-maintenance loop, pass 1)** Boot-chain
+  outcome map for ``_on_pane_state_changed`` extended with
+  ``PaneState.ERROR → "error"`` so an ERROR-terminal pane resolves
+  the future explicitly instead of timing out.
+  ``_try_connection`` uses ``asyncio.get_running_loop()`` (was
+  ``get_event_loop()`` — deprecated in 3.12 when called outside a
+  running loop). ``_raise_attempt_toast_after_grace`` now returns
+  ``True`` only when the toast actually posted (was returning True
+  on the grace-cancelled path too).
+- **(fourth overnight-maintenance loop, pass 1)**
+  ``HintLegendVM._SERVICE_ACTIONS["settings"]`` is now ``()`` (was
+  ``("pane.refresh",)``) — the Settings page has no
+  ``action_refresh`` handler, so the chip was an advertised
+  affordance with no behavior. Empty tuple drops the chip
+  cleanly until the Settings refresh handler ships.
+- **(fourth overnight-maintenance loop, pass 1)**
+  ``DualPaneVM.delete_marked`` now collects per-target failures
+  and reloads the pane in ``finally`` (was silent partial failure
+  on mid-batch error — first failing target raised, leaving
+  subsequent entries un-attempted and the pane stale).
 
 - **NavMenu is now always visible** (PR #59). The left rail
   collapses to a minimally-wide icon-only column instead of
@@ -608,6 +702,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **EMR icon VS-16 alignment** (PR #77). U+26A1 alone defaults to
+  text-style in monospace terminals (1 cell, mis-aligning the
+  nav-rail's 2-cell column); appending U+FE0F forces the
+  emoji-presentation glyph (2 cells, in colour) on the three call
+  sites — the ServiceDescriptor icon, the application-picker
+  trigger label, and the dropdown options.
+- **EMR page layout user-reported gaps** (PR #80). Six user-reported
+  gaps closed in one PR: bordered apps box width-matched to LEFT
+  pane, columnized run rows, master-detail follows cursor (not just
+  Enter), mouse-click on rows, multi-line args / spark params, page
+  width split (`1fr/1fr` from `1fr/2fr`).
+- **EMR misc batch** (PR #81). ⚡️ icon refresh, args pairing in the
+  job-run detail pane, nav-margin spacer, "Shortcuts" → "Commands"
+  rename + service/global strip split, border alignment. Dropdown
+  bug deferred to a follow-up.
 - **3-slot Tab cycle + visible NavMenu focus border** (PR #62).
   Folded the earlier 4-slot Tab cycle (left → right → nav-services →
   nav-pinned) into a single NAV slot (left → right → NAV → wrap) so

@@ -86,6 +86,25 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Cancel / dismiss modal | `Esc` | Modal-owned; works on every modal that ships in v0.7.x |
 | Quit | `q` or `Ctrl+C` | |
 
+### 1.8. EMR Serverless
+
+These are wired by `EmrServerlessPage` (added post-tag, PR #76; arrow-
+key routing added by PR #78; layout overhaul by PR #80). The EMR page
+is mounted in place of the S3 dual-pane when the ⚡️ EMR nav peer is
+selected. Bindings are App-level `priority=True` and short-circuit
+through `_emr_active_pane()` before the dual-pane guard fires.
+
+| Action | Default | Notes |
+|---|---|---|
+| Open application picker | `a` | Opens the applications dropdown above the LEFT pane. The Commands chip on EMR re-labels `app.swap_source` ("switch app") and `Shift+S` is forwarded to the same handler so muscle memory from S3 still opens the picker. |
+| State filter chips | `1` `2` `3` `4` `5` | Multi-select toggles for `RUNNING` / `SUCCESS` / `FAILED` / `CANCELLING` + `CANCELLED` / pending family (`PENDING` / `SUBMITTED` / `SCHEDULED` / `QUEUED`). |
+| Cursor up / down | `↑` `↓` (also `j` / `k`) | Moves the LEFT-pane row cursor; master-detail follows the cursor (the RIGHT pane re-loads on every cursor move, not only on `Enter`). |
+| Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
+| Refresh | `r` | Forces an immediate poll on the active pane (apps if LEFT focused on the picker, runs if LEFT focused on the runs list, detail if RIGHT focused). |
+| Cycle pane focus | `Tab` / `Shift+Tab` | 2-slot cycle (LEFT ↔ RIGHT); narrower than the S3 3-slot cycle because the EMR page has no separate nav slot. |
+| Swap source (re-purposed) | `Shift+S` (`S`) | On EMR this forwards to **open application picker** instead of the S3 connection cycle. |
+| Backspace | `Backspace` | No-op on EMR (symmetric to `Descend` having an EMR branch). |
+
 ## 2. Customizing
 
 A binding can be a single keystroke or a list of fallback keystrokes:
