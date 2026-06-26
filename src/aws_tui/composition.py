@@ -34,6 +34,7 @@ from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
 from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
+from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.services.s3.service import S3Service
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
@@ -195,6 +196,12 @@ def build_app_context(
     # cast to Service: S3Service satisfies the protocol structurally; mypy
     # rejects ClassVar `descriptor` here so we widen explicitly.
     registry.register(cast("Service", s3_service))
+
+    emr_service = EmrServerlessService(
+        hub=hub,
+        dispatcher=dispatcher,
+    )
+    registry.register(cast("Service", emr_service))
 
     # ── Root VM ───────────────────────────────────────────────────────────
     root_vm = RootVM(

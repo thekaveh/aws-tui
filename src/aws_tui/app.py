@@ -37,6 +37,7 @@ from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
+from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.nav_menu import NavMenu
@@ -825,16 +826,21 @@ class AwsTuiApp(App[None]):
         (set by ``S3Service.build_vm``), so no per-pane tracker is needed here.
         """
         ctx = self._app_ctx
+        _svc_id: str | None = None
         try:
             current_vm = ctx.root_vm.content_host.current
+            _svc_id = ctx.root_vm.content_host.current_id
             if current_vm is not None:
                 host = self.query_one("#content-host", Container)
                 host.remove_children()
-                host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+                if _svc_id == "emr-serverless":
+                    host.mount(EmrServerlessPage(current_vm, hub=ctx.hub, id="content-emr-page"))
+                else:
+                    host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.failed",
-                service_id="s3",
+                service_id=_svc_id or "unknown",
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
@@ -846,7 +852,7 @@ class AwsTuiApp(App[None]):
                 notifications.error(
                     ctx.root_vm.chrome.toast_stack,
                     subject="Mount",
-                    message=f"S3 view failed: {type(exc).__name__}",
+                    message=f"Service view failed: {type(exc).__name__}",
                     action="see ~/.cache/aws-tui/log/aws-tui.log",
                     toast_id="mount-service-failed",
                 )
@@ -947,6 +953,14 @@ class AwsTuiApp(App[None]):
         don't accept Textual focus; they use a CSS ``-focused`` class
         toggled by ``DualPaneVM``).
         """
+        # EMR page owns its own 2-slot Tab / Shift+Tab cycle.
+        # Delegate immediately so the App-level priority binding never
+        # falls through to the Settings/nav-rail branch below.
+        with contextlib.suppress(Exception):
+            emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
+            emr_page.action_cycle_panes_forward()
+            return
+
         try:
             nav = self.query_one("#nav-menu", NavMenu)
         except Exception:
@@ -1960,7 +1974,12 @@ class AwsTuiApp(App[None]):
             current_vm = ctx.root_vm.content_host.current
             if current_vm is not None:
                 await host.remove_children()
-                await host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+                if service_id == "emr-serverless":
+                    await host.mount(
+                        EmrServerlessPage(current_vm, hub=ctx.hub, id="content-emr-page")
+                    )
+                else:
+                    await host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.mount_failed",
