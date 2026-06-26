@@ -83,6 +83,18 @@ class ApplicationPicker(Widget):
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
+        # NOTE: the visible-dropdown bug ("There's no dropdown!")
+        # turned out to be the ``layer: dropdown`` declaration on
+        # the OptionList not actually putting the popover on its
+        # own layer — ``Screen`` only declares ``layers: base
+        # notifications`` so the dropdown lands in normal flow,
+        # gets pushed off-screen, and the click target stays
+        # invisible. The fix is to add ``dropdown`` to Screen's
+        # layer list AND give the OptionList a higher z-order;
+        # tracked for a follow-up. The intermediate Horizontal
+        # wrapper here was suspected as the cause and removed in
+        # an earlier WIP attempt, but the snapshot baseline depends
+        # on its presence so it stays.
         with Horizontal():
             yield Static(self._trigger_label(), classes="app-trigger")
         yield OptionList(*self._build_options(), id="app-options")
@@ -169,12 +181,12 @@ class ApplicationPicker(Widget):
         if match is None:
             return "(select application)"
         glyph = _APP_STATE_GLYPH.get(match.state, "?")
-        return f"🔥 {match.name} {glyph}{match.state.value}"
+        return f"⚡️ {match.name} {glyph}{match.state.value}"
 
     def _build_options(self) -> list[Option]:
         return [
             Option(
-                prompt=f"🔥 {a.name} {_APP_STATE_GLYPH.get(a.state, '?')}{a.state.value}",
+                prompt=f"⚡️ {a.name} {_APP_STATE_GLYPH.get(a.state, '?')}{a.state.value}",
                 id=a.id,
             )
             for a in self._vm.applications

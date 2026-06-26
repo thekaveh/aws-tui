@@ -215,7 +215,12 @@ async def test_services_menu_renders_items_and_marks_selected() -> None:
             # pinned at the bottom in #menu-pinned. Sum across both.
             services = app.query_one("#menu-services", OptionList)
             pinned = app.query_one("#menu-pinned", OptionList)
-            assert services.option_count == 2  # s3, ec2
+            # Post-PR-81: NavMenu inserts a blank spacer ``Option``
+            # between consecutive entries so the rail rows have
+            # vertical breathing room. Two service items therefore
+            # render as ``s3 + spacer + ec2`` = 3 OptionList rows.
+            # Settings is the only pinned item so no spacer there.
+            assert services.option_count == 3  # s3, spacer, ec2
             assert pinned.option_count == 1  # settings
     finally:
         vm.dispose()

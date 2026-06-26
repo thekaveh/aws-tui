@@ -53,28 +53,33 @@ class EmrServerlessService:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="emr-serverless",
         label="EMR",
-        # 🔥 U+1F525 FIRE — SMP single-codepoint emoji with
-        # Default_Emoji_Presentation. PR #77 first tried ⚡ U+26A1
-        # then ⚡️ U+26A1 + U+FE0F VS-16, but BOTH render
-        # unreliably in monospace terminals — even with VS-16 the
-        # codepoint frequently falls back to a 1-cell text-style
-        # outline because the colour glyph isn't in the user's font
-        # fallback chain. The 1-cell width then mis-aligns against
-        # the nav-rail's 2-cell emoji column (see ``nav_menu.py``
-        # ``_format_collapsed_prompt``), garbling the whole row.
-        # SMP single-codepoint emojis (U+1F***) avoid this
-        # entirely: every monospace font with emoji support ships
-        # them as 2-cell colour glyphs because there's no text
-        # presentation alternative. 🔥 is semantically apt for
-        # Spark (the framework Apache Spark literally calls its
-        # primitive a "spark"; "fire/spark" share the same
-        # conceptual root), reliably renders 2-cell colour in
-        # every modern terminal, and visually distinct from 🪣
-        # bucket / ⚙️ gear / 🖥️ computer.
+        # ⚡️ U+26A1 HIGH VOLTAGE + U+FE0F VS-16 — the user
+        # explicitly asked for lightning/electricity over the
+        # previous 🔥 fire, since EMR (Spark) is most strongly
+        # associated with the lightning bolt. This is the third
+        # icon attempt (PR #77 ⚡ → PR #79 🔥 → here ⚡️) and
+        # the trade-off is documented:
         #
-        # General rule for nav-rail icons going forward: pick from
-        # the SMP emoji blocks (U+1F***), NOT BMP-with-VS-16.
-        icon="🔥",
+        # - ⚡ alone (PR #77 pre-fix) defaults to a 1-cell
+        #   text-style outline in many monospace fonts. Layout
+        #   garbled.
+        # - ⚡️ (with VS-16) REQUESTS emoji presentation. Apple
+        #   Color Emoji / Noto Color Emoji / Segoe UI Emoji all
+        #   render it as 2-cell colour when the system's font
+        #   fallback chain includes them — which it does on
+        #   macOS Terminal / iTerm2 / VS Code's integrated
+        #   terminal with default settings. The user is on one
+        #   of those setups (PR #79 confirmed 🔥 renders 2-cell
+        #   for them, which means SMP emojis work, which means
+        #   their emoji-font fallback chain is alive).
+        # - 🔥 (PR #79) was the safe SMP single-codepoint pick.
+        #   Worked. User now wants lightning specifically.
+        #
+        # If ⚡️ regresses on this user's setup again, fall back
+        # to the SMP emoji 💫 DIZZY (U+1F4AB, swirly motion) or
+        # back to 🔥 — both are SMP single-codepoint and
+        # reliably 2-cell colour.
+        icon="⚡️",
     )
 
     def __init__(

@@ -57,8 +57,13 @@ def test_chrome_dispose_cascades() -> None:
     assert chrome.status == ConstructionStatus.DISPOSED
 
 
-def test_chrome_hint_legend_starts_with_fallbacks() -> None:
+def test_chrome_hint_legend_starts_with_global_command_palette() -> None:
+    # Post-PR-81: app-level globals (command_palette, help, etc.)
+    # moved from ``.actions`` (LEFT, service) to ``.global_actions``
+    # (RIGHT, always-visible) so the bottom Commands pane can show
+    # service-specific chips on the left and the global app-chrome
+    # chips on the right.
     chrome, _hub = _build()
-    action_ids = {a.action_id for a in chrome.hint_legend.actions}
-    assert "app.command_palette" in action_ids
+    global_ids = {a.action_id for a in chrome.hint_legend.global_actions}
+    assert "app.command_palette" in global_ids
     chrome.dispose()

@@ -310,7 +310,32 @@ class NavMenu(Widget):
         selected_id = self._vm.selected_id
 
         def _add_to(target: OptionList, items: list[NavItemVM]) -> None:
+            # ``inject_separator`` flips True after the first
+            # mounted option so subsequent options get a blank
+            # ``Separator()`` above them — that's the 1-row vertical
+            # breathing room between rail rows the user asked for
+            # ("There's basically no vertical margin between them").
+            # ``Separator`` is a Textual-native OptionList primitive
+            # that renders as a single non-selectable row of empty
+            # space; PR #81's first attempt at per-option CSS
+            # ``padding: 1 0 0 0`` made the OptionList silently
+            # stop rendering its contents — turns out
+            # ``.option-list--option`` isn't a styling surface
+            # Textual exposes for padding the way standard widgets do.
+            # Spacer option between consecutive items gives 1 row
+            # of vertical breathing room in the rail. Textual's
+            # ``OptionList.add_option`` requires a prompt; a
+            # ``disabled=True`` Option with a blank prompt renders
+            # as an empty non-highlightable row — visually the
+            # margin the user asked for. Per-option CSS padding
+            # was the first attempt but ``.option-list--option``
+            # isn't a styling surface Textual exposes for padding,
+            # which silently broke OptionList rendering entirely.
+            inject_spacer = False
             for item in items:
+                if inject_spacer:
+                    target.add_option(Option(" ", disabled=True))
+                inject_spacer = True
                 descriptor = item.descriptor
                 ribbon = _RIBBON_GLYPH if descriptor.id == selected_id else _RIBBON_SPACER
                 # ``icon`` is always a str on ServiceDescriptor; the

@@ -151,7 +151,7 @@ class JobRunDetailPane(Widget, can_focus=True):
         # on the EMR right pane, so each argument and each
         # ``--conf k=v`` gets its own indented line below a single
         # key header.
-        for line in _multiline_kv("Args", list(d.entry_point_arguments)):
+        for line in _multiline_kv("Args", _pair_args(list(d.entry_point_arguments))):
             body.mount(Static(line, classes="detail-row"))
         for line in _multiline_kv("Spark", _split_spark_params(d.spark_submit_parameters)):
             body.mount(Static(line, classes="detail-row"))
@@ -178,6 +178,36 @@ def _multiline_kv(key: str, values: list[str]) -> list[str]:
     header = f"{key:<12}"
     indent = " " * 14  # 12-char key column + 2-space gap
     return [header] + [f"{indent}{v}" for v in values]
+
+
+def _pair_args(args: list[str]) -> list[str]:
+    """Group a flat positional-arg list into ``--option value`` pairs.
+
+    Job-run arguments come from boto as a flat tuple
+    (e.g. ``("--debug", "true", "--input", "s3://bucket/in/")``).
+    User feedback after PR #80: rendering each element on its own
+    line splits ``--debug`` from its value ``true`` — unreadable.
+
+    Heuristic: an arg that starts with ``--`` AND is followed by
+    a non-``--`` arg is treated as the option's value and rendered
+    on the same line. ``--flag`` followed by another ``--flag``
+    stays on its own line (boolean flag with no value). Positional
+    args that don't start with ``--`` also stay on their own line.
+
+    >>> _pair_args(["--debug", "true", "--in", "s3://x", "--verbose", "--out", "s3://y"])
+    ['--debug true', '--in s3://x', '--verbose', '--out s3://y']
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        cur = args[i]
+        if cur.startswith("--") and i + 1 < len(args) and not args[i + 1].startswith("--"):
+            out.append(f"{cur} {args[i + 1]}")
+            i += 2
+        else:
+            out.append(cur)
+            i += 1
+    return out
 
 
 def _split_spark_params(raw: str | None) -> list[str]:
