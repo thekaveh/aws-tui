@@ -632,9 +632,18 @@ EmrServerlessPage {
     color: $text;
 }
 
-EmrServerlessPage > .emr-top-strip {
+EmrServerlessPage > .emr-left-column > .emr-app-box {
     background: $bg;
-    border-bottom: solid $rule-dim;
+    color: $text;
+    border: solid $rule-dim;
+}
+EmrServerlessPage > .emr-left-column > .emr-app-box:focus-within {
+    border: solid $accent;
+}
+JobRunsPane > .runs-column-header {
+    background: $bg-elev;
+    color: $text-muted;
+    text-style: bold;
 }
 
 ApplicationPicker > .app-trigger {
