@@ -108,6 +108,10 @@ def _client_error(code: str, op: str = "ListApplications") -> botocore.exception
     ("raised", "expected"),
     [
         (botocore.exceptions.NoCredentialsError(), AuthRequiredError),
+        (
+            botocore.exceptions.TokenRetrievalError(provider="sso", error_msg="token expired"),
+            AuthRequiredError,
+        ),
         (botocore.exceptions.EndpointConnectionError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ConnectTimeoutError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ReadTimeoutError(endpoint_url="x"), ProviderUnreachableError),
