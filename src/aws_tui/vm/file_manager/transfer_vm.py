@@ -175,6 +175,48 @@ class TransferVM:
         state: TransferState,
         error: str | None = None,
     ) -> None:
+        # Terminal-state stickiness: once a transfer reaches
+        # CANCELLED / COMPLETED / FAILED, a late RUNNING progress
+        # event from the underlying provider must not clobber the
+        # terminal flag — that's how the "I clicked cancel but the
+        # row keeps reporting 73 %" bug would surface. We refuse the
+        # update unless the new state is itself terminal (so a late
+        # FAILED can still be recorded alongside a prior CANCELLED).
+        #
+        # User-initiated transitions out of a terminal state (the
+        # retry button → PENDING) bypass this guard by going through
+        # :meth:`_reset_to_pending`; do NOT add ``PENDING`` to the
+        # allow-list below or stale progress events from a finished
+        # transfer's lingering generator would silently revive it.
+        if self.is_finished:
+            new_is_terminal = state in (
+                TransferState.COMPLETED,
+                TransferState.FAILED,
+                TransferState.CANCELLED,
+            )
+            if not new_is_terminal:
+                return
+        self._apply_update_unchecked(
+            bytes_done=bytes_done,
+            bytes_total=bytes_total,
+            state=state,
+            error=error,
+        )
+
+    def _apply_update_unchecked(
+        self,
+        *,
+        bytes_done: int,
+        bytes_total: int | None,
+        state: TransferState,
+        error: str | None = None,
+    ) -> None:
+        """Lower-level mutator that skips terminal-state stickiness.
+
+        Used by :meth:`_retry` (which deliberately transitions out of a
+        terminal state in response to a user command) and tests that
+        need to drive arbitrary transitions.
+        """
         self._record_sample(bytes_done)
         new = replace(
             self._inner.model,
@@ -216,7 +258,10 @@ class TransferVM:
         self._hub.send(TransferCancelRequestedMessage(transfer_id=self._inner.model.id))
 
     def _retry(self) -> None:
-        self.apply_update(
+        # Retry must bypass terminal-state stickiness — by definition
+        # we're transitioning OUT of FAILED / CANCELLED back to
+        # PENDING in response to a user command.
+        self._apply_update_unchecked(
             bytes_done=0,
             bytes_total=self._inner.model.bytes_total,
             state=TransferState.PENDING,

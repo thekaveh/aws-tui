@@ -67,11 +67,11 @@ class QuickLook(ModalScreen[None]):
             aclose = getattr(chunks, "aclose", None)
             if aclose is not None:
                 await aclose()
-        try:
-            text = buf.decode("utf-8", errors="replace")
-        except Exception:
-            text = repr(bytes(buf))
-        body.update(text)
+        # ``bytes.decode("utf-8", errors="replace")`` substitutes
+        # U+FFFD for any invalid sequence — it cannot raise. The
+        # previous ``except Exception`` + ``repr(bytes(buf))`` fallback
+        # was dead code.
+        body.update(buf.decode("utf-8", errors="replace"))
 
     def action_close(self) -> None:
         self._vm.close_command.execute()

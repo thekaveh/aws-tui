@@ -186,7 +186,7 @@ async def test_shutdown_disposes_full_tree() -> None:
     await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
     await root.switch_service("s3")
     content_vm = root.content_host.current
-    await root.shutdown()
+    root.shutdown()
     assert root.status == ConstructionStatus.DISPOSED
     assert content_vm is not None
     assert content_vm.status == ConstructionStatus.DISPOSED

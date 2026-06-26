@@ -221,12 +221,16 @@ class RootVM:
         self._focused_vm_id = vm_id
         self._hub.send(FocusChangedMessage(focused_vm_id=vm_id))
 
-    async def shutdown(self) -> None:
+    def shutdown(self) -> None:
         """Graceful shutdown: dispose the entire tree.
 
         The async-drain step (cancelling in-flight transfers, closing aioboto3
         clients) belongs to the infra/app layer per spec §5.4. RootVM merely
-        owns the synchronous depth-first dispose cascade afterwards.
+        owns the synchronous depth-first dispose cascade — so the signature
+        is sync. Earlier revisions kept ``async def`` for symmetry with the
+        infra-layer async shutdown, but the misleading signature led callers
+        to add unnecessary ``await``s and obscured that there's nothing to
+        wait for here.
         """
         self.dispose()
 

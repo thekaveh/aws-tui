@@ -178,22 +178,19 @@ def humanize_bytes(n: int | None) -> str:
 def entry_summary(entry: TransferJournalEntry) -> str:
     """One-line summary used by the resume modal body.
 
-    Mirrors the format in spec §7.6 (filename, bytes done / total, %).
-    Bytes-done is approximated as
-    ``total * parts / (parts + 1)`` when no per-part byte totals
-    are available: an asymptotic ``parts / (parts + 1)`` fraction
-    of the total that approaches but never reaches 100% — enough
-    to drive the preview's "how far through this was I" display
-    without overstating. Exact bytes come from the resumed
-    transfer itself once the user picks RESUME_ALL.
+    Mirrors the format in spec §7.6 (filename, parts completed, total
+    size). Without per-part byte totals we cannot honestly report a
+    percentage — the previous ``parts / (parts + 1)`` asymptote rendered
+    "50% done" for a single-part transfer, which the user reasonably
+    read as a lie. We render the part count verbatim instead. Exact
+    bytes come from the resumed transfer itself once the user picks
+    RESUME_ALL.
     """
     name = _basename(entry.destination_uri)
     parts = len(entry.completed_parts)
     if entry.bytes_total is None:
         return f"{name}  ({parts} parts)"
-    bytes_done = int(entry.bytes_total * (parts / max(parts + 1, 1)))
-    pct = int(bytes_done * 100 / entry.bytes_total) if entry.bytes_total else 0
-    return f"{name}  ({humanize_bytes(bytes_done)} / {humanize_bytes(entry.bytes_total)}, {pct}%)"
+    return f"{name}  ({parts} parts, {humanize_bytes(entry.bytes_total)} total)"
 
 
 def _basename(uri: str) -> str:

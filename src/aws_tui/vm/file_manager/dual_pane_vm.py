@@ -402,12 +402,21 @@ class DualPaneVM:
         the journal). Re-raises on a real error — the caller must
         decide whether to continue the batch or propagate.
         """
+        # ``_pre_register_pending`` unconditionally creates a
+        # per-transfer cancel event before this method runs, so the
+        # event is guaranteed to be present. We still narrow with an
+        # ``assert`` for the type checker; the previous fallback
+        # branch was dead code (asserted by the comment that used to
+        # live there) and has been removed.
         cancel_event = self._cancel_events.get(transfer_id)
+        assert cancel_event is not None, (
+            f"cancel event missing for {transfer_id!r} — _pre_register_pending should install it"
+        )
 
         # Pre-cancelled-while-PENDING fast path: the user clicked
         # cancel before this transfer got its turn. Skip the work
         # entirely, mark the journal aborted, move on.
-        if cancel_event is not None and cancel_event.is_set():
+        if cancel_event.is_set():
             self._journal.mark_aborted(transfer_id)
             return False
 
@@ -433,24 +442,6 @@ class DualPaneVM:
                 on_conflict=on_conflict,
             )
         )
-
-        if cancel_event is None:
-            # No cancel event registered (defensive — pre-register
-            # always installs one). Fall back to the simple await path.
-            try:
-                await copy_task
-            except Exception:
-                self._hub.send(
-                    TransferProgressMessage(
-                        transfer_id=transfer_id,
-                        bytes_transferred=0,
-                        bytes_total=entry.entry.size,
-                        state=TransferState.FAILED,
-                    )
-                )
-                self._journal.mark_aborted(transfer_id)
-                raise
-            return True
 
         cancel_task: asyncio.Task[bool] = asyncio.create_task(cancel_event.wait())
         try:

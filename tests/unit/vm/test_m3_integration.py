@@ -139,5 +139,5 @@ async def test_m3_full_lifecycle() -> None:
     sub_theme.dispose()
 
     # Shutdown disposes the entire tree.
-    await root.shutdown()
+    root.shutdown()
     assert root.status == ConstructionStatus.DISPOSED

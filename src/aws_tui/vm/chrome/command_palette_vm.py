@@ -62,19 +62,22 @@ def _subsequence_span(text: str, query: str) -> int | None:
     """
     if not query:
         return 0
-    first: int | None = None
-    last: int | None = None
+    # We initialise to ``-1`` (sentinel) and let the first iteration
+    # set both ends — guarded by the early return path on a missing
+    # character. Avoids the previous ``assert first is not None``
+    # pair that ``python -O`` strips, while keeping mypy happy
+    # without an extra union-attr narrowing.
+    first: int = -1
+    last: int = -1
     cursor = 0
     for ch in query:
         idx = text.find(ch, cursor)
         if idx < 0:
             return None
-        if first is None:
+        if first == -1:
             first = idx
         last = idx
         cursor = idx + 1
-    assert first is not None
-    assert last is not None
     return last - first
 
 
@@ -244,8 +247,14 @@ class CommandPaletteVM:
     def _open(self) -> None:
         self._set_open(True)
         # Reset selection / filter on open so the user always starts clean.
-        self._filter_text = ""
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "filter_text"))
+        # No-op guard: only re-publish the ``filter_text`` change message
+        # when the value actually flipped. Re-opening with the same empty
+        # filter shouldn't notify subscribers — they'd needlessly rebuild
+        # their views on a no-op (also matches the public ``filter_text``
+        # setter's no-op guard).
+        if self._filter_text != "":
+            self._filter_text = ""
+            self._hub.send(PropertyChangedMessage.create(self, self.name, "filter_text"))
         self._recompute_filtered()
 
     def _close(self) -> None:

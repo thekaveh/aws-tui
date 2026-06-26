@@ -148,7 +148,7 @@ async def test_m4_switch_to_s3_hosts_dual_pane_vm(tmp_path: Path) -> None:
     left_names = [e.entry.name for e in dual.left.entries]
     assert "hello.txt" in left_names
 
-    await root.shutdown()
+    root.shutdown()
     assert root.status == ConstructionStatus.DISPOSED
 
 
@@ -194,7 +194,7 @@ async def test_m4_switch_connection_clears_dual_pane(tmp_path: Path) -> None:
     new_dual = root.content_host.current
     assert isinstance(new_dual, DualPaneVM)
 
-    await root.shutdown()
+    root.shutdown()
 
 
 @pytest.mark.asyncio
@@ -237,4 +237,4 @@ async def test_m4_switching_to_other_service_disposes_dual_pane(tmp_path: Path) 
     assert root.content_host.current_id == "ec2-mock"
     assert len(other.built) == 1
 
-    await root.shutdown()
+    root.shutdown()

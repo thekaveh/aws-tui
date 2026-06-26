@@ -119,10 +119,15 @@ def test_entry_summary_includes_basename_and_total() -> None:
     e = _entry(transfer_id="alpha", bytes_total=4_000_000)
     summary = entry_summary(e)
     assert "alpha.bin" in summary
-    assert "%" in summary
+    # No fake percentage — we render the part count and total size
+    # honestly when per-part byte totals are unavailable.
+    assert "%" not in summary
+    assert "parts" in summary
+    assert "total" in summary
 
 
 def test_entry_summary_unknown_total() -> None:
     e = _entry(transfer_id="beta", bytes_total=None)
     summary = entry_summary(e)
     assert "parts" in summary
+    assert "%" not in summary

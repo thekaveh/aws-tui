@@ -76,6 +76,42 @@ def test_transfer_vm_retry_command_from_failed() -> None:
     vm.dispose()
 
 
+def test_transfer_vm_terminal_state_is_sticky() -> None:
+    """A late RUNNING progress event after CANCELLED must not clobber
+    the terminal flag — otherwise the row reverts to ``... 73 %`` after
+    the user clicked cancel."""
+    vm = TransferVM(_model(state=TransferState.RUNNING), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    # User cancels — TransferVM transitions to CANCELLED.
+    vm.cancel_command.execute()
+    assert vm.state == TransferState.CANCELLED
+    # A stale in-flight progress event arrives a moment later.
+    vm.apply_update(bytes_done=730, bytes_total=1000, state=TransferState.RUNNING)
+    # State must STAY cancelled.
+    assert vm.state == TransferState.CANCELLED
+    # Also: a non-terminal PAUSED/PENDING must not revive the row.
+    vm.apply_update(bytes_done=730, bytes_total=1000, state=TransferState.PAUSED)
+    assert vm.state == TransferState.CANCELLED
+    vm.dispose()
+
+
+def test_transfer_vm_terminal_to_terminal_is_allowed() -> None:
+    """A terminal → terminal transition (e.g. FAILED arriving while
+    already CANCELLED) is allowed so the final error can be recorded.
+    """
+    vm = TransferVM(_model(state=TransferState.CANCELLED), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    vm.apply_update(
+        bytes_done=0,
+        bytes_total=1000,
+        state=TransferState.FAILED,
+        error="boom",
+    )
+    assert vm.state == TransferState.FAILED
+    assert vm.model.error == "boom"
+    vm.dispose()
+
+
 def test_transfers_vm_register_and_active_count() -> None:
     hub = _hub()
     tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)

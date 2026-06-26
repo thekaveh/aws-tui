@@ -14,6 +14,7 @@ import contextlib
 import os
 import tempfile
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -266,19 +267,29 @@ class ConfigStore:
     # Mutators
     # ------------------------------------------------------------------
 
+    def _mutate(self, fn: Callable[[Config], Config]) -> None:
+        """Load → transform → save in one atomic-looking helper.
+
+        The four mutators below previously duplicated the same
+        ``cfg = self.load(); self.save(Config(...))`` framing. Extracting
+        the framing keeps the validation + transformation logic in each
+        mutator while pruning the boilerplate.
+        """
+        self.save(fn(self.load()))
+
     def add_connection(self, entry: ConnectionEntry) -> None:
         """Insert or overwrite ``entry`` and persist."""
         if entry.kind not in VALID_KINDS:
             raise ConfigError(f"connection {entry.name!r} has invalid kind {entry.kind!r}")
-        cfg = self.load()
-        new_conns = {**cfg.connections, entry.name: entry}
-        self.save(
-            Config(
-                connections=new_conns,
+
+        def _apply(cfg: Config) -> Config:
+            return Config(
+                connections={**cfg.connections, entry.name: entry},
                 defaults=cfg.defaults,
                 keybindings=cfg.keybindings,
             )
-        )
+
+        self._mutate(_apply)
 
     def update_connection(self, name: str, entry: ConnectionEntry) -> None:
         """Atomic in-place update of an existing connection.
@@ -293,17 +304,17 @@ class ConfigStore:
             )
         if entry.kind not in VALID_KINDS:
             raise ConfigError(f"connection {entry.name!r} has invalid kind {entry.kind!r}")
-        cfg = self.load()
-        if name not in cfg.connections:
-            raise KeyError(name)
-        new_conns = {**cfg.connections, name: entry}
-        self.save(
-            Config(
-                connections=new_conns,
+
+        def _apply(cfg: Config) -> Config:
+            if name not in cfg.connections:
+                raise KeyError(name)
+            return Config(
+                connections={**cfg.connections, name: entry},
                 defaults=cfg.defaults,
                 keybindings=cfg.keybindings,
             )
-        )
+
+        self._mutate(_apply)
 
     def remove_connection(self, name: str) -> None:
         """Atomic removal of a connection.
@@ -312,34 +323,37 @@ class ConfigStore:
         If the removed connection was the default, ``defaults.connection``
         is cleared to ``None``.
         """
-        cfg = self.load()
-        if name not in cfg.connections:
-            raise ConfigError(f"unknown connection: {name!r}")
-        new_conns = {k: v for k, v in cfg.connections.items() if k != name}
-        if cfg.defaults.connection == name:
-            new_defaults = Defaults(connection=None, theme=cfg.defaults.theme)
-        else:
-            new_defaults = cfg.defaults
-        self.save(
-            Config(
+
+        def _apply(cfg: Config) -> Config:
+            if name not in cfg.connections:
+                raise ConfigError(f"unknown connection: {name!r}")
+            new_conns = {k: v for k, v in cfg.connections.items() if k != name}
+            new_defaults = (
+                Defaults(connection=None, theme=cfg.defaults.theme)
+                if cfg.defaults.connection == name
+                else cfg.defaults
+            )
+            return Config(
                 connections=new_conns,
                 defaults=new_defaults,
                 keybindings=cfg.keybindings,
             )
-        )
+
+        self._mutate(_apply)
 
     def set_default_connection(self, name: str) -> None:
         """Mark ``name`` as the default connection. Must exist."""
-        cfg = self.load()
-        if name not in cfg.connections:
-            raise ConfigError(f"unknown connection: {name!r}")
-        self.save(
-            Config(
+
+        def _apply(cfg: Config) -> Config:
+            if name not in cfg.connections:
+                raise ConfigError(f"unknown connection: {name!r}")
+            return Config(
                 connections=cfg.connections,
                 defaults=Defaults(connection=name, theme=cfg.defaults.theme),
                 keybindings=cfg.keybindings,
             )
-        )
+
+        self._mutate(_apply)
 
 
 __all__ = [
