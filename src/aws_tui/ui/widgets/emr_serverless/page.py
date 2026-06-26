@@ -12,7 +12,7 @@ from typing import ClassVar, Literal
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.widget import Widget
 from vmx import Message, MessageHub
 
@@ -71,12 +71,11 @@ class EmrServerlessPage(Widget):
         self._picker = ApplicationPicker(self._vm.applications, hub=self._hub, id="emr-app-picker")
         self._left = JobRunsPane(self._vm.job_runs, hub=self._hub, id="emr-runs-pane")
         self._right = JobRunDetailPane(self._vm.job_run_detail, hub=self._hub, id="emr-detail-pane")
-        with Vertical():
-            with Horizontal(classes="emr-top-strip"):
-                yield self._picker
-            with Horizontal(classes="emr-body"):
-                yield self._left
-                yield self._right
+        with Horizontal(classes="emr-top-strip"):
+            yield self._picker
+        with Horizontal(classes="emr-body"):
+            yield self._left
+            yield self._right
 
     def on_mount(self) -> None:
         # Initial load: applications + first-app's runs + first-run detail.
