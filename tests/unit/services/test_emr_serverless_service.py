@@ -13,9 +13,14 @@ from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.services_protocol import ServiceDescriptor
 
 
-def test_descriptor_icon_is_high_voltage_label_is_emr() -> None:
+def test_descriptor_icon_is_high_voltage_with_vs16_label_is_emr() -> None:
+    # ⚡️ = U+26A1 HIGH VOLTAGE + U+FE0F VARIATION SELECTOR-16. The
+    # VS-16 forces emoji presentation in monospace terminals (2-cell
+    # colour glyph) so the rail icon matches the layout assumption
+    # in ``nav_menu.py`` ("col 2-3: emoji 2 cells wide"). Same trick
+    # ⚙️ Settings + 🖥️ EC2 use.
     assert EmrServerlessService.descriptor == ServiceDescriptor(
-        id="emr-serverless", label="EMR", icon="⚡"
+        id="emr-serverless", label="EMR", icon="⚡️"
     )
 
 
