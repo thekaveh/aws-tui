@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button
 from vmx import MessageHub, RxDispatcher
 
 from aws_tui.ui.widgets.crash_modal import CrashModal
+from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.crash_vm import CrashReport, CrashVM
 
 
@@ -48,8 +48,13 @@ async def test_crash_modal_continue_button_disabled_when_unsafe() -> None:
             modal = app.screen
             assert isinstance(modal, CrashModal)
             assert "-danger" in modal.classes
-            cont = modal.query_one("#crash-continue-btn", Button)
-            assert cont.disabled is True
+            buttons = list(modal.query(ModalButton))
+            cont = next(b for b in buttons if b.button_id == "crash-continue-btn")
+            # When can_continue=False the button gets the ``-disabled``
+            # class instead of Textual's stock ``Button.disabled`` —
+            # ModalButton is a structural Static with no built-in
+            # disabled state; ``action_continue`` guards via the VM.
+            assert "-disabled" in cont.classes
     finally:
         vm.dispose()
         hub.dispose()
@@ -75,8 +80,12 @@ async def test_crash_modal_continue_button_enabled_when_safe() -> None:
             await pilot.pause()
             modal = app.screen
             assert isinstance(modal, CrashModal)
-            cont = modal.query_one("#crash-continue-btn", Button)
-            assert cont.disabled is False
+            buttons = list(modal.query(ModalButton))
+            cont = next(b for b in buttons if b.button_id == "crash-continue-btn")
+            # Safe-side ``continue`` gets ``-primary`` (accent
+            # styling); the ``-disabled`` class must NOT be present.
+            assert "-primary" in cont.classes
+            assert "-disabled" not in cont.classes
     finally:
         vm.dispose()
         hub.dispose()

@@ -13,12 +13,8 @@ from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
-from aws_tui.domain.filesystem import (
-    AuthRequiredError,
-    PermissionDeniedError,
-    ProviderError,
-    ProviderUnreachableError,
-)
+from aws_tui.domain.filesystem import ProviderError
+from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 _ALL_STATES: frozenset[JobRunState] = frozenset(JobRunState)
@@ -134,21 +130,9 @@ class JobRunsVM:
         try:
             # Fetch unfiltered; filter is applied client-side via `runs` property.
             runs = await self._client.list_job_runs(self._application_id, states=None)
-        except AuthRequiredError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.AUTH_REQUIRED)
-            return
-        except ProviderUnreachableError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.UNREACHABLE)
-            return
-        except PermissionDeniedError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.FORBIDDEN)
-            return
         except ProviderError as exc:
-            self._error_text = str(exc) or None
-            self._set_state(PaneState.ERROR)
+            new_state, self._error_text = map_provider_error(exc)
+            self._set_state(new_state)
             return
         self._runs_cache = tuple(runs)
         # Drop stale selection if the run vanished.

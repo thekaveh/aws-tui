@@ -188,8 +188,20 @@ class RootVM:
         # previously-final position (after the await) was the root
         # cause of the "ribbon never appears for the active service"
         # user report.
+        #
+        # Capture the prior selection FIRST so we can revert if the
+        # host fails to adopt the new VM — without this revert the
+        # ribbon would lie ("S3 selected" but content still on the
+        # previous service after a ``set_content`` exception).
+        prior_selection = self._services_menu.selected_id
         self._services_menu.switch_service_command.execute(service_id)
-        await self._content_host.set_content(vm, service_id=service_id)
+        try:
+            await self._content_host.set_content(vm, service_id=service_id)
+        except Exception:
+            # Revert — host failed to adopt, ribbon must not advance.
+            if prior_selection is not None:
+                self._services_menu.switch_service_command.execute(prior_selection)
+            raise
 
     async def switch_theme(self, name: str) -> None:
         """Publish a theme-changed message; the view layer reloads ``.tcss``."""
