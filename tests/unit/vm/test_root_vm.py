@@ -190,3 +190,35 @@ async def test_shutdown_disposes_full_tree() -> None:
     assert root.status == ConstructionStatus.DISPOSED
     assert content_vm is not None
     assert content_vm.status == ConstructionStatus.DISPOSED
+
+
+async def test_switch_service_reverts_menu_when_content_host_raises() -> None:
+    """Pin the H7 contract from the overnight loop: when
+    ``ContentHostVM.set_content`` raises, ``RootVM.switch_service``
+    must revert the nav-rail ribbon back to the prior selection so
+    the UI doesn't lie about which service is hosted. Without the
+    revert, a construct-time failure left the ribbon advanced to a
+    service that was never actually adopted."""
+
+    class _BoomService:
+        def __init__(self) -> None:
+            self.descriptor = ServiceDescriptor(id="boom", label="BOOM", icon="x")
+
+        def supports(self, connection: Connection) -> bool:
+            return True
+
+        def build_vm(self, connection: Connection) -> ComponentVM:
+            raise RuntimeError("construct-time boom")
+
+    s3 = _FakeService("s3")
+    root = _build_root(s3, _BoomService())  # type: ignore[arg-type]
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+    await root.switch_service("s3")
+    assert root.services_menu.selected_id == "s3"
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await root.switch_service("boom")
+
+    # Ribbon reverted; nav-rail still reflects the live host.
+    assert root.services_menu.selected_id == "s3"
+    root.dispose()

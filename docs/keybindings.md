@@ -97,7 +97,7 @@ through `_emr_active_pane()` before the dual-pane guard fires.
 | Action | Default | Notes |
 |---|---|---|
 | Open application picker | `a` | Opens the applications dropdown above the LEFT pane. The Commands chip on EMR re-labels `app.swap_source` ("switch app") and `Shift+S` is forwarded to the same handler so muscle memory from S3 still opens the picker. |
-| State filter chips | `1` `2` `3` `4` `5` | Multi-select toggles for `RUNNING` / `SUCCESS` / `FAILED` / `CANCELLING` + `CANCELLED` / pending family (`PENDING` / `SUBMITTED` / `SCHEDULED` / `QUEUED`). |
+| State filter chips | `1` `2` `3` `4` `5` | Multi-select toggles, one chip per state in this key order: `SUCCESS` / `RUNNING` / `PENDING` / `FAILED` / `CANCELLED`. Source of truth: ``_KEY_TO_STATE`` in ``ui/widgets/emr_serverless/job_runs_pane.py``. The transient pre-terminal states `SUBMITTED` / `SCHEDULED` / `QUEUED` / `CANCELLING` are NOT chip-filterable — they always render (they're members of the initial all-on default filter set and have no toggle key). |
 | Cursor up / down | `↑` `↓` (also `j` / `k`) | Moves the LEFT-pane row cursor; master-detail follows the cursor (the RIGHT pane re-loads on every cursor move, not only on `Enter`). |
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
 | Refresh | `r` | Forces an immediate poll on the active pane (apps if LEFT focused on the picker, runs if LEFT focused on the runs list, detail if RIGHT focused). |
