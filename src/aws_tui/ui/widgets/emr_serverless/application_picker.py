@@ -41,14 +41,13 @@ class ApplicationPicker(Widget):
 
     DEFAULT_CSS: ClassVar[str] = """
     ApplicationPicker {
-        width: auto;
-        height: 3;
+        width: 1fr;
+        height: 1fr;
         layout: horizontal;
     }
     ApplicationPicker > .app-trigger {
-        width: auto;
-        min-width: 24;
-        height: 3;
+        width: 1fr;
+        height: 1fr;
         padding: 0 1;
         content-align: left middle;
         text-style: bold;

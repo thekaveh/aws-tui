@@ -12,7 +12,7 @@ from typing import ClassVar, Literal
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from vmx import Message, MessageHub
 
@@ -26,22 +26,22 @@ class EmrServerlessPage(Widget):
     DEFAULT_CSS: ClassVar[str] = """
     EmrServerlessPage {
         height: 1fr;
+        layout: horizontal;
+    }
+    EmrServerlessPage > .emr-left-column {
+        width: 1fr;
+        height: 1fr;
         layout: vertical;
     }
-    EmrServerlessPage > .emr-top-strip {
+    EmrServerlessPage > .emr-left-column > .emr-app-box {
         height: 3;
-        layout: horizontal;
-        padding: 0 1;
     }
-    EmrServerlessPage > .emr-body {
+    EmrServerlessPage > .emr-left-column > JobRunsPane {
         height: 1fr;
-        layout: horizontal;
     }
-    EmrServerlessPage > .emr-body > JobRunsPane {
+    EmrServerlessPage > JobRunDetailPane {
         width: 1fr;
-    }
-    EmrServerlessPage > .emr-body > JobRunDetailPane {
-        width: 2fr;
+        height: 1fr;
     }
     """
 
@@ -71,13 +71,40 @@ class EmrServerlessPage(Widget):
         self._picker = ApplicationPicker(self._vm.applications, hub=self._hub, id="emr-app-picker")
         self._left = JobRunsPane(self._vm.job_runs, hub=self._hub, id="emr-runs-pane")
         self._right = JobRunDetailPane(self._vm.job_run_detail, hub=self._hub, id="emr-detail-pane")
-        with Horizontal(classes="emr-top-strip"):
-            yield self._picker
-        with Horizontal(classes="emr-body"):
+        # Page layout — TWO columns:
+        #
+        #   ┌─────────────────────┬────────────────────────────┐
+        #   │ application picker  │                            │
+        #   │  (bordered box,     │   JobRunDetailPane         │
+        #   │   height 3)         │   (full height)            │
+        #   ├─────────────────────┤                            │
+        #   │ JobRunsPane         │                            │
+        #   │  (height 1fr,       │                            │
+        #   │   chip row + rows)  │                            │
+        #   └─────────────────────┴────────────────────────────┘
+        #
+        # The application-picker box is width-matched to the
+        # JobRunsPane below it (both share the LEFT column at
+        # ``width: 1fr``) and only its border + title are visible —
+        # the picker widget itself fills the box. The detail pane
+        # spans the full page height, mirroring the S3 page's
+        # symmetric LEFT-RIGHT split.
+        with Vertical(classes="emr-left-column"):
+            with Horizontal(classes="emr-app-box", id="emr-app-box"):
+                yield self._picker
             yield self._left
-            yield self._right
+        yield self._right
 
     def on_mount(self) -> None:
+        # App-box border title — set here because Textual takes the
+        # title from a Python attribute, not from CSS. The matching
+        # ``:focus-within`` border-accent style is in the per-theme
+        # .tcss so the box highlights when the picker is open.
+        try:
+            box = self.query_one("#emr-app-box", Horizontal)
+            box.border_title = "applications"
+        except Exception:
+            pass
         # Initial load: applications + first-app's runs + first-run detail.
         self.run_worker(self._vm.setup(), exclusive=True, group="emr-setup")
         # Set up the three pollers per spec §6.

@@ -145,20 +145,16 @@ class JobRunDetailPane(Widget, can_focus=True):
         )
         body.mount(Static(_format_kv("IAM", d.execution_role_arn or "—"), classes="detail-row"))
         body.mount(Static(_format_kv("Entry point", d.entry_point or "—"), classes="detail-row"))
-        body.mount(
-            Static(
-                _format_kv(
-                    "Args", " ".join(d.entry_point_arguments) if d.entry_point_arguments else "—"
-                ),
-                classes="detail-row",
-            )
-        )
-        body.mount(
-            Static(
-                _format_kv("Spark", d.spark_submit_parameters or "—"),
-                classes="detail-row",
-            )
-        )
+        # Args + Spark are typically the longest values in a job-run
+        # detail. Per user feedback the previous single-line ``Args
+        # --in s3://… --out s3://… --partitions 200`` was unreadable
+        # on the EMR right pane, so each argument and each
+        # ``--conf k=v`` gets its own indented line below a single
+        # key header.
+        for line in _multiline_kv("Args", list(d.entry_point_arguments)):
+            body.mount(Static(line, classes="detail-row"))
+        for line in _multiline_kv("Spark", _split_spark_params(d.spark_submit_parameters)):
+            body.mount(Static(line, classes="detail-row"))
 
 
 def _state_label(d: JobRunDetail) -> str:
@@ -168,6 +164,38 @@ def _state_label(d: JobRunDetail) -> str:
 
 def _format_kv(key: str, value: str) -> str:
     return f"{key:<12}  {value}"
+
+
+def _multiline_kv(key: str, values: list[str]) -> list[str]:
+    """Render a list-valued KV as a header line + one indented row
+    per value. Empty list collapses to a single ``key  —`` row.
+
+    >>> _multiline_kv("Args", ["--in", "s3://bucket/in"])
+    ['Args        ', '              --in', '              s3://bucket/in']
+    """
+    if not values:
+        return [_format_kv(key, "—")]
+    header = f"{key:<12}"
+    indent = " " * 14  # 12-char key column + 2-space gap
+    return [header] + [f"{indent}{v}" for v in values]
+
+
+def _split_spark_params(raw: str | None) -> list[str]:
+    """Split a Spark submit parameter string into one element per
+    ``--conf k=v`` (or other ``--option`` chunk).
+
+    EMR returns the params as one space-joined string, e.g.
+    ``"--conf spark.executor.instances=8 --conf spark.executor.memory=4g"``.
+    Splitting on ``" --"`` and reattaching the leading ``--`` gives
+    one line per option.
+
+    Returns ``[]`` when the input is empty/None so
+    :func:`_multiline_kv` falls back to the single-line ``—`` form.
+    """
+    if not raw:
+        return []
+    pieces = raw.split(" --")
+    return [pieces[0]] + [f"--{p}" for p in pieces[1:]]
 
 
 __all__ = ["JobRunDetailPane"]

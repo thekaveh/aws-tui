@@ -216,3 +216,103 @@ async def test_emr_left_pane_auto_focuses_and_arrow_keys_move_cursor(tmp_path: P
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_left_cursor_move_repoints_right_detail(tmp_path: Path) -> None:
+    """User-reported bug: "The right pane showing the details for
+    each job doesn't automatically get repopulated when the selected
+    option changes on the left side." Master-detail UX:
+    moving the cursor on LEFT fires ``RunSelected`` which the
+    page widget routes to ``page_vm.select_job_run`` — the detail
+    VM's ``set_target`` flips to the new (app_id, run_id) and
+    ``refresh()`` populates it. Without the cursor-fires-RunSelected
+    wiring the detail only updated on Enter / click."""
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    fake.add_job_run(application_id="00emr", job_run_id="r-001", name="first")
+    fake.add_job_run_detail(
+        application_id="00emr", job_run_id="r-001", entry_point="s3://b/first.py"
+    )
+    fake.add_job_run(application_id="00emr", job_run_id="r-002", name="second")
+    fake.add_job_run_detail(
+        application_id="00emr", job_run_id="r-002", entry_point="s3://b/second.py"
+    )
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            # First run is auto-selected by the page VM's setup().
+            detail_vm = ctx.root_vm.content_host.current.job_run_detail
+            initial_run_id = detail_vm.detail.job_run_id if detail_vm.detail else None
+            # Drive a cursor move.
+            await pilot.press("down")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            # The detail should now point at the OTHER run, even
+            # without Enter being pressed.
+            new_run_id = detail_vm.detail.job_run_id if detail_vm.detail else None
+            assert new_run_id != initial_run_id, (
+                f"Detail pane did not follow the cursor: still showing "
+                f"{new_run_id!r} after pressing Down (was {initial_run_id!r}). "
+                f"Master-detail wiring broken — cursor-fires-RunSelected "
+                f"missing from JobRunsPane.action_cursor_down."
+            )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -> None:
+    """User-reported bug: "Mouse also doesn't work when browsing
+    through the items under the left pane of emr like it does for
+    s3." Each row mounts as a ``_JobRunRow`` widget that the pane's
+    ``on_click`` handler walks back to via ``event.widget``; the
+    matched ``run_id`` triggers cursor move + ``RunSelected``."""
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    fake.add_job_run(application_id="00emr", job_run_id="r-001", name="first")
+    fake.add_job_run_detail(application_id="00emr", job_run_id="r-001")
+    fake.add_job_run(application_id="00emr", job_run_id="r-002", name="second")
+    fake.add_job_run_detail(application_id="00emr", job_run_id="r-002")
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            from aws_tui.ui.widgets.emr_serverless.job_runs_pane import _JobRunRow
+
+            left = pilot.app.query_one(JobRunsPane)
+            rows = list(left.query(_JobRunRow))
+            assert len(rows) == 2
+
+            # Click the second row.
+            target = next(r for r in rows if r.run_id == "r-002")
+            await pilot.click(target)
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            # Cursor moved to row 1 + detail flipped to r-002.
+            assert left._cursor_index == 1, (  # type: ignore[attr-defined]
+                f"Click did not move cursor to row 1. Got {left._cursor_index!r}."  # type: ignore[attr-defined]
+            )
+            detail_vm = ctx.root_vm.content_host.current.job_run_detail
+            assert detail_vm.detail is not None
+            assert detail_vm.detail.job_run_id == "r-002", (
+                f"Click did not re-point detail. Got {detail_vm.detail.job_run_id!r}."
+            )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
