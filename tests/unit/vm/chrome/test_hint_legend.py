@@ -178,3 +178,15 @@ def test_globals_remain_stable_across_service_switches() -> None:
         f"S3 globals: {s3_global_ids}, EMR globals: {emr_global_ids}."
     )
     legend.dispose()
+
+
+def test_emr_serverless_chip_labels_include_filter_logs() -> None:
+    """EMR Serverless service chips must include 'filter logs' for the
+    logs filter modal."""
+    legend, _hub = _build()
+    legend.set_current_service("emr-serverless")
+    chip_labels = {a.action_label for a in legend.actions}
+    assert "filter logs" in chip_labels, (
+        f"EMR Serverless chips must include 'filter logs'; got labels: {chip_labels}"
+    )
+    legend.dispose()

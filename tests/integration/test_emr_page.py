@@ -14,6 +14,7 @@ from aws_tui.composition import build_app_context
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
+from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.nav_menu import NavMenu
@@ -107,6 +108,9 @@ async def test_emr_page_tab_cycles_between_panes_not_to_nav_rail(tmp_path: Path)
     """Spec §2 / PR #66 contract: Tab on the EMR page cycles LEFT ↔ RIGHT,
     NEVER falls through to the App-level priority binding that focuses
     the nav rail. Mirrors the S3 page's Tab-cycle contract.
+
+    After Task 9, the RIGHT pane is JobRunLogsPane (focusable, the logs
+    viewer). The detail pane is non-focusable display above the logs.
     """
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
@@ -121,19 +125,19 @@ async def test_emr_page_tab_cycles_between_panes_not_to_nav_rail(tmp_path: Path)
             await pilot.pause()
 
             left = pilot.app.query_one(JobRunsPane)
-            right = pilot.app.query_one(JobRunDetailPane)
+            right_logs = pilot.app.query_one(JobRunLogsPane)
             nav = pilot.app.query_one(NavMenu)
 
             # Focus the LEFT pane first.
             left.focus()
             await pilot.pause()
 
-            # Press Tab — must move focus to RIGHT pane, NOT to nav rail.
+            # Press Tab — must move focus to RIGHT pane (logs), NOT to nav rail.
             await pilot.press("tab")
             await pilot.pause()
 
-            assert pilot.app.focused is right or right.has_focus_within, (
-                f"Tab on EMR LEFT pane focused {pilot.app.focused!r} — expected RIGHT pane. "
+            assert pilot.app.focused is right_logs or right_logs.has_focus_within, (
+                f"Tab on EMR LEFT pane focused {pilot.app.focused!r} — expected RIGHT pane (logs). "
                 f"This is the spec §2 'exactly 2 slots' regression "
                 f"(App-level priority Tab binding hijacking)."
             )
@@ -491,6 +495,145 @@ async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
             )
             # Cascade ran: runs pane is bound to the new app.
             assert page_vm.job_runs.application_id == page_vm.applications.selected_id
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_tab_cycle_visits_runs_then_logs(tmp_path: Path) -> None:
+    """Task 14: End-to-end Tab cycle through 2-slot pane rotation.
+
+    The EMR page's 2-slot Tab cycle visits LEFT (JobRunsPane) ↔ RIGHT
+    (JobRunLogsPane) and does NOT include the detail pane
+    (which is non-focusable display above the logs).
+
+    This test seeds an application + job run, mounts the page,
+    focuses the LEFT pane, and asserts Tab rotates LEFT → RIGHT and
+    back to LEFT, never touching the detail pane.
+    """
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    fake.add_job_run(application_id="00emr", job_run_id="r-001", name="test-run")
+    fake.add_job_run_detail(application_id="00emr", job_run_id="r-001")
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            left = pilot.app.query_one(JobRunsPane)
+            right_logs = pilot.app.query_one(JobRunLogsPane)
+            right_detail = pilot.app.query_one(JobRunDetailPane)
+
+            # Focus the LEFT pane.
+            left.focus()
+            await pilot.pause()
+            assert left.has_focus or left.has_focus_within, (
+                "Precondition: LEFT pane must be focused before testing Tab cycle"
+            )
+
+            # Press Tab → should move to RIGHT pane (logs).
+            await pilot.press("tab")
+            await pilot.pause()
+            assert right_logs.has_focus or right_logs.has_focus_within, (
+                f"Tab on LEFT pane should focus RIGHT pane (logs). "
+                f"Got {pilot.app.focused!r}. "
+                f"This is the 2-slot Tab cycle spec §2 regression."
+            )
+            assert not right_detail.has_focus, (
+                "Tab cycle must NOT visit the detail pane (non-focusable display)."
+            )
+            assert not right_detail.has_focus_within, (
+                "Tab cycle must NOT visit the detail pane (non-focusable display)."
+            )
+
+            # Press Tab again → should move back to LEFT pane.
+            await pilot.press("tab")
+            await pilot.pause()
+            assert left.has_focus or left.has_focus_within, (
+                f"Second Tab on RIGHT pane should cycle back to LEFT. "
+                f"Got {pilot.app.focused!r}. "
+                f"The 2-slot cycle is LEFT ↔ RIGHT-logs only."
+            )
+            assert not right_detail.has_focus, (
+                "Detail pane must never receive focus during Tab cycle."
+            )
+            assert not right_detail.has_focus_within, (
+                "Detail pane must never receive focus during Tab cycle."
+            )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_logs_pane_starts_idle_on_run_select(tmp_path: Path) -> None:
+    """Task 14 optional: on-demand contract — logs VM transitions
+    EMPTY_TARGET → IDLE when a run is selected, WITHOUT auto-loading.
+
+    This pins the core design: logs are fetched on-demand (user presses
+    Enter in the logs pane to load), not automatically when a run is
+    selected. The IDLE state indicates a target is set but no fetch has
+    happened yet.
+
+    After the page mounts and its setup() auto-selects the first run
+    (via selection), the logs VM should:
+    - Have state=IDLE (not EMPTY_TARGET, not LOADING)
+    - Have empty lines tuple (not loaded)
+    - Be ready for the user to press Enter and trigger load()
+    """
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    # Seed with s3_monitoring_log_uri so the VM transitions to IDLE
+    # instead of NO_LOG_CONFIG.
+    fake.add_job_run(application_id="00emr", job_run_id="r-001", name="test-run")
+    fake.add_job_run_detail(
+        application_id="00emr",
+        job_run_id="r-001",
+        s3_monitoring_log_uri="s3://my-bucket/path/to/logs",
+    )
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            page_vm = ctx.root_vm.content_host.current
+            logs_vm = page_vm.job_run_logs
+
+            # After setup auto-selects the first run, the logs VM should
+            # have transitioned from EMPTY_TARGET to IDLE.
+            from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
+
+            assert logs_vm.state is LogsState.IDLE, (
+                f"On-demand contract: logs VM must be IDLE (target set, "
+                f"not loaded) after run selection. Got state={logs_vm.state!r}. "
+                f"This pins that load() is NOT auto-invoked on run selection."
+            )
+            assert logs_vm.application_id == "00emr", (
+                f"Logs VM target should have app_id set. Got {logs_vm.application_id!r}."
+            )
+            assert logs_vm.job_run_id == "r-001", (
+                f"Logs VM target should have run_id set. Got {logs_vm.job_run_id!r}."
+            )
+            assert logs_vm.lines == (), (
+                f"On-demand contract: logs should be empty (not loaded yet). "
+                f"Got {len(logs_vm.lines)} lines — load() was invoked automatically, "
+                f"violating the on-demand contract."
+            )
+            assert logs_vm.available_files == (), (
+                f"On-demand contract: available_files should be empty until "
+                f"load() is invoked. Got {logs_vm.available_files!r}."
+            )
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

@@ -103,6 +103,7 @@ class JobRunsPane(Widget, can_focus=True):
     JobRunsPane .runs-row {
         height: 1;
         padding: 0 1;
+        text-overflow: ellipsis;
     }
     """
 

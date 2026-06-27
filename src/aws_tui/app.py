@@ -980,11 +980,13 @@ class AwsTuiApp(App[None]):
         the next cursor/refresh action.
 
         Logic: if Textual focus is currently inside one of the two
-        panes, return that pane. Otherwise default to LEFT — the
-        S3 page's analogue is ``dual.focused_pane`` defaulting to
-        LEFT before the user has Tabbed; mirroring that gives the
-        same "arrow keys work immediately after clicking ⚡ in the
-        rail" UX as S3.
+        focusable panes (JobRunsPane LEFT or JobRunLogsPane RIGHT),
+        return that pane. Otherwise default to LEFT — the S3 page's
+        analogue is ``dual.focused_pane`` defaulting to LEFT before
+        the user has Tabbed; mirroring that gives the same "arrow keys
+        work immediately after clicking ⚡ in the rail" UX as S3.
+
+        Note: the detail pane is non-focusable and never returned.
         """
         focused = self.focused
         if focused is not None:
@@ -1140,18 +1142,27 @@ class AwsTuiApp(App[None]):
                     focused_list.action_cursor_down()
             return
         # EMR page: forward Up/Down to the active EMR pane's cursor
-        # action. Mirrors the S3 path's ``dual.focused_pane`` lookup.
-        # The detail pane has no cursor concept in PR-A, so
-        # ``getattr(..., None)`` swallows the key cleanly when RIGHT
-        # holds focus (consistent with the S3 page's symmetric
-        # behaviour).
+        # or scroll action. Mirrors the S3 path's ``dual.focused_pane``
+        # lookup. LEFT pane uses cursor actions; RIGHT pane (logs) uses
+        # scroll actions. ``getattr(..., None)`` swallows the key cleanly
+        # when the pane doesn't support the action.
         emr_page = self._emr_page()
         if emr_page is not None:
             emr_pane = self._emr_active_pane(emr_page)
             if emr_pane is not None:
+                # Try cursor action first (LEFT pane), then scroll action (RIGHT pane).
                 action = getattr(
                     emr_pane,
                     "action_cursor_up" if delta < 0 else "action_cursor_down",
+                    None,
+                )
+                if action is not None:
+                    action()
+                    return
+                # Fallback to scroll action for logs pane.
+                action = getattr(
+                    emr_pane,
+                    "action_scroll_up" if delta < 0 else "action_scroll_down",
                     None,
                 )
                 if action is not None:
@@ -1253,15 +1264,22 @@ class AwsTuiApp(App[None]):
             return
         # EMR page: Enter on the LEFT pane commits the focused row
         # (posts ``JobRunsPane.RunSelected`` → page VM forwards to
-        # ``select_job_run``). RIGHT pane has no Enter behaviour in
-        # PR-A. The ``getattr(..., None)`` guard mirrors the S3 path.
+        # ``select_job_run``). Enter on the RIGHT pane (logs) triggers
+        # ``action_load`` to fetch logs. The ``getattr(..., None)``
+        # guard mirrors the S3 path.
         emr_page = self._emr_page()
         if emr_page is not None:
             emr_pane = self._emr_active_pane(emr_page)
             if emr_pane is not None:
+                # Try commit action first (LEFT pane), then load action (RIGHT pane).
                 commit = getattr(emr_pane, "action_commit_selection", None)
                 if commit is not None:
                     commit()
+                    return
+                # Fallback to load action for logs pane.
+                load = getattr(emr_pane, "action_load", None)
+                if load is not None:
+                    load()
             return
         dual = self._dual_pane()
         if dual is None:
@@ -1322,16 +1340,23 @@ class AwsTuiApp(App[None]):
 
     async def action_refresh(self) -> None:
         # EMR page: ``r`` forwards to whichever pane currently holds
-        # Textual focus (LEFT or RIGHT). Each pane posts its own
-        # ``RefreshRequested`` message which the page widget routes
-        # to ``page_vm.refresh_focused(...)``.
+        # Textual focus (LEFT or RIGHT). LEFT pane (JobRunsPane) posts
+        # ``RefreshRequested`` which the page widget routes to
+        # ``page_vm.refresh_focused("runs")``. RIGHT pane (JobRunLogsPane)
+        # calls ``action_reload`` to refresh/reload logs.
         emr_page = self._emr_page()
         if emr_page is not None:
             emr_pane = self._emr_active_pane(emr_page)
             if emr_pane is not None:
+                # Try refresh request first (LEFT pane).
                 refresh = getattr(emr_pane, "action_request_refresh", None)
                 if refresh is not None:
                     refresh()
+                    return
+                # Fallback to reload action for logs pane.
+                reload = getattr(emr_pane, "action_reload", None)
+                if reload is not None:
+                    reload()
             return
         dual = self._dual_pane()
         if dual is None:

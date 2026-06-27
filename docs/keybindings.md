@@ -103,8 +103,16 @@ App-level `priority=True` and short-circuit through
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
 | Refresh | `r` | Forces an immediate poll on the active pane (apps if LEFT focused on the picker, runs if LEFT focused on the runs list, detail if RIGHT focused). |
 | Clone selected job run | `c` | Opens the `JobRunCloneModal` pre-filled from the focused run (name, entry point, IAM, args, spark params). Save fires `EmrServerlessClient.start_job_run`; success / error route through the unified `notifications.success` / `notifications.error` helpers (`Subject = "Job"`). `AwsTuiApp.action_copy` priority binding hijacks `c` to the EMR clone path when EMR is mounted — parallel to the dual-pane priority short-circuits for Tab / arrows. Added in PR #83. |
-| Cycle pane focus | `Tab` / `Shift+Tab` | 2-slot cycle (LEFT ↔ RIGHT); narrower than the S3 3-slot cycle because the EMR page has no separate nav slot. |
+| Cycle pane focus | `Tab` / `Shift+Tab` | 2-slot cycle (LEFT ↔ RIGHT-logs); narrower than the S3 3-slot cycle because the EMR page has no separate nav slot. |
 | Backspace | `Backspace` | No-op on EMR (symmetric to `Descend` having an EMR branch). |
+| Load logs (on-demand) | `Enter` | Loads logs from S3 into the RIGHT-logs pane (first press in the logs slot after Tab-focusing). |
+| Reload logs | `r` | Re-fetches logs from S3 even on cache hit. |
+| Open log filter modal | `f` | Edit regex patterns, toggle "Show all" or "Match case"; ``Apply`` re-fetches. |
+| Scroll log lines up / down | `↑` `↓` (also `k` / `j`) | Navigate the loaded log line view (when RIGHT-logs pane is focused). |
+
+> **Logs pane design note:** the detail pane no longer has its own `r`
+> refresh path; the 5-second detail poller keeps it fresh
+> automatically. `r` now reloads the logs pane when focused there.
 
 ## 2. Customizing
 

@@ -73,6 +73,7 @@ def test_job_run_detail_extends_summary_with_spark_params() -> None:
         spark_submit_parameters="--conf spark.executor.instances=4",
         execution_role_arn="arn:aws:iam::123456789012:role/EmrJobRole",
         duration_ms=240_000,
+        s3_monitoring_log_uri=None,
     )
     assert d.entry_point_arguments == ("--in", "s3://b/in/")
     assert d.duration_ms == 240_000
