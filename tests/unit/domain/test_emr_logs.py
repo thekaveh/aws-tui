@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import gzip
+from unittest.mock import AsyncMock
+
 import pytest
 
-from aws_tui.domain.emr_logs import S3LogLocation, build_run_prefix, parse_log_uri
+from aws_tui.domain.emr_logs import (
+    S3LogLocation,
+    build_run_prefix,
+    parse_log_uri,
+)
 
 
 def test_parse_log_uri_extracts_bucket_and_prefix() -> None:
@@ -36,3 +43,100 @@ def test_parse_log_uri_rejects_non_s3_scheme() -> None:
 )
 def test_build_run_prefix(loc: S3LogLocation, expected: str) -> None:
     assert build_run_prefix(loc, "00abc", "r-001") == expected
+
+
+def test_log_filter_default_matches_common_indicators() -> None:
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, FilterMode
+
+    assert DEFAULT_LOG_FILTER.mode is FilterMode.MATCH
+    assert DEFAULT_LOG_FILTER.matches("2026-06-26 12:00:00 ERROR something broke")
+    assert DEFAULT_LOG_FILTER.matches("Caused by: java.lang.NullPointerException")
+    assert DEFAULT_LOG_FILTER.matches("WARN Spark something noisy")
+    assert not DEFAULT_LOG_FILTER.matches("INFO Spark startup complete")
+
+
+def test_log_filter_passthrough_mode_matches_everything() -> None:
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, FilterMode
+
+    pt = DEFAULT_LOG_FILTER.with_(mode=FilterMode.PASSTHROUGH)
+    assert pt.matches("INFO whatever")
+    assert pt.matches("")
+
+
+def test_log_filter_with_swaps_patterns() -> None:
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER
+
+    custom = DEFAULT_LOG_FILTER.with_(patterns=("KILL",))
+    assert custom.matches("the job was KILLed by the watchdog")
+    assert not custom.matches("ERROR not in the custom set")
+
+
+class _StubBody:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    async def read(self, n: int) -> bytes:
+        out, self._payload = self._payload[:n], self._payload[n:]
+        return out
+
+
+class _StubS3:
+    def __init__(self, body: bytes) -> None:
+        self.get_object = AsyncMock(return_value={"Body": _StubBody(body)})
+
+    async def __aenter__(self) -> _StubS3:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class _StubSession:
+    def __init__(self, stub: _StubS3) -> None:
+        self._stub = stub
+
+    def client(self, *_args: object, **_kwargs: object) -> _StubS3:
+        return self._stub
+
+
+@pytest.mark.asyncio
+async def test_stream_log_yields_matched_lines() -> None:
+    from aws_tui.domain.emr_logs import (
+        DEFAULT_LOG_FILTER,
+        LogFile,
+        LogFileKind,
+        stream_log,
+    )
+
+    log_lines = [
+        "INFO startup",
+        "ERROR something broke",
+        "INFO ignore",
+        "WARN noisy",
+        "INFO bye",
+    ]
+    gz_payload = gzip.compress("\n".join(log_lines).encode())
+    stub = _StubS3(gz_payload)
+    session = _StubSession(stub)
+    log_file = LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=LogFileKind.DRIVER_STDERR,
+    )
+    chunks = []
+    async for chunk in stream_log(
+        session=session,  # type: ignore[arg-type]
+        region_name="us-east-1",
+        log_file=log_file,
+        bucket="b",
+        max_bytes=1024 * 1024,
+        filter_=DEFAULT_LOG_FILTER,
+    ):
+        chunks.append(chunk)
+    # All matched lines are surfaced; the INFO lines are dropped
+    # by the default filter.
+    all_lines = [line for c in chunks for line in c.lines]
+    assert all_lines == ["ERROR something broke", "WARN noisy"]
+    # Total scanned matches the input line count.
+    assert chunks[-1].lines_scanned == 5
+    # Not truncated for this small input.
+    assert chunks[-1].truncated is False
