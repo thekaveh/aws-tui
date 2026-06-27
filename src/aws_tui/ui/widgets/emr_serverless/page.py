@@ -37,8 +37,14 @@ class EmrServerlessPage(Widget):
         height: 1fr;
         layout: vertical;
     }
+    /* Apps box grows in-place when the application picker is open
+       (its OptionList drops down inside the box). ``min-height: 3``
+       holds the closed-state row height; ``height: auto`` lets the
+       box expand up to the column's available space, with
+       JobRunsPane ``1fr`` shrinking to make room. */
     EmrServerlessPage > .emr-left-column > .emr-app-box {
-        height: 3;
+        height: auto;
+        min-height: 3;
     }
     EmrServerlessPage > .emr-left-column > JobRunsPane {
         height: 1fr;
@@ -113,7 +119,10 @@ class EmrServerlessPage(Widget):
         # .tcss so the box highlights when the picker is open.
         try:
             box = self.query_one("#emr-app-box", Horizontal)
-            box.border_title = "applications"
+            # Singular ``application`` reads better in the UI —
+            # the box shows the CURRENT app (one) and a dropdown to
+            # switch to a different one; it's not a list of apps.
+            box.border_title = "application"
         except Exception:
             pass
         # NOTE: ``ContentHostVM.set_content`` already dispatches

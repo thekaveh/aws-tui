@@ -132,10 +132,11 @@ async def test_action_commit_with_highlighted_option_closes_dropdown() -> None:
     """When a row is highlighted, ``action_commit`` closes the
     dropdown — the user-visible "commit closes" contract.
 
-    Post-batch-3: the dropdown OptionList is now mounted to the
-    Screen on open (not as a child of the picker) so it escapes
-    the bordered ``emr-app-box``'s 3-row clip. Tests query via
-    the app, not the picker.
+    Post-batch-4: the dropdown is back inline (OptionList is a
+    direct child of the picker, rendered inside the apps-box
+    which grows via ``height: auto`` to accommodate it). The
+    prior screen-mount approach broke positioning + message
+    bubbling — see the picker module docstring for the history.
     """
     fake = _InMemoryEmr()
     fake.add_application(app_id="a1", name="etl")
@@ -148,11 +149,8 @@ async def test_action_commit_with_highlighted_option_closes_dropdown() -> None:
         picker.toggle_open()
         await pilot.pause()
         assert picker.has_class("-open")
-        # Dropdown is screen-mounted now — query via the app, not
-        # the picker. The id (``#emr-app-picker-dropdown``) is
-        # part of the public widget contract so the per-theme tcss
-        # can target it.
-        opts = pilot.app.query_one("#emr-app-picker-dropdown", OptionList)
+        # OptionList is the picker's direct child again.
+        opts = picker.query_one("#app-options", OptionList)
         opts.highlighted = 0
         await pilot.pause()
         picker.action_commit()
@@ -174,8 +172,7 @@ async def test_action_commit_no_highlight_is_noop() -> None:
         picker = pilot.app.query_one(ApplicationPicker)
         picker.toggle_open()
         await pilot.pause()
-        # Dropdown is screen-mounted — see the commit test above.
-        opts = pilot.app.query_one("#emr-app-picker-dropdown", OptionList)
+        opts = picker.query_one("#app-options", OptionList)
         opts.highlighted = None
         before_selection = vm.selected_id
         picker.action_commit()

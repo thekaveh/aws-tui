@@ -83,7 +83,7 @@ _ACTION_LABELS: dict[str, str] = {
     "pane.new": "new",
     "pane.refresh": "refresh",
     "pane.filter": "filter",
-    "pane.switch_focus": "switch",
+    "pane.switch_focus": "switch pane",
     "pane.select_all": "all",
     "pane.toggle_select": "select",
     "pane.enter_multiselect": "multi",
