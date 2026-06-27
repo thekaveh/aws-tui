@@ -5,6 +5,17 @@ Resolves the S3 location declared by a job run's
 files under it, and streams the gzipped ``stdout/stderr`` bodies
 line-by-line through a compiled filter. Used by ``JobRunLogsVM``;
 not consumed elsewhere.
+
+S3 boto exceptions raised inside ``list_log_files`` and
+``stream_log`` are routed through the sibling
+:func:`aws_tui.domain.emr_serverless.map_boto_error` so they reach
+the VM as typed :class:`ProviderError` subclasses
+(``AuthRequiredError`` / ``ProviderUnreachableError`` /
+``PermissionDeniedError`` / etc). Without that mapping the VM's
+``ProviderError`` clause would never fire and S3 credential /
+network failures would surface only as a generic "unexpected error:
+…" placeholder, losing the actionable AUTH_REQUIRED / UNREACHABLE
+state distinction that every other EMR pane gets for free.
 """
 
 from __future__ import annotations
@@ -17,6 +28,9 @@ from enum import StrEnum
 from io import BytesIO
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+
+from aws_tui.domain.emr_serverless import map_boto_error
+from aws_tui.domain.filesystem import ProviderError
 
 if TYPE_CHECKING:
     import aioboto3
@@ -175,22 +189,28 @@ async def list_log_files(
     if boto_config is not None:
         kwargs["config"] = boto_config
     files: list[tuple[int, LogFile]] = []
-    async with session.client("s3", **kwargs) as s3:
-        next_token: str | None = None
-        while True:
-            list_kwargs: dict[str, object] = {"Bucket": bucket, "Prefix": run_prefix}
-            if next_token is not None:
-                list_kwargs["ContinuationToken"] = next_token
-            resp = await s3.list_objects_v2(**list_kwargs)
-            for obj in resp.get("Contents", []):
-                key = obj["Key"]
-                kind, sort_idx = _classify_key(key)
-                if kind is None:
-                    continue
-                files.append((sort_idx, LogFile(key=key, kind=kind, size=obj.get("Size"))))
-            next_token = resp.get("NextContinuationToken")
-            if next_token is None:
-                break
+    try:
+        async with session.client("s3", **kwargs) as s3:
+            next_token: str | None = None
+            while True:
+                list_kwargs: dict[str, object] = {"Bucket": bucket, "Prefix": run_prefix}
+                if next_token is not None:
+                    list_kwargs["ContinuationToken"] = next_token
+                resp = await s3.list_objects_v2(**list_kwargs)
+                for obj in resp.get("Contents", []):
+                    key = obj["Key"]
+                    kind, sort_idx = _classify_key(key)
+                    if kind is None:
+                        continue
+                    files.append((sort_idx, LogFile(key=key, kind=kind, size=obj.get("Size"))))
+                next_token = resp.get("NextContinuationToken")
+                if next_token is None:
+                    break
+    except Exception as exc:
+        mapped = map_boto_error(exc)
+        if mapped is None:
+            raise
+        raise mapped from exc
     files.sort(key=lambda pair: pair[0])
     return [f for _, f in files]
 
@@ -215,46 +235,56 @@ async def stream_log(
     kwargs: dict[str, object] = {"region_name": region_name}
     if boto_config is not None:
         kwargs["config"] = boto_config
-    async with session.client("s3", **kwargs) as s3:
-        resp = await s3.get_object(Bucket=bucket, Key=log_file.key)
-        body = resp["Body"]
-        buf = BytesIO()
-        bytes_read = 0
-        truncated = False
-        while True:
-            chunk = await body.read(_STREAM_CHUNK_BYTES)
-            if not chunk:
-                break
-            bytes_read += len(chunk)
-            buf.write(chunk)
-            if bytes_read >= max_bytes:
-                truncated = True
-                break
-        buf.seek(0)
-        decompressed = gzip.GzipFile(fileobj=buf, mode="rb")
-        lines_scanned = 0
-        matched: list[str] = []
-        for raw in decompressed:
-            line = raw.decode("utf-8", errors="replace").rstrip("\n")
-            lines_scanned += 1
-            if filter_.matches(line):
-                matched.append(line)
-            if len(matched) >= _LINE_BUFFER_BATCH:
-                yield LogChunk(
-                    lines=tuple(matched),
-                    bytes_read=bytes_read,
-                    lines_scanned=lines_scanned,
-                    matched_count=len(matched),
-                    truncated=False,
-                )
-                matched = []
-        yield LogChunk(
-            lines=tuple(matched),
-            bytes_read=bytes_read,
-            lines_scanned=lines_scanned,
-            matched_count=len(matched),
-            truncated=truncated,
-        )
+    try:
+        async with session.client("s3", **kwargs) as s3:
+            resp = await s3.get_object(Bucket=bucket, Key=log_file.key)
+            body = resp["Body"]
+            buf = BytesIO()
+            bytes_read = 0
+            truncated = False
+            while True:
+                chunk = await body.read(_STREAM_CHUNK_BYTES)
+                if not chunk:
+                    break
+                bytes_read += len(chunk)
+                buf.write(chunk)
+                if bytes_read >= max_bytes:
+                    truncated = True
+                    break
+            buf.seek(0)
+            decompressed = gzip.GzipFile(fileobj=buf, mode="rb")
+            lines_scanned = 0
+            matched: list[str] = []
+            for raw in decompressed:
+                line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                lines_scanned += 1
+                if filter_.matches(line):
+                    matched.append(line)
+                if len(matched) >= _LINE_BUFFER_BATCH:
+                    yield LogChunk(
+                        lines=tuple(matched),
+                        bytes_read=bytes_read,
+                        lines_scanned=lines_scanned,
+                        matched_count=len(matched),
+                        truncated=False,
+                    )
+                    matched = []
+            yield LogChunk(
+                lines=tuple(matched),
+                bytes_read=bytes_read,
+                lines_scanned=lines_scanned,
+                matched_count=len(matched),
+                truncated=truncated,
+            )
+    except ProviderError:
+        # Already typed — preserve it untouched so the VM's
+        # ``ProviderError`` catch can route via map_provider_error.
+        raise
+    except Exception as exc:
+        mapped = map_boto_error(exc)
+        if mapped is None:
+            raise
+        raise mapped from exc
 
 
 @dataclass(frozen=True, slots=True)

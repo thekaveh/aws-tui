@@ -271,11 +271,14 @@ class EmrServerlessPage(Widget):
         modal = JobRunCloneModal(clone_vm, hub=self._hub)
         try:
             new_id = await self.app.push_screen_wait(modal)
-        except Exception:
+        except Exception as exc:
             # The modal raised after dismiss (extremely rare — e.g.
             # the test harness disposed the app mid-flight). Don't
-            # crash the page; let the user retry.
+            # crash the page; surface an advisory toast so the user
+            # learns the action didn't land instead of silently
+            # losing the click.
             clone_vm.dispose()
+            self._post_advisory_toast("Job", f"clone aborted ({exc})")
             return
         try:
             if new_id is None:
@@ -305,6 +308,16 @@ class EmrServerlessPage(Widget):
                 subject="Job",
                 message=f"clone submitted ({new_id})",
             )
+
+    def _post_advisory_toast(self, subject: notifications.Subject, message: str) -> None:
+        """Surface a Warning-level toast for an unexpected failure
+        that doesn't have its own in-pane state. Same defensive
+        ``_app_ctx`` access pattern as :meth:`_post_clone_success_toast`
+        — tests that mount the page under a vanilla ``App`` see no
+        toast (the suppress catches the missing ``_app_ctx``)."""
+        with contextlib.suppress(Exception):
+            stack = self.app._app_ctx.root_vm.chrome.toast_stack  # type: ignore[attr-defined]
+            notifications.advise(stack, subject=subject, message=message)
 
     def _cycle(self, direction: Literal["left", "right"]) -> None:
         # 2-slot cycle: LEFT (JobRunsPane) ↔ RIGHT (JobRunLogsPane).
@@ -355,8 +368,11 @@ class EmrServerlessPage(Widget):
             if new_filter is not None and new_filter != current_filter:
                 self._vm.job_run_logs.set_filter(new_filter)
                 self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
-        except Exception:
-            pass
+        except Exception as exc:
+            # Modal raised mid-flight (rare — usually a test-harness
+            # teardown race). Surface an advisory toast so the user
+            # learns the filter didn't apply.
+            self._post_advisory_toast("Settings", f"filter aborted ({exc})")
 
 
 __all__ = ["EmrServerlessPage"]

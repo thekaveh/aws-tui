@@ -143,6 +143,7 @@ __all__ = [
     "JobRunDetail",
     "JobRunState",
     "JobRunSummary",
+    "map_boto_error",
 ]
 
 
@@ -184,6 +185,14 @@ def _map_boto_error(exc: BaseException) -> ProviderError | None:
     if isinstance(exc, ValueError | KeyError):
         return ValidationError(f"malformed EMR Serverless response: {exc}")
     return None
+
+
+#: Public alias so the sibling :mod:`aws_tui.domain.emr_logs` module
+#: (and any future EMR-domain facade) can route boto exceptions
+#: through the same canonical mapper without each facade re-deriving
+#: the credentials / endpoint / ClientError-code logic. The private
+#: ``_map_boto_error`` keeps the internal call sites unchanged.
+map_boto_error = _map_boto_error
 
 
 # ── Async aioboto3 facade ────────────────────────────────────────────────

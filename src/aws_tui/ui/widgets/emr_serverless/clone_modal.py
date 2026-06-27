@@ -157,6 +157,17 @@ class JobRunCloneModal(ModalScreen[str | None]):
         except ProviderError as exc:
             self._show_error(str(exc) or type(exc).__name__)
             return
+        except Exception as exc:
+            # Defensive net for non-ProviderError raises (e.g. a
+            # botocore parameter-validation error that escapes the
+            # facade's mapping, a programmer error in clone_vm, or
+            # any future regression). Stay in the modal — surface
+            # the message inline so the user can correct the form
+            # or cancel — instead of letting the exception crash
+            # through Textual's default error handler and bring
+            # down the EMR page.
+            self._show_error(f"unexpected error: {exc}")
+            return
         self.dismiss(new_id)
 
     async def on_click(self, event: Click) -> None:
