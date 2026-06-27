@@ -28,6 +28,7 @@ from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Horizontal
 from textual.events import Click
+from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
@@ -93,6 +94,19 @@ class ApplicationPicker(Widget):
         ("enter", "commit", "Pick"),
     ]
 
+    class ApplicationCommitted(TextualMessage):
+        """Posted when the user commits a selection (via Enter or
+        click on a row). The parent ``EmrServerlessPage`` catches
+        this and routes through ``page_vm.select_application()`` so
+        the JobRuns and JobRunDetail panes refresh in lockstep —
+        ``ApplicationsVM.select(id)`` alone only updates the picker's
+        own ``_selected_id`` and the sibling VMs don't see it.
+        """
+
+        def __init__(self, app_id: str) -> None:
+            super().__init__()
+            self.app_id = app_id
+
     def __init__(
         self,
         vm: ApplicationsVM,
@@ -149,6 +163,10 @@ class ApplicationPicker(Widget):
         opt = opts.get_option_at_index(opts.highlighted)
         if opt.id is not None:
             self._vm.select(opt.id)
+            # Post up so the page widget can cascade through
+            # ``page_vm.select_application(id)`` — see the
+            # ``ApplicationCommitted`` docstring.
+            self.post_message(self.ApplicationCommitted(opt.id))
         self.remove_class("-open")
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -164,6 +182,7 @@ class ApplicationPicker(Widget):
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option.id is not None:
             self._vm.select(event.option.id)
+            self.post_message(self.ApplicationCommitted(event.option.id))
         self.remove_class("-open")
 
     def _on_hub_message(self, msg: object) -> None:

@@ -118,6 +118,25 @@ class EmrServerlessPageVM:
         else:
             self.job_run_detail.set_target(None, None)
 
+    async def cycle_application(self, direction: int) -> None:
+        """Select the next (``direction=1``) or previous
+        (``direction=-1``) application in the picker's list,
+        wrapping at either end. Used by the EMR page's ``Shift+S``
+        binding ("switch app") so the keypress visibly moves to the
+        next app — the explicit picker (``a``) stays around for
+        long-list lookup. No-op if fewer than 2 apps exist.
+        """
+        apps = self.applications.applications
+        if len(apps) < 2:
+            return
+        current_id = self.applications.selected_id
+        try:
+            idx = next(i for i, a in enumerate(apps) if a.id == current_id)
+        except StopIteration:
+            idx = -1
+        next_idx = (idx + direction) % len(apps)
+        await self.select_application(apps[next_idx].id)
+
     async def select_job_run(self, run_id: str) -> None:
         self.job_runs.select(run_id)
         self.job_run_detail.set_target(self.applications.selected_id, run_id)

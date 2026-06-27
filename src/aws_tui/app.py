@@ -1110,6 +1110,21 @@ class AwsTuiApp(App[None]):
         self._move_cursor(1)
 
     def _move_cursor(self, delta: int) -> None:
+        # EMR page: if the application picker dropdown is open, Up/
+        # Down navigate the picker's OptionList rather than the
+        # pane cursor. Without this, the App's ``priority=True`` Up/
+        # Down binding steals the keystroke and moves the runs-pane
+        # cursor instead — user feedback: "When the list of
+        # applications is expanded, I can't use arrow keys and enter
+        # to choose a new app". Same hijack-pattern PR #77/#78 used
+        # for the nav-rail.
+        picker_opts = self._open_emr_picker_optionlist()
+        if picker_opts is not None:
+            if delta < 0:
+                picker_opts.action_cursor_up()
+            else:
+                picker_opts.action_cursor_down()
+            return
         # If Textual focus is in the NavMenu's OptionList, Up/Down
         # should navigate THAT list, not the pane cursor. Textual's
         # ``priority=True`` on the App binding steals the keystroke
@@ -1152,6 +1167,26 @@ class AwsTuiApp(App[None]):
         if cmd is not None:
             cmd.execute(delta)
 
+    def _open_emr_picker_optionlist(self) -> OptionList | None:
+        """Return the EMR application picker's OptionList if and only
+        if the picker dropdown is open. Used by the priority-binding
+        forwards (``_move_cursor`` / ``action_descend``) so Up/Down/
+        Enter route to the dropdown when it's expanded.
+        """
+        emr_page = self._emr_page()
+        if emr_page is None:
+            return None
+        picker = getattr(emr_page, "_picker", None)
+        if picker is None:
+            return None
+        if "-open" not in picker.classes:
+            return None
+        try:
+            opts: OptionList = picker.query_one("#app-options", OptionList)
+        except Exception:
+            return None
+        return opts
+
     def _nav_has_focus(self) -> bool:
         """True if Textual focus is currently on the NavMenu or any of
         its descendants (the two OptionLists or the hamburger).
@@ -1191,6 +1226,19 @@ class AwsTuiApp(App[None]):
         # arrow-key focus — checked first so it wins over the plain
         # ``confirm`` fallback.
         if self._forward_to_modal("action_commit_focused", "action_confirm", "action_apply"):
+            return
+        # EMR page: if the application picker dropdown is open,
+        # Enter commits the highlighted row — drive the picker's
+        # ``action_commit`` directly so it fires the
+        # ``ApplicationCommitted`` message + cascades through
+        # ``page_vm.select_application`` (the JobRuns + Detail
+        # panes refresh in lockstep). Same priority-binding-hijack
+        # rationale as the Up/Down forward in ``_move_cursor``.
+        picker_opts = self._open_emr_picker_optionlist()
+        if picker_opts is not None:
+            emr_page = self._emr_page()
+            if emr_page is not None and emr_page._picker is not None:
+                emr_page._picker.action_commit()
             return
         # If Textual focus is in the NavMenu's OptionList, Enter is
         # the user picking a service — forward to the OptionList's
@@ -1611,14 +1659,15 @@ class AwsTuiApp(App[None]):
         The current position is found by matching the focused pane's
         identity label against each candidate's computed label.
 
-        On the EMR page (no DualPaneVM hosted), ``Shift+S`` is the
-        "switch application" affordance — same physical key, page-
-        specific meaning. ``HintLegendVM._label_for`` already
-        relabels the chip to ``switch app`` when EMR is the active
-        service, so this just forwards to the picker."""
+        On the EMR page (no DualPaneVM hosted), ``Shift+S`` cycles
+        to the NEXT application (wraps at end) — user feedback:
+        "shift + s … doesn't result in an actual app switching",
+        they want an actual switch, not just opening the picker.
+        The picker is still openable explicitly via ``a``.
+        """
         emr = self._emr_page()
         if emr is not None:
-            emr.action_open_application_picker()
+            emr.action_cycle_application_forward()
             return
         ctx = self._app_ctx
         dual = self._dual_pane()

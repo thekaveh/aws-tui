@@ -192,6 +192,37 @@ class EmrServerlessPage(Widget):
         if self._picker is not None:
             self._picker.toggle_open()
 
+    def action_cycle_application_forward(self) -> None:
+        """Select the next application in the picker's list
+        (wraps at the end). Drives the ``Shift+S`` "switch app"
+        affordance — user feedback: the keypress should ACTUALLY
+        switch, not just open the picker. The picker is still
+        opened explicitly with ``a``.
+        """
+        self.run_worker(
+            self._vm.cycle_application(1),
+            exclusive=True,
+            group="emr-cycle-app",
+        )
+
+    def on_application_picker_application_committed(
+        self, event: ApplicationPicker.ApplicationCommitted
+    ) -> None:
+        """The picker posts ``ApplicationCommitted`` when the user
+        selects a different application (via Enter or click on a
+        row). Cascade through ``page_vm.select_application(id)`` so
+        the JobRuns and JobRunDetail panes refresh in lockstep with
+        the picker. Without this routing, only the picker's own
+        ``_selected_id`` flipped — the user saw the picker label
+        change but the runs pane below kept showing the old app's
+        runs.
+        """
+        self.run_worker(
+            self._vm.select_application(event.app_id),
+            exclusive=True,
+            group="emr-select-app",
+        )
+
     def action_cycle_panes_forward(self) -> None:
         self._cycle("right")
 
