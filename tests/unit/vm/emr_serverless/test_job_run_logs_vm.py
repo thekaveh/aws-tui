@@ -7,7 +7,13 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, LogChunk, LogFile, LogFileKind
+from aws_tui.domain.emr_logs import (
+    DEFAULT_LOG_FILTER,
+    EmrServerlessLogsClient,
+    LogChunk,
+    LogFile,
+    LogFileKind,
+)
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
 
 
@@ -17,9 +23,13 @@ def _hub() -> MessageHub[Message]:
 
 def _make() -> JobRunLogsVM:
     hub = _hub()
-    vm = JobRunLogsVM(
-        session=cast("object", None),  # not used by set_target paths
+    # Create a stub client with a dummy session (not used by set_target paths).
+    stub_client = EmrServerlessLogsClient(
+        session=cast("object", None),
         region_name="us-east-1",
+    )
+    vm = JobRunLogsVM(
+        client=stub_client,
         hub=hub,
         dispatcher=NULL_DISPATCHER,
     )
@@ -115,7 +125,7 @@ async def test_load_while_already_loading_is_idempotent(monkeypatch: pytest.Monk
         return [_STDERR_FILE]
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_files,
         raising=False,
     )
@@ -139,12 +149,12 @@ async def test_load_happy_path_ready_with_lines(monkeypatch: pytest.MonkeyPatch)
         yield _ONE_CHUNK
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_files,
         raising=False,
     )
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.stream_log",
+        "aws_tui.domain.emr_logs.stream_log",
         _stream_log,
         raising=False,
     )
@@ -171,12 +181,12 @@ async def test_load_prefers_driver_stderr_over_stdout(monkeypatch: pytest.Monkey
         yield _ONE_CHUNK
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_files,
         raising=False,
     )
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.stream_log",
+        "aws_tui.domain.emr_logs.stream_log",
         _stream_log,
         raising=False,
     )
@@ -202,12 +212,12 @@ async def test_load_falls_back_to_driver_stdout_when_no_stderr(
         yield _ONE_CHUNK
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_files,
         raising=False,
     )
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.stream_log",
+        "aws_tui.domain.emr_logs.stream_log",
         _stream_log,
         raising=False,
     )
@@ -228,7 +238,7 @@ async def test_load_no_files_transitions_to_no_files(monkeypatch: pytest.MonkeyP
         return []
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_empty,
         raising=False,
     )
@@ -260,12 +270,12 @@ async def test_load_truncated_chunk_transitions_to_truncated(
         yield truncated_chunk
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_files,
         raising=False,
     )
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.stream_log",
+        "aws_tui.domain.emr_logs.stream_log",
         _stream_truncated,
         raising=False,
     )
@@ -293,12 +303,12 @@ async def test_load_cache_hit_skips_stream_on_second_call(
         yield _ONE_CHUNK
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_files,
         raising=False,
     )
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.stream_log",
+        "aws_tui.domain.emr_logs.stream_log",
         _stream_log,
         raising=False,
     )
@@ -324,7 +334,7 @@ async def test_load_provider_error_transitions_to_error(monkeypatch: pytest.Monk
         raise ProviderUnreachableError("network blip")
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_raises,
         raising=False,
     )
@@ -352,12 +362,12 @@ async def test_load_provider_error_during_stream_transitions_to_error(
         yield  # pragma: no cover — make it an async generator
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_files,
         raising=False,
     )
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.stream_log",
+        "aws_tui.domain.emr_logs.stream_log",
         _stream_raises,
         raising=False,
     )
@@ -378,7 +388,7 @@ async def test_load_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) 
         raise asyncio.CancelledError
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_cancelled,
         raising=False,
     )
@@ -401,7 +411,7 @@ async def test_load_unexpected_exception_transitions_to_error(
         raise RuntimeError("boom!")
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_boom,
         raising=False,
     )
@@ -447,12 +457,12 @@ async def test_load_lines_capped_at_max_matched_lines(monkeypatch: pytest.Monkey
         yield second_chunk
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_files,
         raising=False,
     )
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.stream_log",
+        "aws_tui.domain.emr_logs.stream_log",
         _stream_two_chunks,
         raising=False,
     )
@@ -488,12 +498,12 @@ async def test_cache_hit_preserves_truncation_state(monkeypatch: pytest.MonkeyPa
         yield truncated_chunk
 
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        "aws_tui.domain.emr_logs.list_log_files",
         _list_files,
         raising=False,
     )
     monkeypatch.setattr(
-        "aws_tui.vm.emr_serverless.job_run_logs_vm.stream_log",
+        "aws_tui.domain.emr_logs.stream_log",
         _stream_truncated,
         raising=False,
     )

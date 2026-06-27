@@ -11,7 +11,7 @@ from textual.containers import Container
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.emr_logs import LogFile, LogFileKind
+from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogFile, LogFileKind
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
@@ -25,9 +25,12 @@ def _build_logs_vm() -> JobRunLogsVM:
     """Build a JobRunLogsVM with a mock aioboto3 session."""
     session = aioboto3.Session()
     hub: MessageHub[Message] = MessageHub()
-    vm = JobRunLogsVM(
+    logs_client = EmrServerlessLogsClient(
         session=session,
         region_name="us-east-1",
+    )
+    vm = JobRunLogsVM(
+        client=logs_client,
         hub=hub,
         dispatcher=NULL_DISPATCHER,
     )

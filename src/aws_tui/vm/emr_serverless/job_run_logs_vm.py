@@ -13,26 +13,21 @@ from __future__ import annotations
 
 import asyncio
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_logs import (
     DEFAULT_LOG_FILTER,
+    EmrServerlessLogsClient,
     LogFile,
     LogFileKind,
     LogFilter,
     build_run_prefix,
-    list_log_files,
     parse_log_uri,
-    stream_log,
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm.emr_serverless._errors import map_provider_error
-
-if TYPE_CHECKING:
-    import aioboto3
 
 
 class LogsState(StrEnum):
@@ -56,13 +51,11 @@ class JobRunLogsVM:
     def __init__(
         self,
         *,
-        session: aioboto3.Session,
-        region_name: str | None,
+        client: EmrServerlessLogsClient,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
-        self._session = session
-        self._region_name = region_name
+        self._client: EmrServerlessLogsClient = client
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._inner: ComponentVMOf[None] = (
@@ -196,9 +189,7 @@ class JobRunLogsVM:
         try:
             loc = parse_log_uri(self._log_uri)
             run_prefix = build_run_prefix(loc, self._application_id, self._job_run_id)
-            files = await list_log_files(
-                session=self._session,
-                region_name=self._region_name,
+            files = await self._client.list_files(
                 bucket=loc.bucket,
                 run_prefix=run_prefix,
             )
@@ -240,9 +231,7 @@ class JobRunLogsVM:
                 self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
             buffered: list[str] = []
-            async for chunk in stream_log(
-                session=self._session,
-                region_name=self._region_name,
+            async for chunk in self._client.stream(
                 log_file=self._current_file,
                 bucket=loc.bucket,
                 max_bytes=_MAX_RAW_BYTES,

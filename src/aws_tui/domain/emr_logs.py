@@ -257,8 +257,50 @@ async def stream_log(
         )
 
 
+@dataclass(frozen=True, slots=True)
+class EmrServerlessLogsClient:
+    """Domain-layer facade for log fetching. The VM consumes
+    this; the session+region+BotoConfig stay below the VM
+    layer."""
+
+    session: aioboto3.Session  # aioboto3 is already imported at module level
+    region_name: str | None
+    boto_config: BotoConfig | None = None  # optional; may be used by callers
+
+    async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]:
+        """List log files under the run's S3 prefix."""
+        return await list_log_files(
+            session=self.session,
+            region_name=self.region_name,
+            bucket=bucket,
+            run_prefix=run_prefix,
+            boto_config=self.boto_config,
+        )
+
+    async def stream(
+        self,
+        *,
+        log_file: LogFile,
+        bucket: str,
+        max_bytes: int,
+        filter_: LogFilter,
+    ) -> AsyncIterator[LogChunk]:
+        """Stream the gzipped body of a log file line-by-line."""
+        async for chunk in stream_log(
+            session=self.session,
+            region_name=self.region_name,
+            log_file=log_file,
+            bucket=bucket,
+            max_bytes=max_bytes,
+            filter_=filter_,
+            boto_config=self.boto_config,
+        ):
+            yield chunk
+
+
 __all__ = [
     "DEFAULT_LOG_FILTER",
+    "EmrServerlessLogsClient",
     "FilterMode",
     "LogChunk",
     "LogFile",
