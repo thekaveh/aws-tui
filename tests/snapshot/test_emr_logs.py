@@ -179,3 +179,31 @@ def test_job_run_logs_error_renders_error_text(theme: str) -> None:
     # The seeded error text should appear
     assert "ResourceNotFoundException" in svg, f"error type missing for theme {theme!r}"
     assert "bucket&#160;not&#160;found" in svg, f"error detail missing for theme {theme!r}"
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_job_run_logs_ready_renders_filter_affordance_row(theme: str) -> None:
+    """Content-presence guard for the new always-visible filter row.
+
+    User feedback (post-PR-#92): "I don't see the keyword filters
+    being applied to the log via grey mentioned anywhere or the
+    ability to customize them". The fix added a dim row above the
+    body listing the active patterns + the `f` edit / `Shift+F`
+    reset bindings. Pin its presence so a regression to "hidden
+    only behind a binding" trips a snapshot test."""
+    p = (
+        Path(__file__).parent
+        / "__snapshots__"
+        / "test_emr_logs"
+        / f"test_job_run_logs_ready_snapshot[{theme}].raw"
+    )
+    assert p.is_file(), f"expected snapshot {p.name} on disk; run --snapshot-update first"
+    svg = p.read_text()
+    # Default LogFilter — see ``DEFAULT_LOG_FILTER`` in emr_logs.py.
+    assert "filter:" in svg, f"filter affordance row missing for theme {theme!r}"
+    assert "ERROR" in svg, f"filter pattern missing for theme {theme!r}"
+    assert "f&#160;edit" in svg, (
+        f"filter `f edit` hint missing for theme {theme!r} — user should see "
+        "how to customise the patterns"
+    )
+    assert "shift+f&#160;reset" in svg, f"filter reset hint missing for theme {theme!r}"

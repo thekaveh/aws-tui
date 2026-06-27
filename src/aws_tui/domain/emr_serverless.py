@@ -249,6 +249,60 @@ class EmrServerlessClient:
                     raise
                 raise mapped from exc
 
+    async def list_job_runs_page(
+        self,
+        application_id: str,
+        *,
+        start_token: str | None = None,
+        states: set[JobRunState] | None = None,
+    ) -> tuple[list[JobRunSummary], str | None]:
+        """Fetch ONE page of job runs and return ``(runs, next_token)``.
+
+        The VM threads ``next_token`` back through this method on
+        ``load_more()`` to walk pages on demand. ``states`` filters
+        the returned page CLIENT-side; the same caveat as
+        :meth:`list_job_runs` applies (boto3 only supports a single
+        state filter server-side and we need multi-select for the
+        chip strip).
+
+        Used by :class:`JobRunsVM` so the LEFT pane can page through
+        large run histories incrementally — user feedback (post-
+        PR-#92): "the list of job runs seems to be limited to a
+        select few that represents only the 1st page of returned
+        list of job runs. But we need an elegant way to page
+        through all job runs". The bulk ``list_job_runs`` below is
+        retained for non-paged callers (tests, future scripts) that
+        want a one-shot "give me everything up to N" semantics.
+        """
+        async with self._session.client(
+            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+        ) as c:
+            try:
+                kwargs: dict[str, Any] = {"applicationId": application_id}
+                if start_token is not None:
+                    kwargs["nextToken"] = start_token
+                resp = await c.list_job_runs(**kwargs)
+                summaries = [
+                    JobRunSummary(
+                        application_id=cast(str, r["applicationId"]),
+                        job_run_id=cast(str, r.get("id", r.get("jobRunId", ""))),
+                        name=cast(str | None, r.get("name")),
+                        state=JobRunState(cast(str, r["state"])),
+                        created_at=cast(datetime, r["createdAt"]),
+                        updated_at=cast(datetime, r["updatedAt"]),
+                    )
+                    for r in resp.get("jobRuns", [])
+                ]
+                if states is not None:
+                    summaries = [s for s in summaries if s.state in states]
+                summaries.sort(key=lambda s: s.created_at, reverse=True)
+                return summaries, resp.get("nextToken")
+            except Exception as exc:
+                mapped = _map_boto_error(exc)
+                if mapped is None:
+                    raise
+                raise mapped from exc
+
     async def list_job_runs(
         self,
         application_id: str,

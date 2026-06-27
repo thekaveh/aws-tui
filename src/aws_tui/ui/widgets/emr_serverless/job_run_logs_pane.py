@@ -62,6 +62,18 @@ class JobRunLogsPane(Widget, can_focus=True):
         padding: 0 1;
         margin: 0 1 0 0;
     }
+    /* Filter row — sits between the file-chip row and the body so
+       the user always sees WHICH patterns are gating the lines and
+       how to edit / reset them. Single-line, ellipsizes on overflow.
+       User feedback (post-PR-#92): "I don't see the keyword filters
+       being applied to the log via grey mentioned anywhere or the
+       ability to customize them". */
+    JobRunLogsPane > .logs-filter-row {
+        height: 1;
+        padding: 0 1;
+        text-style: dim;
+        text-overflow: ellipsis;
+    }
     JobRunLogsPane > VerticalScroll {
         height: 1fr;
     }
@@ -82,7 +94,8 @@ class JobRunLogsPane(Widget, can_focus=True):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "load", "Load", show=False),
         Binding("r", "reload", "Reload", show=False),
-        Binding("f", "open_filter", "Filter", show=False),
+        Binding("f", "open_filter", "Filter"),
+        Binding("F", "reset_filter", "Reset filter", show=False),
         Binding("up", "scroll_up", "Up", show=False),
         Binding("k", "scroll_up", "Up", show=False),
         Binding("down", "scroll_down", "Down", show=False),
@@ -101,6 +114,14 @@ class JobRunLogsPane(Widget, can_focus=True):
 
     class OpenFilterRequested(TextualMessage):
         """User pressed f to open the filter modal."""
+
+        pass
+
+    class ResetFilterRequested(TextualMessage):
+        """User pressed Shift+F to reset the filter to the default
+        keyword set. Surfaces an explicit affordance for "I changed
+        my mind / start over" without making the user re-type the
+        canonical patterns in the filter modal."""
 
         pass
 
@@ -127,12 +148,14 @@ class JobRunLogsPane(Widget, can_focus=True):
     def compose(self) -> ComposeResult:
         with Horizontal(classes="logs-chip-row"):
             pass  # Chips are added dynamically in _refresh_chips
+        yield Static("", classes="logs-filter-row", id="logs-filter")
         yield VerticalScroll(id="logs-body")
         yield Static("", classes="logs-status", id="logs-status")
 
     def on_mount(self) -> None:
         self.border_title = "logs"
         self._refresh_chips()
+        self._refresh_filter_row()
         self._refresh_body()
         self._refresh_status()
         self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
@@ -156,6 +179,10 @@ class JobRunLogsPane(Widget, can_focus=True):
     def action_open_filter(self) -> None:
         """Post OpenFilterRequested."""
         self.post_message(self.OpenFilterRequested())
+
+    def action_reset_filter(self) -> None:
+        """Post ResetFilterRequested (Shift+F)."""
+        self.post_message(self.ResetFilterRequested())
 
     def action_scroll_up(self) -> None:
         """Scroll body up."""
@@ -194,9 +221,32 @@ class JobRunLogsPane(Widget, can_focus=True):
             return
         if msg.property_name in {"available_files", "current_file"}:
             self.call_after_refresh(self._refresh_chips)
+        elif msg.property_name == "filter":
+            self.call_after_refresh(self._refresh_filter_row)
         elif msg.property_name in {"state", "lines", "progress"}:
             self.call_after_refresh(self._refresh_body)
             self.call_after_refresh(self._refresh_status)
+
+    def _refresh_filter_row(self) -> None:
+        """Render the always-visible filter affordance:
+        ``filter: <patterns…>  ·  f edit  ·  shift+f reset``. The
+        patterns list is comma-joined and ellipsized by the
+        text-overflow rule on ``.logs-filter-row``. In PASSTHROUGH
+        mode the label flips to ``filter: off`` so the user can
+        tell at a glance whether lines are being gated."""
+        try:
+            row = self.query_one("#logs-filter", Static)
+        except Exception:
+            return
+        f = self._vm.filter
+        from aws_tui.domain.emr_logs import FilterMode
+
+        if f.mode is FilterMode.PASSTHROUGH or not f.patterns:
+            patterns_text = "off"
+        else:
+            patterns_text = " · ".join(f.patterns)
+        hint = " · f edit · shift+f reset"
+        row.update(f"filter: {patterns_text}{hint}")
 
     def _refresh_chips(self) -> None:
         """Render file-selector chip strip."""

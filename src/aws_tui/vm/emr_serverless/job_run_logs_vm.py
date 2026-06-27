@@ -12,6 +12,7 @@ matches in batched ``PropertyChangedMessage`` broadcasts.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from enum import StrEnum
 
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
@@ -43,6 +44,16 @@ class LogsState(StrEnum):
 
 _MAX_RAW_BYTES: int = 100 * 1024 * 1024
 _MAX_MATCHED_LINES: int = 5000
+#: Cap on the LRU response cache. User feedback (post-PR-#92):
+#: "we need to make sure those logs get pulled into a temp space
+#: and get disposed every once in a while so they don't
+#: accumulate". A 5-entry LRU keeps the user's recent navigation
+#: snappy (immediate cache hit on flipping back to the previous
+#: file / run) while bounding the in-memory footprint — each
+#: entry holds at most :data:`_MAX_MATCHED_LINES` decoded strings.
+#: Older entries fall off the LRU AND the cache is cleared
+#: entirely on application switch (see :meth:`set_target`).
+_CACHE_MAX_ENTRIES: int = 5
 
 
 class JobRunLogsVM:
@@ -81,8 +92,13 @@ class JobRunLogsVM:
         self._filter: LogFilter = DEFAULT_LOG_FILTER
         # In-flight cancellation token
         self._load_task: asyncio.Task[None] | None = None
-        # Cache: key=(app_id, run_id, file_key, filter_hash); value=(lines, truncated)
-        self._cache: dict[tuple[str, str, str, int], tuple[tuple[str, ...], bool]] = {}
+        # LRU response cache: key=(app_id, run_id, file_key, filter_hash);
+        # value=(lines, truncated). Capped at :data:`_CACHE_MAX_ENTRIES`
+        # so recent navigation stays snappy without unbounded memory
+        # growth. Cleared on application switch in :meth:`set_target`.
+        self._cache: OrderedDict[tuple[str, str, str, int], tuple[tuple[str, ...], bool]] = (
+            OrderedDict()
+        )
 
     # ── Properties (snapshot accessors) ─────────────────────────────────────
 
@@ -136,6 +152,14 @@ class JobRunLogsVM:
             and self._log_uri == log_uri
         ):
             return
+        # Drop the cache on application switch — entries for the
+        # previous application can't be revisited from this UI
+        # session in a useful way and keeping them around just
+        # bloats memory. Run-switch within the same application
+        # keeps the cache so flipping between recent runs stays
+        # snappy.
+        if app_id != self._application_id:
+            self._cache.clear()
         self._cancel_load()
         self._application_id = app_id
         self._job_run_id = run_id
@@ -225,6 +249,10 @@ class JobRunLogsVM:
                 ),
             )
             if cache_key in self._cache:
+                # LRU bump: move the freshly-accessed entry to the
+                # "newest" end so eviction targets the least-recently
+                # used entry when the cache fills up.
+                self._cache.move_to_end(cache_key)
                 cached_lines, cached_truncated = self._cache[cache_key]
                 self._lines = cached_lines
                 self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
@@ -247,6 +275,9 @@ class JobRunLogsVM:
                 self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "progress"))
                 truncated = chunk.truncated
             self._cache[cache_key] = (self._lines, truncated)
+            # LRU eviction: drop the oldest entry until back under cap.
+            while len(self._cache) > _CACHE_MAX_ENTRIES:
+                self._cache.popitem(last=False)
             self._set_state(LogsState.TRUNCATED if truncated else LogsState.READY)
         except ProviderError as exc:
             new_state, self._error_text = map_provider_error(exc)
@@ -271,6 +302,10 @@ class JobRunLogsVM:
 
     def dispose(self) -> None:
         self._cancel_load()
+        # Drop the response cache so a recycled VM (e.g. test
+        # harnesses or future content-host reuse) doesn't carry
+        # stale entries forward.
+        self._cache.clear()
         self._inner.dispose()
 
     # ── Internal ───────────────────────────────────────────────────────────

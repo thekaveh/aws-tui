@@ -61,14 +61,17 @@ _STATE_GLYPH: dict[JobRunState, str] = {
 }
 
 #: Colored Rich-markup glyph per job-run state, used as the
-#: indicator cell in the runs list. Mirrors the picker's
-#: ``_APP_STATE_MARKER`` semantics — colour + shape carries the
-#: state, no textual ``SUCCESS`` / ``FAILED`` label needed. User
-#: feedback (post-PR-#90, applied here): "I want the same
-#: semantics applied to the job runs … a nice indicator shown
-#: first, then the job name, then date and time".
+#: indicator cell in the runs list. Glyph SHAPES MUST mirror the
+#: chip-row glyphs in :data:`_STATE_GLYPH` — the chip strip is
+#: the visual legend, and the row indicators are the items the
+#: legend describes. User feedback (post-PR-#92): "the green
+#: indicator shown before each job run item doesn't match the
+#: legend shown at the top of the runs pane … You need to use
+#: indicators chosen from among the element items". Colour is
+#: derived from semantics (green ✓ done, cyan ● running, yellow
+#: ⏸/↻ waiting, red ✗ failed, dim ⊘ cancelled).
 _STATE_MARKER: dict[JobRunState, str] = {
-    JobRunState.SUCCESS: "[green]●[/green]",
+    JobRunState.SUCCESS: "[green]✓[/green]",
     JobRunState.RUNNING: "[cyan]●[/cyan]",
     JobRunState.PENDING: "[yellow]⏸[/yellow]",
     JobRunState.SUBMITTED: "[yellow]↻[/yellow]",
@@ -77,6 +80,20 @@ _STATE_MARKER: dict[JobRunState, str] = {
     JobRunState.FAILED: "[red]✗[/red]",
     JobRunState.CANCELLED: "[dim]⊘[/dim]",
     JobRunState.CANCELLING: "[dim]⊘[/dim]",
+}
+
+#: Human-readable label per chip (driven by the `1..5` key
+#: bindings). Surfaced as the chip's hover tooltip so the user
+#: discovers what each chip filters without having to memorise
+#: glyphs. User feedback (post-PR-#92): "the legend shown at the
+#: top of the runs pane … has no meaningful description for its
+#: items". Pairs with the chip key in :data:`_KEY_TO_STATE`.
+_CHIP_TOOLTIP: dict[JobRunState, str] = {
+    JobRunState.SUCCESS: "Filter: SUCCESS  (press 1 to toggle)",
+    JobRunState.RUNNING: "Filter: RUNNING  (press 2 to toggle)",
+    JobRunState.PENDING: "Filter: PENDING  (press 3 to toggle)",
+    JobRunState.FAILED: "Filter: FAILED  (press 4 to toggle)",
+    JobRunState.CANCELLED: "Filter: CANCELLED  (press 5 to toggle)",
 }
 
 _KEY_TO_STATE: dict[str, JobRunState] = {
@@ -95,6 +112,17 @@ _DATETIME_COL_WIDTH: int = 16
 #: Indicator column = 1 visible cell for the glyph + breathing
 #: room. Allocated 3 chars so the glyph sits centred.
 _INDICATOR_COL_WIDTH: int = 3
+
+
+class _LoadMoreSentinel(Static):
+    """Sentinel row appended at the bottom of the runs list when
+    the VM has another page available (``has_more=True``). Click
+    or PgDn invokes :meth:`JobRunsPane.action_load_more` and the
+    VM appends the next page. Carries no run id — the pane's
+    ``on_click`` matches by ``isinstance`` to route clicks here
+    instead of treating them as a row selection."""
+
+    pass
 
 
 class _JobRunRow(Horizontal):
@@ -179,6 +207,13 @@ class JobRunsPane(Widget, can_focus=True):
         height: 1;
         content-align: right middle;
     }}
+    /* "Load more" sentinel row sits at the bottom of the runs list
+       when the VM has another page available. Dimmed + italic so
+       it visually reads as an affordance, not a real run. */
+    JobRunsPane .runs-load-more {{
+        text-style: dim italic;
+        content-align: center middle;
+    }}
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -186,6 +221,10 @@ class JobRunsPane(Widget, can_focus=True):
         Binding("down", "cursor_down", "Down", show=False),
         Binding("enter", "commit_selection", "Open"),
         Binding("r", "request_refresh", "Refresh"),
+        # PgDn = "load more". Shows in the hint legend so the user
+        # discovers the affordance without having to hover the
+        # sentinel row at the bottom of the list.
+        Binding("pagedown", "load_more", "More"),
         *[
             Binding(k, f"toggle_state_filter('{s.value}')", show=False)
             for k, s in _KEY_TO_STATE.items()
@@ -198,6 +237,14 @@ class JobRunsPane(Widget, can_focus=True):
             self.run_id = run_id
 
     class RefreshRequested(TextualMessage):
+        pass
+
+    class LoadMoreRequested(TextualMessage):
+        """User asked for the next page of runs (PgDn or click on
+        the "Load more" sentinel row). The page widget runs
+        :meth:`JobRunsVM.load_more` and the new rows append into
+        the existing list."""
+
         pass
 
     def __init__(
@@ -223,11 +270,13 @@ class JobRunsPane(Widget, can_focus=True):
                 JobRunState.FAILED,
                 JobRunState.CANCELLED,
             ):
-                yield Static(
+                chip = Static(
                     f" {_STATE_GLYPH[state]} ",
                     classes=f"runs-chip runs-chip-{state.value.lower()}",
                     id=f"runs-chip-{state.value.lower()}",
                 )
+                chip.tooltip = _CHIP_TOOLTIP[state]
+                yield chip
         with Horizontal(classes="runs-column-header"):
             yield Static("", classes="runs-cell-indicator")
             yield Static("NAME", classes="runs-cell-name")
@@ -286,33 +335,41 @@ class JobRunsPane(Widget, can_focus=True):
     def action_request_refresh(self) -> None:
         self.post_message(self.RefreshRequested())
 
+    def action_load_more(self) -> None:
+        """Post LoadMoreRequested if the VM has another page. No-op
+        when the list is already fully drained — the user can
+        still press PgDn idly without triggering a wasted call."""
+        if self._vm.has_more:
+            self.post_message(self.LoadMoreRequested())
+
     # ── Mouse ───────────────────────────────────────────────────────────────
 
     def on_click(self, event: Click) -> None:
         """Click on a row → move cursor to that row + select it.
 
-        Mirrors S3's pane click behaviour (per the user feedback
-        "Mouse also doesn't work … like it does for s3"). Rows
-        mount as :class:`_JobRunRow` widgets carrying ``run_id``
-        as a Python attribute; we walk the event widget chain to
-        find the first ``_JobRunRow`` and translate its ``run_id``
-        to a cursor index."""
+        Mirrors S3's pane click behaviour. Click on the "Load more"
+        sentinel row at the bottom fires :class:`LoadMoreRequested`
+        instead of a selection. Rows mount as :class:`_JobRunRow`
+        widgets carrying ``run_id`` as a Python attribute; the
+        sentinel is a :class:`_LoadMoreSentinel` (matched by
+        ``isinstance`` so it can't collide with a row). We walk the
+        event widget chain to find whichever marker comes first.
+        """
         target: object | None = event.widget
-        run_id: str | None = None
         while target is not None:
-            if isinstance(target, _JobRunRow):
-                run_id = target.run_id
-                break
-            target = getattr(target, "parent", None)
-        if run_id is None:
-            return
-        runs = self._vm.runs
-        for idx, r in enumerate(runs):
-            if r.job_run_id == run_id:
-                self._cursor_index = idx
-                self._refresh_rows()
-                self.post_message(self.RunSelected(run_id))
+            if isinstance(target, _LoadMoreSentinel):
+                self.action_load_more()
                 return
+            if isinstance(target, _JobRunRow):
+                runs = self._vm.runs
+                for idx, r in enumerate(runs):
+                    if r.job_run_id == target.run_id:
+                        self._cursor_index = idx
+                        self._refresh_rows()
+                        self.post_message(self.RunSelected(target.run_id))
+                        return
+                return
+            target = getattr(target, "parent", None)
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -404,6 +461,13 @@ class JobRunsPane(Widget, can_focus=True):
             if idx == self._cursor_index:
                 row_classes += " -selected"
             body.mount(_JobRunRow(r, run_id=r.job_run_id, classes=row_classes))
+        if self._vm.has_more:
+            body.mount(
+                _LoadMoreSentinel(
+                    "↓  Load more  (PgDn)",
+                    classes="runs-row runs-load-more",
+                )
+            )
 
 
 __all__ = ["JobRunsPane"]

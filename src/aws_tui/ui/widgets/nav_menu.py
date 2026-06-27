@@ -413,38 +413,72 @@ class NavMenu(Widget):
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         """Sync the OptionList's tooltip to the currently-highlighted
-        option's full label.
-
-        Textual's :class:`OptionList` doesn't support per-option
-        tooltips natively, so we approximate it by retargeting the
-        whole list's tooltip whenever the cursor moves. With the
-        rail collapsed (icon-only prompts), hovering or arrow-keying
-        to an option pops up a tooltip carrying the human-readable
-        label — same UX as a tooltip-per-item with one fewer widget.
+        option's full label — the KEYBOARD branch of the per-row
+        tooltip approximation. Mouse hover is handled separately in
+        :meth:`on_mouse_move` because Textual's OptionList does NOT
+        fire ``OptionHighlighted`` on hover (only on arrow-key /
+        explicit highlight assignment); without the mouse-move
+        branch, hovering a different row keeps showing the LAST
+        keyboarded row's tooltip — user feedback (post-PR-#92):
+        "Both the S3 and the EMR menu items seem to have the same
+        tooltip right now that says 'EMR'".
 
         Map via the Option's ``id`` (descriptor id), NOT its
         OptionList index. The PR #81 spacer ``Option(" ",
         disabled=True)`` inserted between consecutive nav items
         shifts the OptionList indices so they no longer line up
-        with ``_split_items()``'s VM index — index-based lookup
-        landed every EMR-row highlight on the s3 NavItemVM (the
-        previous row in the VM list) and showed "S3" as the EMR
-        tooltip. ``event.option_id`` reads the id we set on
-        ``add_option(Option(prompt, id=descriptor.id))``.
+        with ``_split_items()``'s VM index.
         """
         list_widget = event.option_list
         option_id = event.option_id
         if option_id is None:
-            # ``option_id`` is ``None`` for the disabled spacer
-            # options and for any out-of-range highlight; either way
-            # there's no human-readable label to surface.
             list_widget.tooltip = None
             return
+        list_widget.tooltip = self._tooltip_for_option_id(option_id)
+
+    def on_mouse_move(self, event: object) -> None:
+        """Mouse-hover branch of the per-row tooltip approximation.
+
+        Textual's ``OptionList._on_mouse_move`` updates an internal
+        ``_mouse_hovering_over`` attribute but does NOT fire
+        ``OptionHighlighted``; the OptionList-wide ``tooltip``
+        attribute therefore stays at whatever the keyboard last
+        highlighted. The user-visible symptom: keyboard EMR row
+        once, then hover S3 with the mouse — tooltip stays "EMR".
+
+        We read Textual's own hover state directly so the tooltip
+        re-resolves on every mouse move within either OptionList.
+        Re-reading the framework's state (rather than computing our
+        own y-offset → option-index) keeps us robust to per-version
+        layout details.
+        """
+        for list_id in ("#menu-services", "#menu-pinned"):
+            try:
+                list_widget = self.query_one(list_id, OptionList)
+            except Exception:
+                continue
+            hovered_id = getattr(list_widget, "_mouse_hovering_over", None)
+            if hovered_id is None:
+                # Mouse left this list (or is over a spacer). Fall
+                # back to the keyboard-highlighted tooltip so the
+                # popup stays meaningful when the pointer drifts
+                # off the rows but stays inside the list bounds.
+                highlighted = list_widget.highlighted
+                if highlighted is None:
+                    list_widget.tooltip = None
+                    continue
+                opt = list_widget.get_option_at_index(highlighted)
+                hovered_id = opt.id
+            if hovered_id is None:
+                list_widget.tooltip = None
+                continue
+            list_widget.tooltip = self._tooltip_for_option_id(hovered_id)
+
+    def _tooltip_for_option_id(self, option_id: str) -> str | None:
         for item in self._vm.items:
             if item.descriptor.id == option_id:
-                list_widget.tooltip = item.descriptor.label
-                return
-        list_widget.tooltip = None
+                return item.descriptor.label
+        return None
 
 
 __all__ = ["NavMenu"]
