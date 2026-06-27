@@ -726,3 +726,44 @@ JobRunDetailPane .detail-placeholder {
     color: $text-muted;
     padding: 1 2;
 }
+
+JobRunLogsPane {
+    background: $bg;
+    color: $text;
+    border: solid $rule-dim;
+}
+JobRunLogsPane:focus-within {
+    border: solid $accent;
+}
+JobRunLogsPane > .logs-chip-row {
+    background: $bg-elev;
+    color: $text-muted;
+}
+JobRunLogsPane > .logs-chip-row > .logs-chip {
+    background: $bg;
+    color: $text-muted;
+    border-left: solid $rule-dim;
+}
+JobRunLogsPane > .logs-chip-row > .logs-chip.-active {
+    background: $bg-sel;
+    color: $accent-soft;
+}
+JobRunLogsPane > VerticalScroll {
+    background: $bg;
+}
+JobRunLogsPane .logs-line {
+    color: $text-muted;
+}
+JobRunLogsPane .logs-line.-match {
+    color: $text;
+}
+JobRunLogsPane > .logs-placeholder {
+    color: $text-muted;
+}
+JobRunLogsPane > .logs-placeholder.-error {
+    color: $danger;
+}
+JobRunLogsPane > .logs-status {
+    background: $bg-elev;
+    color: $text-muted;
+}
