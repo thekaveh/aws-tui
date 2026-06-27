@@ -77,7 +77,11 @@ async def test_trigger_label_select_application_when_selection_stale() -> None:
         assert picker._trigger_label() == "(select application)"  # type: ignore[attr-defined]
 
 
-async def test_trigger_label_shows_name_glyph_when_selected() -> None:
+async def test_trigger_label_shows_name_and_colored_glyph_when_selected() -> None:
+    """Post-PR-state-glyphs the trigger label drops the textual
+    state name (``STARTED``) in favour of a colored Rich-markup
+    glyph (green ●). User feedback: "If we do this then we don't
+    need to show the STARTED OR STOPPED ETC statuses next to them"."""
     fake = _InMemoryEmr()
     fake.add_application(app_id="a1", name="etl", state=ApplicationState.STARTED)
     vm, hub = _make_vm(fake)
@@ -88,7 +92,10 @@ async def test_trigger_label_shows_name_glyph_when_selected() -> None:
         picker = pilot.app.query_one(ApplicationPicker)
         label = picker._trigger_label()  # type: ignore[attr-defined]
         assert "etl" in label
-        assert "STARTED" in label
+        # STARTED ⇒ green ● glyph, no textual state name.
+        assert "●" in label
+        assert "[green]" in label
+        assert "STARTED" not in label
 
 
 # ── toggle_open (CSS class flip) ──────────────────────────────────────────────
@@ -178,3 +185,42 @@ async def test_action_commit_no_highlight_is_noop() -> None:
         picker.action_commit()
         await pilot.pause()
         assert vm.selected_id == before_selection
+
+
+# ── Dropdown sort order ──────────────────────────────────────────────────────
+
+
+async def test_build_options_sorts_started_first_then_other_states() -> None:
+    """User feedback: "list the started ones first … then list the
+    remaining". The dropdown lists STARTED applications first; the
+    remaining states group as transitional (STARTING / STOPPING),
+    idle (CREATING / CREATED / STOPPED), terminated. Within a group
+    the tie-break is the application name (alphabetical).
+    """
+    fake = _InMemoryEmr()
+    # Add in deliberately-shuffled order to confirm the sort, not the
+    # insertion order, drives the dropdown.
+    fake.add_application(app_id="a-terminated", name="killed", state=ApplicationState.TERMINATED)
+    fake.add_application(app_id="a-stopped", name="zzz-quiet", state=ApplicationState.STOPPED)
+    fake.add_application(app_id="a-started-b", name="bravo", state=ApplicationState.STARTED)
+    fake.add_application(app_id="a-starting", name="warming-up", state=ApplicationState.STARTING)
+    fake.add_application(app_id="a-started-a", name="alpha", state=ApplicationState.STARTED)
+    fake.add_application(app_id="a-created", name="ready", state=ApplicationState.CREATED)
+    vm, hub = _make_vm(fake)
+    await vm.refresh()
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        picker = pilot.app.query_one(ApplicationPicker)
+        options = picker._build_options()  # type: ignore[attr-defined]
+        ids_in_order = [opt.id for opt in options]
+        # STARTED comes first (alphabetical within group: alpha, bravo),
+        # then STARTING (transitional), then CREATED (idle),
+        # then STOPPED (idle), then TERMINATED.
+        assert ids_in_order == [
+            "a-started-a",
+            "a-started-b",
+            "a-starting",
+            "a-created",
+            "a-stopped",
+            "a-terminated",
+        ]
