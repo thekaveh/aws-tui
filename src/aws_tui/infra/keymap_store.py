@@ -56,6 +56,7 @@ class KeymapStore:
         # when a file-manager pane is focused; the two never share a
         # focus context).
         "emr.clone": ("c",),
+        "emr.logs.filter": ("f",),
     }
 
     def __init__(self, *, overlay: dict[str, str | list[str]] | None = None) -> None:
