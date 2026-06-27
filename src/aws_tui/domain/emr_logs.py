@@ -129,6 +129,72 @@ _LINE_BUFFER_BATCH: int = 200
 _STREAM_CHUNK_BYTES: int = 64 * 1024
 
 
+def _classify_key(key: str) -> tuple[LogFileKind | None, int]:
+    """Map an S3 key path to a ``LogFileKind`` + sort index.
+
+    Driver-first sort (sort_idx ``0`` and ``1``); executor logs get
+    ``2 + executor_idx * 2`` for stdout, ``+1`` for stderr.
+    Keys that don't match the expected pattern return ``(None, 0)``
+    so the caller skips them silently.
+    """
+    if "/SPARK_DRIVER/" in key:
+        if key.endswith("stdout.gz"):
+            return LogFileKind.DRIVER_STDOUT, 0
+        if key.endswith("stderr.gz"):
+            return LogFileKind.DRIVER_STDERR, 1
+        return None, 0
+    if "/SPARK_EXECUTOR_" in key:
+        # Extract the executor index from the path segment.
+        seg = next((s for s in key.split("/") if s.startswith("SPARK_EXECUTOR_")), None)
+        if seg is None:
+            return None, 0
+        try:
+            idx = int(seg.removeprefix("SPARK_EXECUTOR_"))
+        except ValueError:
+            return None, 0
+        if key.endswith("stdout.gz"):
+            return LogFileKind.EXECUTOR_STDOUT, 2 + idx * 2
+        if key.endswith("stderr.gz"):
+            return LogFileKind.EXECUTOR_STDERR, 2 + idx * 2 + 1
+    return None, 0
+
+
+async def list_log_files(
+    *,
+    session: aioboto3.Session,
+    region_name: str | None,
+    bucket: str,
+    run_prefix: str,
+    boto_config: BotoConfig | None = None,
+) -> list[LogFile]:
+    """List all log files under the run's S3 prefix. Returns
+    ``LogFile``s with ``kind`` parsed from the key path and ``size``
+    from each object's ``Size`` field. Driver-first sort so the
+    default selection (``DRIVER_STDERR``) is at a stable index."""
+    kwargs: dict[str, object] = {"region_name": region_name}
+    if boto_config is not None:
+        kwargs["config"] = boto_config
+    files: list[tuple[int, LogFile]] = []
+    async with session.client("s3", **kwargs) as s3:
+        next_token: str | None = None
+        while True:
+            list_kwargs: dict[str, object] = {"Bucket": bucket, "Prefix": run_prefix}
+            if next_token is not None:
+                list_kwargs["ContinuationToken"] = next_token
+            resp = await s3.list_objects_v2(**list_kwargs)
+            for obj in resp.get("Contents", []):
+                key = obj["Key"]
+                kind, sort_idx = _classify_key(key)
+                if kind is None:
+                    continue
+                files.append((sort_idx, LogFile(key=key, kind=kind, size=obj.get("Size"))))
+            next_token = resp.get("NextContinuationToken")
+            if next_token is None:
+                break
+    files.sort(key=lambda pair: pair[0])
+    return [f for _, f in files]
+
+
 async def stream_log(
     *,
     session: aioboto3.Session,
@@ -200,6 +266,7 @@ __all__ = [
     "LogFilter",
     "S3LogLocation",
     "build_run_prefix",
+    "list_log_files",
     "parse_log_uri",
     "stream_log",
 ]

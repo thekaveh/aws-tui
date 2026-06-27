@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aws_tui.domain.emr_logs import (
+    LogFileKind,
     S3LogLocation,
     build_run_prefix,
     parse_log_uri,
@@ -97,6 +98,76 @@ class _StubSession:
 
     def client(self, *_args: object, **_kwargs: object) -> _StubS3:
         return self._stub
+
+
+class _StubS3ListObjectsV2:
+    """Stub S3 client for list_objects_v2 with pagination support."""
+
+    def __init__(self, keys: list[tuple[str, int]]) -> None:
+        """Initialize with a list of (key, size) tuples."""
+        self._keys = keys
+        self._paginate_idx = 0
+
+    async def list_objects_v2(self, **kwargs: object) -> dict[str, object]:
+        """Simulate list_objects_v2 with optional pagination."""
+        # Return all contents in one response for simplicity
+        # (real aioboto3 would use NextContinuationToken)
+        contents = [{"Key": key, "Size": size} for key, size in self._keys]
+        return {
+            "Contents": contents,
+            # No NextContinuationToken means pagination stops
+        }
+
+    async def __aenter__(self) -> _StubS3ListObjectsV2:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class _StubSessionListObjectsV2:
+    """Stub aioboto3.Session for list_objects_v2."""
+
+    def __init__(self, stub: _StubS3ListObjectsV2) -> None:
+        self._stub = stub
+
+    def client(self, *_args: object, **_kwargs: object) -> _StubS3ListObjectsV2:
+        return self._stub
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_groups_driver_first_then_executors() -> None:
+    """Enumerate S3 keys under the run prefix, parse each into a
+    ``LogFile`` with the right ``LogFileKind``, sort driver-first."""
+    from aws_tui.domain.emr_logs import list_log_files
+
+    fake_keys = [
+        ("logs/applications/a/jobs/r/SPARK_EXECUTOR_2/stdout.gz", 1024),
+        ("logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz", 2048),
+        ("logs/applications/a/jobs/r/SPARK_EXECUTOR_1/stderr.gz", 512),
+        ("logs/applications/a/jobs/r/SPARK_DRIVER/stdout.gz", 1024),
+        ("logs/applications/a/jobs/r/SPARK_EXECUTOR_1/stdout.gz", 768),
+        ("logs/applications/a/jobs/r/SPARK_EXECUTOR_2/stderr.gz", 256),
+    ]
+    stub = _StubS3ListObjectsV2(fake_keys)
+    session = _StubSessionListObjectsV2(stub)
+    files = await list_log_files(  # type: ignore[arg-type]
+        session=session,
+        region_name="us-east-1",
+        bucket="b",
+        run_prefix="logs/applications/a/jobs/r",
+    )
+    kinds = [f.kind for f in files]
+    assert kinds == [
+        LogFileKind.DRIVER_STDOUT,
+        LogFileKind.DRIVER_STDERR,
+        LogFileKind.EXECUTOR_STDOUT,  # idx 1
+        LogFileKind.EXECUTOR_STDERR,  # idx 1
+        LogFileKind.EXECUTOR_STDOUT,  # idx 2
+        LogFileKind.EXECUTOR_STDERR,  # idx 2
+    ]
+    # Driver-first invariant: first two entries are driver.
+    assert all(f.kind in (LogFileKind.DRIVER_STDOUT, LogFileKind.DRIVER_STDERR) for f in files[:2])
 
 
 @pytest.mark.asyncio
