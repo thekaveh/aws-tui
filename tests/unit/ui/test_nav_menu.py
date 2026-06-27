@@ -218,3 +218,114 @@ async def test_nav_menu_rebuilds_options_when_vm_items_change(tmp_path: Path) ->
             assert any("⚙" in p or "Settings" in p for p in prompts), prompts
     finally:
         vm.dispose()
+
+
+# ── Highlight-driven tooltip lookup ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_highlight_tooltip_maps_via_option_id_not_index(tmp_path: Path) -> None:
+    """Pin the per-row tooltip lookup against the PR #81 spacer
+    offset.
+
+    PR #81 inserts a blank disabled spacer ``Option`` between
+    consecutive nav-rail rows for vertical breathing room. Pre-fix,
+    ``on_option_list_option_highlighted`` mapped the OptionList
+    cursor index back to ``self._vm.items[idx]`` — but the OptionList
+    layout is ``[item, spacer, item, spacer, …]`` while the VM list
+    is ``[item, item, …]``. So highlighting the second service row
+    (OptionList idx=2) looked up VM idx=2 → IndexError → tooltip
+    cleared; and worse, highlighting the spacer between them
+    (idx=1) showed the SECOND service's label. The user-visible
+    symptom: hovering the EMR row showed "S3" (or no tooltip),
+    never "EMR".
+
+    The fix maps via ``event.option_id`` (each non-spacer Option
+    has its descriptor id) and looks the NavItemVM up by id. This
+    test pins that mapping with TWO registered services so the
+    spacer is actually present in the rendered OptionList.
+    """
+    from textual.widgets import OptionList
+
+    from aws_tui.vm.services_protocol import ServiceDescriptor
+
+    class _S3Stub:
+        descriptor = ServiceDescriptor(id="s3", label="S3", icon="🪣")
+
+        def supports(self, conn: object) -> bool:
+            return True
+
+        def build_vm(self, conn: object) -> object:
+            return object()
+
+    class _EmrStub:
+        descriptor = ServiceDescriptor(id="emr-serverless", label="EMR", icon="🔥")
+
+        def supports(self, conn: object) -> bool:
+            return True
+
+        def build_vm(self, conn: object) -> object:
+            return object()
+
+    hub = _hub()
+    registry = ServiceRegistry()
+    registry.register(_S3Stub())
+    registry.register(_EmrStub())
+    vm = NavMenuVM(registry=registry, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    # Drive a connection broadcast so both services land in the
+    # nav rail.
+    from aws_tui.infra.connection_resolver import Connection
+
+    vm.update_connection(
+        Connection(
+            name="dev",
+            kind="aws",
+            region="us-east-1",
+            source="config",
+            profile="dev",
+        )
+    )
+
+    class _Host(App[None]):
+        def __init__(self, w: NavMenu) -> None:
+            super().__init__()
+            self._w = w
+
+        def compose(self) -> ComposeResult:
+            yield self._w
+
+    nav = NavMenu(vm=vm, hub=hub)
+    app = _Host(nav)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            services = nav.query_one("#menu-services", OptionList)
+            # OptionList layout for two services: [s3, spacer, emr]
+            # = 3 rows. The spacer is the PR #81 breathing-room
+            # ``Option(" ", disabled=True)``.
+            assert services.option_count == 3, (
+                f"Expected [s3, spacer, emr] = 3 rows; got {services.option_count}."
+            )
+
+            # Highlight each non-spacer row and verify the tooltip
+            # lookup resolves to the right label. ``highlighted = idx``
+            # is the public Textual API; setting it triggers the
+            # OptionHighlighted message which fires our handler.
+            services.highlighted = 0  # s3 row
+            await pilot.pause()
+            assert services.tooltip == "S3", (
+                f"Expected 'S3' tooltip on the s3 row; got {services.tooltip!r}."
+            )
+
+            services.highlighted = 2  # emr row (idx=1 is the spacer)
+            await pilot.pause()
+            assert services.tooltip == "EMR", (
+                f"Expected 'EMR' tooltip on the emr row; got {services.tooltip!r}. "
+                "Pre-fix the index-based lookup mapped this back to "
+                "self._vm.items[2] (out of range) → cleared the tooltip, "
+                "OR the user saw the s3 'S3' tooltip stuck from the prior "
+                "highlight."
+            )
+    finally:
+        vm.dispose()

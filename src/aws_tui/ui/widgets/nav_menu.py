@@ -421,21 +421,30 @@ class NavMenu(Widget):
         rail collapsed (icon-only prompts), hovering or arrow-keying
         to an option pops up a tooltip carrying the human-readable
         label — same UX as a tooltip-per-item with one fewer widget.
+
+        Map via the Option's ``id`` (descriptor id), NOT its
+        OptionList index. The PR #81 spacer ``Option(" ",
+        disabled=True)`` inserted between consecutive nav items
+        shifts the OptionList indices so they no longer line up
+        with ``_split_items()``'s VM index — index-based lookup
+        landed every EMR-row highlight on the s3 NavItemVM (the
+        previous row in the VM list) and showed "S3" as the EMR
+        tooltip. ``event.option_id`` reads the id we set on
+        ``add_option(Option(prompt, id=descriptor.id))``.
         """
         list_widget = event.option_list
-        idx = event.option_index
-        if idx is None or idx < 0:
+        option_id = event.option_id
+        if option_id is None:
+            # ``option_id`` is ``None`` for the disabled spacer
+            # options and for any out-of-range highlight; either way
+            # there's no human-readable label to surface.
             list_widget.tooltip = None
             return
-        # Map index → NavItemVM via the VM's items split (services vs
-        # pinned), the same split _rebuild_options does. Done lazily
-        # to avoid keeping a stale mapping around.
-        services, pinned = self._split_items()
-        items = services if getattr(list_widget, "id", None) == "menu-services" else pinned
-        if idx >= len(items):
-            list_widget.tooltip = None
-            return
-        list_widget.tooltip = items[idx].descriptor.label
+        for item in self._vm.items:
+            if item.descriptor.id == option_id:
+                list_widget.tooltip = item.descriptor.label
+                return
+        list_widget.tooltip = None
 
 
 __all__ = ["NavMenu"]
