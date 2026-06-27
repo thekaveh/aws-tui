@@ -37,7 +37,13 @@ def test_emr_page_populated_renders_expected_glyphs_and_labels(theme: str) -> No
     themes (per PR #53 lesson). The fixture seeds one application
     ``etl-pipeline-1``, a SUCCESS run ``nightly-2026-06-25``, and a detail
     with ``EmrJobRole`` in the execution role ARN; assert those strings
-    survive the render."""
+    survive the render.
+
+    The job-run NAME column is 1fr of a narrow LEFT pane, so a long
+    run name like ``nightly-2026-06-25`` ellipsizes to
+    ``nightly-2026-06…`` in the runs list — match the prefix (still
+    uniquely from the seeded fixture). The full name still appears
+    verbatim in the RIGHT detail pane."""
     p = (
         Path(__file__).parent
         / "__snapshots__"
@@ -47,8 +53,12 @@ def test_emr_page_populated_renders_expected_glyphs_and_labels(theme: str) -> No
     assert p.is_file(), f"expected snapshot {p.name} on disk; run --snapshot-update first"
     svg = p.read_text()
     assert "etl-pipeline-1" in svg, f"application name missing for theme {theme!r}"
-    assert "nightly-2026-06-25" in svg, f"job run name missing for theme {theme!r}"
+    assert "nightly-2026-06" in svg, f"job run name (prefix) missing for theme {theme!r}"
     assert "EmrJobRole" in svg, f"execution role ARN fragment missing for theme {theme!r}"
+    # New post-#90 row format: indicator + name + ``YYYY-MM-DD HH:MM`` —
+    # pin the date+time column so a regression to time-only would fail.
+    # SVG encodes the space between date and time as ``&#160;``.
+    assert "2026-06-25&#160;12:00" in svg, f"job run date+time missing for theme {theme!r}"
 
 
 @pytest.mark.parametrize("theme", THEMES)

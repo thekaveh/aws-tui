@@ -10,12 +10,21 @@ fire ``RunSelected`` (the detail follows immediately, no Enter
 required — same UX as a list-master-detail UI). ``Enter`` and click
 are also valid commits. ``r`` posts ``RefreshRequested``.
 
-Row layout — three columns aligned per row:
+Row layout — three columns, strictly aligned per row:
 
-    STATUS         NAME                                TIME
-    ✓ SUCCESS      nightly-2026-06-25                 12:01:34
-    ● RUNNING      ad-hoc                             12:05:00
-    ✗ FAILED       retry-7b3                          11:58:00
+         NAME              DATE & TIME
+    ●    nightly-job      2026-06-25 12:01
+    ●    ad-hoc           2026-06-27 12:05
+    ●    retry-7b3        2026-06-26 11:58
+
+User feedback (post-PR-#90): the picker drops the textual
+``STARTED``/``STOPPED`` labels in favour of a colored Rich-markup
+glyph; the job-run row inherits the same semantics. The leading
+indicator is a 1-cell colored glyph (green ● SUCCESS, blue ●
+RUNNING, dim ⏸ pending, etc.) — no ``SUCCESS``/``FAILED`` text.
+The trailing column carries ``YYYY-MM-DD HH:MM`` (was just
+``HH:MM:SS`` which user noticed was missing the date AND was being
+truncated by row text-overflow).
 """
 
 from __future__ import annotations
@@ -36,6 +45,9 @@ from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
+#: Plain (non-markup) glyph per job-run state. Used by the chip
+#: row at the top of the pane where filter-active styling already
+#: drives the colour via CSS classes.
 _STATE_GLYPH: dict[JobRunState, str] = {
     JobRunState.SUCCESS: "✓",
     JobRunState.RUNNING: "●",
@@ -48,6 +60,25 @@ _STATE_GLYPH: dict[JobRunState, str] = {
     JobRunState.CANCELLING: "⊘",
 }
 
+#: Colored Rich-markup glyph per job-run state, used as the
+#: indicator cell in the runs list. Mirrors the picker's
+#: ``_APP_STATE_MARKER`` semantics — colour + shape carries the
+#: state, no textual ``SUCCESS`` / ``FAILED`` label needed. User
+#: feedback (post-PR-#90, applied here): "I want the same
+#: semantics applied to the job runs … a nice indicator shown
+#: first, then the job name, then date and time".
+_STATE_MARKER: dict[JobRunState, str] = {
+    JobRunState.SUCCESS: "[green]●[/green]",
+    JobRunState.RUNNING: "[cyan]●[/cyan]",
+    JobRunState.PENDING: "[yellow]⏸[/yellow]",
+    JobRunState.SUBMITTED: "[yellow]↻[/yellow]",
+    JobRunState.SCHEDULED: "[yellow]↻[/yellow]",
+    JobRunState.QUEUED: "[yellow]↻[/yellow]",
+    JobRunState.FAILED: "[red]✗[/red]",
+    JobRunState.CANCELLED: "[dim]⊘[/dim]",
+    JobRunState.CANCELLING: "[dim]⊘[/dim]",
+}
+
 _KEY_TO_STATE: dict[str, JobRunState] = {
     "1": JobRunState.SUCCESS,
     "2": JobRunState.RUNNING,
@@ -56,55 +87,98 @@ _KEY_TO_STATE: dict[str, JobRunState] = {
     "5": JobRunState.CANCELLED,
 }
 
-# Status column = ``"<glyph> <STATE_NAME>"`` padded to this width.
-# Longest state name is ``CANCELLED`` (9 chars); the column adds 1
-# leading glyph + 1 gap + 9 = 11 chars; pad to 12 for breathing room.
-_STATUS_COL_WIDTH: int = 12
-# Time column = ``HH:MM:SS`` = 8 chars.
-_TIME_COL_WIDTH: int = 8
+#: Datetime column = ``YYYY-MM-DD HH:MM`` = 16 chars. The detail
+#: pane carries the full ISO with seconds; the list shows
+#: minute-resolution to keep the column compact.
+_DATETIME_FORMAT: str = "%Y-%m-%d %H:%M"
+_DATETIME_COL_WIDTH: int = 16
+#: Indicator column = 1 visible cell for the glyph + breathing
+#: room. Allocated 3 chars so the glyph sits centred.
+_INDICATOR_COL_WIDTH: int = 3
 
 
-class _JobRunRow(Static):
-    """One job-run row. Carries ``run_id`` so the pane's
+class _JobRunRow(Horizontal):
+    """One job-run row, laid out as a 3-cell Horizontal so each
+    column has its own width and the trailing datetime column
+    stays visible while the middle NAME cell ellipsizes on long
+    names. Carries ``run_id`` so the pane's
     :meth:`JobRunsPane.on_click` can map a clicked row to the
     underlying run without sharing a Textual widget id between
     paint cycles (which would race ``remove_children`` / ``mount``
-    and crash with ``DuplicateIds`` when the pane re-renders)."""
+    and crash with ``DuplicateIds`` when the pane re-renders).
+    """
 
-    def __init__(self, content: str, *, run_id: str, classes: str | None = None) -> None:
-        super().__init__(content, classes=classes)
+    def __init__(
+        self,
+        run: JobRunSummary,
+        *,
+        run_id: str,
+        classes: str | None = None,
+    ) -> None:
+        super().__init__(classes=classes)
         self.run_id: str = run_id
+        self._run: JobRunSummary = run
+
+    def compose(self) -> ComposeResult:
+        marker = _STATE_MARKER.get(self._run.state, "?")
+        name = self._run.name or self._run.job_run_id
+        ts = self._run.created_at.strftime(_DATETIME_FORMAT)
+        yield Static(marker, classes="runs-cell-indicator")
+        yield Static(name, classes="runs-cell-name")
+        yield Static(ts, classes="runs-cell-datetime")
 
 
 class JobRunsPane(Widget, can_focus=True):
-    DEFAULT_CSS: ClassVar[str] = """
-    JobRunsPane {
+    DEFAULT_CSS: ClassVar[str] = f"""
+    JobRunsPane {{
         height: 1fr;
         layout: vertical;
-    }
-    JobRunsPane > .runs-chip-row {
+    }}
+    JobRunsPane > .runs-chip-row {{
         height: 1;
         layout: horizontal;
         padding: 0 1;
-    }
-    JobRunsPane > .runs-chip-row > .runs-chip {
+    }}
+    JobRunsPane > .runs-chip-row > .runs-chip {{
         width: auto;
         height: 1;
         padding: 0 1;
         margin: 0 1 0 0;
-    }
-    JobRunsPane > .runs-column-header {
+    }}
+    JobRunsPane > .runs-column-header {{
         height: 1;
         padding: 0 1;
-    }
-    JobRunsPane > VerticalScroll {
+        layout: horizontal;
+    }}
+    JobRunsPane > VerticalScroll {{
         height: 1fr;
-    }
-    JobRunsPane .runs-row {
+    }}
+    /* Row = Horizontal of 3 cells (indicator | name | datetime).
+       The indicator and datetime cells are fixed-width so the
+       columns align across rows; the name cell takes the flex
+       middle and ellipsizes long names without nudging the
+       trailing datetime out of view. */
+    JobRunsPane .runs-row {{
         height: 1;
         padding: 0 1;
+        layout: horizontal;
+    }}
+    JobRunsPane .runs-cell-indicator {{
+        width: {_INDICATOR_COL_WIDTH};
+        height: 1;
+        content-align: left middle;
+    }}
+    JobRunsPane .runs-cell-name {{
+        width: 1fr;
+        height: 1;
+        padding-right: 1;
         text-overflow: ellipsis;
-    }
+    }}
+    JobRunsPane .runs-cell-datetime {{
+        width: {_DATETIME_COL_WIDTH};
+        height: 1;
+        content-align: right middle;
+    }}
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -154,7 +228,10 @@ class JobRunsPane(Widget, can_focus=True):
                     classes=f"runs-chip runs-chip-{state.value.lower()}",
                     id=f"runs-chip-{state.value.lower()}",
                 )
-        yield Static(_format_column_header(), classes="runs-column-header")
+        with Horizontal(classes="runs-column-header"):
+            yield Static("", classes="runs-cell-indicator")
+            yield Static("NAME", classes="runs-cell-name")
+            yield Static("DATE & TIME", classes="runs-cell-datetime")
         yield VerticalScroll(id="runs-body")
 
     def on_mount(self) -> None:
@@ -326,31 +403,7 @@ class JobRunsPane(Widget, can_focus=True):
             row_classes = "runs-row"
             if idx == self._cursor_index:
                 row_classes += " -selected"
-            body.mount(
-                _JobRunRow(_format_run_row(r), run_id=r.job_run_id, classes=row_classes),
-            )
-
-
-def _format_column_header() -> str:
-    """Header row matching :func:`_format_run_row`'s columns."""
-    return f"{'STATUS':<{_STATUS_COL_WIDTH}}  {'NAME':<24}  {'TIME':<{_TIME_COL_WIDTH}}"
-
-
-def _format_run_row(r: JobRunSummary) -> str:
-    """One row, three columns:
-
-    - **Status** = ``"<glyph> <STATE_NAME>"`` left-padded to
-      ``_STATUS_COL_WIDTH``.
-    - **Name** = run name or id; takes the middle ``1fr`` flex
-      column. Rich/Textual handles overflow via the pane's
-      ``text-overflow`` rule — we don't truncate here.
-    - **Time** = ``HH:MM:SS`` from ``created_at``, fixed-width.
-    """
-    glyph = _STATE_GLYPH.get(r.state, "?")
-    status = f"{glyph} {r.state.value}"
-    name = r.name or r.job_run_id
-    ts = r.created_at.strftime("%H:%M:%S")
-    return f"{status:<{_STATUS_COL_WIDTH}}  {name:<24}  {ts:<{_TIME_COL_WIDTH}}"
+            body.mount(_JobRunRow(r, run_id=r.job_run_id, classes=row_classes))
 
 
 __all__ = ["JobRunsPane"]

@@ -11,10 +11,27 @@ from typing import Any
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import ApplicationSummary
+from aws_tui.domain.emr_serverless import ApplicationState, ApplicationSummary
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
+
+#: Single source of truth for the user-facing application order.
+#: STARTED first, then transitional (STARTING / STOPPING), then
+#: non-active (CREATING / CREATED / STOPPED), then terminal
+#: (TERMINATED). The picker dropdown and the Shift+S cycle both
+#: consume :attr:`ApplicationsVM.sorted_applications` so the order
+#: the user sees in the dropdown is the same order they cycle
+#: through with the keybinding.
+_APP_STATE_SORT: dict[ApplicationState, int] = {
+    ApplicationState.STARTED: 0,
+    ApplicationState.STARTING: 1,
+    ApplicationState.STOPPING: 2,
+    ApplicationState.CREATING: 3,
+    ApplicationState.CREATED: 4,
+    ApplicationState.STOPPED: 5,
+    ApplicationState.TERMINATED: 6,
+}
 
 
 class ApplicationsVM:
@@ -49,6 +66,23 @@ class ApplicationsVM:
     @property
     def applications(self) -> tuple[ApplicationSummary, ...]:
         return self._applications
+
+    @property
+    def sorted_applications(self) -> tuple[ApplicationSummary, ...]:
+        """Applications sorted by state group then name.
+
+        Single source of truth for the user-facing application order:
+        STARTED first, then transitional / idle / terminated groups,
+        alphabetical within each group. The picker dropdown and the
+        Shift+S cycle both consume this property — listing and
+        cycling stay in lockstep.
+        """
+        return tuple(
+            sorted(
+                self._applications,
+                key=lambda a: (_APP_STATE_SORT.get(a.state, 99), a.name),
+            )
+        )
 
     @property
     def selected_id(self) -> str | None:
