@@ -6,7 +6,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.emr_serverless import JobRunState
+from aws_tui.domain.emr_serverless import ApplicationState, JobRunState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
@@ -91,7 +91,10 @@ async def test_cycle_application_wraps_at_end_and_cascades() -> None:
     fake.add_job_run(application_id="a2", job_run_id="r-1", state=JobRunState.SUCCESS)
     fake.add_job_run_detail(application_id="a2", job_run_id="r-1")
     await page.setup()
-    apps_in_order = [a.id for a in page.applications.applications]
+    # Cycle source-of-truth is the SORTED list (STARTED first, then
+    # alphabetical); the dropdown listing and Shift+S ring stay in
+    # lockstep.
+    apps_in_order = [a.id for a in page.applications.sorted_applications]
     # ``setup()`` auto-selected the first app.
     first = page.applications.selected_id
     assert first is not None
@@ -109,6 +112,44 @@ async def test_cycle_application_wraps_at_end_and_cascades() -> None:
         "After ``len(apps)`` more cycles starting from ``expected_next``, "
         "we should be back at ``expected_next`` (one full lap around the ring)."
     )
+
+
+@pytest.mark.asyncio
+async def test_cycle_application_walks_the_picker_sort_not_raw_order() -> None:
+    """User feedback: "make sure this newly ordered list of
+    applications is the source of truth through which switch app
+    command cycles".
+
+    Seeds three apps in a deliberately-wrong raw order — STOPPED
+    first, TERMINATED second, STARTED last. After ``setup()``
+    auto-selects the first app of the sorted list (the STARTED
+    one), each ``cycle_application(1)`` MUST visit the next entry
+    in :attr:`ApplicationsVM.sorted_applications` — STARTED →
+    STOPPED → TERMINATED → STARTED. The raw-order ring would
+    visit STOPPED → TERMINATED → STARTED which is the bug we're
+    pinning against.
+    """
+    page, fake = _make()
+    fake.add_application(app_id="dead", name="killed", state=ApplicationState.TERMINATED)
+    fake.add_application(app_id="off", name="snoozy", state=ApplicationState.STOPPED)
+    fake.add_application(app_id="live", name="alpha", state=ApplicationState.STARTED)
+    await page.setup()
+    sorted_ids = [a.id for a in page.applications.sorted_applications]
+    assert sorted_ids == ["live", "off", "dead"], (
+        "Sanity: STARTED first, then STOPPED, then TERMINATED."
+    )
+    # setup() auto-selects the FIRST entry — which is the sorted
+    # first, not the raw first. That's "live" (STARTED).
+    assert page.applications.selected_id == "live"
+    await page.cycle_application(1)
+    assert page.applications.selected_id == "off"
+    await page.cycle_application(1)
+    assert page.applications.selected_id == "dead"
+    await page.cycle_application(1)
+    assert page.applications.selected_id == "live", "wraps around"
+    # Reverse direction also walks the sorted order.
+    await page.cycle_application(-1)
+    assert page.applications.selected_id == "dead"
 
 
 @pytest.mark.asyncio

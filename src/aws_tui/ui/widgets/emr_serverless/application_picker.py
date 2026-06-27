@@ -53,21 +53,6 @@ _APP_STATE_MARKER: dict[ApplicationState, str] = {
     ApplicationState.TERMINATED: "[red]✗[/red]",
 }
 
-#: Sort key for the dropdown — STARTED first, then transitional
-#: (STARTING / STOPPING), then non-active (CREATING / CREATED /
-#: STOPPED), then terminal (TERMINATED). Within a state group the
-#: tie-break is the application name (alphabetical). User feedback:
-#: "list the started ones first … then list the remaining".
-_APP_STATE_SORT: dict[ApplicationState, int] = {
-    ApplicationState.STARTED: 0,
-    ApplicationState.STARTING: 1,
-    ApplicationState.STOPPING: 2,
-    ApplicationState.CREATING: 3,
-    ApplicationState.CREATED: 4,
-    ApplicationState.STOPPED: 5,
-    ApplicationState.TERMINATED: 6,
-}
-
 
 class ApplicationPicker(Widget):
     """Top-strip application selector — inline-expanding."""
@@ -259,23 +244,21 @@ class ApplicationPicker(Widget):
     def _build_options(self) -> list[Option]:
         """Build the dropdown options.
 
-        Sort: STARTED first, then transitional / idle / terminated
-        groups, alphabetical within each group. User feedback:
-        "list the started ones first … then list the remaining".
+        Sort comes from :attr:`ApplicationsVM.sorted_applications` —
+        the single source of truth shared with the Shift+S cycle so
+        the order the user reads in the dropdown is the order they
+        cycle through with the keybinding.
+
         Prompt: ``🔥  <name>  ·  <colored-glyph>`` — no textual
         state name. The colour + shape of the glyph carries the
         state semantics; the prompt stays compact even with long
         application names."""
-        sorted_apps = sorted(
-            self._vm.applications,
-            key=lambda a: (_APP_STATE_SORT.get(a.state, 99), a.name),
-        )
         return [
             Option(
                 prompt=f"🔥  {a.name}  ·  {_APP_STATE_MARKER.get(a.state, '?')}",
                 id=a.id,
             )
-            for a in sorted_apps
+            for a in self._vm.sorted_applications
         ]
 
 

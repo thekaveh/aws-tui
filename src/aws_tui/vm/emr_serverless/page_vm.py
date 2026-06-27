@@ -117,11 +117,14 @@ class EmrServerlessPageVM:
 
     async def setup(self) -> None:
         """Initial load — fetch applications and auto-select the
-        first one so the LEFT pane has something to populate."""
+        first one (per the user-facing sorted order, so the picker
+        dropdown, Shift+S cycle, and the auto-selection all share
+        one source of truth — STARTED apps come first) so the LEFT
+        pane has something to populate."""
         await self.applications.refresh()
-        apps = self.applications.applications
-        if apps and self.applications.selected_id is None:
-            await self.select_application(apps[0].id)
+        sorted_apps = self.applications.sorted_applications
+        if sorted_apps and self.applications.selected_id is None:
+            await self.select_application(sorted_apps[0].id)
 
     async def select_application(self, app_id: str) -> None:
         self.applications.select(app_id)
@@ -136,13 +139,22 @@ class EmrServerlessPageVM:
 
     async def cycle_application(self, direction: int) -> None:
         """Select the next (``direction=1``) or previous
-        (``direction=-1``) application in the picker's list,
-        wrapping at either end. Used by the EMR page's ``Shift+S``
-        binding ("switch app") so the keypress visibly moves to the
-        next app — the explicit picker (``a``) stays around for
-        long-list lookup. No-op if fewer than 2 apps exist.
+        (``direction=-1``) application in the picker's user-facing
+        order, wrapping at either end. Used by the EMR page's
+        ``Shift+S`` binding ("switch app") so the keypress visibly
+        moves to the next app — the explicit picker (``a``) stays
+        around for long-list lookup. No-op if fewer than 2 apps
+        exist.
+
+        Cycle source = :attr:`ApplicationsVM.sorted_applications`,
+        not the raw boto order. This keeps the dropdown listing and
+        the Shift+S ring in lockstep — STARTED apps come first, then
+        transitional / idle / terminated, alphabetical within each
+        group. User feedback: "make sure this newly ordered list of
+        applications is the source of truth through which switch app
+        command cycles".
         """
-        apps = self.applications.applications
+        apps = self.applications.sorted_applications
         if len(apps) < 2:
             return
         current_id = self.applications.selected_id
