@@ -8,6 +8,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.emr_serverless import JobRunState
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
@@ -120,3 +121,39 @@ async def test_cycle_application_with_fewer_than_two_apps_is_noop() -> None:
     before = page.applications.selected_id
     await page.cycle_application(1)
     assert page.applications.selected_id == before
+
+
+@pytest.mark.asyncio
+async def test_select_job_run_cascades_to_logs_vm_with_log_uri() -> None:
+    """When select_job_run cascades to logs VM, it should transition
+    to LogsState.IDLE if the detail has s3_monitoring_log_uri."""
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="app")
+    fake.add_job_run(application_id="a1", job_run_id="r1")
+    fake.add_job_run_detail(
+        application_id="a1",
+        job_run_id="r1",
+        entry_point="s3://b/x.py",
+        s3_monitoring_log_uri="s3://logs-bucket/app-logs/",
+    )
+    await page.setup()
+    await page.select_job_run("r1")
+    assert page.job_run_logs.state is LogsState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_select_job_run_cascades_to_logs_vm_without_log_uri() -> None:
+    """When select_job_run cascades to logs VM, it should transition
+    to LogsState.NO_LOG_CONFIG if the detail has no s3_monitoring_log_uri."""
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="app")
+    fake.add_job_run(application_id="a1", job_run_id="r1")
+    fake.add_job_run_detail(
+        application_id="a1",
+        job_run_id="r1",
+        entry_point="s3://b/x.py",
+        s3_monitoring_log_uri=None,
+    )
+    await page.setup()
+    await page.select_job_run("r1")
+    assert page.job_run_logs.state is LogsState.NO_LOG_CONFIG

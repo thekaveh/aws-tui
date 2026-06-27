@@ -1,6 +1,6 @@
 """EmrServerlessPageVM — orchestration root for the EMR page.
 
-Owns three child VMs (applications / job runs / detail) and wires
+Owns four child VMs (applications / job runs / detail / job run logs) and wires
 the master-detail reactivity between them. The auto-refresh
 pollers live in the widget layer (``EmrServerlessPage.on_mount``)
 via Textual's ``set_interval`` — there's no domain-tier
@@ -17,6 +17,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
+from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
 
 
@@ -48,6 +49,12 @@ class EmrServerlessPageVM:
         self.job_runs: JobRunsVM = JobRunsVM(client=client, hub=hub, dispatcher=dispatcher)
         self.job_run_detail: JobRunDetailVM = JobRunDetailVM(
             client=client, hub=hub, dispatcher=dispatcher
+        )
+        self.job_run_logs: JobRunLogsVM = JobRunLogsVM(
+            session=client._session,  # reuses the EMR client's aioboto3 session
+            region_name=client._region_name,
+            hub=hub,
+            dispatcher=dispatcher,
         )
         self._sub: DisposableBase | None = None
 
@@ -82,6 +89,7 @@ class EmrServerlessPageVM:
         self.applications.construct()
         self.job_runs.construct()
         self.job_run_detail.construct()
+        self.job_run_logs.construct()
         # Wire master-detail.
         self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
 
@@ -92,6 +100,7 @@ class EmrServerlessPageVM:
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+        self.job_run_logs.dispose()
         self.job_run_detail.dispose()
         self.job_runs.dispose()
         self.applications.dispose()
@@ -141,6 +150,16 @@ class EmrServerlessPageVM:
         self.job_runs.select(run_id)
         self.job_run_detail.set_target(self.applications.selected_id, run_id)
         await self.job_run_detail.refresh()
+        # Update logs target — does NOT fetch (user has to press
+        # Enter in the logs pane). Reads the s3 log uri off the
+        # freshly-refreshed detail. If detail is None or has no
+        # uri, the logs VM transitions to NO_LOG_CONFIG.
+        detail = self.job_run_detail.detail
+        self.job_run_logs.set_target(
+            self.applications.selected_id,
+            run_id,
+            detail.s3_monitoring_log_uri if detail is not None else None,
+        )
 
     async def refresh_focused(self, focus: Literal["applications", "runs", "detail"]) -> None:
         """Manual refresh — invoked by the ``r`` keybinding."""

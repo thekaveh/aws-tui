@@ -42,6 +42,9 @@ class _InMemoryEmr:
         # this to a ``ProviderError`` (or any exception) to drive the
         # error-path assertions on ``JobRunCloneVM.submit``.
         self.start_job_run_exc: BaseException | None = None
+        # Dummy attributes for JobRunLogsVM constructor (not used by fake).
+        self._session = None
+        self._region_name = None
 
     # ── Test seeding ────────────────────────────────────────────────────────
 
