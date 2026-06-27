@@ -21,6 +21,7 @@ from aws_tui.ui import notifications
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
+from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
@@ -49,8 +50,22 @@ class EmrServerlessPage(Widget):
     EmrServerlessPage > .emr-left-column > JobRunsPane {
         height: 1fr;
     }
-    EmrServerlessPage > JobRunDetailPane {
-        width: 1fr;
+    /* User feedback: "the left job runs pane … to occupy 1/3 of the
+       horizontal space … the job details pane to occupy the remaining
+       2/3". 1fr:2fr is the 1:3 / 2:3 ratio the user asked for. */
+    EmrServerlessPage > .emr-right-column {
+        width: 2fr;
+        height: 1fr;
+        layout: vertical;
+    }
+    /* 50/50 vertical split inside the right column. Both halves get
+       ``height: 1fr`` so each takes exactly half regardless of how
+       tall the detail content is (it scrolls within its half rather
+       than pushing the logs pane off-screen). */
+    EmrServerlessPage > .emr-right-column > JobRunDetailPane {
+        height: 1fr;
+    }
+    EmrServerlessPage > .emr-right-column > JobRunLogsPane {
         height: 1fr;
     }
     """
@@ -81,36 +96,28 @@ class EmrServerlessPage(Widget):
         self._hub: MessageHub[Message] = hub
         self._picker: ApplicationPicker | None = None
         self._left: JobRunsPane | None = None
-        self._right: JobRunDetailPane | None = None
+        self._right_detail: JobRunDetailPane | None = None
+        self._right_logs: JobRunLogsPane | None = None
         self._runs_tick_counter: int = 0
 
     def compose(self) -> ComposeResult:
         self._picker = ApplicationPicker(self._vm.applications, hub=self._hub, id="emr-app-picker")
         self._left = JobRunsPane(self._vm.job_runs, hub=self._hub, id="emr-runs-pane")
-        self._right = JobRunDetailPane(self._vm.job_run_detail, hub=self._hub, id="emr-detail-pane")
-        # Page layout — TWO columns:
-        #
-        #   ┌─────────────────────┬────────────────────────────┐
-        #   │ application picker  │                            │
-        #   │  (bordered box,     │   JobRunDetailPane         │
-        #   │   height 3)         │   (full height)            │
-        #   ├─────────────────────┤                            │
-        #   │ JobRunsPane         │                            │
-        #   │  (height 1fr,       │                            │
-        #   │   chip row + rows)  │                            │
-        #   └─────────────────────┴────────────────────────────┘
-        #
-        # The application-picker box is width-matched to the
-        # JobRunsPane below it (both share the LEFT column at
-        # ``width: 1fr``) and only its border + title are visible —
-        # the picker widget itself fills the box. The detail pane
-        # spans the full page height, mirroring the S3 page's
-        # symmetric LEFT-RIGHT split.
+        self._right_detail = JobRunDetailPane(
+            self._vm.job_run_detail, hub=self._hub, id="emr-detail-pane"
+        )
+        self._right_logs = JobRunLogsPane(self._vm.job_run_logs, hub=self._hub, id="emr-logs-pane")
+        # Page layout — 1fr:2fr horizontal split with LEFT column
+        # containing the picker + runs pane, and RIGHT column
+        # containing detail (top, 1fr) + logs (bottom, 1fr) in a
+        # 50/50 vertical split.
         with Vertical(classes="emr-left-column"):
             with Horizontal(classes="emr-app-box", id="emr-app-box"):
                 yield self._picker
             yield self._left
-        yield self._right
+        with Vertical(classes="emr-right-column"):
+            yield self._right_detail
+            yield self._right_logs
 
     def on_mount(self) -> None:
         # App-box border title — set here because Textual takes the
@@ -155,10 +162,22 @@ class EmrServerlessPage(Widget):
         return self._left
 
     @property
-    def right_pane(self) -> JobRunDetailPane | None:
-        """RIGHT pane (job-run detail). Public for the same reason
-        as :attr:`left_pane`."""
-        return self._right
+    def right_pane(self) -> JobRunLogsPane | None:
+        """RIGHT pane (job-run logs — the focusable half of the right
+        column). Public for the same reason as :attr:`left_pane`.
+
+        Note: the detail pane is the top half of the right column but
+        is non-focusable and not part of the 2-slot Tab cycle, so it's
+        not returned here. Callers can reach it via ``right_detail`` if
+        needed for testing or direct access."""
+        return self._right_logs
+
+    @property
+    def right_detail(self) -> JobRunDetailPane | None:
+        """RIGHT-top pane (job-run detail — the passive, non-focusable
+        display half of the right column). Exposed for testing/debugging;
+        the main Tab cycle is only LEFT ↔ RIGHT-logs."""
+        return self._right_detail
 
     # ── Pollers ─────────────────────────────────────────────────────────────
 
@@ -288,13 +307,13 @@ class EmrServerlessPage(Widget):
             )
 
     def _cycle(self, direction: Literal["left", "right"]) -> None:
-        # 2-slot cycle; direction doesn't matter for 2 slots, but keep
-        # the binding shape so future expansion (e.g. log pane in PR-B)
-        # has a place to grow without renaming actions.
-        if self._left is None or self._right is None:
+        # 2-slot cycle: LEFT (JobRunsPane) ↔ RIGHT (JobRunLogsPane).
+        # The detail pane is a passive, non-focusable display and doesn't
+        # participate in the Tab cycle.
+        if self._left is None or self._right_logs is None:
             return
         if self._left.has_focus_within or self._left.has_focus:
-            self._right.focus()
+            self._right_logs.focus()
         else:
             self._left.focus()
 
@@ -308,10 +327,36 @@ class EmrServerlessPage(Widget):
     def on_job_runs_pane_refresh_requested(self, _event: JobRunsPane.RefreshRequested) -> None:
         self.run_worker(self._vm.refresh_focused("runs"), exclusive=True, group="emr-refresh")
 
-    def on_job_run_detail_pane_refresh_requested(
-        self, _event: JobRunDetailPane.RefreshRequested
+    def on_job_run_logs_pane_load_requested(self, _event: JobRunLogsPane.LoadRequested) -> None:
+        """User pressed Enter to load logs."""
+        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+
+    def on_job_run_logs_pane_refresh_requested(
+        self, _event: JobRunLogsPane.RefreshRequested
     ) -> None:
-        self.run_worker(self._vm.refresh_focused("detail"), exclusive=True, group="emr-refresh")
+        """User pressed r to refresh/reload logs."""
+        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+
+    def on_job_run_logs_pane_log_file_selected(self, event: JobRunLogsPane.LogFileSelected) -> None:
+        """User selected a different log file from the chip strip."""
+        self._vm.job_run_logs.select_log_file(event.kind)
+        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+
+    async def on_job_run_logs_pane_open_filter_requested(
+        self, _event: JobRunLogsPane.OpenFilterRequested
+    ) -> None:
+        """User pressed f to open the filter modal."""
+        from aws_tui.ui.widgets.emr_serverless.log_filter_modal import LogFilterModal
+
+        current_filter = self._vm.job_run_logs.filter
+        modal = LogFilterModal(current_filter)
+        try:
+            new_filter = await self.app.push_screen_wait(modal)
+            if new_filter is not None and new_filter != current_filter:
+                self._vm.job_run_logs.set_filter(new_filter)
+                self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+        except Exception:
+            pass
 
 
 __all__ = ["EmrServerlessPage"]

@@ -13,7 +13,7 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
-from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
+from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.nav_menu import NavMenu
@@ -107,6 +107,9 @@ async def test_emr_page_tab_cycles_between_panes_not_to_nav_rail(tmp_path: Path)
     """Spec §2 / PR #66 contract: Tab on the EMR page cycles LEFT ↔ RIGHT,
     NEVER falls through to the App-level priority binding that focuses
     the nav rail. Mirrors the S3 page's Tab-cycle contract.
+
+    After Task 9, the RIGHT pane is JobRunLogsPane (focusable, the logs
+    viewer). The detail pane is non-focusable display above the logs.
     """
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
@@ -121,19 +124,19 @@ async def test_emr_page_tab_cycles_between_panes_not_to_nav_rail(tmp_path: Path)
             await pilot.pause()
 
             left = pilot.app.query_one(JobRunsPane)
-            right = pilot.app.query_one(JobRunDetailPane)
+            right_logs = pilot.app.query_one(JobRunLogsPane)
             nav = pilot.app.query_one(NavMenu)
 
             # Focus the LEFT pane first.
             left.focus()
             await pilot.pause()
 
-            # Press Tab — must move focus to RIGHT pane, NOT to nav rail.
+            # Press Tab — must move focus to RIGHT pane (logs), NOT to nav rail.
             await pilot.press("tab")
             await pilot.pause()
 
-            assert pilot.app.focused is right or right.has_focus_within, (
-                f"Tab on EMR LEFT pane focused {pilot.app.focused!r} — expected RIGHT pane. "
+            assert pilot.app.focused is right_logs or right_logs.has_focus_within, (
+                f"Tab on EMR LEFT pane focused {pilot.app.focused!r} — expected RIGHT pane (logs). "
                 f"This is the spec §2 'exactly 2 slots' regression "
                 f"(App-level priority Tab binding hijacking)."
             )
