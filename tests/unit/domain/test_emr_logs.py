@@ -211,3 +211,151 @@ async def test_stream_log_yields_matched_lines() -> None:
     assert chunks[-1].lines_scanned == 5
     # Not truncated for this small input.
     assert chunks[-1].truncated is False
+
+
+# ── boto-error mapping (regression-guard for the silent-swallow audit) ────
+
+
+class _RaisingS3:
+    """Stub S3 client whose ``list_objects_v2`` / ``get_object`` raise
+    a configurable exception. Used to verify ``list_log_files`` and
+    ``stream_log`` route boto exceptions through
+    :func:`aws_tui.domain.emr_serverless.map_boto_error` so the VM
+    sees a typed :class:`ProviderError` and can map to AUTH_REQUIRED
+    / UNREACHABLE / FORBIDDEN — instead of the generic catch-all
+    "unexpected error: …" placeholder that bypassed the proper
+    in-pane error state.
+    """
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    async def list_objects_v2(self, **_kwargs: object) -> dict[str, object]:
+        raise self._exc
+
+    async def get_object(self, **_kwargs: object) -> dict[str, object]:
+        raise self._exc
+
+    async def __aenter__(self) -> _RaisingS3:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class _RaisingSession:
+    def __init__(self, exc: BaseException) -> None:
+        self._stub = _RaisingS3(exc)
+
+    def client(self, *_args: object, **_kwargs: object) -> _RaisingS3:
+        return self._stub
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_wraps_no_credentials_error_as_auth_required() -> None:
+    """The VM's ``ProviderError`` clause routes via
+    ``map_provider_error`` to ``PaneState.AUTH_REQUIRED``; pre-fix
+    a raw ``NoCredentialsError`` slipped past as a bare ``Exception``
+    and the user got "unexpected error: Unable to locate credentials"
+    instead of the actionable "authentication required …" placeholder.
+    """
+    import botocore.exceptions
+
+    from aws_tui.domain.emr_logs import list_log_files
+    from aws_tui.domain.filesystem import AuthRequiredError
+
+    session = _RaisingSession(botocore.exceptions.NoCredentialsError())
+    with pytest.raises(AuthRequiredError):
+        await list_log_files(  # type: ignore[arg-type]
+            session=session,
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_wraps_endpoint_unreachable() -> None:
+    import botocore.exceptions
+
+    from aws_tui.domain.emr_logs import list_log_files
+    from aws_tui.domain.filesystem import ProviderUnreachableError
+
+    session = _RaisingSession(
+        botocore.exceptions.EndpointConnectionError(endpoint_url="https://s3.example/")
+    )
+    with pytest.raises(ProviderUnreachableError):
+        await list_log_files(  # type: ignore[arg-type]
+            session=session,
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_wraps_access_denied_client_error() -> None:
+    import botocore.exceptions
+
+    from aws_tui.domain.emr_logs import list_log_files
+    from aws_tui.domain.filesystem import PermissionDeniedError
+
+    err = botocore.exceptions.ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "no list rights"}},
+        "ListObjectsV2",
+    )
+    session = _RaisingSession(err)
+    with pytest.raises(PermissionDeniedError):
+        await list_log_files(  # type: ignore[arg-type]
+            session=session,
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_propagates_unknown_non_boto_exception() -> None:
+    """A non-boto, non-ProviderError raise (e.g. programmer error)
+    should re-raise UNCHANGED — the VM's defensive ``Exception``
+    clause then catches it as the catch-all. Pinning this prevents
+    the mapper from accidentally wrapping every exception."""
+    from aws_tui.domain.emr_logs import list_log_files
+
+    session = _RaisingSession(RuntimeError("bug in caller"))
+    with pytest.raises(RuntimeError, match="bug in caller"):
+        await list_log_files(  # type: ignore[arg-type]
+            session=session,
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+
+@pytest.mark.asyncio
+async def test_stream_log_wraps_no_credentials_error_as_auth_required() -> None:
+    import botocore.exceptions
+
+    from aws_tui.domain.emr_logs import (
+        DEFAULT_LOG_FILTER,
+        LogFile,
+        LogFileKind,
+        stream_log,
+    )
+    from aws_tui.domain.filesystem import AuthRequiredError
+
+    session = _RaisingSession(botocore.exceptions.NoCredentialsError())
+    log_file = LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=LogFileKind.DRIVER_STDERR,
+    )
+    with pytest.raises(AuthRequiredError):
+        async for _chunk in stream_log(
+            session=session,  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=log_file,
+            bucket="b",
+            max_bytes=1024,
+            filter_=DEFAULT_LOG_FILTER,
+        ):
+            pass
