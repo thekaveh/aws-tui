@@ -85,16 +85,6 @@ class LogFilterModal(ModalScreen[LogFilter | None]):
 
     # ── Form-state sync ────────────────────────────────────────────────────
 
-    def _sync_form_to_filter(self) -> None:
-        """Build a LogFilter from the current form state.
-
-        Called before Apply to construct the new filter. Split patterns
-        on newlines, strip whitespace, drop empty lines.
-        """
-        # This method is used to parse the form, but we'll call _build_filter
-        # directly when needed.
-        pass
-
     def _build_filter(self) -> LogFilter:
         """Build a LogFilter from the current form state.
 

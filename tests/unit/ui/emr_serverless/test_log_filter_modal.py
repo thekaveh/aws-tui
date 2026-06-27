@@ -71,7 +71,7 @@ async def test_log_filter_modal_apply_dismisses_with_new_filter() -> None:
         case_insensitive=True,
     )
 
-    result: LogFilter | None = None
+    captured_dismiss_value: list[LogFilter | None] = []
 
     try:
 
@@ -81,13 +81,15 @@ async def test_log_filter_modal_apply_dismisses_with_new_filter() -> None:
 
             async def on_mount(self) -> None:
                 screen = LogFilterModal(current)
-                self.push_screen(screen)
+                # Spy on the dismiss method to capture the dismissed value
+                original_dismiss = screen.dismiss
 
-            def on_screen_resume(self) -> None:
-                nonlocal result
-                if isinstance(self.screen, LogFilterModal):
-                    # This won't be called since we're checking below
-                    pass
+                def spy_dismiss(value: LogFilter | None) -> None:
+                    captured_dismiss_value.append(value)
+                    original_dismiss(value)
+
+                screen.dismiss = spy_dismiss  # type: ignore[method-assign]
+                self.push_screen(screen)
 
         app = _App()
         async with app.run_test(size=(100, 40)) as pilot:
@@ -113,10 +115,15 @@ async def test_log_filter_modal_apply_dismisses_with_new_filter() -> None:
 
             # The modal should dismiss and we should be back at the app screen
             await pilot.pause()
-            # The LogFilterModal.dismiss() should have been called
-            # We can't directly inspect the return value from the test,
-            # so we verify that the modal is no longer on the screen
             assert not isinstance(app.screen, LogFilterModal)
+
+            # Assert the dismissed value is a LogFilter with the form state
+            assert len(captured_dismiss_value) == 1
+            dismissed_filter = captured_dismiss_value[0]
+            assert isinstance(dismissed_filter, LogFilter)
+            assert dismissed_filter.patterns == ("ERROR", "WARN")
+            assert dismissed_filter.mode is FilterMode.PASSTHROUGH
+            assert dismissed_filter.case_insensitive is True
     finally:
         hub.dispose()
 
@@ -243,10 +250,7 @@ async def test_log_filter_modal_patterns_parsing() -> None:
             textarea.text = "  ERROR  \n\nWARN\n  \nFAIL  "
 
             # Now we need to test the form parsing
-            # The modal's _sync_form_to_filter should parse these correctly
             # We'll verify by looking at what the modal would create
-            # (We can't easily capture the dismiss result in the test)
-            modal._sync_form_to_filter()
             result = modal._build_filter()
 
             # Should have 3 patterns: ERROR, WARN, FAIL (trimmed, empty lines dropped)
