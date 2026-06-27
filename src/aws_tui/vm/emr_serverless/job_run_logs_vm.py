@@ -23,7 +23,13 @@ from aws_tui.domain.emr_logs import (
     LogFile,
     LogFileKind,
     LogFilter,
+    build_run_prefix,
+    list_log_files,
+    parse_log_uri,
+    stream_log,
 )
+from aws_tui.domain.filesystem import ProviderError
+from aws_tui.vm.emr_serverless._errors import map_provider_error
 
 if TYPE_CHECKING:
     import aioboto3
@@ -173,6 +179,100 @@ class JobRunLogsVM:
         self._lines_scanned = 0
         self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "current_file"))
         self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
+
+    # ── Network actions ───────────────────────────────────────────────────
+
+    async def load(self) -> None:
+        """Fetch + stream the selected log file. Idempotent — a
+        second call while already loading is a no-op."""
+        if self._state is LogsState.LOADING:
+            return
+        if self._application_id is None or self._job_run_id is None or self._log_uri is None:
+            return
+        self._set_state(LogsState.LOADING)
+        self._lines = ()
+        self._bytes_read = 0
+        self._lines_scanned = 0
+        try:
+            loc = parse_log_uri(self._log_uri)
+            run_prefix = build_run_prefix(loc, self._application_id, self._job_run_id)
+            files = await list_log_files(
+                session=self._session,
+                region_name=self._region_name,
+                bucket=loc.bucket,
+                run_prefix=run_prefix,
+            )
+            self._available_files = tuple(files)
+            self._hub.send(
+                PropertyChangedMessage.create(self, "emr.job_run_logs", "available_files")
+            )
+            if not files:
+                self._set_state(LogsState.NO_FILES)
+                return
+            if self._current_file is None:
+                self._current_file = next(
+                    (f for f in files if f.kind is LogFileKind.DRIVER_STDERR),
+                    next(
+                        (f for f in files if f.kind is LogFileKind.DRIVER_STDOUT),
+                        files[0],
+                    ),
+                )
+                self._hub.send(
+                    PropertyChangedMessage.create(self, "emr.job_run_logs", "current_file")
+                )
+            truncated = False
+            cache_key = (
+                self._application_id,
+                self._job_run_id,
+                self._current_file.key,
+                hash(
+                    (
+                        self._filter.patterns,
+                        self._filter.mode,
+                        self._filter.case_insensitive,
+                    )
+                ),
+            )
+            if cache_key in self._cache:
+                self._lines = self._cache[cache_key]
+                self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
+                self._set_state(LogsState.READY)
+                return
+            buffered: list[str] = []
+            async for chunk in stream_log(
+                session=self._session,
+                region_name=self._region_name,
+                log_file=self._current_file,
+                bucket=loc.bucket,
+                max_bytes=_MAX_RAW_BYTES,
+                filter_=self._filter,
+            ):
+                buffered.extend(chunk.lines)
+                if len(buffered) > _MAX_MATCHED_LINES:
+                    buffered = buffered[-_MAX_MATCHED_LINES:]
+                self._lines = tuple(buffered)
+                self._bytes_read = chunk.bytes_read
+                self._lines_scanned = chunk.lines_scanned
+                self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
+                self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "progress"))
+                truncated = chunk.truncated
+            self._cache[cache_key] = self._lines
+            self._set_state(LogsState.TRUNCATED if truncated else LogsState.READY)
+        except ProviderError as exc:
+            new_state, self._error_text = map_provider_error(exc)
+            # Re-map the file-pane states the EMR mapper returns to a
+            # logs-specific state. UNREACHABLE / AUTH_REQUIRED /
+            # FORBIDDEN / ERROR all collapse to LogsState.ERROR for
+            # the pane — error_text carries the detail.
+            _ = new_state
+            self._set_state(LogsState.ERROR)
+        except asyncio.CancelledError:
+            # User switched panes or runs — leave state where it is
+            # so the placeholder reflects the most recent intent.
+            raise
+        except Exception as exc:  # defensive
+            self._error_text = f"unexpected error: {exc}"
+            self._set_state(LogsState.ERROR)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
