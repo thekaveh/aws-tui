@@ -13,19 +13,19 @@ from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.services_protocol import ServiceDescriptor
 
 
-def test_descriptor_icon_is_collision_smp_label_is_emr() -> None:
-    # 💥 = U+1F4A5 COLLISION SYMBOL — SMP single-codepoint, renders
-    # as 2-cell colour emoji reliably (no text-presentation fallback
-    # hazard the way U+26A1 has). This is the fourth icon attempt:
+def test_descriptor_icon_is_fire_smp_label_is_emr() -> None:
+    # 🔥 = U+1F525 FIRE — SMP single-codepoint, renders as 2-cell
+    # colour emoji reliably AND draws to the full bounding box.
+    # Fifth icon attempt (back to PR #79's known-good pick after
+    # the PR #83 💥 COLLISION glyph rendered with a tighter
+    # bounding box than the 🪣 nav peer; user feedback). Trail:
     #   PR #77 ⚡    BMP, 1-cell fallback  — broke nav-rail layout
-    #   PR #79 🔥    SMP, 2-cell           — worked
+    #   PR #79 🔥    SMP, 2-cell, full box — worked
     #   PR #81 ⚡️   BMP+VS-16, fallback   — broke layout again
-    #         💥    SMP, 2-cell           — here, user pick
-    # Keeps the "spark/electricity" semantic without the BMP+VS-16
-    # rendering risk. Future icon contract: pick from the SMP block
-    # (U+1F***).
+    #   PR #83 💥    SMP, tight box        — looked tiny vs 🪣
+    #         🔥    SMP, 2-cell, full box  — here, back to known good
     assert EmrServerlessService.descriptor == ServiceDescriptor(
-        id="emr-serverless", label="EMR", icon="💥"
+        id="emr-serverless", label="EMR", icon="🔥"
     )
 
 

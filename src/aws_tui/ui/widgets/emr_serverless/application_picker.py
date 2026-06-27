@@ -7,6 +7,7 @@ and closes the popover. Esc cancels."""
 
 from __future__ import annotations
 
+import contextlib
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -53,15 +54,17 @@ class ApplicationPicker(Widget):
         content-align: left middle;
         text-style: bold;
     }
-    ApplicationPicker > OptionList {
+    /* The OptionList is mounted to the Screen on open (not to
+       this widget) so it escapes the bordered ``emr-app-box``'s
+       3-row clip. ``layer: dropdown`` lifts it above the body
+       widgets; explicit screen-space ``offset`` is set in
+       ``_open_dropdown`` based on the picker's region.
+       Background / border come from per-theme tcss so the
+       dropdown picks up the active accent at runtime. */
+    #emr-app-picker-dropdown {
         layer: dropdown;
-        width: 40;
+        width: 50;
         max-height: 16;
-        offset: 0 3;
-        display: none;
-    }
-    ApplicationPicker.-open > OptionList {
-        display: block;
     }
     """
 
@@ -82,28 +85,26 @@ class ApplicationPicker(Widget):
         self._vm: ApplicationsVM = vm
         self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
+        # The OptionList lives outside this widget's compose so it
+        # can be mounted to the Screen on open (and unmounted on
+        # close) — that's the only way to escape the bordered
+        # ``emr-app-box``'s 3-row clip region. See ``_open_dropdown``.
+        self._dropdown: OptionList | None = None
 
     def compose(self) -> ComposeResult:
-        # NOTE: the visible-dropdown bug ("There's no dropdown!")
-        # turned out to be the ``layer: dropdown`` declaration on
-        # the OptionList not actually putting the popover on its
-        # own layer — ``Screen`` only declares ``layers: base
-        # notifications`` so the dropdown lands in normal flow,
-        # gets pushed off-screen, and the click target stays
-        # invisible. The fix is to add ``dropdown`` to Screen's
-        # layer list AND give the OptionList a higher z-order;
-        # tracked for a follow-up. The intermediate Horizontal
-        # wrapper here was suspected as the cause and removed in
-        # an earlier WIP attempt, but the snapshot baseline depends
-        # on its presence so it stays.
+        # Trigger only. The OptionList overlay is owned by
+        # ``_open_dropdown`` / ``_close_dropdown`` (mounted to
+        # ``self.app.screen`` on open). Wrapping the trigger in a
+        # Horizontal preserves the original layout the page CSS +
+        # snapshot baselines were authored against.
         with Horizontal():
             yield Static(self._trigger_label(), classes="app-trigger")
-        yield OptionList(*self._build_options(), id="app-options")
 
     def on_mount(self) -> None:
         self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
 
     def on_unmount(self) -> None:
+        self._close_dropdown()
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
@@ -112,40 +113,41 @@ class ApplicationPicker(Widget):
 
     def toggle_open(self) -> None:
         if "-open" in self.classes:
-            self.remove_class("-open")
+            self._close_dropdown()
         else:
-            self.add_class("-open")
-        self._refresh_options()
+            self._open_dropdown()
 
     def action_close(self) -> None:
-        self.remove_class("-open")
+        self._close_dropdown()
 
     def action_commit(self) -> None:
-        try:
-            opts = self.query_one("#app-options", OptionList)
-        except Exception:
+        if self._dropdown is None:
             return
+        opts = self._dropdown
         if opts.highlighted is None:
             return
         opt = opts.get_option_at_index(opts.highlighted)
         if opt.id is not None:
             self._vm.select(opt.id)
-        self.remove_class("-open")
+        self._close_dropdown()
 
     # ── Internal ────────────────────────────────────────────────────────────
 
     def on_click(self, event: Click) -> None:
         # Any click bubbles up via ``self`` so toggling is convenient
-        # — the OptionList rows have their own click → action_commit
-        # via the option-selected message handler below.
-        if event.widget is not None and getattr(event.widget, "id", None) == "app-options":
+        # — the OptionList rows post their own ``OptionSelected``
+        # which routes through the on_option_list_* handler below.
+        if (
+            event.widget is not None
+            and getattr(event.widget, "id", None) == "emr-app-picker-dropdown"
+        ):
             return
         self.toggle_open()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option.id is not None:
             self._vm.select(event.option.id)
-        self.remove_class("-open")
+        self._close_dropdown()
 
     def _on_hub_message(self, msg: object) -> None:
         if not isinstance(msg, PropertyChangedMessage):
@@ -153,7 +155,7 @@ class ApplicationPicker(Widget):
         if msg.property_name not in {"applications", "selected_id", "state"}:
             return
         self.call_after_refresh(self._refresh_trigger)
-        self.call_after_refresh(self._refresh_options)
+        self.call_after_refresh(self._refresh_dropdown_options)
 
     def _refresh_trigger(self) -> None:
         try:
@@ -162,16 +164,62 @@ class ApplicationPicker(Widget):
             return
         trigger.update(self._trigger_label())
 
-    def _refresh_options(self) -> None:
-        try:
-            opts = self.query_one("#app-options", OptionList)
-        except Exception:
+    def _refresh_dropdown_options(self) -> None:
+        if self._dropdown is None:
             return
-        opts.clear_options()
+        self._dropdown.clear_options()
         for opt in self._build_options():
-            opts.add_option(opt)
+            self._dropdown.add_option(opt)
+
+    def _open_dropdown(self) -> None:
+        """Mount the OptionList to the Screen and position it just
+        below the picker's bordered box.
+
+        Screen-mounting (rather than yielding the OptionList as a
+        child of this widget) escapes the bordered apps box's 3-row
+        clip — the prior in-flow + ``layer: dropdown`` approach
+        from PR #83 still had the popover clipped by the parent's
+        overflow rect, so the user saw nothing. ``layer: dropdown``
+        is z-order only; it doesn't escape clipping."""
+        if self._dropdown is not None:
+            return
+        self.add_class("-open")
+        opt_list = OptionList(*self._build_options(), id="emr-app-picker-dropdown")
+        self._dropdown = opt_list
+        try:
+            self.app.screen.mount(opt_list)
+        except Exception:
+            # Screen unavailable (test harness without ``run_test`` or
+            # mid-shutdown) — fall back to silent no-op.
+            self._dropdown = None
+            self.remove_class("-open")
+            return
+        # Anchor below the picker's bordered apps box. ``self.region``
+        # is the picker's on-screen rect; the box border adds 1 row
+        # below us, so y + height + 1.
+        with contextlib.suppress(Exception):
+            region = self.region
+            opt_list.styles.offset = (region.x, region.y + region.height + 1)
+        with contextlib.suppress(Exception):
+            opt_list.focus()
+
+    def _close_dropdown(self) -> None:
+        self.remove_class("-open")
+        if self._dropdown is None:
+            return
+        with contextlib.suppress(Exception):
+            self._dropdown.remove()
+        self._dropdown = None
 
     def _trigger_label(self) -> str:
+        """Render the trigger row.
+
+        Format: ``🔥  <name>  ·  <glyph> <STATE>``. The em-dot
+        separator + double-spaces give the state pill room to
+        breathe (user feedback: "the way STOPPED is being displayed
+        right in front of the current app is not formatted enough"
+        — pre-fix it was ``🔥 etl-pipeline-1 ●STOPPED`` with the
+        glyph and the state name jammed together)."""
         apps = self._vm.applications
         sid = self._vm.selected_id
         if not apps:
@@ -182,12 +230,12 @@ class ApplicationPicker(Widget):
         if match is None:
             return "(select application)"
         glyph = _APP_STATE_GLYPH.get(match.state, "?")
-        return f"💥 {match.name} {glyph}{match.state.value}"
+        return f"🔥  {match.name}  ·  {glyph} {match.state.value}"
 
     def _build_options(self) -> list[Option]:
         return [
             Option(
-                prompt=f"💥 {a.name} {_APP_STATE_GLYPH.get(a.state, '?')}{a.state.value}",
+                prompt=(f"🔥  {a.name}  ·  {_APP_STATE_GLYPH.get(a.state, '?')} {a.state.value}"),
                 id=a.id,
             )
             for a in self._vm.applications

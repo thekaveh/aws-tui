@@ -130,11 +130,12 @@ async def test_action_close_removes_open_class() -> None:
 
 async def test_action_commit_with_highlighted_option_closes_dropdown() -> None:
     """When a row is highlighted, ``action_commit`` closes the
-    dropdown — the user-visible "commit closes" contract. Pass-2
-    M-3 (test-review): previous form queried the OptionList by id
-    (``#app-options``), coupling the test to a private layout
-    choice. The behavior we actually need to pin is the higher-
-    level: a committed selection closes the picker.
+    dropdown — the user-visible "commit closes" contract.
+
+    Post-batch-3: the dropdown OptionList is now mounted to the
+    Screen on open (not as a child of the picker) so it escapes
+    the bordered ``emr-app-box``'s 3-row clip. Tests query via
+    the app, not the picker.
     """
     fake = _InMemoryEmr()
     fake.add_application(app_id="a1", name="etl")
@@ -147,12 +148,11 @@ async def test_action_commit_with_highlighted_option_closes_dropdown() -> None:
         picker.toggle_open()
         await pilot.pause()
         assert picker.has_class("-open")
-        # We still need a highlight to drive ``action_commit``'s
-        # happy path; use the broad ``OptionList`` selector instead
-        # of the child id so a layout rename doesn't break the
-        # test. The contract under test is the dropdown closing
-        # post-commit, not which child id holds the options.
-        opts = picker.query_one(OptionList)
+        # Dropdown is screen-mounted now — query via the app, not
+        # the picker. The id (``#emr-app-picker-dropdown``) is
+        # part of the public widget contract so the per-theme tcss
+        # can target it.
+        opts = pilot.app.query_one("#emr-app-picker-dropdown", OptionList)
         opts.highlighted = 0
         await pilot.pause()
         picker.action_commit()
@@ -174,8 +174,8 @@ async def test_action_commit_no_highlight_is_noop() -> None:
         picker = pilot.app.query_one(ApplicationPicker)
         picker.toggle_open()
         await pilot.pause()
-        # Use the broad ``OptionList`` selector, not the child id.
-        opts = picker.query_one(OptionList)
+        # Dropdown is screen-mounted — see the commit test above.
+        opts = pilot.app.query_one("#emr-app-picker-dropdown", OptionList)
         opts.highlighted = None
         before_selection = vm.selected_id
         picker.action_commit()

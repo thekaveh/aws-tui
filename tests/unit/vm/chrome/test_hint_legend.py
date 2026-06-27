@@ -154,10 +154,14 @@ def test_set_current_service_swaps_to_emr_chips_and_relabels_swap_source() -> No
     assert swap_chip.action_label == "switch app", (
         f"Expected 'switch app' label for app.swap_source on EMR; got {swap_chip.action_label!r}."
     )
-    # On S3 the label stays "swap src".
+    # On S3 the label is "switch source" — full word for clarity,
+    # matching the parallel "switch theme" / "switch app" / etc.
+    # User feedback: don't compress one to "swap src"/"cycle" and
+    # leave the others verbose; both source and theme commands now
+    # read "switch X".
     legend.set_current_service("s3")
     swap_chip = next(a for a in legend.actions if a.action_id == "app.swap_source")
-    assert swap_chip.action_label == "swap src"
+    assert swap_chip.action_label == "switch source"
     legend.dispose()
 
 

@@ -90,12 +90,20 @@ _ACTION_LABELS: dict[str, str] = {
     "app.command_palette": "cmd",
     "app.help": "help",
     "app.themes": "themes",
-    "app.cycle_theme": "cycle",
-    "app.swap_source": "swap src",
+    # Both ``app.cycle_theme`` and ``app.swap_source`` semantically
+    # "switch X". User feedback: don't compress one to "cycle" and
+    # leave the other as "swap src" — make both read the same
+    # ("switch") with the noun differing. They sit far apart in the
+    # row so the parallel reads naturally; we don't shorten "switch"
+    # to "cycle" for either to avoid the "cycle theme is confusing"
+    # complaint (cycle theme reads as "cycle a theme attribute" not
+    # "rotate to the next theme").
+    "app.cycle_theme": "switch theme",
+    "app.swap_source": "switch source",
     # Service-specific label overrides handled by ``_label_for`` (the
     # user asked for "switch source" → "switch application" when EMR
-    # is active). Kept here so the generic fall-back stays "swap src"
-    # for S3.
+    # is active). The generic fallback is now "switch source" for
+    # S3 (was "swap src" pre-this-batch).
     "app.quit": "quit",
     "auth.authenticate": "sign in",
     "modal.cancel": "cancel",
