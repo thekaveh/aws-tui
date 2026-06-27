@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **EMR job-run logs pane** (PR #84, service PR-B — logs surface).
+  Lower half of the right column in the EMR page. Streams the selected
+  run's ``s3MonitoringConfiguration.logUri`` from S3 (gzip-decompressed
+  in 64 KB chunks), filters lines through a configurable regex set
+  (default: ``ERROR`` / ``WARN`` / ``FAIL`` / ``Exception`` / 
+  ``Caused by`` / ``Traceback`` / ``Killed`` / ``OutOfMemoryError``),
+  and shows them with progress feedback. On-demand fetch only — press
+  ``Enter`` on the logs pane to load; ``r`` reloads, ``f`` opens the
+  filter modal. New ``vm/emr_serverless/job_run_logs_vm.py::JobRunLogsVM``
+  + ``ui/widgets/emr_serverless/job_run_logs_pane.py::JobRunLogsPane``.
 - **EMR Serverless: clone-job-run modal** (PR #83, item #7 of the
   user-feedback batch; lands ahead of the rest of PR-C). New
   ``vm/emr_serverless/clone_vm.py::JobRunCloneVM`` +

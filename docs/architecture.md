@@ -31,8 +31,8 @@ yet wired (the empty config block would be a no-op).
     resume / first-run).
   - `vm/file_manager/` — pane / dual-pane / entry / transfer VMs.
   - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
-    `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` children
-    (added post-tag by PR #76; the read-only EMR Serverless browser).
+    `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
+    (added post-tag by PR #76 and extended by PR #84; the read-only EMR Serverless browser with logs streaming).
     `JobRunCloneVM` (PR #83) backs the clone-job-run modal — a
     sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
     per modal-mount with the focused run as the source.
