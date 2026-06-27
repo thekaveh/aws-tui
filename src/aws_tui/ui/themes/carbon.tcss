@@ -684,12 +684,14 @@ ApplicationPicker.-open > .app-trigger {
     border: round $accent;
     color: $accent;
 }
-ApplicationPicker > OptionList {
+ApplicationPicker > OptionList,
+#emr-app-picker-dropdown {
     background: $bg-elev;
     color: $text;
-    border: round $rule-dim;
+    border: round $accent;
 }
-ApplicationPicker > OptionList > .option-list--option-highlighted {
+ApplicationPicker > OptionList > .option-list--option-highlighted,
+#emr-app-picker-dropdown > .option-list--option-highlighted {
     background: $bg-sel;
     color: $accent-soft;
 }

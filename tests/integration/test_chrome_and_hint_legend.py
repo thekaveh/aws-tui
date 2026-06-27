@@ -71,7 +71,12 @@ async def test_hint_legend_contains_all_expected_action_chips(
         await pilot.pause()
         legend = app.query_one(HintLegend)
         text = _strip_text(legend)
-        # Action labels from hint_legend_vm _ACTION_LABELS.
+        # Action labels from hint_legend_vm _ACTION_LABELS. Post-
+        # batch-3 the parallel "switch X" pair stays consistent:
+        # ``app.swap_source`` → "switch source" (S3) and
+        # ``app.cycle_theme`` → "switch theme" replace the prior
+        # "swap src" / "cycle". User feedback: don't compress one
+        # to "cycle" while leaving the other verbose.
         for label in (
             "open",
             "switch",
@@ -79,8 +84,8 @@ async def test_hint_legend_contains_all_expected_action_chips(
             "delete",
             "refresh",
             "themes",
-            "cycle",
-            "swap src",
+            "switch theme",
+            "switch source",
             "help",
             "quit",
         ):

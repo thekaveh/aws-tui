@@ -53,23 +53,21 @@ class EmrServerlessService:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="emr-serverless",
         label="EMR",
-        # 💥 U+1F4A5 COLLISION SYMBOL — SMP single-codepoint,
-        # renders as 2-cell colour reliably (every modern terminal
-        # with emoji-font fallback ships this as a colour glyph
-        # because there's no text-presentation alternative). Fourth
-        # icon attempt:
+        # 🔥 U+1F525 FIRE — SMP single-codepoint, renders 2-cell
+        # colour reliably and draws to the full bounding box (the
+        # 💥 COLLISION glyph that briefly shipped in PR #83 drew
+        # to a tighter box and read as smaller than the 🪣 nav
+        # peer; user feedback). Fifth icon attempt:
         #   PR #77 ⚡  (BMP U+26A1)         → 1-cell outline, broke layout
         #   PR #79 🔥  (SMP U+1F525)        → 2-cell colour, worked
-        #   PR #81 ⚡️ (BMP U+26A1+VS-16)   → user explicit ask, broke layout
-        #         💥  (SMP U+1F4A5)        → here, user explicit ask
-        # The user wants the "electricity/spark burst" semantic
-        # without the 1-cell fallback risk of the U+26A1 codepath.
-        # 💥 keeps the "spark" association (Spark / collision
-        # explosion) while being SMP-safe. Future icon contract:
-        # do NOT use BMP+VS-16 here; pick from the SMP block
-        # (U+1F***). See nav_menu.py docstrings for the row-layout
-        # invariant the icon column must preserve (2 cells).
-        icon="💥",
+        #   PR #81 ⚡️ (BMP U+26A1+VS-16)   → broke layout again
+        #   PR #83 💥 (SMP U+1F4A5)        → small bounding box vs 🪣
+        #         🔥  (SMP U+1F525)        → here, back to the known good
+        # Semantically apt for Spark (the framework). Future icon
+        # contract: pick from the SMP block (U+1F***) and prefer
+        # glyphs that draw to the full bounding box; see
+        # nav_menu.py for the 2-cell layout invariant.
+        icon="🔥",
     )
 
     def __init__(

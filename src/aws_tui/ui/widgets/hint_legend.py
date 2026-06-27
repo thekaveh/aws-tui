@@ -37,6 +37,12 @@ class HintLegend(HubSubscriberMixin, Widget):
         height: 1;
         width: 1fr;
         layout: horizontal;
+        /* Centre the concatenated chip row horizontally inside the
+           Commands pane. User feedback: "the commands at the bottom
+           are now aligned left whereas I wanted them to be aligned
+           center". The strip itself stays 1fr-wide so the centre
+           alignment applies to the chip group within it. */
+        align-horizontal: center;
     }
     HintLegend .hint-key {
         width: auto;
