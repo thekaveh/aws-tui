@@ -1,9 +1,22 @@
-"""ApplicationPicker — top-strip dropdown for the EMR page.
+"""ApplicationPicker — top-strip application selector for the EMR page.
 
-Trigger button + layered OptionList. Pressing `a` (page-level
-binding) calls ``toggle_open``; clicking the trigger does the same.
-Selecting a row in the OptionList commits via ``vm.select(app_id)``
-and closes the popover. Esc cancels."""
+Inline-expanding dropdown. The picker uses ``height: auto`` so it
+grows to wrap whatever children are visible: just the trigger row
+when closed, trigger + OptionList when open. The parent
+``emr-app-box`` is ``height: auto, min-height: 3`` so it grows
+in lockstep; the sibling ``JobRunsPane`` (``height: 1fr``)
+shrinks to make room.
+
+Why not a floating overlay: the prior layered-overlay approaches
+(PR #83 declaring ``dropdown`` on Screen, PR #85 mounting the
+OptionList directly to the Screen) both broke the popover —
+layers are z-order only (don't escape parent clipping in PR #83)
+and Screen-mount put the popover after Screen's vertical-flow
+children (so it ended up below the Commands pane in PR #85).
+The inline-expanding pattern is simpler and reliable: the
+OptionList stays a normal child of the picker, no layers, no
+absolute positioning, no cross-widget message routing.
+"""
 
 from __future__ import annotations
 
@@ -35,36 +48,43 @@ _APP_STATE_GLYPH: dict[ApplicationState, str] = {
 
 
 class ApplicationPicker(Widget):
-    """Top-strip application selector.
-
-    Visually a trigger button (closed) that swaps to an OptionList
-    when opened. Theming is in the per-theme ``.tcss``; this widget
-    owns only structural rules."""
+    """Top-strip application selector — inline-expanding."""
 
     DEFAULT_CSS: ClassVar[str] = """
     ApplicationPicker {
         width: 1fr;
-        height: 1fr;
-        layout: horizontal;
+        height: auto;
+        min-height: 3;
+        layout: vertical;
     }
-    ApplicationPicker > .app-trigger {
+    /* The trigger row is always 3 cells tall (matches the apps-box
+       minimum). Wrapped in a Horizontal so its width takes the full
+       picker; the Static fills that Horizontal. */
+    ApplicationPicker > Horizontal {
         width: 1fr;
-        height: 1fr;
+        height: 3;
+    }
+    ApplicationPicker > Horizontal > .app-trigger {
+        width: 1fr;
+        height: 3;
         padding: 0 1;
         content-align: left middle;
         text-style: bold;
     }
-    /* The OptionList is mounted to the Screen on open (not to
-       this widget) so it escapes the bordered ``emr-app-box``'s
-       3-row clip. ``layer: dropdown`` lifts it above the body
-       widgets; explicit screen-space ``offset`` is set in
-       ``_open_dropdown`` based on the picker's region.
-       Background / border come from per-theme tcss so the
-       dropdown picks up the active accent at runtime. */
-    #emr-app-picker-dropdown {
-        layer: dropdown;
-        width: 50;
+    /* OptionList is collapsed by default; ``-open`` flips display
+       to block AND the picker's ``height: auto`` grows to wrap the
+       newly-visible OptionList. Parent ``emr-app-box`` grows in
+       lockstep (its ``height: auto, min-height: 3`` lets it expand
+       up to the column's available space; the sibling JobRunsPane
+       with ``height: 1fr`` shrinks to make room). */
+    ApplicationPicker > OptionList {
+        width: 1fr;
+        height: auto;
         max-height: 16;
+        display: none;
+    }
+    ApplicationPicker.-open > OptionList {
+        display: block;
     }
     """
 
@@ -85,26 +105,19 @@ class ApplicationPicker(Widget):
         self._vm: ApplicationsVM = vm
         self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
-        # The OptionList lives outside this widget's compose so it
-        # can be mounted to the Screen on open (and unmounted on
-        # close) — that's the only way to escape the bordered
-        # ``emr-app-box``'s 3-row clip region. See ``_open_dropdown``.
-        self._dropdown: OptionList | None = None
 
     def compose(self) -> ComposeResult:
-        # Trigger only. The OptionList overlay is owned by
-        # ``_open_dropdown`` / ``_close_dropdown`` (mounted to
-        # ``self.app.screen`` on open). Wrapping the trigger in a
-        # Horizontal preserves the original layout the page CSS +
-        # snapshot baselines were authored against.
+        # Trigger row + OptionList both as children of the picker.
+        # The OptionList is hidden by default via ``display: none``
+        # and revealed when the picker gains the ``-open`` class.
         with Horizontal():
             yield Static(self._trigger_label(), classes="app-trigger")
+        yield OptionList(*self._build_options(), id="app-options")
 
     def on_mount(self) -> None:
         self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
 
     def on_unmount(self) -> None:
-        self._close_dropdown()
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
@@ -113,41 +126,45 @@ class ApplicationPicker(Widget):
 
     def toggle_open(self) -> None:
         if "-open" in self.classes:
-            self._close_dropdown()
+            self.remove_class("-open")
         else:
-            self._open_dropdown()
+            self.add_class("-open")
+            # Focus the dropdown so arrow keys / Enter / Esc are
+            # routed there immediately. ``call_after_refresh`` waits
+            # for the layout-pass that the ``-open`` class triggered
+            # so the OptionList is laid out and focusable.
+            self.call_after_refresh(self._focus_dropdown)
+            self._refresh_options()
 
     def action_close(self) -> None:
-        self._close_dropdown()
+        self.remove_class("-open")
 
     def action_commit(self) -> None:
-        if self._dropdown is None:
+        try:
+            opts = self.query_one("#app-options", OptionList)
+        except Exception:
             return
-        opts = self._dropdown
         if opts.highlighted is None:
             return
         opt = opts.get_option_at_index(opts.highlighted)
         if opt.id is not None:
             self._vm.select(opt.id)
-        self._close_dropdown()
+        self.remove_class("-open")
 
     # ── Internal ────────────────────────────────────────────────────────────
 
     def on_click(self, event: Click) -> None:
-        # Any click bubbles up via ``self`` so toggling is convenient
-        # — the OptionList rows post their own ``OptionSelected``
-        # which routes through the on_option_list_* handler below.
-        if (
-            event.widget is not None
-            and getattr(event.widget, "id", None) == "emr-app-picker-dropdown"
-        ):
+        # Click on the trigger row toggles open/closed. Click on a
+        # row inside the dropdown is handled by Textual's OptionList
+        # which posts ``OptionSelected`` — see the handler below.
+        if event.widget is not None and getattr(event.widget, "id", None) == "app-options":
             return
         self.toggle_open()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option.id is not None:
             self._vm.select(event.option.id)
-        self._close_dropdown()
+        self.remove_class("-open")
 
     def _on_hub_message(self, msg: object) -> None:
         if not isinstance(msg, PropertyChangedMessage):
@@ -155,7 +172,7 @@ class ApplicationPicker(Widget):
         if msg.property_name not in {"applications", "selected_id", "state"}:
             return
         self.call_after_refresh(self._refresh_trigger)
-        self.call_after_refresh(self._refresh_dropdown_options)
+        self.call_after_refresh(self._refresh_options)
 
     def _refresh_trigger(self) -> None:
         try:
@@ -164,52 +181,19 @@ class ApplicationPicker(Widget):
             return
         trigger.update(self._trigger_label())
 
-    def _refresh_dropdown_options(self) -> None:
-        if self._dropdown is None:
-            return
-        self._dropdown.clear_options()
-        for opt in self._build_options():
-            self._dropdown.add_option(opt)
-
-    def _open_dropdown(self) -> None:
-        """Mount the OptionList to the Screen and position it just
-        below the picker's bordered box.
-
-        Screen-mounting (rather than yielding the OptionList as a
-        child of this widget) escapes the bordered apps box's 3-row
-        clip — the prior in-flow + ``layer: dropdown`` approach
-        from PR #83 still had the popover clipped by the parent's
-        overflow rect, so the user saw nothing. ``layer: dropdown``
-        is z-order only; it doesn't escape clipping."""
-        if self._dropdown is not None:
-            return
-        self.add_class("-open")
-        opt_list = OptionList(*self._build_options(), id="emr-app-picker-dropdown")
-        self._dropdown = opt_list
+    def _refresh_options(self) -> None:
         try:
-            self.app.screen.mount(opt_list)
+            opts = self.query_one("#app-options", OptionList)
         except Exception:
-            # Screen unavailable (test harness without ``run_test`` or
-            # mid-shutdown) — fall back to silent no-op.
-            self._dropdown = None
-            self.remove_class("-open")
             return
-        # Anchor below the picker's bordered apps box. ``self.region``
-        # is the picker's on-screen rect; the box border adds 1 row
-        # below us, so y + height + 1.
-        with contextlib.suppress(Exception):
-            region = self.region
-            opt_list.styles.offset = (region.x, region.y + region.height + 1)
-        with contextlib.suppress(Exception):
-            opt_list.focus()
+        opts.clear_options()
+        for opt in self._build_options():
+            opts.add_option(opt)
 
-    def _close_dropdown(self) -> None:
-        self.remove_class("-open")
-        if self._dropdown is None:
-            return
+    def _focus_dropdown(self) -> None:
         with contextlib.suppress(Exception):
-            self._dropdown.remove()
-        self._dropdown = None
+            opts = self.query_one("#app-options", OptionList)
+            opts.focus()
 
     def _trigger_label(self) -> str:
         """Render the trigger row.
