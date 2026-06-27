@@ -223,12 +223,15 @@ class ApplicationPicker(Widget):
     def _trigger_label(self) -> str:
         """Render the trigger row.
 
-        Format: ``🔥  <name>  ·  <colored-glyph>``. The colored glyph
+        Format: ``<colored-glyph>  <name>``. The colored glyph
         encodes the state visually (green ● = STARTED, yellow ◐ /
         ◑ = transitional, dim ○ / ◌ = idle, red ✗ = terminated) so
-        the textual STATE pill is no longer needed. User feedback:
-        "If we do this then we don't need to show the STARTED OR
-        STOPPED ETC statuses next to them"."""
+        the textual STATE pill is no longer needed. User feedback
+        (post-PR-#92): "the dropdown … shows the fire emoji at the
+        beginning of every application name, followed by the name
+        of the app, and then followed by the status of the app. I
+        want this changed to just the status indicator, followed
+        by the name. No need for the emoji"."""
         apps = self._vm.applications
         sid = self._vm.selected_id
         if not apps:
@@ -239,7 +242,7 @@ class ApplicationPicker(Widget):
         if match is None:
             return "(select application)"
         marker = _APP_STATE_MARKER.get(match.state, "?")
-        return f"🔥  {match.name}  ·  {marker}"
+        return f"{marker}  {match.name}"
 
     def _build_options(self) -> list[Option]:
         """Build the dropdown options.
@@ -249,13 +252,14 @@ class ApplicationPicker(Widget):
         the order the user reads in the dropdown is the order they
         cycle through with the keybinding.
 
-        Prompt: ``🔥  <name>  ·  <colored-glyph>`` — no textual
-        state name. The colour + shape of the glyph carries the
-        state semantics; the prompt stays compact even with long
-        application names."""
+        Prompt: ``<colored-glyph>  <name>`` — no fire emoji, no
+        textual state name. The colour + shape of the glyph carries
+        the state semantics. User feedback drove the fire-emoji
+        drop; the colored-glyph + name format keeps the row short
+        and visually grouped."""
         return [
             Option(
-                prompt=f"🔥  {a.name}  ·  {_APP_STATE_MARKER.get(a.state, '?')}",
+                prompt=f"{_APP_STATE_MARKER.get(a.state, '?')}  {a.name}",
                 id=a.id,
             )
             for a in self._vm.sorted_applications

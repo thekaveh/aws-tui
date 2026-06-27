@@ -33,8 +33,13 @@ class EmrServerlessPage(Widget):
         height: 1fr;
         layout: horizontal;
     }
+    /* User feedback (post-PR-#92): "I feel like we can further
+       reduce the width of the first / left column … to become
+       2/7th of the entire width (as opposed to the current 1/3)
+       to give more space to the right pane". 2fr / 5fr = 2/7
+       LEFT and 5/7 RIGHT. */
     EmrServerlessPage > .emr-left-column {
-        width: 1fr;
+        width: 2fr;
         height: 1fr;
         layout: vertical;
     }
@@ -50,11 +55,8 @@ class EmrServerlessPage(Widget):
     EmrServerlessPage > .emr-left-column > JobRunsPane {
         height: 1fr;
     }
-    /* User feedback: "the left job runs pane … to occupy 1/3 of the
-       horizontal space … the job details pane to occupy the remaining
-       2/3". 1fr:2fr is the 1:3 / 2:3 ratio the user asked for. */
     EmrServerlessPage > .emr-right-column {
-        width: 2fr;
+        width: 5fr;
         height: 1fr;
         layout: vertical;
     }
@@ -140,8 +142,14 @@ class EmrServerlessPage(Widget):
         # that would race the host's task and double the boot-time
         # ``list_applications`` API call on every EMR mount.
         # Set up the three pollers per spec §6.
+        # Poller cadence — user feedback (post-PR-#92): "the EMR
+        # job runs list seems to be refreshed automatically way too
+        # frequently which may not be necessary. We can lower the
+        # frequency." Runs poller went 10 s → 30 s; combined with
+        # the 6-tick cadence decay on idle (see ``_poll_runs_decay``)
+        # that's ~3 min effective when no runs are active.
         self.set_interval(30.0, self._tick_applications, name="emr-poll-apps")
-        self.set_interval(10.0, self._tick_runs, name="emr-poll-runs")
+        self.set_interval(30.0, self._tick_runs, name="emr-poll-runs")
         self.set_interval(5.0, self._tick_detail, name="emr-poll-detail")
         # Land Textual focus on the LEFT pane so the user gets the
         # same "arrow keys move the cursor immediately" UX as the S3
@@ -189,7 +197,7 @@ class EmrServerlessPage(Widget):
         self.run_worker(self._vm.applications.refresh(), exclusive=True, group="emr-poll-apps")
 
     def _tick_runs(self) -> None:
-        # Cadence-decay: when no active runs, only refresh every 6th tick (~60 s).
+        # Cadence-decay: when no active runs, only refresh every 6th tick (~3 min).
         if not self._vm.job_runs.has_active_runs() and self._poll_runs_decay():
             return
         self.run_worker(self._vm.job_runs.refresh(), exclusive=True, group="emr-poll-runs")
@@ -287,7 +295,7 @@ class EmrServerlessPage(Widget):
                 return
             self._post_clone_success_toast(new_id)
             # Re-fresh the runs list so the new SUBMITTED row appears
-            # immediately rather than waiting for the next 10-s tick.
+            # immediately rather than waiting for the next 30-s tick.
             self.run_worker(
                 self._vm.job_runs.refresh(),
                 exclusive=True,
@@ -340,6 +348,18 @@ class EmrServerlessPage(Widget):
     def on_job_runs_pane_refresh_requested(self, _event: JobRunsPane.RefreshRequested) -> None:
         self.run_worker(self._vm.refresh_focused("runs"), exclusive=True, group="emr-refresh")
 
+    def on_job_runs_pane_load_more_requested(self, _event: JobRunsPane.LoadMoreRequested) -> None:
+        """User asked for the next page of runs (PgDn or click on
+        the bottom sentinel). Run as ``exclusive=True`` so a slow
+        page response can't be double-fired by an impatient
+        keypress — the second call is dropped by Textual rather
+        than queued behind the first."""
+        self.run_worker(
+            self._vm.job_runs.load_more(),
+            exclusive=True,
+            group="emr-load-more",
+        )
+
     def on_job_run_logs_pane_load_requested(self, _event: JobRunLogsPane.LoadRequested) -> None:
         """User pressed Enter to load logs."""
         self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
@@ -373,6 +393,18 @@ class EmrServerlessPage(Widget):
             # teardown race). Surface an advisory toast so the user
             # learns the filter didn't apply.
             self._post_advisory_toast("Settings", f"filter aborted ({exc})")
+
+    def on_job_run_logs_pane_reset_filter_requested(
+        self, _event: JobRunLogsPane.ResetFilterRequested
+    ) -> None:
+        """User pressed Shift+F to reset the log filter to the
+        default keyword set without going through the modal."""
+        from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER
+
+        if self._vm.job_run_logs.filter == DEFAULT_LOG_FILTER:
+            return
+        self._vm.job_run_logs.set_filter(DEFAULT_LOG_FILTER)
+        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
 
 
 __all__ = ["EmrServerlessPage"]

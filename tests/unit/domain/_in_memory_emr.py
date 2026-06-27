@@ -155,6 +155,38 @@ class _InMemoryEmr:
         runs.sort(key=lambda r: r.created_at, reverse=True)
         return runs[:max_results]
 
+    #: Per-page size used by :meth:`list_job_runs_page`. Defaults
+    #: to a large value so tests that don't care about paging
+    #: (the majority) see ALL seeded runs in a single page.
+    #: Paging-specific tests monkey-patch this to a small value
+    #: (e.g. ``fake.page_size = 2``) to exercise the next-token
+    #: walk without seeding 100+ runs.
+    page_size: int = 100
+
+    async def list_job_runs_page(
+        self,
+        application_id: str,
+        *,
+        start_token: str | None = None,
+        states: set[JobRunState] | None = None,
+    ) -> tuple[list[JobRunSummary], str | None]:
+        """In-memory analogue of :meth:`EmrServerlessClient.list_job_runs_page`.
+
+        ``start_token`` encodes the integer offset of the next page
+        in the sorted run list. Returns at most :attr:`page_size`
+        runs and the token for the next page (or ``None`` when the
+        current page exhausts the list)."""
+        self.calls.append(("list_job_runs_page", (application_id, start_token, states)))
+        runs = list(self._runs.get(application_id, {}).values())
+        if states is not None:
+            runs = [r for r in runs if r.state in states]
+        runs.sort(key=lambda r: r.created_at, reverse=True)
+        offset = int(start_token) if start_token is not None else 0
+        page = runs[offset : offset + self.page_size]
+        next_offset = offset + self.page_size
+        next_token = str(next_offset) if next_offset < len(runs) else None
+        return page, next_token
+
     async def get_job_run(self, application_id: str, job_run_id: str) -> JobRunDetail:
         self.calls.append(("get_job_run", (application_id, job_run_id)))
         return self._details[(application_id, job_run_id)]

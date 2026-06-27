@@ -156,3 +156,79 @@ async def test_has_active_runs_uses_unfiltered_cache_not_state_filter() -> None:
     vm.set_state_filter(frozenset({JobRunState.SUCCESS}))
     assert vm.runs == ()  # filtered out of the public list
     assert vm.has_active_runs() is True  # but the cache still says active
+
+
+# ── Pagination (load_more / has_more) ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_refresh_starts_at_first_page_has_more_when_more_available() -> None:
+    """Refresh fetches ONE page. ``has_more`` reflects the server's
+    next-token; pinned so the pane's "Load more" sentinel stays
+    in lockstep with the VM's paging state."""
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.page_size = 2  # force multi-page over 4 runs
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
+    fake.add_job_run(application_id="a1", job_run_id="r3", state=JobRunState.FAILED)
+    fake.add_job_run(application_id="a1", job_run_id="r4", state=JobRunState.CANCELLED)
+    vm.set_application("a1")
+    await vm.refresh()
+    assert vm.has_more is True
+    assert len(vm.runs) == 2  # first page only
+
+
+@pytest.mark.asyncio
+async def test_load_more_appends_next_page_then_clears_has_more() -> None:
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.page_size = 2
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
+    fake.add_job_run(application_id="a1", job_run_id="r3", state=JobRunState.FAILED)
+    vm.set_application("a1")
+    await vm.refresh()
+    assert vm.has_more is True
+    assert len(vm.runs) == 2
+    await vm.load_more()
+    # Second page appends — full list now visible.
+    assert {r.job_run_id for r in vm.runs} == {"r1", "r2", "r3"}
+    # Third call drains the token to None.
+    assert vm.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_load_more_is_noop_when_no_more_pages() -> None:
+    """Defensive: the pane keeps the PgDn binding even on
+    fully-drained lists; calling load_more then must NOT re-fetch
+    or alter state."""
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.page_size = 100
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    vm.set_application("a1")
+    await vm.refresh()
+    assert vm.has_more is False
+    before_calls = list(fake.calls)
+    await vm.load_more()
+    assert fake.calls == before_calls  # no new client call
+    assert vm.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_set_application_resets_paging_state() -> None:
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_application(app_id="a2", name="other")
+    fake.page_size = 1
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
+    vm.set_application("a1")
+    await vm.refresh()
+    assert vm.has_more is True
+    # Switch apps — paging state must reset; otherwise the new app
+    # inherits an old next_token and load_more crashes / mis-fetches.
+    vm.set_application("a2")
+    assert vm.has_more is False
+    assert vm.runs == ()

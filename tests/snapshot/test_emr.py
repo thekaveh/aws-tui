@@ -53,11 +53,16 @@ def test_emr_page_populated_renders_expected_glyphs_and_labels(theme: str) -> No
     assert p.is_file(), f"expected snapshot {p.name} on disk; run --snapshot-update first"
     svg = p.read_text()
     assert "etl-pipeline-1" in svg, f"application name missing for theme {theme!r}"
-    assert "nightly-2026-06" in svg, f"job run name (prefix) missing for theme {theme!r}"
+    # The job-run NAME column is 1fr of a narrow LEFT pane (now 2/7
+    # of total width post-PR-batch-7items), so the long fixture
+    # name ``nightly-2026-06-25`` ellipsizes to ``nightly-2…`` in
+    # the runs list — match the smallest meaningful prefix that's
+    # still uniquely the seeded run name.
+    assert "nightly-2" in svg, f"job run name (prefix) missing for theme {theme!r}"
     assert "EmrJobRole" in svg, f"execution role ARN fragment missing for theme {theme!r}"
-    # New post-#90 row format: indicator + name + ``YYYY-MM-DD HH:MM`` —
-    # pin the date+time column so a regression to time-only would fail.
-    # SVG encodes the space between date and time as ``&#160;``.
+    # Pin the date+time column so a regression to time-only would
+    # fail. SVG encodes the space between date and time as
+    # ``&#160;``.
     assert "2026-06-25&#160;12:00" in svg, f"job run date+time missing for theme {theme!r}"
 
 

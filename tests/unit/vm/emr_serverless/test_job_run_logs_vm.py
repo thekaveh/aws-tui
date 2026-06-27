@@ -521,3 +521,103 @@ async def test_cache_hit_preserves_truncation_state(monkeypatch: pytest.MonkeyPa
     assert stream_call_count == 1  # still 1 — stream not called again
     assert vm.lines == ("WARN: truncated",)
     vm.dispose()
+
+
+# ── LRU cache eviction + app-switch clearing ──────────────────────────────────
+
+
+async def test_cache_evicts_oldest_entry_when_cap_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LRU cap pinning: after loading more distinct (file, filter)
+    targets than ``_CACHE_MAX_ENTRIES``, the OLDEST entry must be
+    evicted so the cache size stays bounded. Without this the cache
+    grew unbounded across a long EMR session — user feedback
+    (post-PR-#92): "we need to make sure those logs get pulled into
+    a temp space and get disposed every once in a while so they
+    don't accumulate"."""
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import _CACHE_MAX_ENTRIES
+
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    stream_calls: list[str] = []
+
+    async def _stream_log(**kwargs: object):  # type: ignore[return]
+        stream_calls.append(str(kwargs.get("log_file")))
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream_log, raising=False)
+
+    vm = _make()
+    # Load more distinct runs than the cap. Each set_target+load
+    # populates one cache entry. Same application_id throughout so
+    # the app-switch clear path doesn't fire — this isolates the
+    # cap-driven eviction.
+    target_count = _CACHE_MAX_ENTRIES + 2
+    for i in range(target_count):
+        vm.set_target("app1", f"run-{i}", _LOG_URI)
+        await vm.load()
+    # Cache must NOT grow unbounded.
+    assert len(vm._cache) == _CACHE_MAX_ENTRIES, (  # type: ignore[attr-defined]
+        f"LRU cap broken: cache holds {len(vm._cache)} entries "  # type: ignore[attr-defined]
+        f"after {target_count} loads, cap is {_CACHE_MAX_ENTRIES}."
+    )
+    # The two oldest (run-0, run-1) must be evicted; the newest
+    # _CACHE_MAX_ENTRIES (run-2 … run-N) must remain.
+    cached_run_ids = {key[1] for key in vm._cache}  # type: ignore[attr-defined]
+    assert "run-0" not in cached_run_ids
+    assert "run-1" not in cached_run_ids
+    for i in range(2, target_count):
+        assert f"run-{i}" in cached_run_ids
+    vm.dispose()
+
+
+async def test_set_target_clears_cache_on_application_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """User feedback drove the LRU cap; the symmetric concern is
+    "cross-application leakage". Switching applications must drop
+    the prior app's cache entries entirely — they can't be revisited
+    in this UI session and only bloat memory."""
+
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    async def _stream_log(**kwargs: object):  # type: ignore[return]
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream_log, raising=False)
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+    assert len(vm._cache) == 1  # type: ignore[attr-defined]
+    # Switch to a different application — the cache must clear.
+    vm.set_target("app2", "run1", _LOG_URI)
+    assert vm._cache == {}, "Cache must clear on application switch."  # type: ignore[attr-defined]
+    vm.dispose()
+
+
+async def test_dispose_clears_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dispose() must flush the cache so a recycled VM (test
+    harnesses, future content-host reuse) doesn't carry stale
+    entries forward."""
+
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    async def _stream_log(**kwargs: object):  # type: ignore[return]
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream_log, raising=False)
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+    assert len(vm._cache) == 1  # type: ignore[attr-defined]
+    vm.dispose()
+    assert vm._cache == {}  # type: ignore[attr-defined]

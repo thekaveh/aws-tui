@@ -329,3 +329,101 @@ async def test_highlight_tooltip_maps_via_option_id_not_index(tmp_path: Path) ->
             )
     finally:
         vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mouse_hover_updates_tooltip_independent_of_keyboard_highlight(
+    tmp_path: Path,
+) -> None:
+    """Pin the mouse-hover branch of the per-row tooltip.
+
+    Pre-fix: Textual's ``OptionList._on_mouse_move`` updates an
+    internal ``_mouse_hovering_over`` attribute but does NOT fire
+    ``OptionHighlighted``; the OptionList-wide ``tooltip`` therefore
+    stayed at whatever the keyboard last highlighted. User feedback
+    (post-PR-#92): "Both the S3 and the EMR menu items seem to have
+    the same tooltip right now that says 'EMR'". Reproduced here by
+    keyboard-highlighting EMR, simulating a mouse hover over S3, and
+    calling the new :meth:`NavMenu.on_mouse_move` handler. Without
+    the fix the tooltip stays "EMR".
+    """
+    from textual.widgets import OptionList
+
+    from aws_tui.vm.services_protocol import ServiceDescriptor
+
+    class _S3Stub:
+        descriptor = ServiceDescriptor(id="s3", label="S3", icon="🪣")
+
+        def supports(self, conn: object) -> bool:
+            return True
+
+        def build_vm(self, conn: object) -> object:
+            return object()
+
+    class _EmrStub:
+        descriptor = ServiceDescriptor(id="emr-serverless", label="EMR", icon="🔥")
+
+        def supports(self, conn: object) -> bool:
+            return True
+
+        def build_vm(self, conn: object) -> object:
+            return object()
+
+    hub = _hub()
+    registry = ServiceRegistry()
+    registry.register(_S3Stub())
+    registry.register(_EmrStub())
+    vm = NavMenuVM(registry=registry, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    from aws_tui.infra.connection_resolver import Connection
+
+    vm.update_connection(
+        Connection(
+            name="dev",
+            kind="aws",
+            region="us-east-1",
+            source="config",
+            profile="dev",
+        )
+    )
+
+    class _Host(App[None]):
+        def __init__(self, w: NavMenu) -> None:
+            super().__init__()
+            self._w = w
+
+        def compose(self) -> ComposeResult:
+            yield self._w
+
+    nav = NavMenu(vm=vm, hub=hub)
+    app = _Host(nav)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            services = nav.query_one("#menu-services", OptionList)
+            # Keyboard-highlight EMR (idx=2; spacer at idx=1).
+            services.highlighted = 2
+            await pilot.pause()
+            assert services.tooltip == "EMR"
+            # Now simulate mouse hover over the S3 row by setting
+            # Textual's internal hover state directly (the same
+            # path its ``_on_mouse_move`` populates) and dispatch
+            # the new mouse-move handler.
+            services._mouse_hovering_over = "s3"  # type: ignore[attr-defined]
+            nav.on_mouse_move(object())
+            await pilot.pause()
+            assert services.tooltip == "S3", (
+                f"Mouse hover over the S3 row should retarget the tooltip; "
+                f"got {services.tooltip!r}. Pre-fix the tooltip stayed at "
+                "the LAST keyboarded value ('EMR'), which is exactly the "
+                "user-reported bug."
+            )
+            # Mouse leaves both rows (hover state cleared) — tooltip
+            # falls back to the keyboard-highlighted row's label so the
+            # popup is still meaningful when the pointer drifts off.
+            services._mouse_hovering_over = None  # type: ignore[attr-defined]
+            nav.on_mouse_move(object())
+            await pilot.pause()
+            assert services.tooltip == "EMR"
+    finally:
+        vm.dispose()
