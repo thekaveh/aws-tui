@@ -37,14 +37,35 @@ from vmx import Message, MessageHub, PropertyChangedMessage
 from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 
-_APP_STATE_GLYPH: dict[ApplicationState, str] = {
-    ApplicationState.CREATING: "◌",
-    ApplicationState.CREATED: "○",
-    ApplicationState.STARTING: "◐",
-    ApplicationState.STARTED: "●",
-    ApplicationState.STOPPING: "◑",
-    ApplicationState.STOPPED: "○",
-    ApplicationState.TERMINATED: "✗",
+#: Colored Rich-markup glyphs per application state. The glyph SHAPE
+#: alone is distinguishable on monochrome terminals (●/◐/◑/○/◌/✗
+#: are all visually different); the colour is icing for the colour-
+#: capable case. User feedback: "show a green block circle to denote
+#: they have already been started … similarly apt status indicator
+#: for the rest … we don't need to show the STARTED OR STOPPED text".
+_APP_STATE_MARKER: dict[ApplicationState, str] = {
+    ApplicationState.STARTED: "[green]●[/green]",
+    ApplicationState.STARTING: "[yellow]◐[/yellow]",
+    ApplicationState.STOPPING: "[yellow]◑[/yellow]",
+    ApplicationState.CREATING: "[dim]◌[/dim]",
+    ApplicationState.CREATED: "[white]○[/white]",
+    ApplicationState.STOPPED: "[dim]○[/dim]",
+    ApplicationState.TERMINATED: "[red]✗[/red]",
+}
+
+#: Sort key for the dropdown — STARTED first, then transitional
+#: (STARTING / STOPPING), then non-active (CREATING / CREATED /
+#: STOPPED), then terminal (TERMINATED). Within a state group the
+#: tie-break is the application name (alphabetical). User feedback:
+#: "list the started ones first … then list the remaining".
+_APP_STATE_SORT: dict[ApplicationState, int] = {
+    ApplicationState.STARTED: 0,
+    ApplicationState.STARTING: 1,
+    ApplicationState.STOPPING: 2,
+    ApplicationState.CREATING: 3,
+    ApplicationState.CREATED: 4,
+    ApplicationState.STOPPED: 5,
+    ApplicationState.TERMINATED: 6,
 }
 
 
@@ -217,12 +238,12 @@ class ApplicationPicker(Widget):
     def _trigger_label(self) -> str:
         """Render the trigger row.
 
-        Format: ``🔥  <name>  ·  <glyph> <STATE>``. The em-dot
-        separator + double-spaces give the state pill room to
-        breathe (user feedback: "the way STOPPED is being displayed
-        right in front of the current app is not formatted enough"
-        — pre-fix it was ``🔥 etl-pipeline-1 ●STOPPED`` with the
-        glyph and the state name jammed together)."""
+        Format: ``🔥  <name>  ·  <colored-glyph>``. The colored glyph
+        encodes the state visually (green ● = STARTED, yellow ◐ /
+        ◑ = transitional, dim ○ / ◌ = idle, red ✗ = terminated) so
+        the textual STATE pill is no longer needed. User feedback:
+        "If we do this then we don't need to show the STARTED OR
+        STOPPED ETC statuses next to them"."""
         apps = self._vm.applications
         sid = self._vm.selected_id
         if not apps:
@@ -232,16 +253,29 @@ class ApplicationPicker(Widget):
         match = next((a for a in apps if a.id == sid), None)
         if match is None:
             return "(select application)"
-        glyph = _APP_STATE_GLYPH.get(match.state, "?")
-        return f"🔥  {match.name}  ·  {glyph} {match.state.value}"
+        marker = _APP_STATE_MARKER.get(match.state, "?")
+        return f"🔥  {match.name}  ·  {marker}"
 
     def _build_options(self) -> list[Option]:
+        """Build the dropdown options.
+
+        Sort: STARTED first, then transitional / idle / terminated
+        groups, alphabetical within each group. User feedback:
+        "list the started ones first … then list the remaining".
+        Prompt: ``🔥  <name>  ·  <colored-glyph>`` — no textual
+        state name. The colour + shape of the glyph carries the
+        state semantics; the prompt stays compact even with long
+        application names."""
+        sorted_apps = sorted(
+            self._vm.applications,
+            key=lambda a: (_APP_STATE_SORT.get(a.state, 99), a.name),
+        )
         return [
             Option(
-                prompt=(f"🔥  {a.name}  ·  {_APP_STATE_GLYPH.get(a.state, '?')} {a.state.value}"),
+                prompt=f"🔥  {a.name}  ·  {_APP_STATE_MARKER.get(a.state, '?')}",
                 id=a.id,
             )
-            for a in self._vm.applications
+            for a in sorted_apps
         ]
 
 
