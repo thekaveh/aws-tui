@@ -377,3 +377,120 @@ async def test_emr_page_c_key_pushes_clone_modal(tmp_path: Path) -> None:
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_picker_commit_cascades_to_runs_pane(tmp_path: Path) -> None:
+    """User-reported: selecting a different application in the picker
+    dropdown did NOT update the JobRuns pane below.
+
+    Root cause: the picker called ``ApplicationsVM.select(id)``
+    which only flips the picker's own ``_selected_id``; the sibling
+    ``JobRunsVM`` doesn't observe it. The fix has the picker post
+    ``ApplicationPicker.ApplicationCommitted``; the page widget
+    catches it and runs ``page_vm.select_application(id)`` which
+    cascades through ``job_runs.set_application`` +
+    ``job_runs.refresh`` + ``job_run_detail.set_target``.
+
+    This test seeds two applications, mounts the EMR page,
+    commits a selection to the SECOND app via the picker's
+    ``action_commit``, and asserts ``job_runs.application_id``
+    flipped to that second app.
+    """
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    # Add a second application so the picker has somewhere to switch.
+    fake.add_application(app_id="00other", name="ad-hoc")
+    fake.add_job_run(application_id="00other", job_run_id="r-other", name="other-run")
+    fake.add_job_run_detail(application_id="00other", job_run_id="r-other")
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            page_vm = ctx.root_vm.content_host.current
+            page = pilot.app.query_one(EmrServerlessPage)
+            picker = page._picker
+            assert picker is not None
+            # Pre-condition: the runs pane is currently bound to the
+            # first app's id (auto-selected by ``setup``).
+            initial_app_id = page_vm.applications.selected_id
+            assert initial_app_id is not None
+            assert page_vm.job_runs.application_id == initial_app_id
+            other_app_id = "00emr" if initial_app_id == "00other" else "00other"
+
+            # Open the picker, highlight the OTHER app's row, commit.
+            picker.toggle_open()
+            await pilot.pause()
+            opts = picker.query_one("#app-options")
+            for idx in range(opts.option_count):
+                opt = opts.get_option_at_index(idx)
+                if opt.id == other_app_id:
+                    opts.highlighted = idx
+                    break
+            picker.action_commit()
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            # The cascade ran: picker's ``selected_id`` AND the
+            # ``JobRunsVM.application_id`` both flipped to the new app.
+            assert page_vm.applications.selected_id == other_app_id
+            assert page_vm.job_runs.application_id == other_app_id, (
+                "Picker commit should cascade through "
+                "page_vm.select_application(); JobRunsVM "
+                "must be re-scoped to the new app or the runs pane "
+                "shows stale data."
+            )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
+    """``Shift+S`` on the EMR page cycles to the next application
+    (wraps at the end). User feedback: pre-fix it just opened the
+    picker; user expected an actual app switch.
+
+    The keystroke routes through ``AwsTuiApp.action_swap_source``
+    which short-circuits to ``EmrServerlessPage.action_cycle_application_forward``
+    when the EMR page is mounted.
+    """
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    fake.add_application(app_id="00other", name="ad-hoc")
+    fake.add_job_run(application_id="00other", job_run_id="r-other")
+    fake.add_job_run_detail(application_id="00other", job_run_id="r-other")
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            page_vm = ctx.root_vm.content_host.current
+            initial_app_id = page_vm.applications.selected_id
+            assert initial_app_id is not None
+
+            await pilot.press("S")  # Shift+S
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            # Selection moved off the initial app.
+            assert page_vm.applications.selected_id != initial_app_id, (
+                "Shift+S should actually switch the application — pre-fix "
+                "it only opened the picker, which the user reported as a bug."
+            )
+            # Cascade ran: runs pane is bound to the new app.
+            assert page_vm.job_runs.application_id == page_vm.applications.selected_id
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()

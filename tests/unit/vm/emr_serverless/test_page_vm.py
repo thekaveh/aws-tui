@@ -73,3 +73,50 @@ async def test_dispose_cascades_to_children() -> None:
     # after construct(); a second dispose() should be a no-op.
     page.dispose()
     page.dispose()  # idempotent
+
+
+@pytest.mark.asyncio
+async def test_cycle_application_wraps_at_end_and_cascades() -> None:
+    """Pin Shift+S behaviour: ``cycle_application(1)`` selects the
+    next app and wraps at the end. The full ``select_application``
+    cascade runs so JobRuns + Detail panes refresh in lockstep —
+    user feedback: "shift + s … doesn't result in an actual app
+    switching" (pre-fix it just opened the picker).
+    """
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_application(app_id="a2", name="ad-hoc")
+    fake.add_application(app_id="a3", name="ml")
+    fake.add_job_run(application_id="a2", job_run_id="r-1", state=JobRunState.SUCCESS)
+    fake.add_job_run_detail(application_id="a2", job_run_id="r-1")
+    await page.setup()
+    apps_in_order = [a.id for a in page.applications.applications]
+    # ``setup()`` auto-selected the first app.
+    first = page.applications.selected_id
+    assert first is not None
+    # Cycle forward: should land on the next id in the picker's list.
+    await page.cycle_application(1)
+    current_idx = apps_in_order.index(first)
+    expected_next = apps_in_order[(current_idx + 1) % len(apps_in_order)]
+    assert page.applications.selected_id == expected_next
+    # Cascade ran: JobRunsVM is re-scoped to the new app id.
+    assert page.job_runs.application_id == expected_next
+    # Wrap around — keep cycling until we land back on ``first``.
+    for _ in range(len(apps_in_order)):
+        await page.cycle_application(1)
+    assert page.applications.selected_id == expected_next, (
+        "After ``len(apps)`` more cycles starting from ``expected_next``, "
+        "we should be back at ``expected_next`` (one full lap around the ring)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_cycle_application_with_fewer_than_two_apps_is_noop() -> None:
+    """One-app case: nothing to cycle to; the call is a no-op.
+    Zero-app case: same."""
+    page, fake = _make()
+    fake.add_application(app_id="solo", name="only")
+    await page.setup()
+    before = page.applications.selected_id
+    await page.cycle_application(1)
+    assert page.applications.selected_id == before
