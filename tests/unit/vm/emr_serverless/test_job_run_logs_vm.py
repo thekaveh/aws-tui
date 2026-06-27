@@ -466,3 +466,48 @@ async def test_load_lines_capped_at_max_matched_lines(monkeypatch: pytest.Monkey
     # The tail is kept — the last line of the second chunk must be present.
     assert vm.lines[-1] == last_line
     vm.dispose()
+
+
+async def test_cache_hit_preserves_truncation_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second load() for the same target+filter preserves TRUNCATED state from cache."""
+    truncated_chunk = LogChunk(
+        lines=("WARN: truncated",),
+        bytes_read=100 * 1024 * 1024,
+        lines_scanned=5000,
+        matched_count=1,
+        truncated=True,
+    )
+    stream_call_count = 0
+
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    async def _stream_truncated(**kwargs: object):  # type: ignore[return]
+        nonlocal stream_call_count
+        stream_call_count += 1
+        yield truncated_chunk
+
+    monkeypatch.setattr(
+        "aws_tui.vm.emr_serverless.job_run_logs_vm.list_log_files",
+        _list_files,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "aws_tui.vm.emr_serverless.job_run_logs_vm.stream_log",
+        _stream_truncated,
+        raising=False,
+    )
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()  # first call — populates cache with truncated=True
+
+    assert vm.state is LogsState.TRUNCATED
+    assert stream_call_count == 1
+
+    await vm.load()  # second call — should hit cache and preserve TRUNCATED
+
+    assert vm.state is LogsState.TRUNCATED
+    assert stream_call_count == 1  # still 1 — stream not called again
+    assert vm.lines == ("WARN: truncated",)
+    vm.dispose()

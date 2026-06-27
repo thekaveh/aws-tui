@@ -88,8 +88,8 @@ class JobRunLogsVM:
         self._filter: LogFilter = DEFAULT_LOG_FILTER
         # In-flight cancellation token
         self._load_task: asyncio.Task[None] | None = None
-        # Cache: key=(app_id, run_id, file_key, filter_hash)
-        self._cache: dict[tuple[str, str, str, int], tuple[str, ...]] = {}
+        # Cache: key=(app_id, run_id, file_key, filter_hash); value=(lines, truncated)
+        self._cache: dict[tuple[str, str, str, int], tuple[tuple[str, ...], bool]] = {}
 
     # ── Properties (snapshot accessors) ─────────────────────────────────────
 
@@ -234,9 +234,10 @@ class JobRunLogsVM:
                 ),
             )
             if cache_key in self._cache:
-                self._lines = self._cache[cache_key]
+                cached_lines, cached_truncated = self._cache[cache_key]
+                self._lines = cached_lines
                 self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
-                self._set_state(LogsState.READY)
+                self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
             buffered: list[str] = []
             async for chunk in stream_log(
@@ -256,7 +257,7 @@ class JobRunLogsVM:
                 self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
                 self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "progress"))
                 truncated = chunk.truncated
-            self._cache[cache_key] = self._lines
+            self._cache[cache_key] = (self._lines, truncated)
             self._set_state(LogsState.TRUNCATED if truncated else LogsState.READY)
         except ProviderError as exc:
             new_state, self._error_text = map_provider_error(exc)
