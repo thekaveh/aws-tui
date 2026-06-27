@@ -33,6 +33,7 @@ def _detail() -> JobRunDetail:
         spark_submit_parameters="--conf spark.executor.instances=4",
         execution_role_arn="arn:aws:iam::123456789012:role/EmrJobRole",
         duration_ms=240_000,
+        s3_monitoring_log_uri=None,
     )
 
 

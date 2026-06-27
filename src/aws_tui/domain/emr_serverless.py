@@ -127,6 +127,13 @@ class JobRunDetail:
     spark_submit_parameters: str | None
     execution_role_arn: str
     duration_ms: int | None
+    # Parsed from response ``configurationOverrides
+    # .monitoringConfiguration.s3MonitoringConfiguration.logUri``.
+    # ``None`` when the job didn't set up S3 log monitoring (no
+    # monitoringConfiguration block, or no s3MonitoringConfiguration
+    # block within it). The logs pane shows the NO_LOG_CONFIG
+    # placeholder in that case.
+    s3_monitoring_log_uri: str | None
 
 
 __all__ = [
@@ -291,6 +298,12 @@ class EmrServerlessClient:
                 r = resp["jobRun"]
                 spark = r.get("jobDriver", {}).get("sparkSubmit", {})
                 duration_seconds = r.get("totalExecutionDurationSeconds")
+                log_uri = (
+                    r.get("configurationOverrides", {})
+                    .get("monitoringConfiguration", {})
+                    .get("s3MonitoringConfiguration", {})
+                    .get("logUri")
+                )
                 return JobRunDetail(
                     application_id=r["applicationId"],
                     job_run_id=r.get("id", r.get("jobRunId", job_run_id)),
@@ -303,6 +316,7 @@ class EmrServerlessClient:
                     spark_submit_parameters=spark.get("sparkSubmitParameters"),
                     execution_role_arn=r.get("executionRole", ""),
                     duration_ms=(duration_seconds * 1000) if duration_seconds is not None else None,
+                    s3_monitoring_log_uri=log_uri,
                 )
             except Exception as exc:
                 mapped = _map_boto_error(exc)

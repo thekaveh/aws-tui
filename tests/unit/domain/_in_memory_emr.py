@@ -97,6 +97,7 @@ class _InMemoryEmr:
         spark_submit_parameters: str | None = None,
         execution_role_arn: str = "arn:aws:iam::123456789012:role/EmrJobRole",
         duration_ms: int | None = None,
+        s3_monitoring_log_uri: str | None = None,
     ) -> JobRunDetail:
         summary = self._runs.get(application_id, {}).get(job_run_id)
         if summary is None:
@@ -113,6 +114,7 @@ class _InMemoryEmr:
             spark_submit_parameters=spark_submit_parameters,
             execution_role_arn=execution_role_arn,
             duration_ms=duration_ms,
+            s3_monitoring_log_uri=s3_monitoring_log_uri,
         )
         self._details[(application_id, job_run_id)] = d
         return d
@@ -208,6 +210,7 @@ class _InMemoryEmr:
             spark_submit_parameters=spark_submit_parameters,
             execution_role_arn=execution_role_arn,
             duration_ms=None,
+            s3_monitoring_log_uri=None,
         )
         self._details[(application_id, new_id)] = d
         return new_id
