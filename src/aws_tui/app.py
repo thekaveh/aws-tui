@@ -514,7 +514,7 @@ class AwsTuiApp(App[None]):
         narrator maps these into toast text.
         """
         ctx = self._app_ctx
-        if conn.kind == "aws":
+        if conn.kind == "aws" and not ctx.demo:
             try:
                 state = ctx.aws_session.probe_token(conn).state
             except Exception as exc:

@@ -51,41 +51,20 @@ async def test_demo_mode_renders_s3_pane_with_demo_files(tmp_path) -> None:
     """The demo-dev connection's InMemoryFS seed exposes ``etl-input``
     in the S3 file pane.
 
-    Implementation note: in a no-real-AWS-creds environment the boot
-    chain probes SSO tokens for the three ``kind="aws"`` demo
-    connections, finds MISSING for all three, and successfully mounts
-    the s3-compatible ``demo-minio`` connection instead. To exercise the
-    ``demo-dev`` seed data we explicitly call
-    ``switch_connection_with(demo_dev, CONNECTED)`` + ``switch_service``
-    after the boot chain settles — this is the same two-step the
-    production boot chain uses when credentials ARE present, and it
-    routes through ``S3Service.build_vm`` which calls
-    ``s3_fs_factory(demo_dev)`` and returns a freshly seeded
-    ``InMemoryFS``. The ``_mount_service_view`` worker then replaces the
-    DualPane widget so the EntryRow tree reflects the demo-dev data.
+    With the SSO-probe bypass in place (``ctx.demo`` short-circuits
+    ``probe_token``), the natural boot chain reaches ``demo-dev``
+    (first ``kind="aws"`` connection) and mounts its seeded InMemoryFS
+    automatically — no explicit private-method pokes required.
     """
-    from aws_tui.infra.aws_session import TokenState
     from aws_tui.ui.widgets.pane import EntryRow
 
     ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
     app = AwsTuiApp(context=ctx)
     try:
         async with app.run_test() as pilot:
-            # Drain the initial boot chain workers first.
+            # Drain boot chain workers and let the event loop settle.
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
-
-            # Explicitly switch to demo-dev with CONNECTED so the S3
-            # service builds the DualPaneVM backed by the seeded
-            # InMemoryFS (etl-input/, etl-staging/ at root).
-            demo_dev = next(c for c in ctx.connection_resolver.list() if c.name == "demo-dev")
-            await ctx.root_vm.switch_connection_with(demo_dev, TokenState.CONNECTED)
-            await ctx.root_vm.switch_service("s3")
-            # _on_nav_selection_changed does not fire here because
-            # services_menu.selected_id is already "s3" from the boot chain
-            # (no value-change → no PropertyChangedMessage). Force the widget
-            # remount explicitly via the same private method the boot chain uses.
-            await app._mount_service_view("s3")  # type: ignore[attr-defined]
 
             # Drain workers so DualPane.on_mount → VM setup() → InMemoryFS.list
             # completes and the EntryRow widgets are populated.
