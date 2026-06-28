@@ -175,17 +175,47 @@ class NavMenu(Widget, can_focus=True):
             self._after_cursor_move()
 
     def action_commit(self) -> None:
-        """Enter on a row is the same as the cursor landing on
-        it — the master-detail switch already fired on the
-        cursor move. Here purely for parity with the file pane's
-        ``Enter to open`` affordance: a defensive re-execute in
-        case the row hasn't been switched to yet (e.g., the
-        cursor never moved since mount)."""
+        """ENTER on a service row = "go INTO this service": ensure the
+        service is the active one (switching if needed) AND shift
+        Textual focus to the service's default pane.
+
+        User feedback (post-PR-#100): "everytime ENTER is pressed,
+        while inside the menu and on a specific service, then the
+        focus shifted to the next semantically logical pane inside
+        that service's screen. If on S3, I want the focus shifted to
+        the left pane IFF ENTER is pressed. When EMR is selected and
+        ENTER is pressed, I want focus shifted to the job runs and so
+        on."
+
+        Mechanism:
+        1. Drop NavMenu's own Textual focus. Each destination page's
+           ``_maybe_focus_*`` auto-focus is gated on "is NavMenu
+           focused?" (added post-PR-#98 so arrow-walking the rail
+           wouldn't steal focus into the destination pane mid-cursor-
+           walk). For an ENTER commit we WANT focus to leave NavMenu,
+           so we release the gate first.
+        2. If the target service isn't already active, kick off the
+           content-host swap. The new page's ``on_mount`` auto-focus
+           lands focus on its default pane when NavMenu doesn't own
+           focus — handling the swap case asynchronously.
+        3. Call ``app.focus_active_service_pane`` to handle the
+           already-active and already-mounted case (where no
+           ``on_mount`` will fire). When the page isn't mounted yet,
+           this is a silent no-op and step 2's mount-time auto-focus
+           is the safety net.
+        """
         if not self._items:
             return
         target_id = self._items[self._cursor_index].descriptor.id
-        if target_id != self._vm.selected_id:
+        needs_switch = target_id != self._vm.selected_id
+        app = self.app
+        with contextlib.suppress(Exception):
+            app.set_focus(None)
+        if needs_switch:
             self._vm.switch_service_command.execute(target_id)
+        focus_active = getattr(app, "focus_active_service_pane", None)
+        if callable(focus_active):
+            focus_active()
 
     # ── Mouse ────────────────────────────────────────────────────────────────
 
