@@ -83,6 +83,13 @@ class JobRunDetailPane(Widget, can_focus=True):
     def _on_hub_message(self, msg: object) -> None:
         if not isinstance(msg, PropertyChangedMessage):
             return
+        # Sender filter — sibling EMR VMs (JobRunsVM, JobRunLogsVM,
+        # ApplicationsVM) all expose a ``state`` property on the
+        # same hub. Without this, an arrow press on the runs list
+        # would trigger this pane to re-render twice via JobRunsVM
+        # state echoes, then again on detail refresh.
+        if getattr(msg, "sender_object", None) is not self._vm:
+            return
         if msg.property_name in {"detail", "state"}:
             self.call_after_refresh(self._refresh)
 

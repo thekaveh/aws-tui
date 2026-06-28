@@ -195,6 +195,16 @@ class ApplicationPicker(Widget):
     def _on_hub_message(self, msg: object) -> None:
         if not isinstance(msg, PropertyChangedMessage):
             return
+        # Sender filter — the EMR child VMs (JobRunsVM,
+        # JobRunDetailVM, JobRunLogsVM) ALL share this hub AND all
+        # expose ``state`` AND ``selected_id``. Without this, a
+        # cursor move on the runs pane would echo a JobRunsVM
+        # selected_id change here and force a trigger-label
+        # refresh; a detail.refresh()'s state walk would cascade
+        # into here too. The picker only cares about its own
+        # ApplicationsVM.
+        if getattr(msg, "sender_object", None) is not self._vm:
+            return
         # Trigger label depends on the selected app's name + state
         # glyph; refresh it on any of these property changes (cheap).
         # The OptionList rebuild is heavy (``clear_options`` +

@@ -392,6 +392,19 @@ class JobRunsPane(Widget, can_focus=True):
     def _on_hub_message(self, msg: object) -> None:
         if not isinstance(msg, PropertyChangedMessage):
             return
+        # Filter by sender — ALL EMR child VMs (JobRunDetailVM,
+        # JobRunLogsVM, ApplicationsVM, JobRunsVM) share the same
+        # hub AND all expose a ``state`` property. Without the
+        # sender check, arrow-walking the runs list cascades into
+        # ``select_job_run`` → ``await job_run_detail.refresh()``,
+        # whose LOADING → READY transitions fire ``state``
+        # PropertyChangedMessages that THIS pane would otherwise
+        # treat as a reason to ``remove_children`` + re-mount every
+        # run row. That was the residual flicker user reported
+        # post-PR-#100: "the list of emr job runs still flickers
+        # when arrow keys are used to navigate through them".
+        if getattr(msg, "sender_object", None) is not self._vm:
+            return
         if msg.property_name == "state_filter":
             self.call_after_refresh(self._refresh_chips)
             self.call_after_refresh(self._refresh_rows)
