@@ -1,0 +1,282 @@
+name: release
+
+# Two entry points:
+#
+# - ``push: tags: ['v*']`` — the routine release path. Tag a
+#   commit ``vX.Y.Z`` and push: the pipeline runs verify → pypi →
+#   github-release → homebrew-bump.
+#
+# - ``workflow_dispatch`` with ``target = testpypi | pypi`` — the
+#   dry-run lane. ``testpypi`` publishes to test.pypi.org and
+#   skips the GitHub Release + Homebrew bump (rehearses changes
+#   to the release machinery itself without burning a real
+#   version number). ``pypi`` is identical to the tag-push path
+#   but lets the maintainer rerun a failed publish without
+#   re-tagging.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Publish target"
+        type: choice
+        required: true
+        default: "testpypi"
+        options:
+          - testpypi
+          - pypi
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Gate: tag matches __version__ + green tests + clean build ──────────
+  verify:
+    name: verify (tag ↔ version, tests, build)
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      target: ${{ steps.target.outputs.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: install Python 3.12
+        run: uv python install 3.12
+      - name: sync
+        run: uv sync --python 3.12
+
+      # Resolve the target channel: ``testpypi`` for the rehearsal
+      # ``workflow_dispatch``, ``pypi`` for everything else (tag
+      # push OR an explicit ``workflow_dispatch target=pypi``).
+      - name: resolve target
+        id: target
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "target=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=pypi" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The tag-push path requires the tag ref (``vX.Y.Z``) to match
+      # ``aws_tui.__version__`` exactly. The workflow_dispatch path
+      # has no tag; we read ``__version__`` directly and let the
+      # publish job's TestPyPI/PyPI uniqueness check catch a
+      # duplicate.
+      - name: tag-version match
+        id: version
+        run: |
+          PKG_VERSION="$(uv run --python 3.12 python -c 'import aws_tui; print(aws_tui.__version__)')"
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            REF="${{ github.ref_name }}"
+            TAG_VERSION="${REF#v}"
+            if [[ "$TAG_VERSION" != "$PKG_VERSION" ]]; then
+              echo "::error::tag '$REF' does not match aws_tui.__version__='$PKG_VERSION'" >&2
+              exit 1
+            fi
+            echo "tag $REF matches __version__ $PKG_VERSION ✓"
+          else
+            echo "workflow_dispatch — publishing __version__ $PKG_VERSION (no tag check)"
+          fi
+
+      - name: pytest (unit + in-process integration)
+        run: uv run --python 3.12 pytest tests/unit tests/integration -v
+
+      - name: pre-commit (all hooks)
+        run: uv run --python 3.12 pre-commit run --all-files --show-diff-on-failure
+
+      - name: layer rules
+        run: ./scripts/check-layers.sh
+
+      - name: build wheel + sdist
+        run: uv build
+
+      - name: twine check
+        run: uv run twine check dist/*
+
+      - name: upload built artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  # ── PyPI / TestPyPI publish via Trusted Publisher (OIDC) ───────────────
+  publish-pypi:
+    name: publish (${{ needs.verify.outputs.target }})
+    needs: verify
+    runs-on: ubuntu-24.04
+    # Environment gates the publish step on the maintainer's
+    # approval click. ``pypi`` is configured with a required
+    # reviewer in repo Settings; ``testpypi`` is unguarded
+    # (rehearsal lane).
+    environment:
+      name: ${{ needs.verify.outputs.target }}
+      url: ${{ needs.verify.outputs.target == 'pypi' && format('https://pypi.org/project/aws-tui/{0}/', needs.verify.outputs.version) || format('https://test.pypi.org/project/aws-tui/{0}/', needs.verify.outputs.version) }}
+    permissions:
+      # Required for PyPI Trusted Publisher OIDC handshake. NO
+      # secret stored anywhere — GitHub mints a short-lived token
+      # PyPI verifies against the pre-registered repo+workflow.
+      id-token: write
+      contents: read
+    steps:
+      - name: download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: publish to TestPyPI
+        if: needs.verify.outputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          attestations: true
+
+      - name: publish to PyPI
+        if: needs.verify.outputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@v1
+        with:
+          attestations: true
+
+  # ── GitHub Release with the per-version CHANGELOG section ──────────────
+  publish-github:
+    name: github release
+    needs: [verify, publish-pypi]
+    # Only on real PyPI publishes — testpypi is a rehearsal and
+    # shouldn't leave artifacts on the Releases tab.
+    if: needs.verify.outputs.target == 'pypi'
+    runs-on: ubuntu-24.04
+    permissions:
+      # ``contents: write`` is required so ``gh release create``
+      # can attach the wheel + sdist to the new tag's Release.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # Parse the changelog section between ``## [X.Y.Z]`` and the
+      # next ``## [`` header. Awk is portable and runs in ubuntu's
+      # default image without extra setup.
+      - name: extract changelog section
+        id: changelog
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          BODY="$(awk -v ver="$VERSION" '
+            $0 ~ ("^## \\[" ver "\\]") { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md)"
+          if [[ -z "$BODY" ]]; then
+            echo "::error::no changelog section found for [$VERSION]" >&2
+            exit 1
+          fi
+          {
+            echo "body<<EOF"
+            echo "$BODY"
+            echo ""
+            echo "---"
+            echo ""
+            echo "Install: \`pip install aws-tui==$VERSION\` · [PyPI](https://pypi.org/project/aws-tui/$VERSION/) · [Changelog](https://github.com/thekaveh/aws-tui/blob/main/CHANGELOG.md)"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          BODY: ${{ steps.changelog.outputs.body }}
+        run: |
+          # ``--target`` pins the release to the tag's commit (the
+          # workflow_dispatch path may run from any ref; the tag-push
+          # path is already on the tag commit so it's a no-op there).
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes "${BODY}" \
+            dist/*
+
+  # ── Open a bump PR against the Homebrew tap ────────────────────────────
+  bump-homebrew:
+    name: homebrew bump
+    needs: [verify, publish-pypi, publish-github]
+    # Same gate as github-release — testpypi rehearsal should not
+    # touch the Homebrew tap.
+    if: needs.verify.outputs.target == 'pypi'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: thekaveh/homebrew-aws-tui
+          # ``HOMEBREW_TAP_TOKEN`` is a fine-grained Personal
+          # Access Token with ``Contents: read & write`` +
+          # ``Pull requests: read & write`` on the tap repo only.
+          # See docs/RELEASING.md for the one-time setup.
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      # PyPI publishes the sdist with a deterministic URL+sha256;
+      # the formula installs from that sdist. Compute the sha256
+      # directly off the artifact we just published so we don't
+      # race PyPI's CDN.
+      - name: download published sdist
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          PKG="aws_tui-${VERSION}.tar.gz"
+          # Try PyPI's files URL pattern (sdist filename is canonical).
+          curl --fail --location --silent --show-error \
+            -o "$PKG" \
+            "https://files.pythonhosted.org/packages/source/a/aws-tui/$PKG"
+          SHA="$(sha256sum "$PKG" | awk '{print $1}')"
+          echo "PKG_URL=https://files.pythonhosted.org/packages/source/a/aws-tui/$PKG" >> "$GITHUB_ENV"
+          echo "PKG_SHA=$SHA" >> "$GITHUB_ENV"
+
+      - name: bump formula
+        working-directory: tap
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          FORMULA="Formula/aws-tui.rb"
+          if [[ ! -f "$FORMULA" ]]; then
+            echo "::error::$FORMULA not found in tap repo — bootstrap the formula by hand after the first PyPI release" >&2
+            exit 1
+          fi
+          # Replace the url and sha256 lines. The bootstrap formula
+          # follows the standard Language::Python::Virtualenv layout
+          # so these two fields are the only diff per release.
+          sed -i.bak \
+            -e "s|url \".*\"|url \"${PKG_URL}\"|" \
+            -e "s|sha256 \".*\"|sha256 \"${PKG_SHA}\"|" \
+            "$FORMULA"
+          rm "${FORMULA}.bak"
+
+      - name: open bump PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          branch: bump-aws-tui-${{ needs.verify.outputs.version }}
+          title: "aws-tui ${{ needs.verify.outputs.version }}"
+          commit-message: "aws-tui ${{ needs.verify.outputs.version }}"
+          body: |
+            Bump aws-tui to ${{ needs.verify.outputs.version }}.
+
+            - PyPI: https://pypi.org/project/aws-tui/${{ needs.verify.outputs.version }}/
+            - Release: https://github.com/thekaveh/aws-tui/releases/tag/v${{ needs.verify.outputs.version }}
+
+            sha256 computed from the freshly-published sdist.

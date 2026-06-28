@@ -22,7 +22,7 @@ keywords = [
   "windows",
 ]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: System Administrators",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
