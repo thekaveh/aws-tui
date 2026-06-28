@@ -46,7 +46,15 @@ class NavRow(Widget):
     DEFAULT_CSS: ClassVar[str] = """
     NavRow {
         height: 1;
-        padding: 0 1;
+        /* No horizontal padding — match EntryRow exactly so the
+           ribbon glyph (column 0) sits flush against the pane's
+           inner left edge, same as the S3 file pane. User feedback
+           (post-PR-#101): "The thin vertical bar selected item
+           indicator is rendered much closer to the left edge for
+           the file pane (correct and expected behavior) which is
+           not the case for the menu item". EntryRow's CSS
+           (ui/widgets/pane.py) is just ``height: 1`` — mirror that
+           here. */
     }
     """
 
