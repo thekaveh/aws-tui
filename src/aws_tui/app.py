@@ -267,6 +267,7 @@ class AwsTuiApp(App[None]):
         yield BrandBanner(
             theme_name=ctx.initial_theme,
             hub=ctx.hub,
+            demo=ctx.demo,
             id="brand-banner",
         )
         with Horizontal(id="main-area"):
@@ -351,6 +352,17 @@ class AwsTuiApp(App[None]):
         # ``call_after_refresh`` so it runs AFTER Textual's first
         # focus pass instead of being silently undone by it.
         self.call_after_refresh(lambda: self.set_focus(None))
+
+        if ctx.demo:
+            # Spec: one-shot Advisory toast on mount so the user
+            # learns the in-session contract on first run. The
+            # persistent banner subtitle keeps reminding them
+            # afterwards.
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="Demo mode active — try every feature; nothing persists",
+            )
 
     async def _initial_mount_worker(
         self, *, initial_conn: Connection, auth_state: TokenState
@@ -2436,7 +2448,17 @@ def main() -> None:
     saved :class:`CrashReport` is printed here before the exception is
     re-raised so the user knows where the dump landed.
     """
-    app = AwsTuiApp()
+    from aws_tui.demo import is_demo_mode_enabled
+
+    demo = is_demo_mode_enabled()
+
+    if "--version" in sys.argv:
+        status = "enabled" if demo else "disabled"
+        # Match the pip convention: ``project-name 0.8.0``.
+        print(f"aws-tui {__version__} (demo: {status})")
+        return
+
+    app = AwsTuiApp(context=build_app_context(demo=demo))
     try:
         app.run()
     except BaseException as exc:

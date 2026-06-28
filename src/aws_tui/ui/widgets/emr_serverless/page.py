@@ -152,9 +152,14 @@ class EmrServerlessPage(Widget):
         # re-fetches runs at most every ~6 min instead of every
         # ~30 s — orders of magnitude quieter without giving up
         # responsiveness once something is running.
-        self.set_interval(60.0, self._tick_applications, name="emr-poll-apps")
-        self.set_interval(60.0, self._tick_runs, name="emr-poll-runs")
-        self.set_interval(30.0, self._tick_detail, name="emr-poll-detail")
+        demo_ctx = getattr(self.app, "_app_ctx", None)
+        demo_active = bool(demo_ctx and getattr(demo_ctx, "demo", False))
+        apps_cadence = 5.0 if demo_active else 60.0
+        runs_cadence = 5.0 if demo_active else 60.0
+        detail_cadence = 5.0 if demo_active else 30.0
+        self.set_interval(apps_cadence, self._tick_applications, name="emr-poll-apps")
+        self.set_interval(runs_cadence, self._tick_runs, name="emr-poll-runs")
+        self.set_interval(detail_cadence, self._tick_detail, name="emr-poll-detail")
         # Land Textual focus on the LEFT pane so the user gets the
         # same "arrow keys move the cursor immediately" UX as the S3
         # page. Without this, neither pane shows the
