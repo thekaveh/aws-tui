@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+These changes have landed on ``main`` since the v0.8.0 cut commit
+(``cd2c9e8``) but have not yet been packaged as a release. The v0.8.0
+PyPI publish is gated on
+[pypi/support#11264](https://github.com/pypi/support/issues/11264)
+(name-similarity exception for ``aws-tui`` vs ``awstui``). All work
+below will either ship as v0.8.1 (patch — UI polish + bug fixes) or
+roll into v0.9.0 if the maintainer chooses to recategorise the new
+nav-focus + demo-mode behaviour as feature work; the version label
+will be set at cut time.
+
+### Added
+
+- **Demo mode** (PR #97 + #104 polish). ``AWS_TUI_DEMO=1`` or
+  ``--demo`` boots the full UI against seeded in-memory S3 + EMR
+  fakes — no AWS credentials, no real network calls. Persistent
+  ``DEMO MODE — no real AWS calls`` chip prepended to the
+  BrandBanner subtitle (PR #104 keeps the credit pedigree visible
+  after the chip). See ``docs/superpowers/specs/2026-06-28-demo-mode-design.md``.
+- **NavMenu ENTER opens the service** (PR #101). Pressing ``Enter``
+  on a service row in the rail now shifts focus to that service's
+  default pane — S3 → LEFT pane, EMR → Job Runs, Settings → first
+  section's ``CollapsibleTitle``. ``NavMenu.action_commit`` drops
+  rail focus before calling the new ``App.focus_active_service_pane``;
+  page-side auto-focus is gated on "is NavMenu still focused?" so
+  arrow-walking the rail still keeps focus there (only ``Enter``
+  hands focus off). New ``DualPane.focus_left_pane`` +
+  ``SettingsView.focus_default``.
+
+### Changed
+
+- ``docs/`` + ``ui/widgets/settings_view.py``: retargeted the
+  ``Deferred / v0.8 roadmap`` references to ``Deferred / v0.9
+  roadmap`` (and ``coming in v0.8`` placeholders to
+  ``coming in v0.9``) since v0.8.0 shipped without those items.
+  Historical CHANGELOG entries kept their original wording.
+- ``assets/screenshots/aws-tui-running.png``: refreshed the README
+  hero image to a current EMR + demo-mode capture (PR #106).
+
+### Fixed
+
+- **EMR + UI polish train.** Eight follow-up PRs (#96, #98, #99,
+  #100, #102, #103, #104, #105) addressed user-reported issues
+  found while exercising the EMR + nav-rail surface:
+  - markup crash + polling cadence + NavMenu pane-parity (#96);
+  - NavMenu polish + EMR demo cadence (#98) — four items batched;
+  - focus-steal + redraw flash + WARN-noise in default log filter
+    (#99) — drop WARN from ``DEFAULT_LOG_FILTER``;
+  - no row / option re-mount on arrow-walk (#100) — JobRunsPane uses
+    a class-flip selection repaint, ApplicationPicker diff-guards
+    the option rebuild;
+  - NavRow ribbon flush with the pane edge (#102) — drop the
+    horizontal padding so column 0 is the ribbon, matching EntryRow;
+  - filter EMR hub messages by sender (#103) — kill cross-VM
+    redraws on the shared MessageHub when sibling VMs fire ``state``
+    or ``selected_id`` echoes;
+  - preserve the credit pedigree in the demo banner subtitle
+    (#104) — prepend the DEMO chip instead of replacing;
+  - Settings NavRow keeps the ``-selected`` highlight (#105) —
+    drop the redundant per-theme override that out-specificity'd
+    ``NavRow.-selected``.
+- **S3 pagination defensive break.** ``S3FS.list()`` and
+  ``S3FS.delete()`` no longer infinite-loop when an S3-compatible
+  provider returns ``IsTruncated=True`` without a
+  ``NextContinuationToken`` (MinIO has historically shipped this
+  edge case). Pattern now matches ``emr_logs.py::list_log_files``.
+
+### Docs
+
+- ``docs/superpowers/specs/`` — added the demo-mode and
+  cross-platform-readiness design specs (in ``fc55c6a``).
+- ``SECURITY.md`` — supported-version table now declares 0.8.x as
+  latest; ``docs/homebrew-bootstrap.md`` adopts the §3.9 numbered
+  heading mandate; ``docs/recording-todo.md`` retargets to "v0.8.0
+  docs feel done".
+- README §4 — indexed three previously-orphaned post-tag specs
+  (public-release-pipeline, cross-platform-readiness, demo-mode)
+  and the maintainer-facing ``docs/RELEASING.md`` +
+  ``docs/homebrew-bootstrap.md``.
+
+### Build
+
+- Dependabot bumps for ``actions/upload-artifact`` (4→7, PR #1) and
+  ``astral-sh/setup-uv`` (3→7, PR #2). Follow-up alignment commit
+  brought ``release.yml`` to the same versions (``download-artifact``
+  bumped to v7 in lockstep) so the CI and publish pipelines share
+  action majors.
+
 ## [0.8.0] - 2026-06-27
 
 ### Added
