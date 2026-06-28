@@ -28,7 +28,6 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Descend into directory / bucket | `Enter` | |
 | Ascend one level | `Backspace` or `←` | |
 | Switch pane focus | `Tab` / `Shift+Tab` | |
-| Page up / down | `PageUp` / `PageDown` | |
 | Top / bottom | `g` / `G` | |
 | Toggle hidden files (LocalFS) | `.` | |
 
@@ -48,7 +47,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Action | Default | Notes |
 |---|---|---|
 | Copy across panes | `c` | Streams through `CrossFsCopy`, shows confirm modal |
-| Move across panes | `pane.move` action — *(deferred)* | `m` is currently bound to the nav-menu toggle (§1.5); the move handler is not yet wired in `AwsTuiApp` |
+| Move across panes | `pane.move` action — *(deferred)* | The move handler is not yet wired in `AwsTuiApp` — `m` is no longer reserved for the nav-menu toggle (the rail is always visible post-PR-#94 — see §1.5) so `m` is available for the move action when the deferred wiring lands |
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
 | New folder | `pane.new` action — *(deferred)* | No handler wired in v0.7.x |
 | Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
@@ -70,8 +69,15 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 
 | Action | Default | Notes |
 |---|---|---|
-| Toggle nav menu (collapsed ↔ expanded) | `m` | The left rail shows services on top and Settings docked at the bottom. Also toggles via the hamburger glyph on the rail's top-left. |
+| Open Settings | `,` (comma) | Opens the in-app Settings nav page directly. Equivalent to arrow-keying down to the ⚙ Settings row in the rail and pressing `Enter`. |
 | Cycle focused pane source | `Shift+S` (`S`) | Steps through `local` → each AWS profile (`aws s3 · {profile} · {region}`) → each `s3-compatible` connection (`s3-compatible · {name} · {endpoint}`) → wrap. The fastest way to jump between AWS accounts or s3-compatible endpoints — one keystroke per source, no command-palette modal. New connections added via the in-app Settings page (or `~/.config/aws-tui/config.toml`) join the cycle automatically. Either pane can be on any of the four `{S3-class, local}` combinations independently. |
+
+> **Nav-menu visibility:** the left rail is always visible at a single
+> fixed width and shows TEXT labels (Settings docked at the bottom as
+> the ⚙ glyph). The pre-PR-#94 `m`-key collapse/expand toggle was
+> dropped because there is no longer a collapsed mode to toggle into;
+> `m` is unbound by default and reserved for the `pane.move` action
+> (§1.3) when its deferred wiring lands.
 
 ### 1.6. Connection / auth
 
@@ -92,7 +98,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 These are wired by `EmrServerlessPage` (added post-tag, PR #76; arrow-
 key routing added by PR #78; layout overhaul by PR #80; clone-job-run
 modal added by PR #83). The EMR page is mounted in place of the S3
-dual-pane when the 💥 EMR nav peer is selected. Bindings are
+dual-pane when the **EMR** nav row is selected. Bindings are
 App-level `priority=True` and short-circuit through
 `_emr_active_pane()` before the dual-pane guard fires.
 
@@ -146,11 +152,11 @@ effect is achievable by editing
 fork. Bind ahead of time in your config and the wiring will pick them
 up once it lands.
 
-The bindings that **are** wired today (in v0.7.x) and routed straight
+The bindings that **are** wired today (in v0.8.x) and routed straight
 through `AwsTuiApp.BINDINGS` rather than the keymap store: `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
-`Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `c`, `d`, `m`, `S`
-(Shift+S), `Shift+↑`, `Shift+↓`.
+`Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
+`c`, `d`, `S` (Shift+S), `Shift+↑`, `Shift+↓`.
 
 ## 3. Action IDs
 
@@ -179,7 +185,7 @@ lands (see the §1 status note).
 | `pane.toggle_select` | `space` (multi-select) | *(deferred)* | Add / remove from selection |
 | `pane.select_all` | `a` | *(deferred)* | Select all in pane |
 | `pane.copy` | `c` | ✓ | Copy marked entries to other pane |
-| `pane.move` | `m` | *(deferred)* — `m` is in use by the nav-menu toggle | Move marked entries (or rename one) |
+| `pane.move` | `m` | *(deferred)* | Move marked entries (or rename one) — `m` is no longer reserved for the nav-menu toggle (dropped in PR #94), so the default is available when the wiring lands |
 | `pane.delete` | `d` | ✓ | Delete marked entries (confirms) |
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
 | `pane.refresh` | `r` | ✓ | Re-run `provider.list()` |
@@ -191,10 +197,10 @@ These are the action IDs `KeymapStore.DEFAULT_BINDINGS` actually
 registers. Overlay any of them in your `[keybindings]` table; any other
 id raises `UnknownAction` at startup.
 
-`Shift+↑` / `Shift+↓` (extend-selection) and `m` (nav menu
-toggle) are wired directly in `AwsTuiApp.BINDINGS` rather than the
-keymap store, because they're either modifier combinations or static
-UI toggles. They are not currently rebindable through `[keybindings]`.
+`Shift+↑` / `Shift+↓` (extend-selection) are wired directly in
+`AwsTuiApp.BINDINGS` rather than the keymap store, because they're
+modifier combinations. They are not currently rebindable through
+`[keybindings]`.
 
 > **Commands strip layout (PR #83)** — the bottom legend is now ONE
 > concatenated row (single `#hint-strip` container), service-specific
