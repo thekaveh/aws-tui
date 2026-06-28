@@ -104,13 +104,16 @@ async def test_emr_nav_row_hidden_on_s3_compatible_connection(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_emr_page_tab_cycles_between_panes_not_to_nav_rail(tmp_path: Path) -> None:
-    """Spec §2 / PR #66 contract: Tab on the EMR page cycles LEFT ↔ RIGHT,
-    NEVER falls through to the App-level priority binding that focuses
-    the nav rail. Mirrors the S3 page's Tab-cycle contract.
-
-    After Task 9, the RIGHT pane is JobRunLogsPane (focusable, the logs
-    viewer). The detail pane is non-focusable display above the logs.
+async def test_emr_page_tab_cycle_includes_nav_then_left_detail_logs(tmp_path: Path) -> None:
+    """Post-PR-#94 contract: Tab on the EMR page cycles through 4
+    slots — NAV → LEFT → DETAIL → LOGS → NAV (and reverse on
+    Shift+Tab). User feedback: "I also want the menu pane be
+    treated like any other pane in the app, which mean tab
+    switching should allow for it being among the switchable panes
+    to be selected / focused: … On EMR, should be able to switch
+    among the menu, left application job runs pane, and the right
+    job details pane" — clarified in follow-up as 4-slot to keep
+    Logs reachable for ``Enter``-to-load.
     """
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
@@ -125,24 +128,34 @@ async def test_emr_page_tab_cycles_between_panes_not_to_nav_rail(tmp_path: Path)
             await pilot.pause()
 
             left = pilot.app.query_one(JobRunsPane)
+            right_detail = pilot.app.query_one(JobRunDetailPane)
             right_logs = pilot.app.query_one(JobRunLogsPane)
             nav = pilot.app.query_one(NavMenu)
 
-            # Focus the LEFT pane first.
-            left.focus()
+            # The page lands focus on the LEFT pane on mount.
             await pilot.pause()
+            assert left.has_focus or left.has_focus_within
 
-            # Press Tab — must move focus to RIGHT pane (logs), NOT to nav rail.
+            # LEFT → DETAIL.
             await pilot.press("tab")
             await pilot.pause()
-
-            assert pilot.app.focused is right_logs or right_logs.has_focus_within, (
-                f"Tab on EMR LEFT pane focused {pilot.app.focused!r} — expected RIGHT pane (logs). "
-                f"This is the spec §2 'exactly 2 slots' regression "
-                f"(App-level priority Tab binding hijacking)."
+            assert right_detail.has_focus or right_detail.has_focus_within, (
+                f"Tab on LEFT should move to DETAIL; got {pilot.app.focused!r}."
             )
-            assert not nav.has_focus_within, (
-                "Tab on EMR page focused the nav rail — same UX bug PR #66 fixed for S3."
+
+            # DETAIL → LOGS.
+            await pilot.press("tab")
+            await pilot.pause()
+            assert right_logs.has_focus or right_logs.has_focus_within, (
+                f"Tab on DETAIL should move to LOGS; got {pilot.app.focused!r}."
+            )
+
+            # LOGS → NAV (wraps to nav menu — the post-PR-#94
+            # contract adds NavMenu as a real cycle slot).
+            await pilot.press("tab")
+            await pilot.pause()
+            assert nav.has_focus_within, (
+                f"Tab on LOGS should move to NAV; got {pilot.app.focused!r}."
             )
     finally:
         with contextlib.suppress(Exception):
@@ -501,16 +514,12 @@ async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_emr_tab_cycle_visits_runs_then_logs(tmp_path: Path) -> None:
-    """Task 14: End-to-end Tab cycle through 2-slot pane rotation.
-
-    The EMR page's 2-slot Tab cycle visits LEFT (JobRunsPane) ↔ RIGHT
-    (JobRunLogsPane) and does NOT include the detail pane
-    (which is non-focusable display above the logs).
-
-    This test seeds an application + job run, mounts the page,
-    focuses the LEFT pane, and asserts Tab rotates LEFT → RIGHT and
-    back to LEFT, never touching the detail pane.
+async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> None:
+    """Post-PR-#94 cycle now includes the Detail pane as a real
+    slot — Detail's ``can_focus = True``. Verifies one full
+    rotation LEFT → DETAIL → LOGS → NAV → LEFT lands each slot
+    once and detail isn't skipped (the prior 2-slot cycle did skip
+    it).
     """
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
@@ -529,42 +538,27 @@ async def test_emr_tab_cycle_visits_runs_then_logs(tmp_path: Path) -> None:
             left = pilot.app.query_one(JobRunsPane)
             right_logs = pilot.app.query_one(JobRunLogsPane)
             right_detail = pilot.app.query_one(JobRunDetailPane)
+            nav = pilot.app.query_one(NavMenu)
 
-            # Focus the LEFT pane.
+            # Focus the LEFT pane (the page auto-focuses it on mount).
             left.focus()
             await pilot.pause()
-            assert left.has_focus or left.has_focus_within, (
-                "Precondition: LEFT pane must be focused before testing Tab cycle"
-            )
+            assert left.has_focus or left.has_focus_within
 
-            # Press Tab → should move to RIGHT pane (logs).
+            # LEFT → DETAIL → LOGS → NAV → LEFT (one full rotation).
             await pilot.press("tab")
             await pilot.pause()
-            assert right_logs.has_focus or right_logs.has_focus_within, (
-                f"Tab on LEFT pane should focus RIGHT pane (logs). "
-                f"Got {pilot.app.focused!r}. "
-                f"This is the 2-slot Tab cycle spec §2 regression."
-            )
-            assert not right_detail.has_focus, (
-                "Tab cycle must NOT visit the detail pane (non-focusable display)."
-            )
-            assert not right_detail.has_focus_within, (
-                "Tab cycle must NOT visit the detail pane (non-focusable display)."
-            )
-
-            # Press Tab again → should move back to LEFT pane.
+            assert right_detail.has_focus or right_detail.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert right_logs.has_focus or right_logs.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert nav.has_focus_within
             await pilot.press("tab")
             await pilot.pause()
             assert left.has_focus or left.has_focus_within, (
-                f"Second Tab on RIGHT pane should cycle back to LEFT. "
-                f"Got {pilot.app.focused!r}. "
-                f"The 2-slot cycle is LEFT ↔ RIGHT-logs only."
-            )
-            assert not right_detail.has_focus, (
-                "Detail pane must never receive focus during Tab cycle."
-            )
-            assert not right_detail.has_focus_within, (
-                "Detail pane must never receive focus during Tab cycle."
+                f"Full Tab rotation should return to LEFT; got {pilot.app.focused!r}."
             )
     finally:
         with contextlib.suppress(Exception):

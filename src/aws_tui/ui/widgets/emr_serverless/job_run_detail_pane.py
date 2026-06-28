@@ -32,7 +32,7 @@ _TERMINAL_GLYPH: dict[str, str] = {
 }
 
 
-class JobRunDetailPane(Widget, can_focus=False):
+class JobRunDetailPane(Widget, can_focus=True):
     DEFAULT_CSS: ClassVar[str] = """
     JobRunDetailPane {
         height: 1fr;

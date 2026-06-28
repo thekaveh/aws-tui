@@ -189,7 +189,10 @@ class AwsTuiApp(App[None]):
         Binding("comma", "open_settings", "Settings", show=True, priority=True),
         Binding("c", "copy", "Copy", show=True, priority=True),
         Binding("d", "delete", "Delete", show=True, priority=True),
-        Binding("m", "toggle_services", "Menu", show=True, priority=True),
+        # ``m`` (toggle nav rail expand/collapse) was dropped in the
+        # nav-as-pane rework — the rail is always visible at a single
+        # fixed width and shows TEXT labels (no icons), so there is
+        # nothing to toggle.
         Binding("S", "swap_source", "Swap source", show=True, priority=True),
         Binding("shift+up", "mark_up", "Mark ↑", show=False, priority=True),
         Binding("shift+down", "mark_down", "Mark ↓", show=False, priority=True),
@@ -996,36 +999,31 @@ class AwsTuiApp(App[None]):
         return emr_page.left_pane
 
     def action_switch_focus(self) -> None:
-        """2-slot Tab cycle on the S3 screen: LEFT pane ↔ RIGHT pane.
+        """Tab cycle. NavMenu is a regular slot — user feedback
+        (post-PR-#93): "I also want the menu pane be treated like
+        any other pane in the app, which mean tab switching should
+        allow for it being among the switchable panes to be
+        selected / focused".
 
-        Earlier variants (PRs #59 → #61 → #62) folded the NavMenu into
-        the Tab cycle so users could reach the rail without the mouse.
-        In practice the rail steps read as "idle switches" — the user
-        is operating in the panes, and being yanked into a narrow column
-        full of icons that ALSO had no obvious visual focus indicator
-        broke the mental model. The user explicitly asked: "let's keep
-        the tab switching to cycle through the left and right tabs only
-        for now and let's not cause it to focus the menu column." So
-        Tab on the S3 screen is now a simple toggle between LEFT and
-        RIGHT panes — nothing else.
+        Slot order:
 
-        The NavMenu remains reachable via the ``m`` keybinding (toggles
-        collapsed/expanded) and via direct click; arrow keys still
-        navigate the rail once it has Textual focus from those entry
-        points.
+        - **S3** (3-slot): NAV → LEFT → RIGHT
+        - **EMR** (4-slot): NAV → LEFT → DETAIL → LOGS — delegated
+          to :meth:`EmrServerlessPage.action_cycle_panes_forward`.
+        - **Settings-only** (no DualPane mounted): NAV ↔ Content
+          (the previous 2-way preserved so keyboard users can leave
+          the Settings page without a mouse).
 
-        For the Settings-only screen (no DualPane mounted) the existing
-        2-way cycle between the content host and the NavMenu is kept
-        so keyboard users can still leave the Settings page without a
-        mouse.
-
-        Decoupled from Textual focus on the pane side (Pane widgets
-        don't accept Textual focus; they use a CSS ``-focused`` class
-        toggled by ``DualPaneVM``).
+        Pane widgets decline Textual focus by design (they use a CSS
+        ``-focused`` class toggled by ``DualPaneVM``); the NavMenu
+        DOES accept Textual focus (it's an OptionList container).
+        We bridge the two: ``self.set_focus(nav-list)`` for the NAV
+        slot, then ``self.set_focus(None)`` when moving to a pane
+        slot so Textual's focus chain stops chasing the OptionList.
         """
-        # EMR page owns its own 2-slot Tab / Shift+Tab cycle.
-        # Delegate immediately so the App-level priority binding never
-        # falls through to the Settings/nav-rail branch below.
+        # EMR page owns its own 4-slot Tab cycle. Delegate
+        # immediately so the App-level priority binding never falls
+        # through to the S3 / Settings branches below.
         with contextlib.suppress(Exception):
             emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
             emr_page.action_cycle_panes_forward()
@@ -1037,32 +1035,51 @@ class AwsTuiApp(App[None]):
             nav = None
         dual = self._dual_pane()
 
-        # If the NavMenu currently has Textual focus, give it back to
-        # the panes. Two callers can land us here: (a) the user
-        # arrow-keyed into the rail and now wants to leave it, or (b)
-        # the Settings page is mounted and the user is cycling back to
-        # the content host.
+        if dual is None:
+            # Settings-only screen — 2-way cycle between content
+            # host and NavMenu so keyboard users can leave the
+            # Settings page without a mouse.
+            if nav is not None:
+                if self._nav_has_focus():
+                    with contextlib.suppress(Exception):
+                        self.set_focus(None)
+                else:
+                    with contextlib.suppress(Exception):
+                        self._focus_active_nav_list(nav)
+            return
+
+        # S3 screen — 3-slot ring: NAV → LEFT → RIGHT → NAV.
+        # NavMenu is the only slot that accepts Textual focus; the
+        # two file panes don't (they decline focus by design and
+        # display a CSS ``-focused`` class via DualPaneVM). We
+        # derive the current slot from the combination of "does
+        # Textual focus sit on the NavMenu" + ``DualPaneVM.focused``.
+        switch_focus = getattr(dual, "switch_focus_command", None)
         if nav is not None and self._nav_has_focus():
+            # NAV → LEFT. Drop NavMenu focus first so Textual's
+            # focus chain stops chasing the OptionList, then nudge
+            # DualPaneVM onto LEFT (toggle only if currently RIGHT
+            # — ``switch_focus_command`` is a flip, no set-LEFT
+            # primitive exists on the VM).
             with contextlib.suppress(Exception):
                 self.set_focus(None)
+            focused_pane = getattr(dual, "focused", None)
+            focused_name = getattr(focused_pane, "value", None)
+            if focused_name != "left" and switch_focus is not None:
+                switch_focus.execute()
             return
-
-        if dual is None:
-            # No dual pane (Settings hosted) — keep the 2-way
-            # content-host ↔ NavMenu cycle so keyboard users can
-            # leave the Settings page.
-            if nav is not None:
-                with contextlib.suppress(Exception):
-                    self._focus_active_nav_list(nav)
+        focused_pane = getattr(dual, "focused", None)
+        focused_name = getattr(focused_pane, "value", None)
+        if focused_name == "left":
+            # LEFT → RIGHT (flip the VM's focused pane).
+            if switch_focus is not None:
+                switch_focus.execute()
             return
-
-        # S3 screen, neither pane has Textual focus (Pane widgets
-        # decline it by design). Toggle the VM-tracked focused pane;
-        # ``DualPane._sync_focus`` flips the ``-focused`` CSS class on
-        # the two Pane widgets so the active one lights up.
-        cmd = getattr(dual, "switch_focus_command", None)
-        if cmd is not None:
-            cmd.execute()
+        # RIGHT → NAV (default branch — also catches the boot-time
+        # "no pane focused yet" state).
+        if nav is not None:
+            with contextlib.suppress(Exception):
+                self._focus_active_nav_list(nav)
 
     def _focus_active_nav_list(self, nav: NavMenu) -> None:
         """Focus whichever NavMenu OptionList owns the currently-
@@ -1584,21 +1601,6 @@ class AwsTuiApp(App[None]):
             if used_cursor_fallback:
                 for entry in targets:
                     entry.set_marked(False)  # type: ignore[attr-defined]
-
-    def action_toggle_services(self) -> None:
-        """Toggle the nav rail between collapsed (icon-only) and
-        expanded (icon + label). The rail is always visible —
-        previously this method also flipped a separate ``-expanded``
-        visibility class that toggled the rail between
-        ``display: none`` and ``display: block``; that state was
-        dropped so a minimally collapsed icon column is always
-        present, mirroring the macOS Settings sidebar / VS Code
-        activity-bar idiom the user asked for."""
-        try:
-            nav = self.query_one("#nav-menu", NavMenu)
-        except Exception:
-            return
-        nav.toggle_collapsed()
 
     def action_cycle_theme(self) -> None:
         """Cycle to the next theme without opening the picker modal —

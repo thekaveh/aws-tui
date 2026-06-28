@@ -4,7 +4,6 @@ visual decisions:
 - ``BrandBanner`` is mounted at the top
 - The old top-strip ``StatusBar`` widget is NOT present (identity is
   surfaced via the pane border subtitle instead)
-- ``NavMenu`` starts collapsed
 - ``HintLegend`` includes the action ids the user can reach via
   bindings: t themes, T cycle, S swap source, c copy, d delete,
   enter open, tab switch, r refresh, ? help, q quit
@@ -20,7 +19,6 @@ from textual.widgets import Static
 from aws_tui.app import AwsTuiApp
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.hint_legend import HintLegend
-from aws_tui.ui.widgets.nav_menu import NavMenu
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -43,19 +41,6 @@ async def test_chrome_has_banner_no_statusbar(
         from aws_tui.ui.widgets.status_bar import StatusBar
 
         assert len(app.query(StatusBar)) == 0
-
-
-@pytest.mark.asyncio
-async def test_services_menu_starts_collapsed(
-    app_context_factory: AppContextBuilder,
-) -> None:
-    ctx = app_context_factory()
-    app = AwsTuiApp(ctx)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        await pilot.pause()
-        menu = app.query_one(NavMenu)
-        assert menu.is_collapsed is True
 
 
 @pytest.mark.asyncio
