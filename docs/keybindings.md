@@ -2,20 +2,21 @@
 
 > Mirror of spec §4.2. Fully customizable via the `[keybindings]`
 > section of `~/.config/aws-tui/config.toml` *once the input-router
-> wiring lands* — see the v0.7.x status note at the end of §1 and
-> the **Deferred / v0.8 roadmap** block in `CHANGELOG.md`.
+> wiring lands* — see the v0.8.x status note at the end of §1 and
+> the **Deferred / v0.9 roadmap** block in the `[0.8.0]` section of
+> `CHANGELOG.md`.
 
 The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 (terminals intercept it). Letter-driven, with the command palette
 (`:` or `Ctrl+K`) as the universal escape hatch.
 
-> **v0.7.x wiring status:** rows below tagged `(deferred)` are
+> **v0.8.x wiring status:** rows below tagged `(deferred)` are
 > declared in `KeymapStore.DEFAULT_BINDINGS` but the matching
 > `action_*` handler has not yet been added to `AwsTuiApp`. They
 > remain valid action IDs (your `[keybindings]` overlay can rebind
 > them today; the binding takes effect once the deferred wiring
-> ships). See the **Deferred / v0.8 roadmap** block in `CHANGELOG.md`
-> for the full list.
+> ships). See the **Deferred / v0.9 roadmap** block in the `[0.8.0]`
+> section of `CHANGELOG.md` for the full list.
 
 ## 1. Default bindings
 
@@ -133,12 +134,13 @@ The default map is declared in `infra/keymap_store.py` and merged with
 your overlay; unknown action ids are rejected so a typo in your config
 raises a startup error instead of silently dropping a binding.
 
-**v0.7.x status**: the `KeymapStore` accepts the `[keybindings]`
+**v0.8.x status**: the `KeymapStore` accepts the `[keybindings]`
 overlay via its constructor and validates every action id, but the
 composition root does not yet read the overlay from `config.toml` —
 that wiring is part of the input-router work deferred from M6 (see
 [cookbook.md §3](cookbook.md#3-customize-a-keybinding) and the
-**Deferred / v0.8 roadmap** block in `CHANGELOG.md`). Today the same
+**Deferred / v0.9 roadmap** block in the `[0.8.0]` section of
+`CHANGELOG.md`). Today the same
 effect is achievable by editing
 `src/aws_tui/infra/keymap_store.py::DEFAULT_BINDINGS` directly in a
 fork. Bind ahead of time in your config and the wiring will pick them

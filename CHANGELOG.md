@@ -1443,9 +1443,9 @@ import in `app.py.on_mount` moved to a module-level import. (Items
 folded into the unified `### Removed` section above; retained here for
 provenance.)
 
-### Deferred / v0.8 roadmap
+### Deferred / v0.9 roadmap
 
-These items are spec'd but explicitly not wired in v0.7.x. They are
+These items are spec'd but explicitly not wired in v0.8.x. They are
 tracked so the next minor release can pick them up without rediscovery:
 
 - **Quick Look (entire feature)** — `Space` on a file is spec'd to

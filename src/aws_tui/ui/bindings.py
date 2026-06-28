@@ -96,7 +96,7 @@ class BindingResolver:
         ``AwsTuiApp`` today but the BINDINGS field is still a
         hard-coded ``ClassVar``, so ``ActionRegistry.invoke`` does not
         yet sit on the runtime path (tracked in
-        ``CHANGELOG.md`` ▸ ``[Unreleased] Deferred / v0.8 roadmap``).
+        ``CHANGELOG.md`` ▸ ``[0.8.0] Deferred / v0.9 roadmap``).
         Visible only when the action id is among the chip-worthy
         app/pane actions; auxiliary aliases (``ctrl+c`` for quit,
         ``shift+tab`` for back-focus) are emitted with ``show=False``

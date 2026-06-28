@@ -138,7 +138,7 @@ show up as `s3-compatible · {name} · {endpoint}`. Tap
 should populate immediately.
 
 > The dedicated command-palette path (`: connection switch ▸ minio-local`)
-> is spec'd but deferred to v0.8 — in v0.7.x ``:`` opens the
+> is spec'd but deferred to v0.9 — in v0.8.x ``:`` opens the
 > help overlay as a placeholder. ``Shift+S`` is the one-keystroke
 > equivalent today.
 
@@ -322,7 +322,7 @@ Set the action to an empty list:
 
 In a future release you'll be able to trigger the action through
 the command palette (`:` then search "delete"); the palette is
-spec'd but deferred to v0.8, so for v0.7.x an empty
+spec'd but deferred to v0.9, so for v0.8.x an empty
 `[keybindings]` value effectively removes the action until you
 rebind it.
 

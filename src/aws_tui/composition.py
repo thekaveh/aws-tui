@@ -173,7 +173,7 @@ def build_app_context(
             extra={"error": str(exc), "error_type": type(exc).__name__},
         )
         initial_theme = "carbon"
-    # The CHANGELOG ``### Deferred / v0.8 roadmap`` entry promises
+    # The CHANGELOG ``### Deferred / v0.9 roadmap`` entry promises
     # that ``[keybindings]`` overlays in ``config.toml`` "parse and
     # validate but do not yet affect the live keymap" — wiring the
     # overlay into ``KeymapStore`` is what delivers the parse-and-

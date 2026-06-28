@@ -27,9 +27,10 @@ Linux, and Windows. Powered by
   across panes with `c` and `d` (confirm modal first); multi-select via
   `Shift+↑/↓` cursor extension, modifier+click, or persistent marks.
   `m` toggles the left-rail nav menu. Move, rename, and the dedicated
-  `v` multi-select-mode entry point are spec'd but deferred to v0.8 —
+  `v` multi-select-mode entry point are spec'd but deferred to v0.9 —
   see [`docs/keybindings.md`](docs/keybindings.md) §1.4 and the
-  `[Unreleased] Deferred` block of `CHANGELOG.md`.
+  `Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
+  `CHANGELOG.md`.
 - **One-key source switcher.** `Shift+S` cycles the focused pane
   through **every available source** in order: `local` → each AWS
   profile (`aws s3 · {profile} · {region}`) → each `s3-compatible`

@@ -68,8 +68,8 @@ an `(auto)` badge in the picker.
 > The dedicated command-palette path
 > (`: connection materialize <name>`) for promoting an
 > auto-discovered AWS profile into a real `[connections.*]` block is
-> spec'd but deferred to v0.8 — the palette doesn't register
-> connection-management entries in v0.7.x. To materialize today, add
+> spec'd but deferred to v0.9 — the palette doesn't register
+> connection-management entries in v0.8.x. To materialize today, add
 > the `[connections.<name>]` block to `~/.config/aws-tui/config.toml`
 > by hand (the schema is shown in §2 above).
 

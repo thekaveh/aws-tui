@@ -59,19 +59,19 @@ class SettingsView(Widget):
             ):
                 yield S3ConnectionsPanel(vm=self._vm.s3, hub=self._hub)
             with Collapsible(
-                title="Themes (coming in v0.8)",
+                title="Themes (coming in v0.9)",
                 collapsed=True,
                 disabled=True,
                 id="section-themes",
             ):
-                yield Static("This section is coming in v0.8.")
+                yield Static("This section is coming in v0.9.")
             with Collapsible(
-                title="Keymap (coming in v0.8)",
+                title="Keymap (coming in v0.9)",
                 collapsed=True,
                 disabled=True,
                 id="section-keymap",
             ):
-                yield Static("This section is coming in v0.8.")
+                yield Static("This section is coming in v0.9.")
 
     def on_mount(self) -> None:
         # Land focus on the first (non-disabled) Collapsible's
