@@ -540,12 +540,6 @@ NavMenu > Vertical {
 NavMenu > #menu-settings-rows {
     border-top: solid $rule-dim;
 }
-NavMenu > #menu-settings-rows > NavRow {
-    /* Settings row hugs the rail's bottom border once the
-       ``#menu-spacer`` flex Static pushes it down. */
-    background: transparent;
-}
-
 NavRow {
     /* Match Pane .entry-row — height 1, theme text color. */
     color: $text;
