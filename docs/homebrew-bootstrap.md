@@ -6,13 +6,13 @@ Run this **once**, immediately after the first PyPI release
 automatically — bootstrapping just gets the first formula in
 place.
 
-## Prerequisites
+## 1. Prerequisites
 
 - v0.8.0 wheel + sdist on PyPI: <https://pypi.org/project/aws-tui/0.8.0/>
 - The `thekaveh/homebrew-aws-tui` repo exists and is empty.
 - `brew` installed locally for the smoke test.
 
-## Steps
+## 2. Steps
 
 ```bash
 # 1. Clone the tap repo.
@@ -64,7 +64,7 @@ test do
 end
 ```
 
-## Smoke test locally
+## 3. Smoke test locally
 
 ```bash
 brew install --build-from-source ./Formula/aws-tui.rb
@@ -73,7 +73,7 @@ brew test aws-tui
 brew uninstall aws-tui
 ```
 
-## Commit + push
+## 4. Commit + push
 
 ```bash
 git add Formula/aws-tui.rb
@@ -81,7 +81,7 @@ git commit -m "aws-tui 0.8.0 (initial)"
 git push origin main
 ```
 
-## Document the install
+## 5. Document the install
 
 In the tap repo's README:
 
@@ -100,7 +100,7 @@ Tracking [PyPI releases](https://pypi.org/project/aws-tui/);
 bumps are opened automatically by the upstream release workflow.
 ```
 
-## After bootstrap
+## 6. After bootstrap
 
 Tag v0.8.1 in the main repo (whenever the next patch ships) and
 confirm the `bump-homebrew` job opens a PR against the tap
