@@ -52,7 +52,14 @@ def test_log_filter_default_matches_common_indicators() -> None:
     assert DEFAULT_LOG_FILTER.mode is FilterMode.MATCH
     assert DEFAULT_LOG_FILTER.matches("2026-06-26 12:00:00 ERROR something broke")
     assert DEFAULT_LOG_FILTER.matches("Caused by: java.lang.NullPointerException")
-    assert DEFAULT_LOG_FILTER.matches("WARN Spark something noisy")
+    # WARN is intentionally NOT in the default pattern set — Spark stderr
+    # is dominated by WARN-level noise from third-party libs (Hadoop /
+    # Jetty / Netty) that drowns the actually-actionable signal. User
+    # feedback (post-PR-#98): "Including WARNs in the deep filter for
+    # the stderr may have been a mistake as it results in way too big
+    # logs". WARN remains TYPE-able in the filter modal for anyone who
+    # wants it back.
+    assert not DEFAULT_LOG_FILTER.matches("WARN Spark something noisy")
     assert not DEFAULT_LOG_FILTER.matches("INFO Spark startup complete")
 
 
@@ -183,7 +190,7 @@ async def test_stream_log_yields_matched_lines() -> None:
         "INFO startup",
         "ERROR something broke",
         "INFO ignore",
-        "WARN noisy",
+        "Caused by: java.lang.NullPointerException",
         "INFO bye",
     ]
     gz_payload = gzip.compress("\n".join(log_lines).encode())
@@ -206,7 +213,10 @@ async def test_stream_log_yields_matched_lines() -> None:
     # All matched lines are surfaced; the INFO lines are dropped
     # by the default filter.
     all_lines = [line for c in chunks for line in c.lines]
-    assert all_lines == ["ERROR something broke", "WARN noisy"]
+    assert all_lines == [
+        "ERROR something broke",
+        "Caused by: java.lang.NullPointerException",
+    ]
     # Total scanned matches the input line count.
     assert chunks[-1].lines_scanned == 5
     # Not truncated for this small input.

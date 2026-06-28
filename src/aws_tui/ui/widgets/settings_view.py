@@ -99,8 +99,18 @@ class SettingsView(Widget):
             return
         # ``call_after_refresh`` so the focus call lands AFTER the
         # widget tree finishes its initial focus pass; otherwise
-        # Textual's own first-focus walk overwrites this.
-        self.call_after_refresh(title.focus)
+        # Textual's own first-focus walk overwrites this. EXCEPT: if
+        # another widget (typically NavMenu mid-arrow-walk) already
+        # owns focus when the deferred call fires, do not steal it.
+        # User feedback (post-PR-#98): the same focus-steal that bit
+        # EMR also bites Settings — arrow-keying NavMenu down to the
+        # Settings row should keep focus on the rail.
+        self.call_after_refresh(lambda: self._maybe_focus(title))
+
+    def _maybe_focus(self, title: CollapsibleTitle) -> None:
+        focused = self.app.focused
+        if focused is None or self.has_focus_within:
+            title.focus()
 
 
 __all__ = ["SettingsView"]
