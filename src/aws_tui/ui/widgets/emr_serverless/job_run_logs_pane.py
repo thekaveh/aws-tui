@@ -306,12 +306,22 @@ class JobRunLogsPane(Widget, can_focus=True):
             return
         if state is LogsState.ERROR:
             error_msg = self._vm.error_text or "error"
-            body.mount(Static(error_msg, classes="logs-placeholder -error"))
+            # AWS-returned error text — never parse as markup. The
+            # raw text frequently contains brackets (boto's error
+            # serialisation includes ``[ContainerError(...)]`` etc.)
+            # which Rich's parser blows up on. Defensive default.
+            body.mount(Static(error_msg, classes="logs-placeholder -error", markup=False))
             return
         if state in (LogsState.READY, LogsState.TRUNCATED):
-            # Render log lines
+            # Log lines are AWS-returned content — ``[INFO]``,
+            # ``[WARN]``, ``[ERROR]`` etc. are universally present
+            # in real log output. Rich's markup parser tries to read
+            # the next token as a tag value and either crashes
+            # (``MarkupError``) or silently corrupts the displayed
+            # line. ``markup=False`` is the only safe default for
+            # untrusted log content.
             for line in self._vm.lines:
-                body.mount(Static(line, classes="logs-line -match"))
+                body.mount(Static(line, classes="logs-line -match", markup=False))
             # Add truncation banner if needed
             if state is LogsState.TRUNCATED:
                 body.mount(

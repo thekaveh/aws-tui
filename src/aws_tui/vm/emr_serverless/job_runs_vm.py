@@ -19,7 +19,7 @@ from aws_tui.vm.file_manager.pane_vm import PaneState
 
 _ALL_STATES: frozenset[JobRunState] = frozenset(JobRunState)
 
-# Pre-terminal states the poller uses to keep the active (30-s)
+# Pre-terminal states the poller uses to keep the active (60-s)
 # cadence. See ``has_active_runs`` for the rationale; ``CANCELLING``
 # is included because the user just requested a cancel and the state
 # landing on ``CANCELLED`` is the signal they're waiting on.
@@ -192,7 +192,7 @@ class JobRunsVM:
 
     def has_active_runs(self) -> bool:
         """Used by the page-VM poller to choose between the active
-        (30-s) and idle (~3-min) cadences. ``Active'' means any
+        (60-s) and idle (~6-min) cadences. ``Active'' means any
         pre-terminal state —
         ``SUBMITTED`` / ``PENDING`` / ``SCHEDULED`` / ``QUEUED`` /
         ``RUNNING`` (the user expects rapid updates while these

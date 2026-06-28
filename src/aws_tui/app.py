@@ -1082,26 +1082,17 @@ class AwsTuiApp(App[None]):
                 self._focus_active_nav_list(nav)
 
     def _focus_active_nav_list(self, nav: NavMenu) -> None:
-        """Focus whichever NavMenu OptionList owns the currently-
-        selected service. If Settings is selected, focus
-        #menu-pinned; otherwise focus #menu-services. Lets the user
-        Tab-into-nav and immediately see the highlight on the active
-        item without arrow-keying around."""
-        selected_id = nav.vm.selected_id
-        target_id = "#menu-pinned" if selected_id == "settings" else "#menu-services"
-        try:
-            target = nav.query_one(target_id, OptionList)
-        except Exception:
-            return
-        # If the target OptionList is empty (e.g. no services yet),
-        # fall back to whichever one has options.
-        if target.option_count == 0:
-            other_id = "#menu-services" if target_id == "#menu-pinned" else "#menu-pinned"
-            try:
-                target = nav.query_one(other_id, OptionList)
-            except Exception:
-                return
-        target.focus()
+        """Hand Textual focus to the NavMenu.
+
+        Post-PR-#94 rework: NavMenu is itself the focusable widget
+        (no more internal OptionLists). Lands focus directly so
+        arrow keys reach :meth:`NavMenu.action_cursor_up` /
+        ``action_cursor_down``. Name kept (``_focus_active_nav_list``)
+        for backward compatibility with the call sites the App and
+        the EMR page already use.
+        """
+        with contextlib.suppress(Exception):
+            nav.focus()
 
     def _forward_to_modal(self, *action_names: str) -> bool:
         """When a modal is active, try each ``action_name`` on the active
@@ -1151,12 +1142,19 @@ class AwsTuiApp(App[None]):
         # cursor action so OptionList navigation still works while
         # nav is the active Tab-cycle slot.
         if self._nav_has_focus():
-            focused_list = self._focused_optionlist()
-            if focused_list is not None:
-                if delta < 0:
-                    focused_list.action_cursor_up()
-                else:
-                    focused_list.action_cursor_down()
+            # NavMenu owns its own cursor; ``priority=True`` on the
+            # App-level Up/Down binding would otherwise steal the
+            # keystroke before NavMenu's binding fires. Manual
+            # forward keeps the master-detail switch happening on
+            # every arrow press.
+            try:
+                nav = self.query_one("#nav-menu", NavMenu)
+            except Exception:
+                return
+            if delta < 0:
+                nav.action_cursor_up()
+            else:
+                nav.action_cursor_down()
             return
         # EMR page: forward Up/Down to the active EMR pane's cursor
         # or scroll action. Mirrors the S3 path's ``dual.focused_pane``
@@ -1216,12 +1214,18 @@ class AwsTuiApp(App[None]):
         return opts
 
     def _nav_has_focus(self) -> bool:
-        """True if Textual focus is currently on the NavMenu or any of
-        its descendants (the two OptionLists or the hamburger).
+        """True if Textual focus is currently on the NavMenu.
 
-        Used to gate priority bindings (Up/Down/Enter) so they don't
-        steal keystrokes from the NavMenu's OptionList navigation when
-        the user has Tab-cycled focus to the rail.
+        Post-PR-#94 rework the NavMenu is itself the focusable
+        widget — no internal OptionLists. The descendant check
+        survives in case any future child widget grabs focus
+        (none currently does), but the common case is
+        ``self.focused is nav``.
+
+        Used to gate priority bindings (Up/Down/Enter) so they
+        don't steal keystrokes from the NavMenu's cursor
+        navigation when the user has Tab-cycled focus to the
+        rail.
         """
         try:
             nav = self.query_one("#nav-menu", NavMenu)
@@ -1233,15 +1237,11 @@ class AwsTuiApp(App[None]):
         return focused is nav or nav in focused.ancestors_with_self
 
     def _focused_optionlist(self) -> OptionList | None:
-        """Return the currently-focused OptionList if it's a NavMenu
-        child, else None. Used by the Up/Down/Enter forwarding path
-        so priority App bindings can drive the OptionList that has
-        Textual focus instead of the pane cursor."""
-        if not self._nav_has_focus():
-            return None
-        focused = self.focused
-        if isinstance(focused, OptionList):
-            return focused
+        """Vestigial — kept so the EMR application picker's
+        dropdown OptionList resolver path (``_open_emr_picker_optionlist``)
+        is the only OptionList we still need to address. NavMenu
+        no longer hosts an OptionList post-PR-#94; returns None for
+        the nav case."""
         return None
 
     async def action_descend(self) -> None:
@@ -1268,16 +1268,16 @@ class AwsTuiApp(App[None]):
             if emr_page is not None and emr_page._picker is not None:
                 emr_page._picker.action_commit()
             return
-        # If Textual focus is in the NavMenu's OptionList, Enter is
-        # the user picking a service — forward to the OptionList's
-        # action_select so it fires its OptionSelected event (handled
-        # by NavMenu.on_option_list_option_selected →
-        # switch_service_command). Without this forward, the App's
-        # priority=True Enter binding steals the keystroke.
+        # If Textual focus is in the NavMenu, forward Enter to its
+        # own commit action (re-fires the switch on the
+        # currently-highlighted row). Post-PR-#94 NavMenu is the
+        # focusable widget directly, no OptionList layer.
         if self._nav_has_focus():
-            focused_list = self._focused_optionlist()
-            if focused_list is not None:
-                focused_list.action_select()
+            try:
+                nav = self.query_one("#nav-menu", NavMenu)
+            except Exception:
+                return
+            nav.action_commit()
             return
         # EMR page: Enter on the LEFT pane commits the focused row
         # (posts ``JobRunsPane.RunSelected`` → page VM forwards to

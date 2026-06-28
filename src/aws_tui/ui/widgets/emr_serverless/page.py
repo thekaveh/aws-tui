@@ -142,15 +142,19 @@ class EmrServerlessPage(Widget):
         # that would race the host's task and double the boot-time
         # ``list_applications`` API call on every EMR mount.
         # Set up the three pollers per spec §6.
-        # Poller cadence — user feedback (post-PR-#92): "the EMR
-        # job runs list seems to be refreshed automatically way too
-        # frequently which may not be necessary. We can lower the
-        # frequency." Runs poller went 10 s → 30 s; combined with
-        # the 6-tick cadence decay on idle (see ``_poll_runs_decay``)
-        # that's ~3 min effective when no runs are active.
-        self.set_interval(30.0, self._tick_applications, name="emr-poll-apps")
-        self.set_interval(30.0, self._tick_runs, name="emr-poll-runs")
-        self.set_interval(5.0, self._tick_detail, name="emr-poll-detail")
+        # Poller cadence — user feedback (post-PR-#93, restated):
+        # "the EMR page still refreshes quite a lot so many times
+        # so that it's annoying … Instead of refreshing every 5
+        # seconds, let's do every 30 or even 1 min". Applied:
+        # apps + runs at 60 s (active), detail at 30 s (active).
+        # The cadence-decay path (``_poll_runs_decay``) still skips
+        # 5 out of every 6 idle ticks, so an idle EMR page now
+        # re-fetches runs at most every ~6 min instead of every
+        # ~30 s — orders of magnitude quieter without giving up
+        # responsiveness once something is running.
+        self.set_interval(60.0, self._tick_applications, name="emr-poll-apps")
+        self.set_interval(60.0, self._tick_runs, name="emr-poll-runs")
+        self.set_interval(30.0, self._tick_detail, name="emr-poll-detail")
         # Land Textual focus on the LEFT pane so the user gets the
         # same "arrow keys move the cursor immediately" UX as the S3
         # page. Without this, neither pane shows the
@@ -197,7 +201,7 @@ class EmrServerlessPage(Widget):
         self.run_worker(self._vm.applications.refresh(), exclusive=True, group="emr-poll-apps")
 
     def _tick_runs(self) -> None:
-        # Cadence-decay: when no active runs, only refresh every 6th tick (~3 min).
+        # Cadence-decay: when no active runs, only refresh every 6th tick (~6 min).
         if not self._vm.job_runs.has_active_runs() and self._poll_runs_decay():
             return
         self.run_worker(self._vm.job_runs.refresh(), exclusive=True, group="emr-poll-runs")
@@ -295,7 +299,7 @@ class EmrServerlessPage(Widget):
                 return
             self._post_clone_success_toast(new_id)
             # Re-fresh the runs list so the new SUBMITTED row appears
-            # immediately rather than waiting for the next 30-s tick.
+            # immediately rather than waiting for the next 60-s tick.
             self.run_worker(
                 self._vm.job_runs.refresh(),
                 exclusive=True,

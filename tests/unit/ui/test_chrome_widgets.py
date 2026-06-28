@@ -209,19 +209,19 @@ async def test_services_menu_renders_items_and_marks_selected() -> None:
         app = _App()
         async with app.run_test() as pilot:
             await pilot.pause()
-            from textual.widgets import OptionList
+            # Post-PR-#94: NavMenu hosts NavRow widgets directly.
+            # Two service items + Settings = three rows total.
+            from aws_tui.ui.widgets.nav_row import NavRow
 
-            # Services live in #menu-services (s3 + ec2); Settings is
-            # pinned at the bottom in #menu-pinned. Sum across both.
-            services = app.query_one("#menu-services", OptionList)
-            pinned = app.query_one("#menu-pinned", OptionList)
-            # Post-PR-81: NavMenu inserts a blank spacer ``Option``
-            # between consecutive entries so the rail rows have
-            # vertical breathing room. Two service items therefore
-            # render as ``s3 + spacer + ec2`` = 3 OptionList rows.
-            # Settings is the only pinned item so no spacer there.
-            assert services.option_count == 3  # s3, spacer, ec2
-            assert pinned.option_count == 1  # settings
+            rows = list(app.query(NavRow))
+            ids = [r.descriptor_id for r in rows]
+            assert "s3" in ids, f"Expected s3 in {ids}"
+            assert "ec2" in ids, f"Expected ec2 in {ids}"
+            assert "settings" in ids, f"Expected settings in {ids}"
+            # Settings row carries the ``-settings`` class so per-
+            # theme CSS can apply a divider above it.
+            settings_row = next(r for r in rows if r.descriptor_id == "settings")
+            assert settings_row.has_class("-settings")
     finally:
         vm.dispose()
         hub.dispose()

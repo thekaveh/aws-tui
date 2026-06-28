@@ -151,9 +151,15 @@ class _JobRunRow(Horizontal):
         marker = _STATE_MARKER.get(self._run.state, "?")
         name = self._run.name or self._run.job_run_id
         ts = self._run.created_at.strftime(_DATETIME_FORMAT)
+        # Indicator cell USES intentional Rich markup (the colored
+        # glyph in ``_STATE_MARKER`` — e.g. ``[green]✓[/green]``)
+        # so it stays markup-on. NAME is AWS-controlled — job
+        # submitters can give a job any name including ``[brackets]``
+        # and Rich's parser would crash on it. Datetime is safe but
+        # rendered with ``markup=False`` defensively.
         yield Static(marker, classes="runs-cell-indicator")
-        yield Static(name, classes="runs-cell-name")
-        yield Static(ts, classes="runs-cell-datetime")
+        yield Static(name, classes="runs-cell-name", markup=False)
+        yield Static(ts, classes="runs-cell-datetime", markup=False)
 
 
 class JobRunsPane(Widget, can_focus=True):
