@@ -24,6 +24,7 @@ import contextlib
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
+from rich.markup import escape as _escape_markup
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Horizontal
@@ -242,7 +243,11 @@ class ApplicationPicker(Widget):
         if match is None:
             return "(select application)"
         marker = _APP_STATE_MARKER.get(match.state, "?")
-        return f"{marker}  {match.name}"
+        # Application name is AWS-controlled — escape any Rich
+        # markup characters so a name like ``my-app [v2]`` doesn't
+        # crash the parser. The leading marker is the only
+        # intentional markup we ship in this string.
+        return f"{marker}  {_escape_markup(match.name)}"
 
     def _build_options(self) -> list[Option]:
         """Build the dropdown options.
@@ -259,7 +264,11 @@ class ApplicationPicker(Widget):
         and visually grouped."""
         return [
             Option(
-                prompt=f"{_APP_STATE_MARKER.get(a.state, '?')}  {a.name}",
+                # Name is AWS-controlled — escape Rich markup
+                # characters so a name like ``my-app [v2]`` doesn't
+                # crash the OptionList renderer. Marker is the only
+                # intentional markup in the prompt.
+                prompt=f"{_APP_STATE_MARKER.get(a.state, '?')}  {_escape_markup(a.name)}",
                 id=a.id,
             )
             for a in self._vm.sorted_applications

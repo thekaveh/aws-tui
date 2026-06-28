@@ -94,14 +94,27 @@ class JobRunDetailPane(Widget, can_focus=True):
         body.remove_children()
         state = self._vm.state
         d = self._vm.detail
+        # All rows that render AWS-returned content are mounted
+        # with ``markup=False`` so square brackets in user-supplied
+        # job-run fields (entry_point, args, spark params, IAM ARN,
+        # error/state-details text) are NOT parsed as Rich markup
+        # tags. Pre-fix the user hit a crash when a failed job's
+        # error text contained ``[ContainerError(ContainerGroupId=
+        # cecf82cd-c71a-…)]`` — Rich's parser saw the leading ``[``,
+        # tried to read the GUID as a tag value, and failed with
+        # ``MarkupError: Expected markup value (found '-c71a-…')``
+        # in the compositor reflow path, crashing the whole app.
+        # The detail rows are plain text only; we never use markup
+        # here, so disabling it is a safe defensive default.
         if state is PaneState.LOADING:
-            body.mount(Static("loading…", classes="detail-placeholder"))
+            body.mount(Static("loading…", classes="detail-placeholder", markup=False))
             return
         if state is PaneState.UNREACHABLE:
             body.mount(
                 Static(
                     self._vm.error_text or "endpoint unreachable — press r to retry",
                     classes="detail-placeholder",
+                    markup=False,
                 )
             )
             return
@@ -110,17 +123,19 @@ class JobRunDetailPane(Widget, can_focus=True):
                 Static(
                     "authentication required — aws sso login --profile <X>",
                     classes="detail-placeholder",
+                    markup=False,
                 )
             )
             return
         if d is None:
-            body.mount(Static("(no run selected)", classes="detail-placeholder"))
+            body.mount(Static("(no run selected)", classes="detail-placeholder", markup=False))
             return
-        body.mount(Static(_format_kv("State", _state_label(d)), classes="detail-row"))
+        body.mount(Static(_format_kv("State", _state_label(d)), classes="detail-row", markup=False))
         body.mount(
             Static(
                 _format_kv("Started", d.created_at.strftime("%Y-%m-%d %H:%M:%S")),
                 classes="detail-row",
+                markup=False,
             )
         )
         body.mount(
@@ -130,10 +145,23 @@ class JobRunDetailPane(Widget, can_focus=True):
                     f"{d.duration_ms // 1000} s" if d.duration_ms is not None else "—",
                 ),
                 classes="detail-row",
+                markup=False,
             )
         )
-        body.mount(Static(_format_kv("IAM", d.execution_role_arn or "—"), classes="detail-row"))
-        body.mount(Static(_format_kv("Entry point", d.entry_point or "—"), classes="detail-row"))
+        body.mount(
+            Static(
+                _format_kv("IAM", d.execution_role_arn or "—"),
+                classes="detail-row",
+                markup=False,
+            )
+        )
+        body.mount(
+            Static(
+                _format_kv("Entry point", d.entry_point or "—"),
+                classes="detail-row",
+                markup=False,
+            )
+        )
         # Args + Spark are typically the longest values in a job-run
         # detail. Per user feedback the previous single-line ``Args
         # --in s3://… --out s3://… --partitions 200`` was unreadable
@@ -141,9 +169,9 @@ class JobRunDetailPane(Widget, can_focus=True):
         # ``--conf k=v`` gets its own indented line below a single
         # key header.
         for line in _multiline_kv("Args", _pair_args(list(d.entry_point_arguments))):
-            body.mount(Static(line, classes="detail-row"))
+            body.mount(Static(line, classes="detail-row", markup=False))
         for line in _multiline_kv("Spark", _split_spark_params(d.spark_submit_parameters)):
-            body.mount(Static(line, classes="detail-row"))
+            body.mount(Static(line, classes="detail-row", markup=False))
 
 
 def _state_label(d: JobRunDetail) -> str:
