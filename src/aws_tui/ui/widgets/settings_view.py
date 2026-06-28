@@ -112,5 +112,20 @@ class SettingsView(Widget):
         if focused is None or self.has_focus_within:
             title.focus()
 
+    def focus_default(self) -> None:
+        """Move Textual focus to the first focusable section
+        (``S3-Compatible Connections``'s :class:`CollapsibleTitle`).
+        Called by the App when NavMenu commits ENTER on the Settings
+        row — the user's explicit intent to "enter" the Settings
+        screen. Unlike :meth:`_maybe_focus`, this version does NOT
+        gate on whether NavMenu already owns focus — the user just
+        asked to leave NavMenu, so we always land the focus."""
+        try:
+            first = self.query_one("#section-connections", Collapsible)
+            title = first.query_one(CollapsibleTitle)
+        except Exception:
+            return
+        title.focus()
+
 
 __all__ = ["SettingsView"]

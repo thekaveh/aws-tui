@@ -7,6 +7,8 @@ Layout is a horizontal container split 50/50. The focused pane reflects
 
 from __future__ import annotations
 
+import contextlib
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widget import Widget
@@ -107,6 +109,27 @@ class DualPane(HubSubscriberMixin, Widget):
         target = self._left_widget if focused is FocusedPane.LEFT else self._right_widget
         if target is not None:
             target.focus()
+
+    def focus_left_pane(self) -> None:
+        """Make the LEFT pane the visually-active pane and route arrow
+        keys to it. Called when the user explicitly requests "enter
+        the S3 service" (NavMenu ENTER). :class:`Pane` widgets decline
+        Textual focus by design — the visual indicator is driven by
+        :class:`DualPaneVM.focused` via the ``-focused`` CSS class, and
+        arrow keys reach the left pane through ``App._move_cursor`` →
+        ``dual.focused_pane.move_cursor_command``. So "focus LEFT"
+        means (a) drop any App-level focus that might be elsewhere
+        (NavMenu) and (b) ensure the VM is on LEFT.
+        """
+        with contextlib.suppress(Exception):
+            self.app.set_focus(None)
+        if self._vm.focused is FocusedPane.LEFT:
+            return
+        switch_cmd = getattr(self._vm, "switch_focus_command", None)
+        if switch_cmd is None:
+            return
+        with contextlib.suppress(Exception):
+            switch_cmd.execute()
 
 
 __all__ = ["DualPane"]

@@ -1093,6 +1093,48 @@ class AwsTuiApp(App[None]):
             with contextlib.suppress(Exception):
                 self._focus_active_nav_list(nav)
 
+    def focus_active_service_pane(self) -> None:
+        """Move focus to the currently-active service's default pane.
+
+        Called by :meth:`NavMenu.action_commit` when ENTER is pressed
+        on a service row — the user's explicit intent to "enter" the
+        service. Per-service mapping:
+
+        - ``s3`` → :class:`DualPane.focus_left_pane` (Panes decline
+          Textual focus by design; the visual indicator is driven by
+          ``DualPaneVM.focused`` via CSS, so we drop App focus and
+          ensure the VM is on LEFT).
+        - ``emr-serverless`` → :class:`JobRunsPane` (the focusable
+          LEFT pane of the EMR page).
+        - ``settings`` → first :class:`CollapsibleTitle` of the
+          Settings view.
+
+        For service swaps (target ≠ current selected), the new page
+        may not be mounted yet when this fires; each branch's
+        ``query_one`` silently no-ops in that case, and the
+        destination page's own ``on_mount`` auto-focus is the safety
+        net (gated on "is NavMenu still focused?", which NavMenu
+        clears before calling here).
+        """
+        current_id = self._app_ctx.root_vm.content_host.current_id
+        if current_id == "s3":
+            with contextlib.suppress(Exception):
+                dual_widget = self.query_one("#content-dual-pane", DualPane)
+                dual_widget.focus_left_pane()
+            return
+        if current_id == "emr-serverless":
+            with contextlib.suppress(Exception):
+                emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
+                left = emr_page.left_pane
+                if left is not None:
+                    left.focus()
+            return
+        if current_id == SETTINGS_NAV_ID:
+            with contextlib.suppress(Exception):
+                settings = self.query_one(SettingsView)
+                settings.focus_default()
+            return
+
     def _focus_active_nav_list(self, nav: NavMenu) -> None:
         """Hand Textual focus to the NavMenu.
 
