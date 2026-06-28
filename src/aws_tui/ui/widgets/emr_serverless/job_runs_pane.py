@@ -385,7 +385,16 @@ class JobRunsPane(Widget, can_focus=True):
         if msg.property_name == "state_filter":
             self.call_after_refresh(self._refresh_chips)
             self.call_after_refresh(self._refresh_rows)
-        elif msg.property_name in {"runs", "selected_id", "state"}:
+        elif msg.property_name in {"runs", "state"}:
+            # Note: ``selected_id`` is deliberately NOT in this set.
+            # The pane's visible selection is driven by ``_cursor_index``
+            # (already updated synchronously in ``action_cursor_up`` /
+            # ``_down``); the VM's ``selected_id`` change is an echo of
+            # our own ``RunSelected`` post, and reacting to it forces a
+            # full ``remove_children`` + re-mount on every arrow press —
+            # the visible flash the user reported post-PR-#98 ("every
+            # time I use arrow keys to move among the job runs, there
+            # seems to be a refresh and reload of the contents").
             self.call_after_refresh(self._refresh_rows)
 
     def _refresh_chips(self) -> None:

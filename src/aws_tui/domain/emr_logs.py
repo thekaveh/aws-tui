@@ -73,7 +73,6 @@ class LogFilter:
 DEFAULT_LOG_FILTER: LogFilter = LogFilter(
     patterns=(
         r"ERROR",
-        r"WARN",
         r"FAIL",
         r"Exception",
         r"Caused by",

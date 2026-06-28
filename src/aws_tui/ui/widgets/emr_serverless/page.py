@@ -171,9 +171,36 @@ class EmrServerlessPage(Widget):
         # same "arrow keys move the cursor immediately" UX as the S3
         # page. Without this, neither pane shows the
         # ``:focus-within`` accent border and the user has to press
-        # Tab once before arrows do anything.
+        # Tab once before arrows do anything. EXCEPT: if NavMenu (or
+        # any widget outside this page) already owns focus when the
+        # auto-focus runs, do not steal — the user is mid-arrow-walk
+        # on the rail and the page swap was a side-effect of cursor
+        # navigation, not an intent to enter the runs pane. User
+        # feedback (post-PR-#98): "when I use [arrow] keys to move
+        # onto the emr service, it automatically focuses into the job
+        # runs and meaningless focus".
         if self._left is not None:
-            self.call_after_refresh(self._left.focus)
+            self.call_after_refresh(self._maybe_focus_left)
+
+    def _maybe_focus_left(self) -> None:
+        """Auto-focus the LEFT pane on initial page mount UNLESS a
+        widget outside this page (typically the NavMenu rail) already
+        owns Textual focus. Mounting is async — when NavMenu's
+        ``_after_cursor_move`` triggers a service swap, the new page's
+        ``on_mount`` fires SEVERAL refreshes later, well after NavMenu's
+        own ``call_after_refresh(self.focus)`` has run. So NavMenu can't
+        win the focus race from its end; the courtesy has to come from
+        the page side. ``has_focus_within`` is true only when something
+        inside this page already holds focus (first-time mount when the
+        user opened the app directly into EMR, or a re-mount that came
+        from inside this page). All other cases mean the user is
+        elsewhere — leave them alone.
+        """
+        if self._left is None:
+            return
+        focused = self.app.focused
+        if focused is None or self.has_focus_within:
+            self._left.focus()
 
     # ── Public accessors ────────────────────────────────────────────────────
 
