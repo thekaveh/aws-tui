@@ -2437,6 +2437,14 @@ class AwsTuiApp(App[None]):
             ctx.confirm_vm.dispose()
             ctx.transfers_vm.dispose()
             ctx.root_vm.dispose()
+        with contextlib.suppress(Exception):
+            # In demo mode, cancel any in-flight clone state-machine tasks
+            # so asyncio doesn't emit "Task was destroyed but it is pending"
+            # warnings on exit.  The InMemoryEmr singleton is shared across
+            # connection switches within the same AppContext, so we dispose
+            # it here (on app shutdown) rather than in EmrServerlessPageVM.
+            if ctx.demo_emr is not None:
+                ctx.demo_emr.dispose()
 
 
 def main() -> None:
@@ -2447,6 +2455,9 @@ def main() -> None:
     writes a crash dump under ``~/.cache/aws-tui/crash/`` and the
     saved :class:`CrashReport` is printed here before the exception is
     re-raised so the user knows where the dump landed.
+
+    Recognises one CLI flag: ``--version`` prints the version + demo
+    status and exits without launching the UI.
     """
     from aws_tui.demo import is_demo_mode_enabled
 
