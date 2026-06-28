@@ -211,6 +211,8 @@ Numbered hierarchically for navigation.
    9. [Implementation plans (M0–M6 and post-tag specs)](docs/superpowers/plans/) — per-milestone breakdowns + per-spec implementation plans; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
+   2. [Release procedure](docs/RELEASING.md) — cut-a-release checklist: version bump, CHANGELOG, tag, publish, Homebrew bump.
+   3. [Homebrew bootstrap](docs/homebrew-bootstrap.md) — one-shot bootstrap for the `thekaveh/homebrew-aws-tui` tap immediately after the first PyPI release. After that, the bump-homebrew job in `release.yml` opens PRs against the tap automatically.
 5. **Project meta**
    1. [Contributing](CONTRIBUTING.md) — development setup, commit conventions, code of conduct.
    2. [Security policy](SECURITY.md) — vulnerability reporting + supported versions.
