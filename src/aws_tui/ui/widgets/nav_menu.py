@@ -28,8 +28,10 @@ DETAIL → LOGS — wired in :mod:`aws_tui.app`).
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING, ClassVar
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
@@ -59,10 +61,14 @@ class NavMenu(Widget, can_focus=True):
     DEFAULT_CSS: ClassVar[str] = """
     NavMenu {
         display: block;
-        /* Width: 14 cells leaves room for the rail's longest label
-           (``Settings`` = 8 chars) plus the ``<ribbon><space>``
-           prefix and the per-row padding without clipping. */
-        width: 14;
+        /* Width: 10 cells. User feedback (post-PR-#97): since all
+           AWS service labels are at most three letters and Settings
+           is rendered as the gear glyph (⚙️, 2 cells) instead of
+           the 8-char "Settings" word, 10 cells fits the longest row
+           (ribbon 1 + space 1 + "EMR" 3 = 5 cells of content + the
+           per-row padding 2 + NavMenu borders 2 = 9 total) with
+           1 cell of slack. */
+        width: 10;
         /* Fill the available vertical space so the flex spacer
            below has room to push Settings to the bottom. Without
            an explicit ``height: 1fr`` the rail collapses to the
@@ -129,6 +135,28 @@ class NavMenu(Widget, can_focus=True):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+    # ── Focus chrome coordination ─────────────────────────────────────────────
+
+    def on_focus(self, event: events.Focus) -> None:
+        """When the rail gains Textual focus, mark the screen so the
+        per-theme CSS can dim the file-pane border. User feedback
+        (post-PR-#97): "Both the menu and the left/right panes can
+        be shown as focused / selected which again is confusing.
+        Only one pane should be selected at a time including the
+        menu." The dual file pane keeps its VM-driven ``-focused``
+        class for non-visual reasons (transfers / commands routing),
+        so we drive the visual via a sibling-scope ``-nav-active``
+        class on the Screen instead of mutating the pane VM.
+        """
+        with contextlib.suppress(Exception):
+            self.screen.add_class("-nav-active")
+
+    def on_blur(self, event: events.Blur) -> None:
+        """Symmetric to :meth:`on_focus`: drop the screen-level
+        marker so the file pane lights up again."""
+        with contextlib.suppress(Exception):
+            self.screen.remove_class("-nav-active")
 
     # ── Actions ──────────────────────────────────────────────────────────────
 
@@ -224,15 +252,21 @@ class NavMenu(Widget, can_focus=True):
             self._cursor_index = self._index_of(selected_id, default=0)
 
         # Mount the rows. Services first, Settings last (visually
-        # pushed to the bottom by the flex spacer).
+        # pushed to the bottom by the flex spacer). The Settings row
+        # uses the descriptor's ICON (a gear glyph ``⚙️``) instead of
+        # the textual ``Settings`` label so the rail can stay narrow.
+        # User feedback (post-PR-#97): "Let's switch back the Settings
+        # to the gear emoji and then make the menu pane narrower."
         for idx, item in enumerate(self._items):
+            is_settings = item.descriptor.id == _SETTINGS_NAV_ID
+            display = item.descriptor.icon if is_settings else item.descriptor.label
             row = NavRow(
                 descriptor_id=item.descriptor.id,
-                label=item.descriptor.label,
+                label=display,
                 is_selected=(idx == self._cursor_index),
-                is_settings=(item.descriptor.id == _SETTINGS_NAV_ID),
+                is_settings=is_settings,
             )
-            if item.descriptor.id == _SETTINGS_NAV_ID:
+            if is_settings:
                 settings_container.mount(row)
             else:
                 services_container.mount(row)
@@ -255,15 +289,23 @@ class NavMenu(Widget, can_focus=True):
            "arrow key among the menu items … should result in
            changing the service as selected item, or selecting
            the settings".
+        4. Re-grab Textual focus AFTER the swap. The newly-mounted
+           page's ``on_mount`` calls ``call_after_refresh(<pane>.focus)``
+           to land focus on its LEFT pane — stealing focus from the
+           rail mid-arrow-walk. User feedback (post-PR-#97): "I can
+           use arrow keys to move down to EMR, but then the focus
+           automatically is out of the menu and into the job runs
+           which means I can't use arrow keys to move further down
+           the menu". Queueing our ``self.focus`` after the page's
+           ``call_after_refresh`` puts NavMenu LAST in the
+           run-after-next-refresh queue, so we win the focus race.
         """
         self._repaint_rows()
-        # Hand off the switch immediately. The VM dispatches the
-        # content-host swap asynchronously, so the arrow key
-        # remains responsive.
         if 0 <= self._cursor_index < len(self._items):
             target_id = self._items[self._cursor_index].descriptor.id
             if target_id != self._vm.selected_id:
                 self._vm.switch_service_command.execute(target_id)
+                self.call_after_refresh(self.focus)
 
     def _repaint_rows(self) -> None:
         """Flip the ``-selected`` class on every mounted row to
