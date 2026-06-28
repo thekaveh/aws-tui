@@ -26,10 +26,12 @@ Linux, and Windows. Powered by
   on one side, your local filesystem on the other. Copy and delete
   across panes with `c` and `d` (confirm modal first); multi-select via
   `Shift+↑/↓` cursor extension, modifier+click, or persistent marks.
-  `m` toggles the left-rail nav menu. Move, rename, and the dedicated
-  `v` multi-select-mode entry point are spec'd but deferred to v0.8 —
+  The left-rail nav menu is always visible — Tab cycles in/out of it
+  as a regular pane (post-PR-#94). Move, rename, and the dedicated
+  `v` multi-select-mode entry point are spec'd but deferred to v0.9 —
   see [`docs/keybindings.md`](docs/keybindings.md) §1.4 and the
-  `[Unreleased] Deferred` block of `CHANGELOG.md`.
+  `Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
+  `CHANGELOG.md`.
 - **One-key source switcher.** `Shift+S` cycles the focused pane
   through **every available source** in order: `local` → each AWS
   profile (`aws s3 · {profile} · {region}`) → each `s3-compatible`
@@ -46,12 +48,14 @@ Linux, and Windows. Powered by
   Backblaze B2, Wasabi, Ceph, SeaweedFS — same code path as native
   AWS. Path-style addressing toggle and per-vendor docs.
 - **EMR Serverless (read-only browser + clone-job-run).** Second
-  shipped service, alongside S3. Pick the 💥 EMR nav peer to
+  shipped service, alongside S3. Pick the **EMR** nav row to
   browse applications, drive a master-detail Job Runs pane with
   state-filter chips, inspect job-run details (driver, spark
   params, execution duration) — all driven by three independent
-  pollers (apps 30 s / runs 10 s with 6:1 decay when no active
-  runs / detail 5 s with terminal-state suppression). Press `c`
+  pollers (apps 60 s / runs 60 s with 6:1 decay when no active
+  runs / detail 30 s with terminal-state suppression — demo mode
+  bumps to 30 s / 30 s / 5 s so the clone-state walk stays
+  visible). Press `c`
   on a finished job run to open a clone-and-edit modal that
   pre-fills every field from the source run and fires
   ``start_job_run`` on save (PR #83 — landed ahead of the rest
@@ -157,7 +161,12 @@ aws-tui                       # launches with the default connection
 If you've run `aws sso login --profile <name>` recently, aws-tui picks
 up the cached token silently (no network round-trip just to render the
 UI). Otherwise the picker shows the connection in `login needed`
-state — press `a` to authenticate.
+state — the `auth.authenticate` action is spec'd as `a` in
+[`docs/keybindings.md`](docs/keybindings.md) §1.6 but its
+runtime wiring is deferred to v0.9 (the `BindingResolver`
+work — see the `Deferred / v0.9 roadmap` block in `CHANGELOG.md`).
+Today, run `aws sso login --profile <name>` in your shell and
+relaunch.
 
 If `aws s3 ls` works on your shell but `aws-tui` shows
 `access denied` on the left pane, the most common cause is that
@@ -204,9 +213,14 @@ Numbered hierarchically for navigation.
    3. [Modal & toast polish](docs/superpowers/specs/2026-06-19-modal-toast-polish-design.md) — PR #47 modal/toast surface rework.
    4. [Graceful unreachable connections](docs/superpowers/specs/2026-06-19-graceful-unreachable-connections.md) — PR #48/#49 design.
    5. [EMR Serverless service v1 design](docs/superpowers/specs/2026-06-25-emr-serverless-service-design.md) — decomposed PR-A read-only browser, PR-B cancel + logs, PR-C submit (vanilla + clone), PR-D E2E. Shipped through PRs #76–#83 (PR-A read-only browser landed via #76–#82; PR #83 shipped the clone-job-run modal early — see the spec's "Status" note).
-   6. [Implementation plans (M0–M6 and post-tag specs)](docs/superpowers/plans/) — per-milestone breakdowns + per-spec implementation plans; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
+   6. [Public release pipeline](docs/superpowers/specs/2026-06-27-public-release-pipeline-design.md) — `release.yml` build + Sigstore-signed PyPI publish + Homebrew tap bump, design landing alongside the v0.8.0 cut (PR #95).
+   7. [Cross-platform readiness](docs/superpowers/specs/2026-06-28-cross-platform-readiness-design.md) — macOS / Linux / Windows parity audit and the install / smoke / docs plan for matching all three.
+   8. [Demo mode](docs/superpowers/specs/2026-06-28-demo-mode-design.md) — `AWS_TUI_DEMO=1` (or `--demo`) boots the full UI against seeded in-memory fakes; ships in PRs #97 / #104.
+   9. [Implementation plans (M0–M6 and post-tag specs)](docs/superpowers/plans/) — per-milestone breakdowns + per-spec implementation plans; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
+   2. [Release procedure](docs/RELEASING.md) — cut-a-release checklist: version bump, CHANGELOG, tag, publish, Homebrew bump.
+   3. [Homebrew bootstrap](docs/homebrew-bootstrap.md) — one-shot bootstrap for the `thekaveh/homebrew-aws-tui` tap immediately after the first PyPI release. After that, the bump-homebrew job in `release.yml` opens PRs against the tap automatically.
 5. **Project meta**
    1. [Contributing](CONTRIBUTING.md) — development setup, commit conventions, code of conduct.
    2. [Security policy](SECURITY.md) — vulnerability reporting + supported versions.

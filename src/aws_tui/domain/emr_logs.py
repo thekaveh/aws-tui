@@ -203,7 +203,20 @@ async def list_log_files(
                         continue
                     files.append((sort_idx, LogFile(key=key, kind=kind, size=obj.get("Size"))))
                 next_token = resp.get("NextContinuationToken")
-                if next_token is None:
+                if not next_token:
+                    # Defensive: catches both ``None`` (well-behaved S3
+                    # signal that this was the final page) AND the
+                    # ``""`` shape some S3-compatible providers return
+                    # alongside ``IsTruncated`` — without this guard,
+                    # an empty-string token would re-issue the same
+                    # ``list_objects_v2`` request forever (the
+                    # ``if next_token is not None`` guard above keeps
+                    # ``ContinuationToken`` ON the kwargs with an
+                    # empty value, which most providers treat as
+                    # "start from the beginning" → same response →
+                    # infinite loop). Matches the defensive pattern
+                    # in ``s3_fs.py::S3FS.list`` /
+                    # ``S3FS.delete`` (post-PR-#107 / pass-2).
                     break
     except Exception as exc:
         mapped = map_boto_error(exc)

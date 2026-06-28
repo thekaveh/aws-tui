@@ -121,12 +121,14 @@ class AwsTuiApp(App[None]):
     #
     # ``#main-area`` and ``#content-host`` need explicit ``1fr`` sizing
     # so the Horizontal layout allocates the remaining width to the
-    # content host after the always-visible NavMenu takes its fixed 4
-    # (collapsed) or 18 (expanded) cells. Without this, the DualPane
-    # mounted inside renders at zero width and the user sees a blank
-    # screen at startup. The standalone ServicesHamburger widget was
-    # removed in the always-visible nav rework — the hamburger now
-    # lives inside the NavMenu itself.
+    # content host after the always-visible NavMenu takes its fixed
+    # 10-cell width (post-PR-#94 / #97 — single mode, no
+    # collapse/expand, sized to fit the longest 3-letter service
+    # label + the ``▌`` ribbon + per-row padding + borders). Without
+    # this, the DualPane mounted inside renders at zero width and the
+    # user sees a blank screen at startup. The pre-#94 standalone
+    # ServicesHamburger widget + the toggle/collapse modes were both
+    # dropped in the always-visible nav rework.
     CSS = """
     Screen {
         /* ``dropdown`` is declared between ``base`` and
@@ -271,9 +273,10 @@ class AwsTuiApp(App[None]):
             id="brand-banner",
         )
         with Horizontal(id="main-area"):
-            # NavMenu owns its own inline hamburger now (top row of the
-            # rail); the standalone ServicesHamburger widget was
-            # removed in the always-visible nav rework.
+            # NavMenu mounts as the always-visible left rail. Post-
+            # PR-#94 there is no hamburger / collapse / expand mode —
+            # the rail is a fixed-width pane that joins the Tab cycle
+            # like any other.
             yield NavMenu(vm=ctx.root_vm.services_menu, hub=ctx.hub, id="nav-menu")
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
@@ -850,7 +853,24 @@ class AwsTuiApp(App[None]):
                 error_type=type(exc).__name__,
             )
             cfg = None
-        connections = ctx.connection_resolver.list()
+        # ``connection_resolver.list()`` calls ``_explicit_connections()``
+        # which calls ``config_store.load()`` AGAIN — without this guard,
+        # a malformed ~/.config/aws-tui/config.toml propagates the second
+        # parse failure up through ``on_mount``, crashing the app with a
+        # raw Python traceback before any UI lands. The first ``load()``
+        # above is already guarded, but the resolver's internal load was
+        # not. Fall back to an empty list so the boot chain reaches the
+        # no-connection placeholder branch and the user gets a usable UI
+        # + the ``app.config_load.failed`` log line for diagnostics.
+        try:
+            connections = ctx.connection_resolver.list()
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.connection_resolver_list.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            connections = []
         initial_conn = None
         if cfg is not None and cfg.defaults.connection:
             initial_conn = next(

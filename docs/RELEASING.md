@@ -42,7 +42,7 @@ gh pr create --title "chore(release): cut vX.Y.Z" --fill
 
 Review the PR like any other change. Merge when CI is green.
 
-### Pre-tag checklist
+### 1.1. Pre-tag checklist
 
 - **Demo-mode smoke.** Run `AWS_TUI_DEMO=1 uv run aws-tui` from the release-PR branch. Verify the **DEMO MODE** chip appears in the banner, the four demo connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle through Shift+S, the S3 pane shows demo objects, the EMR pane shows two applications + ~10 job runs across states, and the clone-from-detail flow visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within ~5 seconds. If any of these break, fix forward; do NOT tag the release.
 
@@ -125,7 +125,7 @@ is always "fix forward, never overwrite":
 These four console steps are not automatable. The maintainer
 does them once before the first release through this pipeline.
 
-### 4.1 PyPI Trusted Publisher
+### 4.1. PyPI Trusted Publisher
 
 1. Log into [pypi.org](https://pypi.org) → **Your projects** →
    `aws-tui` → **Settings** → **Publishing** → **Add a new pending
@@ -140,7 +140,7 @@ does them once before the first release through this pipeline.
 Repeat for [test.pypi.org](https://test.pypi.org) with environment
 name `testpypi`.
 
-### 4.2 GitHub Environments
+### 4.2. GitHub Environments
 
 In `thekaveh/aws-tui` → Settings → **Environments** → New
 environment:
@@ -148,7 +148,7 @@ environment:
 - `pypi` — add **Required reviewers** = `thekaveh` (you).
 - `testpypi` — no protection rules.
 
-### 4.3 Homebrew tap repo
+### 4.3. Homebrew tap repo
 
 1. Create empty repo `thekaveh/homebrew-aws-tui` on GitHub.
 2. After the first PyPI release (v0.8.0) lands, bootstrap the
@@ -156,7 +156,7 @@ environment:
    From v0.8.1 onward the `bump-homebrew` workflow opens PRs
    automatically.
 
-### 4.4 Homebrew tap token
+### 4.4. Homebrew tap token
 
 The `bump-homebrew` workflow needs to push branches and open PRs
 in a DIFFERENT repo than the one running the workflow. The default

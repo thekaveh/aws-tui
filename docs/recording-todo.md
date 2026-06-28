@@ -1,7 +1,7 @@
 # Recording TODO
 
 > Items the maintainer (i.e. **you**) needs to record manually before
-> the v0.7.0 docs feel done. A subagent cannot drive a real terminal
+> the v0.8.0 docs feel done. A subagent cannot drive a real terminal
 > to produce asciinema casts or PNG screenshots, so this file is a
 > hand-off list. Each item lists where it lands in the docs and the
 > rough recipe.

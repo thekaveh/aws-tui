@@ -36,6 +36,7 @@ from botocore.exceptions import (
     PartialCredentialsError,
     ProfileNotFound,
     ReadTimeoutError,
+    TokenRetrievalError,
 )
 from botocore.exceptions import (
     ConnectionError as BotoConnectionError,
@@ -204,7 +205,12 @@ class S3FS:
         try:
             async with self._client() as s3:
                 resp = await s3.list_buckets()
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -280,7 +286,27 @@ class S3FS:
                     if not resp.get("IsTruncated"):
                         break
                     token = resp.get("NextContinuationToken")
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+                    if not token:
+                        # Defensive: a well-behaved S3 returns
+                        # ``NextContinuationToken`` whenever ``IsTruncated``
+                        # is true, but S3-compatible providers (MinIO,
+                        # Cloudflare R2, Backblaze B2, …) have shipped
+                        # responses with ``IsTruncated=True`` and no
+                        # token (or with the empty string). Without
+                        # this break the loop re-sends the SAME
+                        # request (token is None → the
+                        # ``if token is not None`` guard above keeps
+                        # ``ContinuationToken`` off the kwargs) and the
+                        # pane hangs. ``emr_logs.py::list_log_files``
+                        # uses the same ``if not token`` form for the
+                        # same reason.
+                        break
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -321,7 +347,12 @@ class S3FS:
                             )
                         raise NotFoundError(path.as_posix()) from exc
                     raise _map_client_error(exc, key) from exc
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -350,7 +381,12 @@ class S3FS:
         try:
             async with self._client() as s3:
                 await s3.put_object(Bucket=bucket, Key=key, Body=b"")
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -404,9 +440,23 @@ class S3FS:
                     if not resp.get("IsTruncated"):
                         break
                     token = resp.get("NextContinuationToken")
+                    if not token:
+                        # Same defensive break as the list() path
+                        # above — protects against S3-compatible
+                        # providers that return ``IsTruncated=True``
+                        # with no continuation token, which would
+                        # otherwise re-issue the same request forever
+                        # and either hang the delete or delete the
+                        # same batch repeatedly.
+                        break
                 if not deleted_any:
                     raise NotFoundError(path.as_posix())
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -445,7 +495,12 @@ class S3FS:
                 except ClientError as exc:
                     raise _map_client_error(exc, src_key) from exc
                 await s3.delete_object(Bucket=bucket, Key=src_key)
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -485,7 +540,12 @@ class S3FS:
                     if _error_code(exc) in {"NoSuchKey", "404", "NotFound"}:
                         raise NotFoundError(path.as_posix()) from exc
                     raise _map_client_error(exc, key) from exc
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -508,7 +568,12 @@ class S3FS:
                     if not chunk:
                         return
                     yield chunk
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -547,7 +612,12 @@ class S3FS:
                     )
                 except ClientError as exc:
                     raise _map_client_error(exc, key) from exc
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
