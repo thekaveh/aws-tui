@@ -13,6 +13,10 @@ from aws_tui.ui.widgets.pane import Pane
 from tests.snapshot.apps.demo_mode import DemoModeApp
 from tests.snapshot.conftest import THEMES
 
+# Narrower than conftest.TERMINAL_SIZE (120, 40): the extra 10 rows push
+# the boot toast below the captured frame, hiding the "Demo mode active"
+# advisory that our content-presence guard checks for.  30 rows keeps
+# both the BrandBanner "DEMO MODE" chip and the toast overlay in frame.
 TERMINAL_SIZE = (120, 30)
 
 

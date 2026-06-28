@@ -292,19 +292,16 @@ class InMemoryEmr:
         in-memory run + detail records so the next ``list_job_runs_page``
         or ``get_job_run`` call observes the new state.
         """
-        try:
-            await asyncio.sleep(1.0)
-            self._set_run_state(application_id, job_run_id, JobRunState.SCHEDULED)
-            await asyncio.sleep(1.0)
-            self._set_run_state(application_id, job_run_id, JobRunState.RUNNING)
-            await asyncio.sleep(3.0)
-            self._set_run_state(application_id, job_run_id, JobRunState.SUCCESS)
-        except asyncio.CancelledError:
-            # ``dispose()`` cancels in-flight walks; swallow so the
-            # task ends cleanly. Pre-fix the CancelledError would
-            # surface as an "unhandled exception in Task" warning on
-            # demo-mode shutdown.
-            raise
+        # asyncio propagates CancelledError automatically when
+        # ``dispose()`` calls ``task.cancel()``.  No try/except is
+        # needed — the cancellation unwinds the coroutine naturally
+        # and the task wrapper marks the task as cancelled.
+        await asyncio.sleep(1.0)
+        self._set_run_state(application_id, job_run_id, JobRunState.SCHEDULED)
+        await asyncio.sleep(1.0)
+        self._set_run_state(application_id, job_run_id, JobRunState.RUNNING)
+        await asyncio.sleep(3.0)
+        self._set_run_state(application_id, job_run_id, JobRunState.SUCCESS)
 
     def _set_run_state(self, application_id: str, job_run_id: str, state: JobRunState) -> None:
         """Mutate a run record's state by id.

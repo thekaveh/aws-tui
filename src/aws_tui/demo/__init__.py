@@ -42,7 +42,7 @@ def is_demo_mode_enabled(*, argv: Sequence[str] | None = None) -> bool:
     env_value = os.environ.get(DEMO_ENV_VAR, "").strip().lower()
     if env_value in _TRUTHY:
         return True
-    args = list(sys.argv if argv is None else argv)
+    args = sys.argv if argv is None else argv
     return "--demo" in args
 
 

@@ -8,6 +8,7 @@ for the curated content rationale.
 
 from __future__ import annotations
 
+import zlib
 from datetime import UTC, datetime, timedelta
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr
@@ -93,7 +94,7 @@ def seed_s3_data(fs: InMemoryFS, *, profile: str) -> None:
                 fs._tree[ancestor] = None
                 fs._mtime[ancestor] = _NOW
         fs._tree[path] = body
-        fs._mtime[path] = _NOW - timedelta(hours=hash(key) % 168)
+        fs._mtime[path] = _NOW - timedelta(hours=zlib.crc32(key.encode()) % 168)
 
 
 def seeded_demo_fs(profile: str) -> InMemoryFS:
@@ -104,23 +105,6 @@ def seeded_demo_fs(profile: str) -> InMemoryFS:
 
 
 # ── EMR seed data ───────────────────────────────────────────────────────────
-
-
-_FAILED_LOG: tuple[str, ...] = (
-    "26/06/27 11:42:12 INFO SparkContext: Running Spark version 3.5.0",
-    "26/06/27 11:42:18 INFO ResourceProfile: Default ResourceProfile created.",
-    "26/06/27 11:43:01 WARN MemoryManager: Total allocation exceeds 95% of heap",
-    "26/06/27 11:43:15 ERROR Executor: Exception in task 0.0 in stage 4.0",
-    "java.lang.OutOfMemoryError: Java heap space",
-    "        at org.apache.spark.sql.execution.ShuffleExchangeExec.eval(ShuffleExchangeExec.scala:104)",
-    "        at org.apache.spark.sql.execution.SparkPlan.eval(SparkPlan.scala:201)",
-    "Caused by: java.lang.OutOfMemoryError: GC overhead limit exceeded",
-    "        at java.util.HashMap.resize(HashMap.java:692)",
-    "26/06/27 11:43:18 ERROR YarnScheduler: Lost executor 4 on ip-10-0-1-15.ec2.internal",
-    "26/06/27 11:43:19 ERROR DAGScheduler: ResultStage 4 has failed the maximum allowable times.",
-    "26/06/27 11:43:20 WARN TaskSetManager: Lost task 0.0 in stage 4.0",
-    "26/06/27 11:43:21 ERROR Killed by AM",
-)
 
 
 def seed_emr_data(emr: InMemoryEmr) -> None:

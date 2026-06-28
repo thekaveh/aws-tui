@@ -152,7 +152,7 @@ class EmrServerlessPage(Widget):
         # re-fetches runs at most every ~6 min instead of every
         # ~30 s — orders of magnitude quieter without giving up
         # responsiveness once something is running.
-        demo_ctx = getattr(self.app, "_app_ctx", None)
+        demo_ctx = getattr(self.app, "app_ctx", None)
         demo_active = bool(demo_ctx and getattr(demo_ctx, "demo", False))
         apps_cadence = 5.0 if demo_active else 60.0
         runs_cadence = 5.0 if demo_active else 60.0
