@@ -8,7 +8,6 @@ miss because they exercise sub-components, not the full app composition
 
 from __future__ import annotations
 
-import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -51,13 +50,18 @@ async def _seed_fs() -> InMemoryFS:
 
 
 @pytest.mark.asyncio
-async def test_panes_populate_with_entries_after_mount() -> None:
+async def test_panes_populate_with_entries_after_mount(tmp_path: Path) -> None:
     """Mounting the full app with a wired S3Service must surface entry rows
     in both panes. Regression guard against the failure mode where the
     cursor/path/border refactor + StatusBar removal left both panes
-    empty in real launches even though unit tests passed."""
+    empty in real launches even though unit tests passed.
 
-    tmp = Path(tempfile.mkdtemp(prefix="aws-tui-smoke-"))
+    Uses the ``tmp_path`` pytest fixture so the temp tree is auto-cleaned
+    on test exit — the previous ``tempfile.mkdtemp`` form leaked one
+    ``/tmp/aws-tui-smoke-XXXXXX/`` directory per run.
+    """
+
+    tmp = tmp_path
 
     # Pre-seed the S3 provider so build_vm gets a populated FS. The local
     # pane reads the real OS filesystem under the rooted directory below.
