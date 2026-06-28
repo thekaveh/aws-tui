@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import html as html_lib
 from pathlib import Path
 
 import pytest
 
+from aws_tui.ui.widgets.pane import Pane
 from tests.snapshot.apps.demo_mode import DemoModeApp
 from tests.snapshot.conftest import THEMES
 
@@ -14,22 +17,75 @@ TERMINAL_SIZE = (120, 30)
 
 
 async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
-    """Wait for all async boot workers to complete before snapping.
+    """Wait for all async boot workers AND their downstream reactive
+    updates to settle before snapping.
 
-    Without draining, the snapshot can capture the pane in a transient
-    "loading…" state (non-deterministic render). The integration tests
-    use this same pattern (see ``tests/integration/test_demo_mode.py``).
-    Five drain+pause cycles cover the initial mount worker, the S3
-    file-listing worker, any queued post-mount refresh, and scheduled
-    animations; ``wait_for_scheduled_animations`` ensures CSS
-    transitions (e.g. light-theme focus rings) have settled before
-    the screenshot is taken.
+    Boot chain has two layers that need to settle before the snapshot:
+
+    Layer 1 — Textual ``run_worker`` workers
+        ``_initial_mount_worker`` drives the connection attempt and
+        resolves when the LEFT pane reaches a terminal state (IDLE,
+        EMPTY, UNREACHABLE, etc.).  ``workers.wait_for_complete``
+        catches these.
+
+    Layer 2 — plain asyncio task (``ContentHostVM._setup_task``)
+        ``ContentHostVM.set_content()`` dispatches ``DualPaneVM.setup()``
+        as a raw ``asyncio.create_task``, NOT a Textual worker.
+        ``workers.wait_for_complete`` is blind to this task.
+        We await it directly via
+        ``app._app_ctx.root_vm.content_host._setup_task`` so we know
+        the InMemoryFS listing has finished before we force-refresh
+        the chrome.
+
+    Layer 3 — direct chrome refresh
+        After setup completes, ``_notify("viewmodel")`` has fired but
+        the downstream call_after_refresh → InvokeLater → screen
+        callback chain is non-deterministic across the 10 sequential
+        test runs (different asyncio scheduling pressure per theme).
+        Rather than polling the async queue, we call ``_refresh_chrome``
+        directly on every mounted ``Pane`` widget.  This is safe because:
+        (a) setup has completed, so ``pane._vm.viewmodel.summary`` already
+            holds the settled value ("2 obj · 0 B", "21 obj · 94 B", etc.),
+        (b) ``_refresh_chrome`` is a pure synchronous read-and-update —
+            it does not re-trigger the same reactive chain — and
+        (c) it is exactly what the reactive chain would have called
+            once settled; forcing it here just removes the timing
+            uncertainty from the snapshot.
+
+    Two ``pilot.pause()`` calls after the force-refresh drain CSS
+    transitions and focus-ring animations before the snapshot is taken.
+    ``wait_for_scheduled_animations`` at the end catches any stragglers.
+
+    The hard cap of 20 iterations in the worker loop handles nested
+    second-order workers.
     """
-    for _ in range(5):
-        await pilot.app.workers.wait_for_complete(
-            list(pilot.app.workers._workers)  # type: ignore[attr-defined]
-        )
+    # Layer 1: drain all Textual run_worker workers.
+    for _ in range(20):
+        workers = list(pilot.app.workers._workers)  # type: ignore[attr-defined]
+        if not workers:
+            break
+        await pilot.app.workers.wait_for_complete(workers)
         await pilot.pause()
+
+    # Layer 2: await the ContentHostVM._setup_task directly.
+    # This is the plain asyncio task that run_worker misses.
+    with contextlib.suppress(Exception):
+        setup_task: asyncio.Task[None] | None = pilot.app._app_ctx.root_vm.content_host._setup_task  # type: ignore[attr-defined]
+        if setup_task is not None and not setup_task.done():
+            await setup_task
+
+    # Layer 3: force-sync every Pane's chrome (header + footer) from
+    # the live VM state.  After setup_task is done, the VM is settled;
+    # calling _refresh_chrome directly bypasses the non-deterministic
+    # call_after_refresh → InvokeLater → screen-callback chain.
+    for pane in pilot.app.query(Pane):
+        with contextlib.suppress(Exception):
+            pane._refresh_chrome()  # type: ignore[attr-defined]
+
+    # Two final ticks drain any pending animations / CSS transitions
+    # (focus rings, toast entrance) before the screenshot is taken.
+    await pilot.pause()
+    await pilot.pause()
     await pilot.wait_for_scheduled_animations()
 
 
