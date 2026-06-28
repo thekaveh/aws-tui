@@ -293,12 +293,17 @@ class BrandBanner(Widget):
         self.border_subtitle = _PEDIGREE
         if demo:
             # Visible affordance — user feedback (spec § "Visible
-            # affordances"): the persistent warning-color chip in
-            # the banner subtitle is the always-on cue that the
-            # user is in demo mode. Tests check for this exact
-            # string; if you change the copy, update the snapshot
-            # content-presence guard too.
-            self.border_subtitle = "DEMO MODE — no real AWS calls"
+            # affordances"): the persistent chip in the banner
+            # subtitle is the always-on cue that the user is in
+            # demo mode. PREPEND it to the pedigree instead of
+            # replacing — user feedback (post-PR-#103): "the demo
+            # mode removes all the pedigree details listed on the
+            # bottom right of the logo pane". The DEMO chip leads
+            # so the eye catches it first; the project credits +
+            # version + repo URL stay visible right after. Tests
+            # check the SUBSTRING "DEMO MODE", so this still
+            # satisfies the integration + snapshot guards.
+            self.border_subtitle = f"DEMO MODE — no real AWS calls  ·  {_PEDIGREE}"
 
     @property
     def palette(self) -> tuple[str, ...]:
