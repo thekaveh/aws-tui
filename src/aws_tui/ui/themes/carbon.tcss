@@ -81,6 +81,16 @@ Pane.-focused {
     border: solid $accent;
 }
 
+/* When the NavMenu has focus, dim the file-pane focused
+   border so only one pane reads as visually selected at a
+   time. User feedback (post-PR-#97): "Both the menu and the
+   left/right panes can be shown as focused / selected which
+   again is confusing." The class is driven by NavMenu.on_focus
+   / on_blur — see ui/widgets/nav_menu.py. */
+Screen.-nav-active Pane.-focused {
+    border: solid $rule-dim;
+}
+
 Pane .breadcrumb {
     height: 1;
     background: $bg-elev;

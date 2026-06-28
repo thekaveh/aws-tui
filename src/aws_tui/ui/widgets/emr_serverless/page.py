@@ -152,10 +152,17 @@ class EmrServerlessPage(Widget):
         # re-fetches runs at most every ~6 min instead of every
         # ~30 s — orders of magnitude quieter without giving up
         # responsiveness once something is running.
+        # Demo poller cadence — user feedback (post-PR-#97): the 5 s
+        # demo cadence felt "refreshed every second" because the clone
+        # state machine mutates state mid-interval too. Bump apps + runs
+        # to 30 s; keep detail at 5 s so the clone state walk
+        # (SUBMITTED → SCHEDULED at 1s → RUNNING at 2s → SUCCESS at 5s,
+        # ~5 s total) is still visible in the detail pane on the
+        # currently-selected run. Prod stays at 60/60/30.
         demo_ctx = getattr(self.app, "app_ctx", None)
         demo_active = bool(demo_ctx and getattr(demo_ctx, "demo", False))
-        apps_cadence = 5.0 if demo_active else 60.0
-        runs_cadence = 5.0 if demo_active else 60.0
+        apps_cadence = 30.0 if demo_active else 60.0
+        runs_cadence = 30.0 if demo_active else 60.0
         detail_cadence = 5.0 if demo_active else 30.0
         self.set_interval(apps_cadence, self._tick_applications, name="emr-poll-apps")
         self.set_interval(runs_cadence, self._tick_runs, name="emr-poll-runs")
