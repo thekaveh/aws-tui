@@ -1,7 +1,7 @@
 # aws-tui
 
 <p align="center">
-  <img src="assets/screenshots/aws-tui-running.png" alt="aws-tui — Norton-Commander-style dual-pane TUI with the carbon block-art banner up top, an S3-compatible MinIO source on the left, the local filesystem on the right, and a labelled Commands row along the bottom." width="100%">
+  <img src="assets/screenshots/aws-tui-running.png" alt="aws-tui — carbon block-art banner up top with a DEMO MODE pedigree subtitle, left rail with S3 and EMR services plus a docked Settings gear, EMR page mid-screen showing the etl-pipeline-1 application picker, a job-runs master list with a state-filter chip strip, a right-side run-detail pane (state, started, IAM role, entry point), a logs pane with the default ERROR/FAIL/Exception filter, and a labelled Commands row along the bottom." width="100%">
 </p>
 
 Cross-platform TUI for AWS and S3-compatible services — runs on macOS,
