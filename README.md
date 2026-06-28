@@ -9,17 +9,16 @@ Linux, and Windows. Powered by
 [Textual](https://textual.textualize.io/) and the
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
-> **Status: v0.7.0 + an unreleased train of fixes & features on `main`
-> toward v0.8.** Highlights since the tag: Apache 2.0 relicense, full
-> cross-platform support (macOS + Linux + Windows), App Settings as a
-> first-class nav page with inline CRUD for s3-compatible connections,
-> Settings docked at the bottom of the rail, six additional themes,
-> VMx consumed from PyPI, **EMR Serverless (read-only browser +
-> clone-job-run) as the second shipped service** (PRs #76–#83 —
-> applications listing, job runs master-detail, state-filter chips,
-> clone-and-edit modal for re-running a finished job), plus a steady
-> stream of UX polish and crash fixes. See [`CHANGELOG.md`](CHANGELOG.md)
-> `[Unreleased]` for the full per-PR delta.
+> **Status: v0.8.0** — first release on PyPI (`pip install
+> aws-tui`). Headline change from v0.7.0: **EMR Serverless as a
+> second first-class service** alongside S3 — application picker,
+> job-runs master-detail with state-filter chips, columnized run
+> rows with colored state indicators, on-demand log streaming with
+> a grep filter + LRU cache, clone-and-edit modal for re-running
+> a finished job, and a 4-slot Tab cycle through NavMenu → LEFT →
+> DETAIL → LOGS. The nav rail is now a regular focusable pane
+> with text labels (no collapse mode, no icon emojis). See
+> [`CHANGELOG.md`](CHANGELOG.md) for the full per-PR delta.
 
 ## 1. Features
 
