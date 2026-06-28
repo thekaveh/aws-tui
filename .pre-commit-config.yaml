@@ -43,6 +43,21 @@ repos:
         require_serial: true
         files: ^src/
 
+      # Architectural-layer enforcement. CI already runs this via
+      # ``ci.yml::lint-type`` and ``release.yml::verify``; mirroring
+      # it locally as a pre-commit hook closes the asymmetry where a
+      # contributor who installs the hooks but doesn't open a PR
+      # against CI could still ship a layer violation. Runs on every
+      # commit regardless of which file changed because the script
+      # itself only takes ~50 ms and reports a single line on
+      # success.
+      - id: check-layers
+        name: check-layers (architecture)
+        entry: ./scripts/check-layers.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
   - repo: https://github.com/ComPWA/taplo-pre-commit
     rev: v0.9.3
     hooks:
