@@ -219,6 +219,13 @@ class JobRunLogsPane(Widget, can_focus=True):
     def _on_hub_message(self, msg: object) -> None:
         if not isinstance(msg, PropertyChangedMessage):
             return
+        # Sender filter — sibling EMR VMs (JobRunsVM, JobRunDetailVM,
+        # ApplicationsVM) all expose a ``state`` property on the
+        # same hub. Without this, arrow-walking the runs list
+        # cascades into JobRunsVM.state echoes that this pane would
+        # treat as a reason to re-render its body + status row.
+        if getattr(msg, "sender_object", None) is not self._vm:
+            return
         if msg.property_name in {"available_files", "current_file"}:
             self.call_after_refresh(self._refresh_chips)
         elif msg.property_name == "filter":
