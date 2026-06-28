@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from aws_tui.demo.connections import DemoConnectionResolver, demo_connections
 from aws_tui.infra.connection_resolver import Connection
 
@@ -49,3 +51,24 @@ def test_demo_connection_resolver_default_returns_connection_type() -> None:
     resolver = DemoConnectionResolver()
     default = resolver.default()
     assert default is None or isinstance(default, Connection)
+
+
+def test_demo_connection_resolver_resolves_known_name() -> None:
+    resolver = DemoConnectionResolver()
+    conn = resolver.resolve("demo-prod")
+    assert conn.name == "demo-prod"
+
+
+def test_demo_connection_resolver_resolves_all_demo_names() -> None:
+    """resolve() must succeed for every name returned by list()."""
+    resolver = DemoConnectionResolver()
+    for conn in resolver.list():
+        assert resolver.resolve(conn.name) == conn
+
+
+def test_demo_connection_resolver_resolve_unknown_name_raises() -> None:
+    from aws_tui.infra.connection_resolver import ConnectionNotFound
+
+    resolver = DemoConnectionResolver()
+    with pytest.raises(ConnectionNotFound):
+        resolver.resolve("not-a-real-connection")

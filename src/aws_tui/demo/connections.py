@@ -55,11 +55,9 @@ def demo_connections() -> tuple[Connection, ...]:
 class DemoConnectionResolver:
     """Drop-in for ``ConnectionResolver`` in demo mode.
 
-    The public surface is ``list()`` + ``default()`` only — those
-    are the two methods the composition root + boot chain call.
-    Other ``ConnectionResolver`` methods (e.g. add_connection,
-    remove_connection used by the Settings panel) are not required
-    for demo mode because the demo connections are immutable.
+    The public surface mirrors the methods the composition root and boot
+    chain call on ``ConnectionResolver``.  Demo connections are immutable
+    so add/remove/update are not implemented.
     """
 
     def list(self) -> tuple[Connection, ...]:
@@ -67,6 +65,20 @@ class DemoConnectionResolver:
 
     def default(self) -> Connection | None:
         return demo_connections()[0]
+
+    def resolve(self, name: str) -> Connection:
+        """Return the demo connection matching ``name``; raises if not found.
+
+        Mirrors :meth:`~aws_tui.infra.connection_resolver.ConnectionResolver.resolve`
+        so the composition root can substitute a ``DemoConnectionResolver``
+        for a ``ConnectionResolver`` without divergent error semantics.
+        """
+        match = next((c for c in demo_connections() if c.name == name), None)
+        if match is None:
+            from aws_tui.infra.connection_resolver import ConnectionNotFound
+
+            raise ConnectionNotFound(name)
+        return match
 
 
 __all__ = ["DemoConnectionResolver", "demo_connections"]
