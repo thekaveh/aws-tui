@@ -20,7 +20,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from aws_tui.demo.in_memory_emr import InMemoryEmr
+
 from urllib.parse import urlparse
 
 from vmx import Message, MessageHub, RxDispatcher
@@ -58,6 +62,8 @@ class AppContext:
         "config_store",
         "confirm_vm",
         "connection_resolver",
+        "demo",
+        "demo_emr",
         "dispatcher",
         "hub",
         "initial_theme",
@@ -93,6 +99,8 @@ class AppContext:
         dispatcher: Dispatcher,
         initial_theme: str,
         s3_connections_vm: S3ConnectionsVM,
+        demo: bool = False,
+        demo_emr: InMemoryEmr | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
     ) -> None:
         self.root_vm = root_vm
@@ -112,6 +120,10 @@ class AppContext:
         self.dispatcher = dispatcher
         self.initial_theme = initial_theme
         self.s3_connections_vm = s3_connections_vm
+        self.demo = demo
+        # Non-None only in demo mode; disposed by AwsTuiApp on shutdown so
+        # in-flight clone state-machine tasks are cancelled cleanly.
+        self.demo_emr: InMemoryEmr | None = demo_emr
         self.unreachable_connections: set[tuple[str, str]] = (
             unreachable_connections if unreachable_connections is not None else set()
         )
@@ -121,6 +133,7 @@ def build_app_context(
     *,
     config_dir: Path | None = None,
     cache_dir: Path | None = None,
+    demo: bool = False,
 ) -> AppContext:
     """Build the full ``AppContext`` for a fresh aws-tui session.
 
@@ -143,7 +156,9 @@ def build_app_context(
         cache_dir = cache_home()
 
     log_sink = LogSink(base_dir=cache_dir / "log")
-    config_store = ConfigStore(path=config_dir / "config.toml")
+    # read_only=demo: in demo mode all write methods on ConfigStore are
+    # silent no-ops so the user's real config.toml is never mutated.
+    config_store = ConfigStore(path=config_dir / "config.toml", read_only=demo)
     keybindings_overlay: dict[str, str | list[str]] = {}
     try:
         _cfg = config_store.load()
@@ -178,7 +193,27 @@ def build_app_context(
         user_themes_dir=config_dir / "themes",
         user_overlay=config_dir / "theme.tcss",
     )
-    connection_resolver = ConnectionResolver(config_store=config_store)
+    if demo:
+        from aws_tui.demo.connections import DemoConnectionResolver
+        from aws_tui.demo.seeds import seeded_demo_emr, seeded_demo_fs
+
+        # DemoConnectionResolver is a structural subtype — typed as the
+        # production class so all downstream call sites remain compatible.
+        connection_resolver: ConnectionResolver = DemoConnectionResolver()  # type: ignore[assignment]
+        _demo_emr: InMemoryEmr = seeded_demo_emr()
+        demo_emr_ref: InMemoryEmr | None = _demo_emr
+        s3_fs_factory = lambda c: seeded_demo_fs(c.profile or "demo-default")  # noqa: E731
+        # Captured by the lambda so every emr_client_factory(connection)
+        # call within this AppContext returns the SAME InMemoryEmr —
+        # switching demo profiles in the picker preserves in-flight clone
+        # state.  A second build_app_context() call (rare; mostly in tests)
+        # gets its own _demo_emr; we don't share at module scope.
+        emr_client_factory = lambda c: _demo_emr  # noqa: E731
+    else:
+        connection_resolver = ConnectionResolver(config_store=config_store)
+        demo_emr_ref = None
+        s3_fs_factory = None
+        emr_client_factory = None
     aws_session = AwsSession()
     transfer_journal = TransferJournal(base_dir=cache_dir / "transfers")
 
@@ -192,6 +227,7 @@ def build_app_context(
         transfer_journal=transfer_journal,
         hub=hub,
         dispatcher=dispatcher,
+        s3_fs_factory=s3_fs_factory,
     )
     # cast to Service: S3Service satisfies the protocol structurally; mypy
     # rejects ClassVar `descriptor` here so we widen explicitly.
@@ -200,6 +236,7 @@ def build_app_context(
     emr_service = EmrServerlessService(
         hub=hub,
         dispatcher=dispatcher,
+        emr_client_factory=emr_client_factory,
     )
     registry.register(cast("Service", emr_service))
 
@@ -242,6 +279,8 @@ def build_app_context(
         dispatcher=dispatcher,
         initial_theme=initial_theme,
         s3_connections_vm=s3_connections_vm,
+        demo=demo,
+        demo_emr=demo_emr_ref,
         unreachable_connections=set(),
     )
 

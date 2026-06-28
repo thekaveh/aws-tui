@@ -267,6 +267,7 @@ class AwsTuiApp(App[None]):
         yield BrandBanner(
             theme_name=ctx.initial_theme,
             hub=ctx.hub,
+            demo=ctx.demo,
             id="brand-banner",
         )
         with Horizontal(id="main-area"):
@@ -351,6 +352,17 @@ class AwsTuiApp(App[None]):
         # ``call_after_refresh`` so it runs AFTER Textual's first
         # focus pass instead of being silently undone by it.
         self.call_after_refresh(lambda: self.set_focus(None))
+
+        if ctx.demo:
+            # Spec: one-shot Advisory toast on mount so the user
+            # learns the in-session contract on first run. The
+            # persistent banner subtitle keeps reminding them
+            # afterwards.
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="Demo mode active — try every feature; nothing persists",
+            )
 
     async def _initial_mount_worker(
         self, *, initial_conn: Connection, auth_state: TokenState
@@ -502,7 +514,7 @@ class AwsTuiApp(App[None]):
         narrator maps these into toast text.
         """
         ctx = self._app_ctx
-        if conn.kind == "aws":
+        if conn.kind == "aws" and not ctx.demo:
             try:
                 state = ctx.aws_session.probe_token(conn).state
             except Exception as exc:
@@ -2425,6 +2437,14 @@ class AwsTuiApp(App[None]):
             ctx.confirm_vm.dispose()
             ctx.transfers_vm.dispose()
             ctx.root_vm.dispose()
+        with contextlib.suppress(Exception):
+            # In demo mode, cancel any in-flight clone state-machine tasks
+            # so asyncio doesn't emit "Task was destroyed but it is pending"
+            # warnings on exit.  The InMemoryEmr singleton is shared across
+            # connection switches within the same AppContext, so we dispose
+            # it here (on app shutdown) rather than in EmrServerlessPageVM.
+            if ctx.demo_emr is not None:
+                ctx.demo_emr.dispose()
 
 
 def main() -> None:
@@ -2435,8 +2455,21 @@ def main() -> None:
     writes a crash dump under ``~/.cache/aws-tui/crash/`` and the
     saved :class:`CrashReport` is printed here before the exception is
     re-raised so the user knows where the dump landed.
+
+    Recognises one CLI flag: ``--version`` prints the version + demo
+    status and exits without launching the UI.
     """
-    app = AwsTuiApp()
+    from aws_tui.demo import is_demo_mode_enabled
+
+    demo = is_demo_mode_enabled()
+
+    if "--version" in sys.argv:
+        status = "enabled" if demo else "disabled"
+        # Match the pip convention: ``project-name 0.8.0``.
+        print(f"aws-tui {__version__} (demo: {status})")
+        return
+
+    app = AwsTuiApp(context=build_app_context(demo=demo))
     try:
         app.run()
     except BaseException as exc:

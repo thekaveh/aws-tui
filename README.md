@@ -134,6 +134,20 @@ Requirements: Python 3.11 / 3.12 / 3.13. Runs on macOS, Linux, and
 Windows — see [`docs/platforms.md`](docs/platforms.md) for the
 recommended terminal + font setup per OS.
 
+### Try it without AWS credentials
+
+Pass `AWS_TUI_DEMO=1` (or `--demo`) to launch with deterministic mock data backing all services:
+
+```sh
+AWS_TUI_DEMO=1 aws-tui
+# or
+aws-tui --demo
+```
+
+You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs across multiple states, and working clone / copy / delete operations. State resets every launch — nothing persists. A persistent **DEMO MODE** chip in the banner subtitle keeps the contract obvious.
+
+To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
+
 ## 3. Quickstart
 
 ```bash

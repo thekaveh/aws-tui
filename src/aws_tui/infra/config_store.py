@@ -85,14 +85,27 @@ def _default_path() -> Path:
 
 
 class ConfigStore:
-    """Read/write API around the TOML config file."""
+    """Read/write API around the TOML config file.
 
-    def __init__(self, *, path: Path | None = None) -> None:
+    When constructed with ``read_only=True`` (demo mode), all write
+    operations (:meth:`save`, :meth:`add_connection`,
+    :meth:`update_connection`, :meth:`remove_connection`,
+    :meth:`set_default_connection`) are silent no-ops.  Reads
+    (:meth:`load`) still function normally.
+    """
+
+    def __init__(self, *, path: Path | None = None, read_only: bool = False) -> None:
         self._path: Path = path if path is not None else _default_path()
+        self._read_only = read_only
 
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def read_only(self) -> bool:
+        """True when the store is in demo/read-only mode."""
+        return self._read_only
 
     # ------------------------------------------------------------------
     # Read
@@ -178,7 +191,13 @@ class ConfigStore:
         Writes to a tempfile in the same directory as the target, then
         :func:`os.replace`-es it into place. If anything goes wrong the
         original file (if any) is left untouched.
+
+        In read-only mode (``self.read_only is True``) this is a silent
+        no-op so that demo mode cannot accidentally mutate the user's real
+        ``config.toml``.
         """
+        if self._read_only:
+            return
         for entry in config.connections.values():
             if entry.kind not in VALID_KINDS:
                 raise ConfigError(f"connection {entry.name!r} has invalid kind {entry.kind!r}")

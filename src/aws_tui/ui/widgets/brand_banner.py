@@ -276,6 +276,7 @@ class BrandBanner(Widget):
         *,
         theme_name: str = "carbon",
         hub: MessageHub[Message] | None = None,
+        demo: bool = False,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
@@ -290,6 +291,14 @@ class BrandBanner(Widget):
         # comes from the theme tcss.
         self.border_title = _TAGLINE
         self.border_subtitle = _PEDIGREE
+        if demo:
+            # Visible affordance — user feedback (spec § "Visible
+            # affordances"): the persistent warning-color chip in
+            # the banner subtitle is the always-on cue that the
+            # user is in demo mode. Tests check for this exact
+            # string; if you change the copy, update the snapshot
+            # content-presence guard too.
+            self.border_subtitle = "DEMO MODE — no real AWS calls"
 
     @property
     def palette(self) -> tuple[str, ...]:

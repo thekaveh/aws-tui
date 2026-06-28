@@ -292,3 +292,57 @@ def test_save_chmods_parent_dir_to_0o700(tmp_path: Path) -> None:
     assert parent_mode == 0o700, (
         f"config parent dir should be 0o700 (defense-in-depth) but is 0o{parent_mode:o}"
     )
+
+
+# ── read_only (demo-mode) tests ────────────────────────────────────────────
+
+
+def test_read_only_config_store_save_is_noop(tmp_path: Path) -> None:
+    """ConfigStore(read_only=True).save() must not write the file."""
+    path = tmp_path / "config.toml"
+    store = ConfigStore(path=path, read_only=True)
+    cfg = Config(
+        connections={"demo-dev": ConnectionEntry(name="demo-dev", kind="aws", profile="demo-dev")},
+        defaults=Defaults(),
+        keybindings=Keybindings(),
+    )
+    store.save(cfg)
+    assert not path.exists(), "read_only store must not write config.toml"
+
+
+def test_read_only_config_store_add_connection_is_noop(tmp_path: Path) -> None:
+    """add_connection on a read_only store must not create the file."""
+    path = tmp_path / "config.toml"
+    store = ConfigStore(path=path, read_only=True)
+    store.add_connection(ConnectionEntry(name="x", kind="aws", profile="x"))
+    assert not path.exists()
+
+
+def test_read_only_config_store_remove_connection_is_noop(tmp_path: Path) -> None:
+    """remove_connection on a read_only store must not raise or write."""
+    path = tmp_path / "config.toml"
+    # Seed a real file via a writable store.
+    writable = ConfigStore(path=path)
+    writable.add_connection(ConnectionEntry(name="x", kind="aws", profile="x"))
+    mtime_before = path.stat().st_mtime
+
+    read_only = ConfigStore(path=path, read_only=True)
+    read_only.remove_connection("x")
+    assert path.stat().st_mtime == mtime_before, "read_only store must not touch the file"
+
+
+def test_read_only_config_store_load_still_works(tmp_path: Path) -> None:
+    """load() must still function on a read_only store."""
+    path = tmp_path / "config.toml"
+    writable = ConfigStore(path=path)
+    writable.add_connection(ConnectionEntry(name="y", kind="aws", profile="y"))
+
+    read_only = ConfigStore(path=path, read_only=True)
+    cfg = read_only.load()
+    assert "y" in cfg.connections
+
+
+def test_read_only_property(tmp_path: Path) -> None:
+    """ConfigStore.read_only reflects the constructor flag."""
+    assert ConfigStore(path=tmp_path / "c.toml").read_only is False
+    assert ConfigStore(path=tmp_path / "c.toml", read_only=True).read_only is True
