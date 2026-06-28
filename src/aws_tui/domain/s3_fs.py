@@ -36,6 +36,7 @@ from botocore.exceptions import (
     PartialCredentialsError,
     ProfileNotFound,
     ReadTimeoutError,
+    TokenRetrievalError,
 )
 from botocore.exceptions import (
     ConnectionError as BotoConnectionError,
@@ -204,7 +205,12 @@ class S3FS:
         try:
             async with self._client() as s3:
                 resp = await s3.list_buckets()
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -295,7 +301,12 @@ class S3FS:
                         # uses the same ``if not token`` form for the
                         # same reason.
                         break
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -336,7 +347,12 @@ class S3FS:
                             )
                         raise NotFoundError(path.as_posix()) from exc
                     raise _map_client_error(exc, key) from exc
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -365,7 +381,12 @@ class S3FS:
         try:
             async with self._client() as s3:
                 await s3.put_object(Bucket=bucket, Key=key, Body=b"")
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -430,7 +451,12 @@ class S3FS:
                         break
                 if not deleted_any:
                     raise NotFoundError(path.as_posix())
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -469,7 +495,12 @@ class S3FS:
                 except ClientError as exc:
                     raise _map_client_error(exc, src_key) from exc
                 await s3.delete_object(Bucket=bucket, Key=src_key)
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -509,7 +540,12 @@ class S3FS:
                     if _error_code(exc) in {"NoSuchKey", "404", "NotFound"}:
                         raise NotFoundError(path.as_posix()) from exc
                     raise _map_client_error(exc, key) from exc
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -532,7 +568,12 @@ class S3FS:
                     if not chunk:
                         return
                     yield chunk
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
@@ -571,7 +612,12 @@ class S3FS:
                     )
                 except ClientError as exc:
                     raise _map_client_error(exc, key) from exc
-        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            TokenRetrievalError,
+        ) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc

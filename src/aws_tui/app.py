@@ -850,7 +850,24 @@ class AwsTuiApp(App[None]):
                 error_type=type(exc).__name__,
             )
             cfg = None
-        connections = ctx.connection_resolver.list()
+        # ``connection_resolver.list()`` calls ``_explicit_connections()``
+        # which calls ``config_store.load()`` AGAIN — without this guard,
+        # a malformed ~/.config/aws-tui/config.toml propagates the second
+        # parse failure up through ``on_mount``, crashing the app with a
+        # raw Python traceback before any UI lands. The first ``load()``
+        # above is already guarded, but the resolver's internal load was
+        # not. Fall back to an empty list so the boot chain reaches the
+        # no-connection placeholder branch and the user gets a usable UI
+        # + the ``app.config_load.failed`` log line for diagnostics.
+        try:
+            connections = ctx.connection_resolver.list()
+        except Exception as exc:
+            ctx.log_sink.error(
+                "app.connection_resolver_list.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            connections = []
         initial_conn = None
         if cfg is not None and cfg.defaults.connection:
             initial_conn = next(
