@@ -280,6 +280,19 @@ class S3FS:
                     if not resp.get("IsTruncated"):
                         break
                     token = resp.get("NextContinuationToken")
+                    if not token:
+                        # Defensive: a well-behaved S3 returns
+                        # ``NextContinuationToken`` whenever ``IsTruncated``
+                        # is true, but S3-compatible providers (MinIO,
+                        # Cloudflare R2, Backblaze B2, …) have shipped
+                        # responses with ``IsTruncated=True`` and no
+                        # token. Without this break the loop re-sends
+                        # the SAME request (token is None → the
+                        # ``if token is not None`` guard above keeps
+                        # ``ContinuationToken`` off the kwargs) and the
+                        # pane hangs. Matches the pattern in
+                        # ``emr_logs.py::list_log_files``.
+                        break
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
@@ -404,6 +417,15 @@ class S3FS:
                     if not resp.get("IsTruncated"):
                         break
                     token = resp.get("NextContinuationToken")
+                    if not token:
+                        # Same defensive break as the list() path
+                        # above — protects against S3-compatible
+                        # providers that return ``IsTruncated=True``
+                        # with no continuation token, which would
+                        # otherwise re-issue the same request forever
+                        # and either hang the delete or delete the
+                        # same batch repeatedly.
+                        break
                 if not deleted_any:
                     raise NotFoundError(path.as_posix())
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
