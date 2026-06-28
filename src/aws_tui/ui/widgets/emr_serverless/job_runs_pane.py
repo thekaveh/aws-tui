@@ -308,7 +308,17 @@ class JobRunsPane(Widget, can_focus=True):
     def action_cursor_up(self) -> None:
         if self._cursor_index > 0:
             self._cursor_index -= 1
-            self._refresh_rows()
+            # Lightweight: only flip the ``-selected`` class on the
+            # affected rows. Calling the full ``_refresh_rows`` here
+            # (``remove_children`` + re-mount everything) is what made
+            # arrow-walking the list visibly flash, post-PR-#99: "the
+            # job runs on the emr still keeps being refreshed every
+            # time I move through the items". Row content (name +
+            # timestamp + state glyph) hasn't changed — only WHICH
+            # row carries the cursor — so re-mounting the whole list
+            # for a cursor move is pure waste. Same pattern as
+            # ``NavMenu._repaint_rows`` (see ui/widgets/nav_menu.py).
+            self._repaint_selection()
             # Master-detail: the detail pane follows the cursor.
             # Posting RunSelected on every cursor move (instead of
             # waiting for Enter) is the UX the user asked for —
@@ -322,7 +332,7 @@ class JobRunsPane(Widget, can_focus=True):
     def action_cursor_down(self) -> None:
         if self._cursor_index + 1 < len(self._vm.runs):
             self._cursor_index += 1
-            self._refresh_rows()
+            self._repaint_selection()
             self._post_run_selected_for_cursor()
 
     def action_commit_selection(self) -> None:
@@ -371,7 +381,7 @@ class JobRunsPane(Widget, can_focus=True):
                 for idx, r in enumerate(runs):
                     if r.job_run_id == target.run_id:
                         self._cursor_index = idx
-                        self._refresh_rows()
+                        self._repaint_selection()
                         self.post_message(self.RunSelected(target.run_id))
                         return
                 return
@@ -414,6 +424,20 @@ class JobRunsPane(Widget, can_focus=True):
                 chip.add_class("-active")
             else:
                 chip.remove_class("-active")
+
+    def _repaint_selection(self) -> None:
+        """Flip the ``-selected`` class on the rows so the visible
+        cursor matches ``_cursor_index`` — WITHOUT re-mounting. Used
+        by arrow / click handlers where only the cursor position
+        changed; the underlying run rows are unchanged so wiping
+        them and rebuilding (``_refresh_rows``) is pure flicker.
+        """
+        runs = self._vm.runs
+        if not runs or not (0 <= self._cursor_index < len(runs)):
+            return
+        target_run_id = runs[self._cursor_index].job_run_id
+        for row in self.query(_JobRunRow):
+            row.set_class(row.run_id == target_run_id, "-selected")
 
     def _refresh_rows(self) -> None:
         try:
