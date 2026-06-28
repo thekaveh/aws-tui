@@ -27,6 +27,16 @@ banned ui        "View"          "boto3" "aioboto3" "botocore" "aws_tui\\.infra\
 # banned. ui/ is a hard upward dependency.
 banned services  "Services"      "textual" "aws_tui\\.ui"
 
+# demo/ is the runtime-mock layer. It implements domain interfaces
+# and produces fake clients consumed by the composition root only.
+# Every production layer is banned from importing it so accidentally
+# wiring fake clients into prod code fails CI immediately.
+banned vm        "ViewModel"     "aws_tui\\.demo"
+banned domain    "Domain"        "aws_tui\\.demo"
+banned infra     "Infrastructure" "aws_tui\\.demo"
+banned ui        "View"          "aws_tui\\.demo"
+banned services  "Services"      "aws_tui\\.demo"
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
