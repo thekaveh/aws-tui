@@ -328,15 +328,61 @@ class EmrServerlessPage(Widget):
             notifications.advise(stack, subject=subject, message=message)
 
     def _cycle(self, direction: Literal["left", "right"]) -> None:
-        # 2-slot cycle: LEFT (JobRunsPane) ↔ RIGHT (JobRunLogsPane).
-        # The detail pane is a passive, non-focusable display and doesn't
-        # participate in the Tab cycle.
-        if self._left is None or self._right_logs is None:
+        """4-slot Tab cycle on the EMR page: NAV → LEFT → DETAIL →
+        LOGS. User feedback (post-PR-#93): "On EMR, should be able
+        to switch among the menu, left application job runs pane,
+        and the right job details pane" + follow-up confirmed the
+        4-slot variant so the focusable Logs pane (Enter to load,
+        ``f`` to filter, etc.) stays reachable too.
+
+        Direction:
+        - ``"right"``: forward — NAV → LEFT → DETAIL → LOGS → NAV
+        - ``"left"``: backward — NAV → LOGS → DETAIL → LEFT → NAV
+
+        Pane widgets in the EMR page DO accept Textual focus (unlike
+        the S3 file panes), so the slot ID is derived from
+        ``has_focus`` / ``has_focus_within`` rather than from a VM
+        flag. The NAV slot lives outside this page — when we're
+        about to leave one of our 3 panes for NAV, we drop our
+        focus and ask the App to focus the NavMenu.
+        """
+        if self._left is None or self._right_detail is None or self._right_logs is None:
             return
-        if self._left.has_focus_within or self._left.has_focus:
-            self._right_logs.focus()
+        slots = [self._left, self._right_detail, self._right_logs]
+        # Find which slot currently owns focus (or focus-within for
+        # rare picker-open / dropdown-open cases). -1 marks "NAV
+        # owns focus or nothing is focused yet".
+        focused_idx = -1
+        for idx, slot in enumerate(slots):
+            if slot.has_focus or slot.has_focus_within:
+                focused_idx = idx
+                break
+        if direction == "right":
+            next_idx = focused_idx + 1
+            if next_idx >= len(slots):
+                # Last slot → NAV (wrap by handing focus back to
+                # the rail).
+                self._focus_nav_menu()
+                return
         else:
-            self._left.focus()
+            next_idx = focused_idx - 1
+            if next_idx < 0:
+                # First slot → NAV (Shift+Tab wraps backwards).
+                self._focus_nav_menu()
+                return
+        slots[next_idx].focus()
+
+    def _focus_nav_menu(self) -> None:
+        """Hand focus back to the App-level NavMenu. The App
+        provides ``_focus_active_nav_list`` which lands focus on
+        the OptionList that owns the currently-selected service —
+        we reuse that helper so the EMR page doesn't need to know
+        which OptionList is "active"."""
+        from aws_tui.ui.widgets.nav_menu import NavMenu
+
+        with contextlib.suppress(Exception):
+            nav = self.app.query_one("#nav-menu", NavMenu)
+            self.app._focus_active_nav_list(nav)  # type: ignore[attr-defined]
 
     # ── Message routing ─────────────────────────────────────────────────────
 
