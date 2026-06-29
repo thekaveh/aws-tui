@@ -232,3 +232,160 @@ async def test_set_application_resets_paging_state() -> None:
     vm.set_application("a2")
     assert vm.has_more is False
     assert vm.runs == ()
+
+
+# -------------------- Phase 2: composite-backed selection (§4.2.1) --------------------
+
+
+@pytest.mark.asyncio
+async def test_selected_id_derives_from_composite_current() -> None:
+    """selected_id is derived from ``_inner.current.model.job_run_id``;
+    no hand-rolled ``_selected_id`` field exists after Phase 2."""
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    assert not hasattr(vm, "_selected_id"), (
+        "JobRunsVM must not have a hand-rolled _selected_id field; "
+        "selection lives in CompositeVM.current after Phase 2."
+    )
+    vm.select("r2")
+    assert vm.selected_id == "r2"
+    assert vm._inner.current is not None
+    assert vm._inner.current.model.job_run_id == "r2"
+
+
+@pytest.mark.asyncio
+async def test_select_unknown_run_id_is_noop() -> None:
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    vm.select("r1")
+    vm.select("does-not-exist")
+    # Selection unchanged.
+    assert vm.selected_id == "r1"
+
+
+@pytest.mark.asyncio
+async def test_reselecting_same_run_id_is_idempotent() -> None:
+    """Re-selecting fires no ``selected_id`` PropertyChanged. Pins
+    the §9.bis.9 PR #99(b) acceptance: no spurious notifications for
+    a no-op cursor move."""
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    vm.select("r2")
+    notified: list[str] = []
+    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+        on_next=lambda m: notified.append(getattr(m, "property_name", ""))
+    )
+    try:
+        vm.select("r2")
+        assert "selected_id" not in notified
+    finally:
+        sub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_restores_selection_when_run_id_still_present() -> None:
+    """If the prior selection's id is still in the new page, the
+    cursor restores to it across refresh — keeps View bindings stable
+    across polls."""
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    vm.select("r2")
+    await vm.refresh()
+    # selected_id preserved across refresh.
+    assert vm.selected_id == "r2"
+
+
+@pytest.mark.asyncio
+async def test_refresh_clears_selection_when_run_id_vanished() -> None:
+    """If the prior selection is gone after refresh, cursor goes to
+    None and the VM emits ``selected_id``."""
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
+    vm.set_application("a1")
+    await vm.refresh()
+    vm.select("r1")
+    # Remove r1 from the fake (the fake's _runs is dict[app_id, dict[run_id, ...]]).
+    fake._runs["a1"].pop("r1", None)  # type: ignore[attr-defined]
+    notified: list[str] = []
+    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+        on_next=lambda m: notified.append(getattr(m, "property_name", ""))
+    )
+    try:
+        await vm.refresh()
+        assert vm.selected_id is None
+        assert "selected_id" in notified
+    finally:
+        sub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_composite_on_collection_changed_fires_on_refresh() -> None:
+    """Composite emits on_collection_changed events when refresh
+    appends new items."""
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    events: list[object] = []
+    sub = vm._inner.on_collection_changed.subscribe(on_next=events.append)
+    try:
+        await vm.refresh()
+        # First refresh populates the composite — expect at least
+        # one "add" event per added run.
+        assert len(events) > 0
+    finally:
+        sub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_has_active_runs_uses_composite_items() -> None:
+    """has_active_runs traverses composite items, not the old
+    _runs_cache tuple."""
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.RUNNING)
+    vm.set_application("a1")
+    await vm.refresh()
+    assert vm.has_active_runs() is True
+    # Re-fetch with only terminal runs.
+    fake._runs["a1"] = {}  # type: ignore[attr-defined]
+    fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.SUCCESS)
+    await vm.refresh()
+    assert vm.has_active_runs() is False
+
+
+@pytest.mark.asyncio
+async def test_state_filter_does_not_lose_selection_on_filter_change() -> None:
+    """Filter-text changes are projections; they must NOT clear the
+    composite cursor. (Selection-clear-on-vanish only happens when
+    the cache is rebuilt — refresh / set_application.)"""
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    vm.select("r1")  # SUCCESS
+    # Narrow filter to exclude SUCCESS — cursor's identity unchanged.
+    vm.set_state_filter(frozenset({JobRunState.RUNNING}))
+    # selected_id is still "r1" (it's a property on the composite, not
+    # on the filtered view).
+    assert vm.selected_id == "r1"
+
+
+@pytest.mark.asyncio
+async def test_dispose_cleans_up_items() -> None:
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    assert len(vm._items) == 4  # type: ignore[attr-defined]
+    vm.dispose()
+    assert vm._items == []  # type: ignore[attr-defined]
