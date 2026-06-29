@@ -194,7 +194,10 @@ async def test_cursor_down_executes_switch_service_command() -> None:
             vm.switch_service_command.execute = _spy  # type: ignore[method-assign]
             # Start at row 0, move down to row 1 — the cursor change
             # should fire one switch_service_command execution.
-            nav._cursor_index = 0  # type: ignore[attr-defined]
+            # Under round-3 (spec §9.bis.11), the cursor index is
+            # derived from vm.selected_id — no field to reset. The
+            # default selection is row 0 when nothing is selected
+            # yet.
             nav.action_cursor_down()
             await pilot.pause()
             assert calls, "action_cursor_down should execute switch_service_command"
@@ -233,7 +236,10 @@ async def test_cursor_can_reach_settings_row_via_arrow_keys() -> None:
                 f"Settings missing from cursor-navigable items: {items!r}"
             )
             # Walk down to Settings.
-            nav._cursor_index = 0  # type: ignore[attr-defined]
+            # Under round-3 (spec §9.bis.11), the cursor index is
+            # derived from vm.selected_id — no field to reset. The
+            # default selection is row 0 when nothing is selected
+            # yet.
             for _ in range(settings_idx):
                 nav.action_cursor_down()
                 await pilot.pause()

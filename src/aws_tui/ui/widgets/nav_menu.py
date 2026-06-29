@@ -110,7 +110,12 @@ class NavMenu(Widget, can_focus=True):
         # is NO separation between services and Settings at the
         # navigation level. ``_cursor_index`` indexes into it.
         self._items: list[NavItemVM] = []
-        self._cursor_index: int = 0
+        # Round-3 directive (spec §9.bis.11, §3.2.bis row 1): the
+        # cursor index is NO LONGER a stored field. It's derived on
+        # demand from ``vm.selected_id`` (the VM-owned canonical
+        # slot). Arrow handlers compute the NEXT id and call
+        # ``switch_service_command.execute(next_id)`` instead of
+        # mutating a local index.
 
     @property
     def vm(self) -> NavMenuVM:
@@ -160,19 +165,40 @@ class NavMenu(Widget, can_focus=True):
 
     # ── Actions ──────────────────────────────────────────────────────────────
 
+    def _cursor_index(self) -> int:
+        """Derived cursor index over ``vm.selected_id``. Returns 0
+        when no service is selected (the default focus row)."""
+        return self._index_of(self._vm.selected_id, default=0)
+
     def action_cursor_up(self) -> None:
         if not self._items:
             return
-        if self._cursor_index > 0:
-            self._cursor_index -= 1
-            self._after_cursor_move()
+        cur = self._cursor_index()
+        if cur <= 0:
+            return
+        target_id = self._items[cur - 1].descriptor.id
+        self._after_cursor_move(target_id)
 
     def action_cursor_down(self) -> None:
         if not self._items:
             return
-        if self._cursor_index + 1 < len(self._items):
-            self._cursor_index += 1
-            self._after_cursor_move()
+        cur = self._cursor_index()
+        if cur + 1 >= len(self._items):
+            return
+        target_id = self._items[cur + 1].descriptor.id
+        self._after_cursor_move(target_id)
+
+    def _after_cursor_move(self, target_id: str) -> None:
+        """Cursor moved by arrow key or click — drive the VM's
+        selection slot; the View paints from the resulting
+        PropertyChangedMessage. Re-grabs Textual focus AFTER the
+        swap so the rail wins the focus race against the new
+        page's auto-focus chain (PR #98(2) / PR #99(a)).
+        """
+        if target_id == self._vm.selected_id:
+            return
+        self._vm.switch_service_command.execute(target_id)
+        self.call_after_refresh(self.focus)
 
     def action_commit(self) -> None:
         """ENTER on a service row = "go INTO this service": ensure the
@@ -206,7 +232,7 @@ class NavMenu(Widget, can_focus=True):
         """
         if not self._items:
             return
-        target_id = self._items[self._cursor_index].descriptor.id
+        target_id = self._items[self._cursor_index()].descriptor.id
         needs_switch = target_id != self._vm.selected_id
         app = self.app
         with contextlib.suppress(Exception):
@@ -228,9 +254,8 @@ class NavMenu(Widget, can_focus=True):
                 target_id = target.descriptor_id
                 for idx, item in enumerate(self._items):
                     if item.descriptor.id == target_id:
-                        if idx != self._cursor_index:
-                            self._cursor_index = idx
-                            self._after_cursor_move()
+                        if idx != self._cursor_index():
+                            self._after_cursor_move(target_id)
                         elif target_id != self._vm.selected_id:
                             self._vm.switch_service_command.execute(target_id)
                         return
@@ -263,24 +288,8 @@ class NavMenu(Widget, can_focus=True):
         services_container.remove_children()
         settings_container.remove_children()
 
-        # Try to preserve the cursor's current selection across
-        # the rebuild. If the user's previous cursor row vanished
-        # (e.g., a connection-switch dropped one service), fall
-        # back to whichever row the VM's ``selected_id`` points
-        # at, or 0.
-        prior_id = self._items[self._cursor_index].descriptor.id if self._items else None
         self._items = list(self._vm.items)
-        selected_id = self._vm.selected_id
-        if prior_id is not None:
-            for idx, item in enumerate(self._items):
-                if item.descriptor.id == prior_id:
-                    self._cursor_index = idx
-                    break
-            else:
-                self._cursor_index = self._index_of(selected_id, default=0)
-        else:
-            self._cursor_index = self._index_of(selected_id, default=0)
-
+        cursor_idx = self._cursor_index()
         # Mount the rows. Services first, Settings last (visually
         # pushed to the bottom by the flex spacer). The Settings row
         # uses the descriptor's ICON (a gear glyph ``⚙️``) instead of
@@ -293,7 +302,7 @@ class NavMenu(Widget, can_focus=True):
             row = NavRow(
                 descriptor_id=item.descriptor.id,
                 label=display,
-                is_selected=(idx == self._cursor_index),
+                is_selected=(idx == cursor_idx),
                 is_settings=is_settings,
             )
             if is_settings:
@@ -309,44 +318,13 @@ class NavMenu(Widget, can_focus=True):
                 return idx
         return default
 
-    def _after_cursor_move(self) -> None:
-        """Cursor moved by arrow key or click. Three things:
-
-        1. Re-paint row chrome so the new cursor row carries the
-           ``-selected`` class (and the previous one drops it).
-        2. Scroll the cursor row into view if needed.
-        3. Execute the master-detail switch — user feedback:
-           "arrow key among the menu items … should result in
-           changing the service as selected item, or selecting
-           the settings".
-        4. Re-grab Textual focus AFTER the swap. The newly-mounted
-           page's ``on_mount`` calls ``call_after_refresh(<pane>.focus)``
-           to land focus on its LEFT pane — stealing focus from the
-           rail mid-arrow-walk. User feedback (post-PR-#97): "I can
-           use arrow keys to move down to EMR, but then the focus
-           automatically is out of the menu and into the job runs
-           which means I can't use arrow keys to move further down
-           the menu". Queueing our ``self.focus`` after the page's
-           ``call_after_refresh`` puts NavMenu LAST in the
-           run-after-next-refresh queue, so we win the focus race.
-        """
-        self._repaint_rows()
-        if 0 <= self._cursor_index < len(self._items):
-            target_id = self._items[self._cursor_index].descriptor.id
-            if target_id != self._vm.selected_id:
-                self._vm.switch_service_command.execute(target_id)
-                self.call_after_refresh(self.focus)
-
     def _repaint_rows(self) -> None:
         """Flip the ``-selected`` class on every mounted row to
-        match the current cursor index. Avoids a full re-mount on
-        every arrow keypress."""
+        match the current cursor (derived from ``vm.selected_id``).
+        Avoids a full re-mount on every arrow keypress."""
+        selected_id = self._vm.selected_id
         for row in self.query(NavRow):
-            on_cursor = (
-                0 <= self._cursor_index < len(self._items)
-                and row.descriptor_id == self._items[self._cursor_index].descriptor.id
-            )
-            row.set_class(on_cursor, "-selected")
+            row.set_class(row.descriptor_id == selected_id, "-selected")
 
 
 __all__ = ["NavMenu"]
