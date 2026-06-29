@@ -33,11 +33,26 @@ Every fix landed entirely in the View layer (`src/aws_tui/ui/widgets/...` and
 the per-theme `.tcss` files). Surface-read, this looks like a polish phase
 ironing out View-side details. **The deeper read, surfaced in the 2026-06-28
 review session and recorded in §1.2, is that several of these bugs were
-symptoms of a missing VM-layer architectural piece**: the project hand-rolls
-the observable-list-with-cursor pattern in every list-shaped ViewModel, then
-fights subtle bugs (forgot-to-broadcast, broadcast-too-often, child-VM
-dispose-order, cursor-vs-collection-mutation races) that VMx 2.6.1's
-`CompositeVM` already solves.
+symptoms of TWO related architectural gaps**:
+
+1. The project hand-rolls the observable-list-with-cursor pattern in every
+   list-shaped ViewModel, then fights subtle bugs (forgot-to-broadcast,
+   broadcast-too-often, child-VM dispose-order, cursor-vs-collection-mutation
+   races) that VMx 2.6.1's `CompositeVM` already solves.
+2. Pieces of selection and focus state that should live in the VM layer on
+   plain MVVM discipline currently live in widgets — cursor positions,
+   selection IDs, slot tracking. Ten parallel sources of "what is selected /
+   focused" across View and VM (inventoried in §3.2.bis). The recurring
+   focus-bug train (PRs #98 / #99 / #101) is the surface symptom of this
+   fragmentation.
+
+This spec addresses both halves together. The VMx-toolkit-adoption work
+(Phases 1–6) re-platforms each list-shaped VM onto `CompositeVM` /
+`FormVM` / `IDialogService`; in doing so it consolidates the cursor +
+selection state into the framework's `current` slot. Phase 7 then adds a
+`FocusCoordinatorVM` (§4.3) that observes the now-uniform `current` slots
+and projects the app-wide focused slot, replacing the four-way focus-
+signal collision the View currently lives with.
 
 The redraw-flash bug train (PRs #100 and #103 specifically) is the canonical
 example. Both bugs arose because `JobRunsPane` / `ApplicationPicker` and the
@@ -112,6 +127,33 @@ VMs since the project began."
 > primitive's source, the file path of the existing VM, and any test that
 > exercises the contract. Without those three answers, the PR is not ready
 > for review.
+
+> **Update — amendment after a third review round.** The user pushed back
+> on the round-2 draft with one more question that exposed a final mistake:
+>
+> - **Mistake 8: scoped the spec around the VMx-toolkit-adoption framing
+>   and treated the focus / pane-selection refactor as a parallel follow-up
+>   (was §8.3 "out of scope").** That framing under-promised what this
+>   work needs to deliver. The user's actual diagnosis is that pieces of
+>   focus and selection state currently live in the View layer **regardless
+>   of VMx** — moving them is a plain MVVM-principle requirement. VMx's
+>   `CompositeVM.current` happens to be the cleanest way to accept the
+>   migrated state, but the MIGRATION itself stands independent of the
+>   framework. Treating it as out-of-scope hides the actual work.
+>
+>   §3.2.bis (new) inventories the ten parallel sources of focus /
+>   selection state — six of which live in the View. §4.3 (was §8.3)
+>   promotes the FocusCoordinatorVM into this spec as a real target.
+>   Phase 7 (§5.8) executes it after the per-VM toolkit adoption lays
+>   uniform `current` slots for the coordinator to bridge.
+>
+> **Updated methodology lesson.** The scope of this spec is "move VM-layer
+> state out of the View, and adopt VMx's toolkit primitives as the
+> mechanism". The two halves are not separable. The next worker should not
+> treat any per-VM Phase as "just adopt the framework primitive" — every
+> Phase has both an MVVM-principle goal (what state moves where) and a
+> VMx-toolkit goal (which primitive backs the move). The PR must address
+> both.
 
 
 The next worker picking up this spec should know that the analysis behind it
@@ -437,6 +479,63 @@ across the VM layer; most are list-mutation broadcasts that
 `MessageHub`, `PropertyChangedMessage`, `RelayCommand`,
 `ConstructionStatus`, lifecycle methods) — many of those would either go
 away or fall behind the `CompositeVM` abstraction after migration.
+
+### 3.2.bis. View-side state that should live in the VM layer
+       — regardless of VMx
+
+This section is the MVVM-principle question, independent of which framework
+primitive ends up backing the move. The user's review (round 3) explicitly
+pushed back on treating focus-coordination as a parallel follow-up: pieces
+of selection/focus state currently live in widgets that, on plain MVVM
+discipline, belong in the ViewModel layer. They would need to migrate even
+if VMx did not ship `CompositeVM` / `current` / `IDialogService` — VMx just
+makes the migration cleaner.
+
+**The state-fragmentation inventory.** As of HEAD `5ee16b9` the project has
+**ten** parallel sources of "which thing is selected / focused":
+
+| # | Source of state | Layer | Purpose | Drifts with |
+|---|---|---|---|---|
+| 1 | `ui/widgets/nav_menu.py::NavMenu._cursor_index` | **View** | which row the rail's cursor is on | (2), (10) |
+| 2 | `vm/nav_menu_vm.py::NavMenuVM._selected_id` | VM (hand-rolled) | which service is the active service | (1), the composite's unused `current` slot |
+| 3 | `ui/widgets/emr_serverless/job_runs_pane.py::JobRunsPane._cursor_index` | **View** | which run row the cursor is on | (4) |
+| 4 | `vm/emr_serverless/job_runs_vm.py::JobRunsVM._selected_id` | VM (hand-rolled) | which run is bound to the detail pane | (3), (10) |
+| 5 | `ui/widgets/emr_serverless/application_picker.py` (per-Option highlight) | **View** | which app the picker dropdown highlights | (6) |
+| 6 | `vm/emr_serverless/applications_vm.py::ApplicationsVM._selected_id` | VM (hand-rolled) | which app is the active app | (5), (10) |
+| 7 | `vm/file_manager/dual_pane_vm.py::DualPaneVM._focused` (`FocusedPane.LEFT`/`RIGHT`) | VM | which file pane is the focused pane | (10), Textual's `app.focused` |
+| 8 | `ui/widgets/emr_serverless/page.py::EmrServerlessPage._cycle()` (ad-hoc `has_focus` walks) | **View** | which of the four EMR slots the user is on | (10) |
+| 9 | Screen-level `.-nav-active` CSS class (added PR #98) | **View** | a 4th focus signal, just so the file pane border can be dimmed | (1), (2), (7), (10) |
+| 10 | `app.focused` (Textual runtime) | runtime | which widget the keyboard goes to | every other entry above |
+
+Six of those (entries 1, 3, 5, 8, 9, plus the cursor-vs-selection split
+inside the View widgets) genuinely live in the View today. The MVVM-
+principle answer is **most of them shouldn't**.
+
+**Why this matters as a separate read.** Even if we threw away VMx and
+rewrote against bare Python observables, the principle "selection /
+cursor state belongs in the VM, the View only reads it" still applies.
+What VMx changes is HOW cleanly the move happens — `CompositeVM.current`
+is exactly the slot that absorbs the cursor + selection collapse. But the
+re-platforming of the state is the work; the choice of framework primitive
+is the implementation detail.
+
+**Per-piece migration targets** (cross-referenced with §4.2):
+
+| Today | Target VM | Belongs to |
+|---|---|---|
+| (1) NavMenu widget `_cursor_index` | `NavMenuVM._inner.current` | §4.2.0 |
+| (2) `NavMenuVM._selected_id` | `NavMenuVM._inner.current` (same slot — collapse the dual-state) | §4.2.0 |
+| (3) JobRunsPane widget `_cursor_index` | `JobRunsVM._inner.current` | §4.2.1 |
+| (4) `JobRunsVM._selected_id` | `JobRunsVM._inner.current` | §4.2.1 |
+| (5) ApplicationPicker per-row highlight | `ApplicationsVM._inner.current` | §4.2.3 |
+| (6) `ApplicationsVM._selected_id` | `ApplicationsVM._inner.current` | §4.2.3 |
+| (7) `DualPaneVM._focused` | stays in VM but participates in the focus-coordinator below | §4.3 |
+| (8) EMR page `has_focus`-walk slot tracking | new `EmrServerlessPageVM` slot field driving from the focus-coordinator | §4.3 |
+| (9) Screen-level `.-nav-active` CSS hack | removed — replaced by the focus-coordinator's projection of "which slot has the user" | §4.3 |
+| (10) `app.focused` (Textual runtime) | stays as Textual's concern; the focus-coordinator's job is to KEEP it in sync, not replace it | §4.3 |
+
+§4.3 below adds the focus-coordinator design (was §8.3's "follow-up
+spec"; promoted into this spec at review round 3).
 
 ### 3.2. LOC analysis
 
@@ -778,12 +877,12 @@ decision.
 **LOC delta estimate:** −150 if it fits; **0 and a documented "fits
 poorly" if it doesn't**.
 
-#### 4.2.9. `NavMenuVM` — already uses `CompositeVM`
+#### 4.2.9. ~~`NavMenuVM`~~ — see §4.2.0
 
-Verify the existing usage is complete: is `current` wired? Is
-`on_collection_changed` consumed by the View? If yes, this VM is the
-reference implementation. If partially wired, finish the adoption in
-this spec's Phase 1.
+(Was "NavMenuVM is the reference implementation". Removed at review
+round 2 once §4.2.0 documented the incomplete adoption — the existing
+`CompositeVM` use lacks the `current` slot wiring. Phase 1 finishes
+the adoption per §4.2.0. There is no separate §4.2.9 work.)
 
 #### 4.2.10. Out of scope
 
@@ -802,6 +901,127 @@ this spec's Phase 1.
   primarily a router/composer once forms are extracted).
 - `TransferVM` (the child VM) — the leaf doesn't change shape; only its
   parent's container does.
+
+### 4.3. The FocusCoordinatorVM — promoted into this spec
+
+Was §8.3 "out of scope, parallel follow-up". Promoted into this spec at
+review round 3 because §3.2.bis showed it is part of the same MVVM
+discipline question, not a separate concern. The toolkit-adoption Phases
+1–6 give it the `current`-slot primitive it needs to be small; without
+those Phases it would have to inspect five different hand-rolled
+selection fields.
+
+**Primitives evaluated:** `CompositeVM` (rejected — the coordinator is not
+a homogeneous collection of VMs; it's a discriminated union over a small
+fixed set of slot identifiers), `AggregateVM3` (rejected — not a fixed-N-
+slots VM either; the slot set depends on which service is active),
+`HierarchicalVM` (rejected — not tree-shaped), a small bespoke
+`ComponentVM` subclass with a typed slot discriminator (chosen).
+
+**Chosen shape:**
+
+```python
+class FocusSlot(StrEnum):
+    NAV_MENU = "nav_menu"
+    S3_LEFT = "s3.left"
+    S3_RIGHT = "s3.right"
+    EMR_RUNS = "emr.runs"
+    EMR_DETAIL = "emr.detail"
+    EMR_LOGS = "emr.logs"
+    SETTINGS = "settings"
+
+class FocusCoordinatorVM(ComponentVM):
+    """Single source of truth for app-wide focus slot.
+
+    Subscribes to:
+    - each candidate VM's ``on_current_changed`` (NavMenuVM, JobRunsVM,
+      ApplicationsVM, the PaneVMs)
+    - the active ContentHostVM (which page is mounted dictates which
+      slots are valid right now)
+
+    Exposes:
+    - ``focused_slot: FocusSlot`` — the live discriminator.
+    - ``on_focused_slot_changed: Observable[FocusSlot]`` — what views
+      subscribe to.
+
+    Drives:
+    - the View layer's ``app.set_focus(...)`` calls (replacing the ad-hoc
+      ``call_after_refresh(self.focus)`` chains).
+    - the per-pane CSS class (replacing the Screen-level
+      ``.-nav-active`` hack from PR #98).
+    - DualPaneVM's ``focused`` (which becomes a projection of the
+      coordinator, not an independent source of truth).
+    """
+```
+
+**What this replaces:**
+
+- The Screen-level `.-nav-active` CSS class hack from PR #98 — the dim-
+  the-file-pane-border decision is a function of `focused_slot ==
+  NAV_MENU`, observable by the file-pane widget.
+- The `EmrServerlessPage._cycle` `has_focus`-walk slot tracking — the
+  coordinator knows which slot is active.
+- The `call_after_refresh(self.focus)` race contract NavMenu's commit
+  handler has to maintain (the coordinator's `focused_slot` change is
+  the authoritative signal; whatever fires last in the Textual queue,
+  the View ends up subscribing to the same `focused_slot` event and
+  calls `app.set_focus(target)` once).
+- Half of `DualPaneVM.switch_focus_command`'s job — flipping
+  `DualPaneVM._focused` becomes a side-effect of the coordinator moving
+  between `S3_LEFT` and `S3_RIGHT`.
+
+**What it does NOT replace:**
+
+- Textual's `app.focused` (the runtime focus). The coordinator KEEPS that
+  in sync via the bridge; it doesn't take over Textual's own focus
+  state machine. Textual's focus is still authoritative for "which widget
+  gets the keyboard"; the coordinator is authoritative for "which logical
+  slot is the user driving" and projects to `app.focused` as a
+  consequence.
+- Per-VM cursor / selection state. The coordinator observes which
+  `CompositeVM`'s `current` slot the user is mutating; it does not own
+  that mutation.
+
+**Validation anchors.** The bugs from PRs #98, #99, #101 are the
+regression tests. After §4.3 lands, each of those bug scenarios must be
+covered by a coordinator-level test:
+
+- "When NavMenu has focus and user arrows down to EMR, the file pane
+  border dims; the EMR job-runs slot does NOT auto-grab focus until ENTER
+  is pressed; ENTER on a service row moves `focused_slot` to that
+  service's default slot."
+- "When user is in S3.LEFT and arrow-walks NavMenu, focused_slot
+  remains S3.LEFT until ENTER on a different service row."
+- "The four EMR-page hub-sender bugs (PR #103) cannot recur because
+  cross-VM property echoes can't change `focused_slot` — only
+  on_current_changed from the user-driven VM can."
+
+**LOC delta estimate:** +200 (new coordinator + bridge), but
+**−250 to −400** across `EmrServerlessPage._cycle`, the Screen-level
+`-nav-active` CSS in 10 themes, `NavMenu.on_focus`/`on_blur` ceremony,
+several `_maybe_focus_*` defensive checks, and the `call_after_refresh`
+race coordination in NavMenu's commit handler. Net **−50 to −200**.
+
+**Risks.**
+
+- Mis-classification of "what's an authoritative source for slot N". The
+  bridge code that observes per-VM `current` to compute `focused_slot`
+  must encode the priority correctly (Settings overlays EMR overlays
+  S3, etc.). Phase 0 spike should sketch this priority table on paper.
+- The Textual runtime's focus events fire on a different schedule than
+  VMx PropertyChanged. The coordinator must not project to `app.focused`
+  on every observable tick or it'll fight Textual's own focus walk on
+  first-mount. Use a dispatcher-throttled projection or a flag for
+  initial-mount.
+- Backward compatibility with the existing manual focus tests. The
+  pilot-driven integration tests under `tests/integration/` are
+  Textual-focus-aware; they may need re-anchoring.
+
+**Phasing.** §4.3 lands as Phase 7, AFTER Phase 1–3 (NavMenu, JobRuns,
+PaneVM all migrated to `CompositeVM`) so the coordinator's bridge
+observes uniform `current` slots, not five hand-rolled `_selected_id`
+fields. Phases 4–6 (forms, dialogs, palette) can land in any order
+relative to Phase 7 — they don't intersect with focus.
 
 ## 5. Phased migration plan
 
@@ -964,6 +1184,32 @@ one or both stays hand-rolled.
 
 Cumulative LOC delta: −1,490 if both ship; smaller if one reverts.
 
+### 5.8. Phase 7 — `FocusCoordinatorVM`
+
+One PR. Lands AFTER at least Phase 1 (NavMenu, Toast, Transfers,
+Applications) AND Phase 2 (JobRuns) AND Phase 3 (PaneVM) — the
+coordinator's bridge observes their `current` slots.
+
+Touches:
+
+- New `vm/chrome/focus_coordinator_vm.py` (~150 LOC).
+- `composition.py` wires the coordinator + per-VM subscriptions.
+- `ui/widgets/dual_pane.py` — `_focused` CSS now reads from coordinator.
+- `ui/widgets/emr_serverless/page.py` — `_cycle` reads from coordinator
+  instead of `has_focus` walks; `_maybe_focus_left` and
+  `_maybe_focus_settings` retire.
+- `ui/widgets/nav_menu.py` — `on_focus`/`on_blur` retire; the
+  `call_after_refresh(self.focus)` race coordination retires.
+- `ui/themes/*.tcss` — the Screen-level `.-nav-active` rule deletes
+  from all ten themes.
+- `tests/integration/test_settings_flow.py` and friends — re-anchored
+  to the coordinator's `focused_slot` observable instead of Textual
+  `app.focused`.
+
+Cumulative LOC delta: **−1,490 to −1,690 from base**. Phase 7 by itself
+is roughly LOC-neutral to slightly negative (new coordinator vs removed
+scattered hand-roll), but the bug-class elimination is substantial.
+
 ## 6. Validation strategy
 
 ### 6.1. Per-phase gate
@@ -1098,14 +1344,19 @@ No CSS / layout / theming work is in scope.
 Pure adoption of an existing framework primitive in the VM layer.
 Domain stays as-is.
 
-### 8.3. `FocusCoordinatorVM`
+### 8.3. ~~`FocusCoordinatorVM`~~ — was here, promoted into the spec at
+       review round 3
 
-The recurring focus bugs (PR #98 / #99 / #101) are downstream of a
-different gap — a missing app-wide focus state machine. This is a real
-follow-up worth doing, but bundling it with the toolkit adoption would
-double the scope and the risk. See the parallel spec
-`docs/superpowers/specs/2026-XX-XX-focus-coordinator-design.md` (to be
-written separately).
+(Was "out of scope — write a separate follow-up spec".) After review
+round 3 surfaced that the View-side focus / selection state is part of
+the SAME MVVM-principle refactor as the toolkit adoption (see §1.3
+mistake 8 and §3.2.bis), the FocusCoordinatorVM is now §4.3 of this
+spec and lands as Phase 7 (§5.8).
+
+What truly stays out of scope: Textual's own focus state machine — the
+runtime's `app.focused` remains Textual's concern. The coordinator
+keeps Textual in sync with the VM-side `focused_slot`; it does not
+replace Textual's focus.
 
 ### 8.4. Performance optimisation
 
@@ -1154,18 +1405,32 @@ narrow and per-task).
 
 The migration is complete when:
 
-1. All eight per-VM targets in §4.2 have either landed or are explicitly
-   documented as "kept hand-rolled" with rationale.
-2. Total VM-layer LOC is below 6,000 (down from 7,339).
-3. The number of hand-emitted `PropertyChangedMessage.create(self, ...)`
+1. All nine per-VM targets in §4.2 (including §4.2.0 NavMenu) have either
+   landed or are explicitly documented as "kept hand-rolled" with
+   rationale.
+2. The `FocusCoordinatorVM` (§4.3) has landed and the View-side
+   focus / cursor / slot-tracking state inventoried in §3.2.bis entries
+   1, 3, 5, 8, 9 has been migrated out of the View.
+3. Total VM-layer LOC is below 6,200 (down from 7,339 — slightly higher
+   than the round-2 estimate because Phase 7 ADDS a coordinator).
+4. The number of hand-emitted `PropertyChangedMessage.create(self, ...)`
    calls in `src/aws_tui/vm/` is below 30 (down from 68).
-4. The `tests/unit/vm/` suite is still green and includes shape tests
-   for every migrated VM.
-5. `check-layers.sh` still passes.
-6. The CHANGELOG `[Unreleased]` records "VM-layer refactor — adopt VMx
-   toolkit primitives; user-visible behavior unchanged".
-7. This spec is updated with the actual per-VM disposition (migrated /
-   kept) and the actual LOC delta vs the estimate.
+5. Hand-rolled `_cursor_index` fields across `src/aws_tui/ui/widgets/` are
+   reduced to ≤1 (today: at least 3 — NavMenu, JobRunsPane,
+   EmrServerlessPage slot tracking).
+6. Hand-rolled `_selected_id` fields across `src/aws_tui/vm/` are zero
+   (today: 3 — NavMenu, JobRuns, Applications).
+7. The Screen-level `.-nav-active` CSS rule has been removed from all 10
+   themes.
+8. The `tests/unit/vm/` suite is still green and includes shape tests for
+   every migrated VM AND focus-coordinator scenario tests anchored to
+   the bug train (PR #98 / #99 / #101).
+9. `check-layers.sh` still passes.
+10. The CHANGELOG `[Unreleased]` records "VM-layer refactor — adopt VMx
+    toolkit primitives + consolidate focus/selection state; user-visible
+    behavior unchanged".
+11. This spec is updated with the actual per-VM disposition (migrated /
+    kept) and the actual LOC delta vs the estimate.
 
 ## 11. References
 
