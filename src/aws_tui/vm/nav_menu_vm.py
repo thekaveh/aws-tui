@@ -126,7 +126,10 @@ class NavMenuVM:
 
         self._connection: Connection | None = None
         self._items: list[NavItemVM] = []
-        self._selected_id: str | None = None
+        # Selection lives in `self._inner.current` (the CompositeVM's
+        # canonical slot). `selected_id` is a derived property — see the
+        # round-3 "compose, don't reject" directive (spec §9.bis.11) and
+        # the §4.2.0 finish-the-incomplete-adoption brief.
 
         # CompositeVM tracks the inner VMx instances of each item so the view
         # can observe collection mutations via ``on_collection_changed``.
@@ -157,7 +160,10 @@ class NavMenuVM:
 
     @property
     def selected_id(self) -> str | None:
-        return self._selected_id
+        current = self._inner.current
+        if current is None:
+            return None
+        return current.model.id
 
     @property
     def switch_service_command(self) -> RelayCommandOf[str]:
@@ -234,15 +240,28 @@ class NavMenuVM:
         if service_id is None:
             return
         # Idempotent: re-selecting the active service is a no-op.
-        if self._selected_id == service_id:
+        if self.selected_id == service_id:
             return
+        # Find the matching NavItemVM. Unknown ids are a silent no-op
+        # (preserves the pre-Phase-1 behaviour exercised by
+        # tests/unit/vm/test_nav_menu_vm.py::test_menu_switch_service_unknown_id_noop).
+        match: NavItemVM | None = None
         for item in self._items:
-            is_match = item.descriptor.id == service_id
-            item.set_selected(is_match)
-        self._selected_id = service_id
+            if item.descriptor.id == service_id:
+                match = item
+                break
+        if match is None:
+            return
+        # Promote to the composite's canonical `current` slot, then project
+        # per-item `is_selected` for consumers (NavItemVM unit tests) and
+        # emit the `selected_id` PropertyChangedMessage the View watches.
+        self._inner.current = match.inner
+        for item in self._items:
+            item.set_selected(item is match)
         self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
 
     def _rebuild_items(self, *, notify: bool = True) -> None:
+        prior_selected_id = self.selected_id
         desired_ids = self._desired_service_ids()
         current_ids = [item.descriptor.id for item in self._items]
         # The Settings item is always last; compare only service-derived items.
@@ -285,13 +304,15 @@ class NavMenuVM:
             # when the connection resolution adds entries.
             self._hub.send(PropertyChangedMessage.create(self, self.name, "items"))
 
-        # Clear stale selection if the active id is no longer in the menu.
-        if self._selected_id is not None and not any(
-            item.descriptor.id == self._selected_id for item in self._items
-        ):
-            self._selected_id = None
-            if notify:
-                self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
+        # The CompositeVM enforces "current must be in children" — its
+        # `_remove_at` (composite_vm.py:264-272) drops `_current` to None
+        # whenever the current item is removed. `_clear_items` calls
+        # `self._inner.remove(...)` per item above, so by the time we get
+        # here the composite's `current` reflects the post-rebuild reality.
+        # Only emit the user-visible `selected_id` notification if the
+        # rebuild actually changed which service is current.
+        if notify and self._inner.current is None and prior_selected_id is not None:
+            self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
 
     def _desired_service_ids(self) -> list[str]:
         """Service ids the current connection supports, in registry order."""
