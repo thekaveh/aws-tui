@@ -229,26 +229,13 @@ class ApplicationPicker(Widget):
             opts = self.query_one("#app-options", OptionList)
         except Exception:
             return
-        # Diff guard: skip the rebuild when the option fingerprint
-        # (id + prompt for every row, in order) is unchanged. The
-        # 30 s applications poller fires ``PropertyChangedMessage``
-        # on every tick even when the upstream data is identical
-        # (the in-memory demo provider returns the same list every
-        # time); a naive ``clear_options`` + re-add wipes the
-        # rendered dropdown for a frame, which reads as a flicker
-        # when the user has the dropdown open. Build the new list
-        # FIRST, compare, then only mutate the OptionList if it
-        # actually differs.
-        new_options = self._build_options()
-        new_fingerprint = tuple((o.id, str(o.prompt)) for o in new_options)
-        current_fingerprint = tuple(
-            (opts.get_option_at_index(i).id, str(opts.get_option_at_index(i).prompt))
-            for i in range(opts.option_count)
-        )
-        if new_fingerprint == current_fingerprint:
-            return
+        # The dedup-on-set guard that used to live here (PR #100(b)) has
+        # moved into ApplicationsVM.refresh() per the round-3 directive
+        # (spec §9.bis.11 + §9.bis.9 / Q-A): the VM no-ops on a no-change
+        # poll, so a PropertyChangedMessage reaching this handler means
+        # the data actually changed. The View just rebuilds.
         opts.clear_options()
-        for opt in new_options:
+        for opt in self._build_options():
             opts.add_option(opt)
 
     def _focus_dropdown(self) -> None:

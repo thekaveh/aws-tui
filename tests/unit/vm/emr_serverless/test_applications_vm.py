@@ -94,6 +94,41 @@ async def test_sorted_applications_empty_when_no_apps() -> None:
 
 
 @pytest.mark.asyncio
+async def test_refresh_is_no_op_when_application_list_unchanged() -> None:
+    """Dedup-on-set: a refresh that returns identical (id, state, name)
+    triples to the current list must NOT fire any
+    ``applications`` PropertyChangedMessage.
+
+    Regression anchor for PR #100(b) — the View-side fingerprint guard
+    relocated into the VM per the round-3 directive (spec §9.bis.11 +
+    §9.bis.9 / Q-A). The 30 s applications poller fires
+    ``refresh()`` every tick; the in-memory demo provider returns the
+    same list every time; the VM must absorb the no-change case so
+    downstream View consumers don't even see the event.
+    """
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_application(app_id="a2", name="ad-hoc")
+    await vm.refresh()  # First load — sets up the cache.
+
+    notified: list[str] = []
+    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+        on_next=lambda m: notified.append(getattr(m, "property_name", ""))
+    )
+    try:
+        # Second refresh — same upstream list. No ``applications``
+        # PropertyChanged should fire. (State LOADING→IDLE transitions
+        # still emit ``state`` notifications; that's expected.)
+        await vm.refresh()
+        assert "applications" not in notified, (
+            "VM did not absorb the no-change refresh — fingerprint guard regression"
+        )
+        assert "selected_id" not in notified
+    finally:
+        sub.dispose()
+
+
+@pytest.mark.asyncio
 async def test_refresh_failure_surfaces_unreachable_state() -> None:
     from aws_tui.domain.filesystem import ProviderUnreachableError
 
