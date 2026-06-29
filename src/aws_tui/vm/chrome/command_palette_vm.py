@@ -6,6 +6,16 @@ score over ``label`` and ``keywords`` — explicitly avoiding ``rapidfuzz``
 to keep the dependency footprint tiny. The view layer reads
 ``filtered_entries`` and ``selected_index`` directly; reactive updates fire
 ``PropertyChangedMessage`` on the hub.
+
+Round-3 directive (spec §9.bis.11): the registry is held in an internal
+:class:`vmx.CompositeVM` over per-entry :class:`PaletteEntryVM` facades.
+The composite is NOT exposed in the public surface — consumers continue
+to bind to the existing ``filter_text`` / ``filtered_entries`` /
+``selected_index`` surface. The scoring + sort logic (a true fuzzy-rank,
+NOT a boolean predicate) stays on this VM rather than going through
+``FilteredCompositeVM`` whose predicate model doesn't capture the
+rank-by-score requirement; the composite still provides lifecycle
+cascade + ``on_collection_changed`` for the registry.
 """
 
 from __future__ import annotations
@@ -17,6 +27,8 @@ from dataclasses import dataclass
 
 from vmx import (
     ComponentVM,
+    ComponentVMOf,
+    CompositeVM,
     Message,
     MessageHub,
     PropertyChangedMessage,
@@ -62,11 +74,6 @@ def _subsequence_span(text: str, query: str) -> int | None:
     """
     if not query:
         return 0
-    # We initialise to ``-1`` (sentinel) and let the first iteration
-    # set both ends — guarded by the early return path on a missing
-    # character. Avoids the previous ``assert first is not None``
-    # pair that ``python -O`` strips, while keeping mypy happy
-    # without an extra union-attr narrowing.
     first: int = -1
     last: int = -1
     cursor = 0
@@ -112,6 +119,51 @@ def _score(entry: PaletteEntry, query: str) -> int | None:
     return None
 
 
+class PaletteEntryVM:
+    """Facade wrapping a :class:`ComponentVMOf` so the inner can be
+    parented into the palette's :class:`CompositeVM`.
+
+    Same pattern as ``NavItemVM`` / ``ApplicationItemVM`` /
+    ``JobRunItemVM``: the public payload is the :class:`PaletteEntry`
+    value; ``inner`` is the composite's child handle.
+    """
+
+    def __init__(
+        self,
+        *,
+        entry: PaletteEntry,
+        hub: MessageHub[Message],
+        dispatcher: Dispatcher,
+    ) -> None:
+        self._entry: PaletteEntry = entry
+        self._inner: ComponentVMOf[PaletteEntry] = (
+            ComponentVMOf[PaletteEntry]
+            .builder()
+            .name(f"palette_entry.{entry.id}")
+            .model(entry)
+            .services(hub, dispatcher)
+            .build()
+        )
+
+    @property
+    def entry(self) -> PaletteEntry:
+        return self._entry
+
+    @property
+    def inner(self) -> ComponentVMOf[PaletteEntry]:
+        return self._inner
+
+    @property
+    def is_constructed(self) -> bool:
+        return self._inner.is_constructed
+
+    def construct(self) -> None:
+        self._inner.construct()
+
+    def dispose(self) -> None:
+        self._inner.dispose()
+
+
 class CommandPaletteVM:
     """Reactive command-palette viewmodel."""
 
@@ -124,13 +176,26 @@ class CommandPaletteVM:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
 
-        self._entries: dict[str, tuple[PaletteEntry, PaletteAction]] = {}
+        # Registry: composite of PaletteEntryVM inners (lifecycle +
+        # on_collection_changed), plus a parallel dict for action lookup
+        # by entry id. The composite is internal — consumers bind to the
+        # filter_text / filtered_entries / selected_index surface.
+        self._items: dict[str, PaletteEntryVM] = {}
+        self._actions: dict[str, PaletteAction] = {}
+        self._inner_registry: CompositeVM[ComponentVMOf[PaletteEntry]] = (
+            CompositeVM[ComponentVMOf[PaletteEntry]]
+            .builder()
+            .name("command_palette.registry")
+            .services(hub, dispatcher)
+            .children(self._initial_children)
+            .auto_construct_on_add(True)
+            .build()
+        )
+
         self._filter_text: str = ""
         self._filtered: tuple[PaletteEntry, ...] = ()
         self._selected_index: int = 0
         self._is_open: bool = False
-        # Strong refs to in-flight palette-action tasks to satisfy RUF006
-        # and prevent them being GC'd mid-await.
         self._pending_tasks: set[asyncio.Task[None]] = set()
 
         self._inner: ComponentVM = (
@@ -211,47 +276,61 @@ class CommandPaletteVM:
 
     def construct(self) -> None:
         self._inner.construct()
+        self._inner_registry.construct()
 
     def destruct(self) -> None:
+        self._inner_registry.destruct()
         self._inner.destruct()
 
     def dispose(self) -> None:
-        # Cancel any in-flight action tasks; the done-callback would
-        # normally discard them from the set, but on dispose we don't
-        # want them outliving the VM and firing into a torn-down hub.
         for task in list(self._pending_tasks):
             if not task.done():
                 task.cancel()
         self._pending_tasks.clear()
-        self._entries.clear()
+        for item in list(self._items.values()):
+            item.dispose()
+        self._items.clear()
+        self._actions.clear()
         self._open_command.dispose()
         self._close_command.dispose()
         self._execute_selected_command.dispose()
         self._move_selection_command.dispose()
+        self._inner_registry.dispose()
         self._inner.dispose()
 
     # ── Registry API ───────────────────────────────────────────────────────
 
     def register_entry(self, entry: PaletteEntry, action: PaletteAction) -> None:
         """Register or replace ``entry``; rebuilds the filtered list."""
-        self._entries[entry.id] = (entry, action)
+        # Replace path: drop the old inner from the composite first so
+        # auto_construct + composite ordering stays sane.
+        existing = self._items.get(entry.id)
+        if existing is not None:
+            if existing.inner in self._inner_registry:
+                self._inner_registry.remove(existing.inner)
+            existing.dispose()
+        item = PaletteEntryVM(entry=entry, hub=self._hub, dispatcher=self._dispatcher)
+        self._items[entry.id] = item
+        self._actions[entry.id] = action
+        if self._inner_registry.is_constructed:
+            item.construct()
+        self._inner_registry.append(item.inner)
         self._recompute_filtered()
 
     def unregister_entry(self, entry_id: str) -> None:
-        if entry_id in self._entries:
-            del self._entries[entry_id]
-            self._recompute_filtered()
+        item = self._items.pop(entry_id, None)
+        if item is None:
+            return
+        self._actions.pop(entry_id, None)
+        if item.inner in self._inner_registry:
+            self._inner_registry.remove(item.inner)
+        item.dispose()
+        self._recompute_filtered()
 
     # ── Command implementations ────────────────────────────────────────────
 
     def _open(self) -> None:
         self._set_open(True)
-        # Reset selection / filter on open so the user always starts clean.
-        # No-op guard: only re-publish the ``filter_text`` change message
-        # when the value actually flipped. Re-opening with the same empty
-        # filter shouldn't notify subscribers — they'd needlessly rebuild
-        # their views on a no-op (also matches the public ``filter_text``
-        # setter's no-op guard).
         if self._filter_text != "":
             self._filter_text = ""
             self._hub.send(PropertyChangedMessage.create(self, self.name, "filter_text"))
@@ -271,8 +350,10 @@ class CommandPaletteVM:
             return
         idx = max(0, min(self._selected_index, len(self._filtered) - 1))
         entry = self._filtered[idx]
-        _, action = self._entries[entry.id]
+        action = self._actions.get(entry.id)
         self._set_open(False)
+        if action is None:
+            return
         result = action()
         if inspect.isawaitable(result):
             self._spawn_awaitable(result)
@@ -281,8 +362,6 @@ class CommandPaletteVM:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop — caller is expected to drive the palette from
-            # an asyncio context. We bail rather than crash.
             return
         task = loop.create_task(self._await_action(awaitable))
         self._pending_tasks.add(task)
@@ -306,13 +385,16 @@ class CommandPaletteVM:
 
     # ── Filter machinery ───────────────────────────────────────────────────
 
+    def _initial_children(self) -> tuple[ComponentVMOf[PaletteEntry], ...]:
+        return tuple(item.inner for item in self._items.values())
+
     def _recompute_filtered(self) -> None:
         query = self._filter_text
-        # Enumerate to keep a stable insertion-order tiebreaker so an empty
-        # query renders entries in registration order; a query renders best
-        # matches first, with insertion-order as the deterministic tiebreaker.
+        # Walk the composite's children in insertion order to preserve
+        # stable tiebreakers (matches the pre-Phase-2 behaviour).
         scored: list[tuple[int, int, PaletteEntry]] = []
-        for insertion_idx, (entry, _) in enumerate(self._entries.values()):
+        for insertion_idx, item_inner in enumerate(self._inner_registry):
+            entry = item_inner.model
             score = _score(entry, query)
             if score is None:
                 continue
@@ -322,9 +404,8 @@ class CommandPaletteVM:
         if new_filtered != self._filtered:
             self._filtered = new_filtered
             self._hub.send(PropertyChangedMessage.create(self, self.name, "filtered_entries"))
-        # Reset selection whenever the filter pool changes.
         if self._selected_index != 0:
             self._set_selected_index(0)
 
 
-__all__ = ["CommandPaletteVM", "PaletteAction", "PaletteEntry"]
+__all__ = ["CommandPaletteVM", "PaletteAction", "PaletteEntry", "PaletteEntryVM"]
