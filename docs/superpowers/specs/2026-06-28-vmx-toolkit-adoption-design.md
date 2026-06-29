@@ -265,10 +265,34 @@ VMs since the project began."
 > been corrected; §4.2.4 target description and LOC estimate have been
 > revised; the resolution is recorded in §9.bis.7.
 
+> **Update — second amendment after the brainstorm session (2026-06-28).**
+> A reviewer push-back surfaced a fifth round mistake:
+>
+> - **Mistake 10: §9's open-questions set was scoped only to VMx-
+>   primitive-fit; the MVVM-half open questions implicit in §3.2.bis /
+>   §4.3 / §5.8 were not surfaced.** Specifically: the slot-priority
+>   table §4.3 risk note defers to "Phase 0 should sketch on paper";
+>   the projection-timing strategy choice (throttled vs flagged); the
+>   integration-test re-anchoring scope; and the cursor-vs-selection
+>   split inside View widgets §3.2.bis line 622 names but does not
+>   enumerate. None of these appeared in §9. The brainstorm initially
+>   resolved only the seven VMx-fit questions §9 posed and treated the
+>   MVVM half as "designed, Phase-0-deferred".
+>
+> **Methodology lesson.** Specs with two halves (here: VMx-toolkit
+> adoption + MVVM-discipline migration) need open-questions sets that
+> explicitly span both halves. A single §9 question list reads as
+> "the only open items"; if half the spec's scope is missing from §9,
+> the brainstorm will silently scope down to the question set's
+> implicit framing. The fix this time was a post-hoc walk of today's
+> 2026-06-28 bug train (PRs #98–#105) against the §3.2.bis 10-state
+> inventory, producing per-Phase regression anchors with concrete PR
+> references. See §9.bis.9 for the resulting mapping table.
+
 
 The next worker picking up this spec should know that the analysis behind it
-went through three rounds of correction, then a fourth round during the
-§9 brainstorm. Each correction tightens the
+went through three rounds of correction, then a fourth and fifth round
+during the §9 brainstorm. Each correction tightens the
 design, and each mistake is worth recording because it is the kind of
 mistake a fresh worker can also make.
 
@@ -1402,6 +1426,15 @@ prior bug-train PRs as the test target:
 - Phase 5 (modals): `tests/integration/test_confirm_modal_keyboard.py`
   and `tests/integration/test_first_run_modal.py` are anchors.
 
+**Per-PR breakdown — see §9.bis.9.** The brainstorm round 2 walked the
+2026-06-28 bug train (PRs #98 / #99 / #100 / #101 / #103 / #105) and
+mapped each MVVM-violation-shaped fix to (a) the §3.2.bis row whose
+state-fragmentation drove it, (b) the §4.2 or §4.3 work item whose
+landing eliminates the bug class, and (c) a concrete "the bug cannot
+recur because mechanism X no longer exists in the code" acceptance
+check. Use §9.bis.9 as the per-Phase acceptance-criterion source when
+writing the Phase PRs.
+
 ## 7. Risks
 
 ### 7.1. `PagedComposition` may not fit token-pagination — CLOSED
@@ -1565,10 +1598,22 @@ narrow and per-task).
 ## 9.bis. Resolutions from the brainstorm session — 2026-06-28
 
 This section closes §9's seven open questions, records the spec
-amendments each resolution triggers, and points to the upstream
-feedback report that captures the gaps where a VMx primitive almost
-fit but didn't quite. Numbered `.bis` to keep §10/§11 downstream
-section numbers stable (same convention as §3.2.bis).
+amendments each resolution triggers, surfaces the MVVM-half open
+questions §9 itself failed to pose (round 2), and points to the
+upstream feedback report that captures the gaps where a VMx primitive
+almost fit but didn't quite. Numbered `.bis` to keep §10/§11
+downstream section numbers stable (same convention as §3.2.bis).
+
+**Structure:**
+- §9.bis.1–7 — one per §9 question (Q7, Q1, Q2, Q3, Q4, Q5, Q6).
+- §9.bis.8 — Mistake 9 (the `ServicedObservableCollection` paraphrase
+  bug surfaced while resolving Q6).
+- §9.bis.9 — round-2 amendment: MVVM-half re-classification of
+  today's bug train against the §3.2.bis 10-state inventory,
+  producing per-Phase regression anchors with concrete PR refs.
+- §9.bis.10 — Mistake 10 (the round-2 amendment trigger:
+  §9's question set was too narrowly scoped to VMx-fit).
+- §9.bis.11 — pointer to the upstream feedback artifact.
 
 Each resolution lists, per §0's discipline rules: which VMx
 primitive(s) were evaluated, what was inspected (file + line ranges),
@@ -1835,7 +1880,173 @@ per §0's discipline rules, regardless of what Appendix C says.
 
 ---
 
-### 9.bis.9. Upstream feedback artifact
+### 9.bis.9. MVVM-half re-classification of today's bug train
+
+§9 only posed VMx-primitive-fit questions; the MVVM-discipline half
+(§3.2.bis / §4.3 / §5.0 / §5.8) was treated as "designed, Phase-0-
+deferred". A reviewer's pushback during the brainstorm flagged this as
+too narrow — the brainstorm should have surfaced concrete regression
+anchors for the MVVM half too, not left them to the Phase 0 spike to
+discover. This subsection is the resulting amendment.
+
+**Method.** Walked every PR landed on `main` on 2026-06-28 (`git log
+--since "2026-06-27 00:00"`), classified each fix as either
+"MVVM-violation-shaped" (landed in the View as a workaround for state
+that belongs in the VM) or "genuinely View-side" (CSS specificity,
+Textual runtime quirk, pure polish). Cross-referenced each MVVM-
+violation against the §3.2.bis 10-state inventory and the §4.2 / §4.3
+work items.
+
+**Findings.** Of 11 fixes shipped today (PRs #98–#105), **nine** were
+MVVM-violation-shaped — fixes that landed in the View as workarounds
+for state that the §3.2.bis inventory says belongs in the VM. The
+other two (PR #102 CSS padding, PR #104 banner subtitle) were
+genuine View-layer concerns.
+
+**Concrete bug-train → work-item mapping** (regression anchors for
+the per-Phase tests; column "Eliminated by" = the Phase whose
+acceptance criterion must keep this bug fixed):
+
+| PR | Fix description (today) | Landed in | §3.2.bis row(s) | Eliminated by | Why the migration eliminates the bug class |
+|---|---|---|---|---|---|
+| #98(2) | NavMenu queues `call_after_refresh(self.focus)` to win focus race on arrow-walk into a new page | View (NavMenu + page mount handlers) | 1, 10 | **Phase 7 (FocusCoordinatorVM)** | `focused_slot` is the authoritative signal; page mount reads it once, no race against Textual's queue ordering |
+| #98(3) | New `Screen.-nav-active Pane.-focused` CSS rule across 10 themes; `NavMenu.on_focus/on_blur` drive the class | View (CSS in 10 themes + NavMenu handlers) | 9, 1, 10 | **Phase 7** | the dim-the-file-pane decision becomes `focused_slot == NAV_MENU`; the Screen-level CSS hack deletes; per-pane CSS reads from the coordinator |
+| #99(a) | `EmrServerlessPage._maybe_focus_left` and `SettingsView._maybe_focus` skip auto-focus when NavMenu owns `app.focused` | View (per-page mount handlers inspect `app.focused`) | 8, 10 | **Phase 7** | page mount reads `focus_coordinator.focused_slot` instead of inspecting `app.focused`; no inspection logic on either side |
+| #99(b) | `JobRunsPane._on_hub_message` drops `selected_id` from watch set; selection visuals come from `_cursor_index` | View (JobRunsPane watch-set + hand-rolled cursor) | 3, 4 | **Phase 2 (JobRunsVM → CompositeVM)** | `CompositeVM.on_current_changed` is granular — there is no `selected_id` PropertyChanged for the View to mis-watch; selection visual painted on `current` not on a separate index |
+| #100(a) | `JobRunsPane._repaint_selection` (flips `-selected` class) replaces `_refresh_rows` on arrow | View (new hand-rolled paint helper) | 3, 4 | **Phase 2** | the helper stays in spirit, but its trigger becomes a single `on_current_changed` subscription on the VM-owned cursor instead of a watch on a hand-rolled property |
+| #100(b) | `ApplicationPicker` hub-watch split + fingerprint diff guard | View (per-property watch routing + manual fingerprint) | 5, 6 | **Phase 1 (ApplicationsVM → CompositeVM[ApplicationVM])** | `on_collection_changed` only fires on actual structural change; the 30s no-change poll tick produces no event; fingerprint guard becomes redundant |
+| #101 | `App.focus_active_service_pane` + `DualPane.focus_left_pane` + `SettingsView.focus_default` cross-View focus dispatch on ENTER | View (App-level dispatcher + per-page focus methods) | 7, 8, 10 | **Phase 7** | ENTER on NavMenu mutates `nav_menu_vm.current` (a service descriptor); the coordinator projects `focused_slot` to that service's default pane; per-page `focus_default` methods retire |
+| #103 | `sender_object is self._vm` guards on all four EMR panes' `_on_hub_message` | View (per-pane sender filtering on a shared hub) | 3, 4, 5, 6 | **Phase 1 + Phase 2** | `CompositeVM.on_collection_changed` is emitted on the composite instance's own Observable, NOT broadcast via the global hub; cross-VM property echoes can't reach the wrong pane because they don't traverse the same channel |
+| #105 | Removed redundant `NavMenu > #menu-settings-rows > NavRow { background: transparent; }` from 10 themes | View (10 theme files) | 2 | **Phase 1 (NavMenu §4.2.0 — finish the incomplete adoption)** | once `NavMenuVM._inner.current` is the uniform "this row is selected" slot driving a single `NavRow.-selected` CSS rule, per-section theme overrides become impossible to drift; the bug class (CSS-specificity clobbering selection visuals) is structurally eliminated |
+| #102 | `NavRow` padding `0 1` → `0` to align ribbon with `EntryRow` | View (CSS in NavRow widget) | — (genuine View concern) | — | not MVVM-shaped; pure visual polish |
+| #104 | `BrandBanner` prepends DEMO chip instead of replacing pedigree | View (BrandBanner ctor) | — (genuine View concern) | — | not MVVM-shaped; pure copy/UX polish |
+
+**Why this mapping matters for the migration plan:**
+
+The §6.4 "Regression anchors from prior bug train" section already
+identifies PRs #100 / #103 as regression targets for Phase 2 and
+#98 / #99 / #101 as targets for the focus coordinator. The mapping
+above SHARPENS those references: each row above pins a specific
+mechanism (the `.-nav-active` CSS hack, the `selected_id` watch, the
+`call_after_refresh` queue ordering, the `sender_object` guards) to a
+specific Phase whose acceptance criterion is "the bug from this PR
+cannot recur because the mechanism that caused it no longer exists in
+the code".
+
+**Per-Phase acceptance criteria additions** (derived from the table —
+these strengthen §10 / Definition of done):
+
+- **Phase 1 (NavMenu finish + Applications + Toast + Transfers)**
+  - Acceptance: PR #105 cannot recur — assertable by a test that
+    renders the menu with each row selected in turn and asserts the
+    `-selected` CSS class drives the visual (not a per-section
+    background override).
+  - Acceptance: PR #100(b) cannot recur — assertable by a test that
+    invokes `applications.refresh()` 30 times with the same upstream
+    response and asserts `on_collection_changed` fires zero times
+    (composite-internal equality check, no cross-VM echo).
+- **Phase 2 (JobRunsVM)**
+  - Acceptance: PR #99(b) cannot recur — assertable by a test that
+    triggers a `current` change and asserts NO `PropertyChangedMessage`
+    crosses the hub for an old-style `selected_id` property.
+  - Acceptance: PR #100(a) cannot recur — assertable by a test that
+    moves `current` and asserts a single `on_current_changed` fires,
+    no `on_collection_changed` reset.
+  - Acceptance: PR #103 cannot recur — assertable by a test that
+    constructs both JobRunsVM and JobRunDetailVM on the same hub,
+    triggers `state` PropertyChanged on JobRunDetailVM, and asserts
+    JobRunsPane (or its subscription proxy) does NOT see the event
+    via the composite's `on_collection_changed`.
+- **Phase 7 (FocusCoordinatorVM)**
+  - Acceptance: PR #98(2) cannot recur — assertable by a test that
+    arrow-walks NavMenu past a non-active service and asserts
+    `focused_slot == NAV_MENU` throughout (no race with the new
+    page's auto-focus).
+  - Acceptance: PR #98(3) cannot recur — assertable by a test that
+    sets `focused_slot = NAV_MENU` and asserts the file-pane border
+    CSS class is `-dim`; no Screen-level `.-nav-active` class
+    survives the migration.
+  - Acceptance: PR #99(a) cannot recur — assertable by the same
+    test as PR #98(2) but with an async-mounted page; the
+    coordinator's `focused_slot` is checked at mount-time, no
+    `app.focused` inspection.
+  - Acceptance: PR #101 still works — assertable by a test that
+    fires `nav_menu_vm.current = <service>` then asserts
+    `focused_slot == <service's default slot>`; no
+    `App.focus_active_service_pane` indirection.
+
+**Open Phase-0 questions surfaced by the table** (these are the
+items §4.3 deferred to Phase 0 with no starter; the mapping above
+makes them concrete enough to answer in the spike):
+
+- **Q-MVVM-A:** Slot priority table. The PR #101 mapping needs an
+  explicit "ENTER → default slot for service X" lookup. Settings
+  has no `JobRunsPane` analog — what's its default slot? Probably
+  the first `CollapsibleTitle`, but the coordinator's `FocusSlot`
+  enum has `SETTINGS` (line 1077) and not `SETTINGS_FIRST_SECTION`
+  — clarification needed: do per-service slots have sub-slots, or
+  does the coordinator coarsely project to `SETTINGS` and the
+  Settings page handles its own internal focus?
+- **Q-MVVM-B:** Modal precedence. None of the PRs above involve a
+  modal-while-rail-focused interaction, but Phase 7 must answer:
+  when a Confirmation modal is up, does `focused_slot` freeze on
+  the prior slot, or take a new `MODAL` value? The `FocusSlot` enum
+  at §4.3 line 1070–1077 has no `MODAL` entry; the spike must add
+  it or document the alternative.
+- **Q-MVVM-C:** PR #99(a)'s mount-time race. The fix today
+  inspects `app.focused`. The coordinator's bridge to `app.focused`
+  must NOT echo back via the same path (or it will defeat its own
+  authority). Spike must sketch the dispatcher-throttled or initial-
+  mount-flag option named in §4.3 risk lines 1157–1161.
+
+These are NOT being resolved in this brainstorm — they require
+running real Phase 7 code to verify the right answer. But they are
+now CONCRETE (named PR/file/line) rather than abstract.
+
+**Mistake 10 recorded.** §9's question set was VMx-fit-scoped; the
+MVVM-half open questions implicit in §3.2.bis / §4.3 / §5.8 were not
+called out. See §1.3 amendment for the canonical record.
+
+**Spec amendments triggered by this subsection:**
+
+- §6.4 "Regression anchors from prior bug train" gains a pointer to
+  the bug→work-item table above as the per-PR breakdown.
+- §10 "Definition of done" gains per-Phase acceptance criteria from
+  the bulleted list above (Phase 1, Phase 2, Phase 7 each get
+  explicit "PR #X cannot recur" checks).
+- §4.3 risk note (slot priority table; projection timing) gains
+  cross-references to Q-MVVM-A, Q-MVVM-B, Q-MVVM-C.
+- §1.3 gains a Mistake 10 amendment block (next subsection ties it
+  together with the existing record).
+
+### 9.bis.10. Mistake 10 (recorded against §1.3)
+
+**Mistake 10: §9's open-questions set was scoped only to VMx-
+primitive-fit; the MVVM-half open questions implicit in §3.2.bis /
+§4.3 / §5.8 were not surfaced.**
+
+§9 contained seven questions, all of the shape "does VMx primitive X
+fit aws-tui use case Y?". None asked about: the slot-priority table
+§4.3 risk note defers to "Phase 0 should sketch on paper"; the
+projection-timing strategy choice (throttled vs flagged); the
+integration-test re-anchoring scope; the cursor-vs-selection split
+inside View widgets §3.2.bis line 622 names but does not enumerate.
+
+A reviewer's pushback during the brainstorm — "the spec also has
+the MVVM half about state belonging in the VM, did you cover that?"
+— flagged the gap. The brainstorm response was §9.bis.9: a
+classification of today's bug train against §3.2.bis rows + §4.2 /
+§4.3 work items, producing per-Phase regression anchors with
+concrete PR references.
+
+**Methodology lesson.** Specs with two halves (here: VMx-toolkit
+adoption + MVVM-discipline migration) need open-questions sets that
+explicitly span both halves. A single §9 question list reads as
+"the only open items"; if half the spec's scope is missing from §9,
+the brainstorm will silently scope down to the question set's
+implicit framing.
+
+### 9.bis.11. Upstream feedback artifact
 
 The seven resolutions above identified five places (Items 1–5 in the
 vNext report) where a VMx primitive almost fit but didn't quite, plus
