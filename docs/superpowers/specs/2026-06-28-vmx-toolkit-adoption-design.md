@@ -75,6 +75,45 @@ VMs since the project began."
 ### 1.3. Mistakes made during the review session — record so the next worker
        does not repeat them
 
+> **Update — amendment after a second review round (also 2026-06-28).** The
+> first draft of this spec, recording mistakes 1–4 below, was itself wrong on
+> three further counts surfaced when the reviewer pushed back with
+> "but couldn't the menu just be a `CompositeVM`?" and "shouldn't S3 be
+> `HierarchicalVM`?". The draft had:
+>
+> - **Mistake 5: defaulted to `CompositeVM` for every list-shaped VM
+>   without explicitly evaluating `HierarchicalVM` per case.** The S3 file
+>   pane is the canonical test of this — a tree-shaped domain whose current
+>   View renders one level at a time. Whether the VM should model the flat
+>   level (`CompositeVM`) or the lazy tree (`HierarchicalVM`) is a real
+>   choice the spec must call out, not silently default. See §4.2.x for the
+>   updated per-VM analysis and §9 for the resulting open question.
+> - **Mistake 6: did not read `NavMenuVM`'s existing `CompositeVM` usage
+>   before claiming it was "the reference implementation".** Reading
+>   `vm/nav_menu_vm.py` line 129 shows the VM uses `CompositeVM` for the
+>   children list but tracks `_selected_id: str | None` as a parallel
+>   hand-rolled state. The composite's `current` slot — which is exactly the
+>   primitive that propagates selection — is unused. NavMenuVM is the
+>   project's **partial** adoption, not its reference. The user's review
+>   question "shouldn't the menu be a `CompositeVM` since it has a selected
+>   item that needs propagating?" was diagnosing this gap precisely.
+> - **Mistake 7: did not explicitly consider whether the focus / pane-
+>   selection refactor (the "FocusCoordinatorVM" follow-up §8.3 punts on)
+>   should land BEFORE the toolkit adoption.** §8.3 declared the focus
+>   coordinator out of scope without addressing the ordering question. See
+>   §5.0 below for the analysis and decision.
+>
+> **Methodology lesson for the next worker.** Every per-VM target in §4
+> must include three explicit answers, in writing in the PR description:
+> (1) which VMx primitive(s) was/were evaluated (`CompositeVM`,
+> `ObservableList`, `HierarchicalVM`, `PagedComposition`, etc.);
+> (2) why the chosen primitive fits (or why none does, and the VM stays
+> hand-rolled); (3) what was inspected to know — the file path of the
+> primitive's source, the file path of the existing VM, and any test that
+> exercises the contract. Without those three answers, the PR is not ready
+> for review.
+
+
 The next worker picking up this spec should know that the analysis behind it
 went through three rounds of correction. Each correction tightens the
 design, and each mistake is worth recording because it is the kind of
@@ -275,13 +314,57 @@ choice — used by tests).
 Replaces the bespoke `push_screen_wait` plumbing in `confirm_vm.py`,
 `resume_vm.py`, `crash_vm.py`, and `first_run_vm.py`.
 
-### 2.6. `HierarchicalVM` (and `HierarchicalVMBuilder`)
+### 2.6. `HierarchicalVM[TModel, TVM]` (and `HierarchicalVMBuilder`)
 
-**File:** `vmx/hierarchical/`
+**File:** `vmx/hierarchical/hierarchical_vm.py`
+**Tree-walk utilities:** `vmx/tree/walk.py` — `walk`, `find`, `walk_expanded`
+**Expansion capability:** `vmx/capabilities/expansion.py` — `IExpandable`
 
-Tree-shape VM. Likely **not applicable** to aws-tui today — no tree-shaped
-surfaces. Skip unless a future feature (e.g., a hierarchical bucket
-browser or a folder-tree navigation pane) adopts the shape.
+Generic over a typed `TModel` (the domain model per node) and `TVM` (the VM
+type of children, recursively bound to `HierarchicalVM[Any, Any]`).
+
+Key public API:
+
+- `model: TModel` — the domain model at this node.
+- `children: Sequence[TVM]` — children of this node.
+- `parent: TVM | None` — the parent reference.
+- `add_child(child)` / `remove_child(child)` — emit
+  `TreeStructureChangedMessage` (`ADDED` / `REMOVED`) on `hub`.
+- Reparenting emits `TreeStructureChange.REPARENTED`.
+- `__iter__` — yields materialized children (lets `walk` / `walk_expanded`
+  / `find` see this node as a traversable).
+
+Construction knobs:
+
+- `children_factory: Callable[[TVM], Iterable[TVM]]` — produces child VMs
+  for THIS node. **Called lazily** on first `.children` access by default.
+- `eager_children: bool = False` — when `True`, materialises the entire
+  subtree at `construct()` time, depth-first.
+
+Capabilities:
+
+- `IExpandable` — opt-in interface a node implements to report
+  `is_expanded`; `walk_expanded` traversal then skips collapsed subtrees.
+
+**This is the right primitive when:**
+
+- The DOMAIN is hierarchical (file system, GUI widget tree, DOM, document
+  outline).
+- The View wants to render multiple levels of the hierarchy at once
+  (expand/collapse rows inline).
+- Navigation history (parent/child references) is part of the VM's state
+  rather than the View's.
+
+**This is NOT the right primitive when:**
+
+- The View shows a single level at a time and "navigation" is a `cd`-style
+  re-bind (the Norton-Commander pattern). For that, `CompositeVM` of the
+  current level's children is simpler and lower-overhead.
+- The collection is naturally flat.
+
+aws-tui's S3 file pane sits exactly on the boundary between these cases —
+see §4.2.2 for the explicit evaluation.
+
 
 ### 2.7. `GroupVM` (and `GroupVMBuilder`)
 
@@ -418,7 +501,89 @@ forgot-to-broadcast / forgot-to-dispose-child bug families**.
 
 ### 4.2. Per-VM target shape
 
+> **Methodology reminder (from §1.3 mistake 5).** Every entry below carries
+> three explicit answers: **(1) primitives evaluated**, **(2) chosen primitive
+> and reason**, **(3) what was read to know**. The next worker should
+> reproduce this discipline for any VM the spec does not pre-evaluate.
+
+#### 4.2.0. `NavMenuVM` — finish the incomplete adoption
+
+**Primitives evaluated:** `CompositeVM[ComponentVMOf[ServiceDescriptor]]`
+(currently used for the children list), `HierarchicalVM` (rejected — the
+nav rail is flat, not a tree).
+
+**Chosen:** keep `CompositeVM`, but migrate the hand-rolled
+`_selected_id: str | None` field to the composite's built-in `current` slot.
+
+**What was read:** `vm/nav_menu_vm.py` lines 128–141 (the existing
+`CompositeVM` builder configuration); lines 113–129 (the `_selected_id`
+field that lives in parallel to the composite); `.venv/lib/python3.11/
+site-packages/vmx/composites/composite_vm.py` lines 110–125 (the `current`
+property + its observable + dispatcher-aware `async_selection` flag).
+
+**Current state (gap):**
+
+```python
+# vm/nav_menu_vm.py
+self._items: list[NavItemVM] = []
+self._selected_id: str | None = None   # hand-rolled
+self._inner: CompositeVM[…] = CompositeVM[…].builder()…build()
+                                          # ↑ children, but NOT selection
+```
+
+`_selected_id` and the composite's `current` are two parallel sources of
+truth for "which service is selected". Every selection-change site has to
+update both. That's exactly the kind of duplicated-state bug surface this
+adoption eliminates.
+
+**Target:**
+
+```python
+self._inner: CompositeVM[…] = (
+    CompositeVM[…]
+    .builder()
+    .name("nav_menu")
+    .services(hub, dispatcher)
+    .children(self._initial_children)
+    .auto_construct_on_add(True)
+    .current_selector(self._pick_default_current)   # ADD
+    .on_current_changed(self._broadcast_selected)   # ADD
+    .build()
+)
+```
+
+`selected_id` becomes a derived read-only property:
+`@property def selected_id(self) -> str | None: return self._inner.current.id if self._inner.current else None`.
+The `switch_service_command` mutates `self._inner.current = …`. The View
+subscribes to `on_current_changed` (or `on_collection_changed` for
+rebuild). Stop emitting hand-rolled `PropertyChangedMessage(self,
+"selected_id")` — the framework does the equivalent automatically.
+
+**LOC delta estimate:** −60 (modest, because the composite is already there;
+the win is eliminating the dual-state-tracking bug surface, not lines).
+
+**Tests carried over:** `tests/unit/vm/test_nav_menu_vm.py` —
+selected-id-propagation assertions become assertions on `current.id`.
+
+This becomes the **reference implementation** for §4.2.1–§4.2.7 — but only
+after this finish-the-adoption work lands. Until then, NavMenuVM is the
+**partial** adoption, not the model.
+
 #### 4.2.1. `JobRunsVM` → `CompositeVM[JobRunVM]` + `PagedComposition`
+
+**Primitives evaluated:** `CompositeVM[JobRunVM]`,
+`PagedComposition[JobRunVM]`, `HierarchicalVM` (rejected — runs are flat,
+not a tree).
+
+**Chosen:** `CompositeVM[JobRunVM]` for the run list, wrapped in
+`PagedComposition` for forward-only `nextToken` pagination — pending Phase 0
+spike confirming the framework's pagination semantics fit (see §9).
+
+**What to read before starting:** `vm/emr_serverless/job_runs_vm.py` (entire
+file, ~280 lines); `vmx/collections/paged_composition.py`;
+`tests/unit/vm/emr_serverless/test_job_runs_vm.py` (existing test surface
+— don't break these).
+
 
 **Today:** `_runs_cache: tuple[JobRunSummary, ...]` + `_next_token` +
 `_selected_id` + filter state. Six `PropertyChangedMessage` emission
@@ -444,26 +609,97 @@ load_more, on filter change.
 
 **LOC delta estimate:** −250.
 
-#### 4.2.2. `PaneVM` → `CompositeVM[EntryVM]`
+#### 4.2.2. `PaneVM` — `CompositeVM` vs `HierarchicalVM` evaluation
 
-**Today:** 893 LOC; central to file-manager. Hand-rolls
-`_entries: tuple[EntryVM, ...]` + cursor + filter + the whole PaneState
-machine + manual broadcasts.
+**Primitives evaluated:** `CompositeVM[EntryVM]`,
+`HierarchicalVM[FileSystemNode, FileSystemNodeVM]`, `ObservableList[FileEntry]`
+(rejected — entries are per-row VMs, not raw values).
 
-**Target:**
-- `entries` becomes the underlying `CompositeVM` children list.
+This is the case where the choice is non-obvious and where mistake 5 (§1.3)
+was made — the first draft defaulted to `CompositeVM` without explicitly
+considering `HierarchicalVM`. The user's review pushback was on exactly this
+question. The honest answer is the choice depends on a design call that has
+not yet been made.
+
+**Option A: `CompositeVM[EntryVM]` — the "flat per cd-level" interpretation**
+
+The View today is Norton-Commander style: shows ONE level at a time, `cd`
+into a folder = re-bind the pane to a new list. Under this model PaneVM
+is a flat collection of children that gets replaced wholesale on every
+navigation.
+
+- `entries` becomes the composite's children list.
 - `current: EntryVM | None` is the cursor.
-- State machine (`PaneState`) stays as a property on the parent — it's not
-  list-shaped.
-- Filter sits as a `current_selector` augmentation or as a derived
-  filtered view, depending on Phase 0 spike findings.
+- `cd` is `self._inner.clear(); self._inner.add_all(new_entries)` (inside a
+  `Batch` block so the View redraws once).
+- `_path` stays as a property on PaneVM since it's not list-shaped.
+- `PaneState` (LOADING / IDLE / EMPTY / AUTH_REQUIRED / FORBIDDEN /
+  UNREACHABLE / ERROR) stays as a property on PaneVM — it's the
+  observation-of-the-list state machine, not list shape itself.
 
-**Risk:** PaneVM is the biggest single VM and the most-tested; consider
-splitting the PR into "introduce CompositeVM scaffold with feature flag
-gating both code paths" + "remove old paths" if the diff exceeds 600
+Pros: minimal change from today's idiom. Stays close to existing tests.
+Lowest risk. Maps cleanly to the current View.
+
+Cons: `_path` and the cd-stack are still hand-rolled. Treating
+navigation as VM-side state would require a separate path-history VM.
+
+**Option B: `HierarchicalVM[FileSystemNode, FileSystemNodeVM]` — the
+"lazy tree of the whole bucket" interpretation**
+
+The DOMAIN is genuinely hierarchical — S3 keys are `/`-delimited; LocalFS
+is an actual tree. `HierarchicalVM` with `eager_children=False` (lazy) and
+a `children_factory` that calls `provider.list(node.path)` would model the
+entire bucket as a lazy tree:
+
+- The root is the bucket (or filesystem root).
+- Each folder node's `children_factory` invokes `provider.list(node.path)`
+  on first `.children` access, then caches.
+- `parent` reference is automatic.
+- "cd" becomes "the current pane VM is whichever node is selected"; cd-up
+  is `self._current_node.parent`; cd-into is `self._current_node = child`.
+- The view still shows one level at a time, just by rendering
+  `current_node.children` instead of `pane.entries`.
+- Future feature win: an inline-expand tree view is a one-line render change
+  (`walk_expanded(root)` instead of `current_node.children`).
+- `IExpandable` capability per node lets directories carry their own
+  expanded/collapsed state.
+
+Pros: the domain IS hierarchical; the VM finally reflects that. cd-history
+moves out of `_path` into actual VM topology. Future-proofs a tree view if
+the project ever wants one. Eliminates the `_path` hand-roll.
+
+Cons: significantly larger refactor — PaneVM is 893 LOC and central to
+file-manager. The cache invalidation story is non-trivial (when does a
+folder node refresh its children? when does it forget them?). The current
+hand-rolled refresh semantics ("ask provider on every cd, never cache")
+have known and audited timing characteristics; switching to lazy-with-cache
+changes the contract. The View bridge must be re-thought: today the pane
+subscribes to one VM; under `HierarchicalVM` the subscription target moves
+with each `cd`.
+
+**Decision:** **Open question for Phase 0** (see §9 item 7). The user's
+review explicitly raised this — the spec must not decide it silently.
+
+The Phase 0 spike should answer:
+
+1. Does the project intend to add a tree-style file view (inline expand)
+   in the foreseeable future?
+2. If yes → Option B is the right target despite the bigger refactor.
+3. If no → Option A is the right target. The `HierarchicalVM` evaluation
+   stays in the spec as the "rejected — here's why" record.
+4. Either way: the cache invalidation contract must be written down before
+   any code change. The current "no cache" contract is a feature, not an
+   accident — S3 listings can race a user's external mutation.
+
+**LOC delta estimate:** Option A: −300. Option B: −450 (more deleted from
+`_path` history work) but +200–300 of new tree-node VM, so net −150 to
+−250. Option A is the lower-LOC outcome.
+
+**Risk note:** PaneVM is the biggest single VM and the most-tested.
+Regardless of which option wins, consider splitting the PR into "introduce
+scaffold; old `_entries` tuple co-exists behind a flag; both broadcast in
+parallel for one release" + "remove old path" if the diff exceeds 600
 lines.
-
-**LOC delta estimate:** −300.
 
 #### 4.2.3. `ApplicationsVM` → `CompositeVM[ApplicationVM]`
 
@@ -569,6 +805,83 @@ this spec's Phase 1.
 
 ## 5. Phased migration plan
 
+### 5.0. Ordering decision — does the focus / selection refactor come BEFORE
+       the toolkit adoption, or AFTER?
+
+(Recorded as §5.0 because the user's review explicitly asked. Mistake 7 in
+§1.3 was not having addressed it.)
+
+**The two candidates for "first":**
+
+A. **Focus / selection coordinator first.** Build the FocusCoordinatorVM
+   (the parallel follow-up §8.3 alludes to), wire pane/menu/EMR widgets
+   through it, ship — then start the toolkit adoption against the new
+   coordinator.
+
+B. **Toolkit adoption first.** Migrate list VMs to `CompositeVM`,
+   migrate forms to `FormVM`, migrate modals to `IDialogService` — then
+   build the FocusCoordinatorVM on top of the now-cleaner VM surface.
+
+**Why ordering matters.** The recurring focus bugs (PRs #98 / #99 / #101)
+all involve selection state that today is hand-rolled per VM
+(`NavMenuVM._selected_id`, `JobRunsVM._selected_id`,
+`ApplicationsVM._selected_id`, `DualPaneVM._focused`, plus the Textual
+runtime's own focus). A FocusCoordinatorVM built on top of this hand-rolled
+mess would need to inspect and mutate each VM's bespoke selection field —
+and would need to be rewritten the moment those VMs migrate to
+`CompositeVM.current`.
+
+If we do A first, the coordinator's interface is "give me the selection
+field of VM X" — five different field names, five getters. If we do B
+first, the interface is "give me VM X's `current`" — uniform.
+
+**Decision: B first (toolkit adoption), THEN focus coordinator.**
+
+Why:
+
+1. **Less total work.** A coordinator built on hand-rolled selection then
+   re-built on `current` is two coordinator implementations. A coordinator
+   built after toolkit adoption is one.
+2. **The bug train is already shipped fixed.** PRs #98 / #99 / #101 are
+   merged. There is no pending user-visible focus regression to race
+   against. We are NOT in "ship visible fixes first" mode.
+3. **`CompositeVM.current` IS the selection primitive a coordinator needs.**
+   After §4.2.0 finishes NavMenu's adoption and §4.2.1 migrates JobRunsVM
+   and §4.2.3 migrates ApplicationsVM, the coordinator's question becomes:
+   "of the candidate `CompositeVM`s in the app right now, which one's
+   `current` is the user driving?" — and the answer is a single observable
+   chain across uniform primitives.
+4. **The focus refactor is a smaller spec on top of a finished toolkit
+   adoption.** Without the toolkit adoption, the focus refactor has to
+   reach into five hand-rolled state fields and risks falling into the
+   "fragmented state machine" trap a second time.
+
+**What this means in practice.**
+
+- §8.3 stays as the out-of-scope-for-this-spec marker, with an updated
+  cross-reference: the focus coordinator lands as a follow-up SPEC after
+  this one ships at least through Phase 5 (modals don't matter for focus;
+  Phase 1–3 plus §4.2.0 are the load-bearing pieces).
+- The toolkit-adoption PRs (Phase 1–6) MUST NOT introduce new selection
+  hand-rolling. Each migration's "Done" criterion includes: the migrated
+  VM exposes selection via `current` (or via the framework's idiom for
+  that primitive), not via a bespoke `_selected_id` field.
+- After Phase 3 completes (PaneVM migrated), open the FocusCoordinatorVM
+  spec as a separate `docs/superpowers/specs/YYYY-MM-DD-focus-coordinator-design.md`
+  file. Recommended brainstorm question: "given that NavMenuVM,
+  JobRunsVM, ApplicationsVM, and PaneVM all now expose `current`, what's
+  the smallest VM that observes them and projects an app-wide
+  `focused_slot` discriminated union?"
+
+**Counter-argument the next reviewer may raise.** "But the focus bugs are
+the actually-visible problem — why are we doing the LOC-shrink work
+first?" Answer: the focus bugs are NOT visible — they are shipped fixed.
+What this work eliminates is the bug FAMILY (forgot-to-broadcast,
+forgot-to-dispose-child), which will keep producing new bugs in the
+existing hand-rolled surface for as long as that surface exists. The
+ordering puts the structural cure first and the focus-architecture
+follow-up at the point where it benefits most.
+
 ### 5.1. Phase 0 — bench setup + spike
 
 One PR, no shipped behavior change.
@@ -589,13 +902,17 @@ Deliverables:
 Verification: the spike must run `uv run pytest tests/unit/vm/chrome/`
 green after the migration.
 
-### 5.2. Phase 1 — leaf-VM migrations
+### 5.2. Phase 1 — leaf-VM migrations + finish NavMenu adoption
 
 One PR per VM, in order:
 
+0. **`NavMenuVM` finish-the-adoption** (§4.2.0) — migrate `_selected_id`
+   to `CompositeVM.current`. This goes first because it pins the
+   selection-via-`current` pattern that every subsequent migration mirrors.
 1. `ToastStackVM` → `CompositeVM[ToastVM]`
 2. `TransfersVM` → `ServicedObservableCollection[TransferVM]`
-3. `ApplicationsVM` → `CompositeVM[ApplicationVM]`
+3. `ApplicationsVM` → `CompositeVM[ApplicationVM]` (uses `current` for the
+   selected application, replacing `_selected_id`)
 
 Why this order: each migration is a leaf in the VM tree (no other VM
 depends on its internal shape); each has good test coverage; the order
@@ -822,6 +1139,12 @@ To be answered during the Phase 0 spike:
    does that need a domain-side state outside the dialog service?
 6. Is there a simpler form of `ServicedObservableCollection` that does
    NOT take ownership, for the transfer_journal interaction?
+7. **(Added at review round 2)** Does the project intend to support an
+   inline-expand tree view of S3/local filesystem in the foreseeable
+   future? — drives the PaneVM `CompositeVM` vs `HierarchicalVM` choice
+   (§4.2.2). If unsure, the Phase 0 spike should prototype both options
+   for one provider (probably LocalFS, simplest) and present the diff
+   side-by-side so the maintainer can decide on real code.
 
 Each answered question becomes an amendment to this spec (preferred) or
 a note in the corresponding plan task (acceptable if the answer is
