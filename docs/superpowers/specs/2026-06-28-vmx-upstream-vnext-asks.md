@@ -2,16 +2,43 @@
 
 | Field | Value |
 |---|---|
-| Status | Drafted during the 2026-06-28 brainstorm session that resolved [[2026-06-28-vmx-toolkit-adoption-design]] §9 |
-| Date | 2026-06-28 |
+| Status | Drafted 2026-06-28; re-framed 2026-06-29 under the "compose, don't reject" directive (see §0 addendum) |
+| Date | 2026-06-28 (initial) / 2026-06-29 (round-2 re-framing) |
 | Source project | [aws-tui](https://github.com/thekaveh/aws-tui) — Textual-based TUI for AWS, currently consuming `vmx>=2.6.0,<3.0.0` |
 | Target audience | VMx maintainer(s) planning the vNext (post-2.6.x) release |
-| Related | [[2026-06-28-vmx-toolkit-adoption-design]] §4 (per-VM adoption targets), §9 (open questions), §1.3 (mistakes record) |
-| Tone | "We were going to use primitive X out of the box; we ended up doing Y because of issue Z; if vNext shipped W, we'd swap straight to W." |
+| Related | [[2026-06-28-vmx-toolkit-adoption-design]] §4 (per-VM adoption targets), §9 (open questions), §9.bis (brainstorm resolutions incl. round 3 directive at §9.bis.11), §1.3 (mistakes record) |
+| Tone (post round-2) | "We composed VMx primitive X inside a custom aws-tui VM that adds behaviour Y on top; vNext shipping X-natively-with-Y would let consumers skip the wrapper." |
 
 ---
 
 ## 0. Why this report exists
+
+> **Round-2 addendum (2026-06-29).** The body of this report below
+> was drafted during the round-1 brainstorm with the framing: "we
+> considered VMx primitive X, found it almost fit, here's the
+> workaround we landed on". That framing reflects the round-1
+> implicit dichotomy — VMx fits → adopt; doesn't fit → hand-roll —
+> that the aws-tui maintainer's 2026-06-29 directive supersedes
+> (see [[2026-06-28-vmx-toolkit-adoption-design]] §9.bis.11). Under
+> the directive: ALL view logic moves out of the View into the VM;
+> when no VMx primitive fits directly, aws-tui builds a custom VM
+> that COMPOSES the closest VMx primitive(s) internally + adds the
+> missing behaviour on top, without exposing the primitive in the
+> custom VM's public surface.
+>
+> **What this means for the items below.** The "What aws-tui did
+> instead" lines should now be read as **the composition shape
+> aws-tui ended up with**, not as a workaround that avoids VMx.
+> The "Proposed vNext API" lines describe the primitive that would
+> let consumers skip the composition wrapper — *exactly* the
+> abstraction the aws-tui custom VM ends up exposing on top of the
+> composed primitive. Each item is therefore a candidate for VMx
+> vNext to ship natively so consumers don't have to compose.
+>
+> The underlying findings — which primitive's contract gap drove
+> the composition — are unchanged from round 1. Only the framing
+> flips: from "blocker" to "here's what we ended up building; bake
+> it in".
 
 aws-tui is migrating ~14 list-shaped / form-shaped / modal VMs from
 hand-rolled MVVM patterns onto the VMx toolkit (the full plan is in
@@ -25,7 +52,7 @@ every per-VM target was forced through the discipline of:
 That process surfaced a set of cases where the primitive **almost** fit
 out of the box but didn't quite, AND where a small upstream change would
 let aws-tui (and presumably other consumers) adopt the primitive without
-a hand-rolled adapter. This document is that list.
+a custom composition wrapper. This document is that list.
 
 **For each item:**
 
@@ -365,17 +392,38 @@ similar. Consequence for the four aws-tui modals:
 - **CrashVM** → maps to `notify(severity=ERROR)`. **Clean fit.**
 - **ResumeVM** → three-way decision (Resume / Discard / KeepForLater).
   Boolean `confirm` is two-way; "KeepForLater" needs persistent state.
-  **No fit.** Stays hand-rolled.
-- **FirstRunVM** → multi-step welcome flow with form fields. **No fit.**
-  Stays hand-rolled.
+  **No direct fit.**
+- **FirstRunVM** → multi-step welcome flow with form fields.
+  **No direct fit.**
 
-The aws-tui §4.2.7 LOC delta estimate revised from `−60 × 4 = −240` to
-`−60 × 2 = −120`.
+Round-1 framing put the §4.2.7 LOC delta at `−60 × 2 = −120`
+(only the two clean fits migrated). Round-2 framing under the
+"compose, don't reject" directive (see report addendum) re-estimates
+toward `−180 to −210`: all four migrate, with the two no-direct-fit
+cases composing the closest VMx primitive(s) inside a custom aws-tui
+VM rather than staying hand-rolled.
 
-**What aws-tui did instead:** Adopt `IDialogService` for the two clean
-fits. Document "no fit" rationale for the other two and keep them
-hand-rolled (per the spec's "kept hand-rolled with rationale" allowed
-outcome).
+**What aws-tui did instead (round 2 framing):**
+
+- ConfirmationVM → custom aws-tui VM composing
+  `IDialogService.confirm` directly. Minimal wrapper.
+- CrashVM → custom aws-tui VM composing
+  `IDialogService.notify(severity=ERROR)` directly. Minimal wrapper.
+- ResumeVM → custom aws-tui VM composing a bespoke `ComponentVM`
+  subclass + adding a three-way result type
+  (`Resume / Discard / KeepForLater`) + a domain-side
+  "persist-and-show-on-next-boot" hook on top. The composed
+  primitive is NOT `IDialogService.confirm` (bool return won't fit);
+  it's `ComponentVM` with a result-projection field.
+- FirstRunVM → custom aws-tui VM composing N `FormVM[TM]` instances
+  (one per wizard step) + a small "current step" state machine on
+  top. Multi-step shape is owned by the custom abstraction;
+  `FormVM` is internal.
+
+None stay hand-rolled in the View. The composition wrappers for
+Resume and FirstRun are small (~30 LOC each of added behaviour)
+because the underlying primitives (`ComponentVM`, `FormVM`) cover
+most of the shape already.
 
 **Proposed vNext API:** Extend `DialogService` with a generic VM-backed
 modal escape hatch:
@@ -576,7 +624,7 @@ is the only non-trivial part) + tests + docs.
 | 2 | `PagedComposition` × `CompositeVM` | observable shapes don't compose | dropped via Item 1 (no adapter built) | Small (extend `_try_subscribe_source`) |
 | 3 | `CompositeVM` derived/filtered view | no primitive ships | filter as VM @property; cursor kept visible by VM | Medium (`FilteredCompositeVM`) |
 | 4 | `FormVM` validators | no declarative API | manual predicate + persister raise | Medium (declarative validators + `errors` map) |
-| 5 | `IDialogService` | closed contract; no VM-backed modal | 2 of 4 modals migrate; 2 stay hand-rolled | Medium (`present()` + `ModalVM` protocol) |
+| 5 | `IDialogService` | closed contract; no VM-backed modal | all 4 modals migrate as custom VMs composing VMx; 2 compose `confirm`/`notify` directly, 2 compose `ComponentVM` + `FormVM` with result projection on top | Medium (`present()` + `ModalVM` protocol; optional `MultiStepFormVM`, `ChoiceVM`) |
 | 6 | `ServicedObservableCollection` | docs say ownership; source does not | corrected spec; kept manual `finally: dispose` | Trivial (rename / docstring); small (owned variant) |
 | 7 | `HierarchicalVM` | no cache-invalidation contract | chose `CompositeVM` instead | Small (`invalidate*` + TTL + docs) |
 

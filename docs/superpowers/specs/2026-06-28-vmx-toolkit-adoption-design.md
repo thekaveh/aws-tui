@@ -289,10 +289,38 @@ VMs since the project began."
 > inventory, producing per-Phase regression anchors with concrete PR
 > references. See §9.bis.9 for the resulting mapping table.
 
+> **Update — third amendment after the brainstorm session (2026-06-29).**
+> A sixth round of correction landed one day after the round-1 and
+> round-2 commits, when the maintainer delivered an explicit
+> directive that supersedes the framing the prior rounds operated on:
+>
+> - **Mistake 11: brainstorm rounds 1 and 2 operated on an implicit
+>   "VMx fits → adopt; doesn't fit → hand-roll" dichotomy.** When a
+>   VMx primitive didn't fit cleanly (`IDialogService` for
+>   ResumeVM/FirstRunVM in §9.bis.6; `PagedComposition` for
+>   JobRunsVM's load-more UX in §9.bis.2; no `FilteredCompositeVM`
+>   for PaneVM/CommandPaletteVM in §9.bis.3; no declarative
+>   validators on `FormVM` in §9.bis.5), the resolutions defaulted
+>   to "stay hand-rolled" or "the derived view stays as a `@property`
+>   on the wrapping VM" — both implicitly tolerating logic-in-View
+>   that the directive explicitly forbids. The directive: ALL view
+>   logic out, no exceptions; VMx primitives are COMPOSED inside
+>   custom aws-tui VMs when no direct fit exists; the upstream
+>   report becomes a post-verification "here's what to ship
+>   natively next" list, not a parallel justification for
+>   hand-rolling.
+>
+> **Methodology lesson.** Treat VMx primitives as building blocks
+> for composition, not as choose-or-skip artifacts. When the closest
+> fit needs added behaviour, the work is composition + facade — a
+> custom aws-tui VM wrapping the VMx primitive without exposing it.
+> See §9.bis.11 for the re-framing of §9.bis.2 / .3 / .5 / .6 and
+> §9.bis.12 for the canonical Mistake 11 record.
+
 
 The next worker picking up this spec should know that the analysis behind it
-went through three rounds of correction, then a fourth and fifth round
-during the §9 brainstorm. Each correction tightens the
+went through three rounds of correction, then a fourth, fifth, and sixth
+round during the §9 brainstorm. Each correction tightens the
 design, and each mistake is worth recording because it is the kind of
 mistake a fresh worker can also make.
 
@@ -1006,9 +1034,21 @@ mode.
 
 **LOC delta estimate:** −200.
 
-#### 4.2.7. Modal VMs → `IDialogService` (two of four)
+#### 4.2.7. Modal VMs → custom aws-tui VMs composing VMx (all four)
 
-> **RESOLVED — see §9.bis.6.** `IDialogService` is a closed-set contract
+> **SUPERSEDED — see §9.bis.11 (round 3, 2026-06-29).** Under the
+> maintainer's "compose, don't reject" directive, no VM stays
+> hand-rolled in the View. All four modal VMs become custom aws-tui
+> VMs composing the closest VMx primitive(s): `ConfirmationVM` /
+> `CrashVM` compose `IDialogService.confirm` / `notify` respectively
+> (minimal wrappers); `ResumeVM` composes a bespoke `ComponentVM`
+> subclass + three-way result projection + domain-side persisted-bit
+> hook; `FirstRunVM` composes N `FormVM`s + a "current step" state
+> machine on top. Net LOC delta re-estimates toward `−180 to −210`.
+> The "RESOLVED — see §9.bis.6" pointer below is preserved as the
+> round-1 audit trail.
+
+> **RESOLVED — see §9.bis.6 (round 1, 2026-06-28).** `IDialogService` is a closed-set contract
 > (`confirm` / `notify` / `pick_file_*`). Only `ConfirmationVM`
 > (→ `confirm`) and `CrashVM` (→ `notify(severity=ERROR)`) have a clean
 > fit. `ResumeVM` (three-way decision + persisted "show next boot"
@@ -1605,15 +1645,21 @@ almost fit but didn't quite. Numbered `.bis` to keep §10/§11
 downstream section numbers stable (same convention as §3.2.bis).
 
 **Structure:**
-- §9.bis.1–7 — one per §9 question (Q7, Q1, Q2, Q3, Q4, Q5, Q6).
+- §9.bis.1–7 — round 1: one per §9 question (Q7, Q1, Q2, Q3, Q4, Q5, Q6).
 - §9.bis.8 — Mistake 9 (the `ServicedObservableCollection` paraphrase
   bug surfaced while resolving Q6).
-- §9.bis.9 — round-2 amendment: MVVM-half re-classification of
-  today's bug train against the §3.2.bis 10-state inventory,
-  producing per-Phase regression anchors with concrete PR refs.
-- §9.bis.10 — Mistake 10 (the round-2 amendment trigger:
-  §9's question set was too narrowly scoped to VMx-fit).
-- §9.bis.11 — pointer to the upstream feedback artifact.
+- §9.bis.9 — round 2: MVVM-half re-classification of today's bug
+  train against the §3.2.bis 10-state inventory, producing per-Phase
+  regression anchors with concrete PR refs.
+- §9.bis.10 — Mistake 10 (the round-2 amendment trigger: §9's
+  question set was too narrowly scoped to VMx-fit).
+- §9.bis.11 — round 3: maintainer's "compose, don't reject"
+  directive applied — re-frames §9.bis.2 / .3 / .5 / .6 around the
+  composition pattern (custom aws-tui VMs wrapping VMx primitives).
+- §9.bis.12 — Mistake 11 (the round-3 amendment trigger: rounds 1
+  and 2 implicitly tolerated "stay hand-rolled" outcomes the
+  directive forbids).
+- §9.bis.13 — pointer to the upstream feedback artifact.
 
 Each resolution lists, per §0's discipline rules: which VMx
 primitive(s) were evaluated, what was inspected (file + line ranges),
@@ -2046,7 +2092,197 @@ explicitly span both halves. A single §9 question list reads as
 the brainstorm will silently scope down to the question set's
 implicit framing.
 
-### 9.bis.11. Upstream feedback artifact
+### 9.bis.11. Round 3 — directive "compose, don't reject" applied (2026-06-29)
+
+The brainstorm continued one day after the round-1/round-2 commits.
+The maintainer's directive, delivered verbatim:
+
+> Move ALL view logic out of the view layer and into the view model
+> layer no matter what. In doing so, use VMx as much as possible.
+> Pick the closest view model abstraction that most closely matches
+> your needs in each case and then either directly use it or
+> customize it either by inheritance or by instantiating a VMx
+> artifact inside your custom abstraction and then adding more on
+> top of it without directly exposing it. Once everything works and
+> is verified, compile a list of suggestions to the upstream VMx
+> library to add the new capabilities and abstractions in their next
+> releases so we can refactor again.
+
+This supersedes the implicit "VMx fits → adopt; doesn't fit → leave
+hand-rolled" dichotomy rounds 1 and 2 operated on (recorded as
+Mistake 11 in §9.bis.12 and as a §1.3 amendment block).
+
+**The VMx-use ladder applied to each VM need:**
+
+1. **Direct adoption** — use a VMx primitive out of the box.
+2. **Inheritance** — subclass a VMx primitive and override the
+   specific method(s) that need different behaviour.
+3. **Composition (facade)** — instantiate a VMx primitive INSIDE a
+   custom aws-tui VM that adds the missing behaviour on top. The
+   VMx primitive is NOT exposed in the custom VM's public surface;
+   consumers (Views, other VMs) bind only to the custom abstraction.
+   This is the same pattern aws-tui already uses for leaf VMs
+   (`ToastVM`, `EntryVM`, `TransferVM` all wrap `ComponentVMOf`).
+   Round 3 extends the pattern to composite-shaped VMs too.
+
+The underlying *decision* about which VMx primitive backs each
+migration is unchanged in every case. The directive changes
+**where the boundary sits** between aws-tui-side code and VMx
+primitive surface.
+
+#### §9.bis.2 (Q1 JobRunsVM) — re-framed
+
+Was: "drop `PagedComposition`; `CompositeVM[JobRunVM]` + VM-level
+`next_token` field + `load_more` command."
+
+Now: build a custom aws-tui shape that COMPOSES
+`CompositeVM[JobRunVM]` internally + adds `next_token`, `load_more`,
+`has_more`, `refresh` on top. Two equivalent forms acceptable:
+(a) inline the composition inside `JobRunsVM` directly (one
+consumer — JobRunsVM is the only AWS list with nextToken pagination
+in scope today); (b) lift to a small reusable aws-tui-side
+`TokenPagedCompositeVM[T]` mini-primitive if a second consumer
+materialises later. Either way, `CompositeVM` is NOT exposed in the
+custom VM's public surface. The View binds only to the custom
+abstraction's surface.
+
+#### §9.bis.3 (Q2 filter coupling) — re-framed
+
+Was: "Option C — derived filter view stays as a VM `@property`;
+CompositeVM holds unfiltered + cursor; VM snaps cursor to first
+filter-visible entry on filter change."
+
+Now: build a custom aws-tui `FilteredCompositeVM[VM]` mini-primitive
+that COMPOSES `CompositeVM[VM]` internally + adds `filter_text`,
+`filtered_entries`, visible-cursor projection, `set_predicate` on
+top. `CompositeVM` is NOT exposed in the custom VM's public surface.
+Both `PaneVM` and `CommandPaletteVM` consume the custom abstraction;
+neither touches the inner `CompositeVM` directly. `CommandPaletteVM`
+additionally composes a `ScoredFilteredCompositeVM` variant if the
+fuzzy-match score logic doesn't fit comfortably in the same
+abstraction (Phase 0 spike decides shape, not whether).
+
+#### §9.bis.5 (Q4 `FormVM` cross-field validators) — re-framed
+
+Was: "cross-field invariant via custom `approve_command.predicate` +
+persister raise; ~5 LOC per cross-field rule on each consuming VM."
+
+Now: build a custom aws-tui `ValidatingFormVM[TM]` that COMPOSES
+`FormVM[TM]` internally + adds declarative `field_validator(field,
+fn)` / `model_validator(fn)` registration + reactive
+`errors: dict[str, str]` map + auto-gated `approve_command` (where
+`can_execute = is_dirty AND not has_errors`) on top. `FormVM` is
+NOT exposed in the custom VM's public surface. `S3ConnectionsVM`
+and every future form-shaped VM consume `ValidatingFormVM`.
+
+#### §9.bis.6 (Q5 modal VMs) — re-framed (significant: no VM stays hand-rolled)
+
+Was: "`ConfirmationVM` + `CrashVM` adopt `IDialogService` directly;
+`ResumeVM` + `FirstRunVM` stay hand-rolled with documented 'no fit'
+rationale."
+
+Now: all four modal VMs become custom aws-tui VMs composing the
+closest VMx primitive(s):
+
+- `ConfirmationVM` → custom VM composing `IDialogService.confirm`
+  directly. (Minimal composition wrapper — close to direct adoption,
+  but still a wrapper so cross-cutting concerns like analytics /
+  test hooks have one place to live.)
+- `CrashVM` → custom VM composing
+  `IDialogService.notify(severity=ERROR)` directly. (Same — minimal
+  wrapper.)
+- `ResumeVM` → custom VM composing the closest VMx primitive (a
+  bespoke `ComponentVM` subclass with a result-projection field;
+  `IDialogService.confirm` can't be the composed primitive because
+  its `bool` return can't carry `Resume / Discard / KeepForLater`).
+  The custom VM adds: a three-way result type, a domain-side
+  "persist KeepForLater bit; show-on-next-boot" hook (the
+  persistence stays in the domain because it's domain state, not
+  dialog state; the VM owns the orchestration).
+- `FirstRunVM` → custom VM composing N `FormVM[TM]` instances (one
+  per wizard step) + a small "current step" state machine on top.
+  Multi-step shape becomes a property of the custom abstraction;
+  each step's form is a `FormVM` internally.
+
+None stay hand-rolled in the View. The round-1 finding "no clean
+fit in `IDialogService` for the three-way / multi-step shapes"
+still holds (and feeds upstream Item 5); under the directive that
+translates into **compose around it**, not skip the migration.
+
+§4.2.7 LOC delta revises again: round 1 said `−60 × 4 = −240`;
+round 1 brainstorm dropped it to `−60 × 2 = −120` once the
+two-stay-hand-rolled framing landed; round 3 re-estimates toward
+`−180 to −210` net (the composition wrappers for Resume and
+FirstRun are small — ~30 LOC each of added behaviour — so the net
+recovers most of the round-1 estimate). Phase 0 spike confirms
+once the wrapper shapes are sketched.
+
+#### Other resolutions — unchanged under the directive
+
+- **§9.bis.1 (Q7 PaneVM = `CompositeVM`, not `HierarchicalVM`)** —
+  primitive choice; the directive doesn't change which primitive
+  backs the migration.
+- **§9.bis.4 (Q3 ToastVM + `auto_construct_on_add`)** — direct
+  adoption; no wrapper needed. `ToastStackVM` already wraps
+  `CompositeVM[ToastVM]` per the spec.
+- **§9.bis.7 (Q6 `ServicedObservableCollection`)** — direct
+  adoption with explicit "caller still disposes" semantics. The
+  `finally: vm.dispose()` block lives in `TransfersVM`'s own
+  transfer-worker code path (VM-side already, not View-side); no
+  re-framing needed.
+- **§9.bis.9 (round-2 MVVM-half bug→work mapping)** — the
+  per-Phase acceptance criteria all hold under the directive.
+  Each criterion is a structural assertion about the post-
+  migration code (mechanism X no longer exists); the directive
+  reinforces the eliminations by ensuring no logic survives in the
+  View as an escape hatch.
+
+**Spec amendments triggered elsewhere by the directive:**
+
+- §4.2.7 inline pointer gains a "SUPERSEDED — see §9.bis.11"
+  notice above the round-1 "two of four stay hand-rolled"
+  framing.
+- §10 Definition of done item 1 softens from "kept hand-rolled
+  with rationale" to "landed (either via direct VMx adoption, via
+  inheritance, or via a custom aws-tui VM composing VMx
+  primitives)".
+- Upstream feedback report
+  (`2026-06-28-vmx-upstream-vnext-asks.md`) gains a
+  round-2 addendum at the top: the body's "what aws-tui did
+  instead" lines should now read as **the composition shape aws-
+  tui ended up with**, and the report's purpose becomes "vNext
+  could ship these natively so consumers skip the wrapper"
+  rather than "we couldn't use these primitives".
+
+### 9.bis.12. Mistake 11 (recorded against §1.3)
+
+**Mistake 11: brainstorm rounds 1 and 2 operated on an implicit
+"VMx fits → adopt; doesn't fit → hand-roll" dichotomy.**
+
+When a VMx primitive didn't fit cleanly (`IDialogService` for
+ResumeVM/FirstRunVM, `PagedComposition` for JobRunsVM's load-more
+UX, no `FilteredCompositeVM` for PaneVM/CommandPaletteVM, no
+declarative validators on `FormVM`), the resolutions defaulted to
+"stay hand-rolled" or "the derived view stays as a `@property` on
+the wrapping VM" — both implicitly leaving logic in places the
+maintainer's directive (2026-06-29) explicitly forbids: ALL view
+logic out, no exceptions; VMx primitives are COMPOSED inside custom
+aws-tui VMs when no direct fit exists.
+
+The dichotomy fell out of treating VMx primitives as "the thing you
+either use or don't" rather than "the thing you compose into the
+abstraction you actually need". §9.bis.11 records the round-3
+re-framing; this Mistake 11 entry records the methodology gap.
+
+**Methodology lesson.** Treat VMx primitives as building blocks for
+composition, not as choose-or-skip artifacts. When no primitive
+fits cleanly, the work is: build a custom aws-tui VM that composes
+the closest primitive(s) + adds the missing behaviour on top, WITHOUT
+exposing the primitive in its public surface. The upstream feedback
+report then captures the recurring composition shapes as candidate
+primitives for vNext.
+
+### 9.bis.13. Upstream feedback artifact
 
 The seven resolutions above identified five places (Items 1–5 in the
 vNext report) where a VMx primitive almost fit but didn't quite, plus
@@ -2066,9 +2302,12 @@ addressed to the VMx maintainer.
 
 The migration is complete when:
 
-1. All nine per-VM targets in §4.2 (including §4.2.0 NavMenu) have either
-   landed or are explicitly documented as "kept hand-rolled" with
-   rationale.
+1. All nine per-VM targets in §4.2 (including §4.2.0 NavMenu) have
+   landed — either via direct VMx adoption, via inheritance from a
+   VMx primitive, or via a custom aws-tui VM composing the closest
+   VMx primitive(s) per the §9.bis.11 ladder. **No VM stays
+   hand-rolled in the View** (the round-1 "kept hand-rolled with
+   rationale" framing is superseded by the §9.bis.11 directive).
 2. The `FocusCoordinatorVM` (§4.3) has landed and the View-side
    focus / cursor / slot-tracking state inventoried in §3.2.bis entries
    1, 3, 5, 8, 9 has been migrated out of the View.
