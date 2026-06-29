@@ -7,8 +7,94 @@
 | Owner | TBD at brainstorm |
 | Driver | Architectural review session 2026-06-28 — see §1.2 |
 | Related | [[docs/superpowers/specs/2026-06-13-aws-tui-design.md]] (M0 design baseline), [[docs/architecture.md]] (current five-layer model), [VMx 2.6.1 source](https://github.com/thekaveh/VMx) |
-| Estimated effort | 4–6 PRs over 2–3 calendar weeks at the project's typical cadence |
+| Estimated effort | 4–6 PRs over 2–3 calendar weeks at the project's typical cadence (Phases 1–6) + 1 PR for Phase 7 (focus coordinator) |
 | Target VMx version | `>=2.6.0,<3.0.0` (no version bump required) |
+
+---
+
+## 0. How to use this spec — reading guide for the next worker
+
+> **Read this entire section before doing anything else.** The spec is the
+> output of three review rounds; trying to act on it without reading the
+> mistakes record (§1.3) and the discipline rules below has a high chance
+> of repeating those mistakes.
+
+**Read sections in this order:**
+
+1. **§1.1** — what the work delivers and why (two architectural gaps).
+2. **§1.3 — every numbered mistake.** Eight mistakes the prior review went
+   through. Each one is a trap the next worker can also fall into. Read
+   them as "do not".
+3. **§3.2.bis** — the ten parallel sources of focus / selection state.
+   Anchors the work to specific files, not vibes.
+4. **§4.3** — the FocusCoordinatorVM design.
+5. **§4.2.0** — NavMenuVM's incomplete adoption (the only VM in the
+   project that already uses `CompositeVM`, and its usage is INCOMPLETE).
+6. **§4.2.2** — PaneVM's `CompositeVM` vs `HierarchicalVM` evaluation.
+   This is the canonical "explicit per-primitive comparison" the rest of
+   §4.2 mirrors.
+7. **§5.0** — why toolkit adoption comes before the focus coordinator.
+8. **§9** — open questions to resolve in brainstorming.
+9. The remaining §4.2 entries, in order — but with §4.2.0 and §4.2.2 as
+   the templates for the methodology.
+
+**Discipline rules — non-negotiable.**
+
+These are not aspirational. The methodology mistakes recorded in §1.3
+(specifically 1, 4, 6, 8) are all the same shape: someone opined on a
+VMx primitive or an aws-tui VM without reading the source first. Every
+brainstorming decision, every per-VM PR, every spec amendment must
+record:
+
+1. **Which VMx primitive(s) were evaluated** — by name, with file path
+   under `.venv/lib/python3.11/site-packages/vmx/`.
+2. **Why the chosen primitive fits (or why none does)** — with a quote
+   from the primitive's source, not paraphrase.
+3. **What was inspected to know** — file paths and line ranges that were
+   actually read, not a list of imports.
+
+**Verification commands to run BEFORE making any claim:**
+
+- *Before claiming a VMx primitive exists or doesn't:*
+  `find .venv/lib/python3.11/site-packages/vmx -name "*.py" | xargs grep -l "<symbol>"`
+- *Before claiming an aws-tui VM does or doesn't have a field:*
+  `grep -n "<field_name>" src/aws_tui/vm/<area>/<file>.py`
+- *Before claiming a test fails:*
+  `uv run pytest tests/path/test_<name>.py::<test_id> -x -v 2>&1 | tail -30`
+- *Before claiming a CSS property is invalid in Textual:*
+  `rg "<property>" .venv/lib/python3.11/site-packages/textual/`
+- *Before claiming a VMx version is missing a symbol:*
+  `uv run python -c "from vmx import <Symbol>; print(<Symbol>)"`
+
+If a claim is made without one of those commands behind it, the spec's
+§1.3 mistakes 1, 4, 6 are repeating. The reviewer of any PR or
+amendment should reject on those grounds.
+
+**Brainstorming-session guardrails.**
+
+The brainstorming session that follows this spec resolves §9's open
+questions. It does NOT:
+
+- Propose new VMx primitives (mistake 2: VMx already ships everything we
+  need; see §2).
+- Re-litigate decisions captured in §4 or §5 (the spec is canonical;
+  amendments require an explicit reason recorded in §1.3 as "mistake N").
+- Expand scope to include features not listed in §4.2 / §4.3
+  (mistake 8 was scope creep in the opposite direction; do not over-
+  correct).
+- Decide implementation details that belong in `/writing-plans`
+  output (e.g., which line of code to delete first — that's for the plan,
+  not the brainstorm).
+- Produce more than ~150–300 lines of spec amendment. If the
+  brainstorming output exceeds that, something has gone wrong — likely
+  scope creep or re-litigation.
+
+If brainstorming finds the spec genuinely wrong on a point (a 9th
+mistake), record it as such with the same format §1.3 uses, then
+proceed.
+
+**Workflow assumptions** — see Appendix A. **Per-VM cross-reference table**
+— see Appendix B.
 
 ---
 
@@ -1443,3 +1529,139 @@ The migration is complete when:
   `FormVM` / `IDialogService` adoption
 - Conversation transcript 2026-06-28 review session — the analytical
   walk-through this spec captures
+
+---
+
+## Appendix A — Workflow & project conventions
+
+The next worker should know these without having to discover them in a
+PR review.
+
+### A.1. Python environment
+
+- Project floor: Python 3.11 (`pyproject.toml::requires-python`).
+- CI matrix: `[macos-14, ubuntu-24.04, windows-latest] × [3.11, 3.12, 3.13]`
+  for unit + in-process integration tests.
+- Local `.venv` is created by `uv sync`. May resolve to pyenv's 3.11.0
+  if installed — that release has a `typing.py:1253` regression fixed
+  in 3.11.1+. One test (`test_aggregate_vm3_lazy_factories`) fails under
+  3.11.0 due to this. **It's an env issue, not a repo issue.** Bump to
+  3.11.1 or use uv's installed 3.12.
+
+### A.2. Test invocation
+
+```bash
+# Full suite — the two deselects are known env/flake issues, not failures:
+uv run pytest tests/ -q \
+  --deselect tests/unit/vm/file_manager/test_dual_pane_vm.py::test_dual_copy_across_cancel_event_interrupts_in_flight_copy \
+  --deselect tests/unit/vm/test_vmx_smoke.py::test_aggregate_vm3_lazy_factories
+
+# Quick tier-targeted runs during development:
+uv run pytest tests/unit/vm/                # VM unit tests (~6,500 LOC)
+uv run pytest tests/unit/ui/                # UI widget unit tests
+uv run pytest tests/snapshot/               # Textual SVG goldens (10 themes)
+uv run pytest tests/integration/            # MinIO testcontainer + pilot-driven flows
+```
+
+Expect `1439 passed, 11 deselected, 274 snapshots` on a green run.
+
+### A.3. Lint, type, layers
+
+- **Lint:** `uv run ruff check src/ tests/` — strict; all of src/ + tests/.
+- **Format:** `uv run ruff format src/ tests/`.
+- **Type check:** `uv run mypy src/` — STRICT on src/ (106 files); tests
+  are not gated. `Success: no issues found in 106 source files` is the
+  green signal.
+- **Layer rules:** `scripts/check-layers.sh` — enforces the import
+  boundaries between domain/, vm/, ui/, infra/, services/, demo/. After
+  the round-3 maintenance loop, this also runs as a pre-commit hook
+  (`.pre-commit-config.yaml`). `layer rules clean` is the green signal.
+- **Pre-commit:** `uv run pre-commit run --all-files` runs every hook
+  CI runs, in one command.
+
+### A.4. PR conventions
+
+- **Branch naming:** `<kind>/<topic>` — e.g., `fix/runs-picker-flicker`,
+  `feat/nav-enter-shifts-focus`, `docs/vmx-toolkit-adoption-spec`,
+  `chore/overnight-maintenance-20260628`. Snake_case is fine within the
+  topic.
+- **PR creation:** `gh pr create --title "<conventional commit>" --body "<body>"`.
+- **Merge strategy:** `gh pr merge <num> --squash --delete-branch --admin`
+  for every PR. The repo has 0 required reviewers + no required status
+  checks set yet, so `--admin` is what flushes through; the maintainer
+  manually reads the diff first.
+- **Commit messages:** conventional commits (`fix(area): ...`,
+  `feat(area): ...`, `docs(area): ...`, `chore: ...`,
+  `refactor(area): ...`, `test(area): ...`, `ci(area): ...`).
+- **Heredoc commits:** every multi-line commit message uses
+  `git commit -m "$(cat <<'EOF' ... EOF)"` for safe formatting.
+
+### A.5. Repo state at spec time
+
+- Latest tag: `v0.7.0`.
+- `version.py` + `pyproject.toml`: `0.8.0` (PyPI publish blocked on
+  `pypi/support#11264` — PEP 541 name-similarity appeal).
+- `main` HEAD when this spec was written: `5ee16b9`.
+- Open Dependabot PRs: #46 (checkout v7), #64 (pre-commit-hooks v6),
+  #65 (ruff-pre-commit v0.15.18) — independent of this spec.
+
+---
+
+## Appendix B — Per-VM cross-reference table
+
+The "I'm migrating X" → "open these files" index. Each row maps to
+exactly one §4 entry.
+
+| VM / target | Source file (current) | LOC | Tests | Spec § | Prior PRs that touched it | Target primitive |
+|---|---|---|---|---|---|---|
+| **NavMenuVM** | `vm/nav_menu_vm.py` | ~290 | `tests/unit/vm/test_nav_menu_vm.py` | §4.2.0 | #94 (rewrite), #101 (ENTER focus), #102 (ribbon), #105 (selected bg) | finish `CompositeVM.current` adoption |
+| **JobRunsVM** | `vm/emr_serverless/job_runs_vm.py` | ~280 | `tests/unit/vm/emr_serverless/test_job_runs_vm.py` | §4.2.1 | #91 (sorted-apps), #100 (no re-mount), #103 (sender filter) | `CompositeVM[JobRunVM]` + `PagedComposition` |
+| **PaneVM** | `vm/file_manager/pane_vm.py` | 893 | `tests/unit/vm/file_manager/test_pane_vm.py` | §4.2.2 | the entire M-series | **OPEN — Option A or B** (see §9 question 7) |
+| **ApplicationsVM** | `vm/emr_serverless/applications_vm.py` | ~200 | `tests/unit/vm/emr_serverless/test_applications_vm.py` | §4.2.3 | #88, #90, #91 | `CompositeVM[ApplicationVM]` |
+| **TransfersVM** | `vm/file_manager/transfers_vm.py` | ~250 | `tests/unit/vm/file_manager/test_transfers_vm.py` | §4.2.4 | (the cancel-race flake lives here) | `ServicedObservableCollection[TransferVM]` |
+| **ToastStackVM** | `vm/chrome/toast_stack_vm.py` | ~120 | `tests/unit/vm/chrome/test_toast.py` (timing) | §4.2.5 | none recent | `CompositeVM[ToastVM]` |
+| **S3ConnectionsVM** | `vm/settings/s3_connections_vm.py` | ~180 | `tests/integration/test_settings_flow.py` | §4.2.6 | the Settings-nav-page train | `FormVM<S3Connection>` |
+| **ConfirmationVM** | `vm/chrome/confirm_vm.py` | ~130 | `tests/integration/test_confirm_modal_keyboard.py` | §4.2.7 | #47 (modal+toast polish) | `IDialogService.show(...)` |
+| **ResumeVM** | `vm/chrome/resume_vm.py` | ~110 | `tests/unit/vm/chrome/test_resume_modal.py` | §4.2.7 | #47 | `IDialogService.show(...)` |
+| **CrashVM** | `vm/chrome/crash_vm.py` | ~100 | `tests/unit/vm/chrome/test_crash_vm.py` | §4.2.7 | none recent | `IDialogService.show(...)` |
+| **FirstRunVM** | `vm/chrome/first_run_vm.py` | ~120 | `tests/integration/test_first_run_modal.py` | §4.2.7 | #54 / #55 / #56 (Settings rework) | `IDialogService.show(...)` |
+| **CommandPaletteVM** | `vm/chrome/command_palette_vm.py` | ~240 | `tests/unit/vm/chrome/test_command_palette.py` | §4.2.8 | none recent | `CompositeVM[PaletteEntryVM]` (revert if it doesn't fit) |
+| **ThemePickerVM** | `vm/chrome/theme_picker_vm.py` | ~190 | `tests/unit/vm/chrome/test_theme_picker.py` + `tests/snapshot/test_theme_picker.py` | §4.2.8 | none recent | `CompositeVM[ThemeRowVM]` (revert if it doesn't fit) |
+| **FocusCoordinatorVM** | **NEW** `vm/chrome/focus_coordinator_vm.py` | (target ~150) | NEW shape tests + re-anchored integration tests | §4.3, §5.8 | indirectly: #98, #99, #101, #103 | bespoke `ComponentVM` with `FocusSlot` discriminator |
+
+**VMs explicitly kept hand-rolled** (do not migrate; see §4.2.10):
+`RootVM`, `ContentHostVM`, `ChromeVM`, `EmrServerlessPageVM` (page_vm.py
+— composite of three children in a fixed-shape `AggregateVM3`-style
+pattern), `JobRunDetailVM`, `JobRunLogsVM`, `JobRunCloneVM`.
+
+---
+
+## Appendix C — VMx primitive cheat sheet (for quick lookup during brainstorm)
+
+| Primitive | File | When to reach for it |
+|---|---|---|
+| `ComponentVM` / `ComponentVMOf[M]` | `vmx/components/` | Single VM; the leaf you build composites from. |
+| `CompositeVM[VM]` / `CompositeVMOf[M, VM]` | `vmx/composites/composite_vm.py` | **Homogeneous collection of VMs** with cursor (`current`), `on_collection_changed`, lifecycle cascade. Default choice for list-shaped VMs. |
+| `ObservableList[T]` | `vmx/collections/observable_list.py` | Raw item list (no per-item VM). Granular `on_item_added`/`removed`/`replaced`/`reset`. |
+| `ObservableDictionary[K, V]` | `vmx/collections/observable_dictionary.py` | Key-indexed observable. |
+| `PagedComposition` | `vmx/collections/paged_composition.py` | Pagination wrapper over `ObservableList`. |
+| `Batch` / `BatchUpdateHandle` | `vmx/collections/batch.py` | Collapse N mutations into one collection_changed emission. |
+| `FormVM<TM>` / `FormVMBuilder` | `vmx/forms/form_vm.py` | Typed model form. `is_dirty`, per-field validators, strict mode. |
+| `IDialogService` / `DialogService` / `NullDialogService` | `vmx/dialogs/` | Modal push/dismiss/result lifecycle. Inject `NullDialogService` in tests. |
+| `HierarchicalVM[TModel, TVM]` | `vmx/hierarchical/hierarchical_vm.py` | Recursive tree. Lazy children by default; eager opt-in. `IExpandable` for collapse. |
+| `GroupVM` | `vmx/groups/` | Grouped composition. Likely not applicable here. |
+| `ServicedObservableCollection` | `vmx/collections/serviced_observable_collection.py` | Observable collection that auto-disposes items on removal via the service registry. |
+| `ForwardingComponentVM` / `ForwardingCompositeVM` | `vmx/forwarding/` | Delegate-to-inner with intact lifecycle. Replaces hand-rolled `_inner.construct()` trampolines. |
+| `AggregateVM1`–`AggregateVM6` / `AggregateVMBuilderN` | `vmx/aggregates/` | Typed N-tuple struct of NAMED children. Fixed shape. Page composites use this — not `CompositeVM`. |
+| `RelayCommand` / `RelayCommandOf[T]` | `vmx/commands/` | Command pattern with predicates + `can_execute_changed`. Already used universally. |
+| `MessageHub` / `Message` / `PropertyChangedMessage` | `vmx/messages/` and `vmx/services/message_hub.py` | Pub/sub plumbing. Already used universally. |
+| `RxDispatcher` / `Dispatcher` | `vmx/services/dispatcher.py` | Async/dispatch scheduling. `RxDispatcher.immediate()` is the project default; `NULL_DISPATCHER` for tests. |
+| `ConstructionStatus` | `vmx/lifecycle/status.py` | The `construct → destruct → dispose` state machine. The contract every `_ComponentVMBase` participates in. |
+| `walk` / `walk_expanded` / `find` | `vmx/tree/walk.py` | Tree-walk utilities. `walk_expanded` respects `IExpandable.is_expanded`. |
+
+**Distinction trap (mistake 1):** `CompositeVM` (homogeneous, dynamic
+cardinality, has `current` and `on_collection_changed`) is NOT the same
+as `AggregateVMN` (heterogeneous, fixed-N typed slots). The first draft
+of this spec confused them. If a primitive is "N typed children with
+named accessors" → `AggregateVMN`. If it's "many children of one type" →
+`CompositeVM` or `ObservableList`.
