@@ -43,6 +43,7 @@ from aws_tui.domain.filesystem import (
     ProviderError,
     ProviderUnreachableError,
 )
+from aws_tui.vm._composition import FilteredCompositeVM
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
 
 #: Module-level singleton for the default initial path (root).
@@ -222,6 +223,16 @@ class PaneVM:
             .children(self._initial_children)
             .auto_construct_on_add(True)
             .build()
+        )
+        # Round-3 composition (spec §9.bis.11 / §9.bis.3): the filter
+        # projection over the inner composite. The
+        # FilteredCompositeVM's visible/cursor surface is the source of
+        # truth for "which entries are visible"; the public ``_filtered``
+        # tuple below is a derived snapshot kept for the multitude of
+        # call sites that index by position. The composite itself is
+        # NOT exposed.
+        self._filtered_composite: FilteredCompositeVM[ComponentVMOf[EntryState]] = (
+            FilteredCompositeVM(self._inner, predicate=self._filter_predicate)
         )
 
         # ── Commands ────────────────────────────────────────────────────────
@@ -486,6 +497,10 @@ class PaneVM:
         self._select_all_command.dispose()
         self._clear_selection_command.dispose()
         self._set_filter_command.dispose()
+        # Dispose the FilteredCompositeVM before the inner composite —
+        # the filter has a live subscription to inner's
+        # on_collection_changed that must unwind first.
+        self._filtered_composite.dispose()
         for child in self._entries:
             child.dispose()
         self._entries.clear()
@@ -844,15 +859,33 @@ class PaneVM:
         self._sync_cursor_selection()
         self._notify("viewmodel")
 
-    def _recompute_filtered(self) -> None:
+    def _filter_predicate(self, inner: ComponentVMOf[EntryState]) -> bool:
+        """Predicate used by the inner :class:`FilteredCompositeVM`.
+
+        Mirrors the substring-match semantics ``_recompute_filtered``
+        used pre-round-3: an empty filter accepts all rows, a non-empty
+        filter matches against ``inner.model.entry.name`` via
+        ``_filter_matches``.
+        """
         if not self._filter_text:
-            self._filtered = tuple(range(len(self._entries)))
+            return True
+        return _filter_matches(inner.model.entry.name, self._filter_text)
+
+    def _recompute_filtered(self) -> None:
+        # Push the current filter into the FilteredCompositeVM so its
+        # ``visible`` projection reflects the active query. We use a
+        # fresh closure capturing the latest ``_filter_text`` rather
+        # than rebinding ``self._filter_predicate`` (which would still
+        # work but adds an unnecessary attribute round-trip).
+        self._filtered_composite.set_predicate(self._filter_predicate)
+        # Derived snapshot: the indices into ``_entries`` that match the
+        # composite's visible projection. Preserves the in-position
+        # API for the many call sites in this file that read by index.
+        visible_set = set(self._filtered_composite.visible)
+        if not visible_set:
+            self._filtered = ()
             return
-        self._filtered = tuple(
-            i
-            for i, e in enumerate(self._entries)
-            if _filter_matches(e.entry.name, self._filter_text)
-        )
+        self._filtered = tuple(i for i, e in enumerate(self._entries) if e.inner in visible_set)
 
     # ── Command bridges (sync triggers that delegate to async work) ────────
 
