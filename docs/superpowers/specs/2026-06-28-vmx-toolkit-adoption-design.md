@@ -241,9 +241,34 @@ VMs since the project began."
 > VMx-toolkit goal (which primitive backs the move). The PR must address
 > both.
 
+> **Update — amendment after the brainstorm session (2026-06-28).** A
+> fourth round of correction surfaced during the §9 brainstorm:
+>
+> - **Mistake 9: spec Appendix C entry for `ServicedObservableCollection`
+>   was paraphrased from outside the source without verifying against
+>   the primitive.** The Appendix C cell read "Observable collection
+>   that auto-disposes items on removal via the service registry."
+>   Reading `vmx/collections/serviced_observable_collection.py:1–137`
+>   shows: the class is a `MutableSequence[T]` with optional hub
+>   publication; `__delitem__` (lines 86–93) does
+>   `del self._items[index]` then emits `for_remove(...)`; `remove`
+>   (lines 121–125) is the same shape; there is no `dispose()` call
+>   on removed items anywhere; the constructor takes only a hub.
+>   The "Serviced" in the name refers to **message-hub publication**,
+>   not service-managed lifecycle. Same shape as mistakes 1, 4, 6:
+>   paraphrase substituted for source review.
+>
+> **Methodology lesson reinforced.** Appendix C is a navigation aid, not
+> a contract document. Any per-VM PR that depends on a primitive's
+> behaviour must re-verify against the source per §0's discipline
+> rules, regardless of what Appendix C says. The Appendix C entry has
+> been corrected; §4.2.4 target description and LOC estimate have been
+> revised; the resolution is recorded in §9.bis.7.
+
 
 The next worker picking up this spec should know that the analysis behind it
-went through three rounds of correction. Each correction tightens the
+went through three rounds of correction, then a fourth round during the
+§9 brainstorm. Each correction tightens the
 design, and each mistake is worth recording because it is the kind of
 mistake a fresh worker can also make.
 
@@ -754,11 +779,18 @@ This becomes the **reference implementation** for §4.2.1–§4.2.7 — but only
 after this finish-the-adoption work lands. Until then, NavMenuVM is the
 **partial** adoption, not the model.
 
-#### 4.2.1. `JobRunsVM` → `CompositeVM[JobRunVM]` + `PagedComposition`
+#### 4.2.1. `JobRunsVM` → `CompositeVM[JobRunVM]` (PagedComposition dropped)
+
+> **RESOLVED — see §9.bis.2.** Brainstorm verified that `PagedComposition`
+> is index-based, cannot observe a `CompositeVM` source, and does not
+> match the "Load more" UX. The target shape below is preserved EXCEPT
+> the `PagedComposition` wrapping is removed; pagination state stays as
+> a VM-level `next_token` field + `load_more` command. Read §9.bis.2
+> before acting on the text below.
 
 **Primitives evaluated:** `CompositeVM[JobRunVM]`,
-`PagedComposition[JobRunVM]`, `HierarchicalVM` (rejected — runs are flat,
-not a tree).
+`PagedComposition[JobRunVM]` (**rejected — see §9.bis.2**),
+`HierarchicalVM` (rejected — runs are flat, not a tree).
 
 **Chosen:** `CompositeVM[JobRunVM]` for the run list, wrapped in
 `PagedComposition` for forward-only `nextToken` pagination — pending Phase 0
@@ -795,6 +827,12 @@ load_more, on filter change.
 **LOC delta estimate:** −250.
 
 #### 4.2.2. `PaneVM` — `CompositeVM` vs `HierarchicalVM` evaluation
+
+> **RESOLVED — see §9.bis.1: Option A (`CompositeVM[EntryVM]`).** The
+> "Open question for Phase 0" verdict in §4.2.2 below is now closed.
+> The `HierarchicalVM` analysis is retained in this section as the
+> rejected-option record so a future inline-expand tree-view feature
+> can re-open the decision on its own merits.
 
 **Primitives evaluated:** `CompositeVM[EntryVM]`,
 `HierarchicalVM[FileSystemNode, FileSystemNodeVM]`, `ObservableList[FileEntry]`
@@ -903,17 +941,27 @@ lines.
 
 #### 4.2.4. `TransfersVM` → `ServicedObservableCollection[TransferVM]`
 
+> **CORRECTED — see §9.bis.7 and §9.bis.8 (Mistake 9).** The "auto-
+> disposes" claim below was paraphrased from outside the source and is
+> wrong. `ServicedObservableCollection` does NOT call `dispose()` on
+> removed items; it publishes `CollectionChangedMessage` on mutation
+> and nothing else. The TransfersVM `finally: vm.dispose()` block in
+> `_run_one_transfer` stays.
+
 **Today:** ~250 LOC. Hand-rolls the child transfer list and explicit
 dispose in `_run_one_transfer`'s finally block.
 
 **Target:**
-- `ServicedObservableCollection[TransferVM]` auto-disposes a `TransferVM`
-  when removed.
+- `ServicedObservableCollection[TransferVM]` publishes
+  `CollectionChangedMessage` on mutation. **Caller still owns disposal**
+  (the existing `finally: vm.dispose()` block stays).
 - Pre-registration logic (current ~lines 331–383) becomes a `Batch` block
   over the collection so the View redraws once per drop-batch instead of
   per-entry.
 
-**LOC delta estimate:** −100.
+**LOC delta estimate:** **−60** (revised down from −100 once auto-
+dispose savings dissolved; remaining savings come from the `Batch`
+pattern).
 
 #### 4.2.5. `ToastStackVM` → `CompositeVM[ToastVM]`
 
@@ -934,17 +982,29 @@ mode.
 
 **LOC delta estimate:** −200.
 
-#### 4.2.7. The four modal VMs → `IDialogService`
+#### 4.2.7. Modal VMs → `IDialogService` (two of four)
+
+> **RESOLVED — see §9.bis.6.** `IDialogService` is a closed-set contract
+> (`confirm` / `notify` / `pick_file_*`). Only `ConfirmationVM`
+> (→ `confirm`) and `CrashVM` (→ `notify(severity=ERROR)`) have a clean
+> fit. `ResumeVM` (three-way decision + persisted "show next boot"
+> state) and `FirstRunVM` (multi-step welcome flow) stay hand-rolled
+> with documented "no fit" rationale.
 
 **Today:** Each of `ConfirmationVM`, `ResumeVM`, `CrashVM`,
 `FirstRunVM` hand-rolls push/dismiss/result-future plumbing.
 
-**Target:** Inject `IDialogService` via composition. Each modal becomes a
-thin VM that constructs its model, calls `service.show(...)`, awaits the
-result, returns. The "what does dismiss mean" semantics are now the
-framework's contract instead of each VM's manual interpretation.
+**Target (revised):**
+- `ConfirmationVM` → `IDialogService.confirm(message, title) -> bool`. Adopt.
+- `CrashVM` → `IDialogService.notify(message, title, severity=ERROR)`. Adopt.
+- `ResumeVM` → stays hand-rolled. `confirm`'s `bool` return cannot
+  express three-way `Resume / Discard / KeepForLater`; the
+  "KeepForLater → show next boot" persistence is domain state, not
+  dialog state. See §9.bis.6.
+- `FirstRunVM` → stays hand-rolled. Multi-step form-shaped flow
+  doesn't fit `confirm`/`notify`. See §9.bis.6.
 
-**LOC delta estimate:** −60 × 4 = −240.
+**LOC delta estimate:** **−60 × 2 = −120** (revised down from −240).
 
 #### 4.2.8. `CommandPaletteVM` + `ThemePickerVM`
 
@@ -1344,7 +1404,15 @@ prior bug-train PRs as the test target:
 
 ## 7. Risks
 
-### 7.1. `PagedComposition` may not fit token-pagination
+### 7.1. `PagedComposition` may not fit token-pagination — CLOSED
+
+> **CLOSED — see §9.bis.2.** Brainstorm verified from
+> `vmx/collections/paged_composition.py` source that `PagedComposition`
+> IS strictly index-based AND cannot observe a `CompositeVM` source.
+> Adopted resolution: drop `PagedComposition` from §4.2.1 entirely;
+> `CompositeVM[JobRunVM]` + VM-level `next_token` + `load_more` command.
+> The text below is preserved as the audit trail of how this risk was
+> originally framed.
 
 EMR uses `nextToken`-style forward-only pagination. `PagedComposition` may
 have been designed assuming index-based pagination (page N of M). If
@@ -1356,7 +1424,14 @@ that's the case, the migration of `JobRunsVM` would need:
 
 Investigated in Phase 0 spike.
 
-### 7.2. Filter coupling
+### 7.2. Filter coupling — CLOSED
+
+> **CLOSED — see §9.bis.3.** Adopted resolution: Option C (derived
+> view stays at the VM as a @property; CompositeVM holds unfiltered
+> list + cursor; cursor snaps to first filter-visible entry on filter
+> change). Both PaneVM and CommandPaletteVM follow Option C. The text
+> below is preserved as the audit trail of the two options that were
+> considered first.
 
 `PaneVM` and `CommandPaletteVM` do client-side filtering on the
 collection. `CompositeVM.current_selector` is per-current-selection,
@@ -1487,6 +1562,295 @@ Each answered question becomes an amendment to this spec (preferred) or
 a note in the corresponding plan task (acceptable if the answer is
 narrow and per-task).
 
+## 9.bis. Resolutions from the brainstorm session — 2026-06-28
+
+This section closes §9's seven open questions, records the spec
+amendments each resolution triggers, and points to the upstream
+feedback report that captures the gaps where a VMx primitive almost
+fit but didn't quite. Numbered `.bis` to keep §10/§11 downstream
+section numbers stable (same convention as §3.2.bis).
+
+Each resolution lists, per §0's discipline rules: which VMx
+primitive(s) were evaluated, what was inspected (file + line ranges),
+and why the resolution fits.
+
+### 9.bis.1. Q7 / §4.2.2 — PaneVM: choose Option A (`CompositeVM[EntryVM]`)
+
+**Decision:** Option A.
+
+**Inspected:** `vmx/composites/composite_vm.py` (mutation surface,
+`current` slot, `on_collection_changed`), `vmx/hierarchical/hierarchical_vm.py`
+(via Appendix C cheat sheet entry only — not deep-read because B was
+not chosen), `vm/file_manager/pane_vm.py:210–561` (today's shape:
+unfiltered entries, filter projection, cursor over filtered list),
+`CHANGELOG.md` "Deferred / v0.9 roadmap" (lines 1533–1565 — no
+inline-expand tree view planned).
+
+**Rationale:** The product's foreseeable tree-shaped UI feature is a
+clickable **breadcrumb / "exploded path"** at the top of the pane.
+That feature needs `pathlib.PurePosixPath.parts` + a `cd_to(path)`
+command (~20 LOC of derived property on PaneVM) — it does NOT need to
+render siblings/descendants at multiple levels, which is what
+`HierarchicalVM` was built for. The breadcrumb is satisfied under A.
+
+`HierarchicalVM` would impose its refactor cost (893 LOC pane + new
+`FileSystemNode`/`FileSystemNodeVM` shapes + a moving View-subscription
+target + a redesign of the today-audited "no cache, ask provider on
+every cd" contract) for a benefit only collected if a multi-level
+inline-expand tree view ships — which is not on the v0.9 roadmap.
+
+**Spec amendments:** §4.2.2 decision recorded; the §4.2.2
+`HierarchicalVM` analysis is retained as the explicit "rejected — here's
+why" record so a future inline-expand tree-view feature has a paved
+path to re-open it on its own merits. No other sections affected.
+
+**Upstream ask:** Item 7 in the vNext feedback report — the gaps that
+made `HierarchicalVM` unattractive (cache-invalidation contract not
+documented; no `invalidate(node)` / TTL / refresh-on-focus surface) are
+recorded so they can be closed before a tree-view consumer arrives.
+
+---
+
+### 9.bis.2. Q1 / §4.2.1 — JobRunsVM: drop `PagedComposition`
+
+**Decision:** Replace §4.2.1's `CompositeVM[JobRunVM]` + `PagedComposition`
+target with **`CompositeVM[JobRunVM]` alone**, plus a VM-level
+`next_token: str | None` field and a `load_more: RelayCommand` (shape
+unchanged from today).
+
+**Inspected:** `vmx/collections/paged_composition.py:107–115` (page
+math), `:165–171` (slice access), `:204–210` (`_source_count` calls
+`len(src)`), `:232–240` (subscribes only to `on_item_added`/`on_item_removed`/
+`on_item_replaced`/`on_reset`); `vmx/composites/composite_vm.py:103`
+(`on_collection_changed` — composite does not expose the four
+ObservableList hooks PagedComposition wants); `vm/emr_serverless/job_runs_vm.py:51,96,105,
+137–190` (today's nextToken accumulating load); `ui/widgets/emr_serverless/page.py:451`
+(`LoadMoreRequested` event — UX is **infinite-scroll "Load more"**, not
+"page N of M").
+
+**Rationale:** Three independent misfits, any one of them sufficient:
+
+1. `PagedComposition` is **strictly index-based** — requires `len(source)`
+   and random access. Forward-only nextToken pagination has neither.
+2. `PagedComposition` cannot auto-observe a `CompositeVM`'s mutation
+   stream because the two primitives speak different observable shapes;
+   composition silently emits stale slices.
+3. The aws-tui UX is "Load more", not "page-navigation". `move_to_next_page`
+   would conflate "view a different in-memory slice" with "make a
+   network call" — semantically wrong.
+
+`CompositeVM[JobRunVM]` alone provides the cursor (`current` retires
+`_selected_id`), lifecycle cascade, and `on_collection_changed`. The
+~250 LOC saving estimate for §4.2.1 holds because pagination math
+was not where the savings came from — `_selected_id` retirement +
+PropertyChangedMessage collapse + lifecycle cascade are.
+
+**Spec amendments:** §4.2.1 target ("wrapped in `PagedComposition`") →
+"unwrapped; pagination state stays as a VM field with a `load_more`
+command". §7.1 risk closed as "misfit confirmed; not used".
+
+**Upstream asks:** Items 1 and 2 in the vNext feedback report —
+`TokenPagedComposition[VM]` would let aws-tui (and any AWS-API
+consumer) adopt a framework primitive for nextToken pagination instead
+of hand-rolling.
+
+---
+
+### 9.bis.3. Q2 / §7.2 — Filter coupling: Option C (derived view as a VM @property)
+
+**Decision:** For both `PaneVM` and `CommandPaletteVM`:
+`CompositeVM[EntryVM]` holds the unfiltered list with cursor +
+lifecycle; `filter_text` and `filtered_entries` stay as VM
+fields/@property; on filter change, the VM snaps `_entries.current`
+to the first filter-visible entry. The View binds to
+`filtered_entries` for rendering and to `current` for the selected row.
+
+**Inspected:** `vm/file_manager/pane_vm.py:210–212` (unfiltered
+`_entries` + filtered-index tuple + filter text), `:347–348`
+(`filtered_entries` property), `:549–561` (cursor maps onto
+`filtered_entries` index); `vm/chrome/command_palette_vm.py:128–129`
+(same shape — `_filter_text` + `_filtered` tuple), `:170–176`
+(filter-text setter recomputes filtered), scoring at `:57–93`.
+
+**Rationale:** Both VMs already implement Option C's shape today. The
+CompositeVM adoption slots into the `_entries` backbone; the
+derived-filter view stays exactly where it is today, but the cursor
+moves from "View-tracked index over filtered" → "CompositeVM's `current`
+slot, kept filter-visible by the VM". Preserves NiceGUI-portability of
+the VM layer. Avoids inventing a derived-CompositeVM primitive VMx
+doesn't ship.
+
+Option A (two-layer derived composite) was rejected: VMx doesn't ship
+the primitive, ~50–80 LOC hand-roll wrapper would have been required,
+and cursor-mapping between outer and inner adds duplicated state.
+Option B (filter at the View) was rejected: pushes filter logic into
+widget code, breaks the "VM layer reusable by a second View" property
+the spec's §1.2 q4 asked about.
+
+**Spec amendments:** §7.2 risk closed with "Option C adopted for both
+VMs". §4.2.2 (already updated by 12.1) reads consistently. §4.2.8
+target gains a note: "filter+score stays as a VM @property; cursor
+snaps to first filter-visible entry on filter-text change".
+
+**Upstream ask:** Item 3 in the vNext feedback report —
+`FilteredCompositeVM[VM]` (plus a `ScoredFilteredCompositeVM` variant
+for the palette's fuzzy-match scoring) would let aws-tui delete the
+@property and the cursor-mapping logic in both VMs.
+
+---
+
+### 9.bis.4. Q3 — `auto_construct_on_add=True` composes with `ToastVM`
+
+**Decision:** `auto_construct_on_add=True` fits as-is. No adapter.
+
+**Inspected:** `vmx/composites/composite_vm.py:298–305`
+(`_maybe_auto_construct` calls zero-arg `child.construct()`);
+`vm/chrome/toast_vm.py:136` (`def construct(self) -> None` — zero-arg,
+matches).
+
+**Spec amendments:** §4.2.5 target is final. Phase 0 confirms with a
+one-line shape test asserting `toast_stack.append(toast)` leaves
+`toast.is_constructed is True`.
+
+---
+
+### 9.bis.5. Q4 — `FormVM` cross-field validators: fits via custom predicate
+
+**Decision:** Wrap S3ConnectionsVM around `FormVM<S3Connection>`. The
+cross-field invariant ("`endpoint_url` set IFF `force_path_style`") is
+expressed as: (a) `_is_valid_invariants() -> bool` method on the
+wrapping VM, called from a custom `approve_command.predicate` so the
+button auto-disables when violated; (b) the same condition raised from
+the `persister` callback as belt-and-suspenders.
+
+**Inspected:** `vmx/forms/form_vm.py:48–86` — `FormVM` exposes
+`strict` (gates approve on `is_dirty`), `approve_command.predicate`
+(custom callable), and `persister: (model) -> Awaitable[None]` that
+may raise. **No declarative validator API** (`field_validator`,
+`model_validator`, reactive `errors` map).
+
+**Rationale:** Works, but is the recurring boilerplate-vs-primitive
+case. ~5 LOC of predicate wiring per cross-field rule per form VM
+that consumes `FormVM`.
+
+**Spec amendments:** §4.2.6 target gains a note about the predicate
+pattern; LOC delta `−200` stays approximately correct.
+
+**Upstream ask:** Item 4 in the vNext feedback report — declarative
+`field_validator(...)` / `model_validator(...)` + a reactive
+`errors: dict[str, str]` map + auto-gated `approve_command` would let
+the wrapping VM delete the `_is_valid_invariants` boilerplate.
+
+---
+
+### 9.bis.6. Q5 / §4.2.7 — `IDialogService` for the four modal VMs: 2 adopt, 2 stay
+
+**Decision:**
+
+- `ConfirmationVM` → `IDialogService.confirm(message, title) -> bool`. **Adopt.**
+- `CrashVM` → `IDialogService.notify(message, title, severity=ERROR)`. **Adopt.**
+- `ResumeVM` → **stays hand-rolled.** No fit: three-way decision
+  (`Resume / Discard / KeepForLater`) cannot be expressed by `confirm`'s
+  `bool` return, and "KeepForLater → show again next boot" is domain
+  state, not dialog state.
+- `FirstRunVM` → **stays hand-rolled.** No fit: multi-step welcome flow
+  with form fields cannot be expressed via `confirm`/`notify`.
+
+**Inspected:** `vmx/dialogs/dialog_service.py:38–96` — the abstract
+surface is closed-set: `pick_file_to_open`, `pick_file_to_save`,
+`confirm(...) -> bool`, `notify(severity)`. There is **no generic
+`present(modal_vm) -> result` method**. `vm/chrome/resume_vm.py:34`
+confirms ResumeVM's three-way `KEEP_FOR_LATER` decision exists today.
+
+**Spec amendments:** §4.2.7's "all four modal VMs → `IDialogService`"
+framing is too aspirational. §4.2.7 target now reads "two of four
+modals → `IDialogService` (Confirmation, Crash); two stay hand-rolled
+with a documented 'no fit' rationale (Resume's three-way decision +
+persisted state; FirstRun's multi-step shape)". §4.2.7 LOC delta
+estimate revised from `−60 × 4 = −240` to **`−60 × 2 = −120`**. §10
+definition-of-done item 1 ("all nine per-VM targets ... or documented
+as kept hand-rolled with rationale") now explicitly covers ResumeVM /
+FirstRunVM as "kept hand-rolled, no IDialogService fit".
+
+**Upstream ask:** Item 5 in the vNext feedback report — a generic
+`present(modal_vm: ModalVM[T]) -> Awaitable[T]` + `ModalVM[T]` protocol
+on `IDialogService`, plus optional `ChoiceVM[Enum]` and
+`MultiStepFormVM[TM]` companions, would let ResumeVM and FirstRunVM
+re-platform too.
+
+---
+
+### 9.bis.7. Q6 — `ServicedObservableCollection`: premise was wrong; mistake 9 recorded
+
+**Decision:** No new primitive needed. `ServicedObservableCollection`
+is **already** the non-owning observable — its name suggested
+ownership semantics it doesn't implement. The TransfersVM `finally:
+vm.dispose()` block stays.
+
+**Inspected:** `vmx/collections/serviced_observable_collection.py:1–137`
+— class docstring says "observable list that **optionally publishes**
+CollectionChangedMessage events to an MessageHub-compatible hub". The
+constructor takes only `hub: object = None`. `__delitem__` (lines
+86–93) does `del self._items[index]` then emits a `for_remove(...)`
+message — **no `dispose()` call.** `remove` (lines 121–125) is the
+same shape. The "Serviced" in the name refers to **message-hub
+publication**, not service-managed lifecycle.
+
+**Spec amendments:** §4.2.4 target description changes from "auto-
+disposes a `TransferVM` when removed" to "publishes
+`CollectionChangedMessage` on mutation; caller still owns disposal —
+TransfersVM's `finally: vm.dispose()` block stays". LOC delta revised
+from `−100` to **`−60`** (the remaining savings come from a `Batch`
+block on pre-registration, not from auto-dispose). Appendix C cheat
+sheet entry for `ServicedObservableCollection` is corrected
+accordingly. **Mistake 9 (below) is added to §1.3** as the audit-
+trail entry.
+
+**Upstream ask:** Item 6 in the vNext feedback report — rename to
+`HubPublishingObservableList` or add an explicit "Ownership" section
+to the docstring. Optional follow-on: ship a true lifecycle-aware
+`OwnedObservableCollection[T]` for the case where consumers want
+auto-dispose-on-remove.
+
+---
+
+### 9.bis.8. Mistake 9 (recorded against §1.3)
+
+**Mistake 9: spec Appendix C entry for `ServicedObservableCollection`
+was paraphrased from an unspecified source — likely an upstream doc —
+without verifying against the primitive's source.**
+
+The Appendix C entry read "Observable collection that auto-disposes
+items on removal via the service registry." Reading the source
+(`vmx/collections/serviced_observable_collection.py`) shows: the
+class is a `MutableSequence[T]` with optional hub publication; no
+`dispose()` call on removed items; no service registry interaction
+beyond the message hub. Same shape as mistakes 1, 4, 6: paraphrase
+substituted for source.
+
+**Methodology lesson reinforced:** Appendix C is a **navigation
+aid**, not a contract document. Any per-VM PR that depends on a
+primitive's behaviour must re-verify against the primitive's source
+per §0's discipline rules, regardless of what Appendix C says.
+
+---
+
+### 9.bis.9. Upstream feedback artifact
+
+The seven resolutions above identified five places (Items 1–5 in the
+vNext report) where a VMx primitive almost fit but didn't quite, plus
+two doc / contract gaps (Items 6–7). All seven are documented as
+upstream asks in:
+
+> `docs/superpowers/specs/2026-06-28-vmx-upstream-vnext-asks.md`
+
+Each item carries: primitive evaluated, aws-tui use case, what blocked
+out-of-the-box adoption, what aws-tui did instead, the proposed vNext
+API or behaviour change, and an effort estimate. The report is
+addressed to the VMx maintainer.
+
+---
+
 ## 10. Definition of done
 
 The migration is complete when:
@@ -1523,6 +1887,10 @@ The migration is complete when:
 - VMx 2.6.1 source: `.venv/lib/python3.11/site-packages/vmx/`
 - `docs/architecture.md` — current five-layer model
 - `docs/superpowers/specs/2026-06-13-aws-tui-design.md` — M0 baseline
+- `docs/superpowers/specs/2026-06-28-vmx-upstream-vnext-asks.md` —
+  upstream feedback report for the VMx maintainer; captures the seven
+  primitives that almost fit but didn't quite, with proposed vNext APIs.
+  Output of §9.bis.
 - PRs #98, #99, #100, #101, #103 — the bug train that motivated this work
 - Maintenance-spec §3.18 — design-pattern opportunities (signals not
   violations); this spec is the per-pattern case for `CompositeVM` /
@@ -1650,7 +2018,7 @@ pattern), `JobRunDetailVM`, `JobRunLogsVM`, `JobRunCloneVM`.
 | `IDialogService` / `DialogService` / `NullDialogService` | `vmx/dialogs/` | Modal push/dismiss/result lifecycle. Inject `NullDialogService` in tests. |
 | `HierarchicalVM[TModel, TVM]` | `vmx/hierarchical/hierarchical_vm.py` | Recursive tree. Lazy children by default; eager opt-in. `IExpandable` for collapse. |
 | `GroupVM` | `vmx/groups/` | Grouped composition. Likely not applicable here. |
-| `ServicedObservableCollection` | `vmx/collections/serviced_observable_collection.py` | Observable collection that auto-disposes items on removal via the service registry. |
+| `ServicedObservableCollection` | `vmx/collections/serviced_observable_collection.py` | **CORRECTED — see §9.bis.7 / Mistake 9.** Observable list (`MutableSequence[T]`) that **optionally publishes** `CollectionChangedMessage` to a `MessageHub`. **Does NOT call `dispose()` on removed items** — caller still owns disposal. The "Serviced" refers to message-hub publication, not service-managed lifecycle. |
 | `ForwardingComponentVM` / `ForwardingCompositeVM` | `vmx/forwarding/` | Delegate-to-inner with intact lifecycle. Replaces hand-rolled `_inner.construct()` trampolines. |
 | `AggregateVM1`–`AggregateVM6` / `AggregateVMBuilderN` | `vmx/aggregates/` | Typed N-tuple struct of NAMED children. Fixed shape. Page composites use this — not `CompositeVM`. |
 | `RelayCommand` / `RelayCommandOf[T]` | `vmx/commands/` | Command pattern with predicates + `can_execute_changed`. Already used universally. |
