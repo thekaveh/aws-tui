@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import reactivex as rx
+from reactivex.subject import Subject
 from vmx import ComponentVMOf, CompositeVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
@@ -108,6 +110,11 @@ class ApplicationsVM:
         self._items: list[ApplicationItemVM] = []
         self._state: PaneState = PaneState.LOADING
         self._error_text: str | None = None
+        # Per-VM Observable (round-3 / PR #103 retirement path): fires
+        # the name of the property that just changed, scoped to THIS
+        # VM instance. Views can subscribe here instead of filtering
+        # ``MessageHub`` events by ``sender_object``.
+        self._on_property_changed: Subject[str] = Subject()
         # CompositeVM holds the per-row inners; auto_construct_on_add lets
         # the composite construct each new row when added post-construct().
         # Selection lives in the composite's ``current`` slot — exposed
@@ -168,6 +175,15 @@ class ApplicationsVM:
     def is_constructed(self) -> bool:
         return self._inner.is_constructed
 
+    @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Per-VM-instance Observable that fires the name of the
+        property that just changed. Subscribing here scopes view
+        widgets to THIS VM's events only — no shared-hub
+        ``sender_object`` filtering needed (round-3 / PR #103
+        retirement path)."""
+        return self._on_property_changed
+
     def select(self, app_id: str) -> None:
         """Mark ``app_id`` as the active application. No-op if already selected."""
         if self.selected_id == app_id:
@@ -182,6 +198,7 @@ class ApplicationsVM:
             return
         self._inner.current = match.inner
         self._hub.send(PropertyChangedMessage.create(self, "emr.applications", "selected_id"))
+        self._on_property_changed.on_next("selected_id")
 
     async def refresh(self) -> None:
         """Re-fetch the application list. Updates ``state``,
@@ -216,6 +233,7 @@ class ApplicationsVM:
             for summary in new_apps:
                 self._add_item(summary)
             self._hub.send(PropertyChangedMessage.create(self, "emr.applications", "applications"))
+            self._on_property_changed.on_next("applications")
 
         # The composite may have dropped ``current`` to None during
         # _clear_items + repopulate (the same model id can re-appear
@@ -227,6 +245,7 @@ class ApplicationsVM:
         # selection emitted the same notification.
         if self.selected_id != prior_selected_id:
             self._hub.send(PropertyChangedMessage.create(self, "emr.applications", "selected_id"))
+            self._on_property_changed.on_next("selected_id")
 
         self._set_state(PaneState.IDLE if new_apps else PaneState.EMPTY)
 
@@ -242,6 +261,8 @@ class ApplicationsVM:
         for item in self._items:
             item.dispose()
         self._items.clear()
+        self._on_property_changed.on_completed()
+        self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -257,6 +278,7 @@ class ApplicationsVM:
             return
         self._state = state
         self._hub.send(PropertyChangedMessage.create(self, "emr.applications", "state"))
+        self._on_property_changed.on_next("state")
 
     def _items_equal(self, new_apps: tuple[ApplicationSummary, ...]) -> bool:
         """Identity check for the dedup-on-set guard."""

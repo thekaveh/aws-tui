@@ -389,3 +389,48 @@ async def test_dispose_cleans_up_items() -> None:
     assert len(vm._items) == 4  # type: ignore[attr-defined]
     vm.dispose()
     assert vm._items == []  # type: ignore[attr-defined]
+
+
+# -------------------- PR #103 retirement: per-VM Observable --------------------
+
+
+@pytest.mark.asyncio
+async def test_on_property_changed_fires_per_vm_instance() -> None:
+    """Round-3 / PR #103 retirement path: the per-VM Observable
+    fires scoped to THIS VM only."""
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    events: list[str] = []
+    sub = vm.on_property_changed.subscribe(on_next=events.append)
+    try:
+        await vm.refresh()
+        assert "state" in events
+        assert "runs" in events
+    finally:
+        sub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_on_property_changed_isolates_cross_vm_state_events() -> None:
+    """The §9.bis.9 PR #103 acceptance criterion: constructing two
+    JobRunsVMs on the same hub and triggering `state` on one must
+    NOT fire events on the other VM's Observable. Structural —
+    enforced by per-VM Subject identity, NOT by sender_object
+    filtering."""
+    vm1, _ = _make()
+    fake2 = _InMemoryEmr()
+    fake2.add_application(app_id="b1", name="other")
+    hub: MessageHub[Message] = vm1._hub  # type: ignore[attr-defined]
+    vm2 = JobRunsVM(client=fake2, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm2.construct()
+    events_on_vm1: list[str] = []
+    sub = vm1.on_property_changed.subscribe(on_next=events_on_vm1.append)
+    try:
+        vm2.set_application("b1")
+        await vm2.refresh()
+        # vm1 should not see any of vm2's events.
+        assert events_on_vm1 == []
+    finally:
+        sub.dispose()
+        vm2.dispose()

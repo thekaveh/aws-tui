@@ -263,6 +263,47 @@ async def test_dispose_cleans_up_items() -> None:
 
 
 @pytest.mark.asyncio
+async def test_on_property_changed_fires_per_vm_instance() -> None:
+    """Round-3 / PR #103 retirement path: the per-VM Observable
+    fires scoped to THIS VM only. View consumers binding here are
+    immune to cross-VM `state` PropertyChanged collisions on the
+    shared hub."""
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    events: list[str] = []
+    sub = vm.on_property_changed.subscribe(on_next=events.append)
+    try:
+        await vm.refresh()
+        # state transitions: LOADING → IDLE; applications populated.
+        assert "state" in events
+        assert "applications" in events
+    finally:
+        sub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_on_property_changed_isolates_cross_vm_state_events() -> None:
+    """Constructing a second ApplicationsVM on the same hub must NOT
+    cause `state` events on it to fire on the first VM's
+    Observable. PR #103 acceptance criterion structurally enforced
+    by per-VM Subject."""
+    vm1, _ = _make()
+    fake2 = _make()[1]
+    hub: MessageHub[Message] = vm1._hub  # type: ignore[attr-defined]
+    vm2 = ApplicationsVM(client=fake2, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm2.construct()
+    events_on_vm1: list[str] = []
+    sub = vm1.on_property_changed.subscribe(on_next=events_on_vm1.append)
+    try:
+        await vm2.refresh()  # vm2 transitions LOADING→EMPTY
+        # vm1 should not see any of vm2's events.
+        assert events_on_vm1 == []
+    finally:
+        sub.dispose()
+        vm2.dispose()
+
+
+@pytest.mark.asyncio
 async def test_refresh_failure_surfaces_unreachable_state() -> None:
     from aws_tui.domain.filesystem import ProviderUnreachableError
 

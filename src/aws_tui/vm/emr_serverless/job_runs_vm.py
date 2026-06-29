@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import reactivex as rx
+from reactivex.subject import Subject
 from vmx import ComponentVMOf, CompositeVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
@@ -114,6 +116,11 @@ class JobRunsVM:
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
         self._state_filter: frozenset[JobRunState] = _ALL_STATES
+        # Per-VM Observable (round-3 / PR #103 retirement path): fires
+        # the name of the property that just changed, scoped to THIS
+        # VM instance. Views can subscribe here instead of filtering
+        # ``MessageHub`` events by ``sender_object``.
+        self._on_property_changed: Subject[str] = Subject()
         # CompositeVM owns the per-row VMs + the canonical ``current``
         # slot. ``selected_id`` is derived; the composite is NOT
         # exposed in the public surface (round-3 directive §9.bis.11).
@@ -173,6 +180,15 @@ class JobRunsVM:
     def is_constructed(self) -> bool:
         return self._inner.is_constructed
 
+    @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Per-VM-instance Observable that fires the name of the
+        property that just changed (round-3 / PR #103 retirement
+        path). Views subscribing here are immune to cross-VM
+        ``state`` PropertyChanged collisions on a shared
+        ``MessageHub``."""
+        return self._on_property_changed
+
     def set_application(self, app_id: str | None) -> None:
         """Re-scope to a new application. Clears selection + cache;
         caller must subsequently call :meth:`refresh`."""
@@ -186,8 +202,8 @@ class JobRunsVM:
             # Composite.clear() already drops current to None; the
             # public ``selected_id`` event mirrors that for View
             # consumers.
-            self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "selected_id"))
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "runs"))
+            self._notify("selected_id")
+        self._notify("runs")
         self._set_state(PaneState.LOADING if app_id is not None else PaneState.EMPTY)
 
     def select(self, run_id: str) -> None:
@@ -202,14 +218,14 @@ class JobRunsVM:
             # Unknown id — silent no-op.
             return
         self._inner.current = match.inner
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "selected_id"))
+        self._notify("selected_id")
 
     def set_state_filter(self, states: frozenset[JobRunState]) -> None:
         if states == self._state_filter:
             return
         self._state_filter = states
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "state_filter"))
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "runs"))
+        self._notify("state_filter")
+        self._notify("runs")
 
     def toggle_state_filter(self, state: JobRunState) -> None:
         states = set(self._state_filter)
@@ -260,8 +276,8 @@ class JobRunsVM:
                     restored = True
                     break
             if not restored:
-                self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "selected_id"))
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "runs"))
+                self._notify("selected_id")
+        self._notify("runs")  # restored from refresh prior-selection check above
         self._set_state(PaneState.IDLE if self.runs else PaneState.EMPTY)
 
     async def load_more(self) -> None:
@@ -284,12 +300,12 @@ class JobRunsVM:
             # Server returned an empty page + no more — just clear
             # the token so the sentinel goes away.
             self._next_token = None
-            self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "runs"))
+            self._notify("runs")
             return
         for summary in runs:
             self._add_item(summary)
         self._next_token = next_token
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "runs"))
+        self._notify("runs")
 
     def has_active_runs(self) -> bool:
         """Used by the page-VM poller to choose between the active
@@ -311,6 +327,8 @@ class JobRunsVM:
         for item in self._items:
             item.dispose()
         self._items.clear()
+        self._on_property_changed.on_completed()
+        self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -335,11 +353,18 @@ class JobRunsVM:
             item.construct()
         self._inner.append(item.inner)
 
+    def _notify(self, prop: str) -> None:
+        """Emit a PropertyChanged event on BOTH the shared hub AND
+        the per-VM-instance Observable (round-3 / PR #103 retirement
+        path)."""
+        self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", prop))
+        self._on_property_changed.on_next(prop)
+
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:
             return
         self._state = state
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_runs", "state"))
+        self._notify("state")
 
 
 __all__ = ["JobRunItemVM", "JobRunsVM"]
