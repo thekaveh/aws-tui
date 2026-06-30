@@ -140,7 +140,7 @@ class NavMenu(Widget, can_focus=True):
         self._rebuild_rows()
         self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
         # Subscribe to the focus coordinator (round-3 / §4.3 / Phase
-        # 7) so the screen's ``-nav-active`` class follows the VM-
+        # 7) so the screen's ``-rail-active`` class follows the VM-
         # owned slot, not direct Screen-class mutation on this
         # widget's focus events.
         if self._focus_coordinator is not None:
@@ -174,7 +174,7 @@ class NavMenu(Widget, can_focus=True):
             self._focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
             return
         with contextlib.suppress(Exception):
-            self.screen.add_class("-nav-active")
+            self.screen.add_class("-rail-active")
 
     def on_blur(self, event: events.Blur) -> None:
         """Symmetric to :meth:`on_focus`. When a coordinator is
@@ -185,10 +185,10 @@ class NavMenu(Widget, can_focus=True):
         if self._focus_coordinator is not None:
             return
         with contextlib.suppress(Exception):
-            self.screen.remove_class("-nav-active")
+            self.screen.remove_class("-rail-active")
 
     def _apply_focus_slot_class(self, slot: object) -> None:
-        """Mutate the Screen's ``-nav-active`` class from the
+        """Mutate the Screen's ``-rail-active`` class from the
         coordinator's projected slot. Single source of truth: this
         is the only place the class is touched when a coordinator is
         wired."""
@@ -197,9 +197,9 @@ class NavMenu(Widget, can_focus=True):
         with contextlib.suppress(Exception):
             screen = self.screen
             if slot is FocusSlot.NAV_MENU:
-                screen.add_class("-nav-active")
+                screen.add_class("-rail-active")
             else:
-                screen.remove_class("-nav-active")
+                screen.remove_class("-rail-active")
 
     # ── Actions ──────────────────────────────────────────────────────────────
 
