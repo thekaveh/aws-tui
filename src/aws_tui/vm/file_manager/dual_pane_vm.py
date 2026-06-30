@@ -75,7 +75,6 @@ class DualPaneVM:
         transfer_journal: TransferJournal,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._left: PaneVM = left
         self._right: PaneVM = right
         self._journal: TransferJournal = transfer_journal

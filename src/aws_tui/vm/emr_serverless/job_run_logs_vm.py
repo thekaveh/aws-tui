@@ -91,8 +91,6 @@ class JobRunLogsVM:
         self._bytes_read: int = 0
         self._lines_scanned: int = 0
         self._filter: LogFilter = DEFAULT_LOG_FILTER
-        # In-flight cancellation token
-        self._load_task: asyncio.Task[None] | None = None
         # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement
         # path): fires the name of the property that just changed,
         # scoped to THIS VM instance. The logs-pane view subscribes
@@ -174,7 +172,6 @@ class JobRunLogsVM:
         # snappy.
         if app_id != self._application_id:
             self._cache.clear()
-        self._cancel_load()
         self._application_id = app_id
         self._job_run_id = run_id
         self._log_uri = log_uri
@@ -311,10 +308,12 @@ class JobRunLogsVM:
         self._inner.construct()
 
     def dispose(self) -> None:
-        self._cancel_load()
         # Drop the response cache so a recycled VM (e.g. test
         # harnesses or future content-host reuse) doesn't carry
-        # stale entries forward.
+        # stale entries forward. In-flight ``load()`` workers are
+        # owned by the view (Textual's ``run_worker(group="emr-logs")``
+        # auto-cancels on widget unmount) — the VM holds no task
+        # handle of its own.
         self._cache.clear()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
@@ -338,12 +337,6 @@ class JobRunLogsVM:
     def _notify_all(self) -> None:
         for prop in ("state", "lines", "current_file", "available_files", "filter"):
             self._notify(prop)
-
-    def _cancel_load(self) -> None:
-        task = self._load_task
-        self._load_task = None
-        if task is not None and not task.done():
-            task.cancel()
 
 
 __all__ = ["JobRunLogsVM", "LogsState"]

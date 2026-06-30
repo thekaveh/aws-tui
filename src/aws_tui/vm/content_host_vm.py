@@ -38,7 +38,6 @@ class ContentHostVM:
         dispatcher: Dispatcher,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
 
         self._current: Any | None = None
         self._current_id: str | None = None
