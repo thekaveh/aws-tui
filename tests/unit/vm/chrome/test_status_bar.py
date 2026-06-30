@@ -145,9 +145,14 @@ def test_completed_transfer_decrements_count() -> None:
 
 def test_dispose_cancels_subscriptions() -> None:
     vm, hub = _build()
+    pre_label = vm.connection_label  # "no connection" — initial state
     vm.dispose()
-    # Sending another message after dispose must not crash.
+    # Sending another message after dispose must NOT update the VM's
+    # state. A regression that left the subscription live would flip
+    # connection_label to "kaveh-dev (aws)"; the assert below pins
+    # that and would catch the leak.
     hub.send(ConnectionChangedMessage(connection=_aws_conn(), auth_state=TokenState.CONNECTED))
+    assert vm.connection_label == pre_label
 
 
 def test_concurrent_transfers_aggregate_bytes() -> None:

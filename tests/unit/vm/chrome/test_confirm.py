@@ -98,9 +98,16 @@ def test_request_is_frozen() -> None:
 
 def test_commands_no_op_when_closed() -> None:
     vm = _build()
-    # No pending ask, commands are still callable but do nothing.
+    # No pending ask: the predicate (is_open) is False so neither
+    # command's task runs. Assert observable state stays at the
+    # closed defaults — without these asserts a regression that
+    # let execute() through despite a False predicate would
+    # silently mutate is_open / request.
+    assert vm.is_open is False
     vm.confirm_command.execute()
     vm.cancel_command.execute()
+    assert vm.is_open is False
+    assert vm.request is None
     vm.dispose()
 
 
