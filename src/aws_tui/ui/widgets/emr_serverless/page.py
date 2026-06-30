@@ -456,8 +456,7 @@ class EmrServerlessPage(Widget):
         # manual ``r`` press while the periodic poller is mid-flight is
         # silently dropped by Textual rather than allowed to race the
         # poller's worker. Both end up calling ``job_runs.refresh()``,
-        # which mutates the same ``_runs_cache`` / ``_next_token`` /
-        # ``_selected_id`` and fires the same ``runs``
+        # which mutates the same VM state and fires the same ``runs``
         # PropertyChangedMessage — two concurrent calls produced a
         # double UI redraw and an extra ``list_job_runs`` round-trip
         # per overlap.

@@ -9,16 +9,20 @@ to keep the dependency footprint tiny. The view layer reads
 
 Round-3 directive (spec §9.bis.11): the registry composes
 :class:`vmx.CompositeVM` over per-entry :class:`PaletteEntryVM`
-facades, and the filter+score+sort projection composes a small
-custom rank-by-score @property on top of the composite's
-``on_collection_changed`` event stream. Neither the inner
-``CompositeVM`` nor the rank-by-score machinery is exposed in the
-public surface — consumers bind to ``filter_text`` /
-``filtered_entries`` / ``selected_index``. The rank-by-score is the
-spec's promised ``ScoredFilteredCompositeVM`` variant (§9.bis.3),
-inlined here rather than lifted into ``vm/_composition/`` because
-the palette is its only consumer; promoting it is straightforward if
-a second scored-filter consumer appears.
+facades. ``_recompute_filtered`` walks that composite directly to
+produce ``filtered_entries``; it is invoked imperatively from every
+mutation path (``filter_text`` setter, ``register_entry``,
+``unregister_entry``) rather than subscribed to
+``on_collection_changed`` because those are the only paths that
+mutate the composite. Neither the inner ``CompositeVM`` nor the
+scoring machinery is exposed in the public surface — consumers bind
+to ``filter_text`` / ``filtered_entries`` / ``selected_index``.
+
+The rank-by-score inlined here is what spec §9.bis.3 calls
+``ScoredFilteredCompositeVM`` — it is NOT a thin layer on top of
+``FilteredCompositeVM`` (the palette is the only consumer today, so
+the scored variant has not been lifted into ``vm/_composition/``).
+A second scored-filter consumer would justify promoting it.
 """
 
 from __future__ import annotations

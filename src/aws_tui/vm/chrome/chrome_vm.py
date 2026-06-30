@@ -29,7 +29,6 @@ class ChromeVM:
         keymap: KeymapStore,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
 
         self._hint_legend = HintLegendVM(hub=hub, dispatcher=dispatcher, keymap=keymap)
         self._status_bar = StatusBarVM(hub=hub, dispatcher=dispatcher)

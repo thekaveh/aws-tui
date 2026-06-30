@@ -69,9 +69,15 @@ def test_filling_a_required_field_clears_its_error() -> None:
 
 
 def test_endpoint_iff_force_path_style_is_enforced_both_directions() -> None:
-    """The §9.bis.5 canonical cross-field example."""
-    # endpoint set + force_path_style off → flag force_path_style.
-    f = S3ConnectionFormVM(
+    """The §9.bis.5 canonical cross-field example.
+
+    The validator is symmetric: setting the endpoint without
+    ``force_path_style`` flags ``force_path_style``; requiring
+    ``force_path_style`` without an endpoint flags ``endpoint_url``
+    with the cross-field message (distinct from the bare
+    field-presence message)."""
+    # Direction A — endpoint set + force_path_style off → flag force_path_style.
+    f_a = S3ConnectionFormVM(
         initial=_valid().__class__(
             name="x",
             endpoint_url="http://x",
@@ -82,16 +88,40 @@ def test_endpoint_iff_force_path_style_is_enforced_both_directions() -> None:
         ),
         persister=_ok_persister,
     )
-    assert "force_path_style" in f.errors
-    f.dispose()
+    assert "force_path_style" in f_a.errors
+    f_a.dispose()
+    # Direction B — force_path_style on + no endpoint → flag endpoint_url
+    # WITH the cross-field message (not the bare field-presence message).
+    f_b = S3ConnectionFormVM(
+        initial=_valid().__class__(
+            name="x",
+            endpoint_url="",
+            region="r",
+            access_key_id="a",
+            secret_access_key="s",
+            force_path_style=True,
+        ),
+        persister=_ok_persister,
+    )
+    assert "endpoint_url" in f_b.errors
+    # The cross-field message must be the one that lands — proves the
+    # model validator fired (not just the field-presence validator,
+    # which would say "endpoint_url is required" instead).
+    assert "force_path_style is True" in f_b.errors["endpoint_url"]
+    f_b.dispose()
 
 
-def test_no_endpoint_no_force_path_style_is_valid() -> None:
-    """AWS S3 (not custom endpoint) → both off → invariant satisfied."""
+def test_no_endpoint_no_force_path_style_satisfies_cross_field_but_field_presence_still_fails() -> (
+    None
+):
+    """Both flags off → cross-field invariant is consistent (no
+    ``force_path_style`` error), but ``endpoint_url`` is still
+    flagged because every s3-compatible connection needs a custom
+    endpoint URL — the form has no "AWS S3" mode."""
     f = S3ConnectionFormVM(
         initial=_valid().__class__(
-            name="aws-prod",
-            endpoint_url="",  # blank — AWS S3 path
+            name="prod",
+            endpoint_url="",
             region="us-east-1",
             access_key_id="a",
             secret_access_key="s",
@@ -99,13 +129,6 @@ def test_no_endpoint_no_force_path_style_is_valid() -> None:
         ),
         persister=_ok_persister,
     )
-    # endpoint_url still flagged by field-presence validator first.
-    # Model validator may overwrite that — but since BOTH are off,
-    # the model validator returns {} so the field validator stands.
-    # The intent is: a no-custom-endpoint AWS connection requires an
-    # endpoint_url is empty + force_path_style is False; the
-    # configuration is consistent but ``endpoint_url`` is still
-    # required by the field-presence policy. Document this explicitly.
     assert "endpoint_url" in f.errors  # field-presence wins
     assert "force_path_style" not in f.errors  # cross-field invariant holds
     f.dispose()
