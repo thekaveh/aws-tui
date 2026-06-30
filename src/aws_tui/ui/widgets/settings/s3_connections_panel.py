@@ -108,12 +108,20 @@ class S3ConnectionsPanel(Widget):
             ]
         children: list[Widget] = []
         for c in conns:
+            # ``markup=False`` on every user-controlled field. The
+            # connection-form validator gates ``c.name`` against
+            # ``[A-Za-z0-9_-]{1,32}`` so brackets are blocked there,
+            # but ``endpoint_url`` and ``region`` are not similarly
+            # restricted and a user could legally enter
+            # ``http://minio.lan:9000/[shared]`` or ``us-east-1[dev]``.
+            # Defensive guard keeps the connections list from
+            # crashing if the form regex ever loosens.
             children.append(
                 Horizontal(
                     _RowAccent("▎", classes="row-accent"),
-                    Static(c.name, classes="row-name"),
-                    Static(c.endpoint_url or "", classes="row-endpoint"),
-                    Static(c.region, classes="row-region"),
+                    Static(c.name, classes="row-name", markup=False),
+                    Static(c.endpoint_url or "", classes="row-endpoint", markup=False),
+                    Static(c.region, classes="row-region", markup=False),
                     _ChipEdit("✎", id=f"edit-{c.name}", classes="row-chip-edit"),
                     _ChipDelete("✕", id=f"delete-{c.name}", classes="row-chip-delete"),
                     classes="connection-row",
