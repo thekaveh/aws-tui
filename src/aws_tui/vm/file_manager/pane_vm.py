@@ -763,6 +763,15 @@ class PaneVM:
     # ── Internal: listing & state ───────────────────────────────────────────
 
     async def _reload(self) -> None:
+        # Clear the prior error text BEFORE entering LOADING so a
+        # retry after a prior failure doesn't render the LOADING
+        # placeholder as ``"loading...: <stale error>"`` (see
+        # ``_placeholder_for_current_state`` which appends
+        # ``_error_text`` to every non-IDLE placeholder). The
+        # error-recovery branches below re-populate it from the
+        # fresh exception; the success path drops it explicitly
+        # at the end of the method.
+        self._error_text = None
         self._set_state(PaneState.LOADING)
         try:
             raw = await self._provider.list(self._path)
@@ -833,8 +842,17 @@ class PaneVM:
             if self._inner.is_constructed:
                 child.construct()
             self._inner.append(child.inner)
-        self._cursor_index = 0
+        # ORDER MATTERS: ``_recompute_filtered()`` MUST run before
+        # ``self._cursor_index = 0`` because the setter reads
+        # ``self._filtered`` to map filtered-position → entry inner.
+        # ``self._filtered`` still holds indices into the OLD
+        # entries list at this point; if the new ``_entries`` is
+        # shorter than ``max(_filtered) + 1`` the setter dereferences
+        # past the end and raises IndexError. (E.g. filter narrows
+        # to row 5 of 10, then refresh returns 3 entries.) Sibling
+        # call site ``_set_filter_text`` already has this ordering.
         self._recompute_filtered()
+        self._cursor_index = 0
         self._sync_cursor_selection()
         self._notify("entries")
         self._notify("viewmodel")
