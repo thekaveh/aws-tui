@@ -39,7 +39,7 @@ from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Static
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Message, MessageHub
 
 from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
@@ -293,7 +293,12 @@ class JobRunsPane(Widget, can_focus=True):
         self.border_title = "runs"
         self._refresh_chips()
         self._refresh_rows()
-        self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # Round-3 directive §9.bis.11 / PR #103 retirement: subscribe
+        # to JobRunsVM's per-instance Observable. This Subject only
+        # fires for THIS VM, so no `sender_object` filtering is
+        # needed against cross-VM `state` echoes from sibling EMR
+        # VMs sharing the hub.
+        self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
@@ -389,35 +394,23 @@ class JobRunsPane(Widget, can_focus=True):
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _on_hub_message(self, msg: object) -> None:
-        if not isinstance(msg, PropertyChangedMessage):
-            return
-        # Filter by sender — ALL EMR child VMs (JobRunDetailVM,
-        # JobRunLogsVM, ApplicationsVM, JobRunsVM) share the same
-        # hub AND all expose a ``state`` property. Without the
-        # sender check, arrow-walking the runs list cascades into
-        # ``select_job_run`` → ``await job_run_detail.refresh()``,
-        # whose LOADING → READY transitions fire ``state``
-        # PropertyChangedMessages that THIS pane would otherwise
-        # treat as a reason to ``remove_children`` + re-mount every
-        # run row. That was the residual flicker user reported
-        # post-PR-#100: "the list of emr job runs still flickers
-        # when arrow keys are used to navigate through them".
-        if getattr(msg, "sender_object", None) is not self._vm:
-            return
-        if msg.property_name == "state_filter":
+    def _on_vm_property_changed(self, prop: str) -> None:
+        """Round-3 directive: per-VM Observable subscription. The
+        cross-VM `state` collision the PR #103 hub-filter was
+        guarding against can't reach this handler because the
+        Subject is scoped to JobRunsVM only.
+
+        Note: ``selected_id`` is deliberately NOT in the redraw set.
+        The pane's visible selection is driven by the cursor index
+        (already updated synchronously in ``action_cursor_up`` /
+        ``_down``); reacting to ``selected_id`` here would force a
+        full ``remove_children`` + re-mount on every arrow press —
+        the visible flash the user reported post-PR-#98.
+        """
+        if prop == "state_filter":
             self.call_after_refresh(self._refresh_chips)
             self.call_after_refresh(self._refresh_rows)
-        elif msg.property_name in {"runs", "state"}:
-            # Note: ``selected_id`` is deliberately NOT in this set.
-            # The pane's visible selection is driven by ``_cursor_index``
-            # (already updated synchronously in ``action_cursor_up`` /
-            # ``_down``); the VM's ``selected_id`` change is an echo of
-            # our own ``RunSelected`` post, and reacting to it forces a
-            # full ``remove_children`` + re-mount on every arrow press —
-            # the visible flash the user reported post-PR-#98 ("every
-            # time I use arrow keys to move among the job runs, there
-            # seems to be a refresh and reload of the contents").
+        elif prop in {"runs", "state"}:
             self.call_after_refresh(self._refresh_rows)
 
     def _refresh_chips(self) -> None:

@@ -33,7 +33,7 @@ from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Message, MessageHub
 
 from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
@@ -136,7 +136,14 @@ class ApplicationPicker(Widget):
         yield OptionList(*self._build_options(), id="app-options")
 
     def on_mount(self) -> None:
-        self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # Round-3 directive §9.bis.11 / PR #103 retirement: subscribe
+        # to the VM's per-instance Observable rather than the shared
+        # hub. Eliminates the need for `sender_object` filtering —
+        # this subscription only fires for THIS ApplicationsVM
+        # instance. Hub fallback kept for the (currently unmigrated)
+        # state-machine state events the picker doesn't care about
+        # under round-3 framing anyway.
+        self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
@@ -192,29 +199,20 @@ class ApplicationPicker(Widget):
             self.post_message(self.ApplicationCommitted(event.option.id))
         self.remove_class("-open")
 
-    def _on_hub_message(self, msg: object) -> None:
-        if not isinstance(msg, PropertyChangedMessage):
-            return
-        # Sender filter — the EMR child VMs (JobRunsVM,
-        # JobRunDetailVM, JobRunLogsVM) ALL share this hub AND all
-        # expose ``state`` AND ``selected_id``. Without this, a
-        # cursor move on the runs pane would echo a JobRunsVM
-        # selected_id change here and force a trigger-label
-        # refresh; a detail.refresh()'s state walk would cascade
-        # into here too. The picker only cares about its own
-        # ApplicationsVM.
-        if getattr(msg, "sender_object", None) is not self._vm:
-            return
-        # Trigger label depends on the selected app's name + state
-        # glyph; refresh it on any of these property changes (cheap).
-        # The OptionList rebuild is heavy (``clear_options`` +
-        # re-add wipes the visible dropdown for a frame), so only do
-        # it when the applications LIST itself changed — not on
-        # every ``selected_id`` echo. User feedback (post-PR-#99):
-        # "this also applied to the emr applications as well".
-        if msg.property_name in {"applications", "selected_id", "state"}:
+    def _on_vm_property_changed(self, prop: str) -> None:
+        """Round-3 directive: per-VM Observable subscription. The
+        Subject only fires for events on THIS VM instance, so no
+        `sender_object` filter is needed (PR #103 retirement).
+
+        Trigger label depends on the selected app's name + state
+        glyph; refresh it on any of these property changes (cheap).
+        The OptionList rebuild is heavier and only fires on
+        list-or-state changes (PR #100(b) absorbed at the VM via
+        dedup-on-set — no no-change events reach here).
+        """
+        if prop in {"applications", "selected_id", "state"}:
             self.call_after_refresh(self._refresh_trigger)
-        if msg.property_name in {"applications", "state"}:
+        if prop in {"applications", "state"}:
             self.call_after_refresh(self._refresh_options)
 
     def _refresh_trigger(self) -> None:
