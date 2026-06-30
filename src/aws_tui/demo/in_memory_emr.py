@@ -279,12 +279,25 @@ class InMemoryEmr:
         self._details[(application_id, new_id)] = d
         # Schedule the state walk. ``asyncio.create_task`` requires
         # a running event loop; demo mode always runs inside Textual's
-        # loop. The discard-on-done callback keeps ``_state_tasks``
-        # bounded.
+        # loop. The done callback drains task.exception() before
+        # discarding so a future regression in _advance_state can't
+        # silently lose the exception via asyncio's "never retrieved"
+        # warning (invisible in a TUI). Same shield round-36 added
+        # to CommandPaletteVM._spawn_awaitable.
         task = asyncio.create_task(self._advance_state(application_id, new_id))
         self._state_tasks.add(task)
-        task.add_done_callback(self._state_tasks.discard)
+        task.add_done_callback(self._on_state_task_done)
         return new_id
+
+    def _on_state_task_done(self, task: asyncio.Task[None]) -> None:
+        self._state_tasks.discard(task)
+        if task.cancelled():
+            return
+        # Drain task.exception() to suppress asyncio's "never
+        # retrieved" warning. Demo-mode-only blast radius — there
+        # is no production toast surface to route to; the bare
+        # drain is the contract.
+        _ = task.exception()
 
     async def _advance_state(self, application_id: str, job_run_id: str) -> None:
         """Walk a freshly-submitted job through SUBMITTED → SCHEDULED →
