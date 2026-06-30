@@ -16,7 +16,7 @@ from textual.binding import BindingType
 from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Message, MessageHub
 
 from aws_tui.domain.emr_serverless import JobRunDetail
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
@@ -71,7 +71,10 @@ class JobRunDetailPane(Widget, can_focus=True):
     def on_mount(self) -> None:
         self.border_title = "detail"
         self._refresh()
-        self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # Round-3 / PR #103 retirement: subscribe to the VM's
+        # per-instance Observable instead of filtering the shared
+        # hub by sender_object.
+        self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
@@ -80,17 +83,12 @@ class JobRunDetailPane(Widget, can_focus=True):
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _on_hub_message(self, msg: object) -> None:
-        if not isinstance(msg, PropertyChangedMessage):
-            return
-        # Sender filter — sibling EMR VMs (JobRunsVM, JobRunLogsVM,
-        # ApplicationsVM) all expose a ``state`` property on the
-        # same hub. Without this, an arrow press on the runs list
-        # would trigger this pane to re-render twice via JobRunsVM
-        # state echoes, then again on detail refresh.
-        if getattr(msg, "sender_object", None) is not self._vm:
-            return
-        if msg.property_name in {"detail", "state"}:
+    def _on_vm_property_changed(self, prop: str) -> None:
+        """Round-3 directive: per-VM Observable subscription. The
+        cross-VM `state` collisions PR #103 hub-filter was guarding
+        against can't reach here because this Subject is scoped to
+        JobRunDetailVM only."""
+        if prop in {"detail", "state"}:
             self.call_after_refresh(self._refresh)
 
     def _refresh(self) -> None:

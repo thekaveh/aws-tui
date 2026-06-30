@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import reactivex as rx
+from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
@@ -45,6 +47,12 @@ class JobRunDetailVM:
             .services(hub, dispatcher)
             .build()
         )
+        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement
+        # path): fires the name of the property that just changed,
+        # scoped to THIS VM instance. The detail-pane view subscribes
+        # here instead of filtering shared MessageHub events by
+        # ``sender_object``.
+        self._on_property_changed: Subject[str] = Subject()
 
     # ── Public surface ──────────────────────────────────────────────────────
 
@@ -60,6 +68,13 @@ class JobRunDetailVM:
     def error_text(self) -> str | None:
         return self._error_text
 
+    @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Per-VM-instance Observable scoped to THIS detail VM. PR
+        #103 retirement path — Views subscribing here are immune to
+        cross-VM `state` collisions on the shared hub."""
+        return self._on_property_changed
+
     def set_target(self, application_id: str | None, job_run_id: str | None) -> None:
         """Re-point the detail view at a new run. If either id is
         None, clears."""
@@ -73,6 +88,7 @@ class JobRunDetailVM:
         else:
             self._set_state(PaneState.LOADING)
         self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", "detail"))
+        self._on_property_changed.on_next("detail")
 
     def is_terminal_state(self) -> bool:
         return self._detail is not None and self._detail.state in _TERMINAL_STATES
@@ -90,6 +106,7 @@ class JobRunDetailVM:
             return
         self._detail = d
         self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", "detail"))
+        self._on_property_changed.on_next("detail")
         self._set_state(PaneState.IDLE)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
@@ -98,6 +115,8 @@ class JobRunDetailVM:
         self._inner.construct()
 
     def dispose(self) -> None:
+        self._on_property_changed.on_completed()
+        self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -107,6 +126,7 @@ class JobRunDetailVM:
             return
         self._state = state
         self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", "state"))
+        self._on_property_changed.on_next("state")
 
 
 __all__ = ["JobRunDetailVM"]

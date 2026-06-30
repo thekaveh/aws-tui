@@ -15,6 +15,8 @@ import asyncio
 from collections import OrderedDict
 from enum import StrEnum
 
+import reactivex as rx
+from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
@@ -92,6 +94,12 @@ class JobRunLogsVM:
         self._filter: LogFilter = DEFAULT_LOG_FILTER
         # In-flight cancellation token
         self._load_task: asyncio.Task[None] | None = None
+        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement
+        # path): fires the name of the property that just changed,
+        # scoped to THIS VM instance. The logs-pane view subscribes
+        # here instead of filtering shared MessageHub events by
+        # ``sender_object``.
+        self._on_property_changed: Subject[str] = Subject()
         # LRU response cache: key=(app_id, run_id, file_key, filter_hash);
         # value=(lines, truncated). Capped at :data:`_CACHE_MAX_ENTRIES`
         # so recent navigation stays snappy without unbounded memory
@@ -139,6 +147,13 @@ class JobRunLogsVM:
         return self._application_id
 
     @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Per-VM-instance Observable scoped to THIS logs VM. PR
+        #103 retirement path — Views subscribing here are immune to
+        cross-VM `state` collisions on the shared hub."""
+        return self._on_property_changed
+
+    @property
     def job_run_id(self) -> str | None:
         return self._job_run_id
 
@@ -182,7 +197,7 @@ class JobRunLogsVM:
         if filter_ == self._filter:
             return
         self._filter = filter_
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "filter"))
+        self._notify("filter")
 
     def select_log_file(self, kind: LogFileKind) -> None:
         """Pick a file from ``available_files`` by kind. No-op if
@@ -194,8 +209,8 @@ class JobRunLogsVM:
         self._lines = ()
         self._bytes_read = 0
         self._lines_scanned = 0
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "current_file"))
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
+        self._notify("current_file")
+        self._notify("lines")
 
     # ── Network actions ───────────────────────────────────────────────────
 
@@ -218,9 +233,7 @@ class JobRunLogsVM:
                 run_prefix=run_prefix,
             )
             self._available_files = tuple(files)
-            self._hub.send(
-                PropertyChangedMessage.create(self, "emr.job_run_logs", "available_files")
-            )
+            self._notify("available_files")
             if not files:
                 self._set_state(LogsState.NO_FILES)
                 return
@@ -232,9 +245,7 @@ class JobRunLogsVM:
                         files[0],
                     ),
                 )
-                self._hub.send(
-                    PropertyChangedMessage.create(self, "emr.job_run_logs", "current_file")
-                )
+                self._notify("current_file")
             truncated = False
             cache_key = (
                 self._application_id,
@@ -255,7 +266,7 @@ class JobRunLogsVM:
                 self._cache.move_to_end(cache_key)
                 cached_lines, cached_truncated = self._cache[cache_key]
                 self._lines = cached_lines
-                self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
+                self._notify("lines")
                 self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
             buffered: list[str] = []
@@ -271,8 +282,8 @@ class JobRunLogsVM:
                 self._lines = tuple(buffered)
                 self._bytes_read = chunk.bytes_read
                 self._lines_scanned = chunk.lines_scanned
-                self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
-                self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "progress"))
+                self._notify("lines")
+                self._notify("progress")
                 truncated = chunk.truncated
             self._cache[cache_key] = (self._lines, truncated)
             # LRU eviction: drop the oldest entry until back under cap.
@@ -306,6 +317,8 @@ class JobRunLogsVM:
         # harnesses or future content-host reuse) doesn't carry
         # stale entries forward.
         self._cache.clear()
+        self._on_property_changed.on_completed()
+        self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Internal ───────────────────────────────────────────────────────────
@@ -314,11 +327,18 @@ class JobRunLogsVM:
         if self._state == new_state:
             return
         self._state = new_state
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "state"))
+        self._notify("state")
+
+    def _notify(self, prop: str) -> None:
+        """Emit a PropertyChanged event on BOTH the shared hub AND
+        the per-VM-instance Observable (round-3 / PR #103 retirement
+        path)."""
+        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", prop))
+        self._on_property_changed.on_next(prop)
 
     def _notify_all(self) -> None:
         for prop in ("state", "lines", "current_file", "available_files", "filter"):
-            self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", prop))
+            self._notify(prop)
 
     def _cancel_load(self) -> None:
         task = self._load_task

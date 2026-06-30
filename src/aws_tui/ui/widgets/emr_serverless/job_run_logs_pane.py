@@ -28,7 +28,7 @@ from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Static
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Message, MessageHub
 
 from aws_tui.domain.emr_logs import LogFileKind
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
@@ -158,7 +158,10 @@ class JobRunLogsPane(Widget, can_focus=True):
         self._refresh_filter_row()
         self._refresh_body()
         self._refresh_status()
-        self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # Round-3 / PR #103 retirement: subscribe to the VM's
+        # per-instance Observable instead of filtering the shared
+        # hub by sender_object.
+        self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
@@ -216,21 +219,16 @@ class JobRunLogsPane(Widget, can_focus=True):
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _on_hub_message(self, msg: object) -> None:
-        if not isinstance(msg, PropertyChangedMessage):
-            return
-        # Sender filter — sibling EMR VMs (JobRunsVM, JobRunDetailVM,
-        # ApplicationsVM) all expose a ``state`` property on the
-        # same hub. Without this, arrow-walking the runs list
-        # cascades into JobRunsVM.state echoes that this pane would
-        # treat as a reason to re-render its body + status row.
-        if getattr(msg, "sender_object", None) is not self._vm:
-            return
-        if msg.property_name in {"available_files", "current_file"}:
+    def _on_vm_property_changed(self, prop: str) -> None:
+        """Round-3 directive: per-VM Observable subscription. The
+        cross-VM `state` collisions PR #103 hub-filter was guarding
+        against can't reach here because this Subject is scoped to
+        JobRunLogsVM only."""
+        if prop in {"available_files", "current_file"}:
             self.call_after_refresh(self._refresh_chips)
-        elif msg.property_name == "filter":
+        elif prop == "filter":
             self.call_after_refresh(self._refresh_filter_row)
-        elif msg.property_name in {"state", "lines", "progress"}:
+        elif prop in {"state", "lines", "progress"}:
             self.call_after_refresh(self._refresh_body)
             self.call_after_refresh(self._refresh_status)
 
