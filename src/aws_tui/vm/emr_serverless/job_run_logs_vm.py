@@ -324,6 +324,14 @@ class JobRunLogsVM:
                 self._cache.popitem(last=False)
             self._set_state(LogsState.TRUNCATED if truncated else LogsState.READY)
         except ProviderError as exc:
+            # Identity guard on the error path too — set_target is
+            # synchronous and does NOT cancel the in-flight load
+            # worker. Without this check the OLD target's error
+            # text would stomp the NEW target's state, leaving the
+            # logs pane stuck on ERROR with an error message
+            # describing the prior run's failure.
+            if (self._application_id, self._job_run_id, self._log_uri) != target:
+                return
             new_state, self._error_text = map_provider_error(exc)
             # Re-map the file-pane states the EMR mapper returns to a
             # logs-specific state. UNREACHABLE / AUTH_REQUIRED /
@@ -336,6 +344,9 @@ class JobRunLogsVM:
             # so the placeholder reflects the most recent intent.
             raise
         except Exception as exc:  # defensive
+            # Same identity guard as the ProviderError branch above.
+            if (self._application_id, self._job_run_id, self._log_uri) != target:
+                return
             self._error_text = f"unexpected error: {exc}"
             self._set_state(LogsState.ERROR)
 

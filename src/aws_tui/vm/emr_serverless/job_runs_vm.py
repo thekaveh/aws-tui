@@ -199,6 +199,13 @@ class JobRunsVM:
         prior_selected_id = self.selected_id
         self._clear_items()
         self._next_token = None
+        # Clear the prior app's error text — without this the
+        # window between set_application and refresh's next state
+        # write briefly carries the OLD app's error_text alongside
+        # the NEW state. Sibling parity with JobRunLogsVM.set_target
+        # and PaneVM._reload, both of which clear error_text at
+        # the equivalent seam.
+        self._error_text = None
         if prior_selected_id is not None:
             # Composite.clear() already drops current to None; the
             # public ``selected_id`` event mirrors that for View
@@ -313,6 +320,9 @@ class JobRunsVM:
                     self._notify("selected_id")
             self._notify("runs")
         self._next_token = next_token
+        # Success path — drop any error text carried forward from a
+        # prior failed poll (sibling parity with PaneVM._reload).
+        self._error_text = None
         self._set_state(PaneState.IDLE if self.runs else PaneState.EMPTY)
 
     async def load_more(self) -> None:

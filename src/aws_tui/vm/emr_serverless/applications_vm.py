@@ -261,6 +261,12 @@ class ApplicationsVM:
         if self.selected_id != prior_selected_id:
             self._notify("selected_id")
 
+        # Success path — drop any error text carried forward from
+        # a prior failed poll. Sibling parity with PaneVM._reload
+        # (which clears at the top of success). Without this a
+        # successful recovery after an error would keep stale
+        # error_text alongside IDLE state.
+        self._error_text = None
         self._set_state(PaneState.IDLE if new_apps else PaneState.EMPTY)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────

@@ -83,6 +83,12 @@ class JobRunDetailVM:
         self._application_id = application_id
         self._job_run_id = job_run_id
         self._detail = None
+        # Clear the prior target's error text — sibling parity with
+        # JobRunLogsVM.set_target, PaneVM._reload, JobRunsVM.
+        # set_application (added round 34). Without this the prior
+        # run's "permission denied" message would briefly accompany
+        # the new run's LOADING state.
+        self._error_text = None
         if application_id is None or job_run_id is None:
             self._set_state(PaneState.EMPTY)
         else:
@@ -126,6 +132,9 @@ class JobRunDetailVM:
             return
         if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
             return  # target changed mid-flight; drop the stale detail
+        # Success path — drop any error text carried forward from
+        # a prior failed poll (sibling parity with PaneVM._reload).
+        self._error_text = None
         self._detail = d
         self._notify("detail")
         self._set_state(PaneState.IDLE)
