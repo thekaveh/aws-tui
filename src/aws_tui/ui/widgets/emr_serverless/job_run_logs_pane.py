@@ -145,9 +145,17 @@ class JobRunLogsPane(Widget, can_focus=True):
     def compose(self) -> ComposeResult:
         with Horizontal(classes="logs-chip-row"):
             pass  # Chips are added dynamically in _refresh_chips
-        yield Static("", classes="logs-filter-row", id="logs-filter")
+        # ``markup=False`` on the filter row — its content is
+        # ``f"filter: {' · '.join(filter.patterns)}{hint}"`` and
+        # those patterns ARE user-typed regex strings. Common
+        # patterns like ``[INFO]``, ``[ERROR]``, ``[0-9]+`` are
+        # the obvious thing a user types to filter logs, and Rich
+        # would try to parse them as style tags and crash the
+        # filter-row render. (The status Static is dev-controlled
+        # text but gets the guard for parity.)
+        yield Static("", classes="logs-filter-row", id="logs-filter", markup=False)
         yield VerticalScroll(id="logs-body")
-        yield Static("", classes="logs-status", id="logs-status")
+        yield Static("", classes="logs-status", id="logs-status", markup=False)
 
     def on_mount(self) -> None:
         self.border_title = "logs"

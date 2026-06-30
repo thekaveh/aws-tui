@@ -43,6 +43,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, Literal
 
+from rich.markup import escape as _markup_escape
+
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 
 if TYPE_CHECKING:
@@ -96,10 +98,18 @@ def _format(glyph: str, subject: str, message: str, action: str | None) -> str:
     room from the leading icon; one space after the colon keeps
     the rest readable. Rich markup is parsed by ``Toast.render``
     (post-PR-75) so ``[b]…[/]`` becomes bold.
+
+    ``message`` and ``action`` are escaped via ``rich.markup.escape``
+    so user / exception text containing ``[…]`` (``copy failed:
+    [Errno 13] Permission denied`` etc.) doesn't crash the toast
+    render with MarkupError. The ``[b]…[/]`` literal we inject
+    around ``subject`` is the only intentional markup; subject
+    itself comes from a small closed enum of callers and stays
+    raw.
     """
-    body = f"{glyph}  [b]{subject}:[/] {message}"
+    body = f"{glyph}  [b]{subject}:[/] {_markup_escape(message)}"
     if action:
-        body += f" — {action}"
+        body += f" — {_markup_escape(action)}"
     return body
 
 

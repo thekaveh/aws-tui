@@ -66,7 +66,15 @@ class LogFilterModal(ModalScreen[LogFilter | None]):
             # Inline regex-validation error slot; hidden until the
             # user presses Apply with a bad pattern. See
             # ``_show_validation_error``.
-            err = Static("", id="log-patterns-error", classes="modal-field-error")
+            # ``markup=False`` is mandatory here — the slot renders
+            # ``f"⚠ {message}"`` where ``message`` is the str(ValueError)
+            # from LogFilter.__post_init__, e.g. ``invalid regex
+            # pattern '[abc': missing ], unterminated character set
+            # at position 0: [abc``. Without the guard the error
+            # message designed to GUIDE the user past their typo
+            # would itself crash on the unclosed ``[`` in the
+            # echoed pattern.
+            err = Static("", id="log-patterns-error", classes="modal-field-error", markup=False)
             err.styles.display = "none"
             yield err
 
