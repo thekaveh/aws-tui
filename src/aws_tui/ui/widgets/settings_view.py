@@ -18,6 +18,7 @@ from textual.widgets._collapsible import CollapsibleTitle
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.settings.s3_connections_panel import S3ConnectionsPanel
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.settings.settings_vm import SettingsVM
 
 if TYPE_CHECKING:
@@ -134,11 +135,9 @@ class SettingsView(Widget):
             self._focus_coordinator is not None
             and textual_focused is not None
             and not self.has_focus_within
+            and self._focus_coordinator.focused_slot is FocusSlot.NAV_MENU
         ):
-            from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-
-            if self._focus_coordinator.focused_slot is FocusSlot.NAV_MENU:
-                return
+            return
         if textual_focused is None or self.has_focus_within:
             title.focus()
 

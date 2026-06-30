@@ -15,7 +15,7 @@ endpoint-IFF-force-path-style cross-field) live in one place.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
 
@@ -197,9 +197,12 @@ class ConnectionFormInline(Widget):
     def _install_view_validators(self) -> None:
         """Layer the View-specific format validators (name-regex
         and URL-format) on top of the VM's built-in field-presence
-        + cross-field validators."""
-        self._form_vm._inner.add_field_validator("name", _validate_name)
-        self._form_vm._inner.add_field_validator("endpoint_url", _validate_endpoint_url)
+        + cross-field validators. Uses the form VM's public
+        ``add_field_validator`` — no reach-through into the
+        inner :class:`ValidatingFormVM` (round-3 directive
+        §9.bis.11: composed primitives stay private)."""
+        self._form_vm.add_field_validator("name", _validate_name)
+        self._form_vm.add_field_validator("endpoint_url", _validate_endpoint_url)
 
     def compose(self) -> ComposeResult:
         with Container():
@@ -405,12 +408,11 @@ class ConnectionFormInline(Widget):
             # disabled, but the form VM's errors map is the canonical
             # gate so we re-check here.
             return
-        # Pull the live model from the form VM. It already has
-        # force_path_style=True / verify_tls=True from the initial
-        # construction; preserve those by using ``replace`` only for
-        # the user-edited string fields. Actually the form VM's
-        # set_field has been threading every keystroke into the
-        # model, so model is current — just hand it off.
+        # Pull the live model from the form VM. set_field has been
+        # threading every keystroke into the working model, so it's
+        # current — just hand it off. force_path_style=True and
+        # verify_tls=True from the initial construction survive
+        # untouched because no Input writes to those fields.
         model = self._form_vm.model
         ctx = self._ctx
         self.post_message(
@@ -449,11 +451,6 @@ def _validate_s3_form_value(field: str, value: str) -> str | None:
     if not stripped:
         return "required"
     return None
-
-
-# Mark `replace` as used (it's available for callers who want to
-# tweak the live form model without re-driving every set_field).
-_ = replace
 
 
 __all__ = [

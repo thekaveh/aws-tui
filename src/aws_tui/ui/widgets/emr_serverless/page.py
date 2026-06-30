@@ -11,6 +11,8 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING, ClassVar, Literal
 
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+
 if TYPE_CHECKING:
     from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
@@ -210,8 +212,6 @@ class EmrServerlessPage(Widget):
             and textual_focused is not None
             and not self.has_focus_within
         ):
-            from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-
             slot = self._focus_coordinator.focused_slot
             if slot is FocusSlot.NAV_MENU:
                 # Rail-walk in progress: VM-owned slot agrees AND

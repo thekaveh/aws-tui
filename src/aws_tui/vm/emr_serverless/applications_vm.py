@@ -197,8 +197,7 @@ class ApplicationsVM:
             # Unknown id — silent no-op (matches pre-Phase-1 behaviour).
             return
         self._inner.current = match.inner
-        self._hub.send(PropertyChangedMessage.create(self, "emr.applications", "selected_id"))
-        self._on_property_changed.on_next("selected_id")
+        self._notify("selected_id")
 
     async def refresh(self) -> None:
         """Re-fetch the application list. Updates ``state``,
@@ -232,8 +231,7 @@ class ApplicationsVM:
             self._clear_items()
             for summary in new_apps:
                 self._add_item(summary)
-            self._hub.send(PropertyChangedMessage.create(self, "emr.applications", "applications"))
-            self._on_property_changed.on_next("applications")
+            self._notify("applications")
 
         # The composite may have dropped ``current`` to None during
         # _clear_items + repopulate (the same model id can re-appear
@@ -244,8 +242,7 @@ class ApplicationsVM:
         # sync — matches the prior behaviour where dropping a stale
         # selection emitted the same notification.
         if self.selected_id != prior_selected_id:
-            self._hub.send(PropertyChangedMessage.create(self, "emr.applications", "selected_id"))
-            self._on_property_changed.on_next("selected_id")
+            self._notify("selected_id")
 
         self._set_state(PaneState.IDLE if new_apps else PaneState.EMPTY)
 
@@ -273,12 +270,18 @@ class ApplicationsVM:
         # via _add_item; this seed runs once.
         return tuple(item.inner for item in self._items)
 
+    def _notify(self, prop: str) -> None:
+        """Emit a PropertyChanged event on BOTH the shared hub AND
+        the per-VM-instance Observable (round-3 / PR #103 retirement
+        path). Mirrors the helper on JobRunsVM / JobRunLogsVM."""
+        self._hub.send(PropertyChangedMessage.create(self, "emr.applications", prop))
+        self._on_property_changed.on_next(prop)
+
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:
             return
         self._state = state
-        self._hub.send(PropertyChangedMessage.create(self, "emr.applications", "state"))
-        self._on_property_changed.on_next("state")
+        self._notify("state")
 
     def _items_equal(self, new_apps: tuple[ApplicationSummary, ...]) -> bool:
         """Identity check for the dedup-on-set guard."""

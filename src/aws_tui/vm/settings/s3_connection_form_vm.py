@@ -138,6 +138,23 @@ class S3ConnectionFormVM:
     def on_errors_changed(self) -> rx.Observable[dict[str, str]]:
         return self._inner.on_errors_changed
 
+    # ── Registration ────────────────────────────────────────────────────────
+
+    def add_field_validator(self, field: str, fn: Callable[[S3CompatForm], str | None]) -> None:
+        """Register an EXTRA per-field validator on top of the
+        built-in field-presence + cross-field invariants. Consumers
+        (e.g. the View widget) use this to layer their own
+        format-specific checks (regex on ``name``, URL parse on
+        ``endpoint_url``) without reaching into the composed
+        :class:`ValidatingFormVM` directly."""
+        self._inner.add_field_validator(field, fn)
+
+    def add_model_validator(self, fn: Callable[[S3CompatForm], dict[str, str]]) -> None:
+        """Register an EXTRA cross-field validator. See
+        :meth:`add_field_validator` for the round-3 rationale.
+        """
+        self._inner.add_model_validator(fn)
+
     # ── Mutation ────────────────────────────────────────────────────────────
 
     def set_field(self, field: str, value: Any) -> None:

@@ -41,6 +41,7 @@ from textual.widgets import Static
 from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.ui.widgets.nav_row import NavRow
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 
 if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
@@ -169,8 +170,6 @@ class NavMenu(Widget, can_focus=True):
         the legacy direct mutation when no coordinator is wired
         (e.g. test harnesses that haven't migrated yet)."""
         if self._focus_coordinator is not None:
-            from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-
             self._focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
             return
         with contextlib.suppress(Exception):
@@ -192,8 +191,6 @@ class NavMenu(Widget, can_focus=True):
         coordinator's projected slot. Single source of truth: this
         is the only place the class is touched when a coordinator is
         wired."""
-        from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-
         with contextlib.suppress(Exception):
             screen = self.screen
             if slot is FocusSlot.NAV_MENU:
@@ -294,8 +291,6 @@ class NavMenu(Widget, can_focus=True):
         # the coordinator becomes the data source, the dispatcher
         # remains the View-side projection mechanism.
         if self._focus_coordinator is not None:
-            from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-
             service_default_slot: dict[str, FocusSlot] = {
                 "s3": FocusSlot.S3_LEFT,
                 "emr-serverless": FocusSlot.EMR_RUNS,

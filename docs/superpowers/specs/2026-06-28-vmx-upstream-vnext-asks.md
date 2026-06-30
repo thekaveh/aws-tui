@@ -787,26 +787,28 @@ which is both extra coupling (the View knows the hub exists) AND
 extra defensive code (the sender check).
 
 **What aws-tui did instead:** Added a `Subject[str]` field
-`_on_property_changed` to each migrated VM (ApplicationsVM,
-JobRunsVM at present; same pattern landing on JobRunDetailVM,
-JobRunLogsVM in follow-up). Emissions go through a helper that
-fires BOTH the hub PropertyChangedMessage AND the per-VM Subject —
-the hub side keeps back-compat with other listeners; the per-VM
-side gives View widgets a sender_object-free subscription.
+`_on_property_changed` to each migrated VM. Every emission goes
+through a per-VM `_notify(prop)` helper that fires BOTH the hub
+PropertyChangedMessage AND the per-VM Subject — the hub side
+keeps back-compat with other listeners; the per-VM side gives
+View widgets a sender_object-free subscription. **All four EMR VMs
+(ApplicationsVM, JobRunsVM, JobRunDetailVM, JobRunLogsVM) now
+have the surface, with consistent `_notify(prop)` helpers.**
 
 **Round-3 implementation evidence:**
 
-VM-side (all four EMR VMs now expose the surface):
-- `src/aws_tui/vm/emr_serverless/applications_vm.py:108-115` —
-  `_on_property_changed: Subject[str]` field; emissions at four
-  internal sites (state, applications, selected_id × 2).
-- `src/aws_tui/vm/emr_serverless/job_runs_vm.py:118-122` —
-  same shape, with a `_notify(prop)` helper consolidating 10
-  emission sites into one.
-- `src/aws_tui/vm/emr_serverless/job_run_detail_vm.py:47-54` —
-  added in commit `ac3ad81`; emissions at the two
-  PropertyChangedMessage sites (detail, state).
-- `src/aws_tui/vm/emr_serverless/job_run_logs_vm.py:91-97` —
+VM-side (all four EMR VMs expose the surface with a uniform
+`_notify(prop)` helper as the sole hub.send + Subject.on_next
+emission site):
+- `src/aws_tui/vm/emr_serverless/applications_vm.py` —
+  `_on_property_changed: Subject[str]` + `_notify` helper; four
+  emission sites (state, applications, selected_id × 2).
+- `src/aws_tui/vm/emr_serverless/job_runs_vm.py` —
+  same shape; `_notify` consolidates 10 emission sites into one.
+- `src/aws_tui/vm/emr_serverless/job_run_detail_vm.py` —
+  `_notify` helper consolidates 3 emission sites (detail × 2,
+  state).
+- `src/aws_tui/vm/emr_serverless/job_run_logs_vm.py` —
   added in commit `ac3ad81`; `_notify` helper consolidates 9
   emission sites including the `_notify_all` loop.
 

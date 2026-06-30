@@ -87,8 +87,7 @@ class JobRunDetailVM:
             self._set_state(PaneState.EMPTY)
         else:
             self._set_state(PaneState.LOADING)
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", "detail"))
-        self._on_property_changed.on_next("detail")
+        self._notify("detail")
 
     def is_terminal_state(self) -> bool:
         return self._detail is not None and self._detail.state in _TERMINAL_STATES
@@ -105,8 +104,7 @@ class JobRunDetailVM:
             self._set_state(new_state)
             return
         self._detail = d
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", "detail"))
-        self._on_property_changed.on_next("detail")
+        self._notify("detail")
         self._set_state(PaneState.IDLE)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
@@ -121,12 +119,18 @@ class JobRunDetailVM:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
+    def _notify(self, prop: str) -> None:
+        """Emit a PropertyChanged event on BOTH the shared hub AND
+        the per-VM-instance Observable (round-3 / PR #103 retirement
+        path). Mirrors the helper on the other EMR VMs."""
+        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", prop))
+        self._on_property_changed.on_next(prop)
+
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:
             return
         self._state = state
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", "state"))
-        self._on_property_changed.on_next("state")
+        self._notify("state")
 
 
 __all__ = ["JobRunDetailVM"]

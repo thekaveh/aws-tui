@@ -128,7 +128,23 @@ class FilteredCompositeVM(Generic[VM]):
 
     def set_predicate(self, predicate: Callable[[VM], bool]) -> None:
         """Replace the filter predicate. Re-evaluates the cursor per
-        the configured ``cursor_policy``."""
+        the configured ``cursor_policy``.
+
+        **Identity-equality gotcha:** the check below is
+        ``is`` (object identity), NOT value equality. Passing the
+        SAME predicate object (e.g. a bound method whose state
+        you mutated externally) is treated as a no-op even if its
+        captured state changed. Consumers that drive a stateful
+        predicate (PaneVM threads ``filter_text`` through one)
+        should wrap the call in a fresh closure each invocation:
+
+        .. code-block:: python
+
+           # Closure captures the LIVE filter_text at call time.
+           def _live(item: VM) -> bool:
+               return matches(item, self.filter_text)
+           filtered.set_predicate(_live)
+        """
         if predicate is self._predicate:
             return
         self._predicate = predicate
