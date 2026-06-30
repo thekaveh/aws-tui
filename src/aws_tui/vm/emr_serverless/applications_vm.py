@@ -110,6 +110,7 @@ class ApplicationsVM:
         self._items: list[ApplicationItemVM] = []
         self._state: PaneState = PaneState.LOADING
         self._error_text: str | None = None
+        self._disposed: bool = False
         # Per-VM Observable (round-3 / PR #103 retirement path): fires
         # the name of the property that just changed, scoped to THIS
         # VM instance. Views can subscribe here instead of filtering
@@ -256,6 +257,9 @@ class ApplicationsVM:
         self._inner.construct()
 
     def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
         # Clear our shadow list so disposal cascades cleanly. Composite
         # owns its inner children's lifecycle; the facades dispose
         # alongside.

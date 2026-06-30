@@ -38,6 +38,7 @@ class JobRunDetailVM:
         self._detail: JobRunDetail | None = None
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
+        self._disposed: bool = False
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -112,6 +113,9 @@ class JobRunDetailVM:
         self._inner.construct()
 
     def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()

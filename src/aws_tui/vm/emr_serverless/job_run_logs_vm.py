@@ -91,6 +91,7 @@ class JobRunLogsVM:
         self._bytes_read: int = 0
         self._lines_scanned: int = 0
         self._filter: LogFilter = DEFAULT_LOG_FILTER
+        self._disposed: bool = False
         # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement
         # path): fires the name of the property that just changed,
         # scoped to THIS VM instance. The logs-pane view subscribes
@@ -308,6 +309,9 @@ class JobRunLogsVM:
         self._inner.construct()
 
     def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
         # Drop the response cache so a recycled VM (e.g. test
         # harnesses or future content-host reuse) doesn't carry
         # stale entries forward. In-flight ``load()`` workers are
