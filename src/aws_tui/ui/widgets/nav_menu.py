@@ -45,6 +45,7 @@ from aws_tui.ui.widgets.nav_row import NavRow
 if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
 
+    from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
     from aws_tui.vm.nav_menu_vm import NavItemVM, NavMenuVM
 
 
@@ -98,12 +99,15 @@ class NavMenu(Widget, can_focus=True):
         *,
         vm: NavMenuVM,
         hub: MessageHub[Message],
+        focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: NavMenuVM = vm
         self._hub: MessageHub[Message] = hub
+        self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
+        self._coord_sub: DisposableBase | None = None
         self._sub: DisposableBase | None = None
         # Flat ordered list of every visible item (services then
         # Settings). Cursor moves across this whole list — there
@@ -135,33 +139,67 @@ class NavMenu(Widget, can_focus=True):
         self.border_title = "menu"
         self._rebuild_rows()
         self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # Subscribe to the focus coordinator (round-3 / §4.3 / Phase
+        # 7) so the screen's ``-nav-active`` class follows the VM-
+        # owned slot, not direct Screen-class mutation on this
+        # widget's focus events.
+        if self._focus_coordinator is not None:
+            self._coord_sub = self._focus_coordinator.on_focused_slot_changed.subscribe(
+                on_next=self._apply_focus_slot_class
+            )
+            # Apply the initial state once.
+            self._apply_focus_slot_class(self._focus_coordinator.focused_slot)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+        if self._coord_sub is not None:
+            self._coord_sub.dispose()
+            self._coord_sub = None
 
     # ── Focus chrome coordination ─────────────────────────────────────────────
 
     def on_focus(self, event: events.Focus) -> None:
-        """When the rail gains Textual focus, mark the screen so the
-        per-theme CSS can dim the file-pane border. User feedback
-        (post-PR-#97): "Both the menu and the left/right panes can
-        be shown as focused / selected which again is confusing.
-        Only one pane should be selected at a time including the
-        menu." The dual file pane keeps its VM-driven ``-focused``
-        class for non-visual reasons (transfers / commands routing),
-        so we drive the visual via a sibling-scope ``-nav-active``
-        class on the Screen instead of mutating the pane VM.
-        """
+        """When the rail gains Textual focus, project the slot
+        through the :class:`FocusCoordinatorVM` (round-3 / §4.3).
+        The coordinator's ``on_focused_slot_changed`` subscriber
+        (wired in :meth:`on_mount`) is what mutates the
+        Screen's class — no direct Screen mutation here. Fallback to
+        the legacy direct mutation when no coordinator is wired
+        (e.g. test harnesses that haven't migrated yet)."""
+        if self._focus_coordinator is not None:
+            from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+
+            self._focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
+            return
         with contextlib.suppress(Exception):
             self.screen.add_class("-nav-active")
 
     def on_blur(self, event: events.Blur) -> None:
-        """Symmetric to :meth:`on_focus`: drop the screen-level
-        marker so the file pane lights up again."""
+        """Symmetric to :meth:`on_focus`. When a coordinator is
+        wired, blurring doesn't directly demote the slot — the slot
+        only changes when something ELSE gains focus and projects
+        its own slot through the coordinator. The class mutation is
+        handled by the coordinator subscription."""
+        if self._focus_coordinator is not None:
+            return
         with contextlib.suppress(Exception):
             self.screen.remove_class("-nav-active")
+
+    def _apply_focus_slot_class(self, slot: object) -> None:
+        """Mutate the Screen's ``-nav-active`` class from the
+        coordinator's projected slot. Single source of truth: this
+        is the only place the class is touched when a coordinator is
+        wired."""
+        from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+
+        with contextlib.suppress(Exception):
+            screen = self.screen
+            if slot is FocusSlot.NAV_MENU:
+                screen.add_class("-nav-active")
+            else:
+                screen.remove_class("-nav-active")
 
     # ── Actions ──────────────────────────────────────────────────────────────
 

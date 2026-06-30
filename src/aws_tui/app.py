@@ -277,7 +277,12 @@ class AwsTuiApp(App[None]):
             # PR-#94 there is no hamburger / collapse / expand mode —
             # the rail is a fixed-width pane that joins the Tab cycle
             # like any other.
-            yield NavMenu(vm=ctx.root_vm.services_menu, hub=ctx.hub, id="nav-menu")
+            yield NavMenu(
+                vm=ctx.root_vm.services_menu,
+                hub=ctx.hub,
+                focus_coordinator=ctx.focus_coordinator,
+                id="nav-menu",
+            )
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
         yield ToastStack(ctx.root_vm.chrome.toast_stack, hub=ctx.hub, id="toast-stack")

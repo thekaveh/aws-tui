@@ -43,6 +43,7 @@ from aws_tui.services.s3.service import S3Service
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
 from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 from aws_tui.vm.chrome.quick_look_vm import QuickLookVM
 from aws_tui.vm.chrome.resume_vm import ResumeAction
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
@@ -65,6 +66,7 @@ class AppContext:
         "demo",
         "demo_emr",
         "dispatcher",
+        "focus_coordinator",
         "hub",
         "initial_theme",
         "keymap_store",
@@ -99,6 +101,7 @@ class AppContext:
         dispatcher: Dispatcher,
         initial_theme: str,
         s3_connections_vm: S3ConnectionsVM,
+        focus_coordinator: FocusCoordinatorVM | None = None,
         demo: bool = False,
         demo_emr: InMemoryEmr | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
@@ -120,6 +123,16 @@ class AppContext:
         self.dispatcher = dispatcher
         self.initial_theme = initial_theme
         self.s3_connections_vm = s3_connections_vm
+        # Lifecycle: builds one if not supplied so test harnesses that
+        # pre-date round-3 wiring keep working. The build_app_context
+        # path always supplies a constructed one.
+        self.focus_coordinator: FocusCoordinatorVM = (
+            focus_coordinator
+            if focus_coordinator is not None
+            else FocusCoordinatorVM(hub=hub, dispatcher=dispatcher)
+        )
+        if focus_coordinator is None:
+            self.focus_coordinator.construct()
         self.demo = demo
         # Non-None only in demo mode; disposed by AwsTuiApp on shutdown so
         # in-flight clone state-machine tasks are cancelled cleanly.
@@ -261,6 +274,8 @@ def build_app_context(
         hub=hub,
         dispatcher=dispatcher,
     )
+    focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=dispatcher)
+    focus_coordinator.construct()
     return AppContext(
         root_vm=root_vm,
         registry=registry,
@@ -279,6 +294,7 @@ def build_app_context(
         dispatcher=dispatcher,
         initial_theme=initial_theme,
         s3_connections_vm=s3_connections_vm,
+        focus_coordinator=focus_coordinator,
         demo=demo,
         demo_emr=demo_emr_ref,
         unreachable_connections=set(),
