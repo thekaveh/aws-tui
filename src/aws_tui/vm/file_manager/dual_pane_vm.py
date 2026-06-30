@@ -43,6 +43,33 @@ class FocusedPane(StrEnum):
     RIGHT = "right"
 
 
+def _schedule_detached_refresh(pane: PaneVM) -> None:
+    """Schedule ``pane.refresh()`` as a fire-and-forget task.
+
+    Used by the copy/move finally cleanup so the refresh survives
+    outer-worker cancellation. Awaiting refresh inside a cancelled
+    coroutine raises CancelledError at the first internal await
+    (after ``_reload`` synchronously flipped state to LOADING),
+    leaving the pane stuck on LOADING. Detaching lets the outer
+    cancellation propagate cleanly while the refresh continues to
+    run on its own. The done-callback drains task.exception() so
+    a refresh failure doesn't surface as ``Task exception was
+    never retrieved`` to stderr.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # No running loop (sync-driven tests); caller can refresh manually.
+    task = loop.create_task(pane.refresh())
+    task.add_done_callback(_drain_refresh_exception)
+
+
+def _drain_refresh_exception(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    _ = task.exception()
+
+
 def _pane_uri(pane: PaneVM, leaf: str) -> str:
     """Build a stable scheme-prefixed label for transfer source/
     destination identifiers.
@@ -292,12 +319,18 @@ class DualPaneVM:
             # on disk; without this the pane would still show the
             # pre-batch listing and a retry with
             # ``on_conflict=OVERWRITE`` would silently clobber, or
-            # ERROR would hit EEXIST on the partial set. The
-            # journal cleanup above keeps state coherent; this
-            # makes the UI match. Suppressed so a refresh failure
-            # can't mask the original copy exception.
-            with contextlib.suppress(Exception):
-                await dst_pane.refresh()
+            # ERROR would hit EEXIST on the partial set.
+            #
+            # FIRE-AND-FORGET: under outer-worker cancellation, an
+            # awaited refresh would raise CancelledError at its
+            # first internal await (after _reload synchronously
+            # flipped state to LOADING) — leaving the pane stuck
+            # on LOADING with no entries. ``suppress(Exception)``
+            # doesn't catch CancelledError (a BaseException), so
+            # the bug stood. Detach as a task so the refresh
+            # survives outer cancellation; drain its exception via
+            # the done-callback (same R36/R40 shield).
+            _schedule_detached_refresh(dst_pane)
 
     async def move_across(
         self, *, on_conflict: ConflictResolution = ConflictResolution.ERROR
@@ -359,11 +392,11 @@ class DualPaneVM:
             # ``copy_across`` for the rationale. Move is even more
             # sensitive: files 1..K-1 are both copied AND deleted
             # from src, so the source pane must redraw or the user
-            # sees ghost rows for entries that are gone.
-            with contextlib.suppress(Exception):
-                await src_pane.refresh()
-            with contextlib.suppress(Exception):
-                await dst_pane.refresh()
+            # sees ghost rows for entries that are gone. Same
+            # fire-and-forget detach as copy_across so outer-worker
+            # cancellation doesn't strand the panes in LOADING.
+            _schedule_detached_refresh(src_pane)
+            _schedule_detached_refresh(dst_pane)
 
     async def delete_in_focused(self) -> None:
         """Delete every marked entry in the focused pane."""

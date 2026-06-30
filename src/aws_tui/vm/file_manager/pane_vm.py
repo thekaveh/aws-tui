@@ -715,7 +715,17 @@ class PaneVM:
         reload, leaving the pane showing all M entries as marked
         with the first ``N-1`` already gone — UI / storage drift
         with zero diagnostic. The ``finally`` reload is guaranteed
-        so the user always sees the post-deletion truth."""
+        so the user always sees the post-deletion truth.
+
+        NOTE on outer-worker cancellation: if the caller's worker is
+        cancelled, the inline await below raises CancelledError at
+        the first internal await (after ``_reload`` synchronously
+        flipped state to LOADING), and the pane is briefly stranded
+        on LOADING. This is the documented trade-off for the
+        synchronous post-condition; tests + UI callers depend on
+        ``await delete_marked()`` returning AFTER the reload has
+        repopulated entries. ``r`` re-runs the reload manually on
+        the rare cancel-mid-finally path."""
         targets = [e.entry.name for e in self._entries if e.is_marked]
         if not targets:
             return
