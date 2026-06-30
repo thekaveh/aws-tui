@@ -209,7 +209,13 @@ class PaneVM:
 
         self._entries: list[EntryVM] = []
         self._filtered: tuple[int, ...] = ()  # indices into self._entries
-        self._cursor_index: int = 0
+        # Round-3 directive §9.bis.11: the cursor index is NO LONGER
+        # a stored field. It's a property that resolves to the
+        # ``_inner`` composite's ``current`` slot — the VM-owned
+        # canonical cursor. Reads derive the position of the current
+        # entry in ``_filtered``; writes set the composite's current
+        # to ``_entries[_filtered[N]].inner``. See ``_cursor_index``
+        # property below.
         self._filter_text: str = ""
         self._state: PaneState = PaneState.IDLE
         self._error_text: str | None = None
@@ -329,6 +335,57 @@ class PaneVM:
     @property
     def cursor_index(self) -> int:
         return self._cursor_index
+
+    @property
+    def _cursor_index(self) -> int:
+        """Derived cursor position over ``_inner.current``.
+
+        Round-3 directive §9.bis.11 (commit follow-up): the cursor's
+        canonical source of truth is the inner composite's
+        ``current`` slot. The position returned here is the index
+        of that current entry within ``_filtered`` (the visible
+        subset). When nothing is selected — or when the current
+        item is filtered out — returns 0 (the leading row, matching
+        the prior field's default after a reset).
+        """
+        current = self._inner.current
+        if current is None:
+            return 0
+        # Locate the EntryVM whose inner IS the composite's current,
+        # then map its entry index to its filtered position.
+        for entry_idx, entry in enumerate(self._entries):
+            if entry.inner is current:
+                try:
+                    return self._filtered.index(entry_idx)
+                except ValueError:
+                    return 0
+        return 0
+
+    @_cursor_index.setter
+    def _cursor_index(self, value: int) -> None:
+        """Set the composite's ``current`` slot from a filtered-
+        position write.
+
+        Round-3 bridge: the legacy field-assignment idiom
+        (``self._cursor_index = N``) routes here. Empty filter
+        means there's no row to point at — clears ``current``.
+        Otherwise clamps ``value`` to ``[0, len(_filtered) - 1]``
+        and promotes the corresponding entry to ``current``.
+
+        Idempotent: a no-op when the resolved target equals the
+        existing ``current``. This preserves the "skip notify when
+        cursor didn't move" semantic the prior field-based code
+        relied on at line ``_move_cursor``.
+        """
+        if not self._filtered:
+            if self._inner.current is not None:
+                self._inner.current = None
+            return
+        clamped = max(0, min(value, len(self._filtered) - 1))
+        entry_idx = self._filtered[clamped]
+        target_inner = self._entries[entry_idx].inner
+        if self._inner.current is not target_inner:
+            self._inner.current = target_inner
 
     @property
     def filter_text(self) -> str:
