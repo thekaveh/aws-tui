@@ -9,7 +9,10 @@ ships the static cadences from spec §6)."""
 from __future__ import annotations
 
 import contextlib
-from typing import ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
+
+if TYPE_CHECKING:
+    from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -90,12 +93,14 @@ class EmrServerlessPage(Widget):
         vm: EmrServerlessPageVM,
         *,
         hub: MessageHub[Message],
+        focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: EmrServerlessPageVM = vm
         self._hub: MessageHub[Message] = hub
+        self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
         self._picker: ApplicationPicker | None = None
         self._left: JobRunsPane | None = None
         self._right_detail: JobRunDetailPane | None = None
@@ -185,21 +190,34 @@ class EmrServerlessPage(Widget):
     def _maybe_focus_left(self) -> None:
         """Auto-focus the LEFT pane on initial page mount UNLESS a
         widget outside this page (typically the NavMenu rail) already
-        owns Textual focus. Mounting is async — when NavMenu's
-        ``_after_cursor_move`` triggers a service swap, the new page's
-        ``on_mount`` fires SEVERAL refreshes later, well after NavMenu's
-        own ``call_after_refresh(self.focus)`` has run. So NavMenu can't
-        win the focus race from its end; the courtesy has to come from
-        the page side. ``has_focus_within`` is true only when something
-        inside this page already holds focus (first-time mount when the
-        user opened the app directly into EMR, or a re-mount that came
-        from inside this page). All other cases mean the user is
-        elsewhere — leave them alone.
+        owns Textual focus.
+
+        Round-3 directive §9.bis.11 / PR #99(a) closure: when a
+        :class:`FocusCoordinatorVM` is wired, the rail-walk gate
+        reads from `focused_slot == NAV_MENU` AND requires Textual
+        focus to actually exist on the rail — the coordinator's
+        VM-owned slot becomes the authoritative answer to "is the
+        user arrow-walking the menu?". When no coordinator is
+        wired, or when Textual focus is unset (programmatic
+        service-switch in tests), the legacy "focus left when
+        nothing else holds focus" semantics still apply.
         """
         if self._left is None:
             return
-        focused = self.app.focused
-        if focused is None or self.has_focus_within:
+        textual_focused = self.app.focused
+        if (
+            self._focus_coordinator is not None
+            and textual_focused is not None
+            and not self.has_focus_within
+        ):
+            from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+
+            slot = self._focus_coordinator.focused_slot
+            if slot is FocusSlot.NAV_MENU:
+                # Rail-walk in progress: VM-owned slot agrees AND
+                # Textual focus is on the rail. Leave it alone.
+                return
+        if textual_focused is None or self.has_focus_within:
             self._left.focus()
 
     # ── Public accessors ────────────────────────────────────────────────────

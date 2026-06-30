@@ -8,6 +8,8 @@ placeholders that go live in sub-projects B and C.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
@@ -17,6 +19,9 @@ from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.settings.s3_connections_panel import S3ConnectionsPanel
 from aws_tui.vm.settings.settings_vm import SettingsVM
+
+if TYPE_CHECKING:
+    from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
 
 class SettingsView(Widget):
@@ -40,10 +45,17 @@ class SettingsView(Widget):
     }
     """
 
-    def __init__(self, *, vm: SettingsVM, hub: MessageHub[Message]) -> None:
+    def __init__(
+        self,
+        *,
+        vm: SettingsVM,
+        hub: MessageHub[Message],
+        focus_coordinator: FocusCoordinatorVM | None = None,
+    ) -> None:
         super().__init__()
         self._vm: SettingsVM = vm
         self._hub: MessageHub[Message] = hub
+        self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
 
     @property
     def vm(self) -> SettingsVM:
@@ -108,8 +120,26 @@ class SettingsView(Widget):
         self.call_after_refresh(lambda: self._maybe_focus(title))
 
     def _maybe_focus(self, title: CollapsibleTitle) -> None:
-        focused = self.app.focused
-        if focused is None or self.has_focus_within:
+        """Land focus on the first section title UNLESS the NavMenu
+        rail already owns Textual focus (user is arrow-walking).
+
+        Round-3 §9.bis.11 / PR #99(a) closure: when a
+        :class:`FocusCoordinatorVM` is wired, the rail-walk gate
+        cross-references `focused_slot == NAV_MENU` with Textual's
+        current focus owner. The coordinator's VM-owned slot is the
+        single source of truth; the Textual check stays as a
+        belt-and-braces guard."""
+        textual_focused = self.app.focused
+        if (
+            self._focus_coordinator is not None
+            and textual_focused is not None
+            and not self.has_focus_within
+        ):
+            from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+
+            if self._focus_coordinator.focused_slot is FocusSlot.NAV_MENU:
+                return
+        if textual_focused is None or self.has_focus_within:
             title.focus()
 
     def focus_default(self) -> None:

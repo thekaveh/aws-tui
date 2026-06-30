@@ -911,7 +911,14 @@ class AwsTuiApp(App[None]):
                 host = self.query_one("#content-host", Container)
                 host.remove_children()
                 if _svc_id == "emr-serverless":
-                    host.mount(EmrServerlessPage(current_vm, hub=ctx.hub, id="content-emr-page"))
+                    host.mount(
+                        EmrServerlessPage(
+                            current_vm,
+                            hub=ctx.hub,
+                            focus_coordinator=ctx.focus_coordinator,
+                            id="content-emr-page",
+                        )
+                    )
                 else:
                     host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
         except Exception as exc:
@@ -2291,7 +2298,13 @@ class AwsTuiApp(App[None]):
             # next worker's remove_children, leaving BOTH widgets in
             # the DOM.
             await host.remove_children()
-            await host.mount(SettingsView(vm=settings_vm, hub=ctx.hub))
+            await host.mount(
+                SettingsView(
+                    vm=settings_vm,
+                    hub=ctx.hub,
+                    focus_coordinator=ctx.focus_coordinator,
+                )
+            )
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_settings_view.mount_failed",
@@ -2358,7 +2371,12 @@ class AwsTuiApp(App[None]):
                 await host.remove_children()
                 if service_id == "emr-serverless":
                     await host.mount(
-                        EmrServerlessPage(current_vm, hub=ctx.hub, id="content-emr-page")
+                        EmrServerlessPage(
+                            current_vm,
+                            hub=ctx.hub,
+                            focus_coordinator=ctx.focus_coordinator,
+                            id="content-emr-page",
+                        )
                     )
                 else:
                     await host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
