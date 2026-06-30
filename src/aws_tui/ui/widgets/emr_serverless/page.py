@@ -336,18 +336,23 @@ class EmrServerlessPage(Widget):
         )
         clone_vm.construct()
         modal = JobRunCloneModal(clone_vm, hub=self._hub)
+        # Unified try/finally so cancellation (CancelledError is a
+        # BaseException, NOT an Exception) disposes the VM too.
+        # Previously the outer try caught only Exception, so an
+        # asyncio cancel during push_screen_wait would skip both
+        # the dispose AND the second try/finally — leaking the
+        # clone_vm's inner VMx component + hub subscriptions +
+        # commands. Mirrors s3_connections_panel._do_delete's
+        # try/finally pattern.
         try:
-            new_id = await self.app.push_screen_wait(modal)
-        except Exception as exc:
-            # The modal raised after dismiss (extremely rare — e.g.
-            # the test harness disposed the app mid-flight). Don't
-            # crash the page; surface an advisory toast so the user
-            # learns the action didn't land instead of silently
-            # losing the click.
-            clone_vm.dispose()
-            self._post_advisory_toast("Job", f"clone aborted ({exc})")
-            return
-        try:
+            try:
+                new_id = await self.app.push_screen_wait(modal)
+            except Exception as exc:
+                # The modal raised after dismiss (extremely rare —
+                # e.g. the test harness disposed the app mid-flight).
+                # Surface an advisory toast and bail.
+                self._post_advisory_toast("Job", f"clone aborted ({exc})")
+                return
             if new_id is None:
                 # User cancelled — silent (Cancel is intentional UX,
                 # not an error to advertise).
