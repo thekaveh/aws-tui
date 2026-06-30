@@ -401,8 +401,26 @@ class ConnectionFormInline(Widget):
         Callers should also surface the specific error message (e.g. via
         a toast) — this method only paints the field; it does not show
         the reason.
+
+        Also clears the ``_submitting`` re-entrancy flag so the user
+        can correct the name and re-submit. The parent panel signals
+        a persistence failure by calling this method instead of
+        :meth:`close`, so this is the single seam where the form
+        learns "your last submit failed; you can try again".
         """
         self.query_one("#form-name", Input).add_class("-invalid")
+        self._submitting = False
+
+    def clear_submitting(self) -> None:
+        """Clear the ``_submitting`` re-entrancy flag.
+
+        For failure paths that don't go through :meth:`mark_name_invalid`
+        — generic persistence errors (disk full, permission denied)
+        where the name itself is fine but the save couldn't complete.
+        The parent panel calls this before surfacing the toast so the
+        user can edit field values and retry.
+        """
+        self._submitting = False
 
     def _submit(self) -> None:
         """Validate fields and post :class:`ConnectionFormSubmitted`.

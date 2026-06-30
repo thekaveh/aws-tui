@@ -292,6 +292,9 @@ class S3ConnectionsPanel(Widget):
                 # or anything else from ConfigStore.save(). Keep the form
                 # open so the user doesn't lose their entered values; surface
                 # the error so they understand why it didn't save.
+                # ``clear_submitting()`` re-arms the re-entrancy flag so the
+                # user can retry after fixing the underlying problem.
+                form.clear_submitting()
                 self._surface_error_toast(
                     f"Could not save {event.form.name!r}: {exc}",
                     toast_id=f"add-error-{event.form.name}",
@@ -302,6 +305,7 @@ class S3ConnectionsPanel(Widget):
             try:
                 self._vm.update(event.original_name, entry)
             except Exception as exc:
+                form.clear_submitting()
                 self._surface_error_toast(
                     f"Could not save {event.form.name!r}: {exc}",
                     toast_id=f"edit-error-{event.form.name}",

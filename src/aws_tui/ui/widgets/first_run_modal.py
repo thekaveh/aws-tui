@@ -128,6 +128,13 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
             # toast is the LAST thing the user has left to learn
             # why their config save failed — letting it crash a
             # second time is the worst possible UX.
+            #
+            # ``clear_submitting()`` re-arms the form's re-entrancy
+            # flag so the user can retry after fixing the underlying
+            # problem (e.g. freeing disk space). Without this the
+            # Submit button would silently no-op after the first
+            # failure and the user would be stuck.
+            self.query_one(ConnectionFormInline).clear_submitting()
             self.notify(
                 f"Couldn't save connection: {exc}",
                 severity="error",
