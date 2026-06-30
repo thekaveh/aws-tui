@@ -36,6 +36,7 @@ from textual.widgets.option_list import Option
 
 from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
+from aws_tui.vm.file_manager.pane_vm import PaneState
 
 #: Colored Rich-markup glyphs per application state. The glyph SHAPE
 #: alone is distinguishable on monochrome terminals (●/◐/◑/○/◌/✗
@@ -248,6 +249,22 @@ class ApplicationPicker(Widget):
         of the app, and then followed by the status of the app. I
         want this changed to just the status indicator, followed
         by the name. No need for the emoji"."""
+        # Surface VM error states explicitly so the trigger reads
+        # actionable copy instead of "(no application)" — which is
+        # indistinguishable from a successful empty listing. Mirrors
+        # the per-state branching JobRunsPane / JobRunDetailPane do
+        # for the same PaneState machine.
+        state = self._vm.state
+        if state is PaneState.UNREACHABLE:
+            return f"⚠ {self._vm.error_text or 'endpoint unreachable — press r to retry'}"
+        if state is PaneState.AUTH_REQUIRED:
+            return "⚠ auth required — aws sso login --profile <X>"
+        if state is PaneState.FORBIDDEN:
+            return f"⚠ {self._vm.error_text or 'permission denied — check IAM policy'}"
+        if state is PaneState.ERROR:
+            return f"⚠ {self._vm.error_text or 'error — press r to retry'}"
+        if state is PaneState.LOADING:
+            return "loading…"
         apps = self._vm.applications
         sid = self._vm.selected_id
         if not apps:
