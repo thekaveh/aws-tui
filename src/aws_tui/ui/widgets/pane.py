@@ -14,6 +14,7 @@ re-renders the body when ``entries`` or ``state`` change.
 
 from __future__ import annotations
 
+from rich.markup import escape as _markup_escape
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
@@ -358,11 +359,19 @@ class Pane(HubSubscriberMixin, Widget):
 
         - ``border_title`` (top): the path, updates on every navigation.
         - ``border_subtitle`` (bottom): the connection identity (S3 only).
+
+        Textual's ``_BorderTitle`` descriptor unconditionally runs the
+        value through ``Content.from_markup``; there is NO per-widget
+        knob to disable that. A path or S3 key containing ``[…]``
+        (``/Users/me/[draft]``, ``releases[2025]/``, an
+        ``s3-compatible`` connection named ``prod[us-east]``) would
+        crash the render with ``MarkupError`` — escape the values
+        before assignment so brackets render as literal text.
         """
         vm = self._vm.viewmodel
-        self.border_title = vm.border_title
+        self.border_title = _markup_escape(vm.border_title)
         if vm.border_subtitle is not None:
-            self.border_subtitle = vm.border_subtitle
+            self.border_subtitle = _markup_escape(vm.border_subtitle)
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name in _BODY_REFRESH_PROPS:
@@ -419,7 +428,15 @@ class Pane(HubSubscriberMixin, Widget):
             placeholder_class = "pane-placeholder"
             if vm.placeholder_severity:
                 placeholder_class = f"{placeholder_class} -{vm.placeholder_severity}"
-            body.mount(Static(vm.placeholder_text, classes=placeholder_class))
+            # ``markup=False``: vm.placeholder_text appends
+            # ``_error_text = str(exc)`` for non-IDLE states.
+            # FileNotFoundError stringifies as "[Errno 2] No such
+            # file or directory: ..." — the leading "[" triggers
+            # Rich's markup parser and crashes the pane render.
+            # Same guard JobRunDetailPane / JobRunLogsPane already
+            # apply for the same PaneState machine; the
+            # file-manager pane was missed in the R24 sweep.
+            body.mount(Static(vm.placeholder_text, classes=placeholder_class, markup=False))
             return
 
         for entry_vm in self._vm.filtered_entries:
