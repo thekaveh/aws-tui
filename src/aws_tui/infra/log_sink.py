@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import uuid
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -120,12 +121,19 @@ class LogSink:
         self._handler.setFormatter(_JsonLineFormatter())
         # Each LogSink owns its own logger instance, isolated so test runs and
         # concurrent app instances don't fight over global handler state.
-        self._logger: logging.Logger = logging.getLogger(f"{_LOGGER_NAME}.{id(self)}")
+        #
+        # Use uuid4 instead of ``id(self)``: id() is the CPython
+        # memory address — Python's logging module caches every
+        # logger by name in Logger.manager.loggerDict with a STRONG
+        # reference, so the entry survives GC of the LogSink. Across
+        # a long-running session (or a test suite cycling sinks)
+        # the registry grows monotonically and every dead LogSink's
+        # logger leaks. uuid4 collisions are astronomically
+        # improbable so the prior "reset handlers in case the id
+        # was reused" defence is no longer needed either.
+        self._logger: logging.Logger = logging.getLogger(f"{_LOGGER_NAME}.{uuid.uuid4().hex}")
         self._logger.setLevel(logging.DEBUG)
         self._logger.propagate = False
-        # Reset handlers in case this id was reused.
-        for existing in list(self._logger.handlers):
-            self._logger.removeHandler(existing)
         self._logger.addHandler(self._handler)
         self._closed: bool = False
 

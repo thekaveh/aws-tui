@@ -176,7 +176,14 @@ def build_app_context(
     try:
         _cfg = config_store.load()
         initial_theme = _cfg.defaults.theme
-        keybindings_overlay = _cfg.keybindings.bindings
+        # COPY the bindings dict out of the frozen Config — the
+        # source dict lives on a ``frozen=True`` dataclass, and
+        # handing the bare reference downstream would let any
+        # consumer (KeymapStore overlay, future binding-resolver
+        # logic) mutate the dict inside the supposedly-immutable
+        # Config. The frozen-ness contract only blocks attribute
+        # rebinding, not mutation through the reference.
+        keybindings_overlay = dict(_cfg.keybindings.bindings)
     except Exception as exc:
         # Falling back silently is dishonest — first-run with a
         # malformed config.toml looks identical to a clean install.
