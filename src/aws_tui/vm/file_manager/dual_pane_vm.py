@@ -395,16 +395,37 @@ class DualPaneVM:
                     )
                 )
         except Exception:
-            # Disk-full / permission-denied on ``_journal.begin`` (or
-            # any other failure mid-loop) leaves entries 1..N-1 with
-            # cancel-event registrations that the caller's ``finally``
-            # block would otherwise never clean up — the caller only
-            # iterates the RETURNED ``transfer_ids``, which never
-            # materializes when this method raises. Reap them here so
-            # the dict can't grow unboundedly across many failed
-            # batches.
-            for _, transfer_id in transfer_ids:
+            # Mid-loop failure (e.g. ``_journal.begin`` hits disk-full
+            # or permission-denied, ``_hub.send`` raises from a
+            # subscriber) leaves entries 1..K-1 with THREE half-done
+            # side effects that the caller's ``finally`` would
+            # otherwise never reach (the caller iterates the RETURNED
+            # ``transfer_ids``, which never materializes when this
+            # method raises):
+            #   1. cancel_event registrations (memory only)
+            #   2. journal files in PENDING state (resume modal will
+            #      surface them on next launch as phantom resumable
+            #      transfers)
+            #   3. in-memory TransferVMs in PENDING (status-bar
+            #      aggregate, transfers overlay, cancel_all predicate
+            #      all read off these)
+            # Reap all three so a single mid-batch raise can't
+            # accumulate phantom queued transfers across the session.
+            # Symmetric with the round-19 cleanup in copy_across /
+            # move_across's finally.
+            for entry, transfer_id in transfer_ids:
                 self._cancel_events.pop(transfer_id, None)
+                with contextlib.suppress(Exception):
+                    self._journal.mark_aborted(transfer_id)
+                with contextlib.suppress(Exception):
+                    self._hub.send(
+                        TransferProgressMessage(
+                            transfer_id=transfer_id,
+                            bytes_transferred=0,
+                            bytes_total=entry.entry.size,
+                            state=TransferState.CANCELLED,
+                        )
+                    )
             raise
         return transfer_ids
 
