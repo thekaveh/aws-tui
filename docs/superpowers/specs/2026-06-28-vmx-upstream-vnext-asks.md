@@ -110,6 +110,20 @@ list; `next_token: str | None` stays as a VM field; `load_more:
 RelayCommand` calls the API and appends to the composite. `refresh:
 RelayCommand` clears the composite and re-fetches the first page.
 
+**Round-3 implementation evidence:** Landed on the refactor branch at
+`refactor/vmx-toolkit-adoption` (PR #109):
+- `src/aws_tui/vm/emr_serverless/job_runs_vm.py:127-200` —
+  `_inner: CompositeVM[ComponentVMOf[JobRunSummary]]` (composite
+  internal), `_next_token: str | None` (VM field), `refresh()` /
+  `load_more()` methods.
+- Plus dedup-on-set in `refresh()` (commit `c114b36`) — if the new
+  page matches the current accumulator head, the composite is NOT
+  mutated. Same pattern as ApplicationsVM
+  (`applications_vm.py:226-290`).
+- The "what we wish VMx shipped" shape would directly absorb this
+  pattern — `TokenPagedComposition[VM]` would carry both the
+  next_token threading AND the dedup-on-set guard.
+
 **Proposed vNext API:** Ship a `TokenPagedComposition[VM]` (or
 `CursorPagedComposition[VM]`) alongside the existing index-based one:
 
@@ -247,9 +261,64 @@ We considered that and rejected it as over-abstraction for two VMs.
 - The View binds to `filtered_entries` for rendering and `current` for
   the selected row.
 
-This works, keeps the VM layer fully Vie-portable (NiceGUI-friendly),
+This works, keeps the VM layer fully View-portable (NiceGUI-friendly),
 but the filter logic and the cursor-mapping logic both live on the
 wrapping VM instead of in a reusable primitive.
+
+**Round-3 implementation evidence:** Built as
+`aws_tui.vm._composition.FilteredCompositeVM[VM]` at
+`src/aws_tui/vm/_composition/filtered_composite_vm.py`. The public
+surface ended up being:
+
+```python
+class FilteredCompositeVM(Generic[VM]):  # VM bound to _ComponentVMBase
+    def __init__(
+        self,
+        source: CompositeVM[VM],
+        *,
+        predicate: Callable[[VM], bool] | None = None,
+        cursor_policy: str = "snap_to_first",  # or "clear"
+    ) -> None: ...
+
+    @property
+    def visible(self) -> tuple[VM, ...]: ...
+    @property
+    def visible_count(self) -> int: ...
+    @property
+    def current(self) -> VM | None: ...
+    @property
+    def on_changed(self) -> rx.Observable[None]: ...  # fires on predicate or source change
+
+    def set_predicate(self, predicate) -> None: ...
+    def set_current(self, item: VM | None) -> None: ...
+    def move_to_next_visible(self) -> None: ...
+    def move_to_previous_visible(self) -> None: ...
+    def dispose(self) -> None: ...
+```
+
+23 tests at `tests/unit/vm/_composition/test_filtered_composite_vm.py`
+cover predicate filtering, both cursor policies, navigation wrapping,
+on_changed event timing, source-mutation reconciliation, and dispose
+discipline.
+
+`PaneVM` consumes it at `src/aws_tui/vm/file_manager/pane_vm.py:234`
+with the `on_changed` Observable wired in `__init__` to re-derive
+`_filtered`. `CommandPaletteVM` does NOT consume it — it inlines a
+score-rank variant directly because the boolean predicate model
+doesn't capture rank-by-score (see new Item 8 below).
+
+**Differences from the round-1 proposal worth folding into vNext:**
+- `on_changed` payload is bare `None` (not the typed
+  `CollectionChangedEvent` — subscribers re-read `visible`/`current`).
+  Simpler. Worth pinning the contract before vNext lifts it.
+- `set_predicate` is identity-checked — passing the same predicate
+  object is a no-op. PaneVM's consumer had to wrap its bound method
+  in a fresh closure each call to avoid silent no-ops on
+  `filter_text` change (pane_vm.py recompute path). vNext should
+  consider value-based equality OR document the identity contract.
+- VM bound is `_ComponentVMBase` (matches `CompositeVM`'s
+  constraint) — not exposed publicly via vmx's `__init__` but
+  importable from `vmx.components.base`.
 
 **Proposed vNext API:** A `FilteredCompositeVM[VM]` / `DerivedCompositeVM[VM]`
 decorator:
@@ -323,6 +392,69 @@ themselves so the View knows the validity changed.
 ~5 LOC of predicate wiring per cross-field rule. Works, but is the
 exact "framework primitive almost fits, here's the boilerplate that
 keeps coming back" shape this whole adoption was supposed to eliminate.
+
+**Round-3 implementation evidence:** Lifted the manual pattern into a
+reusable aws-tui-side `ValidatingFormVM[TM]` mini-primitive at
+`src/aws_tui/vm/_composition/validating_form_vm.py` that composes
+`vmx.forms.FormVM` internally. Public surface:
+
+```python
+class ValidatingFormVM(Generic[TM]):
+    def __init__(self, initial: TM, persister, *, strict: bool = True): ...
+
+    @property
+    def model(self) -> TM: ...
+    @property
+    def snapshot(self) -> TM: ...
+    @property
+    def is_dirty(self) -> bool: ...
+    @property
+    def errors(self) -> dict[str, str]: ...
+    @property
+    def has_errors(self) -> bool: ...
+    @property
+    def is_valid(self) -> bool: ...
+    @property
+    def approve_command(self) -> RelayCommand: ...  # auto-gated
+    @property
+    def deny_command(self) -> RelayCommand: ...     # revert
+    @property
+    def on_errors_changed(self) -> rx.Observable[dict[str, str]]: ...
+
+    def add_field_validator(self, field: str, fn: FieldValidator) -> None: ...
+    def add_model_validator(self, fn: ModelValidator) -> None: ...
+    def set_model(self, model: TM) -> None: ...
+    def dispose(self) -> None: ...
+```
+
+14 tests at `tests/unit/vm/_composition/test_validating_form_vm.py`
+cover field validators, the §9.bis.5 canonical
+`endpoint_url IFF force_path_style` cross-field example, approve
+gating (strict + non-strict), on_errors_changed event timing.
+
+**Real consumer evidence:**
+`src/aws_tui/vm/settings/s3_connection_form_vm.py` — composes
+`ValidatingFormVM[S3CompatForm]` + registers the field-presence
+validators for the five required string fields + the
+endpoint-IFF-force-path-style cross-field invariant. 11 tests at
+`tests/unit/vm/settings/test_s3_connection_form_vm.py`.
+
+**Differences from the round-1 proposal worth folding into vNext:**
+- `add_field_validator` / `add_model_validator` are imperative
+  registration methods, NOT builder-time callables. The original
+  proposal showed a builder DSL; aws-tui's consumer ended up
+  preferring runtime registration because the form's validators
+  could vary by mode (add vs edit). vNext might support BOTH.
+- `errors` is a `dict[str, str]` — one error per field. Multi-error
+  scenarios (e.g., a field that fails three different validators)
+  collapse to the first non-None message per the
+  registration-order rule. Document that.
+- `approve_command.can_execute = is_valid AND (not strict OR
+  is_dirty)`. The same gating policy aws-tui's S3ConnectionFormVM
+  needed.
+- `model_validator` returns `dict[field, error]` so a cross-field
+  invariant can flag MULTIPLE fields. The original "field flag +
+  optional cross-field" framing wasn't expressive enough.
 
 **Proposed vNext API:** Declarative validators on `FormVMBuilder`:
 
@@ -616,31 +748,277 @@ is the only non-trivial part) + tests + docs.
 
 ---
 
+## Item 8 — Per-VM Observable surface for shared-hub VMs (NEW from round-3 implementation)
+
+**Primitive evaluated:** `ComponentVM` / `CompositeVM` — specifically,
+their event-emission contract through a shared `MessageHub`.
+
+**aws-tui use case:** PR #103's flicker bug — four sibling EMR VMs
+(`JobRunsVM`, `JobRunDetailVM`, `JobRunLogsVM`, `ApplicationsVM`)
+share a single `MessageHub` AND all emit `state` / `selected_id`
+PropertyChangedMessages on it. View widgets had to
+`if msg.sender_object is not self._vm: return` to ignore cross-VM
+events.
+
+**What blocked out-of-the-box adoption:**
+
+VMx VMs emit through the shared hub by convention. There is no
+per-instance Observable on the VM that View subscribers can bind to
+exclusively. The View ends up coupling to the hub + a sender filter,
+which is both extra coupling (the View knows the hub exists) AND
+extra defensive code (the sender check).
+
+**What aws-tui did instead:** Added a `Subject[str]` field
+`_on_property_changed` to each migrated VM (ApplicationsVM,
+JobRunsVM at present; same pattern landing on JobRunDetailVM,
+JobRunLogsVM in follow-up). Emissions go through a helper that
+fires BOTH the hub PropertyChangedMessage AND the per-VM Subject —
+the hub side keeps back-compat with other listeners; the per-VM
+side gives View widgets a sender_object-free subscription.
+
+**Round-3 implementation evidence:**
+- `src/aws_tui/vm/emr_serverless/applications_vm.py:108-115` —
+  `_on_property_changed: Subject[str]` field; emissions at lines
+  201, 236, 247, 280.
+- `src/aws_tui/vm/emr_serverless/job_runs_vm.py:118-122` —
+  same shape, with a `_notify(prop)` helper consolidating 10
+  emission sites.
+- View consumers: `ui/widgets/emr_serverless/application_picker.py:138-146`
+  and `ui/widgets/emr_serverless/job_runs_pane.py:on_mount` —
+  both subscribe to `vm.on_property_changed` instead of the hub.
+- Integration tests at
+  `tests/integration/test_bug_train_acceptance.py:101-159` —
+  pin the cross-VM isolation contract structurally.
+
+**Proposed vNext API:** Promote `on_property_changed: Observable[str]`
+into the `_ComponentVMBase` (or `ComponentVMBase`) contract directly.
+Every VMx VM gains it automatically; the hub-broadcast path can
+either stay (back-compat) or be deprecated in favour of per-VM
+subscriptions.
+
+```python
+class _ComponentVMBase:
+    @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Hot observable of property names that just changed,
+        scoped to THIS VM instance. Subscribers see events for
+        THIS VM only — no cross-VM cross-talk."""
+        ...
+```
+
+This eliminates a recurring boilerplate pattern AND makes the
+"per-VM Observable" the natural subscription target for Views.
+
+**Estimated upstream effort:** **Small.** ~50 LOC + migration of
+existing PropertyChangedMessage emission sites + tests. The hub
+path stays for cross-VM coordination use cases.
+
+**Reference:** §9.bis.9 PR #103 acceptance criterion.
+
+---
+
+## Item 9 — `ScoredFilteredCompositeVM` for rank-by-score filtering (NEW from round-3 implementation)
+
+**Primitive evaluated:** Hypothetical extension of Item 3's
+`FilteredCompositeVM`.
+
+**aws-tui use case:** `CommandPaletteVM` filters palette entries by
+a fuzzy-match score (substring + leading-char + tight-subsequence,
+in priority order). The filter is NOT a boolean predicate — it's a
+rank function `(entry, query) -> int | None` where `None` means
+"excluded" and lower scores rank higher in the result.
+
+**What blocked out-of-the-box adoption:**
+
+The Item 3 `FilteredCompositeVM` takes `Callable[[VM], bool]` — a
+boolean predicate. It returns visible items in source order. For
+the palette this doesn't fit: the ordering matters (best-match
+first), and the score computation would have to happen twice
+(once in predicate, once for sort).
+
+**What aws-tui did instead:** Inlined the score+rank+sort logic
+into `CommandPaletteVM._recompute_filtered` at
+`src/aws_tui/vm/chrome/command_palette_vm.py:391-408`. The
+composite still provides the underlying entry registry +
+on_collection_changed; the rank logic is a VM-side @property layer
+on top.
+
+**Proposed vNext API:** A sibling primitive
+`ScoredFilteredCompositeVM[VM, Q]`:
+
+```python
+class ScoredFilteredCompositeVM(Generic[VM, Q]):
+    def __init__(
+        self,
+        source: CompositeVM[VM],
+        scorer: Callable[[VM, Q], int | None],
+        initial_query: Q,
+        *,
+        cursor_policy: str = "snap_to_first",
+        order: str = "ascending",  # "ascending" = lowest score first
+    ) -> None: ...
+
+    @property
+    def visible(self) -> tuple[VM, ...]: ...      # ranked by score
+    @property
+    def current(self) -> VM | None: ...
+    @property
+    def query(self) -> Q: ...
+    @property
+    def on_changed(self) -> rx.Observable[None]: ...
+
+    def set_query(self, q: Q) -> None: ...        # re-ranks
+    def set_current(self, item: VM | None) -> None: ...
+    def move_to_next_visible(self) -> None: ...
+    def move_to_previous_visible(self) -> None: ...
+    def dispose(self) -> None: ...
+```
+
+The scorer is called ONCE per item per query; results cached on the
+sort key. Same cursor policies as `FilteredCompositeVM`. Query type
+is generic so consumers can pick `str`, `tuple[str, ...]`, or a
+domain-specific query object.
+
+**Estimated upstream effort:** **Small (after Item 3).** ~80 LOC
+once `FilteredCompositeVM` lands.
+
+**Reference:** `vm/chrome/command_palette_vm.py:_score,
+_subsequence_span, _recompute_filtered`.
+
+---
+
+## Item 10 — Slot-discriminator coordinator with modal precedence (NEW from round-3 implementation)
+
+**Primitive evaluated:** Hypothetical. No existing VMx primitive
+captures "single source of truth for which UI slot has focus".
+
+**aws-tui use case:** Spec §4.3 / Phase 7: a single VM that owns
+the app-wide `focused_slot` discriminator (`NAV_MENU` / `S3_LEFT` /
+`S3_RIGHT` / `EMR_RUNS` / ... / `MODAL`). View widgets project
+their focus events INTO it, and View renderers subscribe to its
+Observable to drive CSS class mutation. Replaces a 10-state
+fragmentation (§3.2.bis) of focus + selection state spread across
+View widgets and Textual runtime.
+
+**What blocked out-of-the-box adoption:** No primitive existed.
+
+**What aws-tui did instead:** Built
+`FocusCoordinatorVM(ComponentVM-composing)` at
+`src/aws_tui/vm/chrome/focus_coordinator_vm.py`:
+
+```python
+class FocusSlot(StrEnum):
+    NAV_MENU, S3_LEFT, S3_RIGHT, EMR_RUNS, EMR_DETAIL, EMR_LOGS,
+    SETTINGS, MODAL = ...
+
+class FocusCoordinatorVM:
+    def __init__(self, *, hub, dispatcher, initial=FocusSlot.NAV_MENU): ...
+
+    @property
+    def focused_slot(self) -> FocusSlot: ...
+    @property
+    def is_modal(self) -> bool: ...
+    @property
+    def on_focused_slot_changed(self) -> rx.Observable[FocusSlot]: ...
+
+    def set_focused_slot(self, slot: FocusSlot) -> None: ...
+    def modal_open(self) -> None: ...   # saves prior slot
+    def modal_close(self) -> None: ...  # restores prior slot
+```
+
+16 tests at `tests/unit/vm/chrome/test_focus_coordinator_vm.py`
+pin the slot transitions, modal save/restore, and dispose
+discipline. Wired through composition root + NavMenu (commit
+`fd1a5d6`).
+
+**Proposed vNext API:** Generalise this into a reusable VMx
+primitive `DiscriminatorVM[E]` where `E` is a `StrEnum`-like
+choice set:
+
+```python
+class DiscriminatorVM(Generic[E]):
+    def __init__(
+        self,
+        *,
+        choices: type[E],
+        initial: E,
+        modal_value: E | None = None,  # the precedence override
+        hub, dispatcher,
+    ) -> None: ...
+
+    @property
+    def value(self) -> E: ...
+    @property
+    def is_modal(self) -> bool: ...  # only when modal_value is set
+    @property
+    def on_changed(self) -> rx.Observable[E]: ...
+
+    def set(self, value: E) -> None: ...
+    def push_modal(self) -> None: ...  # only when modal_value is set
+    def pop_modal(self) -> None: ...
+```
+
+This isn't focus-specific — any "what's the active mode/slot/route"
+discriminator that needs modal-style save/restore semantics could
+use it (e.g., theme picker, settings page tabs).
+
+**Estimated upstream effort:** **Small.** ~120 LOC + tests + docs.
+
+**Reference:** spec §4.3, §3.2.bis, §9.bis.9.
+
+---
+
 ## Summary table
 
 | # | Primitive | Issue | aws-tui workaround | vNext ask effort |
 |---|---|---|---|---|
-| 1 | `PagedComposition` | index-based; can't model nextToken | dropped; `CompositeVM` + manual `next_token` + `load_more` | Small–medium (`TokenPagedComposition`) |
+| 1 | `PagedComposition` | index-based; can't model nextToken | dropped; `CompositeVM` + manual `next_token` + `load_more` (+ dedup-on-set, c114b36) | Small–medium (`TokenPagedComposition`) |
 | 2 | `PagedComposition` × `CompositeVM` | observable shapes don't compose | dropped via Item 1 (no adapter built) | Small (extend `_try_subscribe_source`) |
-| 3 | `CompositeVM` derived/filtered view | no primitive ships | filter as VM @property; cursor kept visible by VM | Medium (`FilteredCompositeVM`) |
-| 4 | `FormVM` validators | no declarative API | manual predicate + persister raise | Medium (declarative validators + `errors` map) |
-| 5 | `IDialogService` | closed contract; no VM-backed modal | all 4 modals migrate as custom VMs composing VMx; 2 compose `confirm`/`notify` directly, 2 compose `ComponentVM` + `FormVM` with result projection on top | Medium (`present()` + `ModalVM` protocol; optional `MultiStepFormVM`, `ChoiceVM`) |
-| 6 | `ServicedObservableCollection` | docs say ownership; source does not | corrected spec; kept manual `finally: dispose` | Trivial (rename / docstring); small (owned variant) |
+| 3 | `CompositeVM` derived/filtered view | no primitive ships | **built `FilteredCompositeVM[VM]` mini-primitive** in `vm/_composition/` (23 tests); consumed by PaneVM | Medium (`FilteredCompositeVM`) |
+| 4 | `FormVM` validators | no declarative API | **built `ValidatingFormVM[TM]` mini-primitive** + consumer `S3ConnectionFormVM` (25 tests total) | Medium (declarative validators + `errors` map) |
+| 5 | `IDialogService` | closed contract; no VM-backed modal | all 4 modals verified compliant by composing `ComponentVM` + own async `ask()` API; round-3 compliance tests pin the contract | Medium (`present()` + `ModalVM` protocol; optional `MultiStepFormVM`, `ChoiceVM`) |
+| 6 | `ServicedObservableCollection` | docs say ownership; source does not | corrected aws-tui spec; kept manual `finally: dispose` in TransfersVM | Trivial (rename / docstring); small (owned variant) |
 | 7 | `HierarchicalVM` | no cache-invalidation contract | chose `CompositeVM` instead | Small (`invalidate*` + TTL + docs) |
+| 8 | Per-VM Observable surface | shared `MessageHub` requires `sender_object` filtering in Views | **built per-VM `Subject[str]` + `on_property_changed` Observable** on ApplicationsVM/JobRunsVM; consumed by ApplicationPicker/JobRunsPane (2 of 4 EMR views migrated) | Small (promote `on_property_changed` to `_ComponentVMBase`) |
+| 9 | `ScoredFilteredCompositeVM` | `FilteredCompositeVM` is boolean only | inlined score+rank+sort on `CommandPaletteVM` | Small after Item 3 |
+| 10 | Slot-discriminator coordinator | no primitive | **built `FocusCoordinatorVM` + `FocusSlot` StrEnum** (16 tests); wired through composition + NavMenu | Small (`DiscriminatorVM[E]` generic) |
 
 ---
 
 ## Suggested prioritisation for VMx vNext
 
-If only a subset can ship:
+If only a subset can ship — ordered by *consumer impact across
+likely future projects*, not by aws-tui's own urgency (aws-tui has
+already composed each one):
 
-1. **Item 6 docs fix** — trivial; closes a real bug (paraphrase-vs-source confusion). Ship in next patch.
-2. **Item 1 `TokenPagedComposition`** — unblocks every AWS-API consumer; aws-tui would adopt immediately.
-3. **Item 4 declarative validators** — high recurring boilerplate cost across consumers; the API shape is uncontroversial.
-4. **Item 5 `present()` + `ModalVM`** — opens the closed-set contract without breaking it; lets bespoke modals re-platform.
-5. **Item 3 `FilteredCompositeVM`** — useful but workable around (the VM @property pattern is fine).
-6. **Item 7 `HierarchicalVM` invalidation** — only matters if a tree-view consumer materialises.
-7. **Item 2 PagedComposition-Composite bridge** — automatically obsolete if Item 1 ships, since aws-tui doesn't pair the two any more.
+1. **Item 6 docs fix** — trivial; closes a real bug
+   (paraphrase-vs-source confusion). Ship in next patch.
+2. **Item 8 per-VM `on_property_changed`** — small primitive change,
+   broad reach. Every consumer with sibling VMs on a shared hub
+   benefits.
+3. **Item 1 `TokenPagedComposition`** — unblocks every AWS-API
+   consumer; aws-tui would adopt immediately and retire its own
+   `next_token` field + dedup-on-set logic.
+4. **Item 4 declarative validators** — `ValidatingFormVM`-shaped
+   API. Promote `errors: dict[str, str]` + auto-gated approve
+   directly. aws-tui's `S3ConnectionFormVM` would slim to a few
+   `add_field_validator` calls without the wrapper.
+5. **Item 3 `FilteredCompositeVM`** — aws-tui's implementation is
+   ready to upstream as a starting point. The cursor-policy contract
+   and the `set_predicate` identity-equality question are the only
+   open design points.
+6. **Item 10 `DiscriminatorVM[E]`** — small, generic, useful beyond
+   focus coordination.
+7. **Item 5 `present()` + `ModalVM`** — opens the closed-set
+   contract without breaking it; lets bespoke modals re-platform.
+8. **Item 9 `ScoredFilteredCompositeVM`** — only matters if a
+   second scored-filter consumer appears; aws-tui's palette is the
+   only one today.
+9. **Item 7 `HierarchicalVM` invalidation** — only matters if a
+   tree-view consumer materialises.
+10. **Item 2 PagedComposition-Composite bridge** — automatically
+    obsolete if Item 1 ships, since aws-tui doesn't pair the two
+    any more.
 
 ---
 
@@ -655,7 +1033,19 @@ If only a subset can ship:
   from the source rather than paraphrase. Items above follow that
   rule; if a paraphrase has slipped in, treat it as Mistake-9-shape
   and verify before acting.
-- Every "aws-tui's workaround" line above describes the **design**
-  intent; the actual migration PRs haven't shipped yet. If a workaround
-  description turns out to be wrong against the eventual PR, update
-  this document.
+- Every "aws-tui's workaround" line above NOW describes the
+  **landed implementation** on the refactor branch
+  `refactor/vmx-toolkit-adoption` (PR #109 against
+  `thekaveh/aws-tui`). File:line citations point to the actual code
+  this report was authored alongside. If a citation drifts after
+  the PR merges (renames, follow-up commits), the patterns will
+  still be valid even if the line numbers shift.
+- Items 3, 4, 8, 10 are **already running in production-equivalent
+  code** at the time of this report. The proposed vNext APIs above
+  are aws-tui's actual implementations cleaned up for upstream
+  consumption.
+- The acknowledgement that this is a single-consumer report STILL
+  applies. The aws-tui patterns may not generalise; pressure-test
+  each item against a hypothetical second consumer (e.g. an Avalonia
+  desktop app, a NiceGUI web app) before committing to the API
+  surface.
