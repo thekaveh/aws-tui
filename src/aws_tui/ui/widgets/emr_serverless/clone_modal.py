@@ -70,6 +70,12 @@ class JobRunCloneModal(ModalScreen[str | None]):
         self._vm: JobRunCloneVM = vm
         self._hub: MessageHub[Message] = hub
         self._error: Static | None = None
+        # Re-entrancy guard: ``submit`` awaits a multi-hundred-ms
+        # ``start_job_run`` round-trip. Without this flag a second
+        # click on the Submit button while the first is in flight
+        # would launch a SECOND EMR job for one user intent —
+        # billing impact, not just UI sloppiness.
+        self._submitting: bool = False
 
     @property
     def vm(self) -> JobRunCloneVM:
@@ -147,27 +153,40 @@ class JobRunCloneModal(ModalScreen[str | None]):
         self.dismiss(None)
 
     async def action_submit(self) -> None:
+        if self._submitting:
+            # Second click while the first submit's start_job_run
+            # round-trip is in flight — silently drop instead of
+            # double-launching the EMR job.
+            return
         self._sync_form_to_vm()
         ok, reason = self._vm.is_valid()
         if not ok:
             self._show_error(reason or "form is invalid")
             return
+        self._submitting = True
         try:
-            new_id = await self._vm.submit()
-        except ProviderError as exc:
-            self._show_error(str(exc) or type(exc).__name__)
-            return
-        except Exception as exc:
-            # Defensive net for non-ProviderError raises (e.g. a
-            # botocore parameter-validation error that escapes the
-            # facade's mapping, a programmer error in clone_vm, or
-            # any future regression). Stay in the modal — surface
-            # the message inline so the user can correct the form
-            # or cancel — instead of letting the exception crash
-            # through Textual's default error handler and bring
-            # down the EMR page.
-            self._show_error(f"unexpected error: {exc}")
-            return
+            try:
+                new_id = await self._vm.submit()
+            except ProviderError as exc:
+                self._show_error(str(exc) or type(exc).__name__)
+                return
+            except Exception as exc:
+                # Defensive net for non-ProviderError raises (e.g. a
+                # botocore parameter-validation error that escapes
+                # the facade's mapping, a programmer error in
+                # clone_vm, or any future regression). Stay in the
+                # modal — surface the message inline so the user
+                # can correct the form or cancel — instead of
+                # letting the exception crash through Textual's
+                # default error handler and bring down the EMR page.
+                self._show_error(f"unexpected error: {exc}")
+                return
+        finally:
+            # Clear the guard before dismiss so the next clone
+            # opens fresh. On the success path this is moot (the
+            # modal is about to unmount); on the error paths above
+            # it lets the user retry after editing the form.
+            self._submitting = False
         self.dismiss(new_id)
 
     async def on_click(self, event: Click) -> None:

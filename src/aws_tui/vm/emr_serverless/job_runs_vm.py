@@ -312,9 +312,18 @@ class JobRunsVM:
         runs (no destructive reset on a paging failure)."""
         if self._application_id is None or self._next_token is None:
             return
-        # Capture identity BEFORE the await — a concurrent
-        # set_application landing during the page fetch must not
-        # let stale rows leak into the new app's accumulator.
+        # Capture FULL pagination identity BEFORE the await:
+        # - app_id: a concurrent set_application landing mid-flight
+        #   would let stale rows leak into the new app's accumulator
+        # - next_token: a concurrent refresh() (different worker
+        #   group ``emr-poll-runs``) replaces _items and resets
+        #   _next_token mid-flight. If we only checked app_id, the
+        #   late load_more response would still _add_item rows
+        #   paginated from the STALE T1 cursor + overwrite
+        #   _next_token with the stale T3 continuation, leaving the
+        #   accumulator straddling two different pagination
+        #   lineages. (Round 14 added the app_id half; this closes
+        #   the token half — same root race.)
         target_app_id = self._application_id
         target_token = self._next_token
         try:
@@ -322,13 +331,13 @@ class JobRunsVM:
                 target_app_id, start_token=target_token, states=None
             )
         except ProviderError as exc:
-            if self._application_id != target_app_id:
-                return  # target changed mid-flight; drop the stale error
+            if (self._application_id, self._next_token) != (target_app_id, target_token):
+                return  # pagination identity changed mid-flight; drop the stale error
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
             return
-        if self._application_id != target_app_id:
-            return  # target changed mid-flight; drop the stale response
+        if (self._application_id, self._next_token) != (target_app_id, target_token):
+            return  # pagination identity changed mid-flight; drop the stale response
         if not runs and next_token is None:
             # Server returned an empty page + no more — just clear
             # the token so the sentinel goes away.
