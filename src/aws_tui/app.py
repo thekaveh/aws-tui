@@ -2470,11 +2470,29 @@ class AwsTuiApp(App[None]):
         ctx = self._app_ctx
         crash_vm = CrashVM(report, hub=ctx.hub, dispatcher=ctx.dispatcher)
         crash_vm.construct()
+        ask_task: asyncio.Task[CrashChoice] | None = None
         try:
             ask_task = asyncio.create_task(crash_vm.ask())
             await self.push_screen(CrashModal(crash_vm, hub=ctx.hub))
             return await ask_task
         finally:
+            # Cancel + drain ask_task on the cancellation path BEFORE
+            # disposing the VM. Without this, an outer cancellation at
+            # ``push_screen`` or ``ask_task`` raises CancelledError —
+            # crash_vm.dispose() runs but ask_task is never explicitly
+            # cancelled nor awaited. CrashVM.dispose happens to resolve
+            # the future via set_result(QUIT) today, but the coupling
+            # is fragile (a future refactor switching to ``cancel()``
+            # would orphan ask_task), and a race window exists where
+            # the outer cancel lands BEFORE ask_task creates the
+            # future — then dispose's short-circuit leaves ask_task
+            # raising a "modal disposed" RuntimeError nobody awaits,
+            # triggering asyncio's "never retrieved" warning. Same
+            # R38 family.
+            if ask_task is not None and not ask_task.done():
+                ask_task.cancel()
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await ask_task
             crash_vm.dispose()
 
     @property
