@@ -96,13 +96,26 @@ class JobRunDetailVM:
         if self._application_id is None or self._job_run_id is None:
             self._set_state(PaneState.EMPTY)
             return
+        # Capture target identity BEFORE the await — a concurrent
+        # ``set_target(new_app, new_run)`` (from picker / cycle /
+        # row click) landing during the get_job_run round trip must
+        # not let the prior run's detail clobber the new target's
+        # state. The detail poller and user actions run in different
+        # Textual worker groups, so ``exclusive=True`` doesn't
+        # prevent cross-group interleaving.
+        target_app_id = self._application_id
+        target_run_id = self._job_run_id
         self._set_state(PaneState.LOADING)
         try:
-            d = await self._client.get_job_run(self._application_id, self._job_run_id)
+            d = await self._client.get_job_run(target_app_id, target_run_id)
         except ProviderError as exc:
+            if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
+                return  # target changed mid-flight; drop the stale error
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
             return
+        if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
+            return  # target changed mid-flight; drop the stale detail
         self._detail = d
         self._notify("detail")
         self._set_state(PaneState.IDLE)

@@ -190,7 +190,12 @@ class ApplicationPicker(Widget):
         self.toggle_open()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option.id is not None:
+        # ``__placeholder__`` is the synthetic disabled row used for
+        # error / loading states (see ``_build_options``). Belt-and-
+        # braces guard — Textual's OptionList already suppresses
+        # selection on disabled rows, but a key-driven Enter while
+        # the row is the only option could slip through.
+        if event.option.id is not None and event.option.id != "__placeholder__":
             self._vm.select(event.option.id)
             self.post_message(self.ApplicationCommitted(event.option.id))
         self.remove_class("-open")
@@ -293,7 +298,36 @@ class ApplicationPicker(Widget):
         textual state name. The colour + shape of the glyph carries
         the state semantics. User feedback drove the fire-emoji
         drop; the colored-glyph + name format keeps the row short
-        and visually grouped."""
+        and visually grouped.
+
+        Error states (UNREACHABLE / AUTH_REQUIRED / FORBIDDEN /
+        ERROR) and LOADING surface as a single non-selectable
+        placeholder row carrying ``error_text`` — without this the
+        dropdown either shows the stale apps from the prior poll
+        (clickable but pointing at a meaningless app id once
+        ``list_applications`` resumes) or an empty list with no
+        actionable copy. Parity with the trigger label which
+        round-13 already branches on the same five states."""
+        state = self._vm.state
+        if state is PaneState.LOADING:
+            return [Option(prompt="loading…", id="__placeholder__", disabled=True)]
+        if state is PaneState.UNREACHABLE:
+            msg = self._vm.error_text or "endpoint unreachable — press r to retry"
+            return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
+        if state is PaneState.AUTH_REQUIRED:
+            return [
+                Option(
+                    prompt="⚠ auth required — aws sso login --profile <X>",
+                    id="__placeholder__",
+                    disabled=True,
+                )
+            ]
+        if state is PaneState.FORBIDDEN:
+            msg = self._vm.error_text or "permission denied — check IAM policy"
+            return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
+        if state is PaneState.ERROR:
+            msg = self._vm.error_text or "error — press r to retry"
+            return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
         return [
             Option(
                 # Name is AWS-controlled — escape Rich markup

@@ -249,16 +249,30 @@ class JobRunsVM:
             self._next_token = None
             self._set_state(PaneState.EMPTY)
             return
+        # Capture the target identity BEFORE the await so a
+        # concurrent ``set_application(B)`` (from picker / Shift+S)
+        # that lands while ``list_job_runs_page`` is in flight
+        # doesn't let app A's late response write into the
+        # accumulator under app B's identity. The pollers
+        # (``_tick_runs``) and user actions (``select_application``,
+        # ``cycle_application``) run in DIFFERENT Textual worker
+        # groups, so ``exclusive=True`` does not protect against
+        # cross-group interleaving.
+        target_app_id = self._application_id
         self._set_state(PaneState.LOADING)
         try:
             # Fetch unfiltered; filter is applied client-side via `runs` property.
             runs, next_token = await self._client.list_job_runs_page(
-                self._application_id, start_token=None, states=None
+                target_app_id, start_token=None, states=None
             )
         except ProviderError as exc:
+            if self._application_id != target_app_id:
+                return  # target changed mid-flight; drop the stale error
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
             return
+        if self._application_id != target_app_id:
+            return  # target changed mid-flight; drop the stale response
         new_runs: tuple[JobRunSummary, ...] = tuple(runs)
         prior_selected_id = self.selected_id
 
@@ -298,14 +312,23 @@ class JobRunsVM:
         runs (no destructive reset on a paging failure)."""
         if self._application_id is None or self._next_token is None:
             return
+        # Capture identity BEFORE the await — a concurrent
+        # set_application landing during the page fetch must not
+        # let stale rows leak into the new app's accumulator.
+        target_app_id = self._application_id
+        target_token = self._next_token
         try:
             runs, next_token = await self._client.list_job_runs_page(
-                self._application_id, start_token=self._next_token, states=None
+                target_app_id, start_token=target_token, states=None
             )
         except ProviderError as exc:
+            if self._application_id != target_app_id:
+                return  # target changed mid-flight; drop the stale error
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
             return
+        if self._application_id != target_app_id:
+            return  # target changed mid-flight; drop the stale response
         if not runs and next_token is None:
             # Server returned an empty page + no more — just clear
             # the token so the sentinel goes away.

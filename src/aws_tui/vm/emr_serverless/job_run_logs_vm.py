@@ -218,6 +218,16 @@ class JobRunLogsVM:
             return
         if self._application_id is None or self._job_run_id is None or self._log_uri is None:
             return
+        # Capture target identity BEFORE any await — a concurrent
+        # set_target(new_app, new_run, new_uri) landing mid-stream
+        # must not let the previous run's lines pollute the new
+        # target's state nor poison the LRU cache under the prior
+        # key. The load worker and set_target run in different
+        # contexts (Textual worker vs synchronous VM call), and
+        # set_target deliberately leaves the load() worker alive
+        # (cancellation is a view-side concern via worker group
+        # ``emr-logs``).
+        target = (self._application_id, self._job_run_id, self._log_uri)
         self._set_state(LogsState.LOADING)
         self._lines = ()
         self._bytes_read = 0
@@ -229,6 +239,8 @@ class JobRunLogsVM:
                 bucket=loc.bucket,
                 run_prefix=run_prefix,
             )
+            if (self._application_id, self._job_run_id, self._log_uri) != target:
+                return  # target changed mid-flight; drop the stale list
             self._available_files = tuple(files)
             self._notify("available_files")
             if not files:
@@ -282,6 +294,11 @@ class JobRunLogsVM:
                 self._notify("lines")
                 self._notify("progress")
                 truncated = chunk.truncated
+            if (self._application_id, self._job_run_id, self._log_uri) != target:
+                # Target changed during stream — drop the cache write
+                # (would key under the wrong target) and the state
+                # transition (caller already moved on).
+                return
             self._cache[cache_key] = (self._lines, truncated)
             # LRU eviction: drop the oldest entry until back under cap.
             while len(self._cache) > _CACHE_MAX_ENTRIES:
