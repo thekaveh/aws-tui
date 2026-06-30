@@ -48,6 +48,20 @@ class LogFilter:
     mode: FilterMode = FilterMode.MATCH
     case_insensitive: bool = True
 
+    def __post_init__(self) -> None:
+        # Validate every pattern eagerly so an invalid regex (a
+        # stray ``(``, ``[abc``, ``*foo`` etc. in the user's filter
+        # text) surfaces as a typed ValueError the modal can catch
+        # at Apply time — instead of crashing ``stream_log`` mid-
+        # iteration and surfacing through the VM's bottom-of-stack
+        # ``except Exception`` as an opaque "unexpected error", with
+        # all matches collected so far silently dropped.
+        for pattern in self.patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid regex pattern {pattern!r}: {exc}") from exc
+
     def matches(self, line: str) -> bool:
         if self.mode is FilterMode.PASSTHROUGH:
             return True

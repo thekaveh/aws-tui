@@ -265,13 +265,27 @@ class DualPaneVM:
                     )
                     self._journal.mark_finished(transfer_id)
         finally:
-            for _, transfer_id in transfer_ids:
+            for entry, transfer_id in transfer_ids:
                 self._cancel_events.pop(transfer_id, None)
                 if transfer_id not in consumed:
                     # Loop never reached this entry — mark its
                     # journal file ABORTED so ``find_unfinished``
-                    # doesn't surface it on next launch.
+                    # doesn't surface it on next launch, AND publish
+                    # a terminal TransferProgressMessage so the
+                    # in-memory TransferVM the pre-register placed
+                    # in PENDING leaves the active set (otherwise
+                    # the status-bar aggregate + cancel_all predicate
+                    # stay "active" with phantom queued rows visible
+                    # in the transfers overlay).
                     self._journal.mark_aborted(transfer_id)
+                    self._hub.send(
+                        TransferProgressMessage(
+                            transfer_id=transfer_id,
+                            bytes_transferred=0,
+                            bytes_total=entry.entry.size,
+                            state=TransferState.CANCELLED,
+                        )
+                    )
         await dst_pane.refresh()
 
     async def move_across(
@@ -314,10 +328,22 @@ class DualPaneVM:
                     )
                     self._journal.mark_finished(transfer_id)
         finally:
-            for _, transfer_id in transfer_ids:
+            for entry, transfer_id in transfer_ids:
                 self._cancel_events.pop(transfer_id, None)
                 if transfer_id not in consumed:
+                    # See ``copy_across`` for the parity rationale —
+                    # publish CANCELLED so the in-memory TransferVM
+                    # doesn't stay in PENDING forever and inflate the
+                    # status-bar / transfers-overlay active count.
                     self._journal.mark_aborted(transfer_id)
+                    self._hub.send(
+                        TransferProgressMessage(
+                            transfer_id=transfer_id,
+                            bytes_transferred=0,
+                            bytes_total=entry.entry.size,
+                            state=TransferState.CANCELLED,
+                        )
+                    )
         await src_pane.refresh()
         await dst_pane.refresh()
 
