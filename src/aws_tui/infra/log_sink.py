@@ -172,6 +172,16 @@ class LogSink:
         self._handler.flush()
         self._logger.removeHandler(self._handler)
         self._handler.close()
+        # Release the logger from the module-level registry too.
+        # ``Logger.manager.loggerDict`` holds a STRONG reference per
+        # named logger that survives GC of the LogSink wrapper —
+        # the R46 uuid switch only stopped id-reuse collisions, the
+        # registry still grew monotonically across the process
+        # lifetime (test suites cycling sinks, long-running app
+        # sessions). The uuid4 name guarantees no other code
+        # references it, so this del is safe.
+        with contextlib.suppress(KeyError):
+            del logging.Logger.manager.loggerDict[self._logger.name]
         self._closed = True
 
 
