@@ -79,9 +79,6 @@ class S3ConnectionsPanel(Widget):
         super().__init__()
         self._vm: S3ConnectionsVM = vm
         self._hub: MessageHub[Message] = hub
-        # Cache the row count so we can detect "transitioned to/from
-        # empty" without rebuilding identically.
-        self._last_row_count: int = -1
 
     @property
     def vm(self) -> S3ConnectionsVM:
@@ -97,7 +94,6 @@ class S3ConnectionsPanel(Widget):
         Safe to call OUTSIDE compose() (no context-manager state required).
         """
         conns = self._vm.connections
-        self._last_row_count = len(conns)
         if not conns:
             return [
                 Vertical(

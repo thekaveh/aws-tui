@@ -28,7 +28,6 @@ from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Static
-from vmx import Message, MessageHub
 
 from aws_tui.domain.emr_logs import LogFileKind
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
@@ -136,13 +135,11 @@ class JobRunLogsPane(Widget, can_focus=True):
         self,
         vm: JobRunLogsVM,
         *,
-        hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: JobRunLogsVM = vm
-        self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:

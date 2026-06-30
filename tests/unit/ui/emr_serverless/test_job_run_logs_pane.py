@@ -38,7 +38,7 @@ class _PaneApp(App[None]):
         self._messages: list[object] = []
 
     def compose(self) -> ComposeResult:
-        yield JobRunLogsPane(self._vm, hub=self._hub, id="pane")
+        yield JobRunLogsPane(self._vm, id="pane")
 
     def on_message(self, message: object) -> None:
         # Capture all posted messages for testing

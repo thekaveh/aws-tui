@@ -35,7 +35,7 @@ class _PickerApp(App[None]):
         self._hub = hub
 
     def compose(self) -> ComposeResult:
-        yield ApplicationPicker(self._vm, hub=self._hub, id="picker")
+        yield ApplicationPicker(self._vm, id="picker")
 
 
 # ── _trigger_label (pure) ─────────────────────────────────────────────────────

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from vmx import NULL_DISPATCHER, MessageHub
+from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
@@ -177,8 +178,13 @@ def test_dispose_is_idempotent() -> None:
 
 
 def test_construct_status_reflects_inner() -> None:
+    """``status`` proxies the composed inner ComponentVM, so after
+    ``_make()`` (which calls ``construct()``) the wrapper reads as
+    CONSTRUCTED. Vacuous ``hasattr`` form previously collapsed to
+    ``assert True`` because ``is_constructed`` is not on the public
+    surface."""
     vm = _make()
-    assert vm.is_constructed if hasattr(vm, "is_constructed") else True
+    assert vm.status is ConstructionStatus.CONSTRUCTED
     vm.dispose()
 
 

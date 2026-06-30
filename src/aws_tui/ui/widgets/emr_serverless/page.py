@@ -110,12 +110,10 @@ class EmrServerlessPage(Widget):
         self._runs_tick_counter: int = 0
 
     def compose(self) -> ComposeResult:
-        self._picker = ApplicationPicker(self._vm.applications, hub=self._hub, id="emr-app-picker")
-        self._left = JobRunsPane(self._vm.job_runs, hub=self._hub, id="emr-runs-pane")
-        self._right_detail = JobRunDetailPane(
-            self._vm.job_run_detail, hub=self._hub, id="emr-detail-pane"
-        )
-        self._right_logs = JobRunLogsPane(self._vm.job_run_logs, hub=self._hub, id="emr-logs-pane")
+        self._picker = ApplicationPicker(self._vm.applications, id="emr-app-picker")
+        self._left = JobRunsPane(self._vm.job_runs, id="emr-runs-pane")
+        self._right_detail = JobRunDetailPane(self._vm.job_run_detail, id="emr-detail-pane")
+        self._right_logs = JobRunLogsPane(self._vm.job_run_logs, id="emr-logs-pane")
         # Page layout — 1fr:2fr horizontal split with LEFT column
         # containing the picker + runs pane, and RIGHT column
         # containing detail (top, 1fr) + logs (bottom, 1fr) in a

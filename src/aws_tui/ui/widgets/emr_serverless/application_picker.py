@@ -33,7 +33,6 @@ from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
-from vmx import Message, MessageHub
 
 from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
@@ -118,13 +117,11 @@ class ApplicationPicker(Widget):
         self,
         vm: ApplicationsVM,
         *,
-        hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: ApplicationsVM = vm
-        self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
@@ -140,9 +137,7 @@ class ApplicationPicker(Widget):
         # to the VM's per-instance Observable rather than the shared
         # hub. Eliminates the need for `sender_object` filtering —
         # this subscription only fires for THIS ApplicationsVM
-        # instance. Hub fallback kept for the (currently unmigrated)
-        # state-machine state events the picker doesn't care about
-        # under round-3 framing anyway.
+        # instance.
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
 
     def on_unmount(self) -> None:

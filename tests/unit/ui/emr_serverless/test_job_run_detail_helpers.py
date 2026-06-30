@@ -141,11 +141,10 @@ async def _render_pane_with_state(vm: JobRunDetailVM, state: PaneState) -> str:
     refresh dance by writing the private ``_state`` directly — we're
     testing the widget's branch on ``vm.state``, not how the VM
     enters that state."""
-    hub: MessageHub[Message] = MessageHub()
 
     class _App(App[None]):
         def compose(self) -> ComposeResult:
-            yield JobRunDetailPane(vm, hub=hub, id="pane")
+            yield JobRunDetailPane(vm, id="pane")
 
     app = _App()
     async with app.run_test() as pilot:

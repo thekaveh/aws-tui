@@ -16,7 +16,6 @@ from textual.binding import BindingType
 from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static
-from vmx import Message, MessageHub
 
 from aws_tui.domain.emr_serverless import JobRunDetail
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
@@ -56,13 +55,11 @@ class JobRunDetailPane(Widget, can_focus=True):
         self,
         vm: JobRunDetailVM,
         *,
-        hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: JobRunDetailVM = vm
-        self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
@@ -127,6 +124,24 @@ class JobRunDetailPane(Widget, can_focus=True):
             body.mount(
                 Static(
                     "authentication required — aws sso login --profile <X>",
+                    classes="detail-placeholder",
+                    markup=False,
+                )
+            )
+            return
+        if state is PaneState.FORBIDDEN:
+            body.mount(
+                Static(
+                    self._vm.error_text or "permission denied — check IAM policy",
+                    classes="detail-placeholder",
+                    markup=False,
+                )
+            )
+            return
+        if state is PaneState.ERROR:
+            body.mount(
+                Static(
+                    self._vm.error_text or "error — press r to retry",
                     classes="detail-placeholder",
                     markup=False,
                 )

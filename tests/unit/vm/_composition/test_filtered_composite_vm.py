@@ -317,14 +317,18 @@ def test_dispose_unsubscribes_from_source() -> None:
     source = _make_source(["a"])
     f = FilteredCompositeVM(source)
     events: list[None] = []
-    sub = f.on_changed.subscribe(on_next=events.append)
+    f.on_changed.subscribe(on_next=events.append)
     f.dispose()
-    # Subscribe AFTER dispose — should still complete cleanly.
-    sub.dispose()
-    # Source mutation must NOT crash the disposed filter.
+    # After dispose, mutating the source must NOT re-enter
+    # FilteredCompositeVM and must NOT fire ``on_changed`` again.
+    # Without this assertion the regression "we forgot to dispose
+    # the source subscription" passes silently — the
+    # ``if self._disposed: return`` shortcut would still swallow
+    # the event without anyone noticing the leaked subscription.
     hub = _hub()
     new_child = (
         ComponentVMOf[str].builder().name("c.b").model("b").services(hub, NULL_DISPATCHER).build()
     )
     source.append(new_child)
+    assert events == [], "FilteredCompositeVM kept its source subscription alive after dispose"
     source.dispose()

@@ -39,7 +39,6 @@ from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Static
-from vmx import Message, MessageHub
 
 from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
@@ -257,13 +256,11 @@ class JobRunsPane(Widget, can_focus=True):
         self,
         vm: JobRunsVM,
         *,
-        hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: JobRunsVM = vm
-        self._hub: MessageHub[Message] = hub
         # Round-3 directive §9.bis.11: the View no longer holds a
         # hand-rolled cursor index. The position is derived on demand
         # from ``vm.selected_id`` (the VM-owned canonical slot).
