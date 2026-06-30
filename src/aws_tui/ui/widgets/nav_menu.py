@@ -229,14 +229,23 @@ class NavMenu(Widget, can_focus=True):
     def _after_cursor_move(self, target_id: str) -> None:
         """Cursor moved by arrow key or click — drive the VM's
         selection slot; the View paints from the resulting
-        PropertyChangedMessage. Re-grabs Textual focus AFTER the
-        swap so the rail wins the focus race against the new
-        page's auto-focus chain (PR #98(2) / PR #99(a)).
+        PropertyChangedMessage.
+
+        Round-3 directive §9.bis.11 / PR #98(2) closure: when a
+        :class:`FocusCoordinatorVM` is wired (the live app), the
+        ``call_after_refresh(self.focus)`` re-grab is unnecessary —
+        the destination page's :meth:`_maybe_focus_*` chain reads
+        the coordinator's `focused_slot` (which is `NAV_MENU` here
+        because :meth:`on_focus` projected it) and bails on the
+        rail-walk gate. No focus race, no defensive re-grab. The
+        legacy re-grab fallback is preserved when no coordinator is
+        wired so test harnesses that haven't migrated still pass.
         """
         if target_id == self._vm.selected_id:
             return
         self._vm.switch_service_command.execute(target_id)
-        self.call_after_refresh(self.focus)
+        if self._focus_coordinator is None:
+            self.call_after_refresh(self.focus)
 
     def action_commit(self) -> None:
         """ENTER on a service row = "go INTO this service": ensure the
@@ -277,6 +286,24 @@ class NavMenu(Widget, can_focus=True):
             app.set_focus(None)
         if needs_switch:
             self._vm.switch_service_command.execute(target_id)
+        # Round-3 directive §9.bis.11 / PR #101 closure: project the
+        # service's default focus slot through the coordinator so VM-
+        # side subscribers observe the user's intent to "enter" the
+        # service. The App-level :meth:`focus_active_service_pane`
+        # below still drives the actual Textual `set_focus` call —
+        # the coordinator becomes the data source, the dispatcher
+        # remains the View-side projection mechanism.
+        if self._focus_coordinator is not None:
+            from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+
+            service_default_slot: dict[str, FocusSlot] = {
+                "s3": FocusSlot.S3_LEFT,
+                "emr-serverless": FocusSlot.EMR_RUNS,
+                _SETTINGS_NAV_ID: FocusSlot.SETTINGS,
+            }
+            slot = service_default_slot.get(target_id)
+            if slot is not None:
+                self._focus_coordinator.set_focused_slot(slot)
         focus_active = getattr(app, "focus_active_service_pane", None)
         if callable(focus_active):
             focus_active()
