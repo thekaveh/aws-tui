@@ -777,18 +777,40 @@ the hub side keeps back-compat with other listeners; the per-VM
 side gives View widgets a sender_object-free subscription.
 
 **Round-3 implementation evidence:**
+
+VM-side (all four EMR VMs now expose the surface):
 - `src/aws_tui/vm/emr_serverless/applications_vm.py:108-115` —
-  `_on_property_changed: Subject[str]` field; emissions at lines
-  201, 236, 247, 280.
+  `_on_property_changed: Subject[str]` field; emissions at four
+  internal sites (state, applications, selected_id × 2).
 - `src/aws_tui/vm/emr_serverless/job_runs_vm.py:118-122` —
   same shape, with a `_notify(prop)` helper consolidating 10
-  emission sites.
-- View consumers: `ui/widgets/emr_serverless/application_picker.py:138-146`
-  and `ui/widgets/emr_serverless/job_runs_pane.py:on_mount` —
-  both subscribe to `vm.on_property_changed` instead of the hub.
-- Integration tests at
-  `tests/integration/test_bug_train_acceptance.py:101-159` —
-  pin the cross-VM isolation contract structurally.
+  emission sites into one.
+- `src/aws_tui/vm/emr_serverless/job_run_detail_vm.py:47-54` —
+  added in commit `ac3ad81`; emissions at the two
+  PropertyChangedMessage sites (detail, state).
+- `src/aws_tui/vm/emr_serverless/job_run_logs_vm.py:91-97` —
+  added in commit `ac3ad81`; `_notify` helper consolidates 9
+  emission sites including the `_notify_all` loop.
+
+View consumers (all four EMR view widgets — every `sender_object`
+guard retired):
+- `ui/widgets/emr_serverless/application_picker.py:138-146` —
+  `_on_vm_property_changed(prop: str)` replaces `_on_hub_message`.
+- `ui/widgets/emr_serverless/job_runs_pane.py:on_mount` — same
+  migration.
+- `ui/widgets/emr_serverless/job_run_detail_pane.py:71-95` —
+  added in commit `ac3ad81`.
+- `ui/widgets/emr_serverless/job_run_logs_pane.py:155-167,219-230`
+  — added in commit `ac3ad81`.
+
+Integration tests:
+- `tests/integration/test_bug_train_acceptance.py:101-159` —
+  pin the cross-VM isolation contract structurally; assert that
+  events on `vm1.on_property_changed` do NOT echo on
+  `vm2.on_property_changed` when both share a hub.
+
+**PR #103 acceptance is fully closed — zero sender_object guards
+remain in the EMR view layer** (commit `ac3ad81`).
 
 **Proposed vNext API:** Promote `on_property_changed: Observable[str]`
 into the `_ComponentVMBase` (or `ComponentVMBase`) contract directly.
@@ -928,8 +950,69 @@ class FocusCoordinatorVM:
 
 16 tests at `tests/unit/vm/chrome/test_focus_coordinator_vm.py`
 pin the slot transitions, modal save/restore, and dispose
-discipline. Wired through composition root + NavMenu (commit
-`fd1a5d6`).
+discipline.
+
+**Wired through the View layer (post-`fd1a5d6` updates):**
+
+- `src/aws_tui/composition.py:104,113` — `AppContext.focus_coordinator`
+  field; instantiated and constructed in `build_app_context`.
+- `src/aws_tui/ui/widgets/nav_menu.py:on_mount` (`fd1a5d6`) —
+  subscribes to `on_focused_slot_changed`; on_focus projects
+  `FocusSlot.NAV_MENU`; `_apply_focus_slot_class` is the SOLE
+  driver of the Screen's `-nav-active` class. The class-mutation
+  responsibility moved from a direct View handler to a
+  coordinator subscription.
+- `src/aws_tui/ui/widgets/nav_menu.py:_after_cursor_move` (`c449dfe`)
+  — arrow-walk no longer calls `call_after_refresh(self.focus)`
+  when coordinator is wired (PR #98(2) closure: the destination
+  page's `_maybe_focus_*` reads the coordinator's slot and bails
+  on the rail-walk gate).
+- `src/aws_tui/ui/widgets/nav_menu.py:action_commit` (`c449dfe`)
+  — ENTER projects the service's default slot
+  (`{"s3": S3_LEFT, "emr-serverless": EMR_RUNS, "settings":
+  SETTINGS}`) into the coordinator before the focus dispatch
+  (PR #101 closure: data source moved to coordinator; App-level
+  dispatcher remains as the View-side projection).
+- `src/aws_tui/ui/widgets/emr_serverless/page.py:_maybe_focus_left`
+  (`f5ee335`) — reads `focused_slot is NAV_MENU` as the
+  authoritative rail-walk indicator (PR #99(a) closure).
+- `src/aws_tui/ui/widgets/settings_view.py:_maybe_focus`
+  (`f5ee335`) — same coordinator-gated check.
+
+**Service-default-slot router pattern (NEW finding for vNext):**
+
+When NavMenu commits a service via ENTER, it maps the service
+id to its default slot through a small dictionary:
+
+```python
+service_default_slot: dict[str, FocusSlot] = {
+    "s3": FocusSlot.S3_LEFT,
+    "emr-serverless": FocusSlot.EMR_RUNS,
+    "settings": FocusSlot.SETTINGS,
+}
+```
+
+The dict has THREE consumers in aws-tui's design space (the three
+services). The pattern generalises: **any caller that needs to
+project "action X → discriminator value Y" benefits from a
+declarative router on the discriminator VM**. Worth including in
+the proposed `DiscriminatorVM[E]` as a `route` registry:
+
+```python
+class DiscriminatorVM(Generic[E]):
+    def register_route(self, key: object, value: E) -> None: ...
+    def project_route(self, key: object) -> bool:
+        """Set value to the registered route for `key` (or no-op
+        if unregistered). Returns True iff a route fired."""
+```
+
+§9.bis.9 bug-train consequences: **PR #98(2), PR #99(a),
+PR #100(a), PR #101 are all structurally retired** through the
+coordinator wiring described above (commits `fd1a5d6`, `9e6a442`,
+`f5ee335`, `c449dfe`). PR #98(3) `.-nav-active` literal class
+remains in 10 themes as the rendering target; the data driving
+it is the coordinator's slot (no longer direct Screen mutation in
+the View).
 
 **Proposed vNext API:** Generalise this into a reusable VMx
 primitive `DiscriminatorVM[E]` where `E` is a `StrEnum`-like
@@ -979,9 +1062,9 @@ use it (e.g., theme picker, settings page tabs).
 | 5 | `IDialogService` | closed contract; no VM-backed modal | all 4 modals verified compliant by composing `ComponentVM` + own async `ask()` API; round-3 compliance tests pin the contract | Medium (`present()` + `ModalVM` protocol; optional `MultiStepFormVM`, `ChoiceVM`) |
 | 6 | `ServicedObservableCollection` | docs say ownership; source does not | corrected aws-tui spec; kept manual `finally: dispose` in TransfersVM | Trivial (rename / docstring); small (owned variant) |
 | 7 | `HierarchicalVM` | no cache-invalidation contract | chose `CompositeVM` instead | Small (`invalidate*` + TTL + docs) |
-| 8 | Per-VM Observable surface | shared `MessageHub` requires `sender_object` filtering in Views | **built per-VM `Subject[str]` + `on_property_changed` Observable** on ApplicationsVM/JobRunsVM; consumed by ApplicationPicker/JobRunsPane (2 of 4 EMR views migrated) | Small (promote `on_property_changed` to `_ComponentVMBase`) |
+| 8 | Per-VM Observable surface | shared `MessageHub` requires `sender_object` filtering in Views | **built per-VM `Subject[str]` + `on_property_changed` Observable** on ALL FOUR EMR VMs; consumed by ALL FOUR EMR view widgets — zero `sender_object` guards remain in the EMR layer | Small (promote `on_property_changed` to `_ComponentVMBase`) |
 | 9 | `ScoredFilteredCompositeVM` | `FilteredCompositeVM` is boolean only | inlined score+rank+sort on `CommandPaletteVM` | Small after Item 3 |
-| 10 | Slot-discriminator coordinator | no primitive | **built `FocusCoordinatorVM` + `FocusSlot` StrEnum** (16 tests); wired through composition + NavMenu | Small (`DiscriminatorVM[E]` generic) |
+| 10 | Slot-discriminator coordinator | no primitive | **built `FocusCoordinatorVM` + `FocusSlot` StrEnum** (16 tests); wired through composition + NavMenu + EmrServerlessPage + SettingsView + service-default-slot router on NavMenu ENTER. PR #98(2)/#99(a)/#100(a)/#101 structurally retired through it. | Small (`DiscriminatorVM[E]` generic with route registry) |
 
 ---
 
