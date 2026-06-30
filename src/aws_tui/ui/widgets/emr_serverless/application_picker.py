@@ -259,15 +259,22 @@ class ApplicationPicker(Widget):
         # indistinguishable from a successful empty listing. Mirrors
         # the per-state branching JobRunsPane / JobRunDetailPane do
         # for the same PaneState machine.
+        # Trigger Static is markup-enabled (line 133), so AWS
+        # error_text containing ``[…]`` would crash the trigger
+        # render. Escape via _escape_markup — same guard
+        # _build_options already applies for the same content.
         state = self._vm.state
         if state is PaneState.UNREACHABLE:
-            return f"⚠ {self._vm.error_text or 'endpoint unreachable — press r to retry'}"
+            msg = self._vm.error_text or "endpoint unreachable — press r to retry"
+            return f"⚠ {_escape_markup(msg)}"
         if state is PaneState.AUTH_REQUIRED:
             return "⚠ auth required — aws sso login --profile <X>"
         if state is PaneState.FORBIDDEN:
-            return f"⚠ {self._vm.error_text or 'permission denied — check IAM policy'}"
+            msg = self._vm.error_text or "permission denied — check IAM policy"
+            return f"⚠ {_escape_markup(msg)}"
         if state is PaneState.ERROR:
-            return f"⚠ {self._vm.error_text or 'error — press r to retry'}"
+            msg = self._vm.error_text or "error — press r to retry"
+            return f"⚠ {_escape_markup(msg)}"
         if state is PaneState.LOADING:
             return "loading…"
         apps = self._vm.applications

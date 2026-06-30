@@ -122,7 +122,14 @@ class JobRunCloneModal(ModalScreen[str | None]):
                 yield _ModalButton("Cancel", button_id="cancel")
                 yield _ModalButton("Submit", button_id="submit", classes="-primary")
 
-            self._error = Static("", classes="modal-error")
+            # ``markup=False`` — _show_error() feeds caller exception
+            # text into update(). Boto / OSError stringifications
+            # contain ``[…]`` (``[ErrorCode]``, ``[Errno 13]``,
+            # ``[ContainerError(...)]``) that crash Rich markup
+            # parsing. Sibling JobRunDetailPane / JobRunLogsPane
+            # already guard the same content; this was the asymmetric
+            # holdout.
+            self._error = Static("", classes="modal-error", markup=False)
             yield self._error
 
     # ── Form-state sync ────────────────────────────────────────────────────

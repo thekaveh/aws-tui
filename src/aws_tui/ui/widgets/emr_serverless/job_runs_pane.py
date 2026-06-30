@@ -508,14 +508,22 @@ class JobRunsPane(Widget, can_focus=True):
         # with an empty ``runs`` cache (the typical post-error case)
         # silently rendered "(no runs)" instead of the actionable
         # placeholder.
+        # ``markup=False`` on every placeholder Static. The error
+        # branches embed VM ``error_text`` (mapped from boto /
+        # OSError) which routinely contains ``[…]`` — Rich would
+        # crash the runs pane render. Sibling JobRunDetailPane /
+        # JobRunLogsPane already guard their analogue branches; this
+        # was the asymmetric holdout. Static-string branches get
+        # the guard too for parity.
         if state is PaneState.LOADING:
-            body.mount(Static("loading…", classes="runs-placeholder"))
+            body.mount(Static("loading…", classes="runs-placeholder", markup=False))
             return
         if state is PaneState.UNREACHABLE:
             body.mount(
                 Static(
                     self._vm.error_text or "endpoint unreachable — press r to retry",
                     classes="runs-placeholder",
+                    markup=False,
                 )
             )
             return
@@ -524,6 +532,7 @@ class JobRunsPane(Widget, can_focus=True):
                 Static(
                     "authentication required — aws sso login --profile <X>",
                     classes="runs-placeholder",
+                    markup=False,
                 )
             )
             return
@@ -532,6 +541,7 @@ class JobRunsPane(Widget, can_focus=True):
                 Static(
                     self._vm.error_text or "permission denied — check IAM policy",
                     classes="runs-placeholder",
+                    markup=False,
                 )
             )
             return
@@ -540,11 +550,12 @@ class JobRunsPane(Widget, can_focus=True):
                 Static(
                     self._vm.error_text or "error — press r to retry",
                     classes="runs-placeholder",
+                    markup=False,
                 )
             )
             return
         if state is PaneState.EMPTY or not runs:
-            body.mount(Static("(no runs)", classes="runs-placeholder"))
+            body.mount(Static("(no runs)", classes="runs-placeholder", markup=False))
             return
         # The cursor position is derived from `vm.selected_id`; on
         # first mount or after a refresh that clears the prior
