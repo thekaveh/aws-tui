@@ -82,7 +82,14 @@ class ConfirmModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Container():
-            yield Static(self._request.title, classes="modal-title")
+            # ``markup=False`` on the title too — callers like
+            # s3_connections_panel build titles via
+            # ``f"Delete connection {name!r}?"`` where ``name`` can
+            # come from a config.toml that allows quoted bracketed
+            # keys (``[connections."minio[v2]"]``). R24 caught
+            # body_lines and path; the title was the asymmetric
+            # holdout.
+            yield Static(self._request.title, classes="modal-title", markup=False)
             # ``markup=False`` on every user-/path-controlled Static.
             # Real filenames and S3 keys legally contain ``[`` and
             # ``]`` (``releases[2025].tar.gz``, ``report[draft].pdf``,

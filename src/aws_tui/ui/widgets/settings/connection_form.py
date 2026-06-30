@@ -208,7 +208,19 @@ class ConnectionFormInline(Widget):
 
     def compose(self) -> ComposeResult:
         with Container():
-            yield Static("New s3-compatible connection", classes="form-title", id="form-title")
+            # ``markup=False`` — open_for_edit() later calls update()
+            # with ``f"Edit {name!r}"``. The form regex (_NAME_RE) blocks
+            # brackets at SUBMISSION, but ConfigStore loads the existing
+            # config.toml without re-applying that regex, so a
+            # hand-edited or migrated file can round-trip ``minio[v2]``
+            # back into the form. The bracketed name would crash the
+            # Rich markup parser when the Edit-mode title updates.
+            yield Static(
+                "New s3-compatible connection",
+                classes="form-title",
+                id="form-title",
+                markup=False,
+            )
             with Vertical(classes="form-fields"):
                 for key, label, placeholder, secret in _FIELDS:
                     yield Static(label, classes="form-label")
