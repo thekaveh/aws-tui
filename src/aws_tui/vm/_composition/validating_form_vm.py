@@ -158,10 +158,10 @@ class ValidatingFormVM(Generic[TM]):
 
     def set_model(self, model: TM) -> None:
         """Update the model. Re-validates and re-evaluates approve's
-        ``can_execute``."""
+        ``can_execute`` (the ``can_execute_changed`` event fires
+        once via ``_revalidate``; no redundant trigger here)."""
         self._inner.set_model(model)
         self._revalidate()
-        self._approve_can_execute_trigger.on_next(None)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 

@@ -56,6 +56,18 @@ if TYPE_CHECKING:
 #: in the same cursor-navigable list as the services.
 _SETTINGS_NAV_ID: str = "settings"
 
+#: Round-3 / PR #101: per-service default focus slot. On ENTER,
+#: ``action_commit`` projects this slot through the coordinator so
+#: VM subscribers observe the user's intent to "enter" the service
+#: without the View-layer having to inspect the destination page's
+#: widget tree. Mapping uses the same service ids ``ServiceDescriptor``
+#: registers (``ServiceRegistry.register``).
+_SERVICE_DEFAULT_SLOT: dict[str, FocusSlot] = {
+    "s3": FocusSlot.S3_LEFT,
+    "emr-serverless": FocusSlot.EMR_RUNS,
+    _SETTINGS_NAV_ID: FocusSlot.SETTINGS,
+}
+
 
 class NavMenu(Widget, can_focus=True):
     """Always-visible left rail of :class:`NavRow` widgets."""
@@ -291,12 +303,7 @@ class NavMenu(Widget, can_focus=True):
         # the coordinator becomes the data source, the dispatcher
         # remains the View-side projection mechanism.
         if self._focus_coordinator is not None:
-            service_default_slot: dict[str, FocusSlot] = {
-                "s3": FocusSlot.S3_LEFT,
-                "emr-serverless": FocusSlot.EMR_RUNS,
-                _SETTINGS_NAV_ID: FocusSlot.SETTINGS,
-            }
-            slot = service_default_slot.get(target_id)
+            slot = _SERVICE_DEFAULT_SLOT.get(target_id)
             if slot is not None:
                 self._focus_coordinator.set_focused_slot(slot)
         focus_active = getattr(app, "focus_active_service_pane", None)
