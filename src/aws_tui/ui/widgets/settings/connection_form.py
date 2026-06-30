@@ -177,6 +177,8 @@ class ConnectionFormInline(Widget):
         # form re-opens are conceptually new edit sessions.
         self._form_vm: S3ConnectionFormVM = self._build_form_vm()
         self._errors_sub: DisposableBase | None = None
+        # Re-entrancy guard for _submit — see _submit docstring.
+        self._submitting: bool = False
 
     @staticmethod
     def _build_form_vm() -> S3ConnectionFormVM:
@@ -237,6 +239,7 @@ class ConnectionFormInline(Widget):
     def open_for_add(self) -> None:
         """Show the form in Add mode (all fields empty, name unlocked)."""
         self._ctx = _OpenContext(mode="add", original_name=None)
+        self._submitting = False
         self.query_one("#form-title", Static).update("New s3-compatible connection")
         # Reset the form VM to a blank model. Use set_model so the
         # snapshot also resets; that way ``is_dirty`` is False on
@@ -265,6 +268,7 @@ class ConnectionFormInline(Widget):
     def open_for_edit(self, *, name: str, defaults: S3CompatForm) -> None:
         """Show the form in Edit mode (pre-filled, name locked)."""
         self._ctx = _OpenContext(mode="edit", original_name=name)
+        self._submitting = False
         self.query_one("#form-title", Static).update(f"Edit {name!r}")
         self._reset_form_vm(defaults)
         for key, _, _, _ in _FIELDS:
@@ -282,6 +286,7 @@ class ConnectionFormInline(Widget):
     def close(self) -> None:
         """Hide the form and clear state."""
         self.remove_class("-open")
+        self._submitting = False
         self._ctx = None
 
     def _reset_form_vm(self, model: S3CompatForm) -> None:
@@ -400,6 +405,19 @@ class ConnectionFormInline(Widget):
         values are pulled into the form VM via ``set_field`` on every
         keystroke, so the VM's ``model`` is always live with the
         latest values; the message carries that model directly.
+
+        Re-entrancy guard: a second click (or Enter / Space repeat)
+        between this method posting the message and the panel's
+        async handler calling :meth:`close` would queue a SECOND
+        ConnectionFormSubmitted. The panel processes them in order,
+        so M1 successfully writes the config + closes + refreshes,
+        then M2 lands on a now-closed form, the duplicate check
+        fires, and the user sees a spurious "already exists" error
+        toast for the entry they just successfully created. The
+        ``_submitting`` flag short-circuits the second post; the
+        panel clears it via :meth:`close` and :meth:`open_for_add`
+        / :meth:`open_for_edit` so the next form interaction starts
+        fresh.
         """
         if self._ctx is None:
             return
@@ -408,6 +426,9 @@ class ConnectionFormInline(Widget):
             # disabled, but the form VM's errors map is the canonical
             # gate so we re-check here.
             return
+        if self._submitting:
+            return
+        self._submitting = True
         # Pull the live model from the form VM. set_field has been
         # threading every keystroke into the working model, so it's
         # current — just hand it off. force_path_style=True and

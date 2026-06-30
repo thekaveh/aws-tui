@@ -212,10 +212,18 @@ class JobRunLogsVM:
     # ── Network actions ───────────────────────────────────────────────────
 
     async def load(self) -> None:
-        """Fetch + stream the selected log file. Idempotent — a
-        second call while already loading is a no-op."""
-        if self._state is LogsState.LOADING:
-            return
+        """Fetch + stream the selected log file.
+
+        View-side ``exclusive=True, group="emr-logs"`` cancels any
+        in-flight load before re-entering, so a second call while
+        ``state is LOADING`` is the cancellation path — the prior
+        worker is being torn down. Do NOT early-return on LOADING
+        here: that would strand the pane on the LOADING placeholder
+        because the prior task's ``CancelledError`` raises out
+        WITHOUT resetting state, then this fresh worker would no-op
+        on the stale flag. The fresh worker re-establishes target
+        identity below before any state mutation.
+        """
         if self._application_id is None or self._job_run_id is None or self._log_uri is None:
             return
         # Capture target identity BEFORE any await — a concurrent
@@ -285,6 +293,17 @@ class JobRunLogsVM:
                 max_bytes=_MAX_RAW_BYTES,
                 filter_=self._filter,
             ):
+                # Re-check target on EVERY chunk — set_target runs
+                # in a different worker group (emr-select-run /
+                # emr-select-app) and does NOT cancel emr-logs, so
+                # the stream can keep feeding chunks AFTER the user
+                # moved on. Without this guard, ``_notify("lines")``
+                # would paint the OLD run's lines under the NEW
+                # run's pane header. (Post-loop guard only catches
+                # the cache-write — the per-chunk paints already
+                # shipped to the view.)
+                if (self._application_id, self._job_run_id, self._log_uri) != target:
+                    return
                 buffered.extend(chunk.lines)
                 if len(buffered) > _MAX_MATCHED_LINES:
                     buffered = buffered[-_MAX_MATCHED_LINES:]
