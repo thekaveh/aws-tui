@@ -513,6 +513,26 @@ class DualPaneVM:
                 {copy_task, cancel_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
+        except BaseException:
+            # Outer-worker cancellation (a second ``c``/``d`` press
+            # cancels the prior ``run_worker(group="transfer-ops")``
+            # via exclusive=True; Settings switch; shutdown). Without
+            # this branch the asyncio.wait raises CancelledError, the
+            # finally below only cleans up cancel_task, and copy_task
+            # is left running in the background — a multi-MB S3
+            # upload would keep writing bytes after the user-facing
+            # copy command has logically aborted. Cancel + await
+            # copy_task too, then re-raise so the caller's own
+            # cancellation chain stays intact.
+            if not copy_task.done():
+                copy_task.cancel()
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await copy_task
+            if not cancel_task.done():
+                cancel_task.cancel()
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await cancel_task
+            raise
         finally:
             if not cancel_task.done():
                 cancel_task.cancel()
