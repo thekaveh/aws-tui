@@ -328,8 +328,33 @@ class JobRunsPane(Widget, can_focus=True):
                 return idx
         return 0
 
+    def _cursor_is_on_visible_row(self) -> bool:
+        """True when ``vm.selected_id`` actually points at a row in
+        the current ``vm.runs`` projection. False when no selection,
+        or when a state-filter chip toggle hid the selected row (the
+        VM's selection is intentionally non-destructive over filter
+        projections — see test_state_filter_does_not_lose_selection_on
+        _filter_change)."""
+        sel = self._vm.selected_id
+        if sel is None:
+            return False
+        return any(r.job_run_id == sel for r in self._vm.runs)
+
     def action_cursor_up(self) -> None:
         runs = self._vm.runs
+        if not runs:
+            return
+        # When the prior selection is hidden by the active state
+        # filter, ``_cursor_index()`` reports 0 even though no row
+        # is visually cursored — pressing Up would silently no-op.
+        # Snap to the LAST visible row so Up has the intuitive "wrap
+        # in from below" effect on a stale-selection list.
+        if not self._cursor_is_on_visible_row():
+            target_id = runs[-1].job_run_id
+            self._vm.select(target_id)
+            self._repaint_selection()
+            self._post_run_selected_for_cursor()
+            return
         cur = self._cursor_index()
         if cur <= 0:
             return
@@ -345,6 +370,16 @@ class JobRunsPane(Widget, can_focus=True):
 
     def action_cursor_down(self) -> None:
         runs = self._vm.runs
+        if not runs:
+            return
+        # Same hidden-selection handling as ``action_cursor_up`` — snap
+        # to the first visible row so Down works symmetrically.
+        if not self._cursor_is_on_visible_row():
+            target_id = runs[0].job_run_id
+            self._vm.select(target_id)
+            self._repaint_selection()
+            self._post_run_selected_for_cursor()
+            return
         cur = self._cursor_index()
         if cur + 1 >= len(runs):
             return

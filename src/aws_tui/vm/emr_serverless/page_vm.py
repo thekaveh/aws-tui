@@ -123,12 +123,17 @@ class EmrServerlessPageVM:
         self.applications.select(app_id)
         self.job_runs.set_application(app_id)
         await self.job_runs.refresh()
-        # Detail follows the first run (if any) on application switch.
+        # Detail + logs follow the first run (if any) on application
+        # switch. Without the explicit ``job_run_logs.set_target(None,
+        # None, None)`` in the empty-runs branch, the logs pane keeps
+        # showing the PRIOR app's lines while the picker, runs list,
+        # and detail pane all flip — a visible cross-app stale read.
         runs = self.job_runs.runs
         if runs:
             await self.select_job_run(runs[0].job_run_id)
         else:
             self.job_run_detail.set_target(None, None)
+            self.job_run_logs.set_target(None, None, None)
 
     async def cycle_application(self, direction: int) -> None:
         """Select the next (``direction=1``) or previous
