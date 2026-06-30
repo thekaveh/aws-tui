@@ -352,10 +352,35 @@ class JobRunsVM:
                 target_app_id, start_token=target_token, states=None
             )
         except ProviderError as exc:
+            # load_more is APPEND-only — a failure on the next-page
+            # fetch must NOT destroy the already-loaded rows by
+            # transitioning the whole pane to ERROR/UNREACHABLE/
+            # FORBIDDEN (the view would early-return on every
+            # non-IDLE state and render only the placeholder,
+            # hiding the user's existing 50 rows and cursor). Keep
+            # the prior IDLE state intact; record the error text so
+            # a future "retry pagination" surface can show it; drop
+            # the token so the broken sentinel goes away. The user
+            # can hit ``r`` to retry the whole list if they want
+            # pagination back.
             if (self._application_id, self._next_token) != (target_app_id, target_token):
                 return  # pagination identity changed mid-flight; drop the stale error
-            new_state, self._error_text = map_provider_error(exc)
-            self._set_state(new_state)
+            self._error_text = str(exc) or None
+            self._next_token = None
+            self._notify("runs")
+            return
+        except Exception as exc:  # defensive
+            # Non-ProviderError escape (botocore param-validation,
+            # OSError from socket layer, programmer bug). Same
+            # shield the four refresh paths got in round 33. Without
+            # it the worker exception is silently swallowed by
+            # Textual's run_worker and PgDn appears to do nothing
+            # with zero diagnostic.
+            if (self._application_id, self._next_token) != (target_app_id, target_token):
+                return
+            self._error_text = f"unexpected error: {exc}"
+            self._next_token = None
+            self._notify("runs")
             return
         if (self._application_id, self._next_token) != (target_app_id, target_token):
             return  # pagination identity changed mid-flight; drop the stale response
