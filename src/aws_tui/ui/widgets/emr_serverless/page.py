@@ -453,17 +453,16 @@ class EmrServerlessPage(Widget):
         )
 
     def on_job_runs_pane_refresh_requested(self, _event: JobRunsPane.RefreshRequested) -> None:
-        # Use the same group as the runs poller (``_tick_runs`` above
-        # at line 246) so a manual ``r`` press while the periodic
-        # poller is mid-flight is silently dropped by Textual rather
-        # than allowed to race the poller's worker. Both end up
-        # calling ``job_runs.refresh()``, which mutates the same
-        # ``_runs_cache`` / ``_next_token`` / ``_selected_id`` and
-        # fires the same ``runs`` PropertyChangedMessage — two
-        # concurrent calls produced a double UI redraw and an extra
-        # ``list_job_runs`` round-trip per overlap. The clone-success
-        # refresh at line 345 already uses ``emr-poll-runs`` for the
-        # same reason; this aligns the manual ``r`` path with it.
+        # Use the same ``emr-poll-runs`` group as ``_tick_runs`` and the
+        # clone-success refresh in ``action_clone_selected_run`` so a
+        # manual ``r`` press while the periodic poller is mid-flight is
+        # silently dropped by Textual rather than allowed to race the
+        # poller's worker. Both end up calling ``job_runs.refresh()``,
+        # which mutates the same ``_runs_cache`` / ``_next_token`` /
+        # ``_selected_id`` and fires the same ``runs``
+        # PropertyChangedMessage — two concurrent calls produced a
+        # double UI redraw and an extra ``list_job_runs`` round-trip
+        # per overlap.
         self.run_worker(self._vm.refresh_focused("runs"), exclusive=True, group="emr-poll-runs")
 
     def on_job_runs_pane_load_more_requested(self, _event: JobRunsPane.LoadMoreRequested) -> None:

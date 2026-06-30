@@ -42,6 +42,7 @@ from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.ui.widgets.nav_row import NavRow
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
@@ -49,12 +50,6 @@ if TYPE_CHECKING:
     from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
     from aws_tui.vm.nav_menu_vm import NavItemVM, NavMenuVM
 
-
-#: Canonical id for the synthetic Settings nav peer (defined by
-#: NavMenuVM._rebuild_items). The Settings row is pushed to the
-#: bottom of the rail via a flex spacer; logically it's still
-#: in the same cursor-navigable list as the services.
-_SETTINGS_NAV_ID: str = "settings"
 
 #: Round-3 / PR #101: per-service default focus slot. On ENTER,
 #: ``action_commit`` projects this slot through the coordinator so
@@ -65,7 +60,7 @@ _SETTINGS_NAV_ID: str = "settings"
 _SERVICE_DEFAULT_SLOT: dict[str, FocusSlot] = {
     "s3": FocusSlot.S3_LEFT,
     "emr-serverless": FocusSlot.EMR_RUNS,
-    _SETTINGS_NAV_ID: FocusSlot.SETTINGS,
+    SETTINGS_NAV_ID: FocusSlot.SETTINGS,
 }
 
 
@@ -364,7 +359,7 @@ class NavMenu(Widget, can_focus=True):
         # User feedback (post-PR-#97): "Let's switch back the Settings
         # to the gear emoji and then make the menu pane narrower."
         for idx, item in enumerate(self._items):
-            is_settings = item.descriptor.id == _SETTINGS_NAV_ID
+            is_settings = item.descriptor.id == SETTINGS_NAV_ID
             display = item.descriptor.icon if is_settings else item.descriptor.label
             row = NavRow(
                 descriptor_id=item.descriptor.id,

@@ -70,7 +70,6 @@ class JobRunLogsVM:
     ) -> None:
         self._client: EmrServerlessLogsClient = client
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()

@@ -33,7 +33,6 @@ class JobRunDetailVM:
     ) -> None:
         self._client = client
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._application_id: str | None = None
         self._job_run_id: str | None = None
         self._detail: JobRunDetail | None = None

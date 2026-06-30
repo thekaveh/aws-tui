@@ -69,7 +69,6 @@ class FocusCoordinatorVM:
         initial: FocusSlot = FocusSlot.NAV_MENU,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._focused_slot: FocusSlot = initial
         # Non-modal slot saved when a modal opens; restored on close.
         self._saved_slot: FocusSlot | None = None
