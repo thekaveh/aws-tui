@@ -204,9 +204,21 @@ class DualPaneVM:
         # Subscribe AFTER children construct so any cancel message that
         # somehow arrives mid-construction doesn't fire before the
         # children are ready to handle the subsequent state shuffle.
-        self._cancel_sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # ``if … is None`` guard makes construct→destruct→construct
+        # cycles safe: each construct must subscribe exactly once.
+        # Mirrors NavMenuVM / StatusBarVM / HintLegendVM symmetric
+        # construct/destruct contracts.
+        if self._cancel_sub is None:
+            self._cancel_sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
 
     def destruct(self) -> None:
+        # Release the hub subscription FIRST — without this it
+        # outlives destruct (the hub keeps the bound method alive,
+        # pinning the DualPaneVM + both panes + _cancel_events
+        # registry). Symmetric with ``construct``'s subscribe.
+        if self._cancel_sub is not None:
+            self._cancel_sub.dispose()
+            self._cancel_sub = None
         self._right.destruct()
         self._left.destruct()
         self._inner.destruct()
