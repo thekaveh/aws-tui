@@ -220,6 +220,18 @@ class ApplicationsVM:
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
             return
+        except Exception as exc:  # defensive
+            # Non-ProviderError escape — botocore parameter-validation
+            # bypassing the facade's mapping, an OSError from the
+            # socket layer, a programmer error, etc. Without this net
+            # the worker exception is swallowed by Textual's
+            # ``run_worker`` machinery and the pane is permanently
+            # stuck on LOADING with no user path to recovery (a
+            # manual ``r`` re-enters LOADING and re-throws). Same
+            # shield JobRunLogsVM.load already has; mirror it here.
+            self._error_text = f"unexpected error: {exc}"
+            self._set_state(PaneState.ERROR)
+            return
         new_apps: tuple[ApplicationSummary, ...] = tuple(apps)
         prior_selected_id = self.selected_id
 

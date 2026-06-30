@@ -114,6 +114,16 @@ class JobRunDetailVM:
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
             return
+        except Exception as exc:  # defensive
+            # Non-ProviderError escape — same shield JobRunLogsVM
+            # has. Without this the worker exception is swallowed
+            # by Textual's run_worker and the detail pane stays
+            # stuck on LOADING.
+            if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
+                return
+            self._error_text = f"unexpected error: {exc}"
+            self._set_state(PaneState.ERROR)
+            return
         if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
             return  # target changed mid-flight; drop the stale detail
         self._detail = d

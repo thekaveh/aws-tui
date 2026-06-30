@@ -271,6 +271,17 @@ class JobRunsVM:
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
             return
+        except Exception as exc:  # defensive
+            # Non-ProviderError escape (botocore param-validation,
+            # OSError, programmer bug). Same shield JobRunLogsVM
+            # already has — without it the worker exception is
+            # swallowed by Textual's run_worker and the runs pane
+            # is permanently stuck on LOADING.
+            if self._application_id != target_app_id:
+                return
+            self._error_text = f"unexpected error: {exc}"
+            self._set_state(PaneState.ERROR)
+            return
         if self._application_id != target_app_id:
             return  # target changed mid-flight; drop the stale response
         new_runs: tuple[JobRunSummary, ...] = tuple(runs)

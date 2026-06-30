@@ -806,6 +806,17 @@ class PaneVM:
             self._replace_entries([])
             self._set_state(PaneState.ERROR)
             return
+        except Exception as exc:  # defensive
+            # Non-ProviderError escape — a programmer bug, an
+            # OSError from the socket layer, or any other exception
+            # not modelled by the provider taxonomy. Without this
+            # net the worker exception is swallowed by Textual's
+            # ``run_worker`` machinery and the pane is permanently
+            # stuck on LOADING with no user path to recovery.
+            self._error_text = f"unexpected error: {exc}"
+            self._replace_entries([])
+            self._set_state(PaneState.ERROR)
+            return
 
         self._error_text = None
         # Prepend a synthetic ".." parent entry on any non-root path so the
