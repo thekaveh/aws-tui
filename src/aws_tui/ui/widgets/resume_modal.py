@@ -53,9 +53,18 @@ class ResumeModal(ModalScreen[ResumeAction]):
             )
             with VerticalScroll(id="resume-body-scroll"):
                 for entry in self._vm.entries:
+                    # ``markup=False`` — entry_summary includes the
+                    # transfer's source / destination URIs, which can
+                    # be real filenames or S3 keys containing
+                    # ``[…]`` (``releases[2025].tar.gz``). Without
+                    # the guard the resume modal would crash on the
+                    # first such entry — and resume is the path
+                    # users hit after a CRASH, so a second crash
+                    # here is especially user-hostile.
                     yield Static(
                         f"  - {entry_summary(entry)}",
                         classes="modal-body resume-entry",
+                        markup=False,
                     )
             with Horizontal(classes="modal-footer"):
                 yield ModalButton("resume all", button_id="resume-resume-btn", classes="-primary")
