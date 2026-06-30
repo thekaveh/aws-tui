@@ -264,7 +264,14 @@ class JobRunsPane(Widget, can_focus=True):
         super().__init__(id=id, classes=classes)
         self._vm: JobRunsVM = vm
         self._hub: MessageHub[Message] = hub
-        self._cursor_index: int = 0
+        # Round-3 directive §9.bis.11: the View no longer holds a
+        # hand-rolled cursor index. The position is derived on demand
+        # from ``vm.selected_id`` (the VM-owned canonical slot).
+        # Arrow / click handlers call ``vm.select(next_id)`` which
+        # mutates the composite's ``current`` slot; the resulting
+        # `selected_id` event drives the same `_repaint_selection`
+        # path, plus we paint synchronously in the handler to avoid
+        # an event-loop hop's worth of cursor-trail.
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
@@ -310,35 +317,44 @@ class JobRunsPane(Widget, can_focus=True):
     def action_toggle_state_filter(self, state_value: str) -> None:
         self._vm.toggle_state_filter(JobRunState(state_value))
 
+    def _cursor_index(self) -> int:
+        """Derived cursor index over ``vm.selected_id``. Returns 0
+        when no run is selected (the default ENTER target)."""
+        runs = self._vm.runs
+        if not runs:
+            return 0
+        sel = self._vm.selected_id
+        if sel is None:
+            return 0
+        for idx, r in enumerate(runs):
+            if r.job_run_id == sel:
+                return idx
+        return 0
+
     def action_cursor_up(self) -> None:
-        if self._cursor_index > 0:
-            self._cursor_index -= 1
-            # Lightweight: only flip the ``-selected`` class on the
-            # affected rows. Calling the full ``_refresh_rows`` here
-            # (``remove_children`` + re-mount everything) is what made
-            # arrow-walking the list visibly flash, post-PR-#99: "the
-            # job runs on the emr still keeps being refreshed every
-            # time I move through the items". Row content (name +
-            # timestamp + state glyph) hasn't changed — only WHICH
-            # row carries the cursor — so re-mounting the whole list
-            # for a cursor move is pure waste. Same pattern as
-            # ``NavMenu._repaint_rows`` (see ui/widgets/nav_menu.py).
-            self._repaint_selection()
-            # Master-detail: the detail pane follows the cursor.
-            # Posting RunSelected on every cursor move (instead of
-            # waiting for Enter) is the UX the user asked for —
-            # arrow through the list and the right pane updates in
-            # lock-step, like Spark History Server or a typical
-            # master/detail list. Real-boto cost is one extra
-            # ``get_job_run`` call per arrow press; PR-B's response
-            # cache (spec §6) keeps that bounded.
-            self._post_run_selected_for_cursor()
+        runs = self._vm.runs
+        cur = self._cursor_index()
+        if cur <= 0:
+            return
+        target_id = runs[cur - 1].job_run_id
+        # Mutate the VM (the canonical cursor slot) BEFORE painting
+        # so a subsequent _repaint_selection reads the new selected
+        # id from the VM. Same lightweight class-flip repaint, same
+        # master-detail RunSelected post — only the cursor source of
+        # truth moved.
+        self._vm.select(target_id)
+        self._repaint_selection()
+        self._post_run_selected_for_cursor()
 
     def action_cursor_down(self) -> None:
-        if self._cursor_index + 1 < len(self._vm.runs):
-            self._cursor_index += 1
-            self._repaint_selection()
-            self._post_run_selected_for_cursor()
+        runs = self._vm.runs
+        cur = self._cursor_index()
+        if cur + 1 >= len(runs):
+            return
+        target_id = runs[cur + 1].job_run_id
+        self._vm.select(target_id)
+        self._repaint_selection()
+        self._post_run_selected_for_cursor()
 
     def action_commit_selection(self) -> None:
         # Enter is a no-op-vs-Up/Down: the cursor-move already fired
@@ -348,9 +364,10 @@ class JobRunsPane(Widget, can_focus=True):
 
     def _post_run_selected_for_cursor(self) -> None:
         runs = self._vm.runs
-        if not runs or not (0 <= self._cursor_index < len(runs)):
+        idx = self._cursor_index()
+        if not runs or not (0 <= idx < len(runs)):
             return
-        run_id = runs[self._cursor_index].job_run_id
+        run_id = runs[idx].job_run_id
         self.post_message(self.RunSelected(run_id))
 
     def action_request_refresh(self) -> None:
@@ -382,13 +399,12 @@ class JobRunsPane(Widget, can_focus=True):
                 self.action_load_more()
                 return
             if isinstance(target, _JobRunRow):
-                runs = self._vm.runs
-                for idx, r in enumerate(runs):
-                    if r.job_run_id == target.run_id:
-                        self._cursor_index = idx
-                        self._repaint_selection()
-                        self.post_message(self.RunSelected(target.run_id))
-                        return
+                # Click → cursor moves to that run via the VM's
+                # canonical select() slot; same downstream paint +
+                # post as the arrow path.
+                self._vm.select(target.run_id)
+                self._repaint_selection()
+                self.post_message(self.RunSelected(target.run_id))
                 return
             target = getattr(target, "parent", None)
 
@@ -433,15 +449,14 @@ class JobRunsPane(Widget, can_focus=True):
 
     def _repaint_selection(self) -> None:
         """Flip the ``-selected`` class on the rows so the visible
-        cursor matches ``_cursor_index`` — WITHOUT re-mounting. Used
-        by arrow / click handlers where only the cursor position
-        changed; the underlying run rows are unchanged so wiping
-        them and rebuilding (``_refresh_rows``) is pure flicker.
-        """
-        runs = self._vm.runs
-        if not runs or not (0 <= self._cursor_index < len(runs)):
-            return
-        target_run_id = runs[self._cursor_index].job_run_id
+        cursor matches the VM's `selected_id` — WITHOUT re-mounting.
+        Used by arrow / click handlers where only the cursor
+        position changed; the underlying run rows are unchanged so
+        wiping them and rebuilding (``_refresh_rows``) is pure
+        flicker. Under round-3 (§9.bis.11) the cursor source of
+        truth is the VM's `selected_id`; the View is a derived
+        projection."""
+        target_run_id = self._vm.selected_id
         for row in self.query(_JobRunRow):
             row.set_class(row.run_id == target_run_id, "-selected")
 
@@ -499,11 +514,15 @@ class JobRunsPane(Widget, can_focus=True):
         if state is PaneState.EMPTY or not runs:
             body.mount(Static("(no runs)", classes="runs-placeholder"))
             return
-        if self._cursor_index >= len(runs):
-            self._cursor_index = max(0, len(runs) - 1)
-        for idx, r in enumerate(runs):
+        # The cursor position is derived from `vm.selected_id`; on
+        # first mount or after a refresh that clears the prior
+        # selection, the VM-side restore logic re-points current
+        # (or leaves it None). Either way, paint via id match —
+        # there is no View-side fallback clamp needed.
+        cursor_run_id = self._vm.selected_id
+        for r in runs:
             row_classes = "runs-row"
-            if idx == self._cursor_index:
+            if r.job_run_id == cursor_run_id:
                 row_classes += " -selected"
             body.mount(_JobRunRow(r, run_id=r.job_run_id, classes=row_classes))
         if self._vm.has_more:

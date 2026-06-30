@@ -215,21 +215,21 @@ async def test_emr_left_pane_auto_focuses_and_arrow_keys_move_cursor(tmp_path: P
 
             # (2) Arrow keys move the cursor. The pane's internal
             # cursor index starts at 0; Down should advance to 1.
-            initial_cursor = left._cursor_index  # type: ignore[attr-defined]
+            initial_cursor = left._cursor_index()  # type: ignore[attr-defined]
             await pilot.press("down")
             await pilot.pause()
-            assert left._cursor_index == initial_cursor + 1, (  # type: ignore[attr-defined]
+            assert left._cursor_index() == initial_cursor + 1, (  # type: ignore[attr-defined]
                 f"Down arrow on EMR LEFT pane did not advance the cursor — "
                 f"App-level priority binding hijacked the keystroke. "
-                f"Got cursor={left._cursor_index!r}, expected {initial_cursor + 1}."  # type: ignore[attr-defined]
+                f"Got cursor={left._cursor_index()!r}, expected {initial_cursor + 1}."  # type: ignore[attr-defined]
             )
 
             # And Up moves it back.
             await pilot.press("up")
             await pilot.pause()
-            assert left._cursor_index == initial_cursor, (  # type: ignore[attr-defined]
+            assert left._cursor_index() == initial_cursor, (  # type: ignore[attr-defined]
                 f"Up arrow did not retract the cursor. Got "
-                f"{left._cursor_index!r}, expected {initial_cursor}."  # type: ignore[attr-defined]
+                f"{left._cursor_index()!r}, expected {initial_cursor}."  # type: ignore[attr-defined]
             )
     finally:
         with contextlib.suppress(Exception):
@@ -323,8 +323,8 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
             await pilot.pause()
 
             # Cursor moved to row 1 + detail flipped to r-002.
-            assert left._cursor_index == 1, (  # type: ignore[attr-defined]
-                f"Click did not move cursor to row 1. Got {left._cursor_index!r}."  # type: ignore[attr-defined]
+            assert left._cursor_index() == 1, (  # type: ignore[attr-defined]
+                f"Click did not move cursor to row 1. Got {left._cursor_index()!r}."  # type: ignore[attr-defined]
             )
             detail_vm = ctx.root_vm.content_host.current.job_run_detail
             assert detail_vm.detail is not None
