@@ -945,16 +945,13 @@ class PaneVM:
         # FRESH closure each call because set_predicate is
         # identity-checked on the predicate object — passing the
         # bound method (always the same identity) would silently
-        # no-op when the filter_text changes.
+        # no-op when the filter_text changes. The fresh closure
+        # guarantees ``set_predicate`` always fires ``on_changed``,
+        # so no follow-up sync is needed.
         def _live_predicate(inner: ComponentVMOf[EntryState]) -> bool:
             return self._filter_predicate(inner)
 
         self._filtered_composite.set_predicate(_live_predicate)
-        # Sync once as a belt-and-braces guarantee — if set_predicate
-        # didn't fire on_changed (e.g. predicate was identity-equal
-        # to an earlier one), we still want _filtered to reflect
-        # the current state.
-        self._sync_filtered_from_composite()
 
     def _sync_filtered_from_composite(self) -> None:
         """Re-derive ``_filtered`` from the composite's visible set."""

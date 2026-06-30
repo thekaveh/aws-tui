@@ -2516,12 +2516,21 @@ class AwsTuiApp(App[None]):
             # Currently-hosted SettingsVM (if any) is disposed by the
             # ContentHostVM tree teardown via ``root_vm.shutdown()``.
             ctx.s3_connections_vm.dispose()
+        # One suppress PER dispose — bundling them under a single
+        # suppress lets the first raise short-circuit every later
+        # call (most notably the FocusCoordinatorVM cleanup the
+        # comment below specifically defends against).
         with contextlib.suppress(Exception):
             ctx.command_palette_vm.dispose()
+        with contextlib.suppress(Exception):
             ctx.quick_look_vm.dispose()
+        with contextlib.suppress(Exception):
             ctx.confirm_vm.dispose()
+        with contextlib.suppress(Exception):
             ctx.transfers_vm.dispose()
+        with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+        with contextlib.suppress(Exception):
             # FocusCoordinatorVM lives on the AppContext top-level,
             # not under root_vm, so root_vm.dispose() doesn't reach
             # it. Without an explicit call the inner ComponentVM +

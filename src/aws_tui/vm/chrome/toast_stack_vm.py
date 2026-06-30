@@ -95,6 +95,14 @@ class ToastStackVM:
             return
         self._disposed = True
         self._cancel_all_timers()
+        # Inner CompositeVM cascades through its ComponentVMOf
+        # children but NOT through the wrapping ToastVM facades —
+        # each facade owns a RelayCommand (``_dismiss_command``)
+        # that must be disposed via ToastVM.dispose(). Mirror the
+        # sibling pattern used by TransfersVM and ThemePickerVM.
+        for toast in self._toasts:
+            toast.dispose()
+        self._toasts.clear()
         self._inner.dispose()
 
     # ── Public API ──────────────────────────────────────────────────────────
