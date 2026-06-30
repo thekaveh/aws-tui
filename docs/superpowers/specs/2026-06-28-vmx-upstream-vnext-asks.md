@@ -1080,6 +1080,70 @@ use it (e.g., theme picker, settings page tabs).
 
 ---
 
+## Item 11 — `RelayCommand.dispose()` does not gate later `execute()` calls (NEW from round-6 verification)
+
+**Primitive evaluated:** `RelayCommand` / `RelayCommandOf[T]` —
+`vmx/commands/relay_command.py` (Builder in
+`vmx/commands/builders.py`).
+
+**aws-tui use case:** The chrome VMs (CommandPaletteVM,
+CrashVM, ConfirmationVM, …) own multiple RelayCommands and
+dispose them all from their own `dispose()` (see e.g.
+`command_palette_vm.py:288-302`). The host (View / test
+harness / `ContentHostVM.set_content` swap) calls `vm.dispose()`
+on tear-down. A later call to a previously-exposed command —
+either accidental (a callback that didn't unsubscribe in time) or
+intentional (test asserting "post-dispose calls are safe") — is
+expected to be a no-op.
+
+**What blocked clean out-of-the-box adoption:** After `dispose()`,
+`RelayCommand.execute()` still runs the registered task and the
+side effect lands. Discovered by tightening a vacuous test —
+`tests/unit/vm/chrome/test_command_palette.py::test_dispose_releases_commands`
+in round 6 of the post-refactor verification loop. The original
+test asserted nothing; replacing it with `assert vm.is_open ==
+prior_is_open` after a post-dispose `open_command.execute()` made
+the test FAIL because `is_open` flipped `False → True`. The
+implication: any "fire-and-forget" subscriber that survives the VM
+through teardown can resurrect VM state long after the VM is
+conceptually dead.
+
+**What aws-tui did instead:** Pinned the actual behaviour
+("dispose runs cleanly; subsequent execute does not raise") and
+documented the surprise in the test docstring so a future vmx
+upgrade tightening the contract trips the test. No wrapping; the
+risk is small for aws-tui (the test harness tears down before any
+late callback can land) but real for any consumer that has a
+slower teardown choreography (e.g. a multi-modal dismissal walk).
+
+**Proposed vNext API or behavior:** Make
+`RelayCommand.execute()` a no-op after `dispose()`, with two
+sub-questions for the design:
+
+1. **Behaviour on disposed `execute()` call:** silent no-op
+   (today's intent) OR raise `DisposedError` (loud-fail variant).
+   The aws-tui ergonomic preference is **silent**, matching the
+   "subsequent execute calls are safe" idiom that the dispose
+   docstring on every primitive already implies. A `disposed`
+   property on the command would let callers gate manually if they
+   prefer the loud-fail discipline.
+2. **`can_execute()` after dispose:** should return `False`
+   unconditionally. Views that observe `can_execute_changed` to
+   enable/disable a button need the final event to be the
+   `False`-flip; otherwise the button stays clickable until the
+   widget itself is unmounted.
+
+**Estimated upstream effort:** **Trivial.** ~15 LOC + 1 test.
+`dispose()` sets `self._disposed = True`; `execute()`'s first line
+becomes `if self._disposed: return`; `can_execute()` returns
+`False` when disposed.
+
+**Reference:** test failure in
+`tests/unit/vm/chrome/test_command_palette.py::test_dispose_releases_commands`
+on commit `24f01da` of `refactor/vmx-toolkit-adoption`.
+
+---
+
 ## Summary table
 
 | # | Primitive | Issue | aws-tui workaround | vNext ask effort |
@@ -1094,6 +1158,7 @@ use it (e.g., theme picker, settings page tabs).
 | 8 | Per-VM Observable surface | shared `MessageHub` requires `sender_object` filtering in Views | **built per-VM `Subject[str]` + `on_property_changed` Observable** on ALL FOUR EMR VMs; consumed by ALL FOUR EMR view widgets — zero `sender_object` guards remain in the EMR layer | Small (promote `on_property_changed` to `_ComponentVMBase`) |
 | 9 | `ScoredFilteredCompositeVM` | `FilteredCompositeVM` is boolean only | inlined score+rank+sort on `CommandPaletteVM` | Small after Item 3 |
 | 10 | Slot-discriminator coordinator | no primitive | **built `FocusCoordinatorVM` + `FocusSlot` StrEnum** (16 tests); wired through composition + NavMenu + EmrServerlessPage + SettingsView + service-default-slot router on NavMenu ENTER. PR #98(2)/#99(a)/#100(a)/#101 structurally retired through it. | Small (`DiscriminatorVM[E]` generic with route registry) |
+| 11 | `RelayCommand.dispose()` | no use-after-dispose gate; `execute()` post-dispose still runs the task | pinned actual behaviour in `test_dispose_releases_commands`; documented surprise so a vmx upgrade tightening the contract trips the test | Trivial (set `_disposed` flag; gate `execute` + `can_execute`) |
 
 ---
 
