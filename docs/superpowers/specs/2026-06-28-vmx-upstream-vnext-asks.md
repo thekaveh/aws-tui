@@ -265,8 +265,26 @@ This works, keeps the VM layer fully View-portable (NiceGUI-friendly),
 but the filter logic and the cursor-mapping logic both live on the
 wrapping VM instead of in a reusable primitive.
 
-**Round-3 implementation evidence:** Built as
-`aws_tui.vm._composition.FilteredCompositeVM[VM]` at
+**Round-3 implementation evidence:**
+
+PaneVM (commit `c641d1a`) now treats `composite.current` as the
+canonical cursor source-of-truth. Its `_cursor_index` is a
+property bridge:
+- **Getter:** derives position from
+  `_inner.current`'s entry index within the visible filter
+  projection. Returns 0 when current is None.
+- **Setter:** clamps a filtered-position write; promotes the
+  corresponding entry's inner to `_inner.current`.
+
+This **property-bridge pattern** is a useful generalisation
+worth noting for vNext: any VM that wants to expose an `int`
+cursor index while owning the canonical state in
+`composite.current` (or a filtered projection thereof) can use
+this pattern. The pattern composes cleanly with
+`FilteredCompositeVM`'s visible projection — the index domain is
+"position within visible", not "position within source".
+
+Built as `aws_tui.vm._composition.FilteredCompositeVM[VM]` at
 `src/aws_tui/vm/_composition/filtered_composite_vm.py`. The public
 surface ended up being:
 
@@ -812,6 +830,15 @@ Integration tests:
 **PR #103 acceptance is fully closed — zero sender_object guards
 remain in the EMR view layer** (commit `ac3ad81`).
 
+**Per-VM Observable surface is now consumed in every aws-tui VM
+that has sibling-VM-on-shared-hub collisions.** Item 8 is no
+longer a "consider for vNext" — it's a contract aws-tui depends
+on. Promoting `on_property_changed: Observable[str]` to
+`_ComponentVMBase` would let aws-tui delete ~15 LOC of duplicated
+Subject-creation + dispose boilerplate across the four migrated
+VMs (`applications_vm.py`, `job_runs_vm.py`,
+`job_run_detail_vm.py`, `job_run_logs_vm.py`).
+
 **Proposed vNext API:** Promote `on_property_changed: Observable[str]`
 into the `_ComponentVMBase` (or `ComponentVMBase`) contract directly.
 Every VMx VM gains it automatically; the hub-broadcast path can
@@ -1058,7 +1085,7 @@ use it (e.g., theme picker, settings page tabs).
 | 1 | `PagedComposition` | index-based; can't model nextToken | dropped; `CompositeVM` + manual `next_token` + `load_more` (+ dedup-on-set, c114b36) | Small–medium (`TokenPagedComposition`) |
 | 2 | `PagedComposition` × `CompositeVM` | observable shapes don't compose | dropped via Item 1 (no adapter built) | Small (extend `_try_subscribe_source`) |
 | 3 | `CompositeVM` derived/filtered view | no primitive ships | **built `FilteredCompositeVM[VM]` mini-primitive** in `vm/_composition/` (23 tests); consumed by PaneVM | Medium (`FilteredCompositeVM`) |
-| 4 | `FormVM` validators | no declarative API | **built `ValidatingFormVM[TM]` mini-primitive** + consumer `S3ConnectionFormVM` (25 tests total) | Medium (declarative validators + `errors` map) |
+| 4 | `FormVM` validators | no declarative API | **built `ValidatingFormVM[TM]` mini-primitive** + consumer `S3ConnectionFormVM` (25 tests total); **`S3ConnectionFormVM` wired into `connection_form.py` widget** as the live edit-flow validator (commit `0b0fe41`) | Medium (declarative validators + `errors` map) |
 | 5 | `IDialogService` | closed contract; no VM-backed modal | all 4 modals verified compliant by composing `ComponentVM` + own async `ask()` API; round-3 compliance tests pin the contract | Medium (`present()` + `ModalVM` protocol; optional `MultiStepFormVM`, `ChoiceVM`) |
 | 6 | `ServicedObservableCollection` | docs say ownership; source does not | corrected aws-tui spec; kept manual `finally: dispose` in TransfersVM | Trivial (rename / docstring); small (owned variant) |
 | 7 | `HierarchicalVM` | no cache-invalidation contract | chose `CompositeVM` instead | Small (`invalidate*` + TTL + docs) |
