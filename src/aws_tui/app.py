@@ -763,7 +763,14 @@ class AwsTuiApp(App[None]):
         try:
             host = self.query_one("#content-host", Container)
             await host.remove_children()
-            await host.mount(DualPane(dual, hub=ctx.hub, id="content-dual-pane"))
+            await host.mount(
+                DualPane(
+                    dual,
+                    hub=ctx.hub,
+                    focus_coordinator=ctx.focus_coordinator,
+                    id="content-dual-pane",
+                )
+            )
         except Exception as exc:
             ctx.log_sink.error(
                 "app.local_only_mount.mount_failed",
@@ -920,7 +927,14 @@ class AwsTuiApp(App[None]):
                         )
                     )
                 else:
-                    host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+                    host.mount(
+                        DualPane(
+                            current_vm,
+                            hub=ctx.hub,
+                            focus_coordinator=ctx.focus_coordinator,
+                            id="content-dual-pane",
+                        )
+                    )
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.failed",
@@ -2391,7 +2405,14 @@ class AwsTuiApp(App[None]):
                         )
                     )
                 else:
-                    await host.mount(DualPane(current_vm, hub=ctx.hub, id="content-dual-pane"))
+                    await host.mount(
+                        DualPane(
+                            current_vm,
+                            hub=ctx.hub,
+                            focus_coordinator=ctx.focus_coordinator,
+                            id="content-dual-pane",
+                        )
+                    )
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.mount_failed",

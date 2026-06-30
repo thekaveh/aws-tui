@@ -435,6 +435,17 @@ class EmrServerlessPage(Widget):
                 self._focus_nav_menu()
                 return
         slots[next_idx].focus()
+        # Project the new slot through the coordinator so the
+        # ``-rail-active`` Screen class set by NavMenu.on_focus
+        # clears — without this, the per-theme ``.-rail-active
+        # Pane.-focused`` rule keeps the EMR panes' focused
+        # border dim instead of accent-highlighted. Sibling to
+        # DualPane's _sync_focus projection.
+        if self._focus_coordinator is not None:
+            slot_to_project = (FocusSlot.EMR_RUNS, FocusSlot.EMR_DETAIL, FocusSlot.EMR_LOGS)[
+                next_idx
+            ]
+            self._focus_coordinator.set_focused_slot(slot_to_project)
 
     def _focus_nav_menu(self) -> None:
         """Hand focus back to the App-level NavMenu. The App

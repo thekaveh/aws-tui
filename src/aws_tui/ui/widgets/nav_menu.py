@@ -390,10 +390,17 @@ class NavMenu(Widget, can_focus=True):
     def _repaint_rows(self) -> None:
         """Flip the ``-selected`` class on every mounted row to
         match the current cursor (derived from ``vm.selected_id``).
-        Avoids a full re-mount on every arrow keypress."""
+        Avoids a full re-mount on every arrow keypress.
+
+        Delegates to ``NavRow.set_selected`` which updates BOTH the
+        CSS class AND the row's internal ``_is_selected`` field +
+        triggers a re-render — without the row's re-render the
+        ribbon glyph ``▌`` stays on the originally-mounted row even
+        though the CSS class moves.
+        """
         selected_id = self._vm.selected_id
         for row in self.query(NavRow):
-            row.set_class(row.descriptor_id == selected_id, "-selected")
+            row.set_selected(row.descriptor_id == selected_id)
 
 
 __all__ = ["NavMenu"]

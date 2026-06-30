@@ -16,6 +16,7 @@ from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets.pane import Pane
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 
 
@@ -45,12 +46,14 @@ class DualPane(HubSubscriberMixin, Widget):
         vm: DualPaneVM,
         *,
         hub: MessageHub[Message],
+        focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: DualPaneVM = vm
         self._hub: MessageHub[Message] = hub
+        self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
         self._left_widget: Pane | None = None
         self._right_widget: Pane | None = None
 
@@ -96,6 +99,20 @@ class DualPane(HubSubscriberMixin, Widget):
         focused = self._vm.focused
         self._left_widget.set_focused(focused is FocusedPane.LEFT)
         self._right_widget.set_focused(focused is FocusedPane.RIGHT)
+        # Project the new pane focus through the coordinator. The
+        # coordinator is the single source of truth for which slot
+        # holds focus app-wide; without this projection the
+        # ``-rail-active`` Screen class set by NavMenu.on_focus
+        # stays put when Tab / mouse-click moves focus from the
+        # rail into a file pane, and the per-theme
+        # ``Screen.-rail-active Pane.-focused`` rule dims the
+        # focused pane's border instead of highlighting it. The
+        # MVVM projection is symmetric with NavMenu.on_focus →
+        # set_focused_slot(NAV_MENU); now the pane move also drives
+        # the coordinator slot.
+        if self._focus_coordinator is not None:
+            slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
+            self._focus_coordinator.set_focused_slot(slot)
 
     def focus_focused_pane(self) -> None:
         """Move Textual focus to whichever pane the VM marks active.
