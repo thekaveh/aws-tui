@@ -7,15 +7,18 @@ to keep the dependency footprint tiny. The view layer reads
 ``filtered_entries`` and ``selected_index`` directly; reactive updates fire
 ``PropertyChangedMessage`` on the hub.
 
-Round-3 directive (spec §9.bis.11): the registry is held in an internal
-:class:`vmx.CompositeVM` over per-entry :class:`PaletteEntryVM` facades.
-The composite is NOT exposed in the public surface — consumers continue
-to bind to the existing ``filter_text`` / ``filtered_entries`` /
-``selected_index`` surface. The scoring + sort logic (a true fuzzy-rank,
-NOT a boolean predicate) stays on this VM rather than going through
-``FilteredCompositeVM`` whose predicate model doesn't capture the
-rank-by-score requirement; the composite still provides lifecycle
-cascade + ``on_collection_changed`` for the registry.
+Round-3 directive (spec §9.bis.11): the registry composes
+:class:`vmx.CompositeVM` over per-entry :class:`PaletteEntryVM`
+facades, and the filter+score+sort projection composes a small
+custom rank-by-score @property on top of the composite's
+``on_collection_changed`` event stream. Neither the inner
+``CompositeVM`` nor the rank-by-score machinery is exposed in the
+public surface — consumers bind to ``filter_text`` /
+``filtered_entries`` / ``selected_index``. The rank-by-score is the
+spec's promised ``ScoredFilteredCompositeVM`` variant (§9.bis.3),
+inlined here rather than lifted into ``vm/_composition/`` because
+the palette is its only consumer; promoting it is straightforward if
+a second scored-filter consumer appears.
 """
 
 from __future__ import annotations

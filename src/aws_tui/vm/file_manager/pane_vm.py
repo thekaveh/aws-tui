@@ -224,15 +224,22 @@ class PaneVM:
             .auto_construct_on_add(True)
             .build()
         )
-        # Round-3 composition (spec §9.bis.11 / §9.bis.3): the filter
-        # projection over the inner composite. The
-        # FilteredCompositeVM's visible/cursor surface is the source of
-        # truth for "which entries are visible"; the public ``_filtered``
-        # tuple below is a derived snapshot kept for the multitude of
-        # call sites that index by position. The composite itself is
-        # NOT exposed.
+        # Round-3 composition (spec §9.bis.11 / §9.bis.3): the
+        # FilteredCompositeVM IS the source of truth for "which
+        # entries are visible". Its ``visible`` projection drives
+        # ``_filtered`` re-derivation through the ``on_changed``
+        # subscription wired below; we don't index it manually
+        # except inside that subscription. The composite is NOT
+        # exposed in the public surface.
         self._filtered_composite: FilteredCompositeVM[ComponentVMOf[EntryState]] = (
             FilteredCompositeVM(self._inner, predicate=self._filter_predicate)
+        )
+        # Single source of truth: subscription re-derives ``_filtered``
+        # whenever the composite's visible set changes (predicate or
+        # source mutation). Pre-computed once below so the field is
+        # populated before any read.
+        self._filter_sub = self._filtered_composite.on_changed.subscribe(
+            on_next=lambda _: self._sync_filtered_from_composite()
         )
 
         # ── Commands ────────────────────────────────────────────────────────
@@ -499,7 +506,10 @@ class PaneVM:
         self._set_filter_command.dispose()
         # Dispose the FilteredCompositeVM before the inner composite —
         # the filter has a live subscription to inner's
-        # on_collection_changed that must unwind first.
+        # on_collection_changed that must unwind first. Drop our
+        # ``on_changed`` subscriber first to keep the teardown order
+        # explicit.
+        self._filter_sub.dispose()
         self._filtered_composite.dispose()
         for child in self._entries:
             child.dispose()
@@ -872,15 +882,25 @@ class PaneVM:
         return _filter_matches(inner.model.entry.name, self._filter_text)
 
     def _recompute_filtered(self) -> None:
-        # Push the current filter into the FilteredCompositeVM so its
-        # ``visible`` projection reflects the active query. We use a
-        # fresh closure capturing the latest ``_filter_text`` rather
-        # than rebinding ``self._filter_predicate`` (which would still
-        # work but adds an unnecessary attribute round-trip).
-        self._filtered_composite.set_predicate(self._filter_predicate)
-        # Derived snapshot: the indices into ``_entries`` that match the
-        # composite's visible projection. Preserves the in-position
-        # API for the many call sites in this file that read by index.
+        # Single source of truth: nudge the FilteredCompositeVM; its
+        # ``on_changed`` subscription wired in __init__ re-derives
+        # ``_filtered`` via _sync_filtered_from_composite. Pass a
+        # FRESH closure each call because set_predicate is
+        # identity-checked on the predicate object — passing the
+        # bound method (always the same identity) would silently
+        # no-op when the filter_text changes.
+        def _live_predicate(inner: ComponentVMOf[EntryState]) -> bool:
+            return self._filter_predicate(inner)
+
+        self._filtered_composite.set_predicate(_live_predicate)
+        # Sync once as a belt-and-braces guarantee — if set_predicate
+        # didn't fire on_changed (e.g. predicate was identity-equal
+        # to an earlier one), we still want _filtered to reflect
+        # the current state.
+        self._sync_filtered_from_composite()
+
+    def _sync_filtered_from_composite(self) -> None:
+        """Re-derive ``_filtered`` from the composite's visible set."""
         visible_set = set(self._filtered_composite.visible)
         if not visible_set:
             self._filtered = ()

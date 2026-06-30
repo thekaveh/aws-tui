@@ -391,6 +391,38 @@ async def test_dispose_cleans_up_items() -> None:
     assert vm._items == []  # type: ignore[attr-defined]
 
 
+# -------------------- Phase 2 dedup-on-set parity (§9.bis.9 Q-A) --------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_is_no_op_when_page_is_unchanged() -> None:
+    """Dedup-on-set: a refresh that returns the SAME first page must
+    NOT fire `runs`/`selected_id`/`on_collection_changed` events.
+    Mirrors ApplicationsVM's PR #100(b) guard."""
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    notified: list[str] = []
+    sub = vm.on_property_changed.subscribe(on_next=notified.append)
+    composite_events: list[object] = []
+    sub2 = vm._inner.on_collection_changed.subscribe(  # type: ignore[attr-defined]
+        on_next=composite_events.append
+    )
+    try:
+        await vm.refresh()  # same page
+        # State LOADING→IDLE transitions still fire — that's fine; the
+        # data-shape signal "runs" must NOT.
+        assert "runs" not in notified, (
+            "JobRunsVM did not absorb the no-change refresh — Phase 2 dedup parity regression"
+        )
+        assert "selected_id" not in notified
+        assert composite_events == []
+    finally:
+        sub.dispose()
+        sub2.dispose()
+
+
 # -------------------- PR #103 retirement: per-VM Observable --------------------
 
 

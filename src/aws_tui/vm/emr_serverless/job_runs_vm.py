@@ -258,26 +258,35 @@ class JobRunsVM:
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
             return
+        new_runs: tuple[JobRunSummary, ...] = tuple(runs)
         prior_selected_id = self.selected_id
-        self._clear_items()
-        for summary in runs:
-            self._add_item(summary)
+
+        # Dedup-on-set parity with ApplicationsVM (§9.bis.9 Q-A): if
+        # the freshly-fetched page matches the current accumulator
+        # head, the composite is NOT mutated and no `runs`/
+        # `selected_id` events fire. The next_token may still differ
+        # (the server can grow the result set without changing the
+        # first page); persist it unconditionally below.
+        unchanged = self._items_equal(new_runs)
+        if not unchanged:
+            self._clear_items()
+            for summary in new_runs:
+                self._add_item(summary)
+            # CompositeVM.clear() during _clear_items drops current
+            # to None automatically. Restore selection by id if still
+            # present; otherwise emit the user-visible "selected_id"
+            # event so consumers update their cursor.
+            if prior_selected_id is not None:
+                restored = False
+                for item in self._items:
+                    if item.summary.job_run_id == prior_selected_id:
+                        self._inner.current = item.inner
+                        restored = True
+                        break
+                if not restored:
+                    self._notify("selected_id")
+            self._notify("runs")
         self._next_token = next_token
-        # CompositeVM.clear() during _clear_items drops current to None
-        # automatically. If the prior selection's id IS still present
-        # in the new page, restore it to keep View bindings stable; if
-        # not, emit the user-visible "selected_id" event so consumers
-        # update their cursor.
-        if prior_selected_id is not None:
-            restored = False
-            for item in self._items:
-                if item.summary.job_run_id == prior_selected_id:
-                    self._inner.current = item.inner
-                    restored = True
-                    break
-            if not restored:
-                self._notify("selected_id")
-        self._notify("runs")  # restored from refresh prior-selection check above
         self._set_state(PaneState.IDLE if self.runs else PaneState.EMPTY)
 
     async def load_more(self) -> None:
@@ -332,6 +341,18 @@ class JobRunsVM:
         self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    def _items_equal(self, new_runs: tuple[JobRunSummary, ...]) -> bool:
+        """Identity check for the dedup-on-set guard. The first N
+        entries of the new page must match our shadow ``_items`` 1:1
+        for refresh to be a no-op. Mirror of ApplicationsVM._items_equal.
+        """
+        if len(self._items) != len(new_runs):
+            return False
+        for item, summary in zip(self._items, new_runs, strict=True):
+            if item.summary != summary:
+                return False
+        return True
 
     def _initial_children(self) -> tuple[ComponentVMOf[JobRunSummary], ...]:
         # CompositeVM builder requires a children factory even when the
