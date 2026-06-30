@@ -23,6 +23,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.emr_logs import (
     DEFAULT_LOG_FILTER,
     EmrServerlessLogsClient,
+    FilterMode,
     LogFile,
     LogFileKind,
     LogFilter,
@@ -98,13 +99,19 @@ class JobRunLogsVM:
         # here instead of filtering shared MessageHub events by
         # ``sender_object``.
         self._on_property_changed: Subject[str] = Subject()
-        # LRU response cache: key=(app_id, run_id, file_key, filter_hash);
-        # value=(lines, truncated). Capped at :data:`_CACHE_MAX_ENTRIES`
-        # so recent navigation stays snappy without unbounded memory
-        # growth. Cleared on application switch in :meth:`set_target`.
-        self._cache: OrderedDict[tuple[str, str, str, int], tuple[tuple[str, ...], bool]] = (
-            OrderedDict()
-        )
+        # LRU response cache: key=(app_id, run_id, file_key, patterns,
+        # mode, case_insensitive); value=(lines, truncated). Use the
+        # raw filter triple instead of hash(triple) — hash() collapses
+        # structurally-distinct filters to a single int, so two
+        # different filter configurations can collide and the second
+        # would silently hit a cache entry built from the first,
+        # serving the wrong filtered line set. LogFilter is a frozen
+        # dataclass so the tuple is hashable directly. Cleared on
+        # application switch in :meth:`set_target`.
+        self._cache: OrderedDict[
+            tuple[str, str, str, tuple[str, ...], FilterMode, bool],
+            tuple[tuple[str, ...], bool],
+        ] = OrderedDict()
 
     # ── Properties (snapshot accessors) ─────────────────────────────────────
 
@@ -278,13 +285,9 @@ class JobRunLogsVM:
                 self._application_id,
                 self._job_run_id,
                 self._current_file.key,
-                hash(
-                    (
-                        self._filter.patterns,
-                        self._filter.mode,
-                        self._filter.case_insensitive,
-                    )
-                ),
+                self._filter.patterns,
+                self._filter.mode,
+                self._filter.case_insensitive,
             )
             if cache_key in self._cache:
                 # LRU bump: move the freshly-accessed entry to the

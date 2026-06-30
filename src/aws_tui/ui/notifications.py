@@ -41,6 +41,7 @@ Classes:
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING, Final, Literal
 
 from rich.markup import escape as _markup_escape
@@ -118,8 +119,17 @@ def _stable_id(prefix: str, subject: str, message: str) -> str:
     care about dedupe. Same prefix + same text = same id, so a
     re-raise replaces the earlier toast via the stack's id-collision
     handling rather than stacking duplicates.
+
+    Uses ``hashlib.blake2b`` instead of ``hash() & 0xFFFFFF`` —
+    Python's ``hash`` is salted per-process AND the 24-bit mask
+    crosses 50% birthday-collision at ~4,800 unique messages within
+    the same prefix+subject bucket (1% at ~580), meaning unrelated
+    fresh toasts can silently replace earlier still-visible ones.
+    blake2b 64-bit digest gives collision-resistant ids without
+    per-process variance.
     """
-    return f"{prefix}-{subject.lower()}-{abs(hash(message)) & 0xFFFFFF:06x}"
+    digest = hashlib.blake2b(message.encode("utf-8"), digest_size=8).hexdigest()
+    return f"{prefix}-{subject.lower()}-{digest}"
 
 
 # ── Public helpers ──────────────────────────────────────────────────────────
