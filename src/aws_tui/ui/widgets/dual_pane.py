@@ -125,11 +125,11 @@ class DualPane(HubSubscriberMixin, Widget):
             self.app.set_focus(None)
         if self._vm.focused is FocusedPane.LEFT:
             return
-        switch_cmd = getattr(self._vm, "switch_focus_command", None)
-        if switch_cmd is None:
-            return
+        # ``switch_focus_command`` is a typed property on DualPaneVM —
+        # accessing it directly lets a rename / retire of the command
+        # break the call site loudly instead of silently no-oping.
         with contextlib.suppress(Exception):
-            switch_cmd.execute()
+            self._vm.switch_focus_command.execute()
 
 
 __all__ = ["DualPane"]

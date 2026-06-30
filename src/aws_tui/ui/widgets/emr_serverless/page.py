@@ -434,9 +434,10 @@ class EmrServerlessPage(Widget):
     def _focus_nav_menu(self) -> None:
         """Hand focus back to the App-level NavMenu. The App
         provides ``_focus_active_nav_list`` which lands focus on
-        the OptionList that owns the currently-selected service —
-        we reuse that helper so the EMR page doesn't need to know
-        which OptionList is "active"."""
+        the NavMenu rail widget directly — post-PR-#94 there is
+        no internal OptionList; the rail itself is the focusable
+        widget. The helper name is kept for back-compat with the
+        App and EMR-page call sites."""
         from aws_tui.ui.widgets.nav_menu import NavMenu
 
         with contextlib.suppress(Exception):

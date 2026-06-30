@@ -28,8 +28,6 @@ class ChromeVM:
         dispatcher: Dispatcher,
         keymap: KeymapStore,
     ) -> None:
-        self._hub: MessageHub[Message] = hub
-
         self._hint_legend = HintLegendVM(hub=hub, dispatcher=dispatcher, keymap=keymap)
         self._status_bar = StatusBarVM(hub=hub, dispatcher=dispatcher)
         self._toast_stack = ToastStackVM(hub=hub, dispatcher=dispatcher)

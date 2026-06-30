@@ -5,9 +5,13 @@ Each widget that binds to a VM subscribes to its hub for
 This module factors that subscription into a tiny mixin so individual
 widgets stay focused on rendering.
 
-The mixin also handles ``unmount`` cleanup — we keep a strong reference
-to the reactivex ``DisposableBase`` returned by ``hub.messages.subscribe``
-and dispose it when the widget unmounts.
+The mixin exposes :meth:`unsubscribe_from_vm` so the consuming widget
+can release the subscription from its own ``on_unmount`` hook — the
+mixin does NOT install an ``on_unmount`` itself (overriding Textual's
+unmount path from a mixin would force every consumer into a
+``super().on_unmount()`` discipline, which is a more error-prone
+contract than the explicit call). A widget that forgets the call
+leaks one subscription per mount.
 """
 
 from __future__ import annotations

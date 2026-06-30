@@ -331,8 +331,15 @@ class NavMenu(Widget, can_focus=True):
             return
         if msg.sender_object is not self._vm:
             return
-        if msg.property_name in ("items", "selected_id"):
+        # ``items`` changes require re-mounting the row widgets;
+        # ``selected_id`` only flips the ``-selected`` class on the
+        # already-mounted rows. Routing the lighter path through
+        # ``_repaint_rows`` honours the per-arrow-keypress
+        # responsiveness target the method's docstring records.
+        if msg.property_name == "items":
             self._rebuild_rows()
+        elif msg.property_name == "selected_id":
+            self._repaint_rows()
 
     def _rebuild_rows(self) -> None:
         """Re-mount all NavRows from the current VM items list.

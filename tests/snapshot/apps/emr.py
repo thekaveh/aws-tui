@@ -97,7 +97,7 @@ class EmrPageApp(App[None]):
         host = self.query_one("#content-host", Container)
         page = EmrServerlessPage(
             self._page_vm,
-            hub=self._page_vm._hub,  # type: ignore[attr-defined]
+            hub=self._page_vm.hub,
             id="emr-page",
         )
         await host.mount(page)
@@ -120,7 +120,7 @@ class EmrPageEmptyApp(App[None]):
         host = self.query_one("#content-host", Container)
         page = EmrServerlessPage(
             self._page_vm,
-            hub=self._page_vm._hub,  # type: ignore[attr-defined]
+            hub=self._page_vm.hub,
             id="emr-page",
         )
         await host.mount(page)
