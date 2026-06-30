@@ -215,10 +215,14 @@ class AwsSession:
 
     async def aclose_all_clients(self) -> None:
         """Exit every still-open client context manager. Safe to call twice."""
-        # Copy and clear so re-entry / parallel closes don't double-exit.
-        pending = list(self._open_clients)
-        self._open_clients.clear()
-        for cm in pending:
+        # Pop each entry as it's successfully closed so a CancelledError
+        # interrupting the loop leaves the unclosed survivors in the
+        # registry for a re-entrant aclose to retry. The prior
+        # "clear-up-front" approach silently leaked the unfinished CMs
+        # on cancellation — open sockets / botocore client sessions
+        # would live until process exit.
+        while self._open_clients:
+            cm = self._open_clients.pop()
             try:
                 await cm.__aexit__(None, None, None)
             except Exception as exc:
@@ -229,6 +233,13 @@ class AwsSession:
                     "aws_session.aclose_failed",
                     extra={"error": str(exc), "error_type": type(exc).__name__},
                 )
+            except BaseException:
+                # CancelledError / KeyboardInterrupt / SystemExit:
+                # this CM never fully closed. Put it back so a
+                # subsequent retry can finish the job (otherwise the
+                # registry-clear-up-front leaked).
+                self._open_clients.append(cm)
+                raise
 
 
 def _parse_iso8601(value: str) -> datetime:

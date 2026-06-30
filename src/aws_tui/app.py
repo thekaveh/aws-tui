@@ -1947,10 +1947,22 @@ class AwsTuiApp(App[None]):
         )
         picker.construct()
         modal = ThemePickerModal(picker=picker, hub=ctx.hub)
-        try:
-            await self.push_screen(modal)
-        finally:
+
+        # ``push_screen`` returns AwaitMount which resolves on MOUNT,
+        # not dismiss — the dedicated wait-for-dismiss is
+        # ``push_screen_wait`` (or the callback form). The prior
+        # ``finally`` ran the moment the modal APPEARED, scheduling
+        # picker.dispose on the next tick. Every subsequent user
+        # action (cursor preview, Enter apply, Esc rollback) then
+        # called pick_theme_command.execute / preview_command.execute
+        # on already-disposed RelayCommands and mutated already-
+        # disposed ThemeOptionVM._inner (whose _trigger_disposed=True
+        # silently swallows property-change subjects). Use the
+        # callback form so dispose runs on DISMISSAL.
+        def _on_picker_dismiss(_result: None) -> None:
             self.call_after_refresh(picker.dispose)
+
+        self.push_screen(modal, _on_picker_dismiss)
 
     def _raise_theme_changed_toast(self, theme_name: str) -> None:
         """Routed through :class:`ToastStackVM` (notifications overlay
@@ -2509,7 +2521,14 @@ class AwsTuiApp(App[None]):
         ctx = self._app_ctx
         with contextlib.suppress(Exception):
             ctx.transfers_vm.cancel_all_command.execute()
-        with contextlib.suppress(Exception):
+        # Include asyncio.CancelledError in the suppress — without it
+        # an in-flight CancelledError (a BaseException, not an
+        # Exception) on the aclose_all_clients await would cascade
+        # past every subsequent cleanup step below this block,
+        # skipping log_sink.flush()/.close() + the four reactive
+        # subscription disposes. Shutdown must NOT be cancellable
+        # mid-stream.
+        with contextlib.suppress(Exception, asyncio.CancelledError):
             await ctx.aws_session.aclose_all_clients()
         with contextlib.suppress(Exception):
             ctx.log_sink.flush()
