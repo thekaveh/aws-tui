@@ -159,12 +159,12 @@ async def test_pr_103_applications_vm_isolated_from_job_runs_vm() -> None:
         runs_vm.dispose()
 
 
-# -------------------- PR #98(3): FocusCoordinator drives -nav-active --------------------
+# -------------------- PR #98(3): FocusCoordinator drives -rail-active --------------------
 
 
 def test_pr_98_3_focus_coordinator_drives_nav_menu_slot() -> None:
     """Acceptance: the FocusCoordinatorVM owns the `focused_slot`
-    discriminator that the View's `-nav-active` Screen class
+    discriminator that the View's `-rail-active` Screen class
     subscribes to. Setting the slot to NAV_MENU emits an event
     that the (mocked) View consumer observes; setting to anything
     else demotes it. Demonstrates the round-3 pattern from
@@ -189,7 +189,7 @@ def test_pr_98_3_focus_coordinator_drives_nav_menu_slot() -> None:
 def test_pr_98_3_modal_open_preserves_prior_slot() -> None:
     """Modal precedence: opening a modal while NavMenu has the
     slot saves NavMenu and promotes MODAL. Closing restores
-    NavMenu. The Screen's `-nav-active` class should follow."""
+    NavMenu. The Screen's `-rail-active` class should follow."""
     coord = FocusCoordinatorVM(hub=_hub(), dispatcher=NULL_DISPATCHER, initial=FocusSlot.NAV_MENU)
     coord.construct()
     try:

@@ -2522,6 +2522,11 @@ class AwsTuiApp(App[None]):
             ctx.confirm_vm.dispose()
             ctx.transfers_vm.dispose()
             ctx.root_vm.dispose()
+            # FocusCoordinatorVM lives on the AppContext top-level,
+            # not under root_vm, so root_vm.dispose() doesn't reach
+            # it. Without an explicit call the inner ComponentVM +
+            # Subject leak on every shutdown.
+            ctx.focus_coordinator.dispose()
         with contextlib.suppress(Exception):
             # In demo mode, cancel any in-flight clone state-machine tasks
             # so asyncio doesn't emit "Task was destroyed but it is pending"

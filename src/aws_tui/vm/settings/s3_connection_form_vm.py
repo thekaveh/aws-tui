@@ -32,7 +32,11 @@ S3FormPersister = Callable[[S3CompatForm], Awaitable[None]]
 
 def _require_non_empty(field_label: str) -> Callable[[S3CompatForm], str | None]:
     def _v(form: S3CompatForm) -> str | None:
-        value = getattr(form, field_label, "")
+        # No default on getattr — an unknown field_label is a wiring
+        # mistake that should surface as AttributeError at first use,
+        # not silently produce "Xyz is required" for a field the UI
+        # never renders.
+        value = getattr(form, field_label)
         if not str(value).strip():
             return f"{field_label} is required"
         return None

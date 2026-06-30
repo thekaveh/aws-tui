@@ -226,21 +226,25 @@ class ApplicationsVM:
             # Real change — rebuild the composite. Drop the current
             # children first; CompositeVM._remove_at clears
             # ``current`` automatically when its referenced child
-            # leaves (composite_vm.py:264-272), so the selection
-            # invariant is preserved without manual fix-up.
+            # leaves (composite_vm.py:264-272). After repopulate the
+            # composite's identity-based ``current`` does NOT survive
+            # (each new ApplicationItemVM has a fresh inner), so we
+            # restore the prior selection by id — mirrors JobRunsVM's
+            # restore loop. Without this every poll silently
+            # unselects the user's chosen app.
             self._clear_items()
             for summary in new_apps:
                 self._add_item(summary)
+            if prior_selected_id is not None:
+                for item in self._items:
+                    if item.summary.id == prior_selected_id:
+                        self._inner.current = item.inner
+                        break
             self._notify("applications")
 
-        # The composite may have dropped ``current`` to None during
-        # _clear_items + repopulate (the same model id can re-appear
-        # but the inner VM is a fresh instance, so identity-based
-        # ``current`` doesn't survive the rebuild). If the post-
-        # rebuild selected_id differs from prior, emit the
-        # ``selected_id`` PropertyChanged so View consumers stay in
-        # sync — matches the prior behaviour where dropping a stale
-        # selection emitted the same notification.
+        # Emit the selected_id event only when the post-rebuild
+        # selection differs from prior — covers both the
+        # "selection vanished" and "selection survived" cases.
         if self.selected_id != prior_selected_id:
             self._notify("selected_id")
 
