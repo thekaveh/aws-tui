@@ -28,6 +28,7 @@ A second scored-filter consumer would justify promoting it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -372,7 +373,29 @@ class CommandPaletteVM:
             return
         task = loop.create_task(self._await_action(awaitable))
         self._pending_tasks.add(task)
-        task.add_done_callback(self._pending_tasks.discard)
+        task.add_done_callback(self._on_action_done)
+
+    def _on_action_done(self, task: asyncio.Task[None]) -> None:
+        """Done-callback for spawned palette actions. Drains the
+        task's exception (if any) so asyncio's destructor doesn't
+        emit a silent ``Task exception was never retrieved`` to
+        stderr — invisible in a TUI. The exception is then routed
+        through the hub as a PropertyChangedMessage so a future
+        toast subscriber can surface it; today the bare drain
+        prevents the silent-loss antipattern even without a
+        subscriber wired."""
+        self._pending_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        # Surface via the hub so a subscribed toast widget can
+        # render it. Without an active subscriber the message is
+        # a no-op, but the bare call to ``task.exception()`` above
+        # has already drained asyncio's "never retrieved" warning.
+        with contextlib.suppress(Exception):
+            self._hub.send(PropertyChangedMessage.create(self, self.name, "action_failed"))
 
     async def _await_action(self, awaitable: Awaitable[None]) -> None:
         await awaitable

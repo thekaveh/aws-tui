@@ -286,7 +286,18 @@ class DualPaneVM:
                             state=TransferState.CANCELLED,
                         )
                     )
-        await dst_pane.refresh()
+            # Refresh the destination pane INSIDE the finally so
+            # the user sees the partial result even when the loop
+            # raised mid-batch. Files 1..K-1 are physically present
+            # on disk; without this the pane would still show the
+            # pre-batch listing and a retry with
+            # ``on_conflict=OVERWRITE`` would silently clobber, or
+            # ERROR would hit EEXIST on the partial set. The
+            # journal cleanup above keeps state coherent; this
+            # makes the UI match. Suppressed so a refresh failure
+            # can't mask the original copy exception.
+            with contextlib.suppress(Exception):
+                await dst_pane.refresh()
 
     async def move_across(
         self, *, on_conflict: ConflictResolution = ConflictResolution.ERROR
@@ -344,8 +355,15 @@ class DualPaneVM:
                             state=TransferState.CANCELLED,
                         )
                     )
-        await src_pane.refresh()
-        await dst_pane.refresh()
+            # Refresh BOTH panes inside the finally — see
+            # ``copy_across`` for the rationale. Move is even more
+            # sensitive: files 1..K-1 are both copied AND deleted
+            # from src, so the source pane must redraw or the user
+            # sees ghost rows for entries that are gone.
+            with contextlib.suppress(Exception):
+                await src_pane.refresh()
+            with contextlib.suppress(Exception):
+                await dst_pane.refresh()
 
     async def delete_in_focused(self) -> None:
         """Delete every marked entry in the focused pane."""

@@ -236,10 +236,15 @@ class JobRunLogsVM:
         # (cancellation is a view-side concern via worker group
         # ``emr-logs``).
         target = (self._application_id, self._job_run_id, self._log_uri)
+        # Do NOT eagerly wipe self._lines / _bytes_read / _lines_scanned
+        # here — if list_files / stream raise (transient
+        # ProviderUnreachableError on ``r`` for example) we'd land in
+        # ERROR with an empty _lines, losing the 4000 lines the user
+        # was looking at a moment ago. Mirror the round-35 load_more
+        # discipline: preserve prior READY state until we KNOW we
+        # have new content to write. The cache-hit fast path and
+        # per-chunk writes below overwrite atomically.
         self._set_state(LogsState.LOADING)
-        self._lines = ()
-        self._bytes_read = 0
-        self._lines_scanned = 0
         try:
             loc = parse_log_uri(self._log_uri)
             run_prefix = build_run_prefix(loc, self._application_id, self._job_run_id)
@@ -249,6 +254,11 @@ class JobRunLogsVM:
             )
             if (self._application_id, self._job_run_id, self._log_uri) != target:
                 return  # target changed mid-flight; drop the stale list
+            # Past list_files, about to commit to a fresh stream —
+            # NOW it's safe to drop the prior accumulator.
+            self._lines = ()
+            self._bytes_read = 0
+            self._lines_scanned = 0
             self._available_files = tuple(files)
             self._notify("available_files")
             if not files:
