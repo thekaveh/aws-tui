@@ -94,6 +94,8 @@ async def test_emr_page_mounts_on_aws_connection(tmp_path: Path) -> None:
 async def test_emr_nav_row_hidden_on_s3_compatible_connection(tmp_path: Path) -> None:
     config_dir = _prep(tmp_path, _S3COMPAT_TOML)
     ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    minio = ctx.connection_resolver.resolve("minio")
+    ctx.connection_resolver.list = lambda: [minio]  # type: ignore[assignment,method-assign]
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:

@@ -160,3 +160,24 @@ def test_aws_session_handles_missing_sso_cache_for_aws_conn(tmp_path: Path) -> N
     )
     result = session.probe_token(conn)
     assert result.state is TokenState.MISSING
+
+
+def test_aws_session_non_sso_profile_probe_allows_live_boto_check(tmp_path: Path) -> None:
+    from aws_tui.infra.aws_session import AwsSession, TokenState
+    from aws_tui.infra.connection_resolver import Connection
+
+    aws_cfg = tmp_path / ".aws" / "config"
+    aws_cfg.parent.mkdir(parents=True)
+    aws_cfg.write_text("[profile dev]\nregion = us-east-1\n", encoding="utf-8")
+    session = AwsSession(sso_cache_dir=tmp_path / "cache", aws_config_path=aws_cfg)
+    conn = Connection(
+        name="dev",
+        kind="aws",
+        region="us-east-1",
+        source="auto-aws-profile",
+        profile="dev",
+    )
+
+    result = session.probe_token(conn)
+
+    assert result.state is TokenState.CONNECTED

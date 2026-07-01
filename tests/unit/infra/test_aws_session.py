@@ -128,7 +128,9 @@ class TestProbeTokenAws:
         result = session.probe_token(_aws_conn())
         assert result.state is TokenState.MISSING
 
-    def test_profile_without_sso_returns_missing(self, tmp_path: Path) -> None:
+    def test_profile_without_sso_returns_connected_for_live_boto_check(
+        self, tmp_path: Path
+    ) -> None:
         aws_cfg = tmp_path / ".aws" / "config"
         aws_cfg.parent.mkdir(parents=True)
         aws_cfg.write_text("[profile dev]\nregion = us-east-1\n", encoding="utf-8")
@@ -137,7 +139,7 @@ class TestProbeTokenAws:
             aws_config_path=aws_cfg,
         )
         result = session.probe_token(_aws_conn())
-        assert result.state is TokenState.MISSING
+        assert result.state is TokenState.CONNECTED
 
     def test_start_url_fallback(self, tmp_path: Path) -> None:
         aws_cfg = tmp_path / ".aws" / "config"

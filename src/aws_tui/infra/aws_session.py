@@ -111,7 +111,10 @@ class AwsSession:
 
         cache_key = self._sso_cache_key_for_profile(connection.profile)
         if cache_key is None:
-            return TokenProbeResult(state=TokenState.MISSING)
+            # Non-SSO AWS profiles (shared credentials, credential_process,
+            # env/role-backed profiles, etc.) have no offline token cache to
+            # inspect. Let the live boto path decide whether credentials work.
+            return TokenProbeResult(state=TokenState.CONNECTED)
 
         cache_file = self._sso_cache_dir / f"{cache_key}.json"
         if not cache_file.is_file():
