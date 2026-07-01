@@ -42,10 +42,10 @@ Connection fields such as `profile`, `region`, `endpoint_url`,
 `credentials`, `access_key_id`, `secret_access_key`, and `session_token`
 must be TOML strings when present. `force_path_style` and `verify_tls`
 must be TOML booleans (`true` / `false`), not quoted strings.
-`endpoint_url` is a base HTTP(S) endpoint only: do not include URL
-username/password, query strings, or fragments. The UI rejects those in
-Settings and redacts them from display if a hand-edited config already
-contains them.
+`endpoint_url` must be an HTTP(S) endpoint. URL paths are preserved, but
+do not include URL username/password, query strings, or fragments. The UI
+rejects those in Settings and redacts them from display if a hand-edited
+config already contains them.
 
 ## 1.2. Credential sources for S3-compatible connections
 The `credentials` field is dispatched at runtime:

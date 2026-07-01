@@ -33,6 +33,7 @@ from botocore.exceptions import (
     ConnectTimeoutError,
     CredentialRetrievalError,
     EndpointConnectionError,
+    EndpointResolutionError,
     NoCredentialsError,
     PartialCredentialsError,
     ProfileNotFound,
@@ -72,6 +73,7 @@ from aws_tui.domain.filesystem import (
 #   other transport failure shape botocore introduces in the future.
 _TRANSPORT_FAILURE_EXCEPTIONS = (
     EndpointConnectionError,
+    EndpointResolutionError,
     ConnectTimeoutError,
     ReadTimeoutError,
     BotoConnectionError,

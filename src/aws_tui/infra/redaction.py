@@ -105,7 +105,8 @@ def _redact_url(raw: str) -> str:
         _, host = netloc.rsplit("@", 1)
         netloc = f"{_REDACTED}@{host}"
     query = _REDACTED if parts.query else ""
-    return urlunsplit(SplitResult(parts.scheme, netloc, parts.path, query, parts.fragment))
+    fragment = _REDACTED if parts.fragment else ""
+    return urlunsplit(SplitResult(parts.scheme, netloc, parts.path, query, fragment))
 
 
 __all__ = [

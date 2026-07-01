@@ -14,15 +14,22 @@ host this VM as a singleton (see [[vmx-content-host-singleton-trap]])."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import aioboto3
 from vmx import Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_logs import EmrServerlessLogsClient
-from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG, EmrServerlessClient
+from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogChunk, LogFile, LogFilter
+from aws_tui.domain.emr_serverless import (
+    EMR_BOTO_CONFIG,
+    EmrServerlessClient,
+    JobRunState,
+    JobRunSummary,
+    map_boto_error,
+)
+from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.services_protocol import ServiceDescriptor
 
@@ -34,6 +41,76 @@ if TYPE_CHECKING:
 #: with whatever the factory returns (typically ``_InMemoryEmr``).
 EmrClientFactory = Callable[[Connection], Any]
 EmrLogsClientFactory = Callable[[Connection], EmrServerlessLogsClient]
+
+
+def _map_session_construction_error(exc: BaseException) -> ProviderError:
+    mapped = map_boto_error(exc)
+    if mapped is not None:
+        return mapped
+    return ProviderError(str(exc) or type(exc).__name__)
+
+
+class _FailedEmrLogsClient:
+    def __init__(self, error: ProviderError) -> None:
+        self._error = error
+
+    async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]:
+        raise self._error
+
+    async def stream(
+        self,
+        *,
+        log_file: LogFile,
+        bucket: str,
+        max_bytes: int,
+        filter_: LogFilter,
+    ) -> AsyncIterator[LogChunk]:
+        raise self._error
+        yield  # pragma: no cover
+
+
+class _FailedEmrClient:
+    def __init__(self, error: ProviderError) -> None:
+        self._error = error
+
+    async def list_applications(self) -> list[object]:
+        raise self._error
+
+    async def list_job_runs_page(
+        self,
+        application_id: str,
+        *,
+        start_token: str | None = None,
+        states: set[JobRunState] | None = None,
+    ) -> tuple[list[JobRunSummary], str | None]:
+        raise self._error
+
+    async def list_job_runs(
+        self,
+        application_id: str,
+        *,
+        states: set[JobRunState] | None = None,
+        max_results: int = 100,
+    ) -> list[JobRunSummary]:
+        raise self._error
+
+    async def get_job_run(self, application_id: str, job_run_id: str) -> object:
+        raise self._error
+
+    async def start_job_run(
+        self,
+        application_id: str,
+        *,
+        execution_role_arn: str,
+        entry_point: str,
+        entry_point_arguments: tuple[str, ...],
+        spark_submit_parameters: str | None,
+        name: str | None = None,
+    ) -> str:
+        raise self._error
+
+    def make_logs_client(self) -> _FailedEmrLogsClient:
+        return _FailedEmrLogsClient(self._error)
 
 
 class EmrServerlessService:
@@ -120,10 +197,13 @@ class EmrServerlessService:
     def _make_client(self, connection: Connection) -> Any:
         if self._client_factory is not None:
             return self._client_factory(connection)
-        session = aioboto3.Session(
-            profile_name=connection.profile,
-            region_name=connection.region,
-        )
+        try:
+            session = aioboto3.Session(
+                profile_name=connection.profile,
+                region_name=connection.region,
+            )
+        except Exception as exc:
+            return _FailedEmrClient(_map_session_construction_error(exc))
         return EmrServerlessClient(session=session, region_name=connection.region)
 
     def _make_logs_client(
@@ -134,10 +214,16 @@ class EmrServerlessService:
         make_logs_client = getattr(client, "make_logs_client", None)
         if callable(make_logs_client):
             return cast("EmrServerlessLogsClient", make_logs_client())
-        session = aioboto3.Session(
-            profile_name=connection.profile,
-            region_name=connection.region,
-        )
+        try:
+            session = aioboto3.Session(
+                profile_name=connection.profile,
+                region_name=connection.region,
+            )
+        except Exception as exc:
+            return cast(
+                "EmrServerlessLogsClient",
+                _FailedEmrLogsClient(_map_session_construction_error(exc)),
+            )
         return EmrServerlessLogsClient(
             session=session,
             region_name=connection.region,

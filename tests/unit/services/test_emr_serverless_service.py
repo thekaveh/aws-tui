@@ -5,11 +5,14 @@ so the nav rail correctly filters out s3-compatible connections."""
 
 from __future__ import annotations
 
+import botocore.exceptions
+import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient
 from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG
+from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless import service as service_module
 from aws_tui.services.emr_serverless.service import EmrServerlessService
@@ -143,3 +146,30 @@ def test_build_vm_default_logs_client_uses_connection_session(monkeypatch: objec
     assert page.job_run_logs._client.session is sessions[1]  # type: ignore[attr-defined]
     assert page.job_run_logs._client.region_name == "us-west-2"  # type: ignore[attr-defined]
     assert page.job_run_logs._client.boto_config is EMR_BOTO_CONFIG  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_build_vm_degrades_session_construction_auth_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_profile_not_found(*_args: object, **_kwargs: object) -> object:
+        raise botocore.exceptions.ProfileNotFound(profile="missing")
+
+    monkeypatch.setattr(service_module.aioboto3, "Session", _raise_profile_not_found)
+    hub: MessageHub[Message] = MessageHub()
+    svc = EmrServerlessService(hub=hub, dispatcher=NULL_DISPATCHER)
+
+    page = svc.build_vm(
+        Connection(
+            name="missing",
+            kind="aws",
+            region="us-west-2",
+            source="config",
+            profile="missing",
+        )
+    )
+
+    with pytest.raises(AuthRequiredError):
+        await page.client.list_applications()
+    with pytest.raises(AuthRequiredError):
+        await page.job_run_logs._client.list_files(bucket="logs", run_prefix="runs/x")  # type: ignore[attr-defined]

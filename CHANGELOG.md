@@ -89,11 +89,11 @@ will be set at cut time.
   output. Startup also treats unreadable SSO cache files as a failed
   initial probe and falls back to local panes instead of crashing.
 - **Visible error and endpoint labels redact URL secrets.** EMR client
-  context-entry failures now route through the domain error mapper, EMR
-  and S3 pane placeholders redact raw exception text, S3-compatible pane
-  titles / Settings rows / reprs drop endpoint userinfo, query strings,
-  and fragments, and the Settings form rejects those unsafe endpoint URL
-  shapes.
+  construction and context-entry failures now route through the domain
+  error mapper, EMR and S3 pane placeholders plus toasts redact raw
+  exception text, S3-compatible pane titles / Settings rows / reprs drop
+  endpoint userinfo, query strings, and fragments, and the Settings form
+  rejects those unsafe endpoint URL shapes plus malformed ports.
 - **S3-compatible credential hardening.** Settings and first-run now share
   normalized form-to-config mapping, blank optional session tokens resolve
   as absent across static/env/keychain/profile sources, and

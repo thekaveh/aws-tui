@@ -119,6 +119,25 @@ def test_action_call_out_uses_em_dash() -> None:
     assert m.text.endswith(" — press r to retry")
 
 
+def test_notification_text_redacts_secret_carriers() -> None:
+    stack = _StubStack()
+    notifications.error(
+        stack,  # type: ignore[arg-type]
+        subject="Transfer",
+        message=(
+            "copy failed: https://user:pass@example.com/bucket?"
+            "X-Amz-Signature=sig#opaque token=abc123"
+        ),
+        action="retry with Authorization: Bearer SECRET",
+    )
+
+    [m] = stack.raised
+    for leaked in ["user", "pass", "X-Amz-Signature", "sig", "opaque", "abc123", "SECRET"]:
+        assert leaked not in m.text
+    assert "token=[REDACTED]" in m.text
+    assert "Authorization: Bearer [REDACTED]" in m.text
+
+
 def test_progress_does_not_carry_action_in_grammar() -> None:
     """Action call-outs only belong on terminal outcomes
     (announce / success / advise / error). A live progress toast

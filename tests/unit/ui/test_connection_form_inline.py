@@ -40,11 +40,14 @@ def test_endpoint_url_invalid() -> None:
     assert _validate_s3_form_value("endpoint_url", "ftp://wrong") is not None
     assert _validate_s3_form_value("endpoint_url", "no-scheme") is not None
     assert _validate_s3_form_value("endpoint_url", "http://") is not None
+    assert _validate_s3_form_value("endpoint_url", "http://localhost:notaport") is not None
+    assert _validate_s3_form_value("endpoint_url", "http://localhost:99999") is not None
     assert _validate_s3_form_value("endpoint_url", "https://user:pass@example.com") is not None
     assert (
         _validate_s3_form_value("endpoint_url", "https://example.com?X-Amz-Signature=sig")
         is not None
     )
+    assert _validate_s3_form_value("endpoint_url", "https://example.com#SECRETFRAG") is not None
 
 
 @pytest.mark.parametrize("field", ["region", "access_key_id", "secret_access_key"])

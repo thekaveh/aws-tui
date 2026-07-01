@@ -12,12 +12,13 @@ from __future__ import annotations
 import pytest
 from botocore.exceptions import (
     CredentialRetrievalError,
+    EndpointResolutionError,
     NoCredentialsError,
     ProfileNotFound,
     TokenRetrievalError,
 )
 
-from aws_tui.domain.filesystem import AuthRequiredError, PathRef
+from aws_tui.domain.filesystem import AuthRequiredError, PathRef, ProviderUnreachableError
 from aws_tui.domain.s3_fs import _AUTH_HINT, S3FS, _auth_error
 
 
@@ -86,6 +87,24 @@ class _CredentialProcessFailureSession:
         return _CredentialProcessFailureClient()
 
 
+class _EndpointResolutionFailureClient:
+    async def __aenter__(self) -> _EndpointResolutionFailureClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def list_buckets(self) -> object:
+        raise EndpointResolutionError(msg="invalid endpoint")
+
+
+class _EndpointResolutionFailureSession:
+    def client(self, service_name: str, **kwargs: object) -> _EndpointResolutionFailureClient:
+        assert service_name == "s3"
+        assert "config" in kwargs
+        return _EndpointResolutionFailureClient()
+
+
 @pytest.mark.asyncio
 async def test_s3_list_masks_credential_process_stderr() -> None:
     fs = S3FS(
@@ -101,6 +120,17 @@ async def test_s3_list_masks_credential_process_stderr() -> None:
     assert "SECRET_TOKEN" not in msg
     assert "leaked" not in msg
     assert _AUTH_HINT in msg
+
+
+@pytest.mark.asyncio
+async def test_s3_list_maps_endpoint_resolution_error_to_unreachable() -> None:
+    fs = S3FS(
+        session=_EndpointResolutionFailureSession(),  # type: ignore[arg-type]
+        bucket=None,
+    )
+
+    with pytest.raises(ProviderUnreachableError):
+        await fs.list(PathRef(()))
 
 
 def test_auth_hint_lists_the_three_recovery_paths() -> None:

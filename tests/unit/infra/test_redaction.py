@@ -56,6 +56,23 @@ def test_redact_text_covers_common_secret_carriers() -> None:
     assert "private_key=[REDACTED]" in text
 
 
+def test_redact_text_redacts_url_fragments() -> None:
+    text = redact_text("failed https://user:pass@example.com/bucket?sig=x#opaqueBearerToken123")
+
+    assert "user" not in text
+    assert "pass" not in text
+    assert "sig=x" not in text
+    assert "opaqueBearerToken123" not in text
+    assert text == "failed https://[REDACTED]@example.com/bucket?[REDACTED]#[REDACTED]"
+
+
+def test_redact_text_redacts_bare_url_fragments() -> None:
+    text = redact_text("failed https://example.com/bucket#SECRETFRAG")
+
+    assert "SECRETFRAG" not in text
+    assert text == "failed https://example.com/bucket#[REDACTED]"
+
+
 def test_redact_value_treats_structured_authorization_as_sensitive() -> None:
     assert redact_value("Bearer SECRETBEARER", key="Authorization") == "[REDACTED]"
 
