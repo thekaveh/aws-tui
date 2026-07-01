@@ -85,7 +85,7 @@ dev = [
   "pytest-cov>=4",
   "pytest-xdist>=3",
   "pytest-textual-snapshot>=1",
-  "moto[server,s3]>=5",
+  "moto[server,s3]>=5.2.2",
   "testcontainers[minio]>=4",
   "types-aiofiles>=23",
   # Installed so CI/release can build with `uv build --no-build-isolation`
