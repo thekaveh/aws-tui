@@ -14,6 +14,7 @@ import os
 import sys
 from collections import deque
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from reactivex.abc import DisposableBase
@@ -2548,16 +2549,35 @@ class AwsTuiApp(App[None]):
         succeeds (falls back to a side-channel path if the write fails).
         """
         ctx = self._app_ctx
-        dump = CrashDump(base_dir=ctx.log_sink.path.parent.parent / "crash")
         log_path = ctx.log_sink.path
         try:
+            dump = CrashDump(base_dir=log_path.parent.parent / "crash")
             dump_path = dump.write(
                 exc=exc,
                 log_path=log_path,
                 action_ring=list(self._action_ring),
             )
-        except Exception:
+        except Exception as dump_exc:
             dump_path = log_path.parent / "crash-fallback.txt"
+            fallback_body = redact_text(
+                "\n".join(
+                    [
+                        "aws-tui crash dump unavailable; fallback report",
+                        f"exception: {type(exc).__name__}: {exc}",
+                        f"dump_error: {type(dump_exc).__name__}: {dump_exc}",
+                        "",
+                        "== traceback ==",
+                        CrashDump.short_traceback(exc, max_lines=20),
+                        "",
+                    ]
+                )
+            )
+            try:
+                dump_path.write_text(fallback_body, encoding="utf-8")
+                with contextlib.suppress(OSError, NotImplementedError):
+                    dump_path.chmod(0o600)
+            except Exception:
+                dump_path = Path("<crash dump unavailable>")
         last_id = self._last_action_id
         report = CrashReport(
             timestamp=datetime.now(UTC),

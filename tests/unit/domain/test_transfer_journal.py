@@ -127,6 +127,17 @@ def test_base_dir_is_private_on_posix(tmp_path: Path) -> None:
     assert stat.S_IMODE(nested.stat().st_mode) == 0o700
 
 
+def test_journal_file_is_private_on_posix(tmp_path: Path) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX mode bits are not available on this platform")
+    j = TransferJournal(base_dir=tmp_path)
+
+    tid = j.begin(source_uri="src://a", destination_uri="dst://a")
+
+    path = tmp_path / f"{tid}.jsonl"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def test_corrupt_file_is_skipped(tmp_path: Path) -> None:
     """A malformed jsonl file should not blow up find_unfinished."""
     (tmp_path / "bogus.jsonl").write_text("not json at all\n", encoding="utf-8")

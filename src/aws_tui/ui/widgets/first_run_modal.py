@@ -151,7 +151,7 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
             else:
                 # Harness fallback: production uses the unified toast helper,
                 # while vanilla Textual test apps still need a visible error.
-                self.notify(message, severity="error", timeout=8, markup=False)
+                self.notify(message, severity="error", timeout=8)
             return
         self.query_one(ConnectionFormInline).close()
         self._vm.add_s3_compat_command.execute()

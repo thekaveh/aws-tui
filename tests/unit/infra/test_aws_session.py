@@ -76,6 +76,7 @@ def _s3_conn(
     *,
     access_key_id: str | None = "AKIA",
     secret_access_key: str | None = "secret",
+    session_token: str | None = "session",
     verify_tls: bool = True,
 ) -> Connection:
     return Connection(
@@ -86,6 +87,7 @@ def _s3_conn(
         endpoint_url="http://localhost:9000",
         access_key_id=access_key_id,
         secret_access_key=secret_access_key,
+        session_token=session_token,
         force_path_style=True,
         verify_tls=verify_tls,
     )
@@ -278,6 +280,7 @@ class TestClientLifecycle:
         sess_kwargs = captured["session_kwargs"]
         assert sess_kwargs["aws_access_key_id"] == "AKIA"
         assert sess_kwargs["aws_secret_access_key"] == "secret"
+        assert sess_kwargs["aws_session_token"] == "session"
         assert sess_kwargs["region_name"] == "us-east-1"
         client_kwargs = captured["client_kwargs"]
         assert client_kwargs["endpoint_url"] == "http://localhost:9000"

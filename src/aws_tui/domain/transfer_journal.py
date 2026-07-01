@@ -187,6 +187,9 @@ class TransferJournal:
             # the surrounding multipart upload pays per part.
             fh.flush()
             os.fsync(fh.fileno())
+        if os.name == "posix":
+            with contextlib.suppress(OSError, NotImplementedError):
+                path.chmod(0o600)
 
     def _replay(self, path: Path) -> TransferJournalEntry | None:
         lines = _iter_jsonl(path)
@@ -248,7 +251,7 @@ def _optional_str(v: object) -> str | None:
 def _optional_int(v: object) -> int | None:
     if v is None:
         return None
-    if isinstance(v, (int, str)):
+    if isinstance(v, int | str):
         return int(v)
     raise ValueError(f"cannot coerce to int: {v!r}")
 

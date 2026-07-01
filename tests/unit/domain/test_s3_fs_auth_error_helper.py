@@ -11,14 +11,14 @@ from __future__ import annotations
 
 from botocore.exceptions import NoCredentialsError, ProfileNotFound, TokenRetrievalError
 
-from aws_tui.domain.filesystem import PermissionDeniedError
+from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.domain.s3_fs import _AUTH_HINT, _auth_error
 
 
 def test_auth_error_wraps_no_credentials() -> None:
     exc = NoCredentialsError()
     mapped = _auth_error(exc)
-    assert isinstance(mapped, PermissionDeniedError)
+    assert isinstance(mapped, AuthRequiredError)
     msg = str(mapped)
     assert "AWS auth:" in msg
     assert _AUTH_HINT in msg
@@ -27,21 +27,21 @@ def test_auth_error_wraps_no_credentials() -> None:
 def test_auth_error_wraps_profile_not_found() -> None:
     exc = ProfileNotFound(profile="kaveh-dev")
     mapped = _auth_error(exc)
-    assert isinstance(mapped, PermissionDeniedError)
+    assert isinstance(mapped, AuthRequiredError)
     assert "kaveh-dev" in str(mapped)
     assert _AUTH_HINT in str(mapped)
 
 
 def test_auth_error_wraps_token_retrieval_error() -> None:
     """SSO token refresh failures must surface as the same
-    ``PermissionDeniedError`` + recovery hint the other auth-error
+    ``AuthRequiredError`` + recovery hint the other auth-error
     types produce. Without this, an expired SSO session bypasses the
     auth-error mapping in ``S3FS`` and the user sees a raw
     ``TokenRetrievalError`` traceback through the pane's UNREACHABLE
     placeholder — losing the ``aws sso login`` recovery hint."""
     exc = TokenRetrievalError(provider="sso", error_msg="token expired")
     mapped = _auth_error(exc)
-    assert isinstance(mapped, PermissionDeniedError)
+    assert isinstance(mapped, AuthRequiredError)
     assert _AUTH_HINT in str(mapped)
 
 

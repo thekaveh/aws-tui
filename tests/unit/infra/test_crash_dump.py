@@ -43,6 +43,8 @@ def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
     log = tmp_path / "aws-tui.log"
     log.write_text(
         "endpoint=https://user:pass@example.com/bucket?X-Amz-Signature=abc123 "
+        "Authorization: Bearer SECRETBEARER "
+        "api_key=SECRETAPI private_key=SECRETPRIVATE "
         "secret_access_key=SECRET "
         '{"access_token": "JSONTOKEN", "password": "JSONPASS"} '
         'credentials = "TOMLCREDS"\n',
@@ -63,6 +65,9 @@ def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
         "user:pass",
         "abc123",
         "SECRET",
+        "SECRETBEARER",
+        "SECRETAPI",
+        "SECRETPRIVATE",
         "JSONTOKEN",
         "JSONPASS",
         "TOMLCREDS",

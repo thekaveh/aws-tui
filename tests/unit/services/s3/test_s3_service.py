@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
@@ -43,6 +43,7 @@ def _minio_conn() -> Connection:
         endpoint_url="http://localhost:9000",
         access_key_id="ak",
         secret_access_key="sk",
+        session_token="tok",
         force_path_style=True,
         verify_tls=False,
     )
@@ -140,9 +141,21 @@ def test_aioboto3_session_factory_aws_profileless() -> None:
     assert isinstance(sess, aioboto3.Session)
 
 
-def test_aioboto3_session_factory_minio() -> None:
+def test_aioboto3_session_factory_minio(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeSession:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+            self.region_name = kwargs["region_name"]
+
+    monkeypatch.setattr(s3_service_module.aioboto3, "Session", FakeSession)
+
     sess = _aioboto3_session_for(_minio_conn())
     assert sess.region_name == "us-east-1"
+    assert captured["aws_access_key_id"] == "ak"
+    assert captured["aws_secret_access_key"] == "sk"
+    assert captured["aws_session_token"] == "tok"
 
 
 def test_aioboto3_session_factory_unsupported() -> None:

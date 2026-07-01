@@ -66,6 +66,9 @@ EOF
   exit 1
 fi
 
+echo "==> uv python install 3.11"
+uv python install 3.11
+
 echo "==> uv sync --frozen"
 uv sync --frozen
 

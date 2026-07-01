@@ -42,3 +42,19 @@ def test_redact_text_preserves_malformed_url_and_redacts_other_fields() -> None:
     assert "https://[::1/path" in text
     assert "abc123" not in text
     assert "token=[REDACTED]" in text
+
+
+def test_redact_text_covers_common_secret_carriers() -> None:
+    text = redact_text(
+        "Authorization: Bearer SECRETBEARER api_key=SECRETAPI private_key=SECRETPRIVATE"
+    )
+
+    for leaked in ["SECRETBEARER", "SECRETAPI", "SECRETPRIVATE"]:
+        assert leaked not in text
+    assert "Authorization: Bearer [REDACTED]" in text
+    assert "api_key=[REDACTED]" in text
+    assert "private_key=[REDACTED]" in text
+
+
+def test_redact_value_treats_structured_authorization_as_sensitive() -> None:
+    assert redact_value("Bearer SECRETBEARER", key="Authorization") == "[REDACTED]"

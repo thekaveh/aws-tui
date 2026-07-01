@@ -50,6 +50,7 @@ class ConnectionEntry:
     credentials: str | None = None
     access_key_id: str | None = None
     secret_access_key: str | None = None
+    session_token: str | None = None
     force_path_style: bool = False
     verify_tls: bool = True
 
@@ -162,6 +163,7 @@ class ConfigStore:
                 credentials=body.get("credentials"),
                 access_key_id=body.get("access_key_id"),
                 secret_access_key=body.get("secret_access_key"),
+                session_token=body.get("session_token"),
                 force_path_style=_bool_field(
                     body,
                     field="force_path_style",
@@ -282,6 +284,8 @@ class ConfigStore:
                     body["access_key_id"] = entry.access_key_id
                 if entry.secret_access_key is not None:
                     body["secret_access_key"] = entry.secret_access_key
+                if entry.session_token is not None:
+                    body["session_token"] = entry.session_token
                 if entry.force_path_style:
                     body["force_path_style"] = True
                 if not entry.verify_tls:

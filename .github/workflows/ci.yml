@@ -141,20 +141,24 @@ jobs:
         run: uv run pre-commit run --all-files --show-diff-on-failure
 
   security:
-    name: dependency audit
+    name: dependency audit (py${{ matrix.python }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
-      - name: install Python 3.11
-        run: uv python install 3.11
+      - name: install Python ${{ matrix.python }}
+        run: uv python install ${{ matrix.python }}
       - name: export locked requirements
-        run: uv export --frozen --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit.txt"
+        run: uv export --frozen --python ${{ matrix.python }} --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit.txt"
       - name: pip-audit (locked dependencies)
-        run: uv run --python 3.11 pip-audit -r "$RUNNER_TEMP/requirements-audit.txt" --require-hashes
+        run: uv run --python ${{ matrix.python }} pip-audit -r "$RUNNER_TEMP/requirements-audit.txt" --require-hashes --disable-pip
 
   pkg:
     name: package build

@@ -194,6 +194,7 @@ def test_static_credentials_round_trip(config_path: Path) -> None:
         credentials="static",
         access_key_id="AKIA-LOCAL",
         secret_access_key="secret",
+        session_token="session",
     )
     cfg = Config(
         connections={entry.name: entry},

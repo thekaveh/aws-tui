@@ -8,7 +8,7 @@ description = "Cross-platform TUI for AWS and S3-compatible services. Powered by
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Kaveh Razavi", email = "kaveh.razavi@gmail.com" }]
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 keywords = [
   "aws",
   "tui",

@@ -385,3 +385,69 @@ async def test_stream_log_wraps_no_credentials_error_as_auth_required() -> None:
             filter_=DEFAULT_LOG_FILTER,
         ):
             pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        botocore.exceptions.ConnectionClosedError(endpoint_url="https://s3.example/"),
+        botocore.exceptions.ProxyConnectionError(proxy_url="https://proxy.example"),
+        botocore.exceptions.SSLError(endpoint_url="https://s3.example/", error="tls"),
+    ],
+)
+async def test_stream_log_wraps_transport_failures(exc: BaseException) -> None:
+    from aws_tui.domain.emr_logs import (
+        DEFAULT_LOG_FILTER,
+        LogFile,
+        LogFileKind,
+        stream_log,
+    )
+    from aws_tui.domain.filesystem import ProviderUnreachableError
+
+    session = _RaisingSession(exc)
+    log_file = LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=LogFileKind.DRIVER_STDERR,
+    )
+    with pytest.raises(ProviderUnreachableError):
+        async for _chunk in stream_log(
+            session=session,  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=log_file,
+            bucket="b",
+            max_bytes=1024,
+            filter_=DEFAULT_LOG_FILTER,
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_stream_log_wraps_access_denied_client_error() -> None:
+    from aws_tui.domain.emr_logs import (
+        DEFAULT_LOG_FILTER,
+        LogFile,
+        LogFileKind,
+        stream_log,
+    )
+    from aws_tui.domain.filesystem import PermissionDeniedError
+
+    err = botocore.exceptions.ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "no get rights"}},
+        "GetObject",
+    )
+    session = _RaisingSession(err)
+    log_file = LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=LogFileKind.DRIVER_STDERR,
+    )
+    with pytest.raises(PermissionDeniedError):
+        async for _chunk in stream_log(
+            session=session,  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=log_file,
+            bucket="b",
+            max_bytes=1024,
+            filter_=DEFAULT_LOG_FILTER,
+        ):
+            pass

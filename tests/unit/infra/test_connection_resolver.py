@@ -197,6 +197,7 @@ class TestS3CompatibleCredentialDispatch:
         kc = InMemoryKeychain()
         kc.set("minio-local", "access_key_id", "AKIA-MINIO")
         kc.set("minio-local", "secret_access_key", "shh")
+        kc.set("minio-local", "session_token", "tok")
         store.add_connection(
             ConnectionEntry(
                 name="minio-local",
@@ -216,6 +217,7 @@ class TestS3CompatibleCredentialDispatch:
         c = resolver.resolve("minio-local")
         assert c.access_key_id == "AKIA-MINIO"
         assert c.secret_access_key == "shh"
+        assert c.session_token == "tok"
         assert c.endpoint_url == "http://localhost:9000"
         assert c.force_path_style is True
 
@@ -224,6 +226,7 @@ class TestS3CompatibleCredentialDispatch:
     ) -> None:
         monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKIA-R2")
         monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "supersecret")
+        monkeypatch.setenv("R2_SESSION_TOKEN", "envsession")
         store.add_connection(
             ConnectionEntry(
                 name="r2",
@@ -241,12 +244,16 @@ class TestS3CompatibleCredentialDispatch:
         c = resolver.resolve("r2")
         assert c.access_key_id == "AKIA-R2"
         assert c.secret_access_key == "supersecret"
+        assert c.session_token == "envsession"
 
     def test_aws_profile_credentials(self, tmp_path: Path, store: ConfigStore) -> None:
         cfg, creds = _write_aws_files(
             tmp_path,
             credentials_body=(
-                "[shared]\naws_access_key_id = AKIA-SHARED\naws_secret_access_key = sharedsecret\n"
+                "[shared]\n"
+                "aws_access_key_id = AKIA-SHARED\n"
+                "aws_secret_access_key = sharedsecret\n"
+                "aws_session_token = sharedsession\n"
             ),
         )
         store.add_connection(
@@ -266,6 +273,7 @@ class TestS3CompatibleCredentialDispatch:
         c = resolver.resolve("wasabi")
         assert c.access_key_id == "AKIA-SHARED"
         assert c.secret_access_key == "sharedsecret"
+        assert c.session_token == "sharedsession"
 
     def test_static_credentials(self, tmp_path: Path, store: ConfigStore) -> None:
         store.add_connection(
@@ -277,6 +285,7 @@ class TestS3CompatibleCredentialDispatch:
                 credentials="static",
                 access_key_id="AKIA-STATIC",
                 secret_access_key="staticsecret",
+                session_token="staticsession",
             )
         )
         resolver = ConnectionResolver(
@@ -287,6 +296,7 @@ class TestS3CompatibleCredentialDispatch:
         c = resolver.resolve("static-r2")
         assert c.access_key_id == "AKIA-STATIC"
         assert c.secret_access_key == "staticsecret"
+        assert c.session_token == "staticsession"
 
     def test_s3_compat_without_keychain_returns_none_keys(
         self, tmp_path: Path, store: ConfigStore

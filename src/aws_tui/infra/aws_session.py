@@ -198,6 +198,7 @@ class AwsSession:
             session = aioboto3.Session(
                 aws_access_key_id=connection.access_key_id,
                 aws_secret_access_key=connection.secret_access_key,
+                aws_session_token=connection.session_token,
                 region_name=connection.region,
             )
             client_cm = session.client(

@@ -9,13 +9,17 @@ from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 _REDACTED = "[REDACTED]"
 _SENSITIVE_KEY = re.compile(
-    r"(secret|password|token|credential|access[_-]?key|signature)",
+    r"(authorization|secret|password|token|credential|access[_-]?key|api[_-]?key|private[_-]?key|signature)",
     re.IGNORECASE,
 )
 _KEY_VALUE = re.compile(
     r'(?<![A-Za-z0-9_.-])("?)([A-Za-z0-9_.-]*'
-    r"(?:secret|password|token|credential|access[_-]?key|signature)"
+    r"(?:secret|password|token|credential|access[_-]?key|api[_-]?key|private[_-]?key|signature)"
     r'[A-Za-z0-9_.-]*)\1(\s*[:=]\s*)("[^"]*"|[^\s,;}]+)',
+    re.IGNORECASE,
+)
+_AUTHORIZATION_HEADER = re.compile(
+    r"(?<![A-Za-z0-9_.-])(Authorization)(\s*:\s*)([A-Za-z][A-Za-z0-9_.+-]*\s+)([^\s,;}]+)",
     re.IGNORECASE,
 )
 _URL = re.compile(r"https?://[^\s\"'<>]+")
@@ -48,6 +52,10 @@ def redact_mapping(fields: Mapping[str, Any]) -> dict[str, object]:
 
 def redact_text(text: str) -> str:
     text = _URL.sub(lambda match: _redact_url(match.group(0)), text)
+    text = _AUTHORIZATION_HEADER.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}{_REDACTED}",
+        text,
+    )
     return _KEY_VALUE.sub(
         lambda match: (
             f"{match.group(1)}{match.group(2)}{match.group(1)}{match.group(3)}{_REDACTED}"

@@ -43,6 +43,7 @@ from botocore.exceptions import (
 )
 
 from aws_tui.domain.filesystem import (
+    AuthRequiredError,
     ConflictError,
     EntryKind,
     FileEntry,
@@ -696,11 +697,11 @@ _AUTH_HINT: str = (
 )
 
 
-def _auth_error(exc: BaseException) -> PermissionDeniedError:
+def _auth_error(exc: BaseException) -> AuthRequiredError:
     """Wrap a boto auth/credentials exception in a domain error with
     the project's canonical recovery hint. Used by every auth catch
     site in :class:`S3FS` so the hint stays in one place."""
-    return PermissionDeniedError(f"AWS auth: {exc}.\n{_AUTH_HINT}")
+    return AuthRequiredError(f"AWS auth: {exc}.\n{_AUTH_HINT}")
 
 
 def _map_client_error(exc: ClientError, target: str) -> ProviderError:

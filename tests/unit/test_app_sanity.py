@@ -270,6 +270,45 @@ def test_build_crash_report_redacts_modal_and_stderr_fields(tmp_path: Path) -> N
     assert "[REDACTED]" in rendered
 
 
+def test_build_crash_report_writes_redacted_fallback_when_dump_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui import app as app_module
+
+    real_short_traceback = app_module.CrashDump.short_traceback
+
+    class BrokenCrashDump:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def write(self, **_kwargs: object) -> Path:
+            raise OSError("disk full private_key=SECRETPRIVATE")
+
+        @staticmethod
+        def short_traceback(exc: BaseException, *, max_lines: int = 5) -> str:
+            return real_short_traceback(exc, max_lines=max_lines)
+
+    monkeypatch.setattr(app_module, "CrashDump", BrokenCrashDump)
+    log_sink = LogSink(base_dir=tmp_path / "log")
+    app = object.__new__(app_module.AwsTuiApp)
+    app._app_ctx = SimpleNamespace(log_sink=log_sink)  # type: ignore[attr-defined]
+    app._action_ring = deque(maxlen=100)  # type: ignore[attr-defined]
+    app._last_action_id = None  # type: ignore[attr-defined]
+
+    try:
+        report = app._build_crash_report(RuntimeError("boom api_key=SECRETAPI"))
+    finally:
+        log_sink.close()
+
+    assert report.dump_path == tmp_path / "log" / "crash-fallback.txt"
+    fallback = report.dump_path.read_text(encoding="utf-8")
+    assert "crash dump unavailable" in fallback
+    for leaked in ["SECRETAPI", "SECRETPRIVATE"]:
+        assert leaked not in fallback
+    assert "[REDACTED]" in fallback
+
+
 def _config_risk_ctx(tmp_path: Path, toml_text: str) -> object:
     config_dir = tmp_path / "config"
     config_dir.mkdir()

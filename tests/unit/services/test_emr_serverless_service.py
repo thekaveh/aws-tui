@@ -9,6 +9,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient
+from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless import service as service_module
 from aws_tui.services.emr_serverless.service import EmrServerlessService
@@ -115,3 +116,30 @@ def test_build_vm_uses_injected_client_logs_factory() -> None:
 
     assert page.client is client
     assert page.job_run_logs._client is logs_client  # type: ignore[attr-defined]
+
+
+def test_build_vm_default_logs_client_uses_connection_session(monkeypatch: object) -> None:
+    sessions: list[object] = []
+    calls: list[dict[str, str | None]] = []
+
+    class _Session:
+        def __init__(self, *, profile_name: str | None, region_name: str | None) -> None:
+            calls.append({"profile_name": profile_name, "region_name": region_name})
+            sessions.append(self)
+
+    monkeypatch.setattr(service_module.aioboto3, "Session", _Session)  # type: ignore[attr-defined]
+    hub: MessageHub[Message] = MessageHub()
+    svc = EmrServerlessService(hub=hub, dispatcher=NULL_DISPATCHER)
+
+    page = svc.build_vm(
+        Connection(name="dev", kind="aws", region="us-west-2", source="config", profile="dev")
+    )
+
+    assert calls == [
+        {"profile_name": "dev", "region_name": "us-west-2"},
+        {"profile_name": "dev", "region_name": "us-west-2"},
+    ]
+    assert page.client._session is sessions[0]  # type: ignore[attr-defined]
+    assert page.job_run_logs._client.session is sessions[1]  # type: ignore[attr-defined]
+    assert page.job_run_logs._client.region_name == "us-west-2"  # type: ignore[attr-defined]
+    assert page.job_run_logs._client.boto_config is EMR_BOTO_CONFIG  # type: ignore[attr-defined]

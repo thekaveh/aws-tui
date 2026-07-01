@@ -53,6 +53,7 @@ class Connection:
     endpoint_url: str | None = None
     access_key_id: str | None = None
     secret_access_key: str | None = None
+    session_token: str | None = None
     force_path_style: bool = False
     verify_tls: bool = True
 
@@ -63,12 +64,14 @@ class Connection:
         # and doesn't leak the secret.
         masked_id = "***" if self.access_key_id else None
         masked_secret = "***" if self.secret_access_key else None
+        masked_token = "***" if self.session_token else None
         return (
             f"Connection(name={self.name!r}, kind={self.kind!r}, "
             f"region={self.region!r}, source={self.source!r}, "
             f"profile={self.profile!r}, endpoint_url={self.endpoint_url!r}, "
             f"access_key_id={masked_id!r}, "
             f"secret_access_key={masked_secret!r}, "
+            f"session_token={masked_token!r}, "
             f"force_path_style={self.force_path_style!r}, "
             f"verify_tls={self.verify_tls!r})"
         )
@@ -165,7 +168,9 @@ class ConnectionResolver:
                     )
                 )
             elif entry.kind == "s3-compatible":
-                access_key_id, secret_access_key = self._dispatch_s3_credentials(entry)
+                access_key_id, secret_access_key, session_token = self._dispatch_s3_credentials(
+                    entry
+                )
                 out.append(
                     Connection(
                         name=entry.name,
@@ -175,6 +180,7 @@ class ConnectionResolver:
                         endpoint_url=entry.endpoint_url,
                         access_key_id=access_key_id,
                         secret_access_key=secret_access_key,
+                        session_token=session_token,
                         force_path_style=entry.force_path_style,
                         verify_tls=entry.verify_tls,
                     )
@@ -238,40 +244,47 @@ class ConnectionResolver:
     # s3-compatible credential dispatch
     # ------------------------------------------------------------------
 
-    def _dispatch_s3_credentials(self, entry: ConnectionEntry) -> tuple[str | None, str | None]:
+    def _dispatch_s3_credentials(
+        self, entry: ConnectionEntry
+    ) -> tuple[str | None, str | None, str | None]:
         spec = entry.credentials or ""
         if spec.startswith("keychain:"):
             service = spec[len("keychain:") :]
             if self._keychain is None:
-                return None, None
+                return None, None, None
             return (
                 self._keychain.get(service, "access_key_id"),
                 self._keychain.get(service, "secret_access_key"),
+                self._keychain.get(service, "session_token"),
             )
         if spec.startswith("env:"):
             prefix = spec[len("env:") :]
             return (
                 os.environ.get(f"{prefix}ACCESS_KEY_ID"),
                 os.environ.get(f"{prefix}SECRET_ACCESS_KEY"),
+                os.environ.get(f"{prefix}SESSION_TOKEN"),
             )
         if spec.startswith("aws-profile:"):
             profile = spec[len("aws-profile:") :]
             return self._read_aws_credentials_profile(profile)
         if spec == "static":
-            return entry.access_key_id, entry.secret_access_key
+            return entry.access_key_id, entry.secret_access_key, entry.session_token
         # Unknown / empty spec — let the caller deal with missing keys.
-        return None, None
+        return None, None, None
 
-    def _read_aws_credentials_profile(self, profile: str) -> tuple[str | None, str | None]:
+    def _read_aws_credentials_profile(
+        self, profile: str
+    ) -> tuple[str | None, str | None, str | None]:
         if not self._aws_credentials_path.is_file():
-            return None, None
+            return None, None, None
         parser = configparser.ConfigParser()
         parser.read(self._aws_credentials_path, encoding="utf-8-sig")
         if not parser.has_section(profile):
-            return None, None
+            return None, None, None
         return (
             parser.get(profile, "aws_access_key_id", fallback=None),
             parser.get(profile, "aws_secret_access_key", fallback=None),
+            parser.get(profile, "aws_session_token", fallback=None),
         )
 
 

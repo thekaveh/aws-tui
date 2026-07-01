@@ -179,7 +179,7 @@ async def test_add_s3_compat_flow_keeps_modal_open_on_save_failure(tmp_path: Pat
             assert notifications
             assert notifications[0][0] == "Couldn't save connection: disk read-only"
             assert notifications[0][1]["severity"] == "error"
-            assert notifications[0][1]["markup"] is False
+            assert "markup" not in notifications[0][1]
     finally:
         store.add_connection = original_add  # type: ignore[method-assign]
         vm.dispose()
