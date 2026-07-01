@@ -38,6 +38,11 @@ connection = "kaveh-dev"
 theme = "carbon"
 ```
 
+Connection fields such as `profile`, `region`, `endpoint_url`,
+`credentials`, `access_key_id`, `secret_access_key`, and `session_token`
+must be TOML strings when present. `force_path_style` and `verify_tls`
+must be TOML booleans (`true` / `false`), not quoted strings.
+
 ## 1.2. Credential sources for S3-compatible connections
 The `credentials` field is dispatched at runtime:
 
