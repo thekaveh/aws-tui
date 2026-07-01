@@ -83,6 +83,11 @@ will be set at cut time.
   credentials, `credential_process`, env, and role-backed profiles no
   longer fall back to local panes as `no AWS credentials` merely because
   they have no SSO cache key.
+- **AWS auth failure surfaces mask credential-process stderr.** S3 and
+  EMR Serverless now map ``CredentialRetrievalError`` to generic auth
+  messages, preserving the recovery hint without echoing raw helper
+  output. Startup also treats unreadable SSO cache files as a failed
+  initial probe and falls back to local panes instead of crashing.
 - **S3-compatible credential hardening.** Settings and first-run now share
   normalized form-to-config mapping, blank optional session tokens resolve
   as absent across static/env/keychain/profile sources, and

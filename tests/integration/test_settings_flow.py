@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -604,6 +605,60 @@ async def test_expired_sso_proactively_falls_back_to_local(tmp_path: Path) -> No
             )
             # Connection marked unreachable so Shift+S skips it until
             # the user runs aws sso login + relaunches.
+            assert (fake_conn.kind, fake_conn.name) in ctx.unreachable_connections
+    finally:
+        with _contextlib.suppress(Exception):
+            _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_corrupt_sso_cache_at_startup_falls_back_to_local(tmp_path: Path) -> None:
+    """A corrupt SSO cache must not crash the app during the initial
+    pre-probe. Startup should continue through the boot chain and end
+    in the same local-fallback state as other unavailable sources."""
+    import contextlib as _contextlib
+
+    from aws_tui.infra.connection_resolver import Connection
+    from aws_tui.ui.widgets.dual_pane import DualPane
+
+    aws_config = tmp_path / ".aws" / "config"
+    aws_config.parent.mkdir()
+    aws_config.write_text(
+        "[profile dev-sso]\n"
+        "region = us-east-1\n"
+        "sso_session = company-sso\n"
+        "[sso-session company-sso]\n"
+        "sso_start_url = https://example.awsapps.com/start\n",
+        encoding="utf-8",
+    )
+    sso_cache_dir = tmp_path / "sso-cache"
+    sso_cache_dir.mkdir()
+    cache_name = hashlib.sha1(b"company-sso").hexdigest()
+    (sso_cache_dir / f"{cache_name}.json").write_text("{not json", encoding="utf-8")
+
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    ctx.aws_session._aws_config_path = aws_config
+    ctx.aws_session._sso_cache_dir = sso_cache_dir
+
+    fake_conn = Connection(
+        name="dev-sso",
+        kind="aws",
+        region="us-east-1",
+        source="auto-aws-profile",
+        profile="dev-sso",
+    )
+    ctx.connection_resolver.list = lambda: [fake_conn]  # type: ignore[method-assign]
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+
+            host = pilot.app.query_one("#content-host")
+            assert len(host.query(DualPane)) == 1
+            assert app._chain_resolved_to_local is True
+            assert app._chain_initial_conn == fake_conn
             assert (fake_conn.kind, fake_conn.name) in ctx.unreachable_connections
     finally:
         with _contextlib.suppress(Exception):

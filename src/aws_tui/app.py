@@ -372,9 +372,17 @@ class AwsTuiApp(App[None]):
 
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
-            auth_state = ctx.aws_session.probe_token(initial_conn).state
+            try:
+                auth_state = ctx.aws_session.probe_token(initial_conn).state
+            except Exception as exc:
+                ctx.log_sink.error(
+                    "app.initial_probe.failed",
+                    name=initial_conn.name,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                auth_state = TokenState.MISSING
             await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
-            # If the resolved AWS connection's SSO token is EXPIRED at
             # Run the initial DualPane build in a background worker
             # so on_mount returns immediately and Textual paints the
             # chrome (banner, nav rail, hint legend, etc.) without

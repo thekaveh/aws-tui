@@ -132,6 +132,13 @@ def _client_error(code: str, op: str = "ListApplications") -> botocore.exception
             botocore.exceptions.TokenRetrievalError(provider="sso", error_msg="token expired"),
             AuthRequiredError,
         ),
+        (
+            botocore.exceptions.CredentialRetrievalError(
+                provider="credential-process",
+                error_msg="credential process failed",
+            ),
+            AuthRequiredError,
+        ),
         (botocore.exceptions.EndpointConnectionError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ConnectTimeoutError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ReadTimeoutError(endpoint_url="x"), ProviderUnreachableError),
@@ -159,6 +166,21 @@ def test_map_boto_error_maps_to_provider_error_subclass(
     assert (
         mapped.__cause__ is raised or mapped.__cause__ is None
     )  # cause may be set by `raise from`
+
+
+def test_credential_retrieval_error_is_auth_required_without_raw_stderr() -> None:
+    exc = botocore.exceptions.CredentialRetrievalError(
+        provider="credential-process",
+        error_msg="SECRET_TOKEN=leaked",
+    )
+
+    mapped = _map_boto_error(exc)
+
+    assert isinstance(mapped, AuthRequiredError)
+    msg = str(mapped)
+    assert "credential process failed" in msg
+    assert "SECRET_TOKEN" not in msg
+    assert "leaked" not in msg
 
 
 def test_map_boto_error_returns_none_for_unrelated_exceptions() -> None:

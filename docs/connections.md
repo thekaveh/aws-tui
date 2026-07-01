@@ -91,7 +91,9 @@ For non-SSO AWS profiles with no `sso_session` / `sso_start_url`, the offline
 probe returns `connected`; live boto calls then validate shared credentials,
 `credential_process`, env, or role-backed credentials.
 
-Total cost: one `os.stat` + one ~1 KB JSON read. Sub-millisecond.
+Total cost for SSO-backed profiles: one `os.stat` + one ~1 KB JSON read.
+Sub-millisecond; non-SSO profiles return `connected` from the offline probe and
+are validated by the live boto path.
 
 ## 1.4. Switching between connections at runtime
 

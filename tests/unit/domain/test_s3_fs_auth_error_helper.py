@@ -9,7 +9,12 @@ silent drift is a UX regression."""
 
 from __future__ import annotations
 
-from botocore.exceptions import NoCredentialsError, ProfileNotFound, TokenRetrievalError
+from botocore.exceptions import (
+    CredentialRetrievalError,
+    NoCredentialsError,
+    ProfileNotFound,
+    TokenRetrievalError,
+)
 
 from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.domain.s3_fs import _AUTH_HINT, _auth_error
@@ -43,6 +48,20 @@ def test_auth_error_wraps_token_retrieval_error() -> None:
     mapped = _auth_error(exc)
     assert isinstance(mapped, AuthRequiredError)
     assert _AUTH_HINT in str(mapped)
+
+
+def test_auth_error_masks_credential_process_stderr() -> None:
+    exc = CredentialRetrievalError(
+        provider="credential-process",
+        error_msg="SECRET_TOKEN=leaked",
+    )
+    mapped = _auth_error(exc)
+    assert isinstance(mapped, AuthRequiredError)
+    msg = str(mapped)
+    assert "credential process failed" in msg
+    assert "SECRET_TOKEN" not in msg
+    assert "leaked" not in msg
+    assert _AUTH_HINT in msg
 
 
 def test_auth_hint_lists_the_three_recovery_paths() -> None:

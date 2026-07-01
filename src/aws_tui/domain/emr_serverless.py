@@ -177,8 +177,13 @@ def _map_boto_error(exc: BaseException) -> ProviderError | None:
     :class:`ValidationError` so future AWS additions surface as a
     typed domain error instead of a crash modal."""
     if isinstance(
-        exc, botocore.exceptions.NoCredentialsError | botocore.exceptions.TokenRetrievalError
+        exc,
+        botocore.exceptions.NoCredentialsError
+        | botocore.exceptions.TokenRetrievalError
+        | botocore.exceptions.CredentialRetrievalError,
     ):
+        if isinstance(exc, botocore.exceptions.CredentialRetrievalError):
+            return AuthRequiredError("credential process failed")
         return AuthRequiredError(str(exc) or "no AWS credentials")
     if isinstance(exc, _TRANSPORT_FAILURE_EXCEPTIONS):
         return ProviderUnreachableError(str(exc) or "endpoint unreachable")
