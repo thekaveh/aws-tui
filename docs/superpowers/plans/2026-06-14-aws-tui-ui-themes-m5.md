@@ -1,4 +1,4 @@
-# aws-tui M5 (UI layer + themes) Implementation Plan
+# 1. aws-tui M5 (UI layer + themes) Implementation Plan
 
 > **For agentic workers:** Compact-plan format. Largest milestone. Spec §3 (mockups), §4 (UI + themes), §5 (binding), §7 (pane states), §8 (snapshot tests).
 
@@ -12,7 +12,7 @@
 
 ---
 
-## Task 1: `ui/actions.py` + `ui/bindings.py` — action/binding registry
+## 1.1. Task 1: `ui/actions.py` + `ui/bindings.py` — action/binding registry
 
 **Files:**
 - Create: `src/aws_tui/ui/actions.py`
@@ -45,7 +45,7 @@ class BindingResolver:
 
 ---
 
-## Task 2: `ui/themes/*.tcss` — full theme files
+## 1.2. Task 2: `ui/themes/*.tcss` — full theme files
 
 **Files:**
 - Modify: `src/aws_tui/ui/themes/carbon.tcss` (full content per spec §4.5)
@@ -77,7 +77,7 @@ Carbon is the canonical default; other 3 swap palette but keep widget structure.
 
 ---
 
-## Task 3: `ui/widgets/` — chrome widgets (status bar, hint legend, toast, services menu)
+## 1.3. Task 3: `ui/widgets/` — chrome widgets (status bar, hint legend, toast, services menu)
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/status_bar.py` — binds to `StatusBarVM`. Single row at top of screen.
@@ -100,7 +100,7 @@ Each widget:
 
 ---
 
-## Task 4: `ui/widgets/pane.py` + `ui/widgets/dual_pane.py`
+## 1.4. Task 4: `ui/widgets/pane.py` + `ui/widgets/dual_pane.py`
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/pane.py` — binds to `PaneVM`. Renders breadcrumb header, column headers (name | size | modified), entry rows, footer summary.
@@ -122,7 +122,7 @@ Pane widget:
 
 ---
 
-## Task 5: overlay widgets — command palette, confirm modal, quick look, transfers tray
+## 1.5. Task 5: overlay widgets — command palette, confirm modal, quick look, transfers tray
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/command_palette.py` — bound to `CommandPaletteVM`. ModalScreen.
@@ -135,7 +135,7 @@ Pane widget:
 
 ---
 
-## Task 6: snapshot tests per theme
+## 1.6. Task 6: snapshot tests per theme
 
 **Files:**
 - Create: `tests/snapshot/__init__.py`
@@ -167,7 +167,7 @@ Use `pytest-textual-snapshot`'s `snap_compare` fixture. Terminal size `(120, 40)
 
 ---
 
-## Task 7: app composition — replace M0 hello-world
+## 1.7. Task 7: app composition — replace M0 hello-world
 
 **Files:**
 - Modify: `src/aws_tui/app.py` — replace the M0 placeholder with the real composition.
@@ -193,7 +193,7 @@ Add `e2e` job to ci.yml.
 
 ---
 
-## Task 8: commit per task + push + tag v0.6.0
+## 1.8. Task 8: commit per task + push + tag v0.6.0
 
 - Per-task commits.
 - CHANGELOG bump for `## [0.6.0]`.
@@ -204,7 +204,7 @@ Add `e2e` job to ci.yml.
 
 ---
 
-## Layer-rule decision (implementation-time revision)
+## 1.9. Layer-rule decision (implementation-time revision)
 
 Per the M5 task brief's "Critical: Layer-rule update needed", Option A
 was chosen: `src/aws_tui/app.py` stays thin (composition root for
@@ -226,7 +226,7 @@ fixture teardown). Both were renamed to `_app_ctx` and
 `_aws_tui_shutdown` respectively. Avoid `_context` and `_shutdown` as
 attribute names on any future `App` subclass.
 
-## Watch-outs
+## 1.10. Watch-outs
 
 - **Layer rules**: `ui/` may NOT import `boto3`, `aioboto3`, `botocore`, `aws_tui.infra.aws_session`, `aws_tui.infra.connection_resolver`. Anything UI needs from those is passed via VM construction or via app composition layer. The `app.py` composition lives at the top — it may import from any layer. Update `scripts/check-layers.sh` exemption for `app.py` if needed.
 

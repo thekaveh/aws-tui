@@ -1,4 +1,4 @@
-# Notification consistency plan
+# 1. Notification consistency plan
 
 **Status:** proposal — awaiting user review before any migration work.
 **Author:** assistant, 2026-06-24.
@@ -18,9 +18,9 @@ code in this plan ships yet** — the user picks which phases to implement.
 
 ---
 
-## 1. Current state (inventory)
+## 1.1. Current state (inventory)
 
-### 1.1 Toast call sites (12 distinct call sites across the codebase)
+### 1.1.1. Toast call sites (12 distinct call sites across the codebase)
 
 | Call site                                    | Current level | Current text                                                 | Timeout | Sticky |
 |----------------------------------------------|---------------|--------------------------------------------------------------|---------|--------|
@@ -36,7 +36,7 @@ code in this plan ships yet** — the user picks which phases to implement.
 | `s3_connections_panel._raise_error_toast`    | ERROR         | (caller-supplied)                                            | 4s      | no     |
 | `_on_pane_state_changed` ad-hoc              | various       | inline call sites                                            | various | mixed  |
 
-### 1.2 Modal call sites
+### 1.1.2. Modal call sites
 
 | Modal                | Role                                          | Buttons / shape                              |
 |----------------------|-----------------------------------------------|----------------------------------------------|
@@ -47,13 +47,13 @@ code in this plan ships yet** — the user picks which phases to implement.
 | `ThemePickerModal`   | Pick a theme from a list                      | OptionList + apply                           |
 | `QuickLook`          | Preview a file                                | (no buttons — Esc closes)                    |
 
-### 1.3 Inline / chrome surfaces
+### 1.1.3. Inline / chrome surfaces
 
 - `TransferRowWidget` — live progress bar with state-colored left border
 - `Pane` — `endpoint unreachable — press r to retry` error pane
 - Boot-time "no connections configured" placeholder
 
-### 1.4 Observed inconsistencies
+### 1.1.4. Observed inconsistencies
 
 1. **Icons / glyphs** — boot-chain uses `▸ ✓ ✗`; theme-change, skipped-unreachable,
    error-mount use no icon at all. Other call sites use ad-hoc decoration or none.
@@ -69,7 +69,7 @@ code in this plan ships yet** — the user picks which phases to implement.
 
 ---
 
-## 2. Proposed taxonomy
+## 1.2. Proposed taxonomy
 
 Six notification **classes** mapped to existing **levels** + new **surface rules**.
 
@@ -101,7 +101,7 @@ Notes:
 
 ---
 
-## 3. Proposed visual grammar (toasts)
+## 1.3. Proposed visual grammar (toasts)
 
 Single-line format:
 
@@ -132,7 +132,7 @@ Rules:
 5. **No brackets around values** (`carbon`, not `[carbon]`); reserve `[]` for
    action chips in the model.
 
-### 3.1 Subject vocabulary (canonical)
+### 1.3.1. Subject vocabulary (canonical)
 
 To prevent drift, define a fixed set of subjects:
 
@@ -149,7 +149,7 @@ New subjects require updating this list (and the typing — see §6).
 
 ---
 
-## 4. Proposed modal grammar
+## 1.4. Proposed modal grammar
 
 `ConfirmModal` already has the canonical shape after PR #72:
 
@@ -182,7 +182,7 @@ hierarchy — title + body + buttons — but currently differ in:
 
 ---
 
-## 5. Timeout / sticky policy
+## 1.5. Timeout / sticky policy
 
 | Class            | Default timeout    | When to override                                                    |
 |------------------|--------------------|---------------------------------------------------------------------|
@@ -196,9 +196,9 @@ hierarchy — title + body + buttons — but currently differ in:
 
 ---
 
-## 6. Implementation plan (phased)
+## 1.6. Implementation plan (phased)
 
-### Phase A — taxonomy + helper API (no behavioural change)
+### 1.6.1. Phase A — taxonomy + helper API (no behavioural change)
 
 Add a thin layer over `ToastStackVM.raise_toast` so call sites pick a class,
 not a level + timeout + glyph + format. New helper in `aws_tui.ui.notifications`
@@ -221,7 +221,7 @@ dismiss it explicitly on outcome.
 Call sites stay on `raise_toast` initially — the helpers wrap and call it.
 This phase ships zero user-visible change.
 
-### Phase B — migrate boot chain + theme change + skip toasts
+### 1.6.2. Phase B — migrate boot chain + theme change + skip toasts
 
 Rewrite the existing call sites in `app.py` to use the helpers. The boot-chain
 narration is the largest single migration (6 of the 12 call sites). User-
@@ -235,17 +235,17 @@ visible deltas:
 
 Update snapshot baselines.
 
-### Phase C — migrate error + mount + settings toasts
+### 1.6.3. Phase C — migrate error + mount + settings toasts
 
 Rewrite the remaining call sites + `s3_connections_panel`.
 
-### Phase D — modal normalization
+### 1.6.4. Phase D — modal normalization
 
 Apply PR #72's "no auto-focus on mount" pattern to `FirstRunModal` and
 `ResumeModal`. Ensure they use the same `.modal-title` / `.modal-body`
 slot classes. Update snapshots.
 
-### Phase E — subject typing
+### 1.6.5. Phase E — subject typing
 
 Replace the `subject: str` parameter with a `Literal[…]` so a typo
 (`subject="Conection"`) fails at mypy time. Adds the canonical subject list
@@ -253,7 +253,7 @@ to a single source of truth (`NotificationSubject` enum).
 
 ---
 
-## 7. What this plan deliberately does NOT do
+## 1.7. What this plan deliberately does NOT do
 
 - **Touch the transfer overlay.** `TransferRowWidget` is its own surface
   with a different problem shape (long-running, state-machine UI). Worth a
@@ -266,7 +266,7 @@ to a single source of truth (`NotificationSubject` enum).
 
 ---
 
-## 8. Open questions for the user
+## 1.8. Open questions for the user
 
 1. **Glyph set.** Proposed `› … ✓ ⚠ ✖`. Alternative: `i … ✓ ! ✖` (no Unicode
    risk on terminals that fall back). Pick one.
@@ -283,7 +283,7 @@ to a single source of truth (`NotificationSubject` enum).
 
 ---
 
-## 9. Next step
+## 1.9. Next step
 
 User reviews this plan. Pick a glyph set, decide on subject style, scope the
 migration (phases A–E or a subset), and answer §8 questions 3 + 5. Then we

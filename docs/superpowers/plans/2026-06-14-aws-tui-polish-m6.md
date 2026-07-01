@@ -1,4 +1,4 @@
-# aws-tui M6 (Polish + release) Implementation Plan
+# 1. aws-tui M6 (Polish + release) Implementation Plan
 
 > Final milestone. Smaller than M5. Closes out v0.1-equivalent feature scope.
 
@@ -10,7 +10,7 @@
 
 ---
 
-## Task 1: Crash modal + unhandled-exception capture
+## 1.1. Task 1: Crash modal + unhandled-exception capture
 
 **Files:**
 - Create: `src/aws_tui/vm/chrome/crash_vm.py`
@@ -49,7 +49,7 @@ Snapshot tests for the crash modal in each theme.
 
 ---
 
-## Task 2: Transfer journal resume modal
+## 1.2. Task 2: Transfer journal resume modal
 
 **Files:**
 - Create: `src/aws_tui/vm/chrome/resume_vm.py` — wraps a list of `TransferJournalEntry` (from M2) into selectable items.
@@ -82,7 +82,7 @@ Snapshot test for the resume modal.
 
 ---
 
-## Task 3: First-run flow
+## 1.3. Task 3: First-run flow
 
 **Files:**
 - Create: `src/aws_tui/vm/chrome/first_run_vm.py`
@@ -111,7 +111,7 @@ The s3-compatible form: prompt for `name`, `endpoint_url`, `region`, `access_key
 
 ---
 
-## Task 4: README polish + docs
+## 1.4. Task 4: README polish + docs
 
 **Files:**
 - Modify: `README.md` — fill out features, install, quickstart, screenshots placeholders.
@@ -127,7 +127,7 @@ For screenshots / asciinema: **leave placeholders** (`<!-- screenshot: TODO; the
 
 ---
 
-## Task 5: CHANGELOG, version bump, commit, tag v0.7.0
+## 1.5. Task 5: CHANGELOG, version bump, commit, tag v0.7.0
 
 - Modify: `src/aws_tui/version.py` → `__version__ = "0.7.0"`.
 - Modify: `CHANGELOG.md` → add `## [0.7.0] - 2026-06-14` section.
@@ -142,7 +142,7 @@ Push, watch CI green, tag `v0.7.0` ("v0.7.0 — polish + release (M6)"), gh rele
 
 ---
 
-## Watch-outs
+## 1.6. Watch-outs
 
 - **Asciinema and screenshots cannot be made by a subagent.** Leave placeholder markdown comments and a TODO list in `docs/recording-todo.md` so the maintainer knows what to record.
 - **Crash modal's `continue` is sometimes unsafe.** Implement the heuristic from spec §7.10: if the offending action was a navigation, refresh, or filter (read-only), `continue` is safe. If it was a write (delete, copy, rename), disable `continue`.

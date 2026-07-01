@@ -1,4 +1,4 @@
-# aws-tui M2 (Domain) Implementation Plan
+# 1. aws-tui M2 (Domain) Implementation Plan
 
 > **For agentic workers:** Compact-plan format. Each task lists files + acceptance criteria + key contract details. Follow TDD within each task using the design spec at `docs/superpowers/specs/2026-06-13-aws-tui-design.md` (§2, §6, §7) for behavioural detail.
 
@@ -10,7 +10,7 @@
 
 ---
 
-## Task 1: `domain/filesystem.py` — Protocol + types
+## 1.1. Task 1: `domain/filesystem.py` — Protocol + types
 
 **Files:**
 - Create: `src/aws_tui/domain/filesystem.py`
@@ -100,7 +100,7 @@ Put it at `tests/unit/domain/_in_memory_fs.py` so it's reusable by other test mo
 
 ---
 
-## Task 2: `domain/local_fs.py` — Local filesystem provider
+## 1.2. Task 2: `domain/local_fs.py` — Local filesystem provider
 
 **Files:**
 - Create: `src/aws_tui/domain/local_fs.py`
@@ -140,7 +140,7 @@ Map OS errors to `ProviderError` subclasses: `FileNotFoundError` → `NotFoundEr
 
 ---
 
-## Task 3: `domain/s3_fs.py` — S3 provider
+## 1.3. Task 3: `domain/s3_fs.py` — S3 provider
 
 **Files:**
 - Create: `src/aws_tui/domain/s3_fs.py`
@@ -184,7 +184,7 @@ Map S3 errors:
 
 ---
 
-## Task 4: `domain/cross_fs.py` — CrossFsCopy/Move
+## 1.4. Task 4: `domain/cross_fs.py` — CrossFsCopy/Move
 
 **Files:**
 - Create: `src/aws_tui/domain/cross_fs.py`
@@ -228,7 +228,7 @@ Implementation:
 
 ---
 
-## Task 5: `domain/transfer_journal.py` — Crash-resume journal
+## 1.5. Task 5: `domain/transfer_journal.py` — Crash-resume journal
 
 **Files:**
 - Create: `src/aws_tui/domain/transfer_journal.py`
@@ -275,7 +275,7 @@ Each append is one JSON line. `find_unfinished` reads all jsonl files in base_di
 
 ---
 
-## Task 6: integration tests with MinIO testcontainer
+## 1.6. Task 6: integration tests with MinIO testcontainer
 
 **Files:**
 - Create: `tests/integration/__init__.py`
@@ -311,7 +311,7 @@ Wire integration into CI: add a new `integration` job in `.github/workflows/ci.y
 
 ---
 
-## Task 7: commit, push, tag v0.3.0
+## 1.7. Task 7: commit, push, tag v0.3.0
 
 - One commit per task (1-6), then a `chore: bump changelog for v0.3.0` commit.
 - `uv run pytest -v` (all tiers) green locally.

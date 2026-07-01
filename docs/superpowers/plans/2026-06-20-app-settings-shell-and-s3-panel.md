@@ -1,4 +1,4 @@
-# App Settings Shell + S3 Connections Panel Implementation Plan
+# 1. App Settings Shell + S3 Connections Panel Implementation Plan
 
 > **SUPERSEDED** by
 > [`2026-06-20-settings-as-first-class-nav-page.md`](2026-06-20-settings-as-first-class-nav-page.md)
@@ -16,7 +16,7 @@
 
 **Tech Stack:** Python 3.11+, Textual (TUI), VMx (MVVM framework, PyPI `vmx>=2.6.0,<3.0.0`), `tomllib`/`tomli_w` for TOML I/O, pytest + pytest-asyncio + pytest-textual-snapshot for tests.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - 10-theme parity: every per-theme CSS block must land in all 10 theme files (`carbon`, `voidline`, `lattice`, `amber`, `solarized-light`, `github-light`, `one-light`, `nord`, `dracula`, `gruvbox-dark`).
 - No new third-party dependencies.
@@ -31,9 +31,9 @@
 
 ---
 
-## File Structure
+## 1.2. File Structure
 
-### Files to create
+### 1.2.1. Files to create
 
 | Path | Responsibility |
 |---|---|
@@ -56,7 +56,7 @@
 | `tests/snapshot/test_services_menu_footer.py` | Snapshot tests for gear footer × 10 themes |
 | `tests/integration/test_settings_modal_flow.py` | In-process integration tests (3 flows) |
 
-### Files to modify
+### 1.2.2. Files to modify
 
 | Path | Change |
 |---|---|
@@ -80,7 +80,7 @@
 
 ---
 
-## Task Sequence Overview
+## 1.3. Task Sequence Overview
 
 | # | Task | Phase |
 |---|---|---|
@@ -102,7 +102,7 @@
 
 ---
 
-## Quality Gates (every task)
+## 1.4. Quality Gates (every task)
 
 Each task ends with these commands all green before commit:
 
@@ -118,7 +118,7 @@ If any gate fails, fix the underlying cause before committing. Never `--no-verif
 
 ---
 
-## Task 1: `ConfigStore.update_connection` + `remove_connection`
+## 1.5. Task 1: `ConfigStore.update_connection` + `remove_connection`
 
 **Files:**
 - Modify: `src/aws_tui/infra/config_store.py` (add two methods after `add_connection` at line ~270)
@@ -285,7 +285,7 @@ KeyError on unknown names."
 
 ---
 
-## Task 2: `ConnectionListChangedMessage`
+## 1.6. Task 2: `ConnectionListChangedMessage`
 
 **Files:**
 - Modify: `src/aws_tui/vm/messages.py` (add new dataclass + `__all__` entry)
@@ -387,7 +387,7 @@ reload-on-close logic)."
 
 ---
 
-## Task 3: `S3ConnectionsVM`
+## 1.7. Task 3: `S3ConnectionsVM`
 
 **Files:**
 - Create: `src/aws_tui/vm/settings/__init__.py` (empty)
@@ -685,7 +685,7 @@ on add and rename-disallowed on update."
 
 ---
 
-## Task 4: `SettingsVM`
+## 1.8. Task 4: `SettingsVM`
 
 **Files:**
 - Create: `src/aws_tui/vm/settings/settings_vm.py`
@@ -982,7 +982,7 @@ on modal dismiss to drive the pane reload."
 
 ---
 
-## Task 5: `S3CompatFormModal`: `name_locked` + live validation
+## 1.9. Task 5: `S3CompatFormModal`: `name_locked` + live validation
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/first_run_modal.py` (extend `S3CompatFormModal.__init__` and `compose`)
@@ -1217,7 +1217,7 @@ unit-tested independently."
 
 ---
 
-## Task 6: `S3ConnectionsPanel` + `_PlaceholderPanel`
+## 1.10. Task 6: `S3ConnectionsPanel` + `_PlaceholderPanel`
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/settings/__init__.py` (empty)
@@ -1554,7 +1554,7 @@ ConfirmationVM for the delete dialog."
 
 ---
 
-## Task 7: `SettingsModal` screen
+## 1.11. Task 7: `SettingsModal` screen
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/settings_modal.py`
@@ -1759,7 +1759,7 @@ dismiss the modal."
 
 ---
 
-## Task 8: `ServicesMenuFooter` + `ServicesMenu` integration
+## 1.12. Task 8: `ServicesMenuFooter` + `ServicesMenu` integration
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/services_menu_footer.py`
@@ -1907,7 +1907,7 @@ lands the action). Hides automatically when the column collapses."
 
 ---
 
-## Task 9: `AwsTuiApp` wiring (+ `AppContext` + `build_app_context`)
+## 1.13. Task 9: `AwsTuiApp` wiring (+ `AppContext` + `build_app_context`)
 
 **Files:**
 - Modify: `src/aws_tui/composition.py` (extend `build_app_context` + `AppContext` dataclass)
@@ -2179,7 +2179,7 @@ Single summary toast on close."
 
 ---
 
-## Task 10: `ServicesMenuVM` subscription
+## 1.14. Task 10: `ServicesMenuVM` subscription
 
 **Files:**
 - Modify: `src/aws_tui/vm/services_menu_vm.py`
@@ -2284,7 +2284,7 @@ ConnectionChangedMessage already triggers."
 
 ---
 
-## Task 11: Per-theme CSS × 10 themes
+## 1.15. Task 11: Per-theme CSS × 10 themes
 
 **Files:**
 - Modify: all 10 `.tcss` files under `src/aws_tui/ui/themes/`
@@ -2491,7 +2491,7 @@ use 80 — matches the per-theme ConfirmModal precedent."
 
 ---
 
-## Task 12: Snapshot tests — `SettingsModal` + `ServicesMenuFooter`
+## 1.16. Task 12: Snapshot tests — `SettingsModal` + `ServicesMenuFooter`
 
 **Files:**
 - Create: `tests/snapshot/apps/settings.py`
@@ -2698,7 +2698,7 @@ and 10 new snapshots for ServicesMenuFooter."
 
 ---
 
-## Task 13: Snapshot tests — `S3CompatFormModal` edit + validation
+## 1.17. Task 13: Snapshot tests — `S3CompatFormModal` edit + validation
 
 **Files:**
 - Create: `tests/snapshot/apps/s3_compat_form.py`
@@ -2852,7 +2852,7 @@ consistently."
 
 ---
 
-## Task 14: In-process integration tests
+## 1.18. Task 14: In-process integration tests
 
 **Files:**
 - Create: `tests/integration/test_settings_modal_flow.py`
@@ -3068,7 +3068,7 @@ Three in-process integration tests:
 
 ---
 
-## Task 15: `CHANGELOG.md` entry
+## 1.19. Task 15: `CHANGELOG.md` entry
 
 **Files:**
 - Modify: `CHANGELOG.md` (under `## [Unreleased]` → `### Added`)
@@ -3120,7 +3120,7 @@ with full CRUD over kind='s3-compatible' TOML entries."
 
 ---
 
-## Self-Review Notes (recorded after writing)
+## 1.20. Self-Review Notes (recorded after writing)
 
 **Spec coverage check** — every section of the spec maps to at least one task:
 

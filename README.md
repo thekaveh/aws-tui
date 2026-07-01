@@ -1,4 +1,4 @@
-# aws-tui
+# 1. aws-tui
 
 <p align="center">
   <img src="assets/screenshots/aws-tui-running.png" alt="aws-tui — carbon block-art banner up top with a DEMO MODE pedigree subtitle, left rail with S3 and EMR services plus a docked Settings gear, EMR page mid-screen showing the etl-pipeline-1 application picker, a job-runs master list with a state-filter chip strip, a right-side run-detail pane (state, started, IAM role, entry point), a logs pane with the default ERROR/FAIL/Exception filter, and a labelled Commands row along the bottom." width="100%">
@@ -21,7 +21,7 @@ Linux, and Windows. Powered by
 > with text labels (no collapse mode, no icon emojis). See
 > [`CHANGELOG.md`](CHANGELOG.md) for the full per-PR delta.
 
-## 1. Features
+## 1.1. Features
 
 - **Norton-Commander–style dual pane.** S3 (or any S3-compatible bucket)
   on one side, your local filesystem on the other. Copy and delete
@@ -118,7 +118,7 @@ Linux, and Windows. Powered by
   snapshot / e2e, with a 9-test MinIO tier opt-in via
   `uv run pytest -m integration`.
 
-## 2. Install
+## 1.2. Install
 
 > **PyPI release of `aws-tui` is in flight** — the VMx PyPI blocker has
 > lifted (the framework now ships on PyPI). Until aws-tui's own first
@@ -142,7 +142,7 @@ read lockfile revision 3 (CI uses `astral-sh/setup-uv@v7`). Runs on
 macOS, Linux, and Windows — see [`docs/platforms.md`](docs/platforms.md)
 for the recommended terminal + font setup per OS.
 
-### 2.1. Try it without AWS credentials
+### 1.2.1. Try it without AWS credentials
 
 Pass `AWS_TUI_DEMO=1` (or `--demo`) to launch with deterministic mock data backing all services:
 
@@ -156,7 +156,7 @@ You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `
 
 To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 
-## 3. Quickstart
+## 1.3. Quickstart
 
 ```bash
 aws-tui                       # launches with the default connection
@@ -178,7 +178,7 @@ If `aws s3 ls` works on your shell but `aws-tui` shows
 pointing at the working profile and relaunch — the resolver picks it
 up between `[defaults].connection` and the first-auto fallback.
 
-### 3.1. First-time launch
+### 1.3.1. First-time launch
 
 If you have **no** `[connections.*]` in `<config-dir>/config.toml`
 **and** `~/.aws/{config,credentials}` is empty, v0.8.x opens the main
@@ -196,7 +196,7 @@ no AWS or S3-compatible connections configured.
 For now, add an AWS profile with `aws configure sso` / `aws sso login`,
 or open Settings with `,` and add an S3-compatible connection.
 
-## 4. Documentation
+## 1.4. Documentation
 
 Numbered hierarchically for navigation.
 
@@ -213,8 +213,8 @@ Numbered hierarchically for navigation.
    3. [VMx Python cheatsheet](docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md) — facade pattern, message-protocol shape, lifecycle gotchas.
 3. **Spec + plans**
 
-   Historical superpowers specs, plans, and notes preserve their original
-   heading style even when live docs use hierarchical numbering.
+   Historical superpowers specs, plans, and notes are indexed here for
+   provenance; headings are numbered for repository-wide navigation.
    1. [v0.1.0 design spec](docs/superpowers/specs/2026-06-13-aws-tui-design.md) — authoritative source for behavior + acceptance.
    2. [Settings as a first-class nav page](docs/superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md) — design + post-ship amendments (PR #54 / #55 / #56). Supersedes the modal-overlay design at [`docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md`](docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md) (kept for git-history continuity, marked SUPERSEDED in-file).
    3. [Modal & toast polish](docs/superpowers/specs/2026-06-19-modal-toast-polish-design.md) — PR #47 modal/toast surface rework.
@@ -224,7 +224,8 @@ Numbered hierarchically for navigation.
    7. [Cross-platform readiness](docs/superpowers/specs/2026-06-28-cross-platform-readiness-design.md) — macOS / Linux / Windows parity audit and the install / smoke / docs plan for matching all three.
    8. [Demo mode](docs/superpowers/specs/2026-06-28-demo-mode-design.md) — `AWS_TUI_DEMO=1` (or `--demo`) boots the full UI against seeded in-memory fakes; ships in PRs #97 / #104.
    9. [VMx toolkit adoption](docs/superpowers/specs/2026-06-28-vmx-toolkit-adoption-design.md) — case-by-case retrofit of the VM layer to use VMx 2.6.1's existing `CompositeVM` / `FormVM` / `IDialogService` toolkit instead of the hand-rolled patterns the project currently ships. Records the analytical mistakes the design review went through (§1.3) so the next worker doesn't repeat them. Awaiting brainstorm → plan → execution.
-   10. [Implementation plans (M0–M6 and post-tag specs)](docs/superpowers/plans/) — per-milestone breakdowns + per-spec implementation plans; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
+   10. [VMx vNext upstream asks](docs/superpowers/specs/2026-06-28-vmx-upstream-vnext-asks.md) — feedback report for VMx maintainers, derived from the aws-tui toolkit-adoption review and focused on primitives that would reduce custom wrapper code.
+   11. [Implementation plans (M0–M6 and post-tag specs)](docs/superpowers/plans/) — per-milestone breakdowns + per-spec implementation plans; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
    2. [Release procedure](docs/RELEASING.md) — cut-a-release checklist: version bump, CHANGELOG, tag, publish, Homebrew bump.
@@ -235,10 +236,10 @@ Numbered hierarchically for navigation.
    2. [Security policy](SECURITY.md) — vulnerability reporting + supported versions.
    3. [Changelog](CHANGELOG.md) — per-pass + per-release deltas.
 
-## 5. File locations
+## 1.5. File locations
 
 `<config-dir>` and `<cache-dir>` are platform-specific; see
-[`docs/platforms.md`](docs/platforms.md#1-quick-reference) for exact
+[`docs/platforms.md`](docs/platforms.md#11-quick-reference) for exact
 macOS, Linux, and Windows paths. Existing legacy XDG directories are
 preserved when present.
 
@@ -251,7 +252,7 @@ preserved when present.
 | `<cache-dir>/transfers/<id>.jsonl` | Per-transfer crash-recovery journal |
 | `<cache-dir>/crash/<ts>.txt` | Full traceback + log/action tail per crash |
 
-## 6. Environment variables
+## 1.6. Environment variables
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -269,7 +270,13 @@ not read those variables in v0.8.x. The Quick Look full-file `$PAGER`
 shell-out is spec'd but not yet wired (see the
 `[Unreleased] Deferred` block of `CHANGELOG.md`).
 
-## 7. Contributing
+## 1.7. Localization
+
+aws-tui is English-only in v0.8.x. User-facing strings are intentionally
+hardcoded until a localization pass introduces translation bundles and
+locale-aware formatting.
+
+## 1.8. Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). License:
 [Apache License 2.0](LICENSE) (with [NOTICE](NOTICE)). Security:

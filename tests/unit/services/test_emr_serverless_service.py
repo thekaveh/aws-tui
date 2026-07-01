@@ -9,8 +9,21 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.services.emr_serverless import service as service_module
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.services_protocol import ServiceDescriptor
+
+
+def test_package_facade_exports_service_contract() -> None:
+    from aws_tui.services.emr_serverless import (
+        EmrClientFactory,
+    )
+    from aws_tui.services.emr_serverless import (
+        EmrServerlessService as FacadeService,
+    )
+
+    assert FacadeService is EmrServerlessService
+    assert EmrClientFactory is service_module.EmrClientFactory
 
 
 def test_descriptor_icon_is_fire_smp_label_is_emr() -> None:

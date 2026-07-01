@@ -1,6 +1,6 @@
-# Cross-Platform Readiness — Design
+# 1. Cross-Platform Readiness — Design
 
-## Goal
+## 1.1. Goal
 
 Make aws-tui a first-class citizen on **macOS, Linux, and
 Windows** alike. "First-class" means: install instructions that
@@ -8,7 +8,7 @@ work, every keystroke that the docs claim works, every file path
 that resolves to the right place, every encoding round-trip
 correctly, and every CI lane green on all three platforms.
 
-## Where we are today
+## 1.2. Where we are today
 
 - **Platforms claimed.** `pyproject.toml` advertises macOS, Linux,
   and Windows classifiers. CI's `unit` job runs the matrix
@@ -32,11 +32,11 @@ correctly, and every CI lane green on all three platforms.
   - No explicit POSIX-only system calls (no `os.fork`,
     `signal.SIGCHLD`, etc.) — Textual handles the terminal abstraction.
 - **Memory note**: `Working style — macOS-first` (per
-  [[user-role]]). Linux and Windows have been a stated goal
+  `user-role`). Linux and Windows have been a stated goal
   since v0.6; CI proves they BUILD; the question is whether they
   actually WORK end-to-end for a real user.
 
-## Non-goals
+## 1.3. Non-goals
 
 - Auto-elevation / admin install flows (msi, pkg). Use the
   standard Python/Homebrew channels.
@@ -46,9 +46,9 @@ correctly, and every CI lane green on all three platforms.
 - iOS / Android (Textual doesn't target them; out of scope).
 - WSL as a distinct platform — treat it as Linux.
 
-## Architecture — 5 work-streams
+## 1.4. Architecture — 5 work-streams
 
-### Stream 1: Audit known platform-sensitive surfaces
+### 1.4.1. Stream 1: Audit known platform-sensitive surfaces
 
 Read-the-code pass with a checklist. No fix work, just produce a
 report of every site that has known platform differences in
@@ -123,7 +123,7 @@ behavior.
 one section per surface, listing every concrete site checked, the
 verdict (clean / risky / broken), and the proposed fix where applicable.
 
-### Stream 2: Expand CI matrix to PROVE the platforms work
+### 1.4.2. Stream 2: Expand CI matrix to PROVE the platforms work
 
 Bring the slower jobs into the cross-platform matrix so a
 regression on Windows lint or Linux snapshot blocks the merge.
@@ -160,7 +160,7 @@ regression on Windows lint or Linux snapshot blocks the merge.
 ~10 → ~20, but runtime parallelism is unchanged (independent
 runners). Wall-clock CI stays under 5 min.
 
-### Stream 3: Install paths verified per platform
+### 1.4.3. Stream 3: Install paths verified per platform
 
 Real install dry-runs for each platform's typical user. Recipes
 captured in README + `docs/installing.md`.
@@ -190,7 +190,7 @@ matrix above; README points to it. The doc is the source of
 truth for "did this install path work for me on platform X?" so
 future contributors don't reinvent the verification.
 
-### Stream 4: Cross-platform release packaging
+### 1.4.4. Stream 4: Cross-platform release packaging
 
 The release pipeline (PR #95) builds `py3-none-any` wheels on
 Linux. That wheel IS cross-platform (pure Python; no native
@@ -211,7 +211,7 @@ extensions), but two release-time gates need adding:
 `.github/workflows/release.yml`; documented in `docs/RELEASING.md`
 as the new pre-PyPI gate.
 
-### Stream 5: Documentation polish for cross-platform UX
+### 1.4.5. Stream 5: Documentation polish for cross-platform UX
 
 For each platform, the docs need to use the right idiom:
 
@@ -235,7 +235,7 @@ For each platform, the docs need to use the right idiom:
 platform (mac / Linux / Windows tabs in the markdown);
 `docs/installing.md` carries the detailed per-platform recipes.
 
-## Failure modes & rollback
+## 1.5. Failure modes & rollback
 
 - **CI matrix expansion is noisy at first.** Per-platform lint /
   type bugs will surface that didn't matter before. Expectation:
@@ -252,7 +252,7 @@ platform (mac / Linux / Windows tabs in the markdown);
   metadata. The smoke install is exactly the gate that catches
   these BEFORE real users hit them.
 
-## What we'll have when done
+## 1.6. What we'll have when done
 
 - A green CI matrix on `{mac, linux, win} × {py 3.11–3.13}` for
   unit, lint, type, and pkg.
@@ -265,7 +265,7 @@ platform (mac / Linux / Windows tabs in the markdown);
 - README + `docs/installing.md` that don't lie about any
   platform.
 
-## Out of scope (deliberate YAGNI)
+## 1.7. Out of scope (deliberate YAGNI)
 
 - Code-signing the macOS installer / Windows binary. Pure-Python
   package; no installer to sign.

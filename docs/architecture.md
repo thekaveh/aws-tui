@@ -1,4 +1,4 @@
-# Architecture
+# 1. Architecture
 
 > Human-readable mirror of §2 of [the design spec](superpowers/specs/2026-06-13-aws-tui-design.md).
 > For the deep dive (VM tree, lifecycle invariants, capability matrix,
@@ -16,7 +16,7 @@ imports, and checks the banned edges in the script. `app.py` and
 `services/` is a service-composition boundary: it can import concrete
 VMs to build service pages, but it cannot import Textual widgets.
 
-## 1. Layers
+## 1.1. Layers
 - **View** — Textual widgets and `.tcss` themes
   (`src/aws_tui/ui/`). Never touches `boto3`, `aioboto3`, or
   `botocore`. Talks to VMs via property reads + relay-command
@@ -60,7 +60,7 @@ VMs to build service pages, but it cannot import Textual widgets.
   `KeychainBackend`. The only layer that touches the OS, AWS APIs,
   the file system, or the macOS keychain.
 
-## 2. Composition root
+## 1.2. Composition root
 The two top-level files `src/aws_tui/composition.py` and
 `src/aws_tui/app.py` are the only modules permitted to import from
 every layer. `composition.py` builds the dependency graph; `app.py`
@@ -78,7 +78,7 @@ handlers.
 - `add_s3_compat_connection(form)` — materializes the in-TUI
   S3-compatible form into a config-store entry.
 
-## 3. Lifecycle
+## 1.3. Lifecycle
 VMs implement `construct → run → destruct → dispose` (VMx convention).
 The `RootVM` constructs the chrome and content-host children
 depth-first; `ContentHostVM.set_content(new)` disposes the previous
@@ -86,7 +86,7 @@ content via the same cascade. App shutdown awaits the in-flight
 transfers cancel + closes every aioboto3 client before disposing the
 VM tree (spec §5.4).
 
-## 4. Messaging
+## 1.4. Messaging
 All cross-VM communication goes through the session's single
 `MessageHub`. Custom envelopes (defined in
 `src/aws_tui/vm/messages.py`):
@@ -102,7 +102,7 @@ callback (typically `isinstance(msg, FooMessage)`). The view layer
 subscribes via `HubSubscriberMixin` on a per-widget basis, which wraps
 the same observable plus dispose-on-unmount.
 
-## 5. Testing pyramid
+## 1.5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
 | Unit | Recount with `uv run pytest tests/unit --collect-only -q | tail -1` | VM, domain, infra behavior; no I/O |
@@ -121,14 +121,14 @@ with `uv run pytest`. Opt into the MinIO tier with
 `uv run pytest -m integration` — it spins up a container, which the
 default `addopts` filter excludes (`-m 'not integration'`).
 
-## 6. Layer-rule check
+## 1.6. Layer-rule check
 `scripts/check-layers.sh` parses Python imports with `ast` across the
 five layer subtrees, resolves relative imports to absolute module names,
 and matches them against the banned-import rules inlined in the script.
 The composition root and `app.py` are deliberately excluded — they live
 at `src/aws_tui/` top-level so the check never inspects them.
 
-## 7. Where to start reading the code
+## 1.7. Where to start reading the code
 1. `src/aws_tui/composition.py` — see how everything wires.
 2. `src/aws_tui/vm/root_vm.py` — top of the VM tree.
 3. `src/aws_tui/vm/file_manager/dual_pane_vm.py` — the first concrete

@@ -1,4 +1,4 @@
-# aws-tui — design spec
+# 1. aws-tui — design spec
 
 | | |
 |---|---|
@@ -55,13 +55,13 @@
 
 ---
 
-## 0. Summary
+## 1.1. Summary
 
 aws-tui is a sleek, macOS-tailored terminal UI for the AWS CLI's domain — a dual-pane Norton-Commander–style file manager for S3 in v1, with a service-plugin spine so adding EC2 / IAM / Lambda / DynamoDB / CloudWatch / ECS later is additive. Authentication is fully delegated to the AWS CLI and boto3 credential chain — if a user has run `aws sso login`, aws-tui picks it up silently. Both panes consume a `FileSystemProvider` interface, so the S3↔Local split is symmetric. The same code paths and UI also serve S3-compatible backends (MinIO, Cloudflare R2, Backblaze B2, Wasabi). The UI layer is built on Textual with a fully MVVM architecture provided by VMx, ten built-in themes (Carbon default, Voidline, Lattice, Amber CRT, Solarized Light, GitHub Light, One Light, Nord, Dracula, Gruvbox Dark), and full user theme override via Textual `.tcss` files.
 
-## 1. Goals & non-goals
+## 1.2. Goals & non-goals
 
-### 1.1 Goals (v0.1.0)
+### 1.2.1. Goals (v0.1.0)
 
 - **Sleek, modern, macOS-tailored TUI** for browsing and managing S3 (and S3-compatible) storage.
 - **Norton-Commander-style dual pane** — Tab to switch focus, single-letter actions, contextual hint legend at the bottom.
@@ -72,7 +72,7 @@ aws-tui is a sleek, macOS-tailored terminal UI for the AWS CLI's domain — a du
 - **Real theming** — ten built-in themes, the default theme is itself configurable, and users can drop `.tcss` overrides.
 - **Distribution via `pipx`** day one (`pipx install git+https://github.com/thekaveh/aws-tui`); PyPI once VMx publishes.
 
-### 1.2 Non-goals (explicit, so they don't sneak in)
+### 1.2.2. Non-goals (explicit, so they don't sneak in)
 
 - Web UI, browser tunnel, or remote-display rendering.
 - Cost / billing visualizations.
@@ -84,7 +84,7 @@ aws-tui is a sleek, macOS-tailored terminal UI for the AWS CLI's domain — a du
 - Bandwidth throttling.
 - Bundling into a standalone binary (PyInstaller / Briefcase) — breaks `.tcss` overrides and bloats the install.
 
-### 1.3 Platforms
+### 1.2.3. Platforms
 
 - **macOS** — primary, tier-1 in CI, tested on every PR.
 - **Linux** — tier-2 best-effort, runs the heavy integration tier in CI (Docker is first-class there).
@@ -92,9 +92,9 @@ aws-tui is a sleek, macOS-tailored terminal UI for the AWS CLI's domain — a du
 
 ---
 
-## 2. Architecture
+## 1.3. Architecture
 
-### 2.1 Five-layer model
+### 1.3.1. Five-layer model
 
 Strict one-way dependencies. Each layer only knows the layer beneath it.
 
@@ -169,7 +169,7 @@ Strict one-way dependencies. Each layer only knows the layer beneath it.
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Key invariants
+### 1.3.2. Key invariants
 
 - **View → VM → Service → Domain → Infra.** No upward calls. View never imports `boto3`. VM never imports Textual widgets. Enforced by `ruff` `flake8-tidy-imports` rules per-folder.
 - **Both panes are the same widget** with a different `FileSystemProvider`. The S3↔Local asymmetry only exists in the providers, not in the UI or the dual-pane VM.
@@ -179,7 +179,7 @@ Strict one-way dependencies. Each layer only knows the layer beneath it.
 
 ---
 
-## 3. Repo layout
+## 1.4. Repo layout
 
 ```
 aws-tui/
@@ -288,7 +288,7 @@ aws-tui/
 └── LICENSE                         # MIT (matches VMx)
 ```
 
-### 3.1 Layer enforcement
+### 1.4.1. Layer enforcement
 
 `ruff` `flake8-tidy-imports` rules per folder:
 
@@ -302,9 +302,9 @@ aws-tui/
 
 ---
 
-## 4. UI design
+## 1.5. UI design
 
-### 4.1 Top-level screen anatomy
+### 1.5.1. Top-level screen anatomy
 
 ```
 +--- top status strip (single row) ---------------------------------+
@@ -321,7 +321,7 @@ aws-tui/
 +-------------------------------------------------------------------+
 ```
 
-### 4.2 Keymap (macOS-tailored, customizable)
+### 1.5.2. Keymap (macOS-tailored, customizable)
 
 Default bindings — `⌘` is not used because terminals intercept it.
 
@@ -365,11 +365,11 @@ All bindings are configurable via `~/.config/aws-tui/config.toml`:
 
 The input router goes through `ui/actions.py` (action registry) → `ui/bindings.py` (action ↔ key) → VM command. The indirection layer is what makes keymap customization free.
 
-### 4.3 Contextual hint legend
+### 1.5.3. Contextual hint legend
 
 A single dim row at the bottom of the screen. Its content is a `DerivedProperty<list[Action]>` over `root.focused_vm` — when focus moves to a different widget, the legend swaps automatically. Format: `<key in accent> <label in dim>` separated by generous spacing. Maximum 7-8 actions visible; the rest are reachable via `:` or `?`.
 
-### 4.4 Modals
+### 1.5.4. Modals
 
 | Modal | Trigger | Behaviour |
 |---|---|---|
@@ -381,11 +381,11 @@ A single dim row at the bottom of the screen. Its content is a `DerivedProperty<
 | First-run | no connections found | Offers to import AWS profiles, add S3-compatible, or skip |
 | Crash | unhandled exception | Trace summary + path to dump file + open-issue link |
 
-### 4.5 Themes
+### 1.5.5. Themes
 
 Ten built-ins ship (four dark originals, three light themes, and three community palettes); default is **Carbon** but the default is itself configurable (`theme = voidline` in config). Users can drop `<config-dir>/theme.tcss` for fine-grained overrides on top of the active built-in, or full custom themes under `<config-dir>/themes/<name>.tcss` selectable like any built-in.
 
-#### Carbon (default) — near-monochrome with ice-blue accent
+#### 1.5.5.1. Carbon (default) — near-monochrome with ice-blue accent
 
 | Token | Hex | Use |
 |---|---|---|
@@ -404,7 +404,7 @@ Ten built-ins ship (four dark originals, three light themes, and three community
 
 Carbon's discipline: **one accent color**, **three-tier text hierarchy** (primary/secondary/label), semantic colors reserved for narrow, meaningful uses (`success` only on auth/transfer status; `danger` only on "cannot be undone" affordances; `warning` only on numerics in Quick Look).
 
-#### Voidline — neon cyan + magenta on near-black
+#### 1.5.5.2. Voidline — neon cyan + magenta on near-black
 
 | Token | Hex | Use |
 |---|---|---|
@@ -419,7 +419,7 @@ Carbon's discipline: **one accent color**, **three-tier text hierarchy** (primar
 
 Voidline uses heavy double-line borders (`╔══╗`), powerline-style hint chips with background fills, and (in the real TUI only) a braille sparkline in the status bar.
 
-#### Lattice — mint-teal + lavender on deep teal
+#### 1.5.5.3. Lattice — mint-teal + lavender on deep teal
 
 | Token | Hex | Use |
 |---|---|---|
@@ -430,7 +430,7 @@ Voidline uses heavy double-line borders (`╔══╗`), powerline-style hint c
 | `text` | `#d4ebe9` | |
 | `text-dim` | `#4a7080` | |
 
-#### Amber CRT — retro phosphor monitor
+#### 1.5.5.4. Amber CRT — retro phosphor monitor
 
 | Token | Hex | Use |
 |---|---|---|
@@ -444,9 +444,9 @@ Amber CRT is intentionally an opt-in alt — beautiful and distinctive, harder o
 
 ---
 
-## 5. MVVM wiring with VMx
+## 1.6. MVVM wiring with VMx
 
-### 5.1 VM tree with primitives
+### 1.6.1. VM tree with primitives
 
 ```
 RootVM                 : AggregateVM3<ServicesMenuVM, ContentHostVM, ChromeVM>
@@ -472,7 +472,7 @@ Overlays (lifetime managed by RootVM, not in main tree):
    QuickLookVM         : ComponentVM
 ```
 
-### 5.2 Commands (`RelayCommand` with reactive `canExecute`)
+### 1.6.2. Commands (`RelayCommand` with reactive `canExecute`)
 
 | VM | Command | canExecute condition |
 |---|---|---|
@@ -493,7 +493,7 @@ Overlays (lifetime managed by RootVM, not in main tree):
 
 `canExecute` triggers are reactive observables — VMx wires them automatically; the View just binds.
 
-### 5.3 Messages on the hub
+### 1.6.3. Messages on the hub
 
 | Message | Publisher | Subscribers |
 |---|---|---|
@@ -506,7 +506,7 @@ Overlays (lifetime managed by RootVM, not in main tree):
 | `TransferProgressMessage` (custom) | CrossFsCopy/Move workers | TransferVM, StatusBarVM |
 | `KeymapChangedMessage` (custom) | infra.KeymapStore | HintLegendVM, View input router |
 
-### 5.4 Lifecycle invariants
+### 1.6.4. Lifecycle invariants
 
 | Trigger | Primitive | Scope |
 |---|---|---|
@@ -535,7 +535,7 @@ async def shutdown():
 
 If async drain exceeds 5 s, we log a warning and proceed to `dispose()` anyway; in-memory state is released, the OS reaps any leaked socket.
 
-### 5.5 Async + threading
+### 1.6.5. Async + threading
 
 - **One event loop** — Textual's asyncio loop is the only loop. No worker threads.
 - **`aioboto3` is asyncio-native** — every AWS call is `await client.list_objects_v2(...)`.
@@ -543,7 +543,7 @@ If async drain exceeds 5 s, we log a warning and proceed to `dispose()` anyway; 
 - **Long ops use `asyncio.create_task()`** and report progress via `PropertyChangedMessage` on the spawning VM.
 - **Cancellation** — every long task is owned by a VM. `VM.destruct()` cancels its tasks before tearing down.
 
-### 5.6 State helpers (VMx 2.5)
+### 1.6.6. State helpers (VMx 2.5)
 
 | Helper | Used by | Computes |
 |---|---|---|
@@ -553,7 +553,7 @@ If async drain exceeds 5 s, we log a warning and proceed to `dispose()` anyway; 
 | `ExpandableState` | PaneVM | breadcrumb path history (`ascend()` walks back) |
 | `SearchableState` | CommandPaletteVM, PaneVM (when `/` pressed) | fuzzy-filter state, persists across re-renders |
 
-### 5.7 Capability adoption
+### 1.6.7. Capability adoption
 
 | VM | Capabilities |
 |---|---|
@@ -563,15 +563,15 @@ If async drain exceeds 5 s, we log a warning and proceed to `dispose()` anyway; 
 | EntryVM | `ISelectable` |
 | ConfirmationVM | VMx `ConfirmHelper` (opt-in notifications sub-package) |
 
-### 5.8 View ↔ VM binding (Textual side)
+### 1.6.8. View ↔ VM binding (Textual side)
 
 Textual widgets get the VM injected via constructor; each widget subscribes to its VM's `PropertyChangedMessage` and re-renders the affected attribute (no full redraw). Inputs (keypresses, mouse) route through `ui/actions.py` → `ui/bindings.py` → VM command. The View layer NEVER imports `boto3`, `aioboto3`, or anything from `infra/`. Enforced by `ruff` import rules.
 
 ---
 
-## 6. AWS auth & service lifecycle
+## 1.7. AWS auth & service lifecycle
 
-### 6.1 Connection model
+### 1.7.1. Connection model
 
 A `Connection` is the unit aws-tui authenticates as. Two kinds:
 
@@ -590,7 +590,7 @@ force_path_style = true
 verify_tls = true
 ```
 
-### 6.2 Credential resolution
+### 1.7.2. Credential resolution
 
 For `kind = "aws"`: standard boto3 chain (`boto3.Session(profile_name=profile)`) — env, shared credentials, SSO cache, EC2 IMDS, ECS task role. We add nothing.
 
@@ -603,7 +603,7 @@ For `kind = "s3-compatible"`, the `credentials` field is dispatched:
 | `aws-profile:<name>` | reuses an entry in `~/.aws/credentials` |
 | `static` | from config file — startup warning + sticky toast |
 
-### 6.3 Auto-discovery + SSO cache probe
+### 1.7.3. Auto-discovery + SSO cache probe
 
 `ConnectionResolver.list()` unions on **every launch** (not just first run):
 
@@ -620,9 +620,9 @@ For each AWS connection, `AwsSession.probe_token(conn)` performs a cheap freshne
 
 Total cost: one `os.stat` + one ~1 KB JSON read. Sub-millisecond. All connections probed on launch — drives the picker's status column.
 
-### 6.4 End-to-end flows
+### 1.7.4. End-to-end flows
 
-#### Flow 1 — Cold start, default connection, valid SSO token
+#### 1.7.4.1. Flow 1 — Cold start, default connection, valid SSO token
 
 ```
 App launch
@@ -647,7 +647,7 @@ App launch
 
 aioboto3 clients are created **eagerly** at construction time but **bind sockets lazily** on first call — cold start makes no network round-trip just to render the UI.
 
-#### Flow 2 — Switch connection (AWS → MinIO)
+#### 1.7.4.2. Flow 2 — Switch connection (AWS → MinIO)
 
 ```
 User: : connection switch -> minio-local
@@ -669,7 +669,7 @@ User: : connection switch -> minio-local
   -> StatusBarVM: "conn minio-local (s3-compat) . region us-east-1 . keys"
 ```
 
-#### Flow 3 — SSO login (first connect or expired)
+#### 1.7.4.3. Flow 3 — SSO login (first connect or expired)
 
 ```
 User selects connection "kaveh-prod"
@@ -691,7 +691,7 @@ User: presses a
 
 We **never** implement the OIDC device flow ourselves. The aws CLI owns that; we orchestrate around it.
 
-#### Flow 4 — SSO token expires mid-session
+#### 1.7.4.4. Flow 4 — SSO token expires mid-session
 
 ```
 User browses bucket; list_objects returns 401
@@ -704,7 +704,7 @@ User browses bucket; list_objects returns 401
 User authenticates -> Flow 3's retry path -> pane re-runs the failed list
 ```
 
-#### Flow 5 — First run, no connections configured
+#### 1.7.4.5. Flow 5 — First run, no connections configured
 
 ```
 App launch
@@ -723,11 +723,11 @@ App launch
 
 The first-run flow is the only place we offer an in-TUI form for adding connections. After that, users edit `config.toml` directly or use `: connection edit <name>` which opens `$EDITOR`.
 
-#### Flow 6 — App exit
+#### 1.7.4.6. Flow 6 — App exit
 
 Covered in §5.4 (lifecycle). `Ctrl+C` or `q` triggers the async shutdown sequence followed by `RootVM.dispose()`.
 
-### 6.5 Service applicability per connection kind
+### 1.7.5. Service applicability per connection kind
 
 The `Service` protocol has `supports(connection: Connection) -> bool`. Examples:
 
@@ -741,19 +741,19 @@ class EC2Service:  # future
 
 `ServicesMenuVM.entries` is a `DerivedProperty` filtered by `supports()`. Switching to a `kind = "s3-compatible"` connection collapses the menu to just S3 — quietly, no error toast.
 
-### 6.6 Regions
+### 1.7.6. Regions
 
 v1 keeps region as a **per-connection field**, not switchable mid-session. Multi-region browsing (one connection, switch region in-app) is a v1.3 feature — the design accommodates it (`S3FS` already takes a region), but the UI affordance + connection re-binding is YAGNI for now.
 
 ---
 
-## 7. Error handling & resilience
+## 1.8. Error handling & resilience
 
-### 7.1 Principle
+### 1.8.1. Principle
 
 Trust boto3's retry layer; own only the UX surface and the crash-recovery journal. We don't reinvent backoff, partial-failure parsing, or multipart mechanics — botocore already does that.
 
-### 7.2 Taxonomy → surface mapping
+### 1.8.2. Taxonomy → surface mapping
 
 | Class | Examples | Surface |
 |---|---|---|
@@ -769,7 +769,7 @@ Trust boto3's retry layer; own only the UX surface and the crash-recovery journa
 
 Rule of thumb: **the more recoverable, the lighter the surface.**
 
-### 7.3 Boto3 client config
+### 1.8.3. Boto3 client config
 
 Every aioboto3 client we construct uses:
 
@@ -785,7 +785,7 @@ botocore.config.Config(
 
 `max_attempts=6` is well above the boto3 default (3) because adaptive mode already self-throttles. If 6 attempts fail, it's not transient.
 
-### 7.4 Large transfers
+### 1.8.4. Large transfers
 
 `boto3.s3.transfer.TransferConfig` (reused unchanged by aioboto3):
 
@@ -799,7 +799,7 @@ botocore.config.Config(
 
 Global cap: **8 concurrent transfers** (configurable). `TransfersVM` enforces; excess transfers queue with state `pending`. **Status (v0.7.x):** the global cap and `pending` queue are **deferred** — `TransfersVM.register()` currently accepts every transfer without limit. The per-transfer `boto3` knobs above (multipart_chunksize, max_concurrency) are wired.
 
-### 7.5 Per-transfer state machine
+### 1.8.5. Per-transfer state machine
 
 ```
 pending -> running -> { completed | failed | cancelled }
@@ -808,7 +808,7 @@ pending -> running -> { completed | failed | cancelled }
 
 `TransferVM.state` is reactive; `TransfersVM.active_count` is a `DerivedProperty`.
 
-### 7.6 Crash-recovery journal
+### 1.8.6. Crash-recovery journal
 
 After each completed multipart part, the transfer state appends a line to `~/.cache/aws-tui/transfers/<id>.jsonl`:
 
@@ -836,7 +836,7 @@ whose remote abort path completes. `docs/connections.md` recommends
 users set a **1-day MPU abort lifecycle rule** on their buckets as a
 backstop for any orphaned MPUs.
 
-### 7.7 Inline pane placeholders
+### 1.8.7. Inline pane placeholders
 
 `PaneVM.state` is a `DerivedProperty` over the last operation's result:
 
@@ -850,11 +850,11 @@ backstop for any orphaned MPUs.
 | `unreachable` | `<endpoint> unreachable - press r to retry` |
 | `error` | first line of error + `?` opens details modal |
 
-### 7.8 Connectivity watcher
+### 1.8.8. Connectivity watcher
 
 One asyncio task pings the current connection's endpoint every 30 s **when transfers are `paused`**. On 3 consecutive successes, resume paused transfers. On failure during normal ops, do nothing — boto3 will surface the next user-triggered call as `unreachable`.
 
-### 7.9 Logging
+### 1.8.9. Logging
 
 | Path | Contents | Rotation |
 |---|---|---|
@@ -865,7 +865,7 @@ One asyncio task pings the current connection's endpoint every 30 s **when trans
 
 `: log show` opens the active log in `$PAGER`. `: log level debug` toggles at runtime. No PII in logs at INFO; bucket/key names are logged (not secrets per AWS docs), but request bodies + response payloads are never logged.
 
-### 7.10 Crash modal
+### 1.8.10. Crash modal
 
 ```
 unexpected error
@@ -885,7 +885,7 @@ unexpected error
 > until the project moves the repo out of pre-release. See
 > `ui/widgets/crash_modal.py` for the current button set.
 
-### 7.11 Non-goals
+### 1.8.11. Non-goals
 
 - Offline mode
 - Multi-region browsing inside a connection
@@ -895,9 +895,9 @@ unexpected error
 
 ---
 
-## 8. Testing strategy
+## 1.9. Testing strategy
 
-### 8.1 Pyramid
+### 1.9.1. Pyramid
 
 | Tier | Share | Speed | Tools | What it proves |
 |---|---|---|---|---|
@@ -908,13 +908,13 @@ unexpected error
 
 CI target: **unit + snapshot < 30 s, integration < 2 min, e2e < 1 min** — sub-3-minute total.
 
-### 8.2 Unit tier — fake providers, not mocks
+### 1.9.2. Unit tier — fake providers, not mocks
 
 VM tests get an `InMemoryFS` (real implementation backed by a dict) — not `Mock(spec=FileSystemProvider)`. Fakes have predictable behaviors and let you write `populate(provider, structure)`-style fixtures; mocks invite false positives.
 
 VM tests **never import** `aioboto3`, `boto3`, `botocore`, or `Textual`. Enforced by `ruff` import rules.
 
-### 8.3 Integration tier — real-ish backends
+### 1.9.3. Integration tier — real-ish backends
 
 | Backend | Tool | Scope |
 |---|---|---|
@@ -926,7 +926,7 @@ VM tests **never import** `aioboto3`, `boto3`, `botocore`, or `Textual`. Enforce
 
 Container fixtures are session-scoped (one container per session, ~3 s startup amortized). Each test gets a fresh ephemeral bucket name.
 
-### 8.4 Snapshot tier — Textual views
+### 1.9.4. Snapshot tier — Textual views
 
 ```python
 def test_main_screen_carbon(snap_compare):
@@ -941,7 +941,7 @@ Covers (per theme):
 
 Goldens under `tests/snapshot/snapshots/<theme>/`. Updates via `pytest --snapshot-update` are explicit — PR reviewer sees the diff in the GitHub UI.
 
-### 8.5 E2E smoke — five journeys
+### 1.9.5. E2E smoke — five journeys
 
 1. **First launch with cached SSO → silent S3 view** (§6.4 Flow 1)
 2. **Copy one object from S3 to local** (cursor → `c` → wait for `TransferVM.state == completed` → byte-check file)
@@ -949,7 +949,7 @@ Goldens under `tests/snapshot/snapshots/<theme>/`. Updates via `pytest --snapsho
 4. **Resume a transfer from journal after simulated crash** (write a journal manually, launch, assert resume modal)
 5. **Delete with confirm → cancel → no AWS call made** (regression-class destructive path)
 
-### 8.6 VMx contract tests
+### 1.9.6. VMx contract tests
 
 For each capability we adopt, run VMx's conformance fixture:
 
@@ -963,7 +963,7 @@ def test_pane_vm_satisfies_capability(contract, pane_vm_factory):
 
 If a VMx upgrade tightens `ISelectable` and we missed something, CI fails after the PyPI version bump.
 
-### 8.7 aws-tui-specific lifecycle suite
+### 1.9.7. aws-tui-specific lifecycle suite
 
 | Assertion | Catches |
 |---|---|
@@ -972,7 +972,7 @@ If a VMx upgrade tightens `ISelectable` and we missed something, CI fails after 
 | `aws_session.aclose_all_clients()` runs before `RootVM.dispose()` | order regression that would leak sockets |
 | `service.supports(connection)` consulted on every menu render | regression if someone adds a service that crashes on MinIO |
 
-### 8.8 Test infrastructure
+### 1.9.8. Test infrastructure
 
 | Concern | Choice |
 |---|---|
@@ -985,7 +985,7 @@ If a VMx upgrade tightens `ISelectable` and we missed something, CI fails after 
 | Type-check | mypy --strict on `src/aws_tui/` |
 | Pre-commit | ruff + mypy + taplo + EOL-fixer |
 
-### 8.9 CI matrix
+### 1.9.9. CI matrix
 
 | Job | OS | Python | Tier |
 |---|---|---|---|
@@ -996,7 +996,7 @@ If a VMx upgrade tightens `ISelectable` and we missed something, CI fails after 
 | `pkg` | ubuntu-22.04 | 3.12 only | `uv build` + `twine check` |
 | `windows-smoke` | windows-2022 | 3.12 | unit only, non-blocking |
 
-### 8.10 Coverage targets
+### 1.9.10. Coverage targets
 
 - `vm/` and `domain/`: ≥90% branch
 - `infra/`: ≥85% branch
@@ -1005,7 +1005,7 @@ If a VMx upgrade tightens `ISelectable` and we missed something, CI fails after 
 
 We do not enforce 100% — chasing the last 10% encourages tests that exercise lines without verifying behavior.
 
-### 8.11 Non-goals for v1 tests
+### 1.9.11. Non-goals for v1 tests
 
 - Property-based / hypothesis testing (v1.1 candidate)
 - 100k-object bucket load tests (correctness is unit-tested; perf is v1.1)
@@ -1013,9 +1013,9 @@ We do not enforce 100% — chasing the last 10% encourages tests that exercise l
 
 ---
 
-## 9. Distribution, CI release-side, repo bootstrap, milestones
+## 1.10. Distribution, CI release-side, repo bootstrap, milestones
 
-### 9.1 Repo identity
+### 1.10.1. Repo identity
 
 | Field | Value |
 |---|---|
@@ -1026,7 +1026,7 @@ We do not enforce 100% — chasing the last 10% encourages tests that exercise l
 | Default branch | `main` |
 | Branch protection | CI green + 1 reviewer required |
 
-### 9.2 Distribution channels
+### 1.10.2. Distribution channels
 
 | Channel | Status | When |
 |---|---|---|
@@ -1036,17 +1036,17 @@ We do not enforce 100% — chasing the last 10% encourages tests that exercise l
 | `nix profile install` | community contribution welcome | not us |
 | Standalone binaries (PyInstaller / Briefcase) | rejected | bundling Textual breaks `.tcss` overrides, +30 MB |
 
-### 9.3 PyPI release path
+### 1.10.3. PyPI release path
 
 VMx now ships on PyPI (consumed as `vmx>=2.6.0,<3.0.0` — see the 2026-06-17 migration plan). aws-tui's own first PyPI release is the remaining gate; until that lands, `pipx install git+...` is the recommended install. The README install command swaps in one line when ready.
 
-### 9.4 Versioning
+### 1.10.4. Versioning
 
 - **SemVer.** `0.x` = pre-stable; `1.0` = PyPI release + API stability on commands & config schema.
 - **VMx PyPI pin** lives in `pyproject.toml` `[project].dependencies`. Bumps are explicit PRs that adjust the version range and run the existing test suite (no separate "conformance suite" PR — the published VMx wheel is the contract).
 - **Changelog** auto-generated from conventional commits via `git-cliff`. CI fails on PRs into `main` if a commit message doesn't match `<type>(<scope>): <subject>`.
 
-### 9.5 CI workflows (release-side; test matrix in §8.9)
+### 1.10.5. CI workflows (release-side; test matrix in §8.9)
 
 | Workflow | Trigger | Does | v0.7.x status |
 |---|---|---|---|
@@ -1057,7 +1057,7 @@ VMx now ships on PyPI (consumed as `vmx>=2.6.0,<3.0.0` — see the 2026-06-17 mi
 | `codeql.yml` | weekly + PR | security scanning | deferred |
 | `dependabot.yml` | continuous | dep updates grouped weekly | shipped (`.github/dependabot.yml`) |
 
-### 9.6 Repo bootstrap — first commits after spec sign-off
+### 1.10.6. Repo bootstrap — first commits after spec sign-off
 
 ```
 01. gh repo create thekaveh/aws-tui --public --license MIT --description "..."
@@ -1089,7 +1089,7 @@ VMx now ships on PyPI (consumed as `vmx>=2.6.0,<3.0.0` — see the 2026-06-17 mi
 
 This is M0 below.
 
-### 9.7 Milestones (solo dev, calendar-time, ~50% buffer)
+### 1.10.7. Milestones (solo dev, calendar-time, ~50% buffer)
 
 | # | Name | Duration | Deliverable |
 |---|---|---|---|
@@ -1103,7 +1103,7 @@ This is M0 below.
 
 **Total: ~8 weeks** of focused solo work. First release: **v0.1.0 via `pipx install git+...`** at the end of M6.
 
-### 9.8 Post-v0.1 roadmap (not v1)
+### 1.10.8. Post-v0.1 roadmap (not v1)
 
 | Version | Theme | Highlights |
 |---|---|---|
@@ -1118,7 +1118,7 @@ This is M0 below.
 
 ---
 
-## 10. Decision log
+## 1.11. Decision log
 
 Concise list of key decisions and rationale, for future readers.
 
@@ -1142,7 +1142,7 @@ Concise list of key decisions and rationale, for future readers.
 
 ---
 
-## 11. Glossary
+## 1.12. Glossary
 
 | Term | Definition |
 |---|---|

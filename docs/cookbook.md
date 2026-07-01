@@ -1,16 +1,16 @@
-# Cookbook
+# 1. Cookbook
 
 > Common recipes for daily aws-tui use. Each recipe is end-to-end —
 > commands you can copy/paste plus the in-app key sequence.
 
-1. [Connect to and switch between data sources](#1-connect-to-and-switch-between-data-sources)
-2. [Switch the theme on the fly](#2-switch-the-theme-on-the-fly)
-3. [Customize a keybinding](#3-customize-a-keybinding)
-4. [Resume after a crash](#4-resume-after-a-crash)
+1. [Connect to and switch between data sources](#11-connect-to-and-switch-between-data-sources)
+2. [Switch the theme on the fly](#12-switch-the-theme-on-the-fly)
+3. [Customize a keybinding](#13-customize-a-keybinding)
+4. [Resume after a crash](#14-resume-after-a-crash)
 
 ---
 
-## 1. Connect to and switch between data sources
+## 1.1. Connect to and switch between data sources
 
 Walks through three setups people hit on day one:
 
@@ -23,7 +23,7 @@ You have a MinIO running on `http://localhost:9000` with the dev
 credentials `minioadmin / minioadmin`. Goal: a `minio-local`
 connection in aws-tui that points at it.
 
-### 1.1. Start MinIO (skip if already running)
+### 1.1.1. Start MinIO (skip if already running)
 
 **Quickest path — dev seeded MinIO** (recommended for first-time
 exploration; ships ~5 buckets and ~90 objects so you have content to
@@ -49,7 +49,7 @@ docker run --rm -d --name minio \
     minio/minio:RELEASE.2025-09-07T16-13-09Z server /data --console-address ":9001"
 ```
 
-### 1.2. Store the credentials in the macOS Keychain (recommended)
+### 1.1.2. Store the credentials in the macOS Keychain (recommended)
 
 The resolver expects two keychain entries under ONE service name
 (matching the `credentials = "keychain:<service>"` value in
@@ -69,7 +69,7 @@ security add-generic-password \
 (The Python `keyring` library aws-tui uses delegates to the macOS
 Keychain by default.)
 
-### 1.3. Add via the in-TUI Settings form
+### 1.1.3. Add via the in-TUI Settings form
 Open Settings with `,`, add an S3-compatible connection, and fill the
 form:
 
@@ -84,7 +84,7 @@ form:
 That writes a `static` entry to `config.toml`. Note: every launch with
 a `static`-credentials connection emits a sticky toast warning, per the
 credential-source preference order documented in
-[connections.md §2](connections.md#2-credential-sources-for-s3-compatible-connections);
+[connections.md §2](connections.md#12-credential-sources-for-s3-compatible-connections);
 the recommended path is to migrate to a `keychain:` source once
 you've verified the connection works. To do that, edit your config
 file (see [docs/platforms.md](platforms.md) for the path on each OS)
@@ -99,7 +99,7 @@ force_path_style = true
 verify_tls = false              # http:// MinIO -> no cert to verify
 ```
 
-### 1.4. Add by editing the file directly
+### 1.1.4. Add by editing the file directly
 If you already have other connections, just append:
 
 ```toml
@@ -122,7 +122,7 @@ the pane's bottom border (`s3-compatible · minio-local · localhost:9000`).
 meaningful region, so the pane title shows `name · endpoint`
 instead.
 
-### 1.5. Use it
+### 1.1.5. Use it
 ```bash
 aws-tui
 ```
@@ -144,7 +144,7 @@ should populate immediately.
 
 ---
 
-### 1.6. Jump between AWS profiles with one keystroke
+### 1.1.6. Jump between AWS profiles with one keystroke
 
 If you have several `[profile *]` blocks in `~/.aws/config` (typical
 for orgs with multiple AWS accounts or SSO permission sets), `Shift+S`
@@ -185,13 +185,13 @@ the cycle immediately, no relaunch.
 
 > Expired SSO tokens are detected offline at launch via the SSO
 > cache freshness probe (see
-> [connections.md §3](connections.md#3-auto-discovery-sso-cache-probe));
+> [connections.md §3](connections.md#13-auto-discovery-sso-cache-probe));
 > a profile with an expired token surfaces an "auth required"
 > placeholder instead of hanging.
 
 ---
 
-### 1.7. Run several s3-compatible endpoints side-by-side
+### 1.1.7. Run several s3-compatible endpoints side-by-side
 
 There's no fixed limit on how many `s3-compatible` connections you
 can configure. Each one shows up in the swap-source cycle and in
@@ -238,13 +238,13 @@ Edit / Delete chips to manage entries already there. Saves are
 atomic (`tempfile` + `os.replace`) so the config can't end up
 half-written.
 
-See [`docs/connections.md` §4](connections.md#4-switching-between-connections-at-runtime)
+See [`docs/connections.md` §4](connections.md#14-switching-between-connections-at-runtime)
 for the full source-cycle semantics and the unreachable-skip behavior.
 
 ---
 
-## 2. Switch the theme on the fly
-### 2.1. One-off (session-only)
+## 1.2. Switch the theme on the fly
+### 1.2.1. One-off (session-only)
 Two paths, both fire `ThemeChangedMessage` and reload the active
 stylesheet instantly without a restart:
 
@@ -258,7 +258,7 @@ stylesheet instantly without a restart:
 > registers no entries yet, so `t` / `Shift+T` are the working
 > shortcuts.
 
-### 2.2. Persistent
+### 1.2.2. Persistent
 ```toml
 # <config-dir>/config.toml
 [defaults]
@@ -267,16 +267,16 @@ theme = "voidline"
 
 Theme names: `carbon` (default), `voidline`, `lattice`, `amber`,
 `solarized-light`, `github-light`, `one-light`, `nord`, `dracula`,
-`gruvbox-dark`. See [theming.md §1](theming.md#1-built-in-themes) for
+`gruvbox-dark`. See [theming.md §1](theming.md#11-built-in-themes) for
 the full per-theme palette breakdown.
 
-### 2.3. Add a custom theme
+### 1.2.3. Add a custom theme
 Copy `src/aws_tui/ui/themes/carbon.tcss` to
 `<config-dir>/themes/midnight.tcss`, edit the palette tokens,
 and pick it from the theme picker (`t`) like any built-in. See
-[theming.md](theming.md#32-full-custom-themes) for the full token table.
+[theming.md](theming.md#132-full-custom-themes) for the full token table.
 
-### 2.4. Tweak just one or two colors
+### 1.2.4. Tweak just one or two colors
 Drop `<config-dir>/theme.tcss` and override what you need; the
 overlay layers on top of the active built-in:
 
@@ -288,7 +288,7 @@ Footer { background: #050505; }
 
 ---
 
-## 3. Customize a keybinding
+## 1.3. Customize a keybinding
 
 > **v0.8.x status:** the composition root reads `[keybindings]`,
 > validates action ids through `KeymapStore`, and logs/falls back to
@@ -312,7 +312,7 @@ For a fallback list (try `Ctrl+K` first, fall back to `:`):
 "app.command_palette" = ["Ctrl+K", ":"]
 ```
 
-### 3.1. Disable a default binding
+### 1.3.1. Disable a default binding
 Set the action to an empty list:
 
 ```toml
@@ -325,14 +325,14 @@ the keybinding until you edit the config back. In v0.8.x the table is
 validated but does not change live dispatch, so `d` still follows
 `AwsTuiApp.BINDINGS`.
 
-### 3.2. See the active map
+### 1.3.2. See the active map
 The full list of action IDs lives in
-[`docs/keybindings.md`](keybindings.md#3-action-ids) and is the same set
+[`docs/keybindings.md`](keybindings.md#13-action-ids) and is the same set
 declared in `src/aws_tui/infra/keymap_store.py:DEFAULT_BINDINGS`. There
 is no `--print-bindings` CLI flag in v0.8; the launch path enters the
 TUI directly.
 
-### 3.3. Unknown action IDs fall back to defaults
+### 1.3.3. Unknown action IDs fall back to defaults
 If you overlay an action id that isn't in `KeymapStore.DEFAULT_BINDINGS`
 (e.g. typo `pane.cpy`), startup logs the `UnknownAction` and falls back
 to the default keymap. That's deliberate: a bad override should not make
@@ -341,13 +341,13 @@ action id to fix.
 
 ---
 
-## 4. Resume after a crash
+## 1.4. Resume after a crash
 Long-running transfers leave local journals so interrupted work can be
 inspected or cleaned up. Full startup resume and explicit S3 multipart
 replay remain deferred in v0.8.x; this recipe documents the current
 journal shape plus the planned modal flow.
 
-### 4.1. What gets saved
+### 1.4.1. What gets saved
 The production transfer path writes a `begin` line and a terminal
 `finished` or `aborted` line to `<cache-dir>/transfers/<id>.jsonl`:
 
@@ -361,7 +361,7 @@ The journal schema can also replay optional `part` lines and an
 path delegates multipart internals to boto and does not record those
 values.
 
-### 4.2. What happens on next launch
+### 1.4.2. What happens on next launch
 v0.8.x writes durable transfer journals, but startup scanning and the
 resume modal are not wired yet. The planned modal flow will scan
 `TransferJournal.find_unfinished()` after the connection resolves and
@@ -380,7 +380,7 @@ surface entries that lack a terminal record:
 | **decide each** | Deferred in v0.8.x: equivalent to **keep for later** until the per-entry modal lands. |
 | **keep for later** | Planned: no mutation; once startup scanning is wired, the modal will show again on next launch. |
 
-### 4.3. Manual cleanup
+### 1.4.3. Manual cleanup
 If you want to nuke the journals without going through the modal:
 
 ```bash
@@ -388,10 +388,10 @@ rm -f "<cache-dir>"/transfers/*.jsonl
 ```
 
 For S3 uploads that were interrupted outside aws-tui's normal cancel
-path, the [1-day MPU abort lifecycle rule](connections.md#6-recommended-1-day-mpu-abort-lifecycle-rule)
+path, the [1-day MPU abort lifecycle rule](connections.md#16-recommended-1-day-mpu-abort-lifecycle-rule)
 is the server-side backstop.
 
-### 4.4. What gets dumped on a crash
+### 1.4.4. What gets dumped on a crash
 If aws-tui hits an unhandled exception, it writes
 `<cache-dir>/crash/<ts>.txt`:
 

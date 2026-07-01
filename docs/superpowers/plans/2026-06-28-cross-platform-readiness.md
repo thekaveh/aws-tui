@@ -1,4 +1,4 @@
-# Cross-Platform Readiness Implementation Plan
+# 1. Cross-Platform Readiness Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** GitHub Actions (matrix expansion), `platformdirs` + `pathlib` (already in place — audit only), `uv` (release tool used in CI), `pipx` (documented install path), Homebrew (existing tap repo bring-up flow — uses the existing PR #95 pipeline).
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Spec: `docs/superpowers/specs/2026-06-28-cross-platform-readiness-design.md`.
 - Repo conventions: VMx MVVM, Textual, pytest tiers (unit/integration/snapshot/e2e), 10 themes, snapshot content-presence guards, ruff + mypy strict.
@@ -23,7 +23,7 @@
 
 ---
 
-## File Structure
+## 1.2. File Structure
 
 | Path | Lifecycle | Owner task |
 |---|---|---|
@@ -38,7 +38,7 @@ No source code under `src/` is touched. No test files under `tests/` are added o
 
 ---
 
-### Task 1: Audit platform-sensitive surfaces
+### 1.2.1. Task 1: Audit platform-sensitive surfaces
 
 **Goal:** Produce a single source-of-truth document — `docs/cross-platform-audit-2026-06-28.md` — listing every platform-sensitive surface in the codebase with a verdict (`clean` / `risky` / `broken`), the concrete file:line citations that back the verdict, and the proposed fix (if any). No code changes.
 
@@ -268,7 +268,7 @@ git commit -m "docs(cross-platform): audit platform-sensitive surfaces (Task 1)"
 
 ---
 
-### Task 2: Expand CI matrix for `lint-type` + `pkg` jobs
+### 1.2.2. Task 2: Expand CI matrix for `lint-type` + `pkg` jobs
 
 **Goal:** Run lint, type-check, layer rules, build, and twine-check on all three OSes × all three supported Python versions. Catch platform-specific lint/type/build regressions before they reach a release.
 
@@ -460,7 +460,7 @@ When CI is green on every matrix leg, Task 2 is done.
 
 ---
 
-### Task 3: Per-platform install paths documented
+### 1.2.3. Task 3: Per-platform install paths documented
 
 **Goal:** Create `docs/installing.md` — the single source of truth for "how do I install aws-tui on platform X." Each install path is concrete (exact command), tested by hand on the platform, and pinned with a "verified on `YYYY-MM-DD` against vX.Y.Z" note.
 
@@ -487,7 +487,7 @@ If you have `pipx` (recommended) or `uv` already:
 
 ```sh
 pipx install aws-tui
-# or
+# 2. or
 uv tool install aws-tui
 ```
 
@@ -513,21 +513,21 @@ This taps `thekaveh/homebrew-aws-tui` and installs aws-tui into its own Homebrew
 ### Alternative: pipx
 
 ```sh
-# One-time:
+# 3. One-time:
 brew install pipx
 pipx ensurepath
 
-# Then:
+# 4. Then:
 pipx install aws-tui
 ```
 
 ### Alternative: uv
 
 ```sh
-# One-time:
+# 5. One-time:
 brew install uv
 
-# Then:
+# 6. Then:
 uv tool install aws-tui
 ```
 
@@ -565,10 +565,10 @@ pipx install aws-tui
 ### Alternative: uv
 
 ```sh
-# One-time (see https://docs.astral.sh/uv/getting-started/installation/):
+# 7. One-time (see https://docs.astral.sh/uv/getting-started/installation/):
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Then:
+# 8. Then:
 uv tool install aws-tui
 ```
 
@@ -583,21 +583,21 @@ If you're installing on a headless Linux box (CI runner, SSH host without a desk
 ### Recommended: pipx
 
 ```powershell
-# One-time:
+# 9. One-time:
 python -m pip install --user pipx
 python -m pipx ensurepath
 
-# Restart the terminal so pipx is on PATH, then:
+# 10. Restart the terminal so pipx is on PATH, then:
 pipx install aws-tui
 ```
 
 ### Alternative: uv
 
 ```powershell
-# One-time (see https://docs.astral.sh/uv/getting-started/installation/):
+# 11. One-time (see https://docs.astral.sh/uv/getting-started/installation/):
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
-# Then:
+# 12. Then:
 uv tool install aws-tui
 ```
 
@@ -611,13 +611,13 @@ Windows defaults to `cp1252` for text files. aws-tui reads and writes all config
 git clone https://github.com/thekaveh/aws-tui
 cd aws-tui
 
-# uv is required for the dev workflow; install per the official docs.
+# 13. uv is required for the dev workflow; install per the official docs.
 uv sync
 
-# Run without installing:
+# 14. Run without installing:
 uv run aws-tui
 
-# Or build + install the wheel:
+# 15. Or build + install the wheel:
 uv build
 pipx install dist/aws_tui-*.whl
 ```
@@ -641,13 +641,13 @@ If the directories don't exist after `aws-tui --version`, that's a bug — file 
 ## Uninstalling
 
 ```sh
-# Homebrew (macOS):
+# 16. Homebrew (macOS):
 brew uninstall aws-tui
 
-# pipx (any platform):
+# 17. pipx (any platform):
 pipx uninstall aws-tui
 
-# uv tool (any platform):
+# 18. uv tool (any platform):
 uv tool uninstall aws-tui
 ```
 
@@ -700,7 +700,7 @@ git commit -m "docs(cross-platform): per-platform install paths (Task 3)"
 
 ---
 
-### Task 4: Release-time smoke install gate
+### 18.1.1. Task 4: Release-time smoke install gate
 
 **Goal:** Add a `smoke-install` matrix job to `.github/workflows/release.yml` that downloads the just-built wheel and runs the "Recommended: pipx" install on each of `{macos-14, ubuntu-24.04, windows-latest}`. The PyPI publish step waits on it; a smoke-install failure blocks the publish.
 
@@ -836,7 +836,7 @@ git commit -m "ci(cross-platform): smoke-install gate before PyPI publish (Task 
 
 ---
 
-### Task 5: README install section restructure + per-platform polish
+### 18.1.2. Task 5: README install section restructure + per-platform polish
 
 **Goal:** The README is the front door — restructure the "Install" section so a first-time visitor on any of the three OSes sees their command verbatim, without scrolling past the other two. Cross-link to `docs/installing.md` for the full per-path matrix. Add a one-line "Terminal recommendation" callout for Windows.
 
@@ -887,7 +887,7 @@ pipx install aws-tui
 ```powershell
 python -m pip install --user pipx
 python -m pipx ensurepath
-# Restart the terminal, then:
+# 19. Restart the terminal, then:
 pipx install aws-tui
 ```
 
@@ -940,7 +940,7 @@ git commit -m "docs(cross-platform): per-platform README install section (Task 5
 
 ---
 
-## Self-Review
+## 19.1. Self-Review
 
 **1. Spec coverage**
 

@@ -1,4 +1,4 @@
-# Releasing aws-tui
+# 1. Releasing aws-tui
 
 How to cut a release. Five minutes of human time per version.
 
@@ -14,7 +14,7 @@ approve `pypi` environment in GitHub Actions (one click)
 merge auto-opened Homebrew bump PR (skim diff first)
 ```
 
-## 1. Routine release
+## 1.1. Routine release
 
 From a clean `main`:
 
@@ -42,7 +42,7 @@ gh pr create --title "chore(release): cut vX.Y.Z" --fill
 
 Review the PR like any other change. Merge when CI is green.
 
-### 1.1. Pre-tag checklist
+### 1.1.1. Pre-tag checklist
 
 - **Demo-mode smoke.** Run `AWS_TUI_DEMO=1 uv run aws-tui` from the release-PR branch. Verify the **DEMO MODE** chip appears in the banner, the four demo connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle through Shift+S, the S3 pane shows demo objects, the EMR pane shows two applications + ~10 job runs across states, and the clone-from-detail flow visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within ~5 seconds. If any of these break, fix forward; do NOT tag the release.
 
@@ -81,7 +81,7 @@ Skim the Homebrew PR and merge it when one is created.
 
 Done.
 
-## 2. Rehearsing the pipeline (TestPyPI dry-run)
+## 1.2. Rehearsing the pipeline (TestPyPI dry-run)
 
 Use this whenever the release machinery itself changes — a new
 job, a tweaked artifact layout, anything that risks burning a
@@ -111,7 +111,7 @@ The `--extra-index-url` lets pip resolve the runtime dependencies
 (boto3, textual, etc.) from real PyPI; TestPyPI only carries the
 aws-tui rehearsal artifact.
 
-## 3. Rollback
+## 1.3. Rollback
 
 **PyPI does not allow republishing the same version.** Recovery
 is always "fix forward, never overwrite":
@@ -133,7 +133,7 @@ is always "fix forward, never overwrite":
 - **Tag/version mismatch.** The `verify` job fails fast and
   publishes nothing. Fix `version.py`, retag.
 
-## 4. One-time bring-up
+## 1.4. One-time bring-up
 
 These four console steps are not automatable. The maintainer
 does them once before the first release through this pipeline.
@@ -141,7 +141,7 @@ PyPI/TestPyPI Trusted Publisher and GitHub environments may already
 exist; the Homebrew bootstrap waits until the first PyPI artifact is
 actually published.
 
-### 4.1. PyPI Trusted Publisher
+### 1.4.1. PyPI Trusted Publisher
 
 1. Log into [pypi.org](https://pypi.org) → **Your projects** →
    `aws-tui` → **Settings** → **Publishing** → **Add a new pending
@@ -156,7 +156,7 @@ actually published.
 Repeat for [test.pypi.org](https://test.pypi.org) with environment
 name `testpypi`.
 
-### 4.2. GitHub Environments
+### 1.4.2. GitHub Environments
 
 In `thekaveh/aws-tui` → Settings → **Environments** → New
 environment:
@@ -164,7 +164,7 @@ environment:
 - `pypi` — add **Required reviewers** = `thekaveh` (you).
 - `testpypi` — no protection rules.
 
-### 4.3. Homebrew tap repo
+### 1.4.3. Homebrew tap repo
 
 1. Create empty repo `thekaveh/homebrew-aws-tui` on GitHub.
 2. After the first PyPI release lands, bootstrap the
@@ -172,7 +172,7 @@ environment:
    From the next release onward the `bump-homebrew` workflow opens PRs
    automatically.
 
-### 4.4. Homebrew tap token
+### 1.4.4. Homebrew tap token
 
 The `bump-homebrew` workflow needs to push branches and open PRs
 in a DIFFERENT repo than the one running the workflow. The default
@@ -193,7 +193,7 @@ fine-grained PAT scoped to the tap repo only:
 Token lifespan is the only routine recurring chore — set the
 calendar reminder for the expiry date.
 
-## 5. Version policy
+## 1.5. Version policy
 
 Semantic Versioning. Pre-1.0 we're explicit:
 

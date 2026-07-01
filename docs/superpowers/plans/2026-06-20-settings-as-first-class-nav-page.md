@@ -1,4 +1,4 @@
-# Settings as First-Class Nav Page Implementation Plan
+# 1. Settings as First-Class Nav Page Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, Textual (TUI — uses native `OptionList`, `Collapsible`, `VerticalScroll`), VMx MVVM framework (PyPI `vmx>=2.6.0,<3.0.0`), pytest + pytest-asyncio + pytest-textual-snapshot for tests.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - 10-theme parity: every per-theme CSS block must land in all 10 theme files (`carbon`, `voidline`, `lattice`, `amber`, `solarized-light`, `github-light`, `one-light`, `nord`, `dracula`, `gruvbox-dark`).
 - **Every new snapshot test MUST be paired with a content-presence guard** per the PR #53 lesson — assert key text/glyphs appear in the rendered `.raw` SVG, not just that all themes match each other. See [memory note](/Users/kaveh/.claude/projects/-Users-kaveh-repos-aws-tui/memory/snapshot-test-content-guards.md).
@@ -22,9 +22,9 @@
 
 ---
 
-## File Structure
+## 1.2. File Structure
 
-### Files to create
+### 1.2.1. Files to create
 
 | Path | Responsibility |
 |---|---|
@@ -40,7 +40,7 @@
 | `tests/snapshot/test_settings_view.py` | Snapshot tests × 10 themes × 3 scenarios + content-presence guards |
 | `tests/integration/test_settings_flow.py` | Replaces `test_settings_modal_flow.py` — new nav-page flow |
 
-### Files to modify
+### 1.2.2. Files to modify
 
 | Path | Change |
 |---|---|
@@ -54,7 +54,7 @@
 | `CHANGELOG.md` | Rewrite the PR #52 bullet under `[Unreleased] > ### Added` |
 | `tests/unit/ui/test_s3_compat_form_modal.py` | Rename → `test_connection_form_inline.py`; update imports to point at `connection_form.py` |
 
-### Files to delete (in Task 11)
+### 1.2.3. Files to delete (in Task 11)
 
 | Path | Why |
 |---|---|
@@ -72,7 +72,7 @@
 
 ---
 
-## Quality Gates (every task)
+## 1.3. Quality Gates (every task)
 
 Each task ends with these commands all green before commit:
 
@@ -88,7 +88,7 @@ If any gate fails, fix the underlying cause before committing. Never `--no-verif
 
 ---
 
-## Task 1: Simplify `SettingsVM`
+## 1.4. Task 1: Simplify `SettingsVM`
 
 The PR #52 `SettingsVM` carries dirty-set + active-section machinery that
 existed only because the modal had to remember what changed during its
@@ -328,7 +328,7 @@ deleted in task 11 once test_settings_flow.py (task 10) replaces it."
 
 ---
 
-## Task 2: Rename `ServicesMenuVM` → `NavMenuVM` + add Settings item
+## 1.5. Task 2: Rename `ServicesMenuVM` → `NavMenuVM` + add Settings item
 
 The left rail is no longer services-only. Rename the VM (and its file)
 to reflect the new role and extend `items` to include a hard-coded
@@ -493,7 +493,7 @@ and services_menu.py updated."
 
 ---
 
-## Task 3: `ConnectionFormInline` widget
+## 1.6. Task 3: `ConnectionFormInline` widget
 
 Lift the form body out of `S3CompatFormModal.compose()` into a
 standalone `Widget` that can be mounted inline within
@@ -925,7 +925,7 @@ two callers have been migrated to ConnectionFormInline."
 
 ---
 
-## Task 4: `NavMenu` widget (OptionList-based)
+## 1.7. Task 4: `NavMenu` widget (OptionList-based)
 
 Replace the `ServiceItemView`-based `ServicesMenu` with an
 `OptionList`-backed `NavMenu`. Preserves the collapse/expand-via-hamburger
@@ -1242,7 +1242,7 @@ ContentHostVM.set_content swap (wired in Task 9)."
 
 ---
 
-## Task 5: `SettingsView` widget
+## 1.8. Task 5: `SettingsView` widget
 
 The main-area content for the Settings nav destination. A
 `VerticalScroll` of `Collapsible` sections, with the first (Connections)
@@ -1457,7 +1457,7 @@ Task 11."
 
 ---
 
-## Task 6: `S3ConnectionsPanel` switches to `ConnectionFormInline`
+## 1.9. Task 6: `S3ConnectionsPanel` switches to `ConnectionFormInline`
 
 Replace the three `@work` modal-push handlers (`_do_add`, `_do_edit`)
 with handlers that toggle the inline form's visibility. Delete still
@@ -1677,7 +1677,7 @@ deleted in Task 11."
 
 ---
 
-## Task 7: Per-theme CSS for new widgets (×10 themes)
+## 1.10. Task 7: Per-theme CSS for new widgets (×10 themes)
 
 Add the CSS blocks for `NavMenu`, `SettingsView`, and `ConnectionFormInline`
 to all 10 themes. The selection-highlight CSS for the OptionList inside
@@ -1838,7 +1838,7 @@ ConfirmModal."
 
 ---
 
-## Task 8: Snapshot tests for new widgets + content-presence guards
+## 1.11. Task 8: Snapshot tests for new widgets + content-presence guards
 
 For each new widget, create:
 - A test-app file that mounts the widget in isolation across 10 themes
@@ -2188,7 +2188,7 @@ themes match each other. Per the PR #53 lesson."
 
 ---
 
-## Task 9: Wire `AwsTuiApp` + `composition.py`
+## 1.12. Task 9: Wire `AwsTuiApp` + `composition.py`
 
 The cutover task. Switch the app from mounting `ServicesMenu` +
 pushing `SettingsModal` to mounting `NavMenu` + routing nav selection
@@ -2399,7 +2399,7 @@ happens in Task 11."
 
 ---
 
-## Task 10: New integration test
+## 1.13. Task 10: New integration test
 
 Replace the skipped `test_settings_modal_flow.py` with
 `test_settings_flow.py` exercising the new nav-page flow.
@@ -2610,7 +2610,7 @@ test_swap_source_skips_unreachable.py)."
 
 ---
 
-## Task 11: Migrate `FirstRunModal`; delete obsolete files
+## 1.14. Task 11: Migrate `FirstRunModal`; delete obsolete files
 
 The big cleanup task. `FirstRunModal` is the last caller of
 `S3CompatFormModal` — it gets migrated to embed `ConnectionFormInline`
@@ -2777,7 +2777,7 @@ Deleted:
 
 ---
 
-## Task 12: Rewrite the CHANGELOG entry
+## 1.15. Task 12: Rewrite the CHANGELOG entry
 
 The `[Unreleased] > ### Added` bullet from PR #52 described the modal
 pattern. It needs to be rewritten to describe the nav-page pattern.
@@ -2846,7 +2846,7 @@ page, inline Add/Edit form)."
 
 ---
 
-## Self-Review Notes
+## 1.16. Self-Review Notes
 
 **Spec coverage:**
 

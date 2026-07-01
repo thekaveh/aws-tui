@@ -1,4 +1,4 @@
-# VMx Submodule → PyPI Dependency Migration Plan
+# 1. VMx Submodule → PyPI Dependency Migration Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, uv-managed dependencies, `pyproject.toml` `[project].dependencies`, `[tool.uv.sources]` (currently routes `vmx` to the vendored path), GitHub Actions checkout with `submodules: recursive`, `scripts/bootstrap.sh` (submodule init), and prose docs that reference `vendor/vmx/`.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - **Version pin:** `vmx>=2.4.0,<3.0.0`. Lower bound matches the vendored `python-v2.4.0` tag so API parity is guaranteed; upper bound caps before the next major. Adjust only if the user explicitly approves a different bound.
 - **Branch protection:** `main` is PR-only. All work lands on `chore/vmx-pypi-migration` and merges via `gh pr create` + `gh pr merge --squash --delete-branch` (only after explicit user approval — don't auto-merge).
@@ -22,7 +22,7 @@
 - **Per-task commits.** Don't batch tasks into one commit; the boundaries matter for review.
 - **Co-author tag:** every commit ends with `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` (project convention — see `git log` on `main`).
 
-## File Map
+## 1.2. File Map
 
 Files this plan creates, modifies, or deletes (no `src/` changes):
 
@@ -48,7 +48,7 @@ Files this plan creates, modifies, or deletes (no `src/` changes):
 
 ---
 
-## Task 1: Create branch, verify PyPI vmx exists, swap pyproject.toml, verify all gates
+## 1.3. Task 1: Create branch, verify PyPI vmx exists, swap pyproject.toml, verify all gates
 
 **Files:**
 - Modify: `pyproject.toml` (the `[project].dependencies` list around line 29; the `[tool.uv.sources]` block at lines 56–57)
@@ -168,7 +168,7 @@ Expected: pre-commit hooks run (ruff, ruff-format, taplo, mypy, end-of-file-fixe
 
 ---
 
-## Task 2: Remove the `vendor/vmx` git submodule
+## 1.4. Task 2: Remove the `vendor/vmx` git submodule
 
 **Files:**
 - Delete: `vendor/vmx` (entire tree, tracked by git as a submodule pointer)
@@ -258,7 +258,7 @@ git commit -m "chore(submodule): remove vendor/vmx — VMx now consumed from PyP
 
 ---
 
-## Task 3: Drop `submodules: recursive` from CI checkout steps
+## 1.5. Task 3: Drop `submodules: recursive` from CI checkout steps
 
 **Files:**
 - Modify: `.github/workflows/ci.yml` (6 sites — lines 26, 43, 60, 77, 94, 117 each contain `submodules: recursive` inside a `with:` block of an `actions/checkout@v4` step)
@@ -331,7 +331,7 @@ git commit -m "ci: drop 'submodules: recursive' from all 6 checkout steps" \
 
 ---
 
-## Task 4: Update `scripts/bootstrap.sh`, `CONTRIBUTING.md`, and `README.md`
+## 1.6. Task 4: Update `scripts/bootstrap.sh`, `CONTRIBUTING.md`, and `README.md`
 
 **Files:**
 - Modify: `scripts/bootstrap.sh` (drop the submodule-init block at lines 14–15 and the comment at line 4)
@@ -480,7 +480,7 @@ git commit -m "docs(bootstrap,contrib,readme): drop submodule-init steps + lift 
 
 ---
 
-## Task 5: Update spec + architecture + annotate historical plans
+## 1.7. Task 5: Update spec + architecture + annotate historical plans
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-06-13-aws-tui-design.md` (3 sites at lines 10, 149, 1016–1018)
@@ -611,7 +611,7 @@ git commit -m "docs(spec,arch,plans): align with vmx-on-PyPI; annotate historica
 
 ---
 
-## Task 6: CHANGELOG `[Unreleased]` entry
+## 1.8. Task 6: CHANGELOG `[Unreleased]` entry
 
 **Files:**
 - Modify: `CHANGELOG.md` (add a `### Changed` bullet under `[Unreleased]`)
@@ -661,7 +661,7 @@ git commit -m "docs(changelog): document vmx submodule → PyPI dependency migra
 
 ---
 
-## Task 7: Update memory files, push, create PR
+## 1.9. Task 7: Update memory files, push, create PR
 
 **Files:**
 - Rewrite: `/Users/kaveh/.claude/projects/-Users-kaveh-repos-aws-tui/memory/vmx-submodule.md`
@@ -797,7 +797,7 @@ Then update memory if anything changes (squash commit hash should land in `proje
 
 ---
 
-## Self-Review
+## 1.10. Self-Review
 
 (Verifying coverage before handoff.)
 

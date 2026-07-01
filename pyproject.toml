@@ -125,9 +125,9 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["src/aws_tui"]
-omit = ["src/aws_tui/__main__.py"]
 
 [tool.coverage.report]
+fail_under = 70
 show_missing = true
 skip_covered = false
 exclude_lines = [

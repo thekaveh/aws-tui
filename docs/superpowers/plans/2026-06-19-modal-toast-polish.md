@@ -1,4 +1,4 @@
-# Modal + Toast Polish — Implementation Plan
+# 1. Modal + Toast Polish — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Textual `.tcss`, VMx VMs/RelayCommands, `pytest-textual-snapshot`, ruff + mypy + pre-commit gates per the existing CI matrix.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - **Branch:** `polish/modal-toast-2026-06-19` (already created and pushed; spec committed at `360399d`).
 - **Themes covered:** all 10 — `carbon`, `voidline`, `lattice`, `amber`, `solarized-light`, `github-light`, `one-light`, `nord`, `dracula`, `gruvbox-dark` (verbatim from `tests/snapshot/conftest.py::THEMES`).
@@ -22,9 +22,9 @@
 
 ---
 
-## File Structure
+## 1.2. File Structure
 
-### Files modified
+### 1.2.1. Files modified
 
 - `src/aws_tui/ui/widgets/modal_button.py` — change `DEFAULT_CSS` from `width: 18` to `width: auto; min-width: 14`; reduce `padding: 0 3` to `padding: 0 2`.
 - `src/aws_tui/ui/widgets/theme_picker_modal.py` — inline `DEFAULT_CSS` slimmed (most styling moves to per-theme `.tcss`); calls `preview_command` on every cursor move; remembers `_original_theme` and rolls back on `action_close`.
@@ -38,7 +38,7 @@
 - `CHANGELOG.md` — new `### Changed` and `### Fixed` bullets in `[Unreleased]`.
 - `tests/snapshot/test_modals.py` — no test additions; just the bulk snapshot refresh covers it.
 
-### Files created
+### 1.2.2. Files created
 
 - `tests/snapshot/apps/theme_picker.py` — `ThemePickerSnapshotApp` composing a real `ThemePickerVM` with 10 themes and cursor on row 4 (`amber`).
 - `tests/snapshot/test_theme_picker.py` — single `@pytest.mark.parametrize("theme", THEMES)` test → 10 new goldens.
@@ -49,7 +49,7 @@
 - `tests/unit/vm/chrome/test_theme_picker_preview.py` — covers the new `preview_command` and `on_preview` callback wiring (no Textual; pure VM test).
 - `tests/unit/vm/file_manager/test_transfer_speed_window.py` — covers `_speed_window` insertion + prune + `current_speed` + `current_eta` with an injected fake clock.
 
-### Files NOT touched
+### 1.2.3. Files NOT touched
 
 - `src/aws_tui/ui/widgets/{command_palette,crash_modal,first_run_modal,quick_look,resume_modal,help_modal}.py` — out of scope (deferred runtime).
 - `src/aws_tui/vm/chrome/{crash_vm,resume_vm,first_run_vm,quick_look_vm,command_palette_vm}.py` — out of scope.
@@ -59,7 +59,7 @@
 
 ---
 
-## Task 0: Bootstrap — verify clean baseline before touching anything
+## 1.3. Task 0: Bootstrap — verify clean baseline before touching anything
 
 **Files:** none (validation only).
 
@@ -101,7 +101,7 @@ Expected: `20` and `10` respectively (the to-be-refreshed goldens). If either nu
 
 ---
 
-## Task 1: Fix `ModalButton` label spill (auto-width + min-width)
+## 1.4. Task 1: Fix `ModalButton` label spill (auto-width + min-width)
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/modal_button.py` (DEFAULT_CSS block)
@@ -205,7 +205,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 2: ConfirmModal — path-chip nowrap + danger right-shift
+## 1.5. Task 2: ConfirmModal — path-chip nowrap + danger right-shift
 
 **Files:**
 - Modify: 10× `src/aws_tui/ui/themes/{theme}.tcss` (ConfirmModal path-value chip rule + new `.modal-footer.-danger > ModalButton.-danger` margin rule)
@@ -307,7 +307,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 3: ThemePickerModal CSS in all 10 themes (no behavior change yet)
+## 1.6. Task 3: ThemePickerModal CSS in all 10 themes (no behavior change yet)
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/theme_picker_modal.py` (slim the inline `DEFAULT_CSS` — keep only the structural rules that aren't theme-dependent)
@@ -539,7 +539,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 4: ThemePickerVM `preview_command` + Esc rollback wiring
+## 1.7. Task 4: ThemePickerVM `preview_command` + Esc rollback wiring
 
 **Files:**
 - Modify: `src/aws_tui/vm/chrome/theme_picker_vm.py` (add `on_preview` constructor arg + `preview_command`)
@@ -830,7 +830,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 5: ServicesMenu + ServicesHamburger cross-theme audit
+## 1.8. Task 5: ServicesMenu + ServicesHamburger cross-theme audit
 
 **Files:**
 - Modify: 10× `src/aws_tui/ui/themes/{theme}.tcss` (audit and tighten ServicesMenu + ServicesHamburger rules)
@@ -939,7 +939,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 6: TransferVM rolling speed window
+## 1.9. Task 6: TransferVM rolling speed window
 
 **Files:**
 - Modify: `src/aws_tui/vm/file_manager/transfer_vm.py`
@@ -1248,7 +1248,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 6.5: `TransfersVM.register_vm` for pre-built TransferVMs
+## 1.10. Task 6.5: `TransfersVM.register_vm` for pre-built TransferVMs
 
 **Files:**
 - Modify: `src/aws_tui/vm/file_manager/transfers_vm.py` (add `register_vm` public method)
@@ -1388,7 +1388,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 7: TransfersOverlay card redesign (custom bar, meta row, themed)
+## 1.11. Task 7: TransfersOverlay card redesign (custom bar, meta row, themed)
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/transfers_overlay.py` (drop `ProgressBar`, render custom 10-cell bar, restructure to card layout with state-colored left bar, add meta row)
@@ -2024,7 +2024,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 8: ToastStack polish (per-theme borders + level colors)
+## 1.12. Task 8: ToastStack polish (per-theme borders + level colors)
 
 **Files:**
 - Modify: 10× `src/aws_tui/ui/themes/{theme}.tcss` (add `Toast` + level rules)
@@ -2202,7 +2202,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 9: CHANGELOG + final verification
+## 1.13. Task 9: CHANGELOG + final verification
 
 **Files:**
 - Modify: `CHANGELOG.md` (new bullets in `[Unreleased] ### Changed` and `### Fixed`)
@@ -2352,7 +2352,7 @@ Expected: PR created. CI should mirror local results. After CI green, merge with
 
 ---
 
-## Acceptance check (re-stated)
+## 1.14. Acceptance check (re-stated)
 
 After Task 9 commit + push, the spec's §11 acceptance criteria are checked:
 
@@ -2368,7 +2368,7 @@ After Task 9 commit + push, the spec's §11 acceptance criteria are checked:
 
 ---
 
-## Self-review notes (for the writing-plans skill record)
+## 1.15. Self-review notes (for the writing-plans skill record)
 
 - **Spec coverage:** every section §3–§9 of the spec maps to at least one task. §3 (frame primitive) is enacted across Tasks 1, 3, 7, 8. §4 (ConfirmModal) is Tasks 1+2. §5 (ThemePicker) is Tasks 3+4. §6 (Services rail) is Task 5. §7 (TransfersOverlay) is Tasks 6+7. §8 (Toast) is Task 8. §9 (Snapshot coverage) is distributed across Tasks 3, 7, 8 with refresh steps in 1, 2, 5. §10 (chunking) and §11 (acceptance) drove the task split. §12 (risks) is reflected in the per-task gate steps.
 - **Placeholder scan:** no "TBD" / "TODO" / "implement later". Every code block is the actual code; every CSS block is the actual rule; every commit message is the literal text.

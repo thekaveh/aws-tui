@@ -1,10 +1,10 @@
-# Theming
+# 1. Theming
 
 > Mirror of spec §4.5. Ten built-in themes ship (4 dark + 3 light +
 > 3 popular community palettes); the default is configurable; full
 > `.tcss` overrides are supported.
 
-## 1. Built-in themes
+## 1.1. Built-in themes
 | Theme | Vibe | Borders | Accent |
 |---|---|---|---|
 | `carbon` (default) | Near-monochrome, macOS-quietness | rounded | ice-blue (`#6fb8ff`) |
@@ -24,7 +24,7 @@ for narrow, meaningful uses (`success` only on auth + transfer status;
 `danger` only on "cannot be undone" affordances; `warning` only on
 numerics in Quick Look).
 
-## 2. Selecting a theme
+## 1.2. Selecting a theme
 In config:
 
 ```toml
@@ -57,8 +57,8 @@ the active stylesheet on the fly.
 > the design spec but the palette doesn't yet register theme entries
 > in v0.8.x — `t` / `Shift+T` are the working shortcuts.
 
-## 3. User overrides
-### 3.1. Single-token overrides
+## 1.3. User overrides
+### 1.3.1. Single-token overrides
 Drop `<config-dir>/theme.tcss` to override individual tokens of
 the active built-in. The overlay layers on top of the built-in CSS so
 you can adjust one or two colors without forking the whole theme:
@@ -75,7 +75,7 @@ Screen {
 }
 ```
 
-### 3.2. Full custom themes
+### 1.3.2. Full custom themes
 Drop a full `.tcss` file under `<config-dir>/themes/<name>.tcss`
 and it's selectable like any built-in (palette: `theme switch ▸
 <name>`).
@@ -83,7 +83,7 @@ and it's selectable like any built-in (palette: `theme switch ▸
 Use one of the built-ins as a starting point — they live in the
 package data at `src/aws_tui/ui/themes/<name>.tcss`.
 
-## 4. Palette tokens
+## 1.4. Palette tokens
 The Carbon palette tokens (full spec table in §4.5):
 
 | Token | Hex | Use |
@@ -103,7 +103,7 @@ The Carbon palette tokens (full spec table in §4.5):
 
 See spec §4.5 for the matching Voidline / Lattice / Amber tables.
 
-## 5. How the loader works
+## 1.5. How the loader works
 `infra/theme_store.py` reads the active theme by:
 
 1. Loading the built-in `<name>.tcss` from the package data via
@@ -118,7 +118,7 @@ See spec §4.5 for the matching Voidline / Lattice / Amber tables.
 The overlay layering means you can keep the built-in look and adjust
 just one or two colors without copying the entire theme.
 
-## 6. Snapshot tests
+## 1.6. Snapshot tests
 The ten themes are pinned by snapshot goldens in
 `tests/snapshot/__snapshots__/` across the checked-in snapshot suites.
 Recount with:

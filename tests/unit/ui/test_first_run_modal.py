@@ -151,6 +151,12 @@ async def test_add_s3_compat_flow_keeps_modal_open_on_save_failure(tmp_path: Pat
             await pilot.pause()
             modal = app.screen
             assert isinstance(modal, FirstRunModal)
+            notifications: list[tuple[str, dict[str, object]]] = []
+
+            def fake_notify(message: str, **kwargs: object) -> None:
+                notifications.append((message, kwargs))
+
+            modal.notify = fake_notify  # type: ignore[method-assign]
             # Open form and post a submit event.
             modal.query_one(ConnectionFormInline).open_for_add()
             await pilot.pause()
@@ -169,6 +175,10 @@ async def test_add_s3_compat_flow_keeps_modal_open_on_save_failure(tmp_path: Pat
             await pilot.pause()
             # The modal must still be the active screen — it must NOT have dismissed.
             assert app.screen is modal, "Modal dismissed despite save failure"
+            assert notifications
+            assert notifications[0][0] == "Couldn't save connection: disk read-only"
+            assert notifications[0][1]["severity"] == "error"
+            assert "markup" not in notifications[0][1]
     finally:
         store.add_connection = original_add  # type: ignore[method-assign]
         vm.dispose()

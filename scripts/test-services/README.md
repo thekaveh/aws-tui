@@ -1,13 +1,13 @@
-# Test-services harness
+# 1. Test-services harness
 
 Local AWS-compatible service mocks for aws-tui development. Each service
 sub-directory is self-contained (Docker Compose + seed script + config
 snippet + up/down lifecycle scripts) so you can spin up the ones you need
 and leave the rest alone.
 
-## 1. What's here today
+## 1.1. What's here today
 
-### 1.1. `s3/` — MinIO-backed S3
+### 1.1.1. `s3/` — MinIO-backed S3
 
 S3-compliant local backend via the official MinIO container. Realistic
 seeded dataset (5 buckets, ~90 objects: nested folder trees, unicode +
@@ -35,7 +35,7 @@ to `<config-dir>/config.toml` and launch `aws-tui`. See
 Edit the seed dataset in `s3/seed.py` (the `_BUCKETS` dict at the bottom
 of the module) and re-run `up.sh` to refresh.
 
-## 2. Extending to other AWS services
+## 1.2. Extending to other AWS services
 
 When adding another locally mocked AWS service (EC2, IAM, Lambda, …),
 add a sibling sub-directory and follow the s3/ layout:
@@ -56,7 +56,7 @@ optional. The directory pattern still applies — `scripts/test-services/ec2/doc
 would pin the localstack image and seed.py would talk to
 `http://localhost:4566`.
 
-## 3. Why this layout (and not `docker-compose.yml` at the repo root)
+## 1.3. Why this layout (and not `docker-compose.yml` at the repo root)
 
 - Keeps dev tooling out of the way of users who don't need it.
 - Lets each service evolve independently (different containers, different

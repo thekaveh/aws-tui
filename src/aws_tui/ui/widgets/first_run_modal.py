@@ -19,6 +19,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 from vmx import Message, MessageHub
 
+from aws_tui.ui import notifications
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.ui.widgets.settings.connection_form import (
     ConnectionFormCancelled,
@@ -121,26 +122,25 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
             ctx = self.app._app_ctx  # type: ignore[attr-defined]
             add_s3_compat_connection(config_store=ctx.config_store, form=event.form)
         except Exception as exc:
-            # ``markup=False`` — OSError subclasses (PermissionError,
-            # FileNotFoundError, OSError on disk-full / read-only-FS)
-            # stringify with a leading ``[Errno N]`` that Rich would
-            # parse as a style tag and crash the toast render. The
-            # toast is the LAST thing the user has left to learn
-            # why their config save failed — letting it crash a
-            # second time is the worst possible UX.
-            #
-            # ``clear_submitting()`` re-arms the form's re-entrancy
-            # flag so the user can retry after fixing the underlying
-            # problem (e.g. freeing disk space). Without this the
-            # Submit button would silently no-op after the first
-            # failure and the user would be stuck.
+            # ``clear_submitting()`` re-arms the form's re-entrancy flag so the
+            # user can retry after fixing the underlying problem (e.g. freeing
+            # disk space). Without this the Submit button would silently no-op
+            # after the first failure and the user would be stuck.
             self.query_one(ConnectionFormInline).clear_submitting()
-            self.notify(
-                f"Couldn't save connection: {exc}",
-                severity="error",
-                timeout=8,
-                markup=False,
-            )
+            message = f"Couldn't save connection: {exc}"
+            toast_stack = getattr(getattr(self.app, "_app_ctx", None), "toast_stack", None)
+            if toast_stack is not None:
+                notifications.error(
+                    toast_stack,
+                    subject="Settings",
+                    message=message,
+                    action="Fix the config path or permissions, then retry.",
+                )
+            else:
+                # Harness fallback: Textual 8's Widget.notify has no markup
+                # flag, so user/error text must go through the unified helper
+                # in production and use only supported notify kwargs here.
+                self.notify(message, severity="error", timeout=8)
             return
         self.query_one(ConnectionFormInline).close()
         self._vm.add_s3_compat_command.execute()

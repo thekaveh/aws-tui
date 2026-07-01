@@ -1,4 +1,4 @@
-# aws-tui M1 (Infrastructure) Implementation Plan
+# 1. aws-tui M1 (Infrastructure) Implementation Plan
 
 > **For agentic workers:** Compact-plan format. Each task lists files + acceptance criteria + key contract details. Implementers MUST follow TDD (write failing test → impl → green → commit) within each task using the design spec at `docs/superpowers/specs/2026-06-13-aws-tui-design.md` for behavioral detail. Use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,7 +10,7 @@
 
 ---
 
-## Task 0: Carry-overs from M0 reviewer
+## 1.1. Task 0: Carry-overs from M0 reviewer
 
 **Files:**
 - Modify: `.pre-commit-config.yaml`
@@ -84,7 +84,7 @@ Make executable, run locally to confirm passes, wire into CI.
 
 ---
 
-## Task 1: `infra/log_sink.py`
+## 1.2. Task 1: `infra/log_sink.py`
 
 **Files:**
 - Create: `src/aws_tui/infra/log_sink.py`
@@ -117,7 +117,7 @@ Each call writes one JSON line with fields: `ts` (ISO8601 with TZ), `level`, `ev
 
 ---
 
-## Task 2: `infra/config_store.py`
+## 1.3. Task 2: `infra/config_store.py`
 
 **Files:**
 - Create: `src/aws_tui/infra/config_store.py`
@@ -178,7 +178,7 @@ Path default: `Path.home() / ".config" / "aws-tui" / "config.toml"`. Uses stdlib
 
 ---
 
-## Task 3: `infra/keychain.py`
+## 1.4. Task 3: `infra/keychain.py`
 
 **Files:**
 - Create: `src/aws_tui/infra/keychain.py`
@@ -208,7 +208,7 @@ class InMemoryKeychain(KeychainBackend):
 
 ---
 
-## Task 4: `infra/connection_resolver.py`
+## 1.5. Task 4: `infra/connection_resolver.py`
 
 **Files:**
 - Create: `src/aws_tui/infra/connection_resolver.py`
@@ -264,7 +264,7 @@ For `kind="s3-compatible"` entries, dispatch `credentials` field:
 
 ---
 
-## Task 5: `infra/aws_session.py`
+## 1.6. Task 5: `infra/aws_session.py`
 
 **Files:**
 - Create: `src/aws_tui/infra/aws_session.py`
@@ -327,7 +327,7 @@ class TokenLoadError(Exception): ...
 
 ---
 
-## Task 6: `infra/theme_store.py`
+## 1.7. Task 6: `infra/theme_store.py`
 
 **Files:**
 - Create: `src/aws_tui/infra/theme_store.py`
@@ -366,7 +366,7 @@ Also: create empty placeholder files at `src/aws_tui/ui/themes/{carbon,voidline,
 
 ---
 
-## Task 7: `infra/keymap_store.py`
+## 1.8. Task 7: `infra/keymap_store.py`
 
 **Files:**
 - Create: `src/aws_tui/infra/keymap_store.py`
@@ -427,7 +427,7 @@ class KeymapStore:
 
 ---
 
-## Task 8: Final M1 integration sanity test
+## 1.9. Task 8: Final M1 integration sanity test
 
 **Files:**
 - Create: `tests/unit/infra/test_integration.py` (still "unit" because it uses tmp_path; no network)
@@ -442,7 +442,7 @@ Sanity test composing the layer: build a `ConfigStore` against tmp config, write
 
 ---
 
-## Task 9: Commit, push, verify CI
+## 1.10. Task 9: Commit, push, verify CI
 
 - [ ] One commit per Task 1-7 (atomic per-component), one for Task 0 (M0 carry-overs), one for Task 8 (integration sanity).
 - [ ] Push.

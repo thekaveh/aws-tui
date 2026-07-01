@@ -1,4 +1,4 @@
-# Settings as First-Class Nav Page — Design Spec
+# 1. Settings as First-Class Nav Page — Design Spec
 
 **Date:** 2026-06-20
 **Status:** Approved (rework of PR #52/#53's sub-project A)
@@ -7,7 +7,7 @@
 
 ---
 
-## 1. Motivation
+## 1.1. Motivation
 
 PR #52 shipped the App Settings overlay as a `ModalScreen` opened via a gear
 button pinned to the bottom of the services rail. PR #53 fixed the gear
@@ -37,9 +37,9 @@ gear footer band, and the form-as-screen pattern are deleted. The two VMs
 (`update_connection`, `remove_connection`), and the
 `ConnectionListChangedMessage` survive unchanged.
 
-## 2. Scope
+## 1.2. Scope
 
-### 2.1 In scope
+### 1.2.1. In scope
 
 - **Left rail becomes a generic vertical nav** with peer items `S3` and
   `Settings`. Built on Textual's native `OptionList` widget.
@@ -71,7 +71,7 @@ gear footer band, and the form-as-screen pattern are deleted. The two VMs
   Settings in the nav menu".
 - **Snapshot tests gain content-presence guards** per the lesson from PR #53.
 
-### 2.2 Removed (deleted as part of this rework)
+### 1.2.2. Removed (deleted as part of this rework)
 
 - `ui/widgets/settings_modal.py` (`SettingsModal` `ModalScreen`)
 - `ui/widgets/services_menu_footer.py` (`ServicesMenuFooter` gear band)
@@ -91,7 +91,7 @@ gear footer band, and the form-as-screen pattern are deleted. The two VMs
     + 30 goldens
 - Unit test files for the deleted widgets
 
-### 2.3 Surviving from PR #52/#53 (kept as-is)
+### 1.2.3. Surviving from PR #52/#53 (kept as-is)
 
 - `src/aws_tui/vm/settings/settings_vm.py` — `SettingsVM` (small change:
   drop `dirty_connection_names` + `clear_dirty()`)
@@ -103,7 +103,7 @@ gear footer band, and the form-as-screen pattern are deleted. The two VMs
 - The `S3ConnectionsPanel` widget — kept but heavily modified (drops
   modal-push CRUD, replaces with inline-form toggle)
 
-### 2.4 Explicitly out of scope
+### 1.2.4. Explicitly out of scope
 
 - Themes panel implementation (sub-project B, separate spec)
 - Keymap rebinding UI (sub-project C, separate spec; precondition: finish
@@ -112,9 +112,9 @@ gear footer band, and the form-as-screen pattern are deleted. The two VMs
 - Connectivity testing on Save (already out of scope per PR #52)
 - Renaming connections (still requires delete + add)
 
-## 3. Architecture
+## 1.3. Architecture
 
-### 3.1 File map (new)
+### 1.3.1. File map (new)
 
 ```
 src/aws_tui/
@@ -125,7 +125,7 @@ src/aws_tui/
       connection_form.py                 # ConnectionFormInline widget
 ```
 
-### 3.2 File map (modified)
+### 1.3.2. File map (modified)
 
 - `src/aws_tui/vm/services_menu_vm.py` — rename `ServicesMenuVM` →
   `NavMenuVM`. Items list extends to include a `Settings` entry (hard-coded
@@ -152,7 +152,7 @@ src/aws_tui/
   `SettingsModal`/`ServicesMenuFooter`/`S3CompatFormModal` blocks with
   `NavMenu`/`SettingsView`/`ConnectionFormInline` blocks.
 
-### 3.3 Layout
+### 1.3.3. Layout
 
 The window's top-level layout is unchanged: rail (left) + main content
 (right). The rail is now a `NavMenu` widget hosting an `OptionList`; the
@@ -209,9 +209,9 @@ button:
 In edit mode the form title reads `Edit <name>` and the `name` field is
 read-only (locked, same `name_locked=True` semantics as PR #52).
 
-## 4. VM layer
+## 1.4. VM layer
 
-### 4.1 `NavMenuVM` (renamed from `ServicesMenuVM`)
+### 1.4.1. `NavMenuVM` (renamed from `ServicesMenuVM`)
 
 Public surface essentially unchanged from today:
 
@@ -239,7 +239,7 @@ Selection from the View side is `switch_service_command.execute(item_id)`
 `PropertyChangedMessage("selected_id")`, which the app-level subscriber
 turns into a `ContentHost.set_content(...)` call.
 
-### 4.2 `SettingsVM` (kept; simplified)
+### 1.4.2. `SettingsVM` (kept; simplified)
 
 ```python
 class SettingsVM:
@@ -255,12 +255,12 @@ The dirty-set/clear_dirty machinery from PR #52 is **deleted**. There is no
 modal lifecycle to track anymore — reload-on-Save happens immediately,
 synchronously from the form's Save handler.
 
-### 4.3 `S3ConnectionsVM` (unchanged)
+### 1.4.3. `S3ConnectionsVM` (unchanged)
 
 Public surface, validation, message publishing, and `entry_from_form`
 helper all stay identical to PR #52.
 
-### 4.4 ContentHost integration
+### 1.4.4. ContentHost integration
 
 `ContentHostVM.set_content(vm, *, service_id)` already takes any VM with
 `construct/dispose` lifecycle. To plug `SettingsVM` in:
@@ -283,9 +283,9 @@ just like the other overlay VMs already are) so the nav selection can
 swap to it without an await on construction. Disposal follows the existing
 ContentHost teardown protocol (`set_content(None)` → dispose).
 
-## 5. View layer
+## 1.5. View layer
 
-### 5.1 `NavMenu` widget
+### 1.5.1. `NavMenu` widget
 
 ```python
 class NavMenu(Widget):
@@ -319,7 +319,7 @@ selection-highlight CSS targets
 `$bg-sel` background + `$accent` foreground (matching the file-pane
 `.entry-row.-selected` style).
 
-### 5.2 `SettingsView` widget
+### 1.5.2. `SettingsView` widget
 
 ```python
 class SettingsView(Widget):
@@ -346,7 +346,7 @@ class SettingsView(Widget):
 `Collapsible` is the Textual native widget. `disabled=True` makes the
 header non-interactive; per-theme CSS styles it with muted color.
 
-### 5.3 `S3ConnectionsPanel` (modified)
+### 1.5.3. `S3ConnectionsPanel` (modified)
 
 Three changes from PR #52:
 
@@ -368,7 +368,7 @@ Three changes from PR #52:
    `block` and populates fields.
 3. **Delete still pushes ConfirmModal** — `@work` handler unchanged.
 
-### 5.4 `ConnectionFormInline` widget (new)
+### 1.5.4. `ConnectionFormInline` widget (new)
 
 Lifted from `S3CompatFormModal`'s compose body. Same fields, same live
 validation (`_validate_s3_form_value` reused). Adds:
@@ -380,7 +380,7 @@ validation (`_validate_s3_form_value` reused). Adds:
   `ConnectionFormCancelled` on Cancel. `S3ConnectionsPanel` subscribes and
   routes to `vm.add(...)` / `vm.update(...)`.
 
-### 5.5 What's deleted
+### 1.5.5. What's deleted
 
 - `ui/widgets/settings_modal.py`
 - `ui/widgets/services_menu_footer.py`
@@ -388,7 +388,7 @@ validation (`_validate_s3_form_value` reused). Adds:
 - `ui/widgets/settings/_placeholder_panel.py` (no longer needed — the
   disabled Collapsibles are the placeholder pattern)
 
-## 6. Save semantics (replaces PR #52's reload-on-close)
+## 1.6. Save semantics (replaces PR #52's reload-on-close)
 
 When the user clicks Save on the inline form:
 1. `ConnectionFormInline` validates one last time + emits `ConnectionFormSubmitted`.
@@ -416,7 +416,7 @@ publish `ConnectionListChangedMessage("deleted")` → pane-reload via
 the hub subscriber (revert to local). No success toast on the
 delete path either — the row disappears, that's confirmation.
 
-## 7. Keyboard
+## 1.7. Keyboard
 
 - `,` (comma) — selects the Settings nav item (equivalent to clicking it).
   Implementation: `action_open_settings` calls
@@ -429,7 +429,7 @@ delete path either — the row disappears, that's confirmation.
   - `Enter` on a Collapsible header — expand/collapse the section.
   - `Esc` — when an inline form is open, equivalent to Cancel.
 
-## 8. Error handling
+## 1.8. Error handling
 
 | Failure | Surface | Behavior |
 |---|---|---|
@@ -440,9 +440,9 @@ delete path either — the row disappears, that's confirmation.
 | Delete of active connection | Same as PR #52 | Pane reverts to local, toast fires. |
 | ContentHost.set_content fails for SettingsVM | Should not occur in normal use | Existing ContentHost error path (rendering placeholder) handles it. |
 
-## 9. Testing
+## 1.9. Testing
 
-### 9.1 Removed tests (no longer apply)
+### 1.9.1. Removed tests (no longer apply)
 
 - `tests/unit/ui/test_settings_modal.py`
 - `tests/unit/ui/test_services_menu_footer.py` (including PR #53's content-presence guards)
@@ -455,21 +455,21 @@ delete path either — the row disappears, that's confirmation.
 - `tests/snapshot/apps/services_menu_footer.py`
 - `tests/snapshot/apps/s3_compat_form.py`
 
-### 9.2 Kept tests (still apply unchanged)
+### 1.9.2. Kept tests (still apply unchanged)
 
 - `tests/unit/infra/test_config_store.py` — `update_connection` +
   `remove_connection` round-trip tests
 - `tests/unit/vm/settings/test_s3_connections_vm.py` — CRUD + message publishing
 - `tests/unit/vm/test_messages.py` — `ConnectionListChangedMessage` shape
 
-### 9.3 Modified tests
+### 1.9.3. Modified tests
 
 - `tests/unit/vm/settings/test_settings_vm.py` — drop the dirty-set tests
   (4 tests removed), keep the construct/dispose + s3 accessor tests.
 - `tests/unit/vm/test_services_menu.py` — rename to `test_nav_menu.py`,
   extend coverage to include the hard-coded `Settings` item.
 
-### 9.4 Added tests
+### 1.9.4. Added tests
 
 - `tests/unit/ui/test_nav_menu.py` — construction smoke + OptionSelected
   event handling + collapsed-mode prompt rebuild.
@@ -503,7 +503,7 @@ delete path either — the row disappears, that's confirmation.
   3. Same seed → Delete → confirm modal → confirm → assert TOML removal
      and pane revert to local.
 
-### 9.5 Snapshot count delta
+### 1.9.5. Snapshot count delta
 
 | | Before | After |
 |---|---|---|
@@ -514,7 +514,7 @@ Net **decrease** of ~24 snapshots — fewer surfaces, fewer goldens, but
 every new snapshot is paired with a content-presence guard so empty
 renderings can't pass.
 
-## 10. Global constraints
+## 1.10. Global constraints
 
 These apply to every task in the implementation plan:
 
@@ -541,7 +541,7 @@ These apply to every task in the implementation plan:
 - **Delete still uses ConfirmModal** — destructive ops keep the modal
   interruption.
 
-## 11. Open implementation questions
+## 1.11. Open implementation questions
 
 These are *implementation-level* questions to resolve while building, not
 design decisions to revisit:
@@ -556,7 +556,7 @@ design decisions to revisit:
 - Verify the `Collapsible` widget's expanded/collapsed reactive triggers a
   layout recompute that the parent `VerticalScroll` honors.
 
-## 12. Migration path
+## 1.12. Migration path
 
 Single PR, single squash-merge. The branch `feat/settings-as-first-class-nav-page`
 starts from `e0edfe1` (current main), deletes the PR #52/#53 modal surfaces
@@ -567,14 +567,14 @@ pattern (replacing the PR #52 bullet, NOT augmenting it).
 This is destructive of PR #52's surface — by design. The architecture
 shipped in #52 was wrong for the TUI's idiom; this rework gets it right.
 
-## 13. Post-ship amendments (PR #55 + PR #56)
+## 1.13. Post-ship amendments (PR #55 + PR #56)
 
 Recorded after the original PR #54 landed at `a7bd050` and the
 follow-up fixes shipped on `main`. Both items below override the
 corresponding sub-sections above and are the current authoritative
 behavior.
 
-### 13.1. SettingsVM is per-mount, not a singleton (PR #56)
+### 1.13.1. SettingsVM is per-mount, not a singleton (PR #56)
 
 §5.1 originally proposed an `AppContext.settings_vm` field
 constructed once in `composition.build_app_context`. That was wrong:
@@ -601,7 +601,7 @@ uses for the per-mount `DualPaneVM`. Any future ContentHost
 destination (Themes panel, Keymap panel) must follow the same
 factory pattern — never store the hosted VM on `AppContext`.
 
-### 13.2. Settings is docked to the bottom of the rail (PR #56)
+### 1.13.2. Settings is docked to the bottom of the rail (PR #56)
 
 §3.3 and §5.1 originally proposed a single `OptionList` for the rail
 items (services + Settings, with Settings last). User feedback after
@@ -639,7 +639,7 @@ def compose(self) -> ComposeResult:
   asserts `svg.index("S3") < svg.index("Settings")` to catch a
   regression where the `dock: bottom` rule gets dropped.
 
-### 13.3. Nav-mount workers are serialized via an exclusive worker group (PR #56 follow-up)
+### 1.13.3. Nav-mount workers are serialized via an exclusive worker group (PR #56 follow-up)
 
 Not originally specified. CI on Windows py3.11 exposed a race that
 back-to-back `Settings → S3 → Settings` clicks could trigger:
@@ -654,7 +654,7 @@ Fix: both `run_worker` calls are now scoped to a shared
 in-flight worker in the group before starting the new one. Any
 future ContentHost mount path must follow the same group.
 
-### 13.4. SSO probe + auth-required placeholder at startup (PR #55)
+### 1.13.4. SSO probe + auth-required placeholder at startup (PR #55)
 
 Not originally specified. PR #55 added an offline SSO-token freshness
 probe BEFORE `switch_service("s3")` runs at startup, so an expired

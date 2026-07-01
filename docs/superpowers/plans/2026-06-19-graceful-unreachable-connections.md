@@ -1,4 +1,4 @@
-# Graceful Unreachable Connections — Implementation Plan
+# 1. Graceful Unreachable Connections — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Textual + VMx hub messages. Standard test stack (pytest, pytest-textual-snapshot, snapshot-textual).
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - **Branch:** `feat/graceful-unreachable-connections` (already created; spec committed at `8fa2547`).
 - **Identity key:** `tuple[str, str]` = `(connection.kind, connection.name)`.
@@ -20,21 +20,21 @@
 
 ---
 
-## File Structure
+## 1.2. File Structure
 
-### Files modified
+### 1.2.1. Files modified
 
 - `src/aws_tui/composition.py` — `AppContext` gains the `unreachable_connections: set[tuple[str, str]]` field. Slot entry + constructor kwarg + default `set()` in `build_app_context`.
 - `src/aws_tui/app.py` — `action_swap_source` filters the candidate ring against `ctx.unreachable_connections`; raises a one-line toast naming skipped entries. New hub subscription on `AwsTuiApp` that mutates the set on active-pane `state` property changes. New per-pane "current connection key" trackers so `state == UNREACHABLE` events can be attributed to a specific connection.
 - `CHANGELOG.md` — one `### Added` bullet under `[Unreleased]`.
 
-### Files created
+### 1.2.2. Files created
 
 - `tests/unit/test_app_context_unreachable.py` — unit test that `AppContext.unreachable_connections` exists, defaults empty, and is a mutable set.
 - `tests/integration/test_swap_source_skips_unreachable.py` — in-process integration test: pre-populate the unreachable set, invoke `action_swap_source`, assert it skips marked entries.
 - `tests/integration/test_swap_source_recovery.py` — in-process integration test: simulate a pane transitioning back to `IDLE` from `UNREACHABLE`, verify the set is cleared and the connection re-enters the ring.
 
-### Files NOT touched
+### 1.2.3. Files NOT touched
 
 - `src/aws_tui/vm/file_manager/pane_vm.py` (no VM change — observation is via hub subscription).
 - `src/aws_tui/domain/*` (no domain change).
@@ -44,7 +44,7 @@
 
 ---
 
-## Task 1: Add `unreachable_connections` field to `AppContext`
+## 1.3. Task 1: Add `unreachable_connections` field to `AppContext`
 
 **Files:**
 - Modify: `src/aws_tui/composition.py` (AppContext: __slots__, __init__, build_app_context call site)
@@ -136,7 +136,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 2: `action_swap_source` filters the ring + emits skip toast
+## 1.4. Task 2: `action_swap_source` filters the ring + emits skip toast
 
 **Files:**
 - Modify: `src/aws_tui/app.py` (action_swap_source body)
@@ -429,7 +429,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 3: Auto-observe `PaneState.UNREACHABLE` transitions on the active panes
+## 1.5. Task 3: Auto-observe `PaneState.UNREACHABLE` transitions on the active panes
 
 **Files:**
 - Modify: `src/aws_tui/app.py` (new subscription helpers, attribute trackers, hooks)
@@ -736,7 +736,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ---
 
-## Task 4: CHANGELOG + final verification
+## 1.6. Task 4: CHANGELOG + final verification
 
 **Files:**
 - Modify: `CHANGELOG.md`
@@ -804,7 +804,7 @@ The PR body should reference the spec and plan paths, list the 4 commits, and co
 
 ---
 
-## Acceptance check (re-stated from spec §6)
+## 1.7. Acceptance check (re-stated from spec §6)
 
 After Task 4 push, verify:
 
@@ -817,7 +817,7 @@ After Task 4 push, verify:
 
 ---
 
-## Self-review notes
+## 1.8. Self-review notes
 
 - **Spec coverage:** §3 identity key → Task 1+2; §4 surfaces touched → all 4 tasks; §5.1 observation point → Task 3; §5.3 skip toast → Task 2; §6 acceptance criteria → manual smoke in Task 3 Step 7 plus the gate in Task 4 Step 2.
 - **Placeholder scan:** every code block is actual code; commit messages are literal; no "TODO" or "implement later".

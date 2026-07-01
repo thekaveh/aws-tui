@@ -1,4 +1,4 @@
-# VMx Python cheatsheet (2026-06-14)
+# 1. VMx Python cheatsheet (2026-06-14)
 
 Quick reference distilled from the VMx Python source for the M3
 implementation. (Distilled originally from `vendor/vmx/langs/python/src/vmx/`;
@@ -7,7 +7,7 @@ wheel.) Captures the actual API surface so the M3 plan's assumptions about
 `AggregateVM3`, `MessageHub`, `RelayCommand`, `DerivedProperty`, etc. can
 be reconciled with reality before writing real VMs.
 
-## 0. Imports
+## 1.1. Imports
 
 All public types are re-exported from the top-level `vmx` package:
 
@@ -47,13 +47,13 @@ from vmx.notifications import (
 `vmx.AggregateVM3Builder` is **identical** to `vmx.AggregateVMBuilder3` (both
 names exported). The naming "AggregateVMBuilderN" is the underlying class.
 
-## 1. The builder pattern (no direct VM subclassing)
+## 1.2. The builder pattern (no direct VM subclassing)
 
 VMx VMs are **not** subclassed — they are constructed via immutable fluent
 builders. To make a custom VM with extra commands/properties, you wrap a
 `ComponentVM` (or `CompositeVM` etc.) instance inside your own facade class.
 
-### 1.1 ComponentVM
+### 1.2.1. ComponentVM
 
 ```python
 from vmx import ComponentVM
@@ -75,7 +75,7 @@ vm = ComponentVM.builder().name("toast").with_null_services().build()
 `ComponentVM.builder()` returns a `ComponentVMBuilder`. `with_null_services()`
 wires `NULL_MESSAGE_HUB` + `NULL_DISPATCHER` for tests.
 
-### 1.2 ComponentVMOf[M] — modeled leaf with settable model
+### 1.2.2. ComponentVMOf[M] — modeled leaf with settable model
 
 ```python
 from vmx import ComponentVMOf
@@ -100,7 +100,7 @@ vm.model                                  # current model
 vm.model = ToastModel(text="new", level="warning")  # setter publishes PropertyChangedMessage("model")
 ```
 
-### 1.3 CompositeVM[VM]
+### 1.2.3. CompositeVM[VM]
 
 ```python
 from vmx import CompositeVM
@@ -123,7 +123,7 @@ composite.append(more_child_vm)            # mid-life adds emit CollectionChange
 Note: composites do NOT expose a `.with_null_services()` shortcut — you must
 pass `NULL_MESSAGE_HUB`/`NULL_DISPATCHER` explicitly.
 
-### 1.4 AggregateVM3 (and 1..6)
+### 1.2.4. AggregateVM3 (and 1..6)
 
 ```python
 from vmx import AggregateVM3, AggregateVMBuilder3
@@ -145,7 +145,7 @@ agg.component_1, agg.component_2, agg.component_3   # populated on construct()
 The factories are invoked lazily on `_on_construct()`. On reconstruct, the
 previous slot is `dispose()`d before being overwritten.
 
-## 2. Lifecycle (synchronous, depth-first)
+## 1.3. Lifecycle (synchronous, depth-first)
 
 All lifecycle operations are **synchronous** in the default (non-background)
 mode. There is no `await vm.construct()` — it returns when done.
@@ -163,14 +163,14 @@ Statuses: `DESTRUCTED → CONSTRUCTING → CONSTRUCTED → DESTRUCTING → DESTR
 each. `CompositeVM.dispose()` calls `dispose()` on each child first, then super.
 `AggregateVMN.dispose()` calls `dispose()` on each component slot.
 
-### 2.1 Background-aware lifecycle
+### 1.3.1. Background-aware lifecycle
 
 `ComponentVM.builder().background(True)` makes construct/destruct schedule the
 callback on the dispatcher's background scheduler. M3 does NOT need this — we
 keep everything foreground/synchronous and own async work explicitly via
 `asyncio.create_task` in our facade classes.
 
-### 2.2 The async setup pattern
+### 1.3.2. The async setup pattern
 
 VMx's `construct()` is synchronous. For VMs that need to load initial state
 from infra (e.g. probing the SSO cache), do **not** put async work inside
@@ -182,7 +182,7 @@ from infra (e.g. probing the SSO cache), do **not** put async work inside
 
 For M3 most VMs don't need this — they react to messages on the hub instead.
 
-## 3. MessageHub & custom messages
+## 1.4. MessageHub & custom messages
 
 ```python
 from vmx import MessageHub, Message
@@ -198,7 +198,7 @@ hub.send(my_message)
 hub.dispose()
 ```
 
-### 3.1 Custom message envelopes
+### 1.4.1. Custom message envelopes
 
 A `Message` is a structural Protocol — anything with `sender_name: str` and
 `sender_object: object` satisfies it. So our custom messages look like:
@@ -221,12 +221,12 @@ class ConnectionChangedMessage:
 
 Subscribers filter by `isinstance(msg, ConnectionChangedMessage)`.
 
-### 3.2 Subscriber resilience
+### 1.4.2. Subscriber resilience
 
 Per `HUB-007`, subscriber exceptions are swallowed by the hub wrapper; one
 raising handler does NOT terminate the stream for other subscribers.
 
-## 4. Reactive properties & DerivedProperty
+## 1.5. Reactive properties & DerivedProperty
 
 `ComponentVM` exposes:
 
@@ -250,7 +250,7 @@ def title(self, value: str) -> None:
     self._hub.send(PropertyChangedMessage.create(self, self._name, "title"))
 ```
 
-### 4.1 DerivedProperty[T]
+### 1.5.1. DerivedProperty[T]
 
 Computes a value from N source observables; cached, equality-guarded, emits
 on `value_changed`:
@@ -275,7 +275,7 @@ Important: `DerivedProperty.value` raises `RuntimeError` if no source has
 emitted yet — feed `BehaviorSubject` (carries an initial value) sources, NOT
 plain `Subject`.
 
-## 5. RelayCommand & RelayCommandOf
+## 1.6. RelayCommand & RelayCommandOf
 
 ```python
 from vmx import RelayCommand, RelayCommandOf
@@ -307,7 +307,7 @@ cmd_p.execute("foo")
 
 Predicates that raise are treated as False; tasks that raise propagate.
 
-## 6. Notifications subpackage (Task 7)
+## 1.7. Notifications subpackage (Task 7)
 
 ```python
 from vmx.notifications import (
@@ -325,7 +325,7 @@ from vmx.notifications import (
 `vmx.notifications` at all — that's simpler and avoids pulling in the
 notification-hub concept just for this one use case.
 
-## 7. Capabilities and state helpers
+## 1.8. Capabilities and state helpers
 
 - `ISelectable`, `IFilterable`, `IExpandable`, `ISearchable`, etc. are
   `abc.ABC`-style markers registered against built-in VM classes — they're
@@ -335,7 +335,7 @@ notification-hub concept just for this one use case.
   filter). Even that we can skip — a simple `_filter_text: str` setter plus
   derived `_filtered_entries` recompute is enough.
 
-## 8. RxDispatcher
+## 1.9. RxDispatcher
 
 ```python
 RxDispatcher.immediate()              # both fg + bg are ImmediateScheduler — sync, for tests
@@ -344,7 +344,7 @@ RxDispatcher.asyncio(loop)            # AsyncIOScheduler fg + ThreadPoolSchedule
 
 For unit tests, use `NULL_DISPATCHER` (cheaper) or `RxDispatcher.immediate()`.
 
-## 9. Smoke verification (run by Task 1)
+## 1.10. Smoke verification (run by Task 1)
 
 ```bash
 uv run python -c "
@@ -367,7 +367,7 @@ print('VMx smoke OK')
 "
 ```
 
-## 10. Implementation pattern for aws-tui custom VMs
+## 1.11. Implementation pattern for aws-tui custom VMs
 
 Since VMx VMs aren't subclassable, our facade pattern is:
 
@@ -407,7 +407,7 @@ This pattern repeats throughout M3:
 - For reactive state, publish `PropertyChangedMessage` on the hub on every set.
 - For derived state, use `DerivedProperty` over `BehaviorSubject` sources.
 
-## 11. Plan deviations recorded
+## 1.12. Plan deviations recorded
 
 - `AggregateVM3` has **no static `.builder()`** — instantiate
   `AggregateVMBuilder3()` directly. The plan said "ChromeVM as AggregateVM3 of

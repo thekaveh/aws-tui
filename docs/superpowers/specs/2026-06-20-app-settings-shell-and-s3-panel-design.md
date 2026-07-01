@@ -1,4 +1,4 @@
-# App Settings Shell + S3 Connections Panel — Design Spec
+# 1. App Settings Shell + S3 Connections Panel — Design Spec
 
 > **SUPERSEDED** by
 > [`2026-06-20-settings-as-first-class-nav-page-design.md`](2026-06-20-settings-as-first-class-nav-page-design.md)
@@ -16,7 +16,7 @@
 
 ---
 
-## 1. Motivation
+## 1.1. Motivation
 
 Adding or modifying an S3-compatible service (MinIO, Wasabi, Cloudflare R2,
 self-hosted Ceph, etc.) today requires hand-editing
@@ -28,9 +28,9 @@ This sub-project builds the first cut of an **App Settings hub** — a single
 themed overlay where every kind of app configuration eventually lives — and
 ships its first panel: full CRUD over `kind = "s3-compatible"` TOML entries.
 
-## 2. Scope
+## 1.2. Scope
 
-### 2.1 In scope (sub-project A)
+### 1.2.1. In scope (sub-project A)
 
 - **Settings shell:** themed modal with a left-sidebar nav, body container,
   footer. Three sidebar entries from day one: `Connections` (active),
@@ -55,7 +55,7 @@ ships its first panel: full CRUD over `kind = "s3-compatible"` TOML entries.
 - **Tests:** unit (VMs + ConfigStore extensions), snapshot (×10 themes),
   in-process integration (gear-click flow + pane-reload flow).
 
-### 2.2 Out of scope (deferred to sub-projects B and C)
+### 1.2.2. Out of scope (deferred to sub-projects B and C)
 
 - **Sub-project B — Themes panel:** refactor of the existing
   `ThemePickerModal` (with its live-preview-on-cursor and Esc-rollback flow
@@ -65,7 +65,7 @@ ships its first panel: full CRUD over `kind = "s3-compatible"` TOML entries.
   Precondition: finishing the `KeymapStore` / `BindingResolver` wiring noted
   in the M6-deferred list. **Separate spec, separate plan, separate PR.**
 
-### 2.3 Explicitly out of scope (this entire feature)
+### 1.2.3. Explicitly out of scope (this entire feature)
 
 - **Editing AWS-kind connections** (named SSO profiles, auto-discovered AWS
   profiles). AWS credentials come from `aws sso login` and the app does not
@@ -80,9 +80,9 @@ ships its first panel: full CRUD over `kind = "s3-compatible"` TOML entries.
   mode. To rename, delete and re-add. Avoids orphaning any future
   per-connection state (journal entries, keychain references in B/C).
 
-## 3. Architecture
+## 1.3. Architecture
 
-### 3.1 File map (new)
+### 1.3.1. File map (new)
 
 ```
 src/aws_tui/
@@ -99,7 +99,7 @@ src/aws_tui/
       _placeholder_panel.py   # "Coming in v0.8" body for disabled sections
 ```
 
-### 3.2 File map (modified)
+### 1.3.2. File map (modified)
 
 - `src/aws_tui/infra/config_store.py` — add `update_connection()`,
   `remove_connection()`
@@ -118,7 +118,7 @@ src/aws_tui/
   `ConnectionListChangedMessage` if the resolver caches; otherwise no change
   (verify during implementation)
 
-### 3.3 Layout
+### 1.3.3. Layout
 
 The settings modal opens centered, ~80 cols × ~28 rows (dark themes; per
 ConfirmModal precedent, light themes can tighten):
@@ -147,7 +147,7 @@ ConfirmModal precedent, light themes can tighten):
   deferred to modal-dismiss is the **pane reload** for connections an
   active pane was already bound to (see §4.3).
 
-### 3.4 S3 connections panel layout
+### 1.3.4. S3 connections panel layout
 
 ```
 ┌─ S3-Compatible Connections ─────────────────────────────────────┐
@@ -169,7 +169,7 @@ Each row:
 
 Below the rows: a centered `[ + Add s3-compatible connection ]` button.
 
-#### 3.4.1 Empty state
+#### 1.3.4.1. Empty state
 
 When `S3ConnectionsVM.connections` is empty:
 
@@ -186,7 +186,7 @@ When `S3ConnectionsVM.connections` is empty:
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.5 Gear footer band
+### 1.3.5. Gear footer band
 
 A new `ServicesMenuFooter` widget docked at the bottom of the services
 column. Single row, `height: 1`, `background: $bg-elev`, `border-top:
@@ -197,9 +197,9 @@ When the services column is hamburger-collapsed (`display: none`), the
 footer hides with it. The keyboard shortcut `,` opens the modal regardless
 of column visibility.
 
-## 4. VM layer
+## 1.4. VM layer
 
-### 4.1 `SettingsVM`
+### 1.4.1. `SettingsVM`
 
 ```python
 class SettingsVM:
@@ -235,7 +235,7 @@ class SettingsVM:
 
 Construct/destruct/dispose forward to the child `S3ConnectionsVM`.
 
-### 4.2 `S3ConnectionsVM`
+### 1.4.2. `S3ConnectionsVM`
 
 ```python
 class S3ConnectionsVM:
@@ -284,7 +284,7 @@ Validation surface (live as user types in the form; final check at the VM):
 Validation errors surface as red borders on the invalid `Input` widgets;
 the Save button is disabled until all five fields pass.
 
-### 4.3 Reload-on-close
+### 1.4.3. Reload-on-close
 
 `SettingsVM._on_hub_message` adds any update/delete name to
 `_dirty_connection_names`. When the SettingsModal calls
@@ -320,9 +320,9 @@ def on_dismiss(self, *, panes: tuple[PaneVM, PaneVM]) -> None:
 during implementation. `LOCAL_CONNECTION` is the singleton local
 connection used today for the default left pane.)
 
-## 5. Persistence (infra)
+## 1.5. Persistence (infra)
 
-### 5.1 `ConfigStore.update_connection(name, entry)`
+### 1.5.1. `ConfigStore.update_connection(name, entry)`
 
 ```python
 def update_connection(self, name: str, entry: ConnectionEntry) -> None:
@@ -334,7 +334,7 @@ def update_connection(self, name: str, entry: ConnectionEntry) -> None:
     """
 ```
 
-### 5.2 `ConfigStore.remove_connection(name)`
+### 1.5.2. `ConfigStore.remove_connection(name)`
 
 ```python
 def remove_connection(self, name: str) -> None:
@@ -352,7 +352,7 @@ Both methods:
 - No retry, no locking — the TOML file is single-user, no concurrent
   writers expected.
 
-### 5.3 Schema notes
+### 1.5.3. Schema notes
 
 The TOML schema for s3-compatible entries with inline credentials:
 
@@ -384,9 +384,9 @@ an entry is opened in the edit form:
   keychain-backed credentials should edit the TOML by hand or skip the
   form for that entry.
 
-## 6. Messages
+## 1.6. Messages
 
-### 6.1 `ConnectionListChangedMessage` (new)
+### 1.6.1. `ConnectionListChangedMessage` (new)
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -413,7 +413,7 @@ class ConnectionListChangedMessage:
 
 Added to `vm/messages.py` `__all__`.
 
-### 6.2 No reuse of `ConnectionChangedMessage`
+### 1.6.2. No reuse of `ConnectionChangedMessage`
 
 `ConnectionChangedMessage` already exists for the per-pane connection-switch
 flow (published by `RootVM.switch_connection_with`). It is **not** reused
@@ -421,9 +421,9 @@ here — semantics are different (one switches an active binding, the other
 announces a config-file change). Subscribers can listen to whichever they
 care about.
 
-## 7. Entry point wiring
+## 1.7. Entry point wiring
 
-### 7.1 `AwsTuiApp.action_open_settings`
+### 1.7.1. `AwsTuiApp.action_open_settings`
 
 ```python
 def action_open_settings(self) -> None:
@@ -437,12 +437,12 @@ def action_open_settings(self) -> None:
 
 Binding added in the `BINDINGS` class attribute alongside existing actions.
 
-### 7.2 Gear button click
+### 1.7.2. Gear button click
 
 The `ServicesMenuFooter` widget calls `app.action_open_settings()` on
 button-click. Same path as the keyboard shortcut.
 
-## 8. Error handling
+## 1.8. Error handling
 
 | Failure | Surface | Behavior |
 |---|---|---|
@@ -454,9 +454,9 @@ button-click. Same path as the keyboard shortcut.
 | User deletes the only s3-compatible connection while a pane is bound to it | Reload-on-close | The pane reverts to `local` on modal dismiss. Toast: `"Left pane reverted to local (minio-local deleted)"`. |
 | Pane reload fails (new endpoint unreachable) | Existing PR #49 mechanism | Pane shows the offline-state placeholder; user sees the standard "endpoint unreachable" rendering. No special handling in the settings flow. |
 
-## 9. Testing
+## 1.9. Testing
 
-### 9.1 Unit tests
+### 1.9.1. Unit tests
 
 - `tests/unit/vm/settings/test_settings_vm.py` (new)
   - construct/dispose
@@ -480,7 +480,7 @@ button-click. Same path as the keyboard shortcut.
 - `tests/unit/vm/test_messages.py` (extend)
   - `test_connection_list_changed_message_shape`: dataclass fields + Protocol conformance
 
-### 9.2 Snapshot tests (×10 themes each)
+### 1.9.2. Snapshot tests (×10 themes each)
 
 - `tests/snapshot/test_settings_modal.py` (new)
   - `test_settings_modal_empty_connections`
@@ -499,7 +499,7 @@ Test apps (`tests/snapshot/apps/`):
 - `s3_compat_form.py` — `S3CompatFormApp(theme: str, mode: str, errors: bool)`
 - `services_menu_footer.py` — `ServicesMenuFooterApp(theme: str, collapsed: bool)`
 
-### 9.3 In-process integration tests
+### 1.9.3. In-process integration tests
 
 `tests/integration/test_settings_modal_flow.py` (new):
 
@@ -520,13 +520,13 @@ Test apps (`tests/snapshot/apps/`):
   settings, click Delete, confirm, dismiss modal, assert toast
   ("Left pane reverted to local") and `pane.current_connection_key is None`.
 
-### 9.4 Snapshot count delta
+### 1.9.4. Snapshot count delta
 
 Pre-feature: 144 snapshots (per memory). Post-feature: +30 snapshots
 approximately (3 settings-modal cases + 3 form cases + 2 footer cases) × 10
 themes = +80. Real delta will be confirmed in the implementation plan.
 
-## 10. Global constraints
+## 1.10. Global constraints
 
 These apply to every task in the implementation plan and are not negotiable
 without re-opening the design:
@@ -553,7 +553,7 @@ without re-opening the design:
   + `twine check`, `uvx pip-audit --strict`. Each commit in the plan must
   leave all gates green.
 
-## 11. Open implementation questions
+## 1.11. Open implementation questions
 
 These are *implementation-level* questions to resolve while building, not
 design decisions to revisit:
@@ -569,7 +569,7 @@ design decisions to revisit:
 - Confirm no existing keybinding maps to `,` in the default keymap
   (`infra/keymap_store.py` or equivalent).
 
-## 12. Future sub-projects (not this spec)
+## 1.12. Future sub-projects (not this spec)
 
 | Sub-project | Description | Spec ETA |
 |---|---|---|

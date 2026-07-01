@@ -1,4 +1,4 @@
-# Connections (AWS profiles + S3-compatible)
+# 1. Connections (AWS profiles + S3-compatible)
 
 > Mirror of spec §6.1–6.3 and §6.5. See also the
 > [cookbook](cookbook.md) for the "connect to local MinIO" walkthrough.
@@ -11,7 +11,7 @@ A **Connection** is the unit aws-tui authenticates as. Two kinds:
 - `kind = "s3-compatible"` — for MinIO, Cloudflare R2, Backblaze B2,
   Wasabi, Ceph, SeaweedFS, anything with an S3-compatible API.
 
-## 1. Config schema (`<config-dir>/config.toml`)
+## 1.1. Config schema (`<config-dir>/config.toml`)
 ```toml
 [connections.kaveh-dev]
 kind = "aws"
@@ -38,7 +38,7 @@ connection = "kaveh-dev"
 theme = "carbon"
 ```
 
-## 2. Credential sources for S3-compatible connections
+## 1.2. Credential sources for S3-compatible connections
 The `credentials` field is dispatched at runtime:
 
 | Spec | Source |
@@ -54,7 +54,7 @@ follow-up step is to move the credentials to the keychain via
 `keyring set <service> <key>` and switch the config to
 `credentials = "keychain:<service>"`.
 
-## 3. Auto-discovery + SSO cache probe
+## 1.3. Auto-discovery + SSO cache probe
 `ConnectionResolver.list()` unions on **every launch**:
 
 1. `[connections.*]` entries in `<config-dir>/config.toml`
@@ -83,7 +83,7 @@ cheap freshness check **without calling AWS**:
 
 Total cost: one `os.stat` + one ~1 KB JSON read. Sub-millisecond.
 
-## 4. Switching between connections at runtime
+## 1.4. Switching between connections at runtime
 
 Every connection the resolver returns — AWS profiles, manually-configured
 `s3-compatible` entries, and auto-discovered AWS profiles alike — joins
@@ -135,7 +135,7 @@ nav after a local-only fallback retries the initial connection and
 clears that connection's unreachable mark; pressing `r` on an
 unreachable pane and recovering it also clears the mark.
 
-## 5. Vendor quirks (manual checklist)
+## 1.5. Vendor quirks (manual checklist)
 - **Cloudflare R2** — no bucket versioning, no replication;
   `region = "auto"`; uses HTTPS at
   `https://<account>.r2.cloudflarestorage.com`.
@@ -148,7 +148,7 @@ unreachable pane and recovering it also clears the mark.
   us-east-2 buckets).
 - **Ceph RGW / SeaweedFS** — typically path-style + custom region.
 
-## 6. Recommended: 1-day MPU abort lifecycle rule
+## 1.6. Recommended: 1-day MPU abort lifecycle rule
 Set a 1-day lifecycle rule to abort incomplete multipart uploads on
 every bucket you write to from aws-tui (or any other tool). aws-tui
 aborts user-cancelled transfers when the provider exposes the abort
@@ -174,7 +174,7 @@ aws s3api put-bucket-lifecycle-configuration \
     --bucket <name> --lifecycle-configuration file://lifecycle.json
 ```
 
-## 7. First-run flow
+## 1.7. First-run flow
 If `ConfigStore.load()` returns no `[connections.*]` and
 `~/.aws/{config,credentials}` is also empty, v0.8.x opens the main
 screen with a local-only placeholder. The welcome modal below exists
@@ -192,10 +192,10 @@ Until that startup wiring lands, use `aws configure sso` /
 `aws sso login` for AWS profiles, or open Settings with `,` to add an
 S3-compatible endpoint.
 
-## 8. Crash-recovery transfer journal
+## 1.8. Crash-recovery transfer journal
 aws-tui writes a JSONL journal under
 `<cache-dir>/transfers/<id>.jsonl` for each transfer, including
 `begin` and terminal `finished` / `aborted` records. Startup scanning,
 automatic resume, and the abort / decide-each / keep modal remain
-deferred in v0.8.x; see the [cookbook](cookbook.md#4-resume-after-a-crash)
+deferred in v0.8.x; see the [cookbook](cookbook.md#14-resume-after-a-crash)
 for the planned flow and manual cleanup notes.

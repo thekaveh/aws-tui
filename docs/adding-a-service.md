@@ -1,4 +1,4 @@
-# Adding a new service
+# 1. Adding a new service
 
 > v0.8.0 ships the `s3` and `emr-serverless` services; EMR includes
 > the read-only browser, job-run logs, and clone-job-run modal. This
@@ -15,7 +15,7 @@ factory, so non-`DualPane` services also need an explicit route in
 `AwsTuiApp._mount_initial_service_view` / `_mount_service_view` until
 the planned service-owned view-factory contract lands.
 
-## 1. The `Service` protocol
+## 1.1. The `Service` protocol
 Declared in `src/aws_tui/vm/services_protocol.py`, re-exported from
 `src/aws_tui/services/__init__.py`:
 
@@ -41,7 +41,7 @@ whatever VMx VM they actually host (`S3Service.build_vm` returns
 `DualPaneVM`, see the §2 template below). `ContentHostVM` only
 needs a `construct → destruct → dispose` surface.
 
-## 2. Steps
+## 1.2. Steps
 1. **Create the folder.**
 
     ```
@@ -114,7 +114,7 @@ needs a `construct → destruct → dispose` surface.
 8. **Update docs.** Add any vendor / API quirks to
     `docs/connections.md`. Update the README's features list.
 
-## 3. Layer rules cheat-sheet for services
+## 1.3. Layer rules cheat-sheet for services
 A service module **may** import from:
 
 - `aws_tui.infra.*` (aws_session, config_store, log_sink, …)
@@ -136,15 +136,15 @@ A service module **may not** import from:
 
 These bans are enforced by `scripts/check-layers.sh`.
 
-## 4. Future: entry-point discovery
+## 1.4. Future: entry-point discovery
 v1.1 promotes the registry to
 `importlib.metadata.entry_points(group="aws_tui.services")` so third-
 party packages can ship services without forking. The same `Service`
 protocol applies.
 
-## 5. Reference: the shipped services
+## 1.5. Reference: the shipped services
 
-### 5.1. S3
+### 1.5.1. S3
 `src/aws_tui/services/s3/service.py` is the first concrete service.
 Read it end-to-end (~80 lines):
 
@@ -163,7 +163,7 @@ Read it end-to-end (~80 lines):
 - `bind_hub(hub)` late-wires the hub since the service is registered
   before `RootVM` has its hub.
 
-### 5.2. EMR Serverless
+### 1.5.2. EMR Serverless
 `src/aws_tui/services/emr_serverless/service.py` is the second
 shipped service and demonstrates the richer per-service pattern:
 

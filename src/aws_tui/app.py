@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import logging
 import os
 import sys
 from collections import deque
@@ -1016,6 +1015,7 @@ class AwsTuiApp(App[None]):
         :meth:`action_app_quit` was wired but never invoked because no
         binding routed to it.
         """
+        self.record_action("app.quit")
         await self._aws_tui_shutdown()
         self.exit()
 
@@ -1077,10 +1077,12 @@ class AwsTuiApp(App[None]):
 
     def action_switch_focus(self) -> None:
         """Move to the next app-wide focus slot."""
+        self.record_action("pane.switch_focus")
         self._cycle_focus(reverse=False)
 
     def action_switch_focus_reverse(self) -> None:
         """Move to the previous app-wide focus slot."""
+        self.record_action("pane.switch_focus_back")
         self._cycle_focus(reverse=True)
 
     def _cycle_focus(self, *, reverse: bool) -> None:
@@ -1198,11 +1200,13 @@ class AwsTuiApp(App[None]):
         return False
 
     def action_move_up(self) -> None:
+        self.record_action("pane.move_up")
         if self._forward_to_modal("action_move_up"):
             return
         self._move_cursor(-1)
 
     def action_move_down(self) -> None:
+        self.record_action("pane.move_down")
         if self._forward_to_modal("action_move_down"):
             return
         self._move_cursor(1)
@@ -1333,6 +1337,7 @@ class AwsTuiApp(App[None]):
         return None
 
     async def action_descend(self) -> None:
+        self.record_action("pane.descend")
         # Forward Enter to the active modal first. Most of our modals
         # treat Enter as confirm/apply (ConfirmModal.action_confirm,
         # ThemePickerModal.action_apply). Without this, App's
@@ -1405,6 +1410,7 @@ class AwsTuiApp(App[None]):
             await pane.navigate_to(pane.path.join(target.entry.name))
 
     async def action_ascend(self) -> None:
+        self.record_action("pane.ascend")
         # Forward Backspace to the active modal as a cancel-by-key
         # gesture (esc still works too).
         if self._forward_to_modal("action_cancel", "action_close", "action_dismiss"):
@@ -1428,6 +1434,7 @@ class AwsTuiApp(App[None]):
 
     async def action_modal_left_or_ascend(self) -> None:
         """In modals, move focus to the previous button; in panes, ascend to parent."""
+        self.record_action("pane.ascend")
         # In a modal: Left moves arrow-key focus to the previous footer
         # button (or whatever the modal exposes as ``action_focus_prev``).
         # Outside any modal: behaves like ``ascend`` so file-pane
@@ -1438,12 +1445,14 @@ class AwsTuiApp(App[None]):
 
     def action_modal_right(self) -> None:
         """In modals, move focus to the next button. No-op in panes."""
+        self.record_action("modal.focus_next")
         # In a modal: Right moves arrow-key focus to the next footer
         # button. Outside any modal: no-op (panes don't currently bind
         # Right to anything).
         self._forward_to_modal("action_focus_next")
 
     async def action_refresh(self) -> None:
+        self.record_action("pane.refresh")
         # EMR page: ``r`` forwards to whichever pane currently holds
         # Textual focus (LEFT or RIGHT). LEFT pane (JobRunsPane) posts
         # ``RefreshRequested`` which the page widget routes to
@@ -1474,6 +1483,7 @@ class AwsTuiApp(App[None]):
         """Show the help overlay (also bound to ``:``). The theme picker
         is a separate modal — press ``t`` (or use the help modal's
         Themes link)."""
+        self.record_action("app.help")
         await self.push_screen(HelpModal())
 
     async def action_copy(self) -> None:
@@ -1489,6 +1499,7 @@ class AwsTuiApp(App[None]):
         Without this short-circuit the App-level priority binding
         swallows ``c`` before the page widget's binding can run.
         """
+        self.record_action("pane.copy")
         emr_page = self._emr_page()
         if emr_page is not None:
             await emr_page.action_clone_selected_run()
@@ -1604,6 +1615,7 @@ class AwsTuiApp(App[None]):
     async def action_delete(self) -> None:
         """Delete the focused pane's marked entries (or the cursor row if
         none are marked). Pops a danger-styled confirm modal first."""
+        self.record_action("pane.delete")
         dual = self._dual_pane()
         if dual is None:
             return
@@ -1700,6 +1712,7 @@ class AwsTuiApp(App[None]):
         notification overlay layer (not Textual's built-in bottom-
         center notify) handles placement + theme conformance.
         """
+        self.record_action("app.cycle_theme")
         ctx = self._app_ctx
         picker = ThemePickerVM(
             themes=ctx.theme_store.BUILTIN_NAMES,
@@ -1718,11 +1731,13 @@ class AwsTuiApp(App[None]):
         self._raise_theme_changed_toast(nxt)
 
     def action_mark_up(self) -> None:
+        self.record_action("pane.mark_up")
         if len(self.screen_stack) > 1:
             return
         self._extend_selection(-1)
 
     def action_mark_down(self) -> None:
+        self.record_action("pane.mark_down")
         if len(self.screen_stack) > 1:
             return
         self._extend_selection(1)
@@ -1784,6 +1799,7 @@ class AwsTuiApp(App[None]):
         they want an actual switch, not just opening the picker.
         The picker is still openable explicitly via ``a``.
         """
+        self.record_action("app.swap_source")
         emr = self._emr_page()
         if emr is not None:
             emr.action_cycle_application_forward()
@@ -1904,6 +1920,7 @@ class AwsTuiApp(App[None]):
     def action_open_settings(self) -> None:
         """Select the Settings entry in the nav menu (programmatic equivalent
         of clicking it). Bound to ``,`` (comma)."""
+        self.record_action("app.settings")
         self._app_ctx.root_vm.services_menu.switch_service_command.execute(SETTINGS_NAV_ID)
 
     async def _rebind_pane_to_local(self, pane: object) -> None:
@@ -1950,6 +1967,7 @@ class AwsTuiApp(App[None]):
         Previously each ``t`` press stacked another picker on top,
         requiring N ``Esc`` presses to clear N stacked modals.
         """
+        self.record_action("app.themes")
         # ``self.screen_stack`` is ordered: the active screen is last.
         # Walk it and bail if any layer is already a ThemePickerModal.
         for screen in self.screen_stack:
@@ -2510,16 +2528,13 @@ class AwsTuiApp(App[None]):
             last_action_id=last_id,
         )
         with contextlib.suppress(Exception):
-            logging.getLogger("aws_tui").error(
+            ctx.log_sink.error(
                 "crash.captured",
-                extra={
-                    "json_fields": {
-                        "exception_type": report.exception_type,
-                        "dump_path": str(report.dump_path),
-                        "last_action_id": report.last_action_id,
-                    }
-                },
+                exception_type=report.exception_type,
+                dump_path=str(report.dump_path),
+                last_action_id=report.last_action_id,
             )
+            ctx.log_sink.flush()
         return report
 
     def _handle_exception(self, error: Exception) -> None:

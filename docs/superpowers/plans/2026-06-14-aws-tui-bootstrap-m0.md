@@ -1,4 +1,4 @@
-# aws-tui M0 (Bootstrap) Implementation Plan
+# 1. aws-tui M0 (Bootstrap) Implementation Plan
 
 > **Historical plan — M0 ship date 2026-06-14.** Submodule-related
 > tasks (`vendor/vmx` add, `--recurse-submodules` clone, etc.) are
@@ -21,7 +21,7 @@
 
 ---
 
-## File Structure
+## 1.1. File Structure
 
 Files created in M0 (alphabetical within section):
 
@@ -92,7 +92,7 @@ Files created in M0 (alphabetical within section):
 
 ---
 
-## Task 1: Create the public GitHub repo
+## 1.2. Task 1: Create the public GitHub repo
 
 **Files:**
 - Create (remote): `github.com/thekaveh/aws-tui` (empty, public, MIT)
@@ -139,7 +139,7 @@ Expected: command exits zero; topics appear at `https://github.com/thekaveh/aws-
 
 ---
 
-## Task 2: Initialize local git repo and wire upstream
+## 1.3. Task 2: Initialize local git repo and wire upstream
 
 **Files:**
 - Modify: `/Users/kaveh/repos/aws-tui/.git/` (newly created)
@@ -177,7 +177,7 @@ origin	https://github.com/thekaveh/aws-tui.git (push)
 
 ---
 
-## Task 3: Add LICENSE, .gitignore, .gitattributes, .editorconfig
+## 1.4. Task 3: Add LICENSE, .gitignore, .gitattributes, .editorconfig
 
 **Files:**
 - Create: `LICENSE`
@@ -344,7 +344,7 @@ Expected: all four lines show file sizes > 0.
 
 ---
 
-## Task 4: Add README, CHANGELOG, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY
+## 1.5. Task 4: Add README, CHANGELOG, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY
 
 **Files:**
 - Create: `README.md`
@@ -563,7 +563,7 @@ Expected: all five files present, sizes > 0.
 
 ---
 
-## Task 5: First commit (repo hygiene)
+## 1.6. Task 5: First commit (repo hygiene)
 
 **Files:**
 - Stage: everything created so far + the existing spec doc.
@@ -608,7 +608,7 @@ Expected: commit succeeds, single SHA reported.
 
 ---
 
-## Task 6: Add VMx as a git submodule
+## 1.7. Task 6: Add VMx as a git submodule
 
 **Files:**
 - Create: `.gitmodules`
@@ -674,7 +674,7 @@ Expected: commit succeeds.
 
 ---
 
-## Task 7: Add `pyproject.toml`, generate `uv.lock`
+## 1.8. Task 7: Add `pyproject.toml`, generate `uv.lock`
 
 **Files:**
 - Create: `pyproject.toml`
@@ -891,7 +891,7 @@ Expected: prints a path under `.venv/lib/python3.12/site-packages/vmx/__init__.p
 
 ---
 
-## Task 8: Create the source layer stubs
+## 1.9. Task 8: Create the source layer stubs
 
 **Files:**
 - Create: 16 `__init__.py` files + 4 `py.typed` markers + 1 `.gitkeep`
@@ -1093,7 +1093,7 @@ src/aws_tui/vm/py.typed
 
 ---
 
-## Task 9: TDD sanity tests for the hello-world app
+## 1.10. Task 9: TDD sanity tests for the hello-world app
 
 **Files:**
 - Create: `tests/__init__.py`
@@ -1190,7 +1190,7 @@ Expected: same screen as Step 4. Press `q`. This proves the `aws-tui = "aws_tui.
 
 ---
 
-## Task 10: Commit source layer + tests
+## 1.11. Task 10: Commit source layer + tests
 
 - [ ] **Step 1: Stage and inspect**
 
@@ -1228,7 +1228,7 @@ Expected: commit succeeds.
 
 ---
 
-## Task 11: Add docs skeletons
+## 1.12. Task 11: Add docs skeletons
 
 **Files:**
 - Create: `docs/architecture.md`
@@ -1326,7 +1326,7 @@ Create `/Users/kaveh/repos/aws-tui/docs/theming.md`:
 ## Selecting a theme
 
 ```toml
-# ~/.config/aws-tui/config.toml
+# 2. ~/.config/aws-tui/config.toml
 [defaults]
 theme = "voidline"
 ```
@@ -1473,7 +1473,7 @@ cd /Users/kaveh/repos/aws-tui && \
 
 ---
 
-## Task 12: Add scripts
+## 2.1. Task 12: Add scripts
 
 **Files:**
 - Create: `scripts/bootstrap.sh`
@@ -1545,7 +1545,7 @@ Expected: completes without errors. Final line shows the suggested next command.
 
 ---
 
-## Task 13: Add `.pre-commit-config.yaml` and verify
+## 2.2. Task 13: Add `.pre-commit-config.yaml` and verify
 
 **Files:**
 - Create: `.pre-commit-config.yaml`
@@ -1619,7 +1619,7 @@ cd /Users/kaveh/repos/aws-tui && git add .pre-commit-config.yaml && \
 
 ---
 
-## Task 14: Add GitHub workflows + templates + dependabot
+## 2.3. Task 14: Add GitHub workflows + templates + dependabot
 
 **Files:**
 - Create: `.github/workflows/ci.yml`
@@ -1878,7 +1878,7 @@ cd /Users/kaveh/repos/aws-tui && \
 
 ---
 
-## Task 15: Commit scripts
+## 2.4. Task 15: Commit scripts
 
 - [ ] **Step 1: Stage and commit**
 
@@ -1893,7 +1893,7 @@ Expected: commit succeeds. (We split this off from Task 12 so the script-add and
 
 ---
 
-## Task 16: Verify everything locally before push
+## 2.5. Task 16: Verify everything locally before push
 
 - [ ] **Step 1: Re-run the full test suite**
 
@@ -1947,7 +1947,7 @@ Expected: ~7 commits in chronological order — initial hygiene, VMx submodule, 
 
 ---
 
-## Task 17: Push to GitHub and verify CI green
+## 2.6. Task 17: Push to GitHub and verify CI green
 
 - [ ] **Step 1: Push**
 
@@ -2011,7 +2011,7 @@ Expected: JSON shows the URL, the description we set in Task 1, MIT license (det
 
 ---
 
-## Done
+## 2.7. Done
 
 M0 is complete: public repo, scaffolded layout, VMx submodule pinned, hello-world Textual app, 3 sanity tests, 7 atomic commits, full CI matrix green, v0.0.1 tagged and released.
 

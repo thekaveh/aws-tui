@@ -1,6 +1,6 @@
-# Public Release Pipeline — Design
+# 1. Public Release Pipeline — Design
 
-## Goal
+## 1.1. Goal
 
 Get aws-tui onto its proper public distribution channels (PyPI as
 primary, GitHub Releases, Homebrew tap) via a **sustainable**
@@ -12,7 +12,7 @@ First release through this pipeline: **v0.8.0** (current HEAD
 `269427c` + ~90 commits since the v0.7.0 tag, including the EMR
 Serverless service and many UX fixes).
 
-## Non-goals
+## 1.2. Non-goals
 
 - Conda-forge channel (skipped — add only if users ask).
 - Docker image (TUI without a daemon doesn't benefit).
@@ -24,9 +24,9 @@ Serverless service and many UX fixes).
 - Per-PR pre-release channels (`0.8.0.dev0+sha` etc.) — adds
   complexity not warranted for a solo-maintainer project.
 
-## Architecture — 5 components
+## 1.3. Architecture — 5 components
 
-### 1. Version source of truth
+### 1.3.1. Version source of truth
 
 - `src/aws_tui/version.py::__version__` is the single source.
   Hatchling already reads it via `[tool.hatch.version]` in
@@ -40,7 +40,7 @@ Serverless service and many UX fixes).
   `Development Status :: 3 - Alpha` for v0.8.0. Signals "safe to
   install for real use; API may still shift in 0.x."
 
-### 2. Changelog cut process
+### 1.3.2. Changelog cut process
 
 - Documented in `docs/RELEASING.md` (six steps).
 - `scripts/cut-changelog.sh <version>` automates:
@@ -50,7 +50,7 @@ Serverless service and many UX fixes).
   classifier (when transitioning), and the README "Status" line.
 - PR-reviewed like any other change. Merge → tag → push.
 
-### 3. Release workflow (`.github/workflows/release.yml`)
+### 1.3.3. Release workflow (`.github/workflows/release.yml`)
 
 Single workflow, five jobs in sequence:
 
@@ -82,7 +82,7 @@ Triggers:
   TestPyPI dry-run lane for rehearsing changes to the release
   machinery itself without burning a real version number.
 
-### 4. Homebrew tap
+### 1.3.4. Homebrew tap
 
 New repo `thekaveh/homebrew-aws-tui`:
 - One formula: `Formula/aws-tui.rb`.
@@ -96,14 +96,14 @@ New repo `thekaveh/homebrew-aws-tui`:
   PyPI release; bootstrapping the initial formula is one human
   step after the first 0.8.0 publish lands.
 
-### 5. TestPyPI dry-run rehearsal
+### 1.3.5. TestPyPI dry-run rehearsal
 
 Same `release.yml`, `workflow_dispatch` with `target = testpypi`.
 When `testpypi`: publish-pypi job points at TestPyPI's Trusted
 Publisher; publish-github + bump-homebrew jobs are skipped. Manual
 button — only run when the release machinery itself changed.
 
-## What the maintainer does for each release
+## 1.4. What the maintainer does for each release
 
 1. Open release PR: run `scripts/cut-changelog.sh 0.8.0`, bump
    `version.py`, update README status line. (~5 min)
@@ -115,7 +115,7 @@ button — only run when the release machinery itself changed.
 
 Five minutes of human time per release.
 
-## One-time bring-up (manual, maintainer-side)
+## 1.5. One-time bring-up (manual, maintainer-side)
 
 These four console steps are **not automatable** and the
 maintainer does them once before the first 0.8.0 cut.
@@ -133,7 +133,7 @@ maintainer does them once before the first 0.8.0 cut.
    The bootstrap formula is committed by hand after the first
    PyPI release succeeds.
 
-## Failure modes & rollback
+## 1.6. Failure modes & rollback
 
 - **Tag/version mismatch.** Verify job fails fast → no publish.
   Fix: amend the cut PR's `version.py`, retag.
@@ -151,7 +151,7 @@ maintainer does them once before the first 0.8.0 cut.
   TestPyPI dry-run, before any real release. That's the point of
   the rehearsal lane.
 
-## Testing the pipeline
+## 1.7. Testing the pipeline
 
 - **First action after merging the release-machinery PR**: run
   `workflow_dispatch` with `target = testpypi`. Confirm a wheel

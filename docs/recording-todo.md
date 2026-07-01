@@ -1,4 +1,4 @@
-# Recording TODO
+# 1. Recording TODO
 
 > Items the maintainer (i.e. **you**) needs to record manually before
 > the v0.8.0 docs feel done. A subagent cannot drive a real terminal
@@ -12,7 +12,7 @@ embed them at the section named in each item:
 - For `.cast` files: `[![asciicast](https://asciinema.org/a/<id>.svg)](https://asciinema.org/a/<id>)`
 - For PNG: `![<alt>](assets/<file>.png)`
 
-## 1. Quickstart launch (`README.md` hero)
+## 1.1. Quickstart launch (`README.md` hero)
 
 Format: asciinema, 30 seconds, 100×30.
 
@@ -31,7 +31,7 @@ aws-tui
 Embed under the README hero image / status block if a fresh terminal
 recording is still useful after the current hero asset.
 
-## 2. First-run startup placeholder (`README.md` Quickstart section)
+## 1.2. First-run startup placeholder (`README.md` Quickstart section)
 
 Format: PNG screenshot at 120×40.
 
@@ -54,7 +54,7 @@ the config of the temp HOME for a more striking image.
 Record the welcome modal separately when the v0.9 first-run startup
 wiring lands.
 
-## 3. S3 → local copy walkthrough (cookbook: connect to MinIO)
+## 1.3. S3 → local copy walkthrough (cookbook: connect to MinIO)
 
 Format: asciinema, 60 seconds, 120×40.
 
@@ -75,9 +75,9 @@ aws-tui
 ```
 
 Embed below the "Use it" step of the MinIO recipe in
-[cookbook.md](cookbook.md#15-use-it).
+[cookbook.md](cookbook.md#115-use-it).
 
-## 4. Theme switch (cookbook: switch theme)
+## 1.4. Theme switch (cookbook: switch theme)
 
 Format: asciinema, 20 seconds, 120×40.
 
@@ -98,7 +98,7 @@ aws-tui
 
 Embed below the "One-off (session-only)" step of the theme recipe.
 
-## 5. Crash-recovery flow (cookbook: resume after a crash)
+## 1.5. Crash-recovery flow (cookbook: resume after a crash)
 
 Format: asciinema, 60 seconds, 120×40.
 
@@ -126,7 +126,7 @@ Cleanup after recording: `rm "$CACHE_DIR/transfers/seedabc.jsonl"`.
 
 Embed below "What happens on next launch" in the resume recipe.
 
-## 6. Crash dump / planned crash modal (cookbook: resume after a crash, second half)
+## 1.6. Crash dump / planned crash modal (cookbook: resume after a crash, second half)
 
 Format: PNG screenshot.
 
@@ -141,7 +141,7 @@ crash modal. Revert the change before committing.
 Save as `docs/assets/crash-modal-carbon.png`. Embed below the "What
 gets dumped on a crash" section.
 
-## 7. When you're done
+## 1.7. When you're done
 
 Once the artifacts land, embed them in the target sections named above
 and (optionally) delete this file. The CHANGELOG entry for the

@@ -6,14 +6,18 @@ unit/, integration/, snapshot/, and e2e/.
 
 from __future__ import annotations
 
+import json
 import re
+import runpy
 import sys
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from aws_tui import __version__
+from aws_tui.infra.log_sink import LogSink
 
 
 def test_package_imports() -> None:
@@ -128,6 +132,21 @@ def test_cli_version_reports_env_demo_without_launching_app(
     assert capsys.readouterr().out == f"aws-tui {__version__} (demo: enabled)\n"
 
 
+def test_python_module_entrypoint_invokes_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aws_tui.app as app_module
+
+    calls: list[str] = []
+
+    def fake_main() -> None:
+        calls.append("main")
+
+    monkeypatch.setattr(app_module, "main", fake_main)
+
+    runpy.run_module("aws_tui.__main__", run_name="__main__")
+
+    assert calls == ["main"]
+
+
 def test_cli_demo_flag_reaches_app_context(monkeypatch: pytest.MonkeyPatch) -> None:
     from aws_tui import app as app_module
 
@@ -184,6 +203,42 @@ def test_cli_env_demo_reaches_app_context(monkeypatch: pytest.MonkeyPatch) -> No
     app_module.main()
 
     assert demos == [True]
+
+
+def test_bound_action_records_action_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    from aws_tui import app as app_module
+
+    app = object.__new__(app_module.AwsTuiApp)
+    app._action_ring = deque(maxlen=100)  # type: ignore[attr-defined]
+    app._last_action_id = None  # type: ignore[attr-defined]
+    monkeypatch.setattr(app, "_cycle_focus", lambda *, reverse: None)
+
+    app.action_switch_focus()
+
+    assert app.last_action_id == "pane.switch_focus"
+    assert str(app._action_ring[-1]).endswith(" pane.switch_focus")  # type: ignore[attr-defined]
+
+
+def test_build_crash_report_writes_crash_log_event(tmp_path: Path) -> None:
+    from aws_tui import app as app_module
+
+    log_sink = LogSink(base_dir=tmp_path / "log")
+    app = object.__new__(app_module.AwsTuiApp)
+    app._app_ctx = SimpleNamespace(log_sink=log_sink)  # type: ignore[attr-defined]
+    app._action_ring = deque(maxlen=100)  # type: ignore[attr-defined]
+    app._last_action_id = None  # type: ignore[attr-defined]
+
+    try:
+        report = app._build_crash_report(RuntimeError("boom"))
+    finally:
+        log_sink.close()
+
+    lines = (tmp_path / "log" / "aws-tui.log").read_text(encoding="utf-8").splitlines()
+    records = [json.loads(line) for line in lines]
+    crash_records = [record for record in records if record["event"] == "crash.captured"]
+    assert len(crash_records) == 1
+    assert crash_records[0]["exception_type"] == "RuntimeError"
+    assert crash_records[0]["dump_path"] == str(report.dump_path)
 
 
 @pytest.mark.asyncio

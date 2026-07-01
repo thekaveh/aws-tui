@@ -1,4 +1,4 @@
-# Keybindings
+# 1. Keybindings
 
 > Mirror of spec §4.2. `[keybindings]` entries in
 > `<config-dir>/config.toml` parse and validate today, but runtime
@@ -19,9 +19,9 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 > ships). See the **Deferred / v0.9 roadmap** block in the `[0.8.0]`
 > section of `CHANGELOG.md` for the full list.
 
-## 1. Default bindings
+## 1.1. Default bindings
 
-### 1.1. Navigation
+### 1.1.1. Navigation
 
 | Action | Default | Notes |
 |---|---|---|
@@ -32,7 +32,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Top / bottom | `g` / `G` | |
 | Toggle hidden files (LocalFS) | `.` | |
 
-### 1.2. Selection
+### 1.1.2. Selection
 
 | Action | Default | Notes |
 |---|---|---|
@@ -43,7 +43,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Select all | `pane.select_all` action — *(deferred)* | Spec'd on `a` (in multi-select); not wired |
 | Clear selection | `Esc` (in multi-select) | Modal-style cancel; clears mark set |
 
-### 1.3. File operations
+### 1.1.3. File operations
 
 | Action | Default | Notes |
 |---|---|---|
@@ -54,7 +54,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
 | Refresh pane | `r` | |
 
-### 1.4. Overlays
+### 1.1.4. Overlays
 
 | Action | Default | Notes |
 |---|---|---|
@@ -66,7 +66,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Cycle to next theme (no modal) | `Shift+T` (`T`) | |
 | Help overlay | `?` | |
 
-### 1.5. Pane chrome
+### 1.1.5. Pane chrome
 
 | Action | Default | Notes |
 |---|---|---|
@@ -81,21 +81,21 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 > keymap default reserves `m` for the deferred `pane.move` action
 > (§1.3) when its router wiring lands.
 
-### 1.6. Connection / auth
+### 1.1.6. Connection / auth
 
 | Action | Default | Notes |
 |---|---|---|
 | Authenticate (when auth toast active) | `auth.authenticate` action — *(deferred)* | Spec'd on `a`; handler not wired in v0.8.x |
 | Connection switcher | `app.command_palette` action — *(deferred)* | Spec'd as `:` then `connection switch <name>`; the palette open binding is deferred |
 
-### 1.7. App
+### 1.1.7. App
 
 | Action | Default | Notes |
 |---|---|---|
 | Cancel / dismiss modal | `Esc` | Modal-owned; works on every modal that ships in v0.8.x |
 | Quit | `q` or `Ctrl+C` | |
 
-### 1.8. EMR Serverless
+### 1.1.8. EMR Serverless
 
 These are wired by `EmrServerlessPage` (added post-tag, PR #76; arrow-
 key routing added by PR #78; layout overhaul by PR #80; clone-job-run
@@ -125,7 +125,7 @@ App-level `priority=True` and short-circuit through
 > refresh path; the 5-second detail poller keeps it fresh
 > automatically. `r` now reloads the logs pane when focused there.
 
-## 2. Customizing
+## 1.2. Customizing
 
 A binding can be a single keystroke or a list of fallback keystrokes:
 
@@ -161,7 +161,7 @@ through `AwsTuiApp.BINDINGS` rather than the keymap store: `q`,
 `Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
 `c`, `d`, `S` (Shift+S), `Shift+↑`, `Shift+↓`.
 
-## 3. Action IDs
+## 1.3. Action IDs
 
 The `wired?` column marks whether `AwsTuiApp` currently has a matching
 `action_*` handler. `(deferred)` rows are valid action IDs you can
@@ -216,7 +216,7 @@ modifier combinations. They are not currently rebindable through
 > `delete` when the cursor is on the `..` parent row) renders with
 > the `-disabled` class (`text-style: dim`) without losing its slot.
 
-## 4. Modal forwarding for Enter / Esc / arrows
+## 1.4. Modal forwarding for Enter / Esc / arrows
 
 Textual dispatches App-level `priority=True` bindings *before* modal
 screen bindings. Without that, pressing `Enter` inside the theme
@@ -231,7 +231,7 @@ result: `Enter` confirms in any modal, `Esc` (or `Backspace`) cancels,
 and `↑/↓` navigate the picker even though the app reserves them for
 the dual-pane cursor.
 
-## 5. Layer separation
+## 1.5. Layer separation
 
 The target architecture is action-registry dispatch: views should route
 through action IDs and `BindingResolver` so rebinding can be purely

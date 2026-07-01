@@ -1,19 +1,19 @@
-# Modal + Toast Polish — Design Spec
+# 1. Modal + Toast Polish — Design Spec
 
 **Date:** 2026-06-19
 **Author:** Kaveh (with Claude pair-design)
 **Status:** Approved for implementation
 **Tracks:** `ConfirmModal`, `ThemePickerModal`, `ServicesMenu` rail + `ServicesHamburger`, `TransfersOverlay` + `TransferRowWidget`, `ToastStack` + `Toast`
 
-## 1. Motivation
+## 1.1. Motivation
 
 The dialogs the user actually sees in v0.7.x (copy/delete confirm modal, theme picker, services rail, transfers overlay, toast stack) read as half-baked: button labels can spill past button borders, the theme picker has zero per-theme CSS and falls back to a bare-terminal frame, and the transfers overlay's progress bars look "awful." This spec defines a focused polish pass that fixes the bugs, introduces a shared modal-frame convention across all 10 themes, and redesigns the transfers row to a card-style layout with full per-transfer information.
 
 The pass is deliberately **conservative on shape, expressive on color**: every theme gets the same modal silhouette (rounded border, consistent padding, fixed button geometry); the theme's `$accent` / `$bg-elev` / `$rule-dim` / `$text` tokens do the personality work.
 
-## 2. Scope
+## 1.2. Scope
 
-### 2.1. In scope
+### 1.2.1. In scope
 
 - `ConfirmModal` (copy + delete; danger + non-danger variants)
 - `ThemePickerModal` (full CSS for all 10 themes + preview-on-cursor + Esc-rollback behavior change)
@@ -22,7 +22,7 @@ The pass is deliberately **conservative on shape, expressive on color**: every t
 - `ToastStack` + `Toast` (non-progress: theme-change toast, auth toast, generic notifications)
 - Snapshot-test coverage for the surfaces that don't have it today
 
-### 2.2. Out of scope
+### 1.2.2. Out of scope
 
 The following modals are **built but never `push_screen`-ed at runtime** per `CHANGELOG.md [Unreleased] Deferred / v0.8 roadmap` and are therefore not user-visible in v0.7.x. They are not polished in this pass:
 
@@ -30,7 +30,7 @@ The following modals are **built but never `push_screen`-ed at runtime** per `CH
 
 They keep their current CSS (which has snapshot coverage already). When the M6-deferred wiring lands, a follow-up polish pass should re-evaluate them against the conventions established here.
 
-### 2.3. Decisions already locked in (from the brainstorm)
+### 1.2.3. Decisions already locked in (from the brainstorm)
 
 | Decision | Choice |
 |---|---|
@@ -39,34 +39,34 @@ They keep their current CSS (which has snapshot coverage already). When the M6-d
 | Transfers-row layout | **Card-style** with colored left accent rule (blue=running / green=done / red=failed) |
 | Theme-family coverage | All 10 themes (carbon, voidline, lattice, amber, solarized-light, github-light, one-light, nord, dracula, gruvbox-dark) |
 
-## 3. Modal frame primitive (shared across all 10 themes)
+## 1.3. Modal frame primitive (shared across all 10 themes)
 
 A single visual convention every confirm/picker modal honors. Only color tokens vary across themes.
 
-### 3.1. Frame
+### 1.3.1. Frame
 
 - Outer container: `border: round $rule-dim`, `background: $bg-elev`, `padding: 1 2`.
 - Width: `70` for confirm modals, `44` for the theme picker. `max-height: 80%` to stay usable on small terminals.
 - Centered horizontally and vertically (`align: center middle` on the screen).
 
-### 3.2. Title
+### 1.3.2. Title
 
 - One row at the top of the container.
 - `color: $accent`, `text-style: bold`.
 - No underline rule beneath the title (Option B from the brainstorm — rejected for simplicity).
 
-### 3.3. Body
+### 1.3.3. Body
 
 - Sibling rows below the title; per-row padding `0 1`.
 - Field labels in `$accent` (e.g., the "From" / "To" / "Target" labels on confirm-modal path entries).
 - Field values inside a small rounded chip: `border: round $rule-dim`, `background: $bg`, `color: $text`.
 
-### 3.4. Footer
+### 1.3.4. Footer
 
 - `height: 5`, `align: right middle`, `padding: 1 0 0 0`.
 - These figures preserve the post-pass-13 fix in CHANGELOG that resolved the "buttons clipped" bug. Do not regress.
 
-### 3.5. ModalButton
+### 1.3.5. ModalButton
 
 The root cause of the spill bug: `width: 18` fixed + `padding: 0 3` leaves 12 chars for the label, which fits "Confirm" / "Cancel" but clips longer strings ("Authenticate", "Delete all marked"). Fix:
 
@@ -78,9 +78,9 @@ The root cause of the spill bug: `width: 18` fixed + `padding: 0 3` leaves 12 ch
 
 `ModalButton.DEFAULT_CSS` is updated to reflect this; theme `.tcss` files that previously hard-coded `width: 18` get the corresponding update.
 
-## 4. ConfirmModal (copy + delete)
+## 1.4. ConfirmModal (copy + delete)
 
-### 4.1. Fine-tuning
+### 1.4.1. Fine-tuning
 
 - Apply the §3 frame.
 - **Path-value chips:** add `text-wrap: nowrap` so long paths never push the modal wider than 70 cols. Truncate with `…` if the path exceeds the chip's inner width. For multi-path lists, cap at 5 rows and add a `+N more` tail line.
@@ -88,20 +88,20 @@ The root cause of the spill bug: `width: 18` fixed + `padding: 0 3` leaves 12 ch
 - **Danger variant** (delete): keep the existing `solid $danger` border and `$danger`-colored title. Add one polish: the right-aligned footer shifts the Confirm button right by +2 cols for danger modals (a small UX guardrail so a reflex Enter doesn't land where the cursor was before the modal opened). Implementation: `.modal-footer.-danger > ModalButton.-danger { margin-right: 2; }`.
 - **Hover transition:** add `transition: background 80ms` on buttons if Textual's stylesheet supports it for the property (verify during implementation; drop the line if it errors).
 
-### 4.2. No behavior change
+### 1.4.2. No behavior change
 
 Keyboard wiring (Enter commits focused, Esc cancels, Tab/Shift+Tab swap focus) stays as-is. This is purely a CSS pass for this modal.
 
-## 5. ThemePickerModal
+## 1.5. ThemePickerModal
 
-### 5.1. Add full CSS (10 themes)
+### 1.5.1. Add full CSS (10 themes)
 
 The widget currently ships with inline `DEFAULT_CSS` only — no `.tcss` file references it. **Every theme gains a `ThemePickerModal` block** matching the §3 frame primitive plus per-row treatment:
 
 - `_ThemeRow` default: `color: $text` for the theme name; `color: $accent` for the active-marker glyph (●).
 - `_ThemeRow.-cursor`: `background: $bg-sel`, `color: $accent-soft`, `text-style: bold`. Matches the file-pane cursor pattern so the visual language is consistent.
 
-### 5.2. Preview-on-cursor
+### 1.5.2. Preview-on-cursor
 
 New behavior the user explicitly requested: as the user moves the cursor through the theme list, the active theme switches live so they see the candidate before committing.
 
@@ -110,7 +110,7 @@ New behavior the user explicitly requested: as the user moves the cursor through
 - `ThemePickerModal._move_by(delta)` calls `self._picker.preview_command.execute(new_theme_name)` after updating the cursor index.
 - **Semantic distinction:** `preview_command` is for the in-modal candidate; `pick_theme_command` is for the final commit. Future config-persistence work hangs off `pick_theme_command` only.
 
-### 5.3. Esc rollback
+### 1.5.3. Esc rollback
 
 - `ThemePickerModal.__init__` captures `self._original_theme = picker.active_theme`.
 - `action_close` becomes:
@@ -123,15 +123,15 @@ New behavior the user explicitly requested: as the user moves the cursor through
 
 - Enter still commits via `pick_theme_command` (unchanged).
 
-### 5.4. Performance flag
+### 1.5.4. Performance flag
 
 Cursoring fast through 10 themes will repaint 10 times. Textual's `refresh_css(animate=False)` is sub-frame, so this should be smooth in practice. If implementation reveals flicker, add a 60 ms debounce on `_move_by` before the preview fires. Decide after seeing it; don't pre-optimize.
 
-## 6. ServicesMenu rail + ServicesHamburger
+## 1.6. ServicesMenu rail + ServicesHamburger
 
 This is largely an audit + tightening pass — the rail already has theme rules.
 
-### 6.1. Cross-theme audit
+### 1.6.1. Cross-theme audit
 
 For each of the 10 themes, confirm these selectors exist with consistent token usage:
 
@@ -146,26 +146,26 @@ For each of the 10 themes, confirm these selectors exist with consistent token u
 
 Fix any drift — e.g., a theme using a literal hex where it should reference `$accent`.
 
-### 6.2. Selected-row visual language
+### 1.6.2. Selected-row visual language
 
 Standardize on the file-pane cursor pattern: `background: $bg-sel`, `color: $accent-soft`, `text-style: bold`, leading `▌` accent-color bar. The rail and the file panes then read as siblings rather than as parallel-but-different surfaces.
 
-### 6.3. Hamburger
+### 1.6.3. Hamburger
 
 Standard rounded chip: `border: round $rule-dim`, `background: $bg-elev`, `color: $accent`. Hover swaps to `background: $accent`, `color: $bg`. Carbon already does this — propagate to the other nine themes.
 
-### 6.4. No layout changes
+### 1.6.4. No layout changes
 
 Collapsed-state width stays at `3` (per the post-pass-13 fix in CHANGELOG). Expanded width stays at `16`. No regression desired.
 
-## 7. TransfersOverlay + TransferRowWidget (Option C: card redesign)
+## 1.7. TransfersOverlay + TransferRowWidget (Option C: card redesign)
 
-### 7.1. Overlay frame
+### 1.7.1. Overlay frame
 
 - Width unchanged: `44`. Top-right dock unchanged.
 - Title becomes `▌ TRANSFERS` (was plain `Transfers`). Leading `▌` in `$accent` matches the visual-language used on modal titles and the file-pane selected-row marker.
 
-### 7.2. Row layout (5 lines per row)
+### 1.7.2. Row layout (5 lines per row)
 
 ```
 ▌ <name>                                 ↑ 62%
@@ -181,7 +181,7 @@ Collapsed-state width stays at `3` (per the post-pass-13 fix in CHANGELOG). Expa
 - **Meta line (line 4):** `humanize_bytes(done) / humanize_bytes(total)` on the left; `<speed>/s · <eta>` on the right, both in `$text-muted`. If `bytes_total` is `None` (indeterminate stream), the line reads `<done> · streaming…`.
 - **Inter-row separator:** none — the colored left bar is the visual separator.
 
-### 7.3. State machine and visual mapping
+### 1.7.3. State machine and visual mapping
 
 | State | Left bar | State word | Bar | Cancel chip |
 |---|---|---|---|---|
@@ -191,7 +191,7 @@ Collapsed-state width stays at `3` (per the post-pass-13 fix in CHANGELOG). Expa
 | `FAILED` | `$danger` | `✗ failed` (`$danger`) | partial bar in `$danger` | dim 30 % |
 | `CANCELLED` | `$text-muted` | `⊘ cancelled` (`$text-muted`) | partial bar in `$text-muted` | hidden |
 
-### 7.4. Speed + eta
+### 1.7.4. Speed + eta
 
 - New private `TransferVM._speed_window: collections.deque[tuple[float, int]]` capped at 5 seconds of `(timestamp, bytes_done)` samples (deque maxlen plus timestamp prune on each insert).
 - `apply_update` appends a sample.
@@ -200,20 +200,20 @@ Collapsed-state width stays at `3` (per the post-pass-13 fix in CHANGELOG). Expa
 - Both rendered by `TransferRowWidget` via `humanize_bytes` and an `m:ss` / `mm:ss` / `h:mm:ss` formatter.
 - Tests use a fixture clock (monotonic time injected via constructor) so speed assertions are deterministic.
 
-### 7.5. Empty state
+### 1.7.5. Empty state
 
 `TransfersOverlay` already hides itself via `.-hidden` when there are no visible rows. Unchanged.
 
-## 8. ToastStack + Toast (non-progress toasts)
+## 1.8. ToastStack + Toast (non-progress toasts)
 
 These are theme-change / auth / generic notifications — distinct from the transfers overlay's progress toasts.
 
-### 8.1. Per-toast frame
+### 1.8.1. Per-toast frame
 
 - `border: round $rule-dim`, `background: $bg-elev`, `padding: 0 1`. The current widget has padding but no border, so toasts look like floating text rather than discrete units.
 - `height: auto` (unchanged — toasts grow to fit their text).
 
-### 8.2. Level colors
+### 1.8.2. Level colors
 
 | Level | Border | Title color |
 |---|---|---|
@@ -222,31 +222,31 @@ These are theme-change / auth / generic notifications — distinct from the tran
 | `.-warning` | `$warning` | `$warning` |
 | `.-error` | `$danger` | `$danger` |
 
-### 8.3. Action chip
+### 1.8.3. Action chip
 
 When a toast carries an `action_label` (e.g., `[authenticate]`), it renders as a small inline chip: `color: $accent`, `text-style: bold`. The existing `Toast.render()` already emits this as Rich markup — we keep it there; the chip styling is purely a `color` override in the per-theme `.tcss`.
 
-### 8.4. Stack ordering and lifecycle
+### 1.8.4. Stack ordering and lifecycle
 
 Unchanged. Newest on top, auto-dismiss timers handled by `ToastStackVM` (the fix for which already landed in Pass 2 of the overnight-maintenance loop).
 
-## 9. Snapshot test coverage
+## 1.9. Snapshot test coverage
 
 Three new snapshot apps + tests to cover the surfaces that have zero coverage today, plus refresh of the existing confirm-modal snapshots:
 
-### 9.1. New snapshot apps
+### 1.9.1. New snapshot apps
 
 - `tests/snapshot/apps/theme_picker.py` — composes a real `ThemePickerVM` with cursor on row 4 (`amber`). One test parametrized over all 10 themes → 10 new goldens.
 - `tests/snapshot/apps/transfers.py` — composes a `TransfersVM` with three transfers: one `RUNNING` at 62 %, one `COMPLETED` in linger, one `FAILED`. Parametrized over all 10 themes → 10 new goldens.
 - `tests/snapshot/apps/toast.py` — composes a `ToastStackVM` with one INFO toast (theme-change) plus one ERROR toast (with action chip). Parametrized over all 10 themes → 10 new goldens.
 
-### 9.2. New test files
+### 1.9.2. New test files
 
 - `tests/snapshot/test_theme_picker.py`
 - `tests/snapshot/test_transfers.py`
 - `tests/snapshot/test_toast.py`
 
-### 9.3. Refresh existing snapshots
+### 1.9.3. Refresh existing snapshots
 
 Three existing snapshot groups will need a bulk refresh after the polish lands:
 
@@ -258,13 +258,13 @@ That's 30 refreshed goldens. Five other modal snapshot groups (`command_palette`
 
 Run: `uv run pytest tests/snapshot --snapshot-update`, then visually inspect the diff in `snapshot_report.html` against the design described in this spec.
 
-### 9.4. Net snapshot delta
+### 1.9.4. Net snapshot delta
 
 - **New** goldens: **30** (theme picker × 10 + transfers × 10 + toast × 10).
 - **Refreshed** in-scope goldens: **30** (confirm-copy × 10 + confirm-danger × 10 + main-screen × 10).
 - **Out-of-scope, must not change:** **74** (5 deferred modals × 10 = 50, plus `test_pane_states` = 24).
 
-## 10. Implementation outline (for the implementation plan)
+## 1.10. Implementation outline (for the implementation plan)
 
 Suggested commit chunking. Each chunk is independently green (ruff + mypy + pytest + snapshots).
 
@@ -277,7 +277,7 @@ Suggested commit chunking. Each chunk is independently green (ruff + mypy + pyte
 
 A separate **chunk 0** establishes the snapshot harness scaffolding (or refactors the existing harness to support the three new apps) — the harness pattern is well established under `tests/snapshot/apps/`, so this should be a small step.
 
-## 11. Acceptance criteria
+## 1.11. Acceptance criteria
 
 The PR is acceptable when **all** of the following are true:
 
@@ -291,7 +291,7 @@ The PR is acceptable when **all** of the following are true:
 8. `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`, `uv run mypy src`, `bash scripts/check-layers.sh`, and `uv run pre-commit run --all-files` all pass.
 9. The PR's `CHANGELOG.md [Unreleased] ### Changed` section documents the modal-frame convention and the theme-picker preview behavior; `### Fixed` lists the button-spill, ThemePicker-missing-CSS, and TransfersOverlay-bar-styling resolutions.
 
-## 12. Risks
+## 1.12. Risks
 
 - **Per-theme drift:** 10 themes × ~50 CSS rules touched is real risk surface. Mitigation: every theme has at least one snapshot exercising every new selector; bulk visual diff is the gate.
 - **Custom progress bar:** dropping `textual.widgets.ProgressBar` for a Static-rendered cell sequence means we own the rendering. Cost: ~30 LOC + tests. Benefit: full theme control. Net positive given the "awful" critique today.
@@ -299,7 +299,7 @@ The PR is acceptable when **all** of the following are true:
 - **Live preview flicker:** unlikely (Textual `refresh_css(animate=False)` is sub-frame), but the §5.4 debounce is the bail-out.
 - **Snapshot churn:** every theme gets new + refreshed goldens. Reviewer needs to visually diff. Mitigation: PR description includes before/after composites for one representative theme per family (carbon, amber, voidline, solarized-light) so the reviewer can ratify the design once and accept the rest as derivative.
 
-## 13. References
+## 1.13. References
 
 - Brainstorm session: this spec is the output of the 2026-06-19 brainstorming run; the Option A modal direction, Option C transfers-row layout, and Esc-rollback behavior were each user-chosen in the visual companion.
 - `CHANGELOG.md [Unreleased]` — the source-of-truth for what's already deferred and what's already shipped in v0.7.x.

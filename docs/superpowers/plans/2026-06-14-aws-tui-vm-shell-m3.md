@@ -1,4 +1,4 @@
-# aws-tui M3 (VM shell) Implementation Plan
+# 1. aws-tui M3 (VM shell) Implementation Plan
 
 > **Historical plan — M3 ship date 2026-06-14.** Path references to
 > `vendor/vmx/langs/python/...` inside this document are accurate
@@ -17,7 +17,7 @@
 
 ---
 
-## Task 1: VMx familiarization spike
+## 1.1. Task 1: VMx familiarization spike
 
 **Output:** A short markdown note at `docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md` (gitignored under `notes/`? actually keep it tracked under `docs/`) capturing:
 
@@ -37,7 +37,7 @@ This becomes the contract reference for Tasks 2-9. **No source code in `src/aws_
 
 ---
 
-## Task 2: `vm/messages.py` — custom message envelopes
+## 1.2. Task 2: `vm/messages.py` — custom message envelopes
 
 **Files:**
 - Create: `src/aws_tui/vm/messages.py`
@@ -82,7 +82,7 @@ Layer rule reminder: `vm/messages.py` may import from `aws_tui.infra` (for `Conn
 
 ---
 
-## Task 3: `vm/chrome/toast_vm.py` + `vm/chrome/toast_stack_vm.py`
+## 1.3. Task 3: `vm/chrome/toast_vm.py` + `vm/chrome/toast_stack_vm.py`
 
 **Files:**
 - Create: `src/aws_tui/vm/chrome/__init__.py` (already exists as stub; leave docstring)
@@ -125,7 +125,7 @@ class ToastStackVM(CompositeVM[ToastVM]):
 
 ---
 
-## Task 4: `vm/chrome/status_bar_vm.py`
+## 1.4. Task 4: `vm/chrome/status_bar_vm.py`
 
 **Files:**
 - Create: `src/aws_tui/vm/chrome/status_bar_vm.py`
@@ -159,7 +159,7 @@ Listens for `ConnectionChangedMessage` and `TransferProgressMessage` from the hu
 
 ---
 
-## Task 5: `vm/chrome/hint_legend_vm.py`
+## 1.5. Task 5: `vm/chrome/hint_legend_vm.py`
 
 **Files:**
 - Create: `src/aws_tui/vm/chrome/hint_legend_vm.py`
@@ -189,7 +189,7 @@ class HintLegendVM(ComponentVM[None]):
 
 ---
 
-## Task 6: `vm/chrome/command_palette_vm.py`
+## 1.6. Task 6: `vm/chrome/command_palette_vm.py`
 
 **Files:**
 - Create: `src/aws_tui/vm/chrome/command_palette_vm.py`
@@ -233,7 +233,7 @@ Fuzzy filter: substring-match on `label`, fall back to keywords. Don't pull in `
 
 ---
 
-## Task 7: `vm/chrome/confirm_vm.py` + `vm/chrome/quick_look_vm.py`
+## 1.7. Task 7: `vm/chrome/confirm_vm.py` + `vm/chrome/quick_look_vm.py`
 
 **Files:**
 - Create: `src/aws_tui/vm/chrome/confirm_vm.py`
@@ -283,7 +283,7 @@ class QuickLookVM(ComponentVM[QuickLookContent | None]):
 
 ---
 
-## Task 8: `vm/services_menu_vm.py`
+## 1.8. Task 8: `vm/services_menu_vm.py`
 
 **Files:**
 - Create: `src/aws_tui/services/base.py` — the `Service` protocol (defined here, used by both `services/` and `vm/`)
@@ -342,7 +342,7 @@ class ServiceRegistry:
 
 ---
 
-## Task 9: `vm/root_vm.py` + integration
+## 1.9. Task 9: `vm/root_vm.py` + integration
 
 **Files:**
 - Create: `src/aws_tui/vm/content_host_vm.py`
@@ -401,7 +401,7 @@ class RootVM(AggregateVM3[ServicesMenuVM, ContentHostVM, ChromeVM]):
 
 ---
 
-## Task 10: commit per task + push + tag v0.4.0
+## 1.10. Task 10: commit per task + push + tag v0.4.0
 
 Per-task commits: `feat(vm): <component>`. Final commit bumps CHANGELOG.
 
@@ -411,7 +411,7 @@ Push, watch CI (all jobs green: unit matrix + integration MinIO + lint+type + pk
 
 ---
 
-## Watch-outs (M3-specific) — UPDATED 2026-06-14 after VMx spike
+## 1.11. Watch-outs (M3-specific) — UPDATED 2026-06-14 after VMx spike
 
 - **VMx VMs are NOT subclassable.** They are built via immutable fluent builders. Every "ViewModel" in our M3 plan is a facade class that holds a VMx instance as `self._inner` and forwards lifecycle. See `docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md` §10 for the pattern.
 - **`AggregateVM3.builder()` does NOT exist as a static method.** Use `AggregateVMBuilder3()` constructor directly (or its alias `AggregateVM3Builder()`). All AggregateVMN builders are instantiated, not obtained via a static factory.
