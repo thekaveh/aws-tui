@@ -18,6 +18,7 @@ def _make() -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
     hub: MessageHub[Message] = MessageHub()
     page = EmrServerlessPageVM(
         client=fake,
+        logs_client=fake.make_logs_client(),
         hub=hub,
         dispatcher=NULL_DISPATCHER,
         connection=Connection(

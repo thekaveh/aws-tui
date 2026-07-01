@@ -8,6 +8,7 @@ from __future__ import annotations
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.domain.emr_logs import EmrServerlessLogsClient
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless import service as service_module
 from aws_tui.services.emr_serverless.service import EmrServerlessService
@@ -17,6 +18,7 @@ from aws_tui.vm.services_protocol import ServiceDescriptor
 def test_package_facade_exports_service_contract() -> None:
     from aws_tui.services.emr_serverless import (
         EmrClientFactory,
+        EmrLogsClientFactory,
     )
     from aws_tui.services.emr_serverless import (
         EmrServerlessService as FacadeService,
@@ -24,6 +26,7 @@ def test_package_facade_exports_service_contract() -> None:
 
     assert FacadeService is EmrServerlessService
     assert EmrClientFactory is service_module.EmrClientFactory
+    assert EmrLogsClientFactory is service_module.EmrLogsClientFactory
 
 
 def test_descriptor_icon_is_fire_smp_label_is_emr() -> None:
@@ -64,3 +67,51 @@ def test_does_not_support_s3_compatible_connection() -> None:
             secret_access_key="y",
         )
     )
+
+
+def test_build_vm_threads_explicit_logs_client_factory() -> None:
+    hub: MessageHub[Message] = MessageHub()
+    client = object()
+    logs_client = EmrServerlessLogsClient(
+        session=object(),  # type: ignore[arg-type]
+        region_name="us-east-1",
+    )
+    svc = EmrServerlessService(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        emr_client_factory=lambda _conn: client,
+        emr_logs_client_factory=lambda _conn: logs_client,
+    )
+    page = svc.build_vm(
+        Connection(name="dev", kind="aws", region="us-east-1", source="config", profile="dev")
+    )
+
+    assert page.client is client
+    assert page.job_run_logs._client is logs_client  # type: ignore[attr-defined]
+
+
+def test_build_vm_uses_injected_client_logs_factory() -> None:
+    class _InjectedClient:
+        def __init__(self, logs_client: EmrServerlessLogsClient) -> None:
+            self.logs_client = logs_client
+
+        def make_logs_client(self) -> EmrServerlessLogsClient:
+            return self.logs_client
+
+    hub: MessageHub[Message] = MessageHub()
+    logs_client = EmrServerlessLogsClient(
+        session=object(),  # type: ignore[arg-type]
+        region_name="us-east-1",
+    )
+    client = _InjectedClient(logs_client)
+    svc = EmrServerlessService(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        emr_client_factory=lambda _conn: client,
+    )
+    page = svc.build_vm(
+        Connection(name="dev", kind="aws", region="us-east-1", source="config", profile="dev")
+    )
+
+    assert page.client is client
+    assert page.job_run_logs._client is logs_client  # type: ignore[attr-defined]

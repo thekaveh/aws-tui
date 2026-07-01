@@ -22,7 +22,9 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime
 
+from aws_tui.domain.emr_logs import EmrServerlessLogsClient
 from aws_tui.domain.emr_serverless import (
+    EMR_BOTO_CONFIG,
     ApplicationState,
     ApplicationSummary,
     JobRunDetail,
@@ -65,6 +67,19 @@ class InMemoryEmr:
         # (otherwise asyncio surfaces "Task was destroyed but it is
         # pending" warnings).
         self._state_tasks: set[asyncio.Task[None]] = set()
+
+    def make_logs_client(self) -> EmrServerlessLogsClient:
+        """Build the logs facade paired with this in-memory client.
+
+        Demo/test EMR jobs never fetch real S3 logs, but the page VM
+        still owns a JobRunLogsVM. Returning an explicit facade keeps
+        service composition from reaching into the fake's internals.
+        """
+        return EmrServerlessLogsClient(
+            session=self._session,
+            region_name=self._region_name,
+            boto_config=EMR_BOTO_CONFIG,
+        )
 
     # ── Test seeding ────────────────────────────────────────────────────────
 

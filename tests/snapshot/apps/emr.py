@@ -70,6 +70,7 @@ def _build_page_vm(client: _InMemoryEmr) -> EmrServerlessPageVM:
     hub: MessageHub[Message] = MessageHub()
     page = EmrServerlessPageVM(
         client=client,
+        logs_client=client.make_logs_client(),
         hub=hub,
         dispatcher=NULL_DISPATCHER,
         connection=Connection(

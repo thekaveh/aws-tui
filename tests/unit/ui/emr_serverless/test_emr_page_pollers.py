@@ -45,6 +45,7 @@ def _build_page() -> tuple[EmrServerlessPage, EmrServerlessPageVM, _InMemoryEmr]
     )
     vm = EmrServerlessPageVM(
         client=fake,
+        logs_client=fake.make_logs_client(),
         hub=hub,
         dispatcher=NULL_DISPATCHER,
         connection=conn,

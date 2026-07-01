@@ -15,13 +15,14 @@ host this VM as a singleton (see [[vmx-content-host-singleton-trap]])."""
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import aioboto3
 from vmx import Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import EmrServerlessClient
+from aws_tui.domain.emr_logs import EmrServerlessLogsClient
+from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG, EmrServerlessClient
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.services_protocol import ServiceDescriptor
 
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 #: Test hook — when provided, replaces real ``EmrServerlessClient`` construction
 #: with whatever the factory returns (typically ``_InMemoryEmr``).
 EmrClientFactory = Callable[[Connection], Any]
+EmrLogsClientFactory = Callable[[Connection], EmrServerlessLogsClient]
 
 
 class EmrServerlessService:
@@ -48,6 +50,10 @@ class EmrServerlessService:
         Test hook — when supplied, ``build_vm`` calls this instead
         of constructing a real :class:`EmrServerlessClient`. Lets
         integration tests inject :class:`_InMemoryEmr`.
+    emr_logs_client_factory:
+        Test hook for the S3-backed EMR logs facade. Production code
+        builds this from the connection directly so the page VM never
+        reaches into private attributes on the EMR Serverless client.
     """
 
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
@@ -76,10 +82,12 @@ class EmrServerlessService:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         emr_client_factory: EmrClientFactory | None = None,
+        emr_logs_client_factory: EmrLogsClientFactory | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._client_factory: EmrClientFactory | None = emr_client_factory
+        self._logs_client_factory: EmrLogsClientFactory | None = emr_logs_client_factory
 
     # ── Service protocol ────────────────────────────────────────────────────
 
@@ -98,8 +106,10 @@ class EmrServerlessService:
         from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 
         client = self._make_client(connection)
+        logs_client = self._make_logs_client(connection, client=client)
         return EmrServerlessPageVM(
             client=client,
+            logs_client=logs_client,
             hub=self._hub,
             dispatcher=self._dispatcher,
             connection=connection,
@@ -116,5 +126,23 @@ class EmrServerlessService:
         )
         return EmrServerlessClient(session=session, region_name=connection.region)
 
+    def _make_logs_client(
+        self, connection: Connection, *, client: Any | None = None
+    ) -> EmrServerlessLogsClient:
+        if self._logs_client_factory is not None:
+            return self._logs_client_factory(connection)
+        make_logs_client = getattr(client, "make_logs_client", None)
+        if callable(make_logs_client):
+            return cast("EmrServerlessLogsClient", make_logs_client())
+        session = aioboto3.Session(
+            profile_name=connection.profile,
+            region_name=connection.region,
+        )
+        return EmrServerlessLogsClient(
+            session=session,
+            region_name=connection.region,
+            boto_config=EMR_BOTO_CONFIG,
+        )
 
-__all__ = ["EmrClientFactory", "EmrServerlessService"]
+
+__all__ = ["EmrClientFactory", "EmrLogsClientFactory", "EmrServerlessService"]

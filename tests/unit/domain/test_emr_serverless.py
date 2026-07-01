@@ -135,6 +135,12 @@ def _client_error(code: str, op: str = "ListApplications") -> botocore.exception
         (botocore.exceptions.EndpointConnectionError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ConnectTimeoutError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ReadTimeoutError(endpoint_url="x"), ProviderUnreachableError),
+        (botocore.exceptions.ConnectionClosedError(endpoint_url="x"), ProviderUnreachableError),
+        (
+            botocore.exceptions.ProxyConnectionError(proxy_url="https://proxy.example"),
+            ProviderUnreachableError,
+        ),
+        (botocore.exceptions.SSLError(endpoint_url="x", error="tls"), ProviderUnreachableError),
         (_client_error("AccessDeniedException"), PermissionDeniedError),
         (_client_error("ThrottlingException"), ThrottledError),
         (_client_error("ResourceNotFoundException"), NotFoundError),

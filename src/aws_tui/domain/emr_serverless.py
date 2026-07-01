@@ -157,6 +157,13 @@ _CLIENT_ERROR_CODE_MAP: dict[str, type[ProviderError]] = {
     "ResourceNotFoundException": NotFoundError,
     "ValidationException": ValidationError,
 }
+_TRANSPORT_FAILURE_EXCEPTIONS = (
+    botocore.exceptions.EndpointConnectionError,
+    botocore.exceptions.ConnectTimeoutError,
+    botocore.exceptions.ReadTimeoutError,
+    botocore.exceptions.ConnectionClosedError,
+    botocore.exceptions.ConnectionError,
+)
 
 
 def _map_boto_error(exc: BaseException) -> ProviderError | None:
@@ -173,12 +180,7 @@ def _map_boto_error(exc: BaseException) -> ProviderError | None:
         exc, botocore.exceptions.NoCredentialsError | botocore.exceptions.TokenRetrievalError
     ):
         return AuthRequiredError(str(exc) or "no AWS credentials")
-    if isinstance(
-        exc,
-        botocore.exceptions.EndpointConnectionError
-        | botocore.exceptions.ConnectTimeoutError
-        | botocore.exceptions.ReadTimeoutError,
-    ):
+    if isinstance(exc, _TRANSPORT_FAILURE_EXCEPTIONS):
         return ProviderUnreachableError(str(exc) or "endpoint unreachable")
     if isinstance(exc, botocore.exceptions.ClientError):
         code = exc.response.get("Error", {}).get("Code", "")

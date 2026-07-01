@@ -22,7 +22,7 @@ for _ in $(seq 1 30); do
 done
 
 echo "==> seeding buckets"
-uv run python scripts/test-services/s3/seed.py
+./scripts/run-with-uv.sh python scripts/test-services/s3/seed.py
 
 cat <<EOF
 
@@ -33,7 +33,7 @@ cat <<EOF
 ==> point aws-tui at it by adding the snippet at
        scripts/test-services/s3/config-snippet.toml
     to your <config-dir>/config.toml (see docs/platforms.md), then launch:
-       uv run aws-tui
+       ./scripts/run-with-uv.sh aws-tui
 
 ==> teardown when done:
        scripts/test-services/s3/down.sh           # stop (preserves data)

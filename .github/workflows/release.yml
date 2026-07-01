@@ -137,13 +137,13 @@ jobs:
         run: uv run --python 3.12 pytest tests/e2e -v
 
       - name: export locked requirements
-        run: uv export --frozen --format requirements-txt --no-hashes --output-file "$RUNNER_TEMP/requirements-audit.txt"
+        run: uv export --frozen --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit.txt"
 
       - name: install Python 3.11 for audit
         run: uv python install 3.11
 
       - name: pip-audit (locked dependencies)
-        run: uv run --python 3.11 pip-audit -r "$RUNNER_TEMP/requirements-audit.txt"
+        run: uv run --python 3.11 pip-audit -r "$RUNNER_TEMP/requirements-audit.txt" --require-hashes
 
       - name: pre-commit (all hooks)
         run: uv run --python 3.12 pre-commit run --all-files --show-diff-on-failure

@@ -19,7 +19,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Final
 
-from aws_tui.infra.redaction import redact_mapping
+from aws_tui.infra.redaction import redact_mapping, redact_text
 
 _LOGGER_NAME: Final[str] = "aws_tui"
 _FILE_NAME: Final[str] = "aws-tui.log"
@@ -39,7 +39,7 @@ class _JsonLineFormatter(logging.Formatter):
         payload: dict[str, Any] = {
             "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
-            "event": record.getMessage(),
+            "event": redact_text(record.getMessage()),
         }
         extra = getattr(record, "json_fields", None)
         if isinstance(extra, dict):

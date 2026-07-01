@@ -104,10 +104,10 @@ class CrashDump:
             The unhandled exception.
         log_path:
             Optional path to the JSON-lines log file; up to the last 1000
-            lines are appended verbatim.
+            lines are redacted and appended.
         action_ring:
             Optional iterable of user-action strings; up to the last 100
-            entries are appended verbatim.
+            entries are redacted and appended.
         timestamp:
             Override for the dump's filename timestamp (used by tests).
         """

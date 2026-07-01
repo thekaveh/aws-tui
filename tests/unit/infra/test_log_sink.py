@@ -54,7 +54,8 @@ def test_info_writes_one_json_line(sink: LogSink, tmp_path: Path) -> None:
 
 def test_secret_fields_and_url_credentials_are_redacted(sink: LogSink, tmp_path: Path) -> None:
     sink.warning(
-        "s3.failed",
+        "s3.failed secret_access_key=EVENTSECRET "
+        "https://user:eventpass@example.com/bucket?X-Amz-Signature=eventsig",
         endpoint_url="https://user:pass@example.com/bucket?X-Amz-Signature=abc123",
         secret_access_key="SECRET",
         access_token="TOKEN",
@@ -71,6 +72,9 @@ def test_secret_fields_and_url_credentials_are_redacted(sink: LogSink, tmp_path:
     assert "NESTED" not in raw
     assert "HUNTER2" not in raw
     assert "user:pass" not in raw
+    assert "EVENTSECRET" not in raw
+    assert "user:eventpass" not in raw
+    assert "eventsig" not in raw
     assert "abc123" not in raw
     assert "example.com" in raw
     assert "[REDACTED]" in raw

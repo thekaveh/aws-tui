@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 from unittest.mock import AsyncMock
 
+import botocore.exceptions
 import pytest
 
 from aws_tui.domain.emr_logs import (
@@ -269,8 +270,6 @@ async def test_list_log_files_wraps_no_credentials_error_as_auth_required() -> N
     and the user got "unexpected error: Unable to locate credentials"
     instead of the actionable "authentication required …" placeholder.
     """
-    import botocore.exceptions
-
     from aws_tui.domain.emr_logs import list_log_files
     from aws_tui.domain.filesystem import AuthRequiredError
 
@@ -286,8 +285,6 @@ async def test_list_log_files_wraps_no_credentials_error_as_auth_required() -> N
 
 @pytest.mark.asyncio
 async def test_list_log_files_wraps_endpoint_unreachable() -> None:
-    import botocore.exceptions
-
     from aws_tui.domain.emr_logs import list_log_files
     from aws_tui.domain.filesystem import ProviderUnreachableError
 
@@ -304,9 +301,30 @@ async def test_list_log_files_wraps_endpoint_unreachable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_log_files_wraps_access_denied_client_error() -> None:
-    import botocore.exceptions
+@pytest.mark.parametrize(
+    "exc",
+    [
+        botocore.exceptions.ConnectionClosedError(endpoint_url="https://s3.example/"),
+        botocore.exceptions.ProxyConnectionError(proxy_url="https://proxy.example"),
+        botocore.exceptions.SSLError(endpoint_url="https://s3.example/", error="tls"),
+    ],
+)
+async def test_list_log_files_wraps_transport_failures(exc: BaseException) -> None:
+    from aws_tui.domain.emr_logs import list_log_files
+    from aws_tui.domain.filesystem import ProviderUnreachableError
 
+    session = _RaisingSession(exc)
+    with pytest.raises(ProviderUnreachableError):
+        await list_log_files(  # type: ignore[arg-type]
+            session=session,
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_wraps_access_denied_client_error() -> None:
     from aws_tui.domain.emr_logs import list_log_files
     from aws_tui.domain.filesystem import PermissionDeniedError
 
@@ -344,8 +362,6 @@ async def test_list_log_files_propagates_unknown_non_boto_exception() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_log_wraps_no_credentials_error_as_auth_required() -> None:
-    import botocore.exceptions
-
     from aws_tui.domain.emr_logs import (
         DEFAULT_LOG_FILTER,
         LogFile,
