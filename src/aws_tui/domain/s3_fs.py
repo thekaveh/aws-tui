@@ -693,7 +693,8 @@ _AUTH_HINT: str = (
     "uses an auth path aioboto3 can't read directly. Try:\n"
     "  - `aws sso login --profile <name>` to refresh SSO\n"
     "  - check ~/.aws/config for `credential_process` / `source_profile`\n"
-    "  - export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY explicitly"
+    "  - export AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and, for temporary "
+    "credentials, AWS_SESSION_TOKEN explicitly"
 )
 
 

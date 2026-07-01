@@ -43,10 +43,10 @@ The `credentials` field is dispatched at runtime:
 
 | Spec | Source |
 |---|---|
-| `keychain:<service>` | macOS Keychain via the Python `keyring` library |
-| `env:PREFIX_*` | `${PREFIX_ACCESS_KEY_ID}` + `${PREFIX_SECRET_ACCESS_KEY}` |
-| `aws-profile:<name>` | An existing entry in `~/.aws/credentials` |
-| `static` | Inline `access_key_id` / `secret_access_key` in `config.toml` — startup warning toast |
+| `keychain:<service>` | macOS Keychain via the Python `keyring` library: `access_key_id`, `secret_access_key`, and optional `session_token` accounts |
+| `env:PREFIX_*` | `${PREFIX}_ACCESS_KEY_ID` + `${PREFIX}_SECRET_ACCESS_KEY` + optional `${PREFIX}_SESSION_TOKEN` |
+| `aws-profile:<name>` | An existing entry in `~/.aws/credentials`, including optional `aws_session_token` for temporary credentials |
+| `static` | Inline `access_key_id` / `secret_access_key` / optional `session_token` in `config.toml` — startup warning toast |
 
 Recommended order of preference: `keychain` ▸ `env` ▸ `aws-profile`
 ▸ `static`. The in-TUI Settings form writes a `static` entry; the

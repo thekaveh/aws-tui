@@ -37,6 +37,10 @@ def _matrix_values(workflow_path: str, job: str, key: str) -> list[str]:
     return list(workflow["jobs"][job]["strategy"]["matrix"][key])
 
 
+def _assert_supported_python_loop(run: str) -> None:
+    assert "for py in 3.11 3.12 3.13; do" in run
+
+
 def test_ci_dependency_audit_keeps_locked_hashes() -> None:
     _assert_hashed_audit_pair(".github/workflows/ci.yml", "security")
     assert _matrix_values(".github/workflows/ci.yml", "security", "python") == [
@@ -47,7 +51,17 @@ def test_ci_dependency_audit_keeps_locked_hashes() -> None:
 
 
 def test_release_dependency_audit_keeps_locked_hashes() -> None:
+    workflow = _workflow(".github/workflows/release.yml")
     _assert_hashed_audit_pair(".github/workflows/release.yml", "verify")
+    _assert_supported_python_loop(
+        _step(workflow, "verify", "pytest supported Python matrix")["run"]
+    )
+    export_run = _step(workflow, "verify", "export locked requirements")["run"]
+    audit_run = _step(workflow, "verify", "pip-audit (locked dependencies)")["run"]
+    _assert_supported_python_loop(export_run)
+    _assert_supported_python_loop(audit_run)
+    assert "requirements-audit-$py.txt" in export_run
+    assert "requirements-audit-$py.txt" in audit_run
 
 
 def test_release_smoke_install_covers_supported_python_versions() -> None:

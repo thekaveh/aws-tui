@@ -28,7 +28,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 
 def _default_journal_dir() -> Path:
@@ -172,21 +172,17 @@ class TransferJournal:
     def _append(self, transfer_id: str, record: dict[str, Any]) -> None:
         path = self._path_for(transfer_id)
         line = json.dumps(record, separators=(",", ":"))
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-            # The module docstring promises "fsync semantics are
-            # clearer without async indirection" — deliver them. A
-            # natural file-close flushes stdio buffers but does NOT
-            # force the FS journal/metadata to disk. On power loss
-            # between an ``mark_completed`` write and the OS's
-            # background flush (~30s), the journal would lose the
-            # terminal marker and the resume-modal would replay the
-            # whole transfer on next launch. fsync is the durability
-            # primitive that closes that window. The cost is one
-            # syscall per append; negligible against the network I/O
-            # the surrounding multipart upload pays per part.
-            fh.flush()
-            os.fsync(fh.fileno())
+        if os.name == "posix":
+            with open(
+                path,
+                "a",
+                encoding="utf-8",
+                opener=_private_append_opener,
+            ) as fh:
+                _write_journal_line(fh, line)
+        else:
+            with path.open("a", encoding="utf-8") as fh:
+                _write_journal_line(fh, line)
         if os.name == "posix":
             with contextlib.suppress(OSError, NotImplementedError):
                 path.chmod(0o600)
@@ -258,6 +254,26 @@ def _optional_int(v: object) -> int | None:
 
 class _JournalReplayError(Exception):
     """Raised when a journal file is malformed; caller skips it."""
+
+
+def _private_append_opener(path: str, flags: int) -> int:
+    return os.open(path, flags | os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+
+
+def _write_journal_line(fh: TextIO, line: str) -> None:
+    fh.write(line + "\n")
+    # The module docstring promises "fsync semantics are clearer
+    # without async indirection" — deliver them. A natural file-close
+    # flushes stdio buffers but does NOT force the FS journal/metadata
+    # to disk. On power loss between an ``mark_completed`` write and
+    # the OS's background flush (~30s), the journal would lose the
+    # terminal marker and the resume-modal would replay the whole
+    # transfer on next launch. fsync is the durability primitive that
+    # closes that window. The cost is one syscall per append;
+    # negligible against the network I/O the surrounding multipart
+    # upload pays per part.
+    fh.flush()
+    os.fsync(fh.fileno())
 
 
 __all__ = ["TransferJournal", "TransferJournalEntry"]

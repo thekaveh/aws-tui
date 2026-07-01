@@ -7,7 +7,7 @@ Thanks for your interest. aws-tui is pre-release; the API and config schema may 
 ```bash
 git clone https://github.com/thekaveh/aws-tui.git
 cd aws-tui
-./scripts/bootstrap.sh           # uv sync --frozen + pre-commit hooks
+./scripts/bootstrap.sh           # uv guard, Python 3.11 hook runtime, sync + hooks
 uv run pytest                    # default non-Docker suite
 uv run pytest tests/unit         # unit-only fast path
 uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing

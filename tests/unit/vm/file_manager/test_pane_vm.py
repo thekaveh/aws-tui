@@ -11,6 +11,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import (
+    AuthRequiredError,
     FileEntry,
     NotFoundError,
     PathRef,
@@ -282,6 +283,11 @@ class _ForbiddenFS(_UnreachableFS):
         raise PermissionDeniedError("403")
 
 
+class _AuthRequiredFS(_UnreachableFS):
+    async def list(self, _path: PathRef) -> list[FileEntry]:
+        raise AuthRequiredError("login please")
+
+
 class _ErrorFS(_UnreachableFS):
     async def list(self, _path: PathRef) -> list[FileEntry]:
         raise ProviderError("boom")
@@ -307,6 +313,16 @@ async def test_pane_forbidden_state() -> None:
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.FORBIDDEN
+    pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pane_auth_required_state_from_provider() -> None:
+    pane = PaneVM(provider=_AuthRequiredFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane.construct()
+    await pane.setup()
+    assert pane.state == PaneState.AUTH_REQUIRED
+    assert pane.viewmodel.error_text == "login please"
     pane.dispose()
 
 

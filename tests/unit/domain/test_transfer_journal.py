@@ -138,6 +138,27 @@ def test_journal_file_is_private_on_posix(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_journal_file_is_created_with_private_mode_on_posix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX mode bits are not available on this platform")
+    modes: list[int] = []
+    real_open = os.open
+
+    def recording_open(path: str, flags: int, mode: int = 0o777) -> int:
+        modes.append(mode)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    j = TransferJournal(base_dir=tmp_path)
+
+    j.begin(source_uri="src://a", destination_uri="dst://a")
+
+    assert 0o600 in modes
+
+
 def test_corrupt_file_is_skipped(tmp_path: Path) -> None:
     """A malformed jsonl file should not blow up find_unfinished."""
     (tmp_path / "bogus.jsonl").write_text("not json at all\n", encoding="utf-8")

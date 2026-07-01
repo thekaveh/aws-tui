@@ -189,6 +189,7 @@ class S3ConnectionsPanel(Widget):
             region=existing.region,
             access_key_id=existing.access_key_id or "",
             secret_access_key=existing.secret_access_key or "",
+            session_token=existing.session_token,
             force_path_style=existing.force_path_style,
             verify_tls=existing.verify_tls,
         )

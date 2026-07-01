@@ -26,7 +26,7 @@ aws-tui orchestrates the AWS CLI and the `boto3` credential chain for AWS connec
 
 ### 1.3.1. S3-compatible static credentials are persisted on disk
 
-When a user adds an `s3-compatible` connection with `credentials = "static"` (the default written by the in-TUI add form), the `access_key_id` and `secret_access_key` are persisted **in plaintext** to `<config-dir>/config.toml` (see `docs/platforms.md` for the exact OS path). On POSIX filesystems aws-tui creates the config directory with owner-only permissions and writes the config file through an owner-only temporary file; platforms without POSIX permission bits depend on the OS profile's normal user isolation. For non-throwaway credentials we recommend the `credentials = "keychain:<service>"` source, which delegates secret storage to the OS keychain via the `keyring` library. The static-credentials path emits a launch-time warning toast as a reminder.
+When a user adds an `s3-compatible` connection with `credentials = "static"` (the default written by the in-TUI add form), the `access_key_id`, `secret_access_key`, and optional `session_token` are persisted **in plaintext** to `<config-dir>/config.toml` (see `docs/platforms.md` for the exact OS path). On POSIX filesystems aws-tui creates the config directory with owner-only permissions and writes the config file through an owner-only temporary file; platforms without POSIX permission bits depend on the OS profile's normal user isolation. For non-throwaway credentials we recommend the `credentials = "keychain:<service>"` source, which delegates secret storage to the OS keychain via the `keyring` library. The static-credentials path emits a launch-time warning toast as a reminder.
 
 ### 1.3.2. Crash dumps can contain redacted log content
 

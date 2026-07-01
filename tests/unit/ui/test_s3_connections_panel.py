@@ -32,8 +32,10 @@ def _entry(name: str) -> ConnectionEntry:
         kind="s3-compatible",
         endpoint_url="http://localhost:9000",
         region="us-east-1",
+        credentials="static",
         access_key_id="K",
         secret_access_key="S",
+        session_token="TOK",
         force_path_style=True,
         verify_tls=True,
     )
@@ -124,6 +126,35 @@ async def test_panel_routes_form_submission_to_vm_add(tmp_path: Path) -> None:
             await pilot.pause()
         # After event handling the row must be persisted.
         assert "from-event" in store.load().connections
+    finally:
+        s3_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_edit_preserves_hidden_session_token(tmp_path: Path) -> None:
+    hub = _hub()
+    store = ConfigStore(path=tmp_path / "config.toml")
+    store.add_connection(_entry("sts"))
+    resolver = ConnectionResolver(config_store=store)
+    s3_vm = S3ConnectionsVM(
+        resolver=resolver, config_store=store, hub=hub, dispatcher=NULL_DISPATCHER
+    )
+    s3_vm.construct()
+    panel = S3ConnectionsPanel(vm=s3_vm, hub=hub)
+    app = _PanelHost(panel)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            form = panel.query_one(ConnectionFormInline)
+            panel._on_edit_clicked("sts")
+            submitted = form._form_vm.model
+            assert submitted.session_token == "TOK"
+            panel.post_message(
+                ConnectionFormSubmitted(form=submitted, mode="edit", original_name="sts")
+            )
+            await pilot.pause()
+
+        assert store.load().connections["sts"].session_token == "TOK"
     finally:
         s3_vm.dispose()
 

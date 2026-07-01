@@ -68,7 +68,7 @@ jobs somehow let a bad tag through, this is your last chance to stop.
 After approval the pipeline:
 1. Publishes only after `verify` builds the artifacts and
    `smoke-install` clean-installs the built wheel on macOS, Linux, and
-   Windows.
+   Windows across Python 3.11, 3.12, and 3.13.
 2. Publishes to PyPI via Trusted Publisher (sigstore attestation).
 3. Creates the GitHub Release with the changelog section as body
    and wheel + sdist attached.

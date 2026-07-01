@@ -307,6 +307,13 @@ def test_build_crash_report_writes_redacted_fallback_when_dump_write_fails(
     for leaked in ["SECRETAPI", "SECRETPRIVATE"]:
         assert leaked not in fallback
     assert "[REDACTED]" in fallback
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "log" / "aws-tui.log").read_text(encoding="utf-8").splitlines()
+    ]
+    crash_records = [record for record in records if record["event"] == "crash.captured"]
+    assert len(crash_records) == 1
+    assert crash_records[0]["dump_path"] == str(report.dump_path)
 
 
 def _config_risk_ctx(tmp_path: Path, toml_text: str) -> object:

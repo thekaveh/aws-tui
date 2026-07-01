@@ -89,6 +89,14 @@ class _StubBody:
         return out
 
 
+class _RaisingBody:
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    async def read(self, _n: int) -> bytes:
+        raise self._exc
+
+
 class _StubS3:
     def __init__(self, body: bytes) -> None:
         self.get_object = AsyncMock(return_value={"Body": _StubBody(body)})
@@ -105,6 +113,25 @@ class _StubSession:
         self._stub = stub
 
     def client(self, *_args: object, **_kwargs: object) -> _StubS3:
+        return self._stub
+
+
+class _BodyRaisingS3:
+    def __init__(self, exc: BaseException) -> None:
+        self.get_object = AsyncMock(return_value={"Body": _RaisingBody(exc)})
+
+    async def __aenter__(self) -> _BodyRaisingS3:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class _BodyRaisingSession:
+    def __init__(self, exc: BaseException) -> None:
+        self._stub = _BodyRaisingS3(exc)
+
+    def client(self, *_args: object, **_kwargs: object) -> _BodyRaisingS3:
         return self._stub
 
 
@@ -423,6 +450,34 @@ async def test_stream_log_wraps_transport_failures(exc: BaseException) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_log_wraps_transport_failures_from_body_read() -> None:
+    from aws_tui.domain.emr_logs import (
+        DEFAULT_LOG_FILTER,
+        LogFile,
+        LogFileKind,
+        stream_log,
+    )
+    from aws_tui.domain.filesystem import ProviderUnreachableError
+
+    exc = botocore.exceptions.ConnectionClosedError(endpoint_url="https://s3.example/")
+    session = _BodyRaisingSession(exc)
+    log_file = LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=LogFileKind.DRIVER_STDERR,
+    )
+    with pytest.raises(ProviderUnreachableError):
+        async for _chunk in stream_log(
+            session=session,  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=log_file,
+            bucket="b",
+            max_bytes=1024,
+            filter_=DEFAULT_LOG_FILTER,
+        ):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_stream_log_wraps_access_denied_client_error() -> None:
     from aws_tui.domain.emr_logs import (
         DEFAULT_LOG_FILTER,
@@ -437,6 +492,37 @@ async def test_stream_log_wraps_access_denied_client_error() -> None:
         "GetObject",
     )
     session = _RaisingSession(err)
+    log_file = LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=LogFileKind.DRIVER_STDERR,
+    )
+    with pytest.raises(PermissionDeniedError):
+        async for _chunk in stream_log(
+            session=session,  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=log_file,
+            bucket="b",
+            max_bytes=1024,
+            filter_=DEFAULT_LOG_FILTER,
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_stream_log_wraps_access_denied_from_body_read() -> None:
+    from aws_tui.domain.emr_logs import (
+        DEFAULT_LOG_FILTER,
+        LogFile,
+        LogFileKind,
+        stream_log,
+    )
+    from aws_tui.domain.filesystem import PermissionDeniedError
+
+    err = botocore.exceptions.ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "body read denied"}},
+        "ReadObjectBody",
+    )
+    session = _BodyRaisingSession(err)
     log_file = LogFile(
         key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
         kind=LogFileKind.DRIVER_STDERR,

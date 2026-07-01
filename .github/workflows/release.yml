@@ -301,9 +301,8 @@ jobs:
           BODY: ${{ steps.changelog.outputs.body }}
           TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
         run: |
-          # ``--target`` pins the release to the tag's commit (the
-          # workflow_dispatch path may run from any ref; the tag-push
-          # path is already on the tag commit so it's a no-op there).
+          # ``target_commitish`` pins the REST-created release to the tag's
+          # commit, matching the previous CLI ``--target`` behavior.
           python3 - <<'PY'
           import json
           import mimetypes

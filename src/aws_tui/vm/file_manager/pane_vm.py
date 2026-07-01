@@ -34,6 +34,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import (
+    AuthRequiredError,
     EntryKind,
     FileEntry,
     FileSystemProvider,
@@ -65,8 +66,9 @@ class PaneState(StrEnum):
       root path (treated as an empty bucket / mount point). No
       ``_error_text`` is set on the EMPTY-via-NotFoundError path because
       the user-facing copy is just "empty", not an error.
-    - ``AUTH_REQUIRED`` — Injected externally by ``RootVM`` after it
-      observes an ``AuthExpiredMessage``; never reached from ``_reload``.
+    - ``AUTH_REQUIRED`` — ``AuthRequiredError`` during ``list()``, or
+      injected externally by ``RootVM`` after it observes an
+      ``AuthExpiredMessage``.
     - ``FORBIDDEN`` — ``PermissionDeniedError`` during ``list()``.
     - ``UNREACHABLE`` — ``ProviderUnreachableError`` during ``list()``.
     - ``ERROR`` — Generic ``ProviderError``, OR ``NotFoundError`` on a
@@ -803,6 +805,11 @@ class PaneVM:
                 self._error_text = str(exc) or None
                 self._replace_entries([])
                 self._set_state(PaneState.ERROR)
+            return
+        except AuthRequiredError as exc:
+            self._error_text = str(exc) or None
+            self._replace_entries([])
+            self._set_state(PaneState.AUTH_REQUIRED)
             return
         except PermissionDeniedError as exc:
             self._error_text = str(exc) or None

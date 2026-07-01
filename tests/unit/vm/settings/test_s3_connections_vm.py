@@ -146,6 +146,7 @@ def test_entry_from_form_round_trip(tmp_path: Path) -> None:
         region="r1",
         access_key_id="ak",
         secret_access_key="sk",
+        session_token="tok",
         force_path_style=True,
         verify_tls=False,
     )
@@ -156,6 +157,7 @@ def test_entry_from_form_round_trip(tmp_path: Path) -> None:
     assert entry.region == "r1"
     assert entry.access_key_id == "ak"
     assert entry.secret_access_key == "sk"
+    assert entry.session_token == "tok"
     assert entry.force_path_style is True
     assert entry.verify_tls is False
     vm.dispose()

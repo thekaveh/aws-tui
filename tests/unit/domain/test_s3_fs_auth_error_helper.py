@@ -53,3 +53,4 @@ def test_auth_hint_lists_the_three_recovery_paths() -> None:
     assert "aws sso login" in _AUTH_HINT
     assert "credential_process" in _AUTH_HINT
     assert "AWS_ACCESS_KEY_ID" in _AUTH_HINT
+    assert "AWS_SESSION_TOKEN" in _AUTH_HINT

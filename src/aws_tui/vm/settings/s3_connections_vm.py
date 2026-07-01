@@ -125,6 +125,7 @@ class S3ConnectionsVM:
             credentials="static",
             access_key_id=form.access_key_id,
             secret_access_key=form.secret_access_key,
+            session_token=form.session_token,
             force_path_style=form.force_path_style,
             verify_tls=form.verify_tls,
         )

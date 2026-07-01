@@ -46,6 +46,7 @@ class S3CompatForm:
     region: str
     access_key_id: str
     secret_access_key: str
+    session_token: str | None = None
     force_path_style: bool = True
     verify_tls: bool = True
 
