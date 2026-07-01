@@ -94,3 +94,24 @@ def test_form_is_invalid_when_field_missing() -> None:
         secret_access_key="SECRET",
     )
     assert f.is_valid() is False
+
+
+def test_form_repr_masks_credentials() -> None:
+    f = S3CompatForm(
+        name="minio",
+        endpoint_url="http://localhost:9000",
+        region="us-east-1",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        session_token="TOKEN",
+    )
+
+    rendered = repr(f)
+
+    assert "minio" in rendered
+    assert "AKID" not in rendered
+    assert "SECRET" not in rendered
+    assert "TOKEN" not in rendered
+    assert "access_key_id='***'" in rendered
+    assert "secret_access_key='***'" in rendered
+    assert "session_token='***'" in rendered

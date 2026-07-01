@@ -11,7 +11,7 @@ The modal offers three buttons mapping to :class:`FirstRunAction`:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from textual import on
 from textual.app import ComposeResult
@@ -124,6 +124,7 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
         """
         from aws_tui.composition import add_s3_compat_connection
 
+        ctx: object | None = None
         try:
             # Reach in via ``_app_ctx`` (not the ``app_ctx`` property) so
             # the unit-test harness can mount this modal under a vanilla
@@ -131,8 +132,10 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
             # ``hasattr`` gating would skip the persist step in tests;
             # the test harness explicitly sets the private name to drive
             # the persist path.
-            ctx = self.app._app_ctx  # type: ignore[attr-defined]
-            add_s3_compat_connection(config_store=ctx.config_store, form=event.form)
+            ctx = getattr(self.app, "app_ctx", None) or getattr(self.app, "_app_ctx", None)
+            if ctx is None:
+                raise RuntimeError("app context unavailable")
+            add_s3_compat_connection(config_store=cast("Any", ctx).config_store, form=event.form)
         except Exception as exc:
             # ``clear_submitting()`` re-arms the form's re-entrancy flag so the
             # user can retry after fixing the underlying problem (e.g. freeing
@@ -140,7 +143,7 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
             # after the first failure and the user would be stuck.
             self.query_one(ConnectionFormInline).clear_submitting()
             message = f"Couldn't save connection: {exc}"
-            toast_stack = _toast_stack_from_app_ctx(ctx)
+            toast_stack = _toast_stack_from_app_ctx(ctx) if ctx is not None else None
             if toast_stack is not None:
                 notifications.error(
                     toast_stack,

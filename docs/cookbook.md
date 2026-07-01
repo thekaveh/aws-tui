@@ -87,6 +87,7 @@ form:
 | Region | `us-east-1` |
 | Access key ID | `minioadmin` |
 | Secret access key | `minioadmin` |
+| Session token | Optional; only for temporary credentials |
 
 That writes a `static` entry to `config.toml`. Note: every launch with
 a `static`-credentials connection emits a warning toast, per the

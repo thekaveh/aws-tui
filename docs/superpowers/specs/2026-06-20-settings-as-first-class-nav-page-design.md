@@ -370,8 +370,7 @@ Three changes from PR #52:
 
 ### 1.5.4. `ConnectionFormInline` widget (new)
 
-Lifted from `S3CompatFormModal`'s compose body. Same fields, same live
-validation (`_validate_s3_form_value` reused). Adds:
+Lifted from `S3CompatFormModal`'s compose body. Adds:
 - `open_for_add()` — clears fields, name unlocked, title reads "New
   s3-compatible connection".
 - `open_for_edit(name, defaults)` — pre-fills fields, name locked, title
@@ -379,6 +378,11 @@ validation (`_validate_s3_form_value` reused). Adds:
 - Emits a `ConnectionFormSubmitted(form: S3CompatForm, mode: Literal["add", "edit"], original_name: str | None)` message on Save; emits
   `ConnectionFormCancelled` on Cancel. `S3ConnectionsPanel` subscribes and
   routes to `vm.add(...)` / `vm.update(...)`.
+
+Post-ship amendment: the inline form now includes the optional
+`session_token` field for temporary S3-compatible credentials and composes
+`S3ConnectionFormVM` for live validation. `_validate_s3_form_value` remains as
+legacy test compatibility, not the widget's runtime validation surface.
 
 ### 1.5.5. What's deleted
 

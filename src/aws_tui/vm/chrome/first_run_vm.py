@@ -34,7 +34,7 @@ class FirstRunAction(StrEnum):
     SKIP = "skip"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class S3CompatForm:
     """Inputs collected by the in-TUI s3-compatible form.
 
@@ -49,6 +49,17 @@ class S3CompatForm:
     session_token: str | None = None
     force_path_style: bool = True
     verify_tls: bool = True
+
+    def __repr__(self) -> str:
+        masked_id = "***" if self.access_key_id else None
+        masked_secret = "***" if self.secret_access_key else None
+        masked_token = "***" if self.session_token else None
+        return (
+            f"S3CompatForm(name={self.name!r}, endpoint_url={self.endpoint_url!r}, "
+            f"region={self.region!r}, access_key_id={masked_id!r}, "
+            f"secret_access_key={masked_secret!r}, session_token={masked_token!r}, "
+            f"force_path_style={self.force_path_style!r}, verify_tls={self.verify_tls!r})"
+        )
 
     def is_valid(self) -> bool:
         return all(

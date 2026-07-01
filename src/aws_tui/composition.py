@@ -32,7 +32,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.transfer_journal import TransferJournal, TransferJournalEntry
 from aws_tui.infra.aws_session import AwsSession
-from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
+from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
 from aws_tui.infra.log_sink import LogSink
@@ -49,7 +49,7 @@ from aws_tui.vm.chrome.resume_vm import ResumeAction
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
-from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
+from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM, entry_from_s3_form
 
 _logger = logging.getLogger("aws_tui.composition")
 
@@ -473,19 +473,7 @@ def add_s3_compat_connection(
     form: S3CompatForm,
 ) -> None:
     """Materialize an :class:`S3CompatForm` into a config-store entry."""
-    entry = ConnectionEntry(
-        name=form.name,
-        kind="s3-compatible",
-        region=form.region,
-        endpoint_url=form.endpoint_url,
-        access_key_id=form.access_key_id,
-        secret_access_key=form.secret_access_key,
-        session_token=form.session_token,
-        credentials="static",
-        force_path_style=form.force_path_style,
-        verify_tls=form.verify_tls,
-    )
-    config_store.add_connection(entry)
+    config_store.add_connection(entry_from_s3_form(form))
 
 
 __all__ = [

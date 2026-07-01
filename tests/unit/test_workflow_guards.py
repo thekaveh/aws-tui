@@ -41,15 +41,26 @@ def _assert_supported_python_loop(run: str) -> None:
     assert "for py in 3.11 3.12 3.13; do" in run
 
 
-def _assert_step_run_contains(
+def _executable_lines(run: str) -> list[str]:
+    return [
+        line.strip()
+        for line in run.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+def _assert_step_has_command(
     workflow: dict[str, Any],
     job: str,
     name: str,
+    command_prefix: str,
     *needles: str,
 ) -> None:
     run = _step(workflow, job, name)["run"]
-    for needle in needles:
-        assert needle in run
+    assert any(
+        line.startswith(command_prefix) and all(needle in line for needle in needles)
+        for line in _executable_lines(run)
+    ), f"missing executable {command_prefix!r} line in {job!r} / {name!r}"
 
 
 def test_ci_dependency_audit_keeps_locked_hashes() -> None:
@@ -64,7 +75,7 @@ def test_ci_dependency_audit_keeps_locked_hashes() -> None:
 def test_ci_pytest_tiers_stay_wired() -> None:
     workflow = _workflow(".github/workflows/ci.yml")
 
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "unit",
         "pytest (unit + in-process integration)",
@@ -74,17 +85,19 @@ def test_ci_pytest_tiers_stay_wired() -> None:
         "tests/unit",
         "tests/integration",
     )
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "integration",
         "pytest (integration tier)",
+        "uv run",
         "pytest",
         "-m integration",
     )
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "coverage",
         "pytest coverage (unit + in-process integration)",
+        "uv run",
         "--python 3.12",
         "pytest",
         "tests/unit",
@@ -92,17 +105,19 @@ def test_ci_pytest_tiers_stay_wired() -> None:
         "--cov=aws_tui",
         "--cov-report=xml",
     )
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "snapshot",
         "pytest (snapshot tier)",
+        "uv run",
         "pytest",
         "tests/snapshot",
     )
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "e2e",
         "pytest (e2e tier)",
+        "uv run",
         "pytest",
         "tests/e2e",
     )
@@ -111,7 +126,7 @@ def test_ci_pytest_tiers_stay_wired() -> None:
 def test_integration_marker_is_reserved_for_minio_tier() -> None:
     marked_files = {
         path.relative_to(REPO_ROOT).as_posix()
-        for path in (REPO_ROOT / "tests/integration").glob("*.py")
+        for path in (REPO_ROOT / "tests/integration").rglob("*.py")
         if "pytest.mark.integration" in path.read_text(encoding="utf-8")
     }
 
@@ -138,18 +153,32 @@ def test_release_dependency_audit_keeps_locked_hashes() -> None:
 def test_release_pytest_tiers_stay_wired() -> None:
     workflow = _workflow(".github/workflows/release.yml")
 
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "verify",
         "pytest supported Python matrix",
+        "for py",
         "for py in 3.11 3.12 3.13; do",
+    )
+    _assert_step_has_command(
+        workflow,
+        "verify",
+        "pytest supported Python matrix",
+        "uv sync",
         'uv sync --frozen --python "$py"',
+    )
+    _assert_step_has_command(
+        workflow,
+        "verify",
+        "pytest supported Python matrix",
+        "uv run",
         'uv run --python "$py" pytest tests/unit tests/integration -v',
     )
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "verify",
         "pytest coverage (unit + in-process integration)",
+        "uv run",
         "--python 3.12",
         "pytest",
         "tests/unit",
@@ -157,26 +186,29 @@ def test_release_pytest_tiers_stay_wired() -> None:
         "--cov=aws_tui",
         "--cov-report=xml",
     )
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "verify",
         "pytest (MinIO integration tier)",
+        "uv run",
         "--python 3.12",
         "pytest",
         "-m integration",
     )
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "verify",
         "pytest (snapshot tier)",
+        "uv run",
         "--python 3.12",
         "pytest",
         "tests/snapshot",
     )
-    _assert_step_run_contains(
+    _assert_step_has_command(
         workflow,
         "verify",
         "pytest (e2e tier)",
+        "uv run",
         "--python 3.12",
         "pytest",
         "tests/e2e",

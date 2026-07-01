@@ -565,11 +565,11 @@ will be set at cut time.
   general ``KeyringError`` for the same reason as ``get``.
 - **(third maintenance loop, pass 20)** ``Connection`` dataclass
   now declares ``repr=False`` and ships a custom ``__repr__``
-  that masks ``access_key_id`` and ``secret_access_key``
-  (``"***"`` if present, ``None`` if not). The default dataclass
-  repr inlined every field verbatim — any logger, REPL print,
-  or traceback that surfaced a ``Connection`` instance leaked
-  plaintext credentials. ``eq``, ``hash``, and the ``slots``
+  that masks ``access_key_id``, ``secret_access_key``, and
+  ``session_token`` (``"***"`` if present, ``None`` if not). The
+  default dataclass repr inlined every field verbatim — any logger,
+  REPL print, or traceback that surfaced a ``Connection`` instance
+  leaked plaintext credentials. ``eq``, ``hash``, and the ``slots``
   layout are unchanged.
 - **(third maintenance loop, pass 27)** ``S3FS`` now translates
   the full family of botocore transport-layer failures to

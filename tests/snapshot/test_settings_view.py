@@ -115,3 +115,4 @@ def test_settings_view_form_open_renders_input_labels(theme: str) -> None:
     svg = p.read_text().replace("&#160;", " ")
     assert "Endpoint URL" in svg, f"form label 'Endpoint URL' missing for theme {theme!r}"
     assert "Access key ID" in svg, f"form label 'Access key ID' missing for theme {theme!r}"
+    assert "Session token" in svg, f"form label 'Session token' missing for theme {theme!r}"

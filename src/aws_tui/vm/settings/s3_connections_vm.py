@@ -12,6 +12,29 @@ from aws_tui.vm.chrome.first_run_vm import S3CompatForm
 from aws_tui.vm.messages import ConnectionListChangedMessage
 
 
+def _blank_to_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def entry_from_s3_form(form: S3CompatForm) -> ConnectionEntry:
+    """Convert a filled :class:`S3CompatForm` to a normalized config entry."""
+    return ConnectionEntry(
+        name=form.name.strip(),
+        kind="s3-compatible",
+        region=form.region.strip(),
+        endpoint_url=form.endpoint_url.strip(),
+        credentials="static",
+        access_key_id=form.access_key_id.strip(),
+        secret_access_key=form.secret_access_key.strip(),
+        session_token=_blank_to_none(form.session_token),
+        force_path_style=form.force_path_style,
+        verify_tls=form.verify_tls,
+    )
+
+
 class S3ConnectionsVM:
     """List + CRUD over the s3-compatible subset of TOML connections.
 
@@ -117,18 +140,7 @@ class S3ConnectionsVM:
 
         Keeps infra types out of the UI layer.
         """
-        return ConnectionEntry(
-            name=form.name,
-            kind="s3-compatible",
-            region=form.region,
-            endpoint_url=form.endpoint_url,
-            credentials="static",
-            access_key_id=form.access_key_id,
-            secret_access_key=form.secret_access_key,
-            session_token=form.session_token,
-            force_path_style=form.force_path_style,
-            verify_tls=form.verify_tls,
-        )
+        return entry_from_s3_form(form)
 
 
-__all__ = ["S3ConnectionsVM"]
+__all__ = ["S3ConnectionsVM", "entry_from_s3_form"]

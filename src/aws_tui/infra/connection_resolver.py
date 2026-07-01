@@ -37,8 +37,9 @@ class ConnectionNotFound(Exception):
 class Connection:
     """Fully-resolved connection ready for an :class:`AwsSession`.
 
-    A custom ``__repr__`` redacts ``access_key_id`` and
-    ``secret_access_key`` — the default dataclass repr inlines every
+    A custom ``__repr__`` redacts ``access_key_id``,
+    ``secret_access_key``, and ``session_token`` — the default
+    dataclass repr inlines every
     field verbatim, so an unhandled exception that surfaces a
     ``Connection`` (logger, REPL, traceback) would otherwise leak
     plaintext credentials. ``eq``, ``hash``, and slot layout are
@@ -58,8 +59,8 @@ class Connection:
     verify_tls: bool = True
 
     def __repr__(self) -> str:
-        # Mirror the dataclass-default shape but mask the two secret
-        # fields. ``"***"`` if a value is present, ``None`` otherwise —
+        # Mirror the dataclass-default shape but mask secret fields.
+        # ``"***"`` if a value is present, ``None`` otherwise —
         # the presence/absence is itself useful debugging information
         # and doesn't leak the secret.
         masked_id = "***" if self.access_key_id else None

@@ -161,3 +161,27 @@ def test_entry_from_form_round_trip(tmp_path: Path) -> None:
     assert entry.force_path_style is True
     assert entry.verify_tls is False
     vm.dispose()
+
+
+def test_entry_from_form_normalizes_text_and_blank_session_token(tmp_path: Path) -> None:
+    from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+
+    vm, _, _ = _make_vm(tmp_path)
+    form = S3CompatForm(
+        name=" from-form ",
+        endpoint_url=" http://x:9000 ",
+        region=" r1 ",
+        access_key_id=" ak ",
+        secret_access_key=" sk ",
+        session_token="   ",
+        force_path_style=True,
+        verify_tls=False,
+    )
+    entry = vm.entry_from_form(form)
+    assert entry.name == "from-form"
+    assert entry.endpoint_url == "http://x:9000"
+    assert entry.region == "r1"
+    assert entry.access_key_id == "ak"
+    assert entry.secret_access_key == "sk"
+    assert entry.session_token is None
+    vm.dispose()

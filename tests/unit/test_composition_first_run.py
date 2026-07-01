@@ -76,3 +76,24 @@ def test_add_s3_compat_writes_entry(tmp_path: Path) -> None:
     assert entry.access_key_id == "MINIO_AKID"
     assert entry.session_token == "MINIO_SESSION"
     assert entry.verify_tls is False
+
+
+def test_add_s3_compat_normalizes_form_values(tmp_path: Path) -> None:
+    config_store = ConfigStore(path=tmp_path / "config.toml")
+    form = S3CompatForm(
+        name=" minio-local ",
+        endpoint_url=" http://localhost:9000 ",
+        region=" us-east-1 ",
+        access_key_id=" MINIO_AKID ",
+        secret_access_key=" MINIO_SECRET ",
+        session_token="   ",
+        force_path_style=True,
+        verify_tls=False,
+    )
+    add_s3_compat_connection(config_store=config_store, form=form)
+    entry = config_store.load().connections["minio-local"]
+    assert entry.endpoint_url == "http://localhost:9000"
+    assert entry.region == "us-east-1"
+    assert entry.access_key_id == "MINIO_AKID"
+    assert entry.secret_access_key == "MINIO_SECRET"
+    assert entry.session_token is None
