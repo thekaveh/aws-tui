@@ -612,13 +612,17 @@ For `kind = "s3-compatible"`, the `credentials` field is dispatched:
 
 Explicit entries win on name collision. Auto-discovered entries show an `(auto)` badge in the picker; `: connection materialize <name>` writes a real entry to config.toml.
 
-For each AWS connection, `AwsSession.probe_token(conn)` performs a cheap freshness check **without calling AWS**:
+For each SSO-backed AWS connection, `AwsSession.probe_token(conn)` performs a cheap freshness check **without calling AWS**:
 
 - Resolve the SSO cache filename via `botocore.tokens.SSOTokenLoader`
 - Read `expiresAt`, compare to `datetime.now(timezone.utc)` with 60-second skew buffer
 - Return `connected | expired | missing`
 
-Total cost: one `os.stat` + one ~1 KB JSON read. Sub-millisecond. All connections probed on launch — drives the picker's status column.
+For non-SSO AWS profiles with no `sso_session` / `sso_start_url`, the offline
+probe returns `connected`; live boto calls then validate shared credentials,
+`credential_process`, env, or role-backed credentials. Total cost for SSO
+profiles: one `os.stat` + one ~1 KB JSON read. Sub-millisecond. All
+connections probed on launch — drives the picker's status column.
 
 ### 1.7.4. End-to-end flows
 
@@ -1155,7 +1159,7 @@ Concise list of key decisions and rationale, for future readers.
 | **Capability** | A VMx micro-interface (`ISelectable`, `IFilterable`, `IPageable`, ...) that a VM opts into |
 | **DerivedProperty** | VMx primitive for computed values that auto-recompute when their sources change |
 | **Hint legend** | The dim row at the bottom of the screen showing key bindings relevant to the focused widget |
-| **Connection probe** | Cheap freshness check on the SSO cache file — returns `connected | expired | missing` without calling AWS |
+| **Connection probe** | Cheap freshness check on SSO cache files — returns `connected | expired | missing` without calling AWS; non-SSO AWS profiles return `connected` so live boto credential resolution can decide |
 | **Transfer journal** | Per-transfer `.jsonl` file in `~/.cache/aws-tui/transfers/` that lets us resume across crashes |
 | **Quick Look** | macOS-borrowed term for the modal preview opened by `Space` |
 

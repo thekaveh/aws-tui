@@ -79,6 +79,10 @@ will be set at cut time.
 - **First-run S3-compatible save failures no longer crash the error
   handler.** The modal now uses supported Textual notification kwargs in
   test harnesses and the unified toast taxonomy in production.
+- **Non-SSO AWS profiles reach live boto credential validation.** Shared
+  credentials, `credential_process`, env, and role-backed profiles no
+  longer fall back to local panes as `no AWS credentials` merely because
+  they have no SSO cache key.
 - **S3-compatible credential hardening.** Settings and first-run now share
   normalized form-to-config mapping, blank optional session tokens resolve
   as absent across static/env/keychain/profile sources, and

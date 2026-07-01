@@ -165,15 +165,18 @@ To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 aws-tui                       # launches with the default connection
 ```
 
-If you've run `aws sso login --profile <name>` recently, aws-tui picks
-up the cached token silently (no network round-trip just to render the
-UI). Otherwise the picker shows the connection in `login needed`
-state — the `auth.authenticate` action is spec'd as `a` in
+For SSO-backed profiles, if you've run `aws sso login --profile <name>`
+recently, aws-tui picks up the cached token silently (no network
+round-trip just to render the UI). Otherwise the picker shows the
+connection in `login needed` state — the `auth.authenticate` action is
+spec'd as `a` in
 [`docs/keybindings.md` connection/auth](docs/keybindings.md#116-connection-auth) but its
 runtime wiring is deferred to v0.9 (the `BindingResolver`
 work — see the `Deferred / v0.9 roadmap` block in `CHANGELOG.md`).
 Today, run `aws sso login --profile <name>` in your shell and
-relaunch.
+relaunch. Non-SSO profiles are attempted directly through boto3; debug
+shared credentials, `credential_process`, env, or role-backed profiles
+with `aws sts get-caller-identity --profile <name>`.
 
 If `aws s3 ls` works on your shell but `aws-tui` shows
 `access denied` on the left pane, the most common cause is that

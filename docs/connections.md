@@ -78,7 +78,7 @@ an `(auto)` badge in the picker.
 > the `[connections.<name>]` block to `<config-dir>/config.toml`
 > by hand (the schema is shown in [§1.1](#11-config-schema-config-dirconfigtoml)).
 
-For each AWS connection, `AwsSession.probe_token(conn)` performs a
+For each SSO-backed AWS connection, `AwsSession.probe_token(conn)` performs a
 cheap freshness check **without calling AWS**:
 
 - Resolve the SSO cache filename by mirroring the pinned
@@ -86,6 +86,10 @@ cheap freshness check **without calling AWS**:
 - Read `expiresAt`, compare against now-UTC with a 60-second skew
   buffer.
 - Return `connected | expired | missing`.
+
+For non-SSO AWS profiles with no `sso_session` / `sso_start_url`, the offline
+probe returns `connected`; live boto calls then validate shared credentials,
+`credential_process`, env, or role-backed credentials.
 
 Total cost: one `os.stat` + one ~1 KB JSON read. Sub-millisecond.
 
