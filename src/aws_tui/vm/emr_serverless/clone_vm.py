@@ -53,7 +53,6 @@ class JobRunCloneVM:
     ) -> None:
         self._client = client
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._application_id: str = detail.application_id
         # Pre-populated form state. Tuple for arguments (immutable
         # snapshot the view can render row-per-line); str / None for

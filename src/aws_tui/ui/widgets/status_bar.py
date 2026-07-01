@@ -63,18 +63,28 @@ class StatusBar(HubSubscriberMixin, Widget):
         # _refresh_section. The auth indicator's level class is applied
         # dynamically; the id lets us find the widget regardless of which
         # level class it currently carries.
-        yield Static("aws.tui", id="status-name", classes="status-name")
-        yield Static(self._connection_text(), id="status-conn", classes="status-conn")
-        yield Static(self._region_text(), id="status-region", classes="status-region")
+        # ``markup=False`` on every Static whose text flows from a
+        # user-controlled value (connection name, region from the
+        # config / SSO probe). Even though most won't contain
+        # ``[…]`` today, a future connection named "prod[us-east]"
+        # would crash the persistent status bar and take down the
+        # whole frame. The dev-controlled ones (``"aws.tui"``,
+        # auth/transfers text built from finite enum-derived
+        # phrases) get the guard too for parity.
+        yield Static("aws.tui", id="status-name", classes="status-name", markup=False)
+        yield Static(self._connection_text(), id="status-conn", classes="status-conn", markup=False)
+        yield Static(self._region_text(), id="status-region", classes="status-region", markup=False)
         yield Static(
             self._vm.auth_indicator,
             id="status-auth",
             classes=self._auth_classes(),
+            markup=False,
         )
         yield Static(
             self._vm.transfers_summary,
             id="status-transfers",
             classes="status-transfers",
+            markup=False,
         )
 
     def on_mount(self) -> None:

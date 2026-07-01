@@ -9,7 +9,12 @@ ships the static cadences from spec §6)."""
 from __future__ import annotations
 
 import contextlib
-from typing import ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
+
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+
+if TYPE_CHECKING:
+    from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -90,12 +95,14 @@ class EmrServerlessPage(Widget):
         vm: EmrServerlessPageVM,
         *,
         hub: MessageHub[Message],
+        focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: EmrServerlessPageVM = vm
         self._hub: MessageHub[Message] = hub
+        self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
         self._picker: ApplicationPicker | None = None
         self._left: JobRunsPane | None = None
         self._right_detail: JobRunDetailPane | None = None
@@ -103,12 +110,10 @@ class EmrServerlessPage(Widget):
         self._runs_tick_counter: int = 0
 
     def compose(self) -> ComposeResult:
-        self._picker = ApplicationPicker(self._vm.applications, hub=self._hub, id="emr-app-picker")
-        self._left = JobRunsPane(self._vm.job_runs, hub=self._hub, id="emr-runs-pane")
-        self._right_detail = JobRunDetailPane(
-            self._vm.job_run_detail, hub=self._hub, id="emr-detail-pane"
-        )
-        self._right_logs = JobRunLogsPane(self._vm.job_run_logs, hub=self._hub, id="emr-logs-pane")
+        self._picker = ApplicationPicker(self._vm.applications, id="emr-app-picker")
+        self._left = JobRunsPane(self._vm.job_runs, id="emr-runs-pane")
+        self._right_detail = JobRunDetailPane(self._vm.job_run_detail, id="emr-detail-pane")
+        self._right_logs = JobRunLogsPane(self._vm.job_run_logs, id="emr-logs-pane")
         # Page layout — 1fr:2fr horizontal split with LEFT column
         # containing the picker + runs pane, and RIGHT column
         # containing detail (top, 1fr) + logs (bottom, 1fr) in a
@@ -185,21 +190,32 @@ class EmrServerlessPage(Widget):
     def _maybe_focus_left(self) -> None:
         """Auto-focus the LEFT pane on initial page mount UNLESS a
         widget outside this page (typically the NavMenu rail) already
-        owns Textual focus. Mounting is async — when NavMenu's
-        ``_after_cursor_move`` triggers a service swap, the new page's
-        ``on_mount`` fires SEVERAL refreshes later, well after NavMenu's
-        own ``call_after_refresh(self.focus)`` has run. So NavMenu can't
-        win the focus race from its end; the courtesy has to come from
-        the page side. ``has_focus_within`` is true only when something
-        inside this page already holds focus (first-time mount when the
-        user opened the app directly into EMR, or a re-mount that came
-        from inside this page). All other cases mean the user is
-        elsewhere — leave them alone.
+        owns Textual focus.
+
+        Round-3 directive §9.bis.11 / PR #99(a) closure: when a
+        :class:`FocusCoordinatorVM` is wired, the rail-walk gate
+        reads from `focused_slot == NAV_MENU` AND requires Textual
+        focus to actually exist on the rail — the coordinator's
+        VM-owned slot becomes the authoritative answer to "is the
+        user arrow-walking the menu?". When no coordinator is
+        wired, or when Textual focus is unset (programmatic
+        service-switch in tests), the legacy "focus left when
+        nothing else holds focus" semantics still apply.
         """
         if self._left is None:
             return
-        focused = self.app.focused
-        if focused is None or self.has_focus_within:
+        textual_focused = self.app.focused
+        if (
+            self._focus_coordinator is not None
+            and textual_focused is not None
+            and not self.has_focus_within
+        ):
+            slot = self._focus_coordinator.focused_slot
+            if slot is FocusSlot.NAV_MENU:
+                # Rail-walk in progress: VM-owned slot agrees AND
+                # Textual focus is on the rail. Leave it alone.
+                return
+        if textual_focused is None or self.has_focus_within:
             self._left.focus()
 
     # ── Public accessors ────────────────────────────────────────────────────
@@ -320,18 +336,23 @@ class EmrServerlessPage(Widget):
         )
         clone_vm.construct()
         modal = JobRunCloneModal(clone_vm, hub=self._hub)
+        # Unified try/finally so cancellation (CancelledError is a
+        # BaseException, NOT an Exception) disposes the VM too.
+        # Previously the outer try caught only Exception, so an
+        # asyncio cancel during push_screen_wait would skip both
+        # the dispose AND the second try/finally — leaking the
+        # clone_vm's inner VMx component + hub subscriptions +
+        # commands. Mirrors s3_connections_panel._do_delete's
+        # try/finally pattern.
         try:
-            new_id = await self.app.push_screen_wait(modal)
-        except Exception as exc:
-            # The modal raised after dismiss (extremely rare — e.g.
-            # the test harness disposed the app mid-flight). Don't
-            # crash the page; surface an advisory toast so the user
-            # learns the action didn't land instead of silently
-            # losing the click.
-            clone_vm.dispose()
-            self._post_advisory_toast("Job", f"clone aborted ({exc})")
-            return
-        try:
+            try:
+                new_id = await self.app.push_screen_wait(modal)
+            except Exception as exc:
+                # The modal raised after dismiss (extremely rare —
+                # e.g. the test harness disposed the app mid-flight).
+                # Surface an advisory toast and bail.
+                self._post_advisory_toast("Job", f"clone aborted ({exc})")
+                return
             if new_id is None:
                 # User cancelled — silent (Cancel is intentional UX,
                 # not an error to advertise).
@@ -414,13 +435,25 @@ class EmrServerlessPage(Widget):
                 self._focus_nav_menu()
                 return
         slots[next_idx].focus()
+        # Project the new slot through the coordinator so the
+        # ``-rail-active`` Screen class set by NavMenu.on_focus
+        # clears — without this, the per-theme ``.-rail-active
+        # Pane.-focused`` rule keeps the EMR panes' focused
+        # border dim instead of accent-highlighted. Sibling to
+        # DualPane's _sync_focus projection.
+        if self._focus_coordinator is not None:
+            slot_to_project = (FocusSlot.EMR_RUNS, FocusSlot.EMR_DETAIL, FocusSlot.EMR_LOGS)[
+                next_idx
+            ]
+            self._focus_coordinator.set_focused_slot(slot_to_project)
 
     def _focus_nav_menu(self) -> None:
         """Hand focus back to the App-level NavMenu. The App
         provides ``_focus_active_nav_list`` which lands focus on
-        the OptionList that owns the currently-selected service —
-        we reuse that helper so the EMR page doesn't need to know
-        which OptionList is "active"."""
+        the NavMenu rail widget directly — post-PR-#94 there is
+        no internal OptionList; the rail itself is the focusable
+        widget. The helper name is kept for back-compat with the
+        App and EMR-page call sites."""
         from aws_tui.ui.widgets.nav_menu import NavMenu
 
         with contextlib.suppress(Exception):
@@ -435,17 +468,15 @@ class EmrServerlessPage(Widget):
         )
 
     def on_job_runs_pane_refresh_requested(self, _event: JobRunsPane.RefreshRequested) -> None:
-        # Use the same group as the runs poller (``_tick_runs`` above
-        # at line 246) so a manual ``r`` press while the periodic
-        # poller is mid-flight is silently dropped by Textual rather
-        # than allowed to race the poller's worker. Both end up
-        # calling ``job_runs.refresh()``, which mutates the same
-        # ``_runs_cache`` / ``_next_token`` / ``_selected_id`` and
-        # fires the same ``runs`` PropertyChangedMessage — two
-        # concurrent calls produced a double UI redraw and an extra
-        # ``list_job_runs`` round-trip per overlap. The clone-success
-        # refresh at line 345 already uses ``emr-poll-runs`` for the
-        # same reason; this aligns the manual ``r`` path with it.
+        # Use the same ``emr-poll-runs`` group as ``_tick_runs`` and the
+        # clone-success refresh in ``action_clone_selected_run`` so a
+        # manual ``r`` press while the periodic poller is mid-flight is
+        # silently dropped by Textual rather than allowed to race the
+        # poller's worker. Both end up calling ``job_runs.refresh()``,
+        # which mutates the same VM state and fires the same ``runs``
+        # PropertyChangedMessage — two concurrent calls produced a
+        # double UI redraw and an extra ``list_job_runs`` round-trip
+        # per overlap.
         self.run_worker(self._vm.refresh_focused("runs"), exclusive=True, group="emr-poll-runs")
 
     def on_job_runs_pane_load_more_requested(self, _event: JobRunsPane.LoadMoreRequested) -> None:

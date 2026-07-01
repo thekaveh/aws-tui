@@ -39,9 +39,16 @@ def _filename_for(ts: datetime) -> str:
     """Return the filename for a crash dump created at ``ts``.
 
     Colons would render as drive separators on a few corner-case
-    filesystems, so we use ``YYYY-MM-DDTHH-MM-SS`` (no ``:``).
+    filesystems, so we use ``YYYY-MM-DDTHH-MM-SS-<microseconds>``
+    (no ``:``). Microseconds suffix prevents a second crash within
+    the same wall-clock second from silently overwriting the
+    root-cause dump — Textual can dispatch ``_handle_exception``
+    for multiple failing workers in close succession during
+    teardown (a master crash followed within ms by a dependent
+    shutdown task raising), and ``Path.write_text`` is overwrite
+    mode.
     """
-    return ts.strftime("%Y-%m-%dT%H-%M-%S") + ".txt"
+    return ts.strftime("%Y-%m-%dT%H-%M-%S-%f") + ".txt"
 
 
 def _short_traceback(tb_lines: list[str], *, max_lines: int = 5) -> str:

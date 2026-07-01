@@ -95,6 +95,14 @@ class ToastStackVM:
             return
         self._disposed = True
         self._cancel_all_timers()
+        # Inner CompositeVM cascades through its ComponentVMOf
+        # children but NOT through the wrapping ToastVM facades —
+        # each facade owns a RelayCommand (``_dismiss_command``)
+        # that must be disposed via ToastVM.dispose(). Mirror the
+        # sibling pattern used by TransfersVM and ThemePickerVM.
+        for toast in self._toasts:
+            toast.dispose()
+        self._toasts.clear()
         self._inner.dispose()
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -202,6 +210,24 @@ class ToastStackVM:
             prev.cancel()
         task = loop.create_task(_run(), name=f"toast-auto-dismiss-{toast.model.id}")
         self._timers[toast.model.id] = task
+        # Drain exceptions so a raise inside the dismiss chain
+        # (e.g. _on_toast_dismissed → _inner.remove on an already-
+        # torn-down composite, or toast.dispose() raising under a
+        # racing dispose) doesn't get silently lost to asyncio's
+        # "Task exception was never retrieved" warning. Same shield
+        # round-36 added to CommandPaletteVM. Also pops from
+        # _timers on raise — the success path's
+        # _on_toast_dismissed already does, but a raise short-
+        # circuits before _on_toast_dismissed.pop runs.
+        task.add_done_callback(self._on_auto_dismiss_done)
+
+    def _on_auto_dismiss_done(self, task: asyncio.Task[None]) -> None:
+        toast_id = task.get_name().removeprefix("toast-auto-dismiss-")
+        if self._timers.get(toast_id) is task:
+            self._timers.pop(toast_id, None)
+        if task.cancelled():
+            return
+        _ = task.exception()
 
     def _cancel_all_timers(self) -> None:
         for task in list(self._timers.values()):

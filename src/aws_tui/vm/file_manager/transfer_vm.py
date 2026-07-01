@@ -53,7 +53,6 @@ class TransferVM:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._clock: Callable[[], float] = clock
         self._speed_window: deque[tuple[float, int]] = deque()
 

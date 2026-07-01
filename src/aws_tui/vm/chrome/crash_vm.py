@@ -113,7 +113,6 @@ class CrashVM:
         dispatcher: Dispatcher,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
 
         self._report: CrashReport = report
         self._is_open: bool = False

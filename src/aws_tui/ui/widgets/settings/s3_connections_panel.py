@@ -79,9 +79,13 @@ class S3ConnectionsPanel(Widget):
         super().__init__()
         self._vm: S3ConnectionsVM = vm
         self._hub: MessageHub[Message] = hub
-        # Cache the row count so we can detect "transitioned to/from
-        # empty" without rebuilding identically.
-        self._last_row_count: int = -1
+        # Index-keyed map from row id slug to connection name. The
+        # name itself can't go into the widget id because Textual
+        # validates against ``^[a-zA-Z_-][a-zA-Z0-9_-]*$`` and would
+        # raise ``BadIdentifier`` on a config.toml-loaded name
+        # containing ``[``, ``.``, whitespace, or any non-ASCII
+        # character. Rebuilt on every render in ``_render_children``.
+        self._id_to_name: dict[str, str] = {}
 
     @property
     def vm(self) -> S3ConnectionsVM:
@@ -97,7 +101,6 @@ class S3ConnectionsPanel(Widget):
         Safe to call OUTSIDE compose() (no context-manager state required).
         """
         conns = self._vm.connections
-        self._last_row_count = len(conns)
         if not conns:
             return [
                 Vertical(
@@ -111,17 +114,32 @@ class S3ConnectionsPanel(Widget):
                 )
             ]
         children: list[Widget] = []
-        for c in conns:
+        # Rebuild the id → name map. Use index-based slugs because
+        # connection names can come from a config.toml that allows
+        # quoted bracketed keys (``[connections."minio[v2]"]``) or
+        # any other character Textual's ``^[a-zA-Z_-][a-zA-Z0-9_-]*$``
+        # widget-id grammar rejects. Without this the Settings page
+        # crashes on mount before the user can even see the row to
+        # repair the bad name.
+        self._id_to_name = {}
+        for idx, c in enumerate(conns):
+            self._id_to_name[str(idx)] = c.name
+            # ``markup=False`` on every user-controlled field. The
+            # connection-form validator gates ``c.name`` against
+            # ``[A-Za-z0-9_-]{1,32}`` so brackets are blocked there,
+            # but ``endpoint_url`` and ``region`` are not similarly
+            # restricted, and ``c.name`` itself can arrive from a
+            # hand-edited config.toml. Defensive guard.
             children.append(
                 Horizontal(
                     _RowAccent("▎", classes="row-accent"),
-                    Static(c.name, classes="row-name"),
-                    Static(c.endpoint_url or "", classes="row-endpoint"),
-                    Static(c.region, classes="row-region"),
-                    _ChipEdit("✎", id=f"edit-{c.name}", classes="row-chip-edit"),
-                    _ChipDelete("✕", id=f"delete-{c.name}", classes="row-chip-delete"),
+                    Static(c.name, classes="row-name", markup=False),
+                    Static(c.endpoint_url or "", classes="row-endpoint", markup=False),
+                    Static(c.region, classes="row-region", markup=False),
+                    _ChipEdit("✎", id=f"edit-{idx}", classes="row-chip-edit"),
+                    _ChipDelete("✕", id=f"delete-{idx}", classes="row-chip-delete"),
                     classes="connection-row",
-                    id=f"row-{c.name}",
+                    id=f"row-{idx}",
                 )
             )
         children.append(_AddButton("+ Add s3-compatible connection", id="add-populated"))
@@ -151,7 +169,14 @@ class S3ConnectionsPanel(Widget):
     def _on_edit(self, event: Button.Pressed) -> None:
         event.stop()
         btn_id = event.button.id or ""
-        name = btn_id.removeprefix("edit-")
+        slug = btn_id.removeprefix("edit-")
+        # Map back through ``_id_to_name`` because the button id is
+        # an index slug (Textual widget-id grammar rejects names
+        # containing brackets / dots / whitespace, so we can't
+        # round-trip the name through the id).
+        name = self._id_to_name.get(slug)
+        if name is None:
+            return
         self._on_edit_clicked(name)
 
     def _on_edit_clicked(self, name: str) -> None:
@@ -174,7 +199,11 @@ class S3ConnectionsPanel(Widget):
     def _on_delete(self, event: Button.Pressed) -> None:
         event.stop()
         btn_id = event.button.id or ""
-        name = btn_id.removeprefix("delete-")
+        slug = btn_id.removeprefix("delete-")
+        # Same id-slug → name mapping as the edit handler.
+        name = self._id_to_name.get(slug)
+        if name is None:
+            return
         self._do_delete(name)
 
     @work(exclusive=True, group="s3-connections-delete")
@@ -263,6 +292,9 @@ class S3ConnectionsPanel(Widget):
                 # or anything else from ConfigStore.save(). Keep the form
                 # open so the user doesn't lose their entered values; surface
                 # the error so they understand why it didn't save.
+                # ``clear_submitting()`` re-arms the re-entrancy flag so the
+                # user can retry after fixing the underlying problem.
+                form.clear_submitting()
                 self._surface_error_toast(
                     f"Could not save {event.form.name!r}: {exc}",
                     toast_id=f"add-error-{event.form.name}",
@@ -273,6 +305,7 @@ class S3ConnectionsPanel(Widget):
             try:
                 self._vm.update(event.original_name, entry)
             except Exception as exc:
+                form.clear_submitting()
                 self._surface_error_toast(
                     f"Could not save {event.form.name!r}: {exc}",
                     toast_id=f"edit-error-{event.form.name}",

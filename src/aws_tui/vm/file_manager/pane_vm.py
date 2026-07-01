@@ -43,6 +43,7 @@ from aws_tui.domain.filesystem import (
     ProviderError,
     ProviderUnreachableError,
 )
+from aws_tui.vm._composition import FilteredCompositeVM
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
 
 #: Module-level singleton for the default initial path (root).
@@ -208,7 +209,13 @@ class PaneVM:
 
         self._entries: list[EntryVM] = []
         self._filtered: tuple[int, ...] = ()  # indices into self._entries
-        self._cursor_index: int = 0
+        # Round-3 directive §9.bis.11: the cursor index is NO LONGER
+        # a stored field. It's a property that resolves to the
+        # ``_inner`` composite's ``current`` slot — the VM-owned
+        # canonical cursor. Reads derive the position of the current
+        # entry in ``_filtered``; writes set the composite's current
+        # to ``_entries[_filtered[N]].inner``. See ``_cursor_index``
+        # property below.
         self._filter_text: str = ""
         self._state: PaneState = PaneState.IDLE
         self._error_text: str | None = None
@@ -222,6 +229,23 @@ class PaneVM:
             .children(self._initial_children)
             .auto_construct_on_add(True)
             .build()
+        )
+        # Round-3 composition (spec §9.bis.11 / §9.bis.3): the
+        # FilteredCompositeVM IS the source of truth for "which
+        # entries are visible". Its ``visible`` projection drives
+        # ``_filtered`` re-derivation through the ``on_changed``
+        # subscription wired below; we don't index it manually
+        # except inside that subscription. The composite is NOT
+        # exposed in the public surface.
+        self._filtered_composite: FilteredCompositeVM[ComponentVMOf[EntryState]] = (
+            FilteredCompositeVM(self._inner, predicate=self._filter_predicate)
+        )
+        # Single source of truth: subscription re-derives ``_filtered``
+        # whenever the composite's visible set changes (predicate or
+        # source mutation). Pre-computed once below so the field is
+        # populated before any read.
+        self._filter_sub = self._filtered_composite.on_changed.subscribe(
+            on_next=lambda _: self._sync_filtered_from_composite()
         )
 
         # ── Commands ────────────────────────────────────────────────────────
@@ -311,6 +335,57 @@ class PaneVM:
     @property
     def cursor_index(self) -> int:
         return self._cursor_index
+
+    @property
+    def _cursor_index(self) -> int:
+        """Derived cursor position over ``_inner.current``.
+
+        Round-3 directive §9.bis.11 (commit follow-up): the cursor's
+        canonical source of truth is the inner composite's
+        ``current`` slot. The position returned here is the index
+        of that current entry within ``_filtered`` (the visible
+        subset). When nothing is selected — or when the current
+        item is filtered out — returns 0 (the leading row, matching
+        the prior field's default after a reset).
+        """
+        current = self._inner.current
+        if current is None:
+            return 0
+        # Locate the EntryVM whose inner IS the composite's current,
+        # then map its entry index to its filtered position.
+        for entry_idx, entry in enumerate(self._entries):
+            if entry.inner is current:
+                try:
+                    return self._filtered.index(entry_idx)
+                except ValueError:
+                    return 0
+        return 0
+
+    @_cursor_index.setter
+    def _cursor_index(self, value: int) -> None:
+        """Set the composite's ``current`` slot from a filtered-
+        position write.
+
+        Round-3 bridge: the legacy field-assignment idiom
+        (``self._cursor_index = N``) routes here. Empty filter
+        means there's no row to point at — clears ``current``.
+        Otherwise clamps ``value`` to ``[0, len(_filtered) - 1]``
+        and promotes the corresponding entry to ``current``.
+
+        Idempotent: a no-op when the resolved target equals the
+        existing ``current``. This preserves the "skip notify when
+        cursor didn't move" semantic the prior field-based code
+        relied on at line ``_move_cursor``.
+        """
+        if not self._filtered:
+            if self._inner.current is not None:
+                self._inner.current = None
+            return
+        clamped = max(0, min(value, len(self._filtered) - 1))
+        entry_idx = self._filtered[clamped]
+        target_inner = self._entries[entry_idx].inner
+        if self._inner.current is not target_inner:
+            self._inner.current = target_inner
 
     @property
     def filter_text(self) -> str:
@@ -486,6 +561,13 @@ class PaneVM:
         self._select_all_command.dispose()
         self._clear_selection_command.dispose()
         self._set_filter_command.dispose()
+        # Dispose the FilteredCompositeVM before the inner composite —
+        # the filter has a live subscription to inner's
+        # on_collection_changed that must unwind first. Drop our
+        # ``on_changed`` subscriber first to keep the teardown order
+        # explicit.
+        self._filter_sub.dispose()
+        self._filtered_composite.dispose()
         for child in self._entries:
             child.dispose()
         self._entries.clear()
@@ -633,7 +715,17 @@ class PaneVM:
         reload, leaving the pane showing all M entries as marked
         with the first ``N-1`` already gone — UI / storage drift
         with zero diagnostic. The ``finally`` reload is guaranteed
-        so the user always sees the post-deletion truth."""
+        so the user always sees the post-deletion truth.
+
+        NOTE on outer-worker cancellation: if the caller's worker is
+        cancelled, the inline await below raises CancelledError at
+        the first internal await (after ``_reload`` synchronously
+        flipped state to LOADING), and the pane is briefly stranded
+        on LOADING. This is the documented trade-off for the
+        synchronous post-condition; tests + UI callers depend on
+        ``await delete_marked()`` returning AFTER the reload has
+        repopulated entries. ``r`` re-runs the reload manually on
+        the rare cancel-mid-finally path."""
         targets = [e.entry.name for e in self._entries if e.is_marked]
         if not targets:
             return
@@ -681,6 +773,15 @@ class PaneVM:
     # ── Internal: listing & state ───────────────────────────────────────────
 
     async def _reload(self) -> None:
+        # Clear the prior error text BEFORE entering LOADING so a
+        # retry after a prior failure doesn't render the LOADING
+        # placeholder as ``"loading...: <stale error>"`` (see
+        # ``_placeholder_for_current_state`` which appends
+        # ``_error_text`` to every non-IDLE placeholder). The
+        # error-recovery branches below re-populate it from the
+        # fresh exception; the success path drops it explicitly
+        # at the end of the method.
+        self._error_text = None
         self._set_state(PaneState.LOADING)
         try:
             raw = await self._provider.list(self._path)
@@ -712,6 +813,17 @@ class PaneVM:
             return
         except ProviderError as exc:
             self._error_text = str(exc) or None
+            self._replace_entries([])
+            self._set_state(PaneState.ERROR)
+            return
+        except Exception as exc:  # defensive
+            # Non-ProviderError escape — a programmer bug, an
+            # OSError from the socket layer, or any other exception
+            # not modelled by the provider taxonomy. Without this
+            # net the worker exception is swallowed by Textual's
+            # ``run_worker`` machinery and the pane is permanently
+            # stuck on LOADING with no user path to recovery.
+            self._error_text = f"unexpected error: {exc}"
             self._replace_entries([])
             self._set_state(PaneState.ERROR)
             return
@@ -751,8 +863,17 @@ class PaneVM:
             if self._inner.is_constructed:
                 child.construct()
             self._inner.append(child.inner)
-        self._cursor_index = 0
+        # ORDER MATTERS: ``_recompute_filtered()`` MUST run before
+        # ``self._cursor_index = 0`` because the setter reads
+        # ``self._filtered`` to map filtered-position → entry inner.
+        # ``self._filtered`` still holds indices into the OLD
+        # entries list at this point; if the new ``_entries`` is
+        # shorter than ``max(_filtered) + 1`` the setter dereferences
+        # past the end and raises IndexError. (E.g. filter narrows
+        # to row 5 of 10, then refresh returns 3 entries.) Sibling
+        # call site ``_set_filter_text`` already has this ordering.
         self._recompute_filtered()
+        self._cursor_index = 0
         self._sync_cursor_selection()
         self._notify("entries")
         self._notify("viewmodel")
@@ -844,15 +965,40 @@ class PaneVM:
         self._sync_cursor_selection()
         self._notify("viewmodel")
 
-    def _recompute_filtered(self) -> None:
+    def _filter_predicate(self, inner: ComponentVMOf[EntryState]) -> bool:
+        """Predicate used by the inner :class:`FilteredCompositeVM`.
+
+        Mirrors the substring-match semantics ``_recompute_filtered``
+        used pre-round-3: an empty filter accepts all rows, a non-empty
+        filter matches against ``inner.model.entry.name`` via
+        ``_filter_matches``.
+        """
         if not self._filter_text:
-            self._filtered = tuple(range(len(self._entries)))
+            return True
+        return _filter_matches(inner.model.entry.name, self._filter_text)
+
+    def _recompute_filtered(self) -> None:
+        # Single source of truth: nudge the FilteredCompositeVM; its
+        # ``on_changed`` subscription wired in __init__ re-derives
+        # ``_filtered`` via _sync_filtered_from_composite. Pass a
+        # FRESH closure each call because set_predicate is
+        # identity-checked on the predicate object — passing the
+        # bound method (always the same identity) would silently
+        # no-op when the filter_text changes. The fresh closure
+        # guarantees ``set_predicate`` always fires ``on_changed``,
+        # so no follow-up sync is needed.
+        def _live_predicate(inner: ComponentVMOf[EntryState]) -> bool:
+            return self._filter_predicate(inner)
+
+        self._filtered_composite.set_predicate(_live_predicate)
+
+    def _sync_filtered_from_composite(self) -> None:
+        """Re-derive ``_filtered`` from the composite's visible set."""
+        visible_set = set(self._filtered_composite.visible)
+        if not visible_set:
+            self._filtered = ()
             return
-        self._filtered = tuple(
-            i
-            for i, e in enumerate(self._entries)
-            if _filter_matches(e.entry.name, self._filter_text)
-        )
+        self._filtered = tuple(i for i, e in enumerate(self._entries) if e.inner in visible_set)
 
     # ── Command bridges (sync triggers that delegate to async work) ────────
 

@@ -38,7 +38,6 @@ class ContentHostVM:
         dispatcher: Dispatcher,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
 
         self._current: Any | None = None
         self._current_id: str | None = None
@@ -156,6 +155,19 @@ class ContentHostVM:
                         self._run_setup(result),
                         name=f"content-host-setup-{service_id}",
                     )
+                    # Drain exceptions so a non-cancel raise from the
+                    # awaitable (NoCredentialsError, ProviderError,
+                    # botocore client error, programmer bug) doesn't
+                    # silently log "Task exception was never
+                    # retrieved" to stderr — invisible in a TUI.
+                    # Same R36 / R37 shield pattern as
+                    # CommandPaletteVM._spawn_awaitable and
+                    # ToastStackVM auto-dismiss. Without this the
+                    # task finishes with a non-cancel exception,
+                    # _cancel_pending_setup short-circuits at
+                    # task.done() and drops the reference, and
+                    # asyncio's GC emits the warning.
+                    self._setup_task.add_done_callback(self._on_setup_done)
 
     async def _run_setup(self, awaitable: Any) -> None:
         """Drive ``setup``'s awaitable; swallow cancellation cleanly.
@@ -183,6 +195,16 @@ class ContentHostVM:
         if task is None or task.done():
             return
         task.cancel()
+
+    def _on_setup_done(self, task: asyncio.Task[None]) -> None:
+        """Done-callback drain — see add_done_callback site for
+        rationale. Pops the task reference if it's still the current
+        one (a later set_content may have already replaced it)."""
+        if self._setup_task is task:
+            self._setup_task = None
+        if task.cancelled():
+            return
+        _ = task.exception()
 
 
 __all__ = ["ContentHostVM"]

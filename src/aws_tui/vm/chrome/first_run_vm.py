@@ -71,7 +71,6 @@ class FirstRunVM:
         dispatcher: Dispatcher,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
 
         self._is_open: bool = False
         self._future: asyncio.Future[FirstRunAction] | None = None

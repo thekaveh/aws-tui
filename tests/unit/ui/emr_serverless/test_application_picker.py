@@ -35,7 +35,7 @@ class _PickerApp(App[None]):
         self._hub = hub
 
     def compose(self) -> ComposeResult:
-        yield ApplicationPicker(self._vm, hub=self._hub, id="picker")
+        yield ApplicationPicker(self._vm, id="picker")
 
 
 # ── _trigger_label (pure) ─────────────────────────────────────────────────────
@@ -43,7 +43,11 @@ class _PickerApp(App[None]):
 
 async def test_trigger_label_no_application_when_list_is_empty() -> None:
     vm, hub = _make_vm()
-    # No apps refreshed in. _trigger_label is callable directly via the widget.
+    # Refresh into the empty IDLE/EMPTY state so the trigger reads
+    # the "no application" string. Without ``refresh()`` the VM's
+    # initial state is LOADING, which now correctly renders as
+    # "loading…" instead.
+    await vm.refresh()
     async with _PickerApp(vm, hub).run_test() as pilot:
         await pilot.pause()
         picker = pilot.app.query_one(ApplicationPicker)

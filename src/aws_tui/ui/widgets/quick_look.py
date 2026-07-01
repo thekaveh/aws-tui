@@ -42,9 +42,19 @@ class QuickLook(ModalScreen[None]):
         with Container():
             content = self._vm.content
             title = content.title if content else "(no preview)"
-            yield Static(title, classes="quicklook-title")
+            # ``markup=False`` on both Statics: title is a path / S3
+            # key (may legally contain ``[…]``), and the body Static
+            # below is .update()'d in on_mount with raw file bytes
+            # — JSON, source, logs, TOML all routinely contain
+            # bracket sequences Rich would parse as style tags and
+            # crash on. Static.update() re-runs the parent's markup
+            # setting, so ``markup=False`` here also disables markup
+            # on every subsequent update().
+            yield Static(title, classes="quicklook-title", markup=False)
             with VerticalScroll(id="quicklook-body-scroll"):
-                yield Static("loading...", id="quicklook-body", classes="quicklook-body")
+                yield Static(
+                    "loading...", id="quicklook-body", classes="quicklook-body", markup=False
+                )
 
     async def on_mount(self) -> None:
         content = self._vm.content

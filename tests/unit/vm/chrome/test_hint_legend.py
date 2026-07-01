@@ -139,9 +139,13 @@ def test_unknown_action_is_silently_skipped() -> None:
 
 def test_dispose_unsubscribes() -> None:
     legend, hub = _build()
+    pre = legend.focused_vm_id  # None on a freshly-built legend
     legend.dispose()
-    # Sending after dispose must not crash.
+    # Sending after dispose must NOT update the VM's state — a
+    # subscription that survived dispose would advance focused_vm_id
+    # to "x", which the assertion below catches.
     hub.send(FocusChangedMessage(focused_vm_id="x"))
+    assert legend.focused_vm_id == pre
 
 
 def test_set_current_service_swaps_to_emr_chips_and_relabels_swap_source() -> None:

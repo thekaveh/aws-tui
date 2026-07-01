@@ -61,7 +61,7 @@ def test_aggregate_vm3_lazy_factories() -> None:
         return ComponentVM.builder().name(name).with_null_services().build()
 
     agg = (
-        AggregateVMBuilder3[ComponentVM, ComponentVM, ComponentVM]()
+        AggregateVMBuilder3()
         .name("agg3")
         .services(NULL_MESSAGE_HUB, NULL_DISPATCHER)
         .component_1(lambda: (seen.append("1"), fac("c1"))[1])

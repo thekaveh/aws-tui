@@ -17,10 +17,14 @@ def _make_exc() -> Exception:
 
 def test_write_creates_file_with_expected_name(tmp_path: Path) -> None:
     dump = CrashDump(base_dir=tmp_path / "crash")
-    ts = datetime(2026, 6, 14, 10, 30, 45, tzinfo=UTC)
+    # Microseconds suffix added in round-44 to prevent same-second
+    # crash dumps from clobbering each other (a master crash plus a
+    # cascading shutdown raise within ms losing the root-cause
+    # report). The test now pins the seconds-and-microseconds shape.
+    ts = datetime(2026, 6, 14, 10, 30, 45, 123456, tzinfo=UTC)
     path = dump.write(exc=_make_exc(), timestamp=ts)
     assert path.exists()
-    assert path.name == "2026-06-14T10-30-45.txt"
+    assert path.name == "2026-06-14T10-30-45-123456.txt"
     assert path.parent == tmp_path / "crash"
 
 

@@ -41,7 +41,10 @@ Classes:
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING, Final, Literal
+
+from rich.markup import escape as _markup_escape
 
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 
@@ -96,10 +99,18 @@ def _format(glyph: str, subject: str, message: str, action: str | None) -> str:
     room from the leading icon; one space after the colon keeps
     the rest readable. Rich markup is parsed by ``Toast.render``
     (post-PR-75) so ``[b]…[/]`` becomes bold.
+
+    ``message`` and ``action`` are escaped via ``rich.markup.escape``
+    so user / exception text containing ``[…]`` (``copy failed:
+    [Errno 13] Permission denied`` etc.) doesn't crash the toast
+    render with MarkupError. The ``[b]…[/]`` literal we inject
+    around ``subject`` is the only intentional markup; subject
+    itself comes from a small closed enum of callers and stays
+    raw.
     """
-    body = f"{glyph}  [b]{subject}:[/] {message}"
+    body = f"{glyph}  [b]{subject}:[/] {_markup_escape(message)}"
     if action:
-        body += f" — {action}"
+        body += f" — {_markup_escape(action)}"
     return body
 
 
@@ -108,8 +119,17 @@ def _stable_id(prefix: str, subject: str, message: str) -> str:
     care about dedupe. Same prefix + same text = same id, so a
     re-raise replaces the earlier toast via the stack's id-collision
     handling rather than stacking duplicates.
+
+    Uses ``hashlib.blake2b`` instead of ``hash() & 0xFFFFFF`` —
+    Python's ``hash`` is salted per-process AND the 24-bit mask
+    crosses 50% birthday-collision at ~4,800 unique messages within
+    the same prefix+subject bucket (1% at ~580), meaning unrelated
+    fresh toasts can silently replace earlier still-visible ones.
+    blake2b 64-bit digest gives collision-resistant ids without
+    per-process variance.
     """
-    return f"{prefix}-{subject.lower()}-{abs(hash(message)) & 0xFFFFFF:06x}"
+    digest = hashlib.blake2b(message.encode("utf-8"), digest_size=8).hexdigest()
+    return f"{prefix}-{subject.lower()}-{digest}"
 
 
 # ── Public helpers ──────────────────────────────────────────────────────────
