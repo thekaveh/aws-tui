@@ -60,7 +60,7 @@ follow-up step is to move the credentials to the keychain via
 1. `[connections.*]` entries in `<config-dir>/config.toml`
 2. AWS profiles in `~/.aws/config` and `~/.aws/credentials` —
    auto-promoted to `kind = "aws"`, `profile = "<name>"`,
-   `source = "auto"`.
+   `source = "auto-aws-profile"`.
 
 Explicit entries win on name collision. Auto-discovered entries show
 an `(auto)` badge in the picker.
@@ -76,7 +76,8 @@ an `(auto)` badge in the picker.
 For each AWS connection, `AwsSession.probe_token(conn)` performs a
 cheap freshness check **without calling AWS**:
 
-- Resolve the SSO cache filename via `botocore.tokens.SSOTokenLoader`.
+- Resolve the SSO cache filename by mirroring the pinned
+  `botocore.tokens.SSOTokenLoader` cache-key contract.
 - Read `expiresAt`, compare against now-UTC with a 60-second skew
   buffer.
 - Return `connected | expired | missing`.

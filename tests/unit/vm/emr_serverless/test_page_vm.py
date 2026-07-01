@@ -6,7 +6,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.emr_serverless import ApplicationState, JobRunState
+from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG, ApplicationState, JobRunState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
@@ -26,6 +26,11 @@ def _make() -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
     )
     page.construct()
     return page, fake
+
+
+def test_page_vm_threads_emr_boto_config_into_logs_client() -> None:
+    page, _ = _make()
+    assert page.job_run_logs._client.boto_config is EMR_BOTO_CONFIG  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ import pytest
 
 from aws_tui.domain.emr_serverless import (
     _EMR_BOTO_CONFIG,
+    EMR_BOTO_CONFIG,
     ApplicationState,
     ApplicationSummary,
     EmrServerlessClient,
@@ -138,6 +139,7 @@ def _client_error(code: str, op: str = "ListApplications") -> botocore.exception
         (_client_error("ThrottlingException"), ThrottledError),
         (_client_error("ResourceNotFoundException"), NotFoundError),
         (_client_error("ValidationException"), ValidationError),
+        (botocore.exceptions.ParamValidationError(report="bad parameter"), ValidationError),
         (_client_error("InternalServerException"), ProviderError),
     ],
 )
@@ -374,11 +376,12 @@ async def test_start_job_run_forwards_form_fields_to_boto() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_job_run_omits_name_when_unset_and_blanks_spark_params() -> None:
+async def test_start_job_run_omits_name_and_blank_spark_params_when_unset() -> None:
     """``name`` is optional in the boto3 contract — it must be absent
-    from the kwargs when the modal leaves the field blank. A ``None``
-    ``spark_submit_parameters`` becomes an empty string so the
-    sparkSubmit driver shape stays well-formed."""
+    from the kwargs when the modal leaves the field blank.
+    ``sparkSubmitParameters`` is also optional; botocore requires a
+    non-blank value when the key is present, so blank modal values
+    must omit the key entirely."""
     stub = _StubClient()
     stub.start_job_run.return_value = {"jobRunId": "jr-new-2"}
     client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
@@ -387,13 +390,13 @@ async def test_start_job_run_omits_name_when_unset_and_blanks_spark_params() -> 
         execution_role_arn="arn:aws:iam::123456789012:role/Role",
         entry_point="s3://b/job.py",
         entry_point_arguments=(),
-        spark_submit_parameters=None,
+        spark_submit_parameters="   ",
         name=None,
     )
     kwargs = stub.start_job_run.await_args.kwargs
     assert "name" not in kwargs
     spark = kwargs["jobDriver"]["sparkSubmit"]
-    assert spark["sparkSubmitParameters"] == ""
+    assert "sparkSubmitParameters" not in spark
     assert spark["entryPointArguments"] == []
 
 
@@ -467,3 +470,4 @@ def test_emr_boto_config_pins_timeout_and_retry_shape() -> None:
     assert _EMR_BOTO_CONFIG.connect_timeout == 10
     assert _EMR_BOTO_CONFIG.read_timeout == 60
     assert _EMR_BOTO_CONFIG.retries == {"max_attempts": 6, "mode": "adaptive"}
+    assert EMR_BOTO_CONFIG is _EMR_BOTO_CONFIG

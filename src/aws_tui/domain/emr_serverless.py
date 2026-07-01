@@ -40,6 +40,7 @@ _EMR_BOTO_CONFIG: BotoConfig = BotoConfig(
     read_timeout=60,
     retries={"max_attempts": 6, "mode": "adaptive"},
 )
+EMR_BOTO_CONFIG: BotoConfig = _EMR_BOTO_CONFIG
 
 
 class ApplicationState(StrEnum):
@@ -137,6 +138,7 @@ class JobRunDetail:
 
 
 __all__ = [
+    "EMR_BOTO_CONFIG",
     "ApplicationState",
     "ApplicationSummary",
     "EmrServerlessClient",
@@ -182,6 +184,8 @@ def _map_boto_error(exc: BaseException) -> ProviderError | None:
         code = exc.response.get("Error", {}).get("Code", "")
         cls = _CLIENT_ERROR_CODE_MAP.get(code, ProviderError)
         return cls(exc.response.get("Error", {}).get("Message", str(exc)))
+    if isinstance(exc, botocore.exceptions.ParamValidationError):
+        return ValidationError(str(exc))
     if isinstance(exc, ValueError | KeyError):
         return ValidationError(f"malformed EMR Serverless response: {exc}")
     return None
@@ -408,16 +412,16 @@ class EmrServerlessClient:
             "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
         ) as c:
             try:
+                spark_submit: dict[str, Any] = {
+                    "entryPoint": entry_point,
+                    "entryPointArguments": list(entry_point_arguments),
+                }
+                if spark_submit_parameters is not None and spark_submit_parameters.strip():
+                    spark_submit["sparkSubmitParameters"] = spark_submit_parameters.strip()
                 kwargs: dict[str, Any] = {
                     "applicationId": application_id,
                     "executionRoleArn": execution_role_arn,
-                    "jobDriver": {
-                        "sparkSubmit": {
-                            "entryPoint": entry_point,
-                            "entryPointArguments": list(entry_point_arguments),
-                            "sparkSubmitParameters": spark_submit_parameters or "",
-                        }
-                    },
+                    "jobDriver": {"sparkSubmit": spark_submit},
                 }
                 if name is not None:
                     kwargs["name"] = name

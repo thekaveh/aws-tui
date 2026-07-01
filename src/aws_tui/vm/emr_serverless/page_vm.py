@@ -14,6 +14,7 @@ from vmx import ComponentVMOf, Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient
+from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
@@ -56,6 +57,7 @@ class EmrServerlessPageVM:
         logs_client = EmrServerlessLogsClient(
             session=client._session,
             region_name=client._region_name,
+            boto_config=EMR_BOTO_CONFIG,
         )
         self.job_run_logs: JobRunLogsVM = JobRunLogsVM(
             client=logs_client,

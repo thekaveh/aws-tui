@@ -12,7 +12,7 @@ default_language_version:
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: 2c9f875913ee60ca25ce70243dc24d5b6415598c # v4.6.0
     hooks:
       - id: end-of-file-fixer
         exclude: "tests/snapshot/__snapshots__/"
@@ -28,7 +28,7 @@ repos:
         args: ["--fix=lf"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.17
+    rev: 3b3f7c3f57fe9925356faf5fe6230835138be230 # v0.15.17
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -60,7 +60,7 @@ repos:
         always_run: true
 
   - repo: https://github.com/ComPWA/taplo-pre-commit
-    rev: v0.9.3
+    rev: ade0f95ddcf661c697d4670d2cfcbe95d0048a0a # v0.9.3
     hooks:
       - id: taplo-format
       - id: taplo-lint
