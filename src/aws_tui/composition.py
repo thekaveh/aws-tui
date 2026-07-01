@@ -480,6 +480,7 @@ def add_s3_compat_connection(
         endpoint_url=form.endpoint_url,
         access_key_id=form.access_key_id,
         secret_access_key=form.secret_access_key,
+        session_token=form.session_token,
         credentials="static",
         force_path_style=form.force_path_style,
         verify_tls=form.verify_tls,

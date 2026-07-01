@@ -63,6 +63,7 @@ def test_add_s3_compat_writes_entry(tmp_path: Path) -> None:
         region="us-east-1",
         access_key_id="MINIO_AKID",
         secret_access_key="MINIO_SECRET",
+        session_token="MINIO_SESSION",
         force_path_style=True,
         verify_tls=False,
     )
@@ -73,4 +74,5 @@ def test_add_s3_compat_writes_entry(tmp_path: Path) -> None:
     assert entry.kind == "s3-compatible"
     assert entry.endpoint_url == "http://localhost:9000"
     assert entry.access_key_id == "MINIO_AKID"
+    assert entry.session_token == "MINIO_SESSION"
     assert entry.verify_tls is False

@@ -4,8 +4,10 @@ subtitle chip."""
 
 from __future__ import annotations
 
+import os
 import re
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 from aws_tui.app import AwsTuiApp
@@ -74,7 +76,26 @@ class DemoModeApp(AwsTuiApp):
         # snapshot tier reuses the per-theme theme-store: passing
         # the theme via env preserves the existing fixture style.
         tmpdir = Path(tempfile.mkdtemp(prefix="demo-snapshot-"))
+        local_root = tmpdir / "local"
+        local_root.mkdir()
+        for name, modified in (
+            (".a", datetime(2026, 6, 30, 12, 0, 0, tzinfo=UTC)),
+            (".b", datetime(2026, 6, 30, 12, 0, 0, tzinfo=UTC)),
+            (".vol", datetime(2025, 10, 29, 12, 0, 0, tzinfo=UTC)),
+            ("Applications", datetime(2026, 6, 30, 12, 0, 0, tzinfo=UTC)),
+            ("Library", datetime(2026, 3, 15, 12, 0, 0, tzinfo=UTC)),
+            ("System", datetime(2025, 10, 29, 12, 0, 0, tzinfo=UTC)),
+            ("Users", datetime(2025, 11, 17, 12, 0, 0, tzinfo=UTC)),
+        ):
+            child = local_root / name
+            child.mkdir()
+            fixed_mtime = modified.timestamp()
+            os.utime(child, (fixed_mtime, fixed_mtime))
+
         ctx = build_app_context(config_dir=tmpdir, cache_dir=tmpdir, demo=True)
+        # Keep production demo mode honest ("local pane is real") while making
+        # the snapshot harness deterministic across host machines and dates.
+        ctx.registry.get("s3")._local_root = local_root  # type: ignore[attr-defined]
         ctx.initial_theme = theme
         super().__init__(context=ctx)
 

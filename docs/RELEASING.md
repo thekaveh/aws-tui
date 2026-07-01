@@ -101,7 +101,9 @@ Verify the install end-to-end:
 
 ```bash
 VERSION="X.Y.Z.dev<RUN_NUMBER>"  # copy from the release workflow's verify output
-python3 -m venv /tmp/aws-tui-dry && source /tmp/aws-tui-dry/bin/activate
+uv python install 3.13
+uv venv --python 3.13 /tmp/aws-tui-dry
+source /tmp/aws-tui-dry/bin/activate
 pip install --pre -i https://test.pypi.org/simple/ \
     --extra-index-url https://pypi.org/simple/ \
     "aws-tui==$VERSION"

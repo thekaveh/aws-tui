@@ -50,6 +50,42 @@ def test_ci_dependency_audit_keeps_locked_hashes() -> None:
     ]
 
 
+def test_ci_pytest_tiers_stay_wired() -> None:
+    workflow = _workflow(".github/workflows/ci.yml")
+
+    assert (
+        _step(workflow, "unit", "pytest (unit + in-process integration)")["run"]
+        == "uv run --python ${{ matrix.python }} pytest tests/unit tests/integration -v"
+    )
+    assert (
+        _step(workflow, "integration", "pytest (integration tier)")["run"]
+        == "uv run pytest -m integration -v"
+    )
+    assert (
+        _step(workflow, "coverage", "pytest coverage (unit + in-process integration)")["run"]
+        == "uv run --python 3.12 pytest tests/unit tests/integration "
+        "--cov=aws_tui --cov-report=term-missing --cov-report=xml"
+    )
+    assert (
+        _step(workflow, "snapshot", "pytest (snapshot tier)")["run"]
+        == "uv run pytest tests/snapshot -v"
+    )
+    assert _step(workflow, "e2e", "pytest (e2e tier)")["run"] == "uv run pytest tests/e2e -v"
+
+
+def test_integration_marker_is_reserved_for_minio_tier() -> None:
+    marked_files = {
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in (REPO_ROOT / "tests/integration").glob("*.py")
+        if "pytest.mark.integration" in path.read_text(encoding="utf-8")
+    }
+
+    assert marked_files == {
+        "tests/integration/test_cross_fs_minio.py",
+        "tests/integration/test_s3_fs_minio.py",
+    }
+
+
 def test_release_dependency_audit_keeps_locked_hashes() -> None:
     workflow = _workflow(".github/workflows/release.yml")
     _assert_hashed_audit_pair(".github/workflows/release.yml", "verify")
