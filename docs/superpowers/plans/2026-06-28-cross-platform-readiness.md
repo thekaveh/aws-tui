@@ -700,7 +700,7 @@ git commit -m "docs(cross-platform): per-platform install paths (Task 3)"
 
 ---
 
-### 18.1.1. Task 4: Release-time smoke install gate
+### 18.2.1. Task 4: Release-time smoke install gate
 
 **Goal:** Add a `smoke-install` matrix job to `.github/workflows/release.yml` that downloads the just-built wheel and runs the "Recommended: pipx" install on each of `{macos-14, ubuntu-24.04, windows-latest}`. The PyPI publish step waits on it; a smoke-install failure blocks the publish.
 
@@ -836,7 +836,7 @@ git commit -m "ci(cross-platform): smoke-install gate before PyPI publish (Task 
 
 ---
 
-### 18.1.2. Task 5: README install section restructure + per-platform polish
+### 18.2.2. Task 5: README install section restructure + per-platform polish
 
 **Goal:** The README is the front door — restructure the "Install" section so a first-time visitor on any of the three OSes sees their command verbatim, without scrolling past the other two. Cross-link to `docs/installing.md` for the full per-path matrix. Add a one-line "Terminal recommendation" callout for Windows.
 
