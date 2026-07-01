@@ -170,13 +170,23 @@ class ConfigStore:
             connections[name] = ConnectionEntry(
                 name=name,
                 kind=kind,
-                profile=body.get("profile"),
-                region=body.get("region"),
-                endpoint_url=body.get("endpoint_url"),
-                credentials=body.get("credentials"),
-                access_key_id=body.get("access_key_id"),
-                secret_access_key=body.get("secret_access_key"),
-                session_token=body.get("session_token"),
+                profile=_optional_str_field(body, field="profile", table=f"connections.{name}"),
+                region=_optional_str_field(body, field="region", table=f"connections.{name}"),
+                endpoint_url=_optional_str_field(
+                    body, field="endpoint_url", table=f"connections.{name}"
+                ),
+                credentials=_optional_str_field(
+                    body, field="credentials", table=f"connections.{name}"
+                ),
+                access_key_id=_optional_str_field(
+                    body, field="access_key_id", table=f"connections.{name}"
+                ),
+                secret_access_key=_optional_str_field(
+                    body, field="secret_access_key", table=f"connections.{name}"
+                ),
+                session_token=_optional_str_field(
+                    body, field="session_token", table=f"connections.{name}"
+                ),
                 force_path_style=_bool_field(
                     body,
                     field="force_path_style",
@@ -419,6 +429,13 @@ def _bool_field(body: dict[str, Any], *, field: str, default: bool, table: str) 
     if isinstance(value, bool):
         return value
     raise ConfigError(f"[{table}].{field} must be a boolean")
+
+
+def _optional_str_field(body: dict[str, Any], *, field: str, table: str) -> str | None:
+    value = body.get(field)
+    if value is None or isinstance(value, str):
+        return value
+    raise ConfigError(f"[{table}].{field} must be a string")
 
 
 __all__ = [

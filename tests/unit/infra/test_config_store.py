@@ -151,6 +151,32 @@ def test_connection_boolean_fields_reject_string_values(config_path: Path, field
         store.load()
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "profile",
+        "region",
+        "endpoint_url",
+        "credentials",
+        "access_key_id",
+        "secret_access_key",
+        "session_token",
+    ],
+)
+def test_connection_optional_string_fields_reject_non_strings(
+    config_path: Path, field: str
+) -> None:
+    endpoint_line = "" if field == "endpoint_url" else 'endpoint_url = "https://minio.local"\n'
+    config_path.write_text(
+        f'[connections.minio]\nkind = "s3-compatible"\n{endpoint_line}{field} = 123\n',
+        encoding="utf-8",
+    )
+    store = ConfigStore(path=config_path)
+
+    with pytest.raises(ConfigError, match=field):
+        store.load()
+
+
 def test_add_connection_persists(config_path: Path) -> None:
     store = ConfigStore(path=config_path)
     store.add_connection(ConnectionEntry(name="dev", kind="aws", profile="dev", region="us-west-2"))

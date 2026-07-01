@@ -187,7 +187,7 @@ welcome to aws-tui
 no AWS or S3-compatible connections configured.
   add aws profile  (runs 'aws configure sso' in your terminal)
   add s3-compatible (in-TUI form)
-  skip for now
+  skip for now (you can add later from Settings)
 ```
 
 Until that startup wiring lands, use `aws configure sso` /
