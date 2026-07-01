@@ -1,14 +1,16 @@
 # Bootstrapping the Homebrew formula
 
-Run this **once**, immediately after the first PyPI release
-(v0.8.0) lands. After that, the `bump-homebrew` job in
+Run this **once**, immediately after the first PyPI release lands.
+The v0.8.0 code has been cut in-repo, but the PyPI publish is still
+pending; do not run this bootstrap until the wheel and sdist are
+visible on PyPI. After that, the `bump-homebrew` job in
 `.github/workflows/release.yml` opens PRs against the tap
 automatically — bootstrapping just gets the first formula in
 place.
 
 ## 1. Prerequisites
 
-- v0.8.0 wheel + sdist on PyPI: <https://pypi.org/project/aws-tui/0.8.0/>
+- First `aws-tui` wheel + sdist visible on PyPI.
 - The `thekaveh/homebrew-aws-tui` repo exists and is empty.
 - `brew` installed locally for the smoke test.
 
@@ -48,7 +50,7 @@ homebrew-pypi-poet aws-tui > Formula/aws-tui.rb
 
 Then **manually clean up** the generated formula. The two
 fields that the auto-bump workflow expects to be on their own
-lines (so its `sed` works) are:
+top-level lines before any `resource` blocks are:
 
 ```ruby
 url "https://files.pythonhosted.org/packages/source/a/aws-tui/aws_tui-0.8.0.tar.gz"

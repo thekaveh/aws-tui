@@ -244,7 +244,8 @@ async def main() -> int:
     total_objs = sum(len(v) for v in _BUCKETS.values())
     print(f"==> done. {len(_BUCKETS)} buckets, {total_objs} objects, {elapsed:.1f}s")
     print()
-    print("Point aws-tui at this MinIO by adding to ~/.config/aws-tui/config.toml:")
+    print("Point aws-tui at this MinIO by adding to <config-dir>/config.toml:")
+    print("  (see docs/platforms.md for the exact OS path)")
     print("  (copy from scripts/test-services/s3/config-snippet.toml)")
     return 0
 

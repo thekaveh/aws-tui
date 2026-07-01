@@ -66,6 +66,15 @@ class _StubClientContext:
         yield self._stub
 
 
+class _RecordingSession:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def client(self, service_name: str, **kwargs: Any) -> object:
+        self.calls.append({"service_name": service_name, **kwargs})
+        return object()
+
+
 def _patch_s3fs_client(monkeypatch: pytest.MonkeyPatch, stub: _StubS3Client) -> None:
     ctx_factory = _StubClientContext(stub)
     monkeypatch.setattr(S3FS, "_client", lambda self: ctx_factory())
@@ -75,6 +84,28 @@ def _build_fs() -> S3FS:
     # Session is bypassed via the patched _client; pass a dummy.
     session = MagicMock()
     return S3FS(session=session, bucket="mybkt", endpoint_url=None, force_path_style=False)
+
+
+def test_client_passes_verify_tls_to_aioboto3_session() -> None:
+    session = _RecordingSession()
+    fs = S3FS(
+        session=session,  # type: ignore[arg-type]
+        bucket=None,
+        endpoint_url="https://minio.local",
+        force_path_style=True,
+        verify_tls=False,
+    )
+
+    fs._client()
+
+    assert session.calls == [
+        {
+            "service_name": "s3",
+            "config": fs._config,
+            "endpoint_url": "https://minio.local",
+            "verify": False,
+        }
+    ]
 
 
 async def test_list_pagination_breaks_when_truncated_without_token(

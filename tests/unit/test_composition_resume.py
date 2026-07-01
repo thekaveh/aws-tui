@@ -169,6 +169,21 @@ class _FlakyAwsSession:
         return _ctx()
 
 
+class _ClientFactoryRaisesSession:
+    async def client(self, connection: Connection, service: str) -> Any:
+        raise RuntimeError("could not create client")
+
+
+class _ClientEnterRaisesSession:
+    async def client(self, connection: Connection, service: str) -> Any:
+        @asynccontextmanager
+        async def _ctx():
+            raise RuntimeError("could not enter client")
+            yield None
+
+        return _ctx()
+
+
 @pytest.mark.asyncio
 async def test_abort_all_preserves_journal_when_s3_abort_fails(tmp_path: Path) -> None:
     """If ``abort_multipart_upload`` raises, we must NOT purge the journal.
@@ -204,6 +219,45 @@ async def test_abort_all_preserves_journal_when_s3_abort_fails(tmp_path: Path) -
     # ran inside the suppressed call).
     assert len(session.client_obj.aborts) == 1
     # The journal must still be on disk for next-session retry.
+    assert list((tmp_path / "transfers").glob("*.jsonl")) == [
+        tmp_path / "transfers" / f"{tid}.jsonl"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session",
+    [_ClientFactoryRaisesSession(), _ClientEnterRaisesSession()],
+)
+async def test_abort_all_preserves_journal_when_s3_client_acquisition_fails(
+    tmp_path: Path,
+    session: object,
+) -> None:
+    """Client factory/context failures must preserve journals for retry."""
+    journal = TransferJournal(base_dir=tmp_path / "transfers")
+    tid = journal.begin(
+        source_uri="local:///a",
+        destination_uri="s3://bucket/uploads/a.bin",
+        upload_id="mpu-a",
+    )
+    entry = TransferJournalEntry(
+        transfer_id=tid,
+        source_uri="local:///a",
+        destination_uri="s3://bucket/uploads/a.bin",
+        upload_id="mpu-a",
+        bytes_total=4096,
+        started_at=datetime(2026, 6, 13, tzinfo=UTC),
+        last_progress=datetime(2026, 6, 13, tzinfo=UTC),
+    )
+
+    await apply_resume_decision(
+        decision=ResumeAction.ABORT_ALL,
+        entries=[entry],
+        journal=journal,
+        aws_session=session,  # type: ignore[arg-type]
+        connection=_connection(),
+    )
+
     assert list((tmp_path / "transfers").glob("*.jsonl")) == [
         tmp_path / "transfers" / f"{tid}.jsonl"
     ]

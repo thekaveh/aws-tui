@@ -76,6 +76,7 @@ def _s3_conn(
     *,
     access_key_id: str | None = "AKIA",
     secret_access_key: str | None = "secret",
+    verify_tls: bool = True,
 ) -> Connection:
     return Connection(
         name="minio",
@@ -86,6 +87,7 @@ def _s3_conn(
         access_key_id=access_key_id,
         secret_access_key=secret_access_key,
         force_path_style=True,
+        verify_tls=verify_tls,
     )
 
 
@@ -271,7 +273,7 @@ class TestClientLifecycle:
         monkeypatch.setattr(aioboto3, "Session", FakeSession)
 
         session = AwsSession(sso_cache_dir=tmp_path)
-        conn = _s3_conn()
+        conn = _s3_conn(verify_tls=False)
         await session.client(conn, "s3")
         sess_kwargs = captured["session_kwargs"]
         assert sess_kwargs["aws_access_key_id"] == "AKIA"
@@ -279,5 +281,6 @@ class TestClientLifecycle:
         assert sess_kwargs["region_name"] == "us-east-1"
         client_kwargs = captured["client_kwargs"]
         assert client_kwargs["endpoint_url"] == "http://localhost:9000"
+        assert client_kwargs["verify"] is False
         # Force-path-style propagates through botocore Config.
         assert "config" in client_kwargs

@@ -13,7 +13,7 @@ docker compose -f scripts/test-services/s3/docker-compose.yml up -d
 echo "==> waiting for MinIO to report ready"
 # docker compose's healthcheck already covers readiness; this block makes
 # the wait visible to the user.
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
     state=$(docker inspect -f '{{.State.Health.Status}}' aws-tui-dev-minio 2>/dev/null || echo "starting")
     if [ "$state" = "healthy" ]; then
         break
@@ -32,7 +32,7 @@ cat <<EOF
 
 ==> point aws-tui at it by adding the snippet at
        scripts/test-services/s3/config-snippet.toml
-    to your ~/.config/aws-tui/config.toml, then launch:
+    to your <config-dir>/config.toml (see docs/platforms.md), then launch:
        uv run aws-tui
 
 ==> teardown when done:

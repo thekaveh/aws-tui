@@ -31,7 +31,7 @@ body:
     id: version
     attributes:
       label: aws-tui version
-      description: Output of `aws-tui --version` (when implemented) or the commit SHA.
+      description: Exact output of `aws-tui --version`, or the commit SHA for local development builds.
     validations:
       required: true
   - type: input
@@ -45,5 +45,5 @@ body:
     id: logs
     attributes:
       label: Relevant log lines
-      description: From `~/.cache/aws-tui/log/aws-tui.log` (redact sensitive content).
+      description: From `<cache-dir>/log/aws-tui.log`; see docs/platforms.md for the exact OS path. Redact sensitive content.
       render: shell

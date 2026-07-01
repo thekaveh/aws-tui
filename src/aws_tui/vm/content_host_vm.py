@@ -136,40 +136,40 @@ class ContentHostVM:
 
         setup = getattr(vm, "setup", None)
         if callable(setup):
-            result = setup()
-            if inspect.isawaitable(result):
-                # Dispatch as a background task so a slow ``setup``
-                # (e.g. ``S3FS.list`` blocking on a 60-second botocore
-                # retry budget) doesn't block the View from mounting
-                # the freshly-adopted VM. The pane VMs surface progress
-                # through their reactive ``state`` property.
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    # No running loop — caller is driving us from a
-                    # sync context (some tests). Fall back to awaiting
-                    # inline so behaviour is at least deterministic.
+            # Dispatch as a background task so a slow ``setup``
+            # (e.g. ``S3FS.list`` blocking on a 60-second botocore
+            # retry budget) doesn't block the View from mounting
+            # the freshly-adopted VM. The pane VMs surface progress
+            # through their reactive ``state`` property.
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop — caller is driving us from a
+                # sync context (some tests). Fall back to awaiting
+                # inline so behaviour is at least deterministic.
+                result = setup()
+                if inspect.isawaitable(result):
                     await result
-                else:
-                    self._setup_task = loop.create_task(
-                        self._run_setup(result),
-                        name=f"content-host-setup-{service_id}",
-                    )
-                    # Drain exceptions so a non-cancel raise from the
-                    # awaitable (NoCredentialsError, ProviderError,
-                    # botocore client error, programmer bug) doesn't
-                    # silently log "Task exception was never
-                    # retrieved" to stderr — invisible in a TUI.
-                    # Same R36 / R37 shield pattern as
-                    # CommandPaletteVM._spawn_awaitable and
-                    # ToastStackVM auto-dismiss. Without this the
-                    # task finishes with a non-cancel exception,
-                    # _cancel_pending_setup short-circuits at
-                    # task.done() and drops the reference, and
-                    # asyncio's GC emits the warning.
-                    self._setup_task.add_done_callback(self._on_setup_done)
+            else:
+                self._setup_task = loop.create_task(
+                    self._run_setup(setup),
+                    name=f"content-host-setup-{service_id}",
+                )
+                # Drain exceptions so a non-cancel raise from the
+                # awaitable (NoCredentialsError, ProviderError,
+                # botocore client error, programmer bug) doesn't
+                # silently log "Task exception was never
+                # retrieved" to stderr — invisible in a TUI.
+                # Same R36 / R37 shield pattern as
+                # CommandPaletteVM._spawn_awaitable and
+                # ToastStackVM auto-dismiss. Without this the
+                # task finishes with a non-cancel exception,
+                # _cancel_pending_setup short-circuits at
+                # task.done() and drops the reference, and
+                # asyncio's GC emits the warning.
+                self._setup_task.add_done_callback(self._on_setup_done)
 
-    async def _run_setup(self, awaitable: Any) -> None:
+    async def _run_setup(self, setup: Any) -> None:
         """Drive ``setup``'s awaitable; swallow cancellation cleanly.
 
         Errors from the awaitable propagate out — the asyncio task
@@ -179,15 +179,11 @@ class ContentHostVM:
         doesn't need to publish anything extra here.
         """
         try:
-            await awaitable
+            result = setup()
+            if inspect.isawaitable(result):
+                await result
         except asyncio.CancelledError:
             return
-        finally:
-            # If the task is finishing on its own (not cancelled by a
-            # later ``set_content``), clear the reference so the next
-            # ``_cancel_pending_setup`` is a no-op.
-            if self._setup_task is not None and self._setup_task.done():
-                self._setup_task = None
 
     def _cancel_pending_setup(self) -> None:
         task = self._setup_task

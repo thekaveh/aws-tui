@@ -17,6 +17,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  UV_VERSION: "0.11.19"
+
 jobs:
   unit:
     name: unit (${{ matrix.os }} / py${{ matrix.python }})
@@ -30,11 +33,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python ${{ matrix.python }}
         run: uv python install ${{ matrix.python }}
       - name: sync
-        run: uv sync --python ${{ matrix.python }}
+        run: uv sync --frozen --python ${{ matrix.python }}
       # Runs unit + the in-process integration files (full-app pilot,
       # modal forwarding, etc. — they intentionally lack the
       # `integration` marker per pyproject's addopts comment). The
@@ -51,11 +55,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --python 3.12
+        run: uv sync --frozen --python 3.12
       - name: pytest (integration tier)
         run: uv run pytest -m integration -v
 
@@ -66,11 +71,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --python 3.12
+        run: uv sync --frozen --python 3.12
       - name: pytest (snapshot tier)
         run: uv run pytest tests/snapshot -v
 
@@ -81,11 +87,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --python 3.12
+        run: uv sync --frozen --python 3.12
       - name: pytest (e2e tier)
         run: uv run pytest tests/e2e -v
 
@@ -96,11 +103,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
+      - name: install Python 3.11 for pre-commit hooks
+        run: uv python install 3.11
       - name: sync
-        run: uv sync --python 3.12
+        run: uv sync --frozen --python 3.12
       - name: layer rules
         run: ./scripts/check-layers.sh
       # Surfaces every hook defined in .pre-commit-config.yaml:
@@ -114,6 +124,22 @@ jobs:
       - name: pre-commit (all hooks)
         run: uv run pre-commit run --all-files --show-diff-on-failure
 
+  security:
+    name: dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: install Python 3.11
+        run: uv python install 3.11
+      - name: export locked requirements
+        run: uv export --frozen --format requirements-txt --no-hashes --output-file "$RUNNER_TEMP/requirements-audit.txt"
+      - name: pip-audit (locked dependencies)
+        run: uv run --python 3.11 pip-audit -r "$RUNNER_TEMP/requirements-audit.txt"
+
   pkg:
     name: package build
     runs-on: ubuntu-24.04
@@ -121,13 +147,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --python 3.12
+        run: uv sync --frozen --python 3.12
       - name: build wheel + sdist
-        run: uv build
+        run: uv build --no-build-isolation
       - name: twine check
         run: uv run twine check dist/*
       - name: upload build artifacts

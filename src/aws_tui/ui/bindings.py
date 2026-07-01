@@ -1,9 +1,9 @@
-"""BindingResolver — bridges :class:`KeymapStore` to Textual ``Binding`` list.
+"""BindingResolver — deferred bridge from :class:`KeymapStore` to Textual bindings.
 
 Textual widgets get their key bindings via a ``BINDINGS`` class attribute
-that lists :class:`textual.binding.Binding` objects. We compute that list
-at app-construction time from the current :class:`KeymapStore` so any
-overlay (per ``config.toml``) is respected without per-widget edits.
+that lists :class:`textual.binding.Binding` objects. The app still ships
+hard-coded ``AwsTuiApp.BINDINGS`` in v0.8.x; ``config.toml`` keybinding
+overlays are parsed and validated but not yet routed through this resolver.
 
 The action description shown by Textual's help footer is taken from a
 small label map kept in this module; missing entries fall back to the

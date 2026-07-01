@@ -68,24 +68,9 @@ class _ReachableFS(FileSystemProvider):
 async def test_hub_subscription_marks_unreachable_via_pane_state(
     tmp_path: Path,
 ) -> None:
-    """PaneVM.setup() → UNREACHABLE state-change → hub fires → subscriber marks.
-
-    Directly exercises the subscription chain without going through the full
-    Textual app harness: constructs a real AwsTuiApp with the ctx, wires the
-    subscription (done in AwsTuiApp.__init__ / on_mount), then injects a real
-    PropertyChangedMessage built from a real PaneVM instance with a known
-    connection_key and manually calls the subscriber.
-    """
+    """Pane state-change message through the real hub subscriber marks/clears."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "config.toml").write_text(
-        "[connections.target]\n"
-        'kind = "s3-compatible"\n'
-        'endpoint_url = "http://localhost:9999"\n'
-        'credentials = "static"\n'
-        'access_key_id = "k"\n'
-        'secret_access_key = "s"\n'
-    )
     ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
     app = AwsTuiApp(ctx)
 
@@ -106,16 +91,21 @@ async def test_hub_subscription_marks_unreachable_via_pane_state(
     # Build the PropertyChangedMessage as the hub would carry it.
     real_msg = PropertyChangedMessage.create(pane, pane.name, "state")
 
-    # Verify the subscriber routes it to mark the connection.
-    assert ("s3-compatible", "target") not in ctx.unreachable_connections
-    app._on_hub_message_pane_state(real_msg)
-    assert ("s3-compatible", "target") in ctx.unreachable_connections
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
 
-    # Now simulate recovery: pane transitions to IDLE.
-    pane._state = PaneState.IDLE
-    recovery_msg = PropertyChangedMessage.create(pane, pane.name, "state")
-    app._on_hub_message_pane_state(recovery_msg)
-    assert ("s3-compatible", "target") not in ctx.unreachable_connections
+        # Verify the real MessageHub subscription routes it to mark the connection.
+        assert ("s3-compatible", "target") not in ctx.unreachable_connections
+        hub.send(real_msg)
+        await pilot.pause()
+        assert ("s3-compatible", "target") in ctx.unreachable_connections
+
+        # Now simulate recovery: pane transitions to IDLE.
+        pane._state = PaneState.IDLE
+        recovery_msg = PropertyChangedMessage.create(pane, pane.name, "state")
+        hub.send(recovery_msg)
+        await pilot.pause()
+        assert ("s3-compatible", "target") not in ctx.unreachable_connections
 
     # Cleanup.
     pane.dispose()

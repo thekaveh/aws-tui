@@ -16,7 +16,11 @@ from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneVM
-from aws_tui.vm.messages import TransferProgressMessage, TransferState
+from aws_tui.vm.messages import (
+    TransferCancelRequestedMessage,
+    TransferProgressMessage,
+    TransferState,
+)
 from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
@@ -207,6 +211,35 @@ async def test_dual_copy_across_pre_registers_all_pending_before_running(
 
 
 @pytest.mark.asyncio
+async def test_dual_queued_cancel_marks_journal_aborted_immediately(
+    tmp_path: Path,
+) -> None:
+    """Cancelling a queued row must survive a crash before its turn runs."""
+    dp, hub = await _make_dual(tmp_path)
+    try:
+        dp.left.enter_multiselect_command.execute()
+        dp.left.select_all_command.execute()
+        transfer_ids = dp._pre_register_pending(
+            list(dp.left.marked_entries),
+            dp.left,
+            dp.right,
+        )
+        assert len(transfer_ids) == 2
+
+        queued_id = transfer_ids[1][1]
+        hub.send(TransferCancelRequestedMessage(transfer_id=queued_id))
+
+        unfinished_ids = {
+            entry.transfer_id
+            for entry in dp._journal.find_unfinished()  # type: ignore[attr-defined]
+        }
+        assert queued_id not in unfinished_ids
+        assert transfer_ids[0][1] in unfinished_ids
+    finally:
+        dp.dispose()
+
+
+@pytest.mark.asyncio
 async def test_dual_copy_across_cancel_event_interrupts_in_flight_copy(
     tmp_path: Path,
 ) -> None:
@@ -226,7 +259,6 @@ async def test_dual_copy_across_cancel_event_interrupts_in_flight_copy(
 
     from aws_tui.domain.filesystem import EntryKind, FileEntry
     from aws_tui.domain.filesystem import PathRef as _PathRef
-    from aws_tui.vm.messages import TransferCancelRequestedMessage
 
     class _BlockingProvider(InMemoryFS):
         """LocalFS-shaped provider whose read_stream blocks forever
@@ -341,6 +373,112 @@ async def test_dual_copy_across_cancel_event_interrupts_in_flight_copy(
         )
     finally:
         dp.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dual_copy_across_outer_cancellation_aborts_current_journal(
+    tmp_path: Path,
+) -> None:
+    """Cancelling the Textual worker must not leave a resumable phantom.
+
+    ``copy_across`` marks the current transfer id as consumed before
+    awaiting ``_run_one_transfer``. If the outer worker is cancelled
+    while the copy task is running, that active journal still needs a
+    terminal ABORTED marker; otherwise the next launch offers a resume
+    for a transfer the user already cancelled by replacing/shutting down
+    the worker.
+    """
+    from collections.abc import AsyncIterator as _AsyncIterator
+
+    from aws_tui.domain.filesystem import EntryKind, FileEntry
+    from aws_tui.domain.filesystem import PathRef as _PathRef
+
+    class _BlockingProvider(InMemoryFS):
+        def __init__(self) -> None:
+            super().__init__()
+            self._block_event = asyncio.Event()
+            self.read_started = asyncio.Event()
+            self.read_was_cancelled = False
+            self._entry = FileEntry(
+                name="big-file.bin",
+                kind=EntryKind.FILE,
+                size=10_000_000,
+                modified=None,
+            )
+
+        async def list(self, path: _PathRef) -> tuple[FileEntry, ...]:
+            return (self._entry,)
+
+        async def stat(self, path: _PathRef) -> FileEntry:
+            if path.segments and path.segments[-1] == "big-file.bin":
+                return self._entry
+            return await super().stat(path)
+
+        async def read_stream(  # type: ignore[override]
+            self, _path: _PathRef, *, chunk_size: int = 8 * 1024 * 1024
+        ) -> _AsyncIterator[bytes]:
+            return self._blocking_gen()
+
+        async def _blocking_gen(self) -> _AsyncIterator[bytes]:
+            yield b""
+            self.read_started.set()
+            try:
+                await self._block_event.wait()
+            except asyncio.CancelledError:
+                self.read_was_cancelled = True
+                raise
+
+    hub: MessageHub[Message] = cast("MessageHub[Message]", MessageHub())
+    journal = TransferJournal(base_dir=tmp_path / "journal")
+    left_provider = _BlockingProvider()
+    left = PaneVM(provider=left_provider, hub=hub, dispatcher=NULL_DISPATCHER, id_prefix="left")
+    right = PaneVM(provider=InMemoryFS(), hub=hub, dispatcher=NULL_DISPATCHER, id_prefix="right")
+    dp = DualPaneVM(
+        left=left,
+        right=right,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        transfer_journal=journal,
+    )
+    dp.construct()
+    await dp.setup()
+    try:
+        dp.left.enter_multiselect_command.execute()
+        dp.left.toggle_select_command.execute()
+        copy_task = asyncio.create_task(dp.copy_across())
+        await asyncio.wait_for(left_provider.read_started.wait(), timeout=2.0)
+
+        copy_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(copy_task, timeout=2.0)
+
+        assert left_provider.read_was_cancelled
+        assert journal.find_unfinished() == []
+    finally:
+        dp.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dual_dispose_cancels_detached_refresh_tasks(tmp_path: Path) -> None:
+    """Post-transfer refresh tasks are owned by the DualPaneVM lifecycle."""
+    dp, _hub = await _make_dual(tmp_path)
+    refresh_started = asyncio.Event()
+    refresh_cancelled = asyncio.Event()
+
+    async def _blocking_refresh() -> None:
+        refresh_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            refresh_cancelled.set()
+            raise
+
+    dp.right.refresh = _blocking_refresh  # type: ignore[method-assign]
+
+    dp._schedule_detached_refresh(dp.right)
+    await asyncio.wait_for(refresh_started.wait(), timeout=2.0)
+    dp.dispose()
+    await asyncio.wait_for(refresh_cancelled.wait(), timeout=2.0)
 
 
 @pytest.mark.asyncio

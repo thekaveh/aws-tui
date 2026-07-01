@@ -28,7 +28,7 @@ numerics in Quick Look).
 In config:
 
 ```toml
-# ~/.config/aws-tui/config.toml
+# <config-dir>/config.toml
 [defaults]
 theme = "voidline"
 ```
@@ -55,16 +55,16 @@ the active stylesheet on the fly.
 
 > The command-palette path (`:` then `theme switch ▸ voidline`) is in
 > the design spec but the palette doesn't yet register theme entries
-> in v0.7.x — `t` / `Shift+T` are the working shortcuts.
+> in v0.8.x — `t` / `Shift+T` are the working shortcuts.
 
 ## 3. User overrides
 ### 3.1. Single-token overrides
-Drop `~/.config/aws-tui/theme.tcss` to override individual tokens of
+Drop `<config-dir>/theme.tcss` to override individual tokens of
 the active built-in. The overlay layers on top of the built-in CSS so
 you can adjust one or two colors without forking the whole theme:
 
 ```tcss
-/* ~/.config/aws-tui/theme.tcss */
+/* <config-dir>/theme.tcss */
 
 Screen {
     background: #050810;     /* override `bg` */
@@ -76,7 +76,7 @@ Screen {
 ```
 
 ### 3.2. Full custom themes
-Drop a full `.tcss` file under `~/.config/aws-tui/themes/<name>.tcss`
+Drop a full `.tcss` file under `<config-dir>/themes/<name>.tcss`
 and it's selectable like any built-in (palette: `theme switch ▸
 <name>`).
 
@@ -95,7 +95,7 @@ The Carbon palette tokens (full spec table in §4.5):
 | `text-muted` | `#8a8e96` | Secondary values |
 | `text-dim` | `#5e6470` | Labels |
 | `accent` | `#6fb8ff` | Focused/actionable glyphs |
-| `accent-soft` | `#cfe4ff` | Selected-row foreground |
+| `accent-soft` | `#cfe4ff` | Secondary accent surfaces |
 | `accent-hot` | `#c9a0ff` | Command palette `:` glyph |
 | `success` | `#5cd693` | SSO ok, transfer up arrow |
 | `warning` | `#f0c674` | Auth-pending state |
@@ -108,9 +108,9 @@ See spec §4.5 for the matching Voidline / Lattice / Amber tables.
 
 1. Loading the built-in `<name>.tcss` from the package data via
    `importlib.resources`.
-2. If `~/.config/aws-tui/themes/<name>.tcss` exists, **replacing**
+2. If `<config-dir>/themes/<name>.tcss` exists, **replacing**
    the built-in with it (custom theme wins).
-3. If `~/.config/aws-tui/theme.tcss` exists, **appending** it to the
+3. If `<config-dir>/theme.tcss` exists, **appending** it to the
    active CSS (overlay always wins).
 4. Returning the combined string; `App.stylesheet.add_source` injects
    it as additional rules and `App.stylesheet.update(self)` reflows.
@@ -119,13 +119,16 @@ The overlay layering means you can keep the built-in look and adjust
 just one or two colors without copying the entire theme.
 
 ## 6. Snapshot tests
-The ten themes are pinned by 214 snapshot goldens in
-`tests/snapshot/__snapshots__/` across 10 scaffolding apps — main
-screen, modals, nav menu, pane states, settings view, theme picker,
-toast, transfers, EMR (added post-tag by PR #76's `test_emr/`
-subdir), and the EMR clone-job-run modal (added by PR #83's
-`test_emr_clone_modal/` subdir — 10 themes × 1 scene) — most
-parametrised by theme. Every new widget snapshot is paired with a
-content-presence guard test (per the PR #53 lesson). Updates:
+The ten themes are pinned by snapshot goldens in
+`tests/snapshot/__snapshots__/` across the checked-in snapshot suites.
+Recount with:
+
+```bash
+find tests/snapshot/__snapshots__ -name '*.raw' | wc -l
+find tests/snapshot/__snapshots__ -mindepth 1 -maxdepth 1 -type d | wc -l
+```
+
+Every new widget snapshot is paired with a content-presence guard test
+(per the PR #53 lesson). Updates:
 `uv run pytest tests/snapshot --snapshot-update`. Snapshots are
-CI-gated only on Python 3.12 / Ubuntu to avoid tolerance flakes.
+CI-gated on Python 3.12 / Ubuntu to avoid tolerance flakes.

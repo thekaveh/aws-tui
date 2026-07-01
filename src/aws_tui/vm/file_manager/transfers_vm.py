@@ -2,7 +2,8 @@
 
 Subscribes to :class:`TransferProgressMessage` on the hub and updates the
 matching :class:`TransferVM`. Exposes derived totals (active_count,
-total_bytes_done/total) that the status bar and transfer panel render.
+total_bytes_done/total) consumed by the retained status VM and transfers
+overlay.
 """
 
 from __future__ import annotations

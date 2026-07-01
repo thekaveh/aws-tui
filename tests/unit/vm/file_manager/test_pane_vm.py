@@ -91,6 +91,37 @@ async def test_pane_toggle_select_marks_cursor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pane_toggle_select_skips_parent_link() -> None:
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    await pane.navigate_to(PathRef(("b",)))
+
+    assert pane.selected_entry is not None
+    assert pane.selected_entry.is_parent_link
+    pane.toggle_select_command.execute()
+
+    assert not pane.is_multiselect_mode
+    assert pane.marked_entries == ()
+    assert pane.viewmodel.selection_count == 0
+    pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pane_select_all_skips_parent_link() -> None:
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    await pane.navigate_to(PathRef(("b",)))
+
+    pane.select_all_command.execute()
+
+    assert pane.is_multiselect_mode
+    assert [entry.entry.name for entry in pane.marked_entries] == ["nested.bin"]
+    assert pane.viewmodel.selection_count == 1
+    assert not pane.entries[0].is_marked
+    pane.dispose()
+
+
+@pytest.mark.asyncio
 async def test_pane_enter_exit_multiselect() -> None:
     fs = await _seed_fs()
     pane = await _make_pane(fs)
@@ -115,6 +146,32 @@ async def test_pane_delete_marked() -> None:
     await pane.delete_marked()
     names = [e.entry.name for e in pane.entries]
     assert "a.txt" not in names
+    pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pane_delete_marked_ignores_manually_marked_parent_link() -> None:
+    class _RecordingFS(InMemoryFS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.deleted: list[PathRef] = []
+
+        async def delete(self, path: PathRef) -> None:
+            self.deleted.append(path)
+            await super().delete(path)
+
+    fs = _RecordingFS()
+    await fs.mkdir(PathRef(("b",)))
+    await fs.write_stream(PathRef(("b", "nested.bin")), _astream(b"nested"))
+    pane = await _make_pane(fs)
+    await pane.navigate_to(PathRef(("b",)))
+    assert pane.entries[0].is_parent_link
+    pane.entries[0].set_marked(True)
+
+    await pane.delete_marked()
+
+    assert fs.deleted == []
+    assert pane.entries[0].is_parent_link
     pane.dispose()
 
 

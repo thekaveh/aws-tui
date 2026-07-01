@@ -396,9 +396,13 @@ When the user clicks Save on the inline form:
 3. The VM persists via `ConfigStore` and publishes `ConnectionListChangedMessage`.
 4. Subscribers react: `AwsTuiApp` drops deleted names from
    `unreachable_connections` (delete path); pane-reload logic in the app
-   rebinds any pane whose `current_connection_key.name` matches the
-   affected name. Same `_rebind_pane_to_local` / `_rebind_pane_to_connection`
-   helpers from PR #52 are reused (they're independent of the modal flow).
+   rebinds any S3-compatible pane whose `(kind, name)` key matches the
+   affected name. Same `_rebind_pane_to_local` /
+   `_rebind_pane_to_connection` helpers from PR #52 are reused (they're
+   independent of the modal flow). Post-ship hardening: AWS profiles and
+   S3-compatible connections may share display names, so reload matching
+   must keep the `kind == "s3-compatible"` guard rather than matching on
+   name alone.
 5. `S3ConnectionsPanel.refresh_rows()` rebuilds the row list.
 6. The form collapses (`display: none`).
 7. No success toast — the form-close + new-row visibility are
@@ -494,7 +498,8 @@ delete path either — the row disappears, that's confirmation.
      and TOML round-trips.
   2. Seed a connection bound to the left pane → select Settings → edit
      endpoint → Save → assert pane reload happened (toast + pane
-     `current_connection_key` still bound to the same name).
+     `current_connection_key == ("s3-compatible", name)` still bound to the
+     same S3-compatible connection name).
   3. Same seed → Delete → confirm modal → confirm → assert TOML removal
      and pane revert to local.
 

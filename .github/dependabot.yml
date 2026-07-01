@@ -1,6 +1,6 @@
 version: 2
 updates:
-  - package-ecosystem: pip
+  - package-ecosystem: uv
     directory: "/"
     schedule:
       interval: weekly
@@ -43,7 +43,7 @@ updates:
   # scripts/test-services/s3/docker-compose.yml. Keeps the supply-
   # chain-reproducibility pin (no ``:latest``) maintained without
   # manual upgrades.
-  - package-ecosystem: docker
+  - package-ecosystem: docker-compose
     directory: "/scripts/test-services/s3/"
     schedule:
       interval: weekly

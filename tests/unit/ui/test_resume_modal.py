@@ -53,7 +53,6 @@ async def test_resume_modal_renders_entries() -> None:
             assert isinstance(modal, ResumeModal)
             buttons = modal.query(ModalButton)
             assert {b.button_id for b in buttons} == {
-                "resume-resume-btn",
                 "resume-abort-btn",
                 "resume-decide-btn",
                 "resume-keep-btn",

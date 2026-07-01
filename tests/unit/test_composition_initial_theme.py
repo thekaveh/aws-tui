@@ -44,6 +44,23 @@ def test_initial_theme_honours_defaults_theme_from_config(tmp_path: Path) -> Non
         ctx.root_vm.dispose()
 
 
+def test_keybinding_overlay_validates_but_does_not_change_live_legend_keys(
+    tmp_path: Path,
+) -> None:
+    cfg = tmp_path / "config"
+    cache = tmp_path / "cache"
+    _write_config(
+        cfg,
+        '[keybindings]\npane.delete = "x"\n',
+    )
+    cache.mkdir()
+    ctx = build_app_context(config_dir=cfg, cache_dir=cache)
+    try:
+        assert ctx.keymap_store.resolve("pane.delete") == ("d",)
+    finally:
+        ctx.root_vm.dispose()
+
+
 def test_initial_theme_falls_back_to_carbon_on_broken_config(tmp_path: Path) -> None:
     cfg = tmp_path / "config"
     cache = tmp_path / "cache"

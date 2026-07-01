@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from pathlib import Path
 
@@ -201,6 +202,15 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
     assert "minio-test" in cfg.connections
     entry = cfg.connections["minio-test"]
     assert entry.endpoint_url == "http://localhost:9000"
+    assert entry.credentials == "static"
+
+    from aws_tui.infra.connection_resolver import ConnectionResolver
+
+    resolved = ConnectionResolver(
+        config_store=ConfigStore(path=config_dir / "config.toml")
+    ).resolve("minio-test")
+    assert resolved.access_key_id == "AKIATEST"
+    assert resolved.secret_access_key == "SECRETTEST"
 
 
 @pytest.mark.asyncio
@@ -284,6 +294,172 @@ async def test_dual_pane_mounts_at_startup_without_blank_screen(tmp_path: Path) 
             )
     finally:
         _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_settings_selection_during_boot_replays_after_boot_mount(
+    tmp_path: Path,
+) -> None:
+    """A user nav choice made during slow boot must survive boot completion.
+
+    ``_boot_in_flight`` suppresses the initial seed S3 selection to avoid a
+    duplicate startup mount. It must not drop a real user selection forever:
+    the late boot worker can otherwise mount file panes over a Settings nav
+    selection.
+    """
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    (config_dir / "config.toml").write_text(
+        _MINIO_LOCAL_TOML + '\n[defaults]\nconnection = "minio-local"\n'
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _slow_try_connection(conn: object) -> str:
+        started.set()
+        await release.wait()
+        await app._mount_local_only_dual_pane(  # type: ignore[arg-type]
+            initial_conn=conn,
+            reason="test-delayed-boot",
+        )
+        return "ok"
+
+    app._try_connection = _slow_try_connection  # type: ignore[method-assign]
+
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+
+            from aws_tui.ui.widgets.dual_pane import DualPane
+            from aws_tui.ui.widgets.settings_view import SettingsView
+            from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
+
+            ctx.root_vm.services_menu.switch_service_command.execute(SETTINGS_NAV_ID)
+            await pilot.pause()
+            assert ctx.root_vm.services_menu.selected_id == SETTINGS_NAV_ID
+
+            release.set()
+            await app.workers.wait_for_complete(  # type: ignore[attr-defined]
+                list(app.workers._workers)  # type: ignore[attr-defined]
+            )
+            await pilot.pause()
+
+            host = pilot.app.query_one("#content-host")
+            assert ctx.root_vm.content_host.current_id == SETTINGS_NAV_ID
+            assert len(host.query(SettingsView)) == 1
+            assert len(host.query(DualPane)) == 0
+    finally:
+        with contextlib.suppress(Exception):
+            _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_settings_selection_during_boot_mounts_without_waiting_for_boot_chain(
+    tmp_path: Path,
+) -> None:
+    """A real user nav choice during boot must abort the slow S3 attempt.
+
+    Replaying Settings after the boot chain eventually finishes still leaves
+    users stuck behind a slow or unreachable endpoint. The Settings page is the
+    escape hatch for fixing that config, so it should mount immediately and
+    cancel the in-flight boot attempt.
+    """
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    (config_dir / "config.toml").write_text(
+        _MINIO_LOCAL_TOML + '\n[defaults]\nconnection = "minio-local"\n'
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def _slow_try_connection(conn: object) -> str:
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        await app._mount_local_only_dual_pane(  # type: ignore[arg-type]
+            initial_conn=conn,
+            reason="test-delayed-boot",
+        )
+        return "ok"
+
+    app._try_connection = _slow_try_connection  # type: ignore[method-assign]
+
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+
+            from aws_tui.ui.widgets.dual_pane import DualPane
+            from aws_tui.ui.widgets.settings_view import SettingsView
+            from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
+
+            try:
+                ctx.root_vm.services_menu.switch_service_command.execute(SETTINGS_NAV_ID)
+                await pilot.pause()
+                await pilot.pause()
+
+                host = pilot.app.query_one("#content-host")
+                assert ctx.root_vm.content_host.current_id == SETTINGS_NAV_ID
+                assert len(host.query(SettingsView)) == 1
+                assert len(host.query(DualPane)) == 0
+                assert cancelled.is_set()
+            finally:
+                release.set()
+                with contextlib.suppress(Exception):
+                    await app.workers.wait_for_complete(  # type: ignore[attr-defined]
+                        list(app.workers._workers)  # type: ignore[attr-defined]
+                    )
+    finally:
+        with contextlib.suppress(Exception):
+            _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_s3_selection_after_local_fallback_retries_initial_connection(
+    tmp_path: Path,
+) -> None:
+    """Selecting S3 after fallback should be an explicit retry path."""
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    (config_dir / "config.toml").write_text(
+        _MINIO_LOCAL_TOML + '\n[defaults]\nconnection = "minio-local"\n'
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    conn = ctx.connection_resolver.resolve("minio-local")
+    app._chain_resolved_to_local = True
+    app._chain_initial_conn = conn
+    ctx.unreachable_connections.add((conn.kind, conn.name))
+    attempts: list[str] = []
+
+    async def _noop_cancel_transfers() -> None:
+        return None
+
+    async def _forbidden_local_mount(*args: object, **kwargs: object) -> None:
+        raise AssertionError("successful S3 retry should not preserve local-only fallback")
+
+    async def _fake_try_connection(retry_conn: object) -> str:
+        attempts.append(retry_conn.name)
+        return "ok"
+
+    app._cancel_transfer_workers_before_content_swap = _noop_cancel_transfers  # type: ignore[method-assign]
+    app._mount_local_only_dual_pane = _forbidden_local_mount  # type: ignore[method-assign]
+    app._try_connection = _fake_try_connection  # type: ignore[method-assign]
+
+    try:
+        await app._mount_service_view("s3")
+    finally:
+        with contextlib.suppress(Exception):
+            _dispose(ctx)
+
+    assert attempts == ["minio-local"]
+    assert app._chain_resolved_to_local is False
+    assert app._chain_initial_conn is None
+    assert (conn.kind, conn.name) not in ctx.unreachable_connections
 
 
 @pytest.mark.asyncio
@@ -535,20 +711,10 @@ async def test_boot_chain_local_fallback_populates_both_panes(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_settings_to_s3_toggle_preserves_chain_local_fallback(tmp_path: Path) -> None:
-    """When the boot chain ran out of candidates and mounted local
-    on both panes, a subsequent Settings → S3 toggle must NOT
-    rebuild the S3 DualPane (which would re-attempt the same
-    failed connections and dump the user back on the same
-    UNREACHABLE error pane the chain already navigated past).
-
-    User report against the post-PR-71 build: "shows how the S3
-    screen is again showing incorrect content despite recent
-    fixes after switching to settings and then back again to
-    S3 where it's supposed to fall back". The screenshot shows
-    the LEFT pane back in ``s3://`` mode rendering "endpoint
-    unreachable - press r to retry".
-    """
+async def test_settings_to_s3_toggle_retries_then_falls_back_to_local(
+    tmp_path: Path,
+) -> None:
+    """If an explicit S3 retry still fails, keep the user on local panes."""
     import contextlib as _contextlib
 
     from aws_tui.domain.local_fs import LocalFS
@@ -567,9 +733,14 @@ async def test_settings_to_s3_toggle_preserves_chain_local_fallback(tmp_path: Pa
         profile="dev-sso",
     )
     ctx.connection_resolver.list = lambda: [fake_conn]  # type: ignore[assignment,method-assign]
-    ctx.aws_session.probe_token = lambda _c: TokenProbeResult(  # type: ignore[assignment,method-assign]
-        state=TokenState.MISSING
-    )
+    probe_calls = 0
+
+    def _probe_missing(_conn: object) -> TokenProbeResult:
+        nonlocal probe_calls
+        probe_calls += 1
+        return TokenProbeResult(state=TokenState.MISSING)
+
+    ctx.aws_session.probe_token = _probe_missing  # type: ignore[assignment,method-assign]
 
     app = AwsTuiApp(ctx)
     try:
@@ -598,12 +769,17 @@ async def test_settings_to_s3_toggle_preserves_chain_local_fallback(tmp_path: Pa
             dual_panes = host.query(DualPane)
             assert len(dual_panes) == 1
             dual_vm = ctx.root_vm.content_host.current
-            # LEFT pane MUST still be LocalFS — the toggle must
-            # NOT have rebuilt an S3FS provider.
+            # The explicit S3 selection re-probes the remembered
+            # connection, then falls back to local again because auth
+            # is still missing.
+            assert probe_calls >= 2
+            assert app._chain_resolved_to_local is True
+            assert app._chain_initial_conn == fake_conn
+            assert (fake_conn.kind, fake_conn.name) in ctx.unreachable_connections
             assert isinstance(dual_vm.left._provider, LocalFS), (  # type: ignore[union-attr]
-                f"expected LEFT pane provider to remain LocalFS after the "
-                f"Settings → S3 toggle (chain-fallback state persists for "
-                f"the session); got {type(dual_vm.left._provider).__name__}"  # type: ignore[union-attr]
+                f"expected LEFT pane provider to fall back to LocalFS after "
+                f"the failed Settings → S3 retry; got "
+                f"{type(dual_vm.left._provider).__name__}"  # type: ignore[union-attr]
             )
     finally:
         with _contextlib.suppress(Exception):

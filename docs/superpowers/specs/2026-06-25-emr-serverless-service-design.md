@@ -63,7 +63,7 @@ registry.register(cast("Service", emr_service))
 ServiceDescriptor(
     id="emr-serverless",
     label="EMR",
-    icon="💥",                   # U+1F4A5 COLLISION — SMP single-codepoint, 2 cells, reliable colour
+    icon="🔥",                   # U+1F525 FIRE — SMP single-codepoint, 2 cells, reliable colour
 )
 ```
 
@@ -72,14 +72,14 @@ ServiceDescriptor(
 > 1-cell text-style stroke in monospace terminals, mis-aligning the
 > nav-rail's 2-cell emoji column. PR #77 forced emoji presentation
 > with `⚡️` (BMP+VS-16); PR #79 briefly switched to `🔥`; PR #81
-> returned to `⚡️`; PR #83 finally settled on `💥` (SMP
-> single-codepoint, no VS-16 dance). The documented "icon contract"
-> for future services: **SMP single-codepoint, no variation
-> selector** — pick a glyph that reliably occupies 2 cells in
-> monospace terminals without a VS-16 trick. Symmetric with the
-> rail's literal-object naming: 🪣 = bucket, 💥 = explosion /
-> spark, ⚙️ = gear (kept on BMP+VS-16 because it's worked on the
-> user's stack), 🖥️ = computer (same).
+> returned to `⚡️`; PR #83 tried `💥` (SMP single-codepoint) but it
+> rendered too small beside the S3 bucket icon, so the shipped
+> descriptor returned to `🔥`. The documented "icon contract" for
+> future services: **SMP single-codepoint, no variation selector** —
+> pick a glyph that reliably occupies 2 cells in monospace terminals
+> without a VS-16 trick. Symmetric with the rail's literal-object
+> naming: 🪣 = bucket, 🔥 = compute/spark, ⚙️ = gear (kept on BMP+VS-16
+> because it's worked on the user's stack), 🖥️ = computer (same).
 
 ### VMx lifecycle
 
@@ -176,10 +176,10 @@ Every EMR surface inherits from existing chrome. No reinvented patterns. If EMR 
 ### Selected-row look
 
 ```css
-.entry-row.-selected { background: $bg-sel; color: $accent-soft; }
+.entry-row.-selected { background: $bg-sel; color: $text; }
 ```
 
-No `text-style: bold`. Identical to S3 pane rows and NavMenu option highlight per PR #66. The chip-filter row uses the same `$bg-sel` + `$accent-soft` shape when activated.
+No `text-style: bold`. Identical to S3 pane rows and NavMenu option highlight per PR #66, with the post-maintenance contrast update that uses `$text` on `$bg-sel`. The chip-filter row uses the same `$bg-sel` + `$text` shape when activated.
 
 ### Tab cycle
 
@@ -405,7 +405,7 @@ Levels: [ E ] [ W ] [ I ] [ D ] [ T ]   Grep: [ stage_… ]   [ stderr ▾ ]   �
 - **Stream switcher** `[stderr ▾ / stdout]`. Spark driver writes mostly to stderr.
 - **Live indicator** `●5s` ↔ `○5s` rotates between refreshing and idle. Hidden for completed runs.
 
-Chip styling follows §3: resting `$bg` + `$rule-dim`; active `$bg-sel` + `$accent-soft`.
+Chip styling follows §3: resting `$bg` + `$rule-dim`; active `$bg-sel` + `$text`.
 
 ### View bounds + scrolling
 

@@ -5,7 +5,7 @@
 
 $bg:           #ffffff;
 $bg-elev:      #f6f8fa;
-$bg-sel:       #ddf4ff;
+$bg-sel:       #c9e6f5;
 $text:         #1f2328;
 $text-muted:   #59636e;
 $text-dim:     #818b97;
@@ -36,27 +36,27 @@ StatusBar > .status-name {
 }
 
 StatusBar > .status-conn {
-    color: $accent-soft;
+    color: $text;
 }
 
 StatusBar > .status-region {
-    color: $text-muted;
+    color: $text;
 }
 
 StatusBar > .status-auth-ok {
-    color: $success;
+    color: $text;
 }
 
 StatusBar > .status-auth-warn {
-    color: $warning;
+    color: $text;
 }
 
 StatusBar > .status-auth-err {
-    color: $danger;
+    color: $text;
 }
 
 StatusBar > .status-transfers {
-    color: $accent-hot;
+    color: $text;
 }
 
 Pane {
@@ -101,7 +101,7 @@ Pane .entry-row {
 
 Pane .entry-row.-selected {
     background: $bg-sel;
-    color: $accent-soft;
+    color: $text;
 }
 
 Pane .entry-row.-marked {
@@ -163,35 +163,31 @@ CommandPalette {
     background: $bg 60%;
 }
 
-CommandPalette > .palette-prompt {
+CommandPalette .palette-prompt {
     color: $accent-hot;
     text-style: bold;
 }
 
-CommandPalette > Input {
+CommandPalette Input {
     background: $bg-elev;
     color: $text;
     border: round $accent;
 }
 
-CommandPalette > .palette-list {
+CommandPalette .palette-list {
     background: $bg-elev;
     color: $text;
     border: round $rule-dim;
 }
 
-CommandPalette > .palette-list > .palette-item {
+CommandPalette .palette-list > .palette-item {
     color: $text;
     height: 1;
 }
 
-CommandPalette > .palette-list > .palette-item.-selected {
+CommandPalette .palette-list > .palette-item.-selected {
     background: $bg-sel;
-    color: $accent-soft;
-}
-
-CommandPalette > .palette-list > .palette-item > .palette-category {
-    color: $accent-hot;
+    color: $text;
 }
 
 ConfirmModal {
@@ -313,7 +309,7 @@ ThemePickerModal _ThemeRow {
 }
 ThemePickerModal _ThemeRow.-cursor {
     background: $bg-sel;
-    color: $accent-soft;
+    color: $text;
     text-style: bold;
 }
 
@@ -552,7 +548,7 @@ NavRow.-selected {
        cursor row reads as the same visual as the file-pane
        cursor row. User explicitly asked for this. */
     background: $bg-sel;
-    color: $accent-soft;
+    color: $text;
 }
 
 /* ─── SettingsView ────────────────────────────────────────────── */
@@ -679,7 +675,7 @@ ApplicationPicker > OptionList {
 }
 ApplicationPicker > OptionList > .option-list--option-highlighted {
     background: $bg-sel;
-    color: $accent-soft;
+    color: $text;
 }
 
 JobRunsPane {
@@ -701,7 +697,7 @@ JobRunsPane > .runs-chip-row > .runs-chip {
 }
 JobRunsPane > .runs-chip-row > .runs-chip.-active {
     background: $bg-sel;
-    color: $accent-soft;
+    color: $text;
 }
 JobRunsPane > .runs-chip-row > .runs-chip-success.-active   { color: $success; }
 JobRunsPane > .runs-chip-row > .runs-chip-running.-active   { color: $accent; }
@@ -714,7 +710,7 @@ JobRunsPane .runs-row {
 }
 JobRunsPane .runs-row.-selected {
     background: $bg-sel;
-    color: $accent-soft;
+    color: $text;
 }
 JobRunsPane .runs-placeholder {
     background: $bg;
@@ -761,7 +757,7 @@ JobRunLogsPane > .logs-chip-row > .logs-chip {
 }
 JobRunLogsPane > .logs-chip-row > .logs-chip.-active {
     background: $bg-sel;
-    color: $accent-soft;
+    color: $text;
 }
 JobRunLogsPane > VerticalScroll {
     background: $bg;
@@ -772,10 +768,10 @@ JobRunLogsPane .logs-line {
 JobRunLogsPane .logs-line.-match {
     color: $text;
 }
-JobRunLogsPane > .logs-placeholder {
+JobRunLogsPane .logs-placeholder {
     color: $text-muted;
 }
-JobRunLogsPane > .logs-placeholder.-error {
+JobRunLogsPane .logs-placeholder.-error {
     color: $danger;
 }
 JobRunLogsPane > .logs-status {

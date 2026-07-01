@@ -11,7 +11,7 @@ A **Connection** is the unit aws-tui authenticates as. Two kinds:
 - `kind = "s3-compatible"` — for MinIO, Cloudflare R2, Backblaze B2,
   Wasabi, Ceph, SeaweedFS, anything with an S3-compatible API.
 
-## 1. Config schema (`~/.config/aws-tui/config.toml`)
+## 1. Config schema (`<config-dir>/config.toml`)
 ```toml
 [connections.kaveh-dev]
 kind = "aws"
@@ -24,7 +24,7 @@ endpoint_url = "http://localhost:9000"
 region = "us-east-1"
 credentials = "keychain:minio-local"      # or env:PREFIX_*, aws-profile:name, static
 force_path_style = true
-verify_tls = true
+verify_tls = false                        # http:// MinIO -> no cert to verify
 
 [connections.r2-personal]
 kind = "s3-compatible"
@@ -49,7 +49,7 @@ The `credentials` field is dispatched at runtime:
 | `static` | Inline `access_key_id` / `secret_access_key` in `config.toml` — startup warning + sticky toast |
 
 Recommended order of preference: `keychain` ▸ `env` ▸ `aws-profile`
-▸ `static`. The in-TUI first-run form writes a `static` entry; the
+▸ `static`. The in-TUI Settings form writes a `static` entry; the
 follow-up step is to move the credentials to the keychain via
 `keyring set <service> <key>` and switch the config to
 `credentials = "keychain:<service>"`.
@@ -57,7 +57,7 @@ follow-up step is to move the credentials to the keychain via
 ## 3. Auto-discovery + SSO cache probe
 `ConnectionResolver.list()` unions on **every launch**:
 
-1. `[connections.*]` entries in `~/.config/aws-tui/config.toml`
+1. `[connections.*]` entries in `<config-dir>/config.toml`
 2. AWS profiles in `~/.aws/config` and `~/.aws/credentials` —
    auto-promoted to `kind = "aws"`, `profile = "<name>"`,
    `source = "auto"`.
@@ -70,8 +70,8 @@ an `(auto)` badge in the picker.
 > auto-discovered AWS profile into a real `[connections.*]` block is
 > spec'd but deferred to v0.9 — the palette doesn't register
 > connection-management entries in v0.8.x. To materialize today, add
-> the `[connections.<name>]` block to `~/.config/aws-tui/config.toml`
-> by hand (the schema is shown in §2 above).
+> the `[connections.<name>]` block to `<config-dir>/config.toml`
+> by hand (the schema is shown in §1 above).
 
 For each AWS connection, `AwsSession.probe_token(conn)` performs a
 cheap freshness check **without calling AWS**:
@@ -118,9 +118,10 @@ Why this is useful day-to-day:
   refreshes the candidate ring without a relaunch).
 - **Cross-account / cross-vendor transfers** — put one account on the
   left pane, a different account on the right pane (each pane cycles
-  independently), then `c` (copy) or `m` (move) streams between them
-  via `CrossFsCopy` / `CrossFsMove` — no intermediate local hop
-  required.
+  independently), then `c` (copy) streams between them via
+  `CrossFsCopy` — no intermediate local hop required. The
+  `CrossFsMove` engine exists, but `m` move UI wiring is deferred to
+  v0.9.
 
 The `,` key opens **Settings** where you can add, edit, or delete
 `s3-compatible` connections (see [`docs/cookbook.md`](cookbook.md) §1
@@ -129,8 +130,10 @@ perspective — manage those through the standard `~/.aws/` tooling.
 
 `Shift+S` filters out connections that have been observed unreachable
 during the session (e.g. a stopped MinIO container). A one-line info
-toast names what was skipped on the first press; pressing `r` on the
-unreachable pane and recovering it clears the mark.
+toast names what was skipped on the first press. Selecting S3 from the
+nav after a local-only fallback retries the initial connection and
+clears that connection's unreachable mark; pressing `r` on an
+unreachable pane and recovering it also clears the mark.
 
 ## 5. Vendor quirks (manual checklist)
 - **Cloudflare R2** — no bucket versioning, no replication;
@@ -148,9 +151,11 @@ unreachable pane and recovering it clears the mark.
 ## 6. Recommended: 1-day MPU abort lifecycle rule
 Set a 1-day lifecycle rule to abort incomplete multipart uploads on
 every bucket you write to from aws-tui (or any other tool). aws-tui
-aborts MPUs on user cancel and on the resume modal's `abort all`,
-but a network drop or app crash before the abort completes can leave
-orphans that accrue charges.
+aborts user-cancelled transfers when the provider exposes the abort
+path, but startup resume/abort and explicit MPU-id journaling remain
+deferred in v0.8.x. A network drop or app crash can therefore leave
+orphans that accrue charges until the bucket lifecycle rule catches
+them.
 
 ```jsonc
 // lifecycle.json
@@ -171,8 +176,9 @@ aws s3api put-bucket-lifecycle-configuration \
 
 ## 7. First-run flow
 If `ConfigStore.load()` returns no `[connections.*]` and
-`~/.aws/{config,credentials}` is also empty, aws-tui shows a welcome
-modal on launch (per spec §6.4 Flow 5):
+`~/.aws/{config,credentials}` is also empty, v0.8.x opens the main
+screen with a local-only placeholder. The welcome modal below exists
+in the UI surface and remains the planned v0.9 startup flow:
 
 ```
 welcome to aws-tui
@@ -182,15 +188,14 @@ no AWS or S3-compatible connections configured.
   skip for now
 ```
 
-`add aws` shells out (synchronous; TUI freezes for the duration of
-the wizard, which is expected) to `aws configure sso`. `add
-s3-compatible` opens an in-TUI form prompting for name, endpoint URL,
-region, access key, secret key. `skip` proceeds to the main screen
-with no connection selected.
+Until that startup wiring lands, use `aws configure sso` /
+`aws sso login` for AWS profiles, or open Settings with `,` to add an
+S3-compatible endpoint.
 
 ## 8. Crash-recovery transfer journal
-aws-tui appends a JSONL line per completed multipart part to
-`~/.cache/aws-tui/transfers/<id>.jsonl`. On launch it scans the
-directory for journals lacking a terminal `finished` / `aborted`
-record and offers a resume / abort / decide-each / keep modal — see
-the [cookbook](cookbook.md#4-resume-after-a-crash) for the walkthrough.
+aws-tui writes a JSONL journal under
+`<cache-dir>/transfers/<id>.jsonl` for each transfer, including
+`begin` and terminal `finished` / `aborted` records. Startup scanning,
+automatic resume, and the abort / decide-each / keep modal remain
+deferred in v0.8.x; see the [cookbook](cookbook.md#4-resume-after-a-crash)
+for the planned flow and manual cleanup notes.

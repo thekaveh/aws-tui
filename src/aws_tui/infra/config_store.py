@@ -1,8 +1,9 @@
 """TOML-backed configuration store.
 
-Reads and writes ``~/.config/aws-tui/config.toml``. Pure data layer: the
-store knows nothing about credential resolution or AWS — it just shuttles
-:class:`Config` objects in and out of the file system.
+Reads and writes ``config.toml`` under the platform-specific aws-tui
+config directory. Pure data layer: the store knows nothing about
+credential resolution or AWS — it just shuttles :class:`Config` objects
+in and out of the file system.
 
 Writes are atomic via tempfile + :func:`os.replace`. A mid-write crash
 leaves the original file untouched.
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any, Final
 
 import tomli_w
+
+from aws_tui.infra.paths import config_home
 
 #: The two supported connection kinds.
 VALID_KINDS: Final[frozenset[str]] = frozenset({"aws", "s3-compatible"})
@@ -81,7 +84,7 @@ class Config:
 
 
 def _default_path() -> Path:
-    return Path.home() / ".config" / "aws-tui" / "config.toml"
+    return config_home() / "config.toml"
 
 
 class ConfigStore:
@@ -150,8 +153,18 @@ class ConfigStore:
                 credentials=body.get("credentials"),
                 access_key_id=body.get("access_key_id"),
                 secret_access_key=body.get("secret_access_key"),
-                force_path_style=bool(body.get("force_path_style", False)),
-                verify_tls=bool(body.get("verify_tls", True)),
+                force_path_style=_bool_field(
+                    body,
+                    field="force_path_style",
+                    default=False,
+                    table=f"connections.{name}",
+                ),
+                verify_tls=_bool_field(
+                    body,
+                    field="verify_tls",
+                    default=True,
+                    table=f"connections.{name}",
+                ),
             )
 
         raw_defaults = raw.get("defaults", {})
@@ -373,6 +386,13 @@ class ConfigStore:
             )
 
         self._mutate(_apply)
+
+
+def _bool_field(body: dict[str, Any], *, field: str, default: bool, table: str) -> bool:
+    value = body.get(field, default)
+    if isinstance(value, bool):
+        return value
+    raise ConfigError(f"[{table}].{field} must be a boolean")
 
 
 __all__ = [

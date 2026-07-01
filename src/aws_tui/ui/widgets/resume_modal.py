@@ -1,8 +1,10 @@
 """ResumeModal screen bound to :class:`ResumeVM`.
 
-Shown when ``TransferJournal.find_unfinished()`` returns at least one
-entry on startup. Four buttons map to :class:`ResumeAction` per spec
-§7.6: resume all, abort all, decide each, keep journal for later.
+Scaffold for the future startup scan that will show unfinished
+``TransferJournal.find_unfinished()`` entries. Automatic startup wiring is
+not live in v0.8.x, so the modal is currently test/scaffold reachable and
+surfaces the journal actions planned for that path: abort all, decide each,
+keep journal for later.
 """
 
 from __future__ import annotations
@@ -23,7 +25,6 @@ class ResumeModal(ModalScreen[ResumeAction]):
 
     BINDINGS = [  # noqa: RUF012
         ("escape", "keep_for_later", "Keep for later"),
-        ("r", "resume_all", "Resume all"),
         ("a", "abort_all", "Abort all"),
         ("d", "decide_each", "Decide each"),
         ("k", "keep_for_later", "Keep for later"),
@@ -67,14 +68,9 @@ class ResumeModal(ModalScreen[ResumeAction]):
                         markup=False,
                     )
             with Horizontal(classes="modal-footer"):
-                yield ModalButton("resume all", button_id="resume-resume-btn", classes="-primary")
                 yield ModalButton("abort all", button_id="resume-abort-btn", classes="-danger")
                 yield ModalButton("decide each", button_id="resume-decide-btn")
-                yield ModalButton("keep for later", button_id="resume-keep-btn")
-
-    def action_resume_all(self) -> None:
-        self._vm.resume_all_command.execute()
-        self.dismiss(ResumeAction.RESUME_ALL)
+                yield ModalButton("keep for later", button_id="resume-keep-btn", classes="-primary")
 
     def action_abort_all(self) -> None:
         self._vm.abort_all_command.execute()
@@ -92,9 +88,7 @@ class ResumeModal(ModalScreen[ResumeAction]):
         # ModalButton bubbles its click up; we read the tagged button_id.
         target = event.widget
         button_id = getattr(target, "button_id", None)
-        if button_id == "resume-resume-btn":
-            self.action_resume_all()
-        elif button_id == "resume-abort-btn":
+        if button_id == "resume-abort-btn":
             self.action_abort_all()
         elif button_id == "resume-decide-btn":
             self.action_decide_each()

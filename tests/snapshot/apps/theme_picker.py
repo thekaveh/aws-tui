@@ -41,7 +41,7 @@ class ThemePickerSnapshotApp(App[None]):
     async def on_mount(self) -> None:
         modal = ThemePickerModal(picker=self._picker, hub=self._hub)
         await self.push_screen(modal)
-        await self.refresh_bindings()
+        self.refresh_bindings()
         # Move cursor to row 3 (amber) so the snapshot exercises the
         # cursor highlight (different theme position per row keeps the
         # snapshot informative).

@@ -92,9 +92,9 @@ def seeded_demo_emr() -> InMemoryEmr: ...
 
 | Profile | Buckets | Sample objects |
 |---|---|---|
-| `demo-dev` | `etl-input/`, `etl-staging/` | 20 objects: `raw/events/2026-06-{25,26,27}.json.gz`, `inbox/manifest.csv`, etc. |
-| `demo-prod` | `data-lake/`, `etl-output/` | 30 objects: `silver/customers/year=2026/month=06/part-0000.parquet`, `curated/marts/sales/snapshot.parquet`, mixed sizes 1 KB–500 MB |
-| `demo-shared` | `assets/`, `archive/` | 10 objects: `logo.png`, `report-2026Q2.pdf`, `backup-{01..07}.tar.gz` |
+| `demo-dev` | `etl-input/`, `etl-staging/` | 10 objects: `raw/events/2026-06-{25,26,27}.json.gz`, `inbox/manifest.csv`, etc. |
+| `demo-prod` | `data-lake/`, `etl-output/` | 10 objects: `silver/customers/year=2026/month=06/part-0000.parquet`, `gold/marts/sales/snapshot.parquet`, mixed sizes 2 KB–510 MB |
+| `demo-shared` | `assets/`, `archive/` | 6 objects: `logo.png`, `report-2026Q2.pdf`, `backup-{01..03}.tar.gz` |
 
 **EMR seed** (one fixture, shared across all aws-kind demo
 connections — see component 5 for the singleton rationale):
@@ -103,15 +103,13 @@ connections — see component 5 for the singleton rationale):
   `ad-hoc-queries` (STOPPED)
 - 10 job runs spread over the last 7 days:
   - 6 SUCCESS (4 on `etl-pipeline-1`, 2 on `ad-hoc-queries`)
-  - 2 FAILED with realistic `[ContainerError(ContainerGroupId=…,
-    ErrorCode=OutOfMemoryError)]` stateDetails — exercises the
-    markup-escape fix from PR #96
+  - 2 FAILED without fake S3 log URIs; the UI surfaces typed no-log
+    states instead of linking to nonexistent demo logs
   - 1 RUNNING
   - 1 PENDING
-- The 2 FAILED runs have S3 log URIs pointing to in-memory log
-  files (~200 lines each of fake Spark driver output with
-  `INFO` / `WARN` / `ERROR` / `Caused by:` matches that
-  exercise the default filter)
+- Fake failed-run S3 log URIs are intentionally not seeded in the
+  production demo fixture; that earlier design note is superseded by
+  the no-log state above.
 
 ### 4. Demo connection resolver (`demo/connections.py`)
 
@@ -152,7 +150,7 @@ def build_app_context(*, demo: bool = False) -> AppContext:
     if demo:
         connection_resolver = DemoConnectionResolver()
         s3_fs_factory      = lambda c: seeded_demo_fs(c.profile or "demo-default")
-        emr_client_factory = lambda c: _DEMO_EMR  # singleton
+        emr_client_factory = lambda c: _demo_emr  # per-AppContext singleton
     else:
         connection_resolver = ConnectionResolver(...)  # existing
         s3_fs_factory      = None
@@ -160,24 +158,22 @@ def build_app_context(*, demo: bool = False) -> AppContext:
     # rest of build_app_context unchanged
 ```
 
-A module-level `_DEMO_EMR: InMemoryEmr = seeded_demo_emr()` keeps
-the EMR fake stable across connection switches. Without the
-singleton, switching from `demo-dev` to `demo-prod` would re-seed
-EMR data and jarringly reset the user's in-flight clone
-progressions.
+`build_app_context(demo=True)` captures one `_demo_emr` per app
+context so the EMR fake stays stable across connection switches.
+Without the captured instance, switching from `demo-dev` to
+`demo-prod` would re-seed EMR data and jarringly reset the user's
+in-flight clone progressions.
 
 **Poller cadence in demo mode.** EMR page's
-`set_interval(60.0, …)` calls become
-`set_interval(5.0 if ctx.demo else 60.0, …)`. The cadence-decay
-path (PR #93) still pauses pollers when no active runs exist;
-since demo data is mostly terminal-state runs, the decay engages
-quickly after the 1 RUNNING demo run reaches SUCCESS.
+application/run/detail pollers use 30/30/5 seconds (production uses
+60/60/30). Detail stays at 5 seconds so the clone state walk remains
+visible on the selected run.
 
 **Visible affordances.**
 - BrandBanner subtitle reads
   `"DEMO MODE — no real AWS calls"` in `$warning`. Persistent.
 - Boot toast: one-shot Advisory on mount —
-  `"Demo mode active — try every feature; nothing persists"`.
+  `"Demo mode active — AWS data resets; local pane is real"`.
 - `aws-tui --version` prints `demo: enabled` when env var is set,
   so a stuck shell rc surfaces on the first version check.
 
@@ -199,9 +195,9 @@ Add `aws_tui.demo` as an allowed-but-restricted layer:
 
 ## Persistence
 
-Fresh state per launch. No demo data survives exit. The Local
-file pane uses a real `LocalFS` rooted at a tmpdir seeded with
-a few example files; tmpdir cleaned on exit.
+Fresh AWS/S3/EMR demo state per launch. The S3 and EMR fakes do not
+survive exit. The Local file pane is the user's real `LocalFS` root,
+so local file operations are real host filesystem operations.
 
 ## Risks and mitigations
 
@@ -238,7 +234,7 @@ a few example files; tmpdir cleaned on exit.
 - **Unit (new) 6–8 tests** in `tests/unit/demo/` covering
   `is_demo_mode_enabled()` (env var truthy/falsy combos,
   `--demo` flag, both at once), `demo_connections()`, the
-  `_DEMO_EMR` singleton stability across connection switches,
+  per-AppContext demo EMR stability across connection switches,
   and `seeded_demo_emr()`'s clone state machine with a mocked
   async clock.
 - **Integration (new) 1 test** at

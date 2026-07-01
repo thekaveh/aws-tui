@@ -10,7 +10,7 @@
 
 # Claude Code / superpowers session state (transient; specs and plans under docs/ stay tracked)
 .superpowers/
-.claude/local/
+.claude/
 .overnight-maint/
 
 # Python
@@ -46,6 +46,7 @@ ENV/
 .cache
 .pytest_cache/
 .hypothesis/
+requirements-audit.txt
 htmlcov/
 coverage.xml
 *.cover

@@ -44,12 +44,15 @@ legacy `conhost.exe` (the console window you get if you launch
 
 1. Open Windows Terminal.
 2. Open a PowerShell tab (the default profile on Windows 11).
-3. Install aws-tui:
+3. Install aws-tui from Git until the first PyPI release lands:
    ```powershell
-   pipx install aws-tui
+   pipx install git+https://github.com/thekaveh/aws-tui.git
    # or, if you have uv installed system-wide:
-   uv tool install aws-tui
+   uv tool install git+https://github.com/thekaveh/aws-tui.git
    ```
+   After aws-tui is visible on PyPI, the shorter
+   `pipx install aws-tui` / `uv tool install aws-tui` commands become
+   the preferred install path.
 4. Run:
    ```powershell
    aws-tui
@@ -85,7 +88,10 @@ Konsole, Alacritty, kitty, WezTerm. Install a Powerline-aware or Nerd
 Font for full box-drawing glyph support.
 
 If you set `$XDG_CONFIG_HOME` or `$XDG_CACHE_HOME`, aws-tui follows
-them — that's standard `platformdirs` behaviour.
+them through `platformdirs` on fresh installs. One upgrade caveat:
+when an existing legacy `~/.config/aws-tui` or `~/.cache/aws-tui`
+directory is present, that legacy directory wins so existing users do
+not silently launch against an empty config/cache root.
 
 ## 5. What's not supported
 

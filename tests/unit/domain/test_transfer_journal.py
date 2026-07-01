@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -115,6 +117,16 @@ def test_base_dir_is_created_when_missing(tmp_path: Path) -> None:
     assert (nested / f"{tid}.jsonl").is_file()
 
 
+def test_base_dir_is_private_on_posix(tmp_path: Path) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX mode bits are not available on this platform")
+    nested = tmp_path / "private"
+
+    TransferJournal(base_dir=nested)
+
+    assert stat.S_IMODE(nested.stat().st_mode) == 0o700
+
+
 def test_corrupt_file_is_skipped(tmp_path: Path) -> None:
     """A malformed jsonl file should not blow up find_unfinished."""
     (tmp_path / "bogus.jsonl").write_text("not json at all\n", encoding="utf-8")
@@ -137,3 +149,9 @@ def test_replay_preserves_upload_id_and_bytes_total(tmp_path: Path) -> None:
     assert entry.bytes_total == 12345
     assert entry.source_uri == "local:///tmp/a"
     assert entry.destination_uri == "s3://bkt/key"
+
+
+def test_domain_transfer_journal_does_not_import_infra_layer() -> None:
+    source = Path("src/aws_tui/domain/transfer_journal.py").read_text(encoding="utf-8")
+    assert "from aws_tui.infra" not in source
+    assert "import aws_tui.infra" not in source

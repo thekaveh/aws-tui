@@ -62,6 +62,17 @@ async def test_seeded_demo_emr_has_runs_across_states() -> None:
 
 
 @pytest.mark.asyncio
+async def test_seeded_demo_failed_runs_do_not_advertise_fake_s3_logs() -> None:
+    emr = seeded_demo_emr()
+    runs, _ = await emr.list_job_runs_page("etl-pipeline-1")
+    failed_ids = [r.job_run_id for r in runs if r.state is JobRunState.FAILED]
+    assert failed_ids
+
+    details = [await emr.get_job_run("etl-pipeline-1", run_id) for run_id in failed_ids]
+    assert {detail.s3_monitoring_log_uri for detail in details} == {None}
+
+
+@pytest.mark.asyncio
 async def test_clone_state_machine_walks_to_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """Submitting a fresh job kicks off a SUBMITTED → SCHEDULED →
     RUNNING → SUCCESS walk. With a mocked sleep we collapse the
@@ -95,8 +106,8 @@ async def test_clone_state_machine_walks_to_success(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_dispose_cancels_in_flight_state_walks() -> None:
-    """``InMemoryEmr.dispose()`` cancels pending state-walk tasks so
+async def test_aclose_cancels_and_drains_in_flight_state_walks() -> None:
+    """``InMemoryEmr.aclose()`` cancels pending state-walk tasks so
     demo shutdown doesn't surface ``Task was destroyed but it is
     pending`` warnings."""
     emr = seeded_demo_emr()
@@ -109,6 +120,29 @@ async def test_dispose_cancels_in_flight_state_walks() -> None:
         name="never-finishes",
     )
     assert emr._state_tasks, "expected at least one tracked task"
+    await emr.aclose()
+    # All tracked tasks should be cancelled, drained, and removed.
+    assert not emr._state_tasks
+
+
+@pytest.mark.asyncio
+async def test_dispose_requests_state_walk_cancellation() -> None:
+    """Synchronous callers still get cancellation even though only
+    ``aclose()`` can await the cancelled tasks."""
+    emr = seeded_demo_emr()
+    await emr.start_job_run(
+        "etl-pipeline-1",
+        execution_role_arn="arn:aws:iam::111111111111:role/EmrJobRole",
+        entry_point="s3://demo/etl.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=None,
+        name="dispose-cancels",
+    )
+    tasks = tuple(emr._state_tasks)
+    assert tasks
+
     emr.dispose()
-    # All tracked tasks should be cancelled and removed.
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    assert all(task.cancelled() for task in tasks)
     assert not emr._state_tasks

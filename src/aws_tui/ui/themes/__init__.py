@@ -1,1 +1,1 @@
-"""Built-in theme `.tcss` files (carbon, voidline, lattice, amber)."""
+"""Built-in theme `.tcss` files loaded by ``ThemeStore.BUILTIN_NAMES``."""

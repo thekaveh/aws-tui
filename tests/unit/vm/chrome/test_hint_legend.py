@@ -28,14 +28,16 @@ def _build(
     return legend, hub
 
 
-def test_initial_globals_include_command_palette_and_help() -> None:
+def test_initial_globals_include_help_and_theme_controls() -> None:
     # Post-PR-81: app-level fallbacks (themes/help/quit) live on the
     # ``.global_actions`` (RIGHT side of the Commands pane) NOT on
     # ``.actions`` (LEFT, service-specific).
     legend, _hub = _build()
     global_ids = {a.action_id for a in legend.global_actions}
-    assert "app.command_palette" in global_ids
+    assert "app.themes" in global_ids
+    assert "app.cycle_theme" in global_ids
     assert "app.help" in global_ids
+    assert "app.command_palette" not in global_ids
     legend.dispose()
 
 
@@ -65,7 +67,8 @@ def test_focus_on_pane_swaps_service_actions() -> None:
     # App-level globals (themes/help/quit) live on ``.global_actions``
     # post-PR-81 — NOT on ``.actions``.
     global_ids = [a.action_id for a in legend.global_actions]
-    assert global_ids[-3:] == ["app.command_palette", "app.help", "app.quit"]
+    assert global_ids[-2:] == ["app.help", "app.quit"]
+    assert "app.command_palette" not in global_ids
     legend.dispose()
 
 
@@ -85,8 +88,8 @@ def test_focus_unknown_vm_falls_back_to_globals() -> None:
     # default fallback-service chip set, and the always-visible
     # globals (themes/help/quit) live on ``.global_actions``.
     global_ids = {a.action_id for a in legend.global_actions}
-    assert "app.command_palette" in global_ids
     assert "app.help" in global_ids
+    assert "app.command_palette" not in global_ids
     legend.dispose()
 
 
@@ -184,13 +187,10 @@ def test_globals_remain_stable_across_service_switches() -> None:
     legend.dispose()
 
 
-def test_emr_serverless_chip_labels_include_filter_logs() -> None:
-    """EMR Serverless service chips must include 'filter logs' for the
-    logs filter modal."""
+def test_emr_serverless_service_chips_do_not_advertise_widget_scoped_filter() -> None:
+    """The logs filter key only works when the logs pane has focus."""
     legend, _hub = _build()
     legend.set_current_service("emr-serverless")
-    chip_labels = {a.action_label for a in legend.actions}
-    assert "filter logs" in chip_labels, (
-        f"EMR Serverless chips must include 'filter logs'; got labels: {chip_labels}"
-    )
+    action_ids = {a.action_id for a in legend.actions}
+    assert "emr.logs.filter" not in action_ids
     legend.dispose()

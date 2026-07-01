@@ -149,9 +149,9 @@ def seed_emr_data(emr: InMemoryEmr) -> None:
             job_run_id=run_id,
             entry_point="s3://demo-prod/etl/scripts/ad-hoc.py",
         )
-    # 2 FAILED runs on etl-pipeline-1 with stateDetails containing
-    # the bracket-laden ContainerError text. Exercises the markup-
-    # escape fix from PR #96.
+    # 2 FAILED runs on etl-pipeline-1. Details intentionally omit fake
+    # S3 log URIs; the demo client returns typed no-log states instead
+    # of pointing at nonexistent in-memory log files.
     for i, days_ago in enumerate([3, 1]):
         run_id = f"r-etl-failed-{i:03d}"
         emr.add_job_run(
@@ -165,7 +165,6 @@ def seed_emr_data(emr: InMemoryEmr) -> None:
             application_id="etl-pipeline-1",
             job_run_id=run_id,
             entry_point="s3://demo-prod/etl/scripts/nightly.py",
-            s3_monitoring_log_uri=f"s3://demo-prod/emr-logs/{run_id}/",
         )
     # 1 RUNNING run on etl-pipeline-1.
     emr.add_job_run(

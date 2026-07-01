@@ -7,8 +7,7 @@
 > rough recipe.
 
 Place finished artifacts under `docs/assets/` (create if missing) and
-swap the matching `<!-- screenshot: TODO ... -->` comment for an
-embed:
+embed them at the section named in each item:
 
 - For `.cast` files: `[![asciicast](https://asciinema.org/a/<id>.svg)](https://asciinema.org/a/<id>)`
 - For PNG: `![<alt>](assets/<file>.png)`
@@ -29,26 +28,31 @@ aws-tui
 # press q to exit
 ```
 
-Replace the README's first `<!-- screenshot: TODO ... -->` comment.
+Embed under the README hero image / status block if a fresh terminal
+recording is still useful after the current hero asset.
 
-## 2. First-run modal (`README.md` Quickstart section)
+## 2. First-run startup placeholder (`README.md` Quickstart section)
 
 Format: PNG screenshot at 120×40.
 
 Recipe:
 
 ```bash
-# Force the first-run path with empty stubs:
-mv ~/.config/aws-tui ~/.config/aws-tui.bak 2>/dev/null
-HOME=/tmp/aws-tui-firstrun aws-tui &
-# take a screenshot of the modal (macOS: Cmd+Shift+4, drag the
-# terminal window). Save as docs/assets/first-run-voidline.png.
-# Restore:
-mv ~/.config/aws-tui.bak ~/.config/aws-tui 2>/dev/null
+# Force the current no-connection startup path with an isolated HOME:
+tmp_home="$(mktemp -d)"
+HOME="$tmp_home" aws-tui &
+# take a screenshot of the local-only/no-connection placeholder
+# (macOS: Cmd+Shift+4, drag the terminal window). Save as
+# docs/assets/first-run-voidline.png.
+# Cleanup after the recording:
+rm -rf "$tmp_home"
 ```
 
 Or set the theme to `voidline` first via `theme = "voidline"` in
 the config of the temp HOME for a more striking image.
+
+Record the welcome modal separately when the v0.9 first-run startup
+wiring lands.
 
 ## 3. S3 → local copy walkthrough (cookbook: connect to MinIO)
 
@@ -61,17 +65,17 @@ asciinema rec -t "aws-tui: MinIO -> local copy" \
     docs/assets/minio-copy.cast
 # inside:
 aws-tui
-# : connection switch -> minio-local
+# Shift+S until the left pane title shows minio-local
 # navigate into a bucket
-# v (multi-select), space-space on two files
+# use Shift+Down or Ctrl+Click to mark two files
 # c (copy)
 # confirm
-# t (transfers tray) shows progress
+# transfers overlay shows progress
 # q
 ```
 
 Embed below the "Use it" step of the MinIO recipe in
-[cookbook.md](cookbook.md#1-connect-to-a-local-minio).
+[cookbook.md](cookbook.md#15-use-it).
 
 ## 4. Theme switch (cookbook: switch theme)
 
@@ -84,11 +88,10 @@ asciinema rec -t "aws-tui: theme switch" \
     docs/assets/theme-switch.cast
 # inside:
 aws-tui
-# :
-# theme switch -> voidline -> Enter
+# t
+# select voidline -> Enter
 # pause 2 seconds to admire
-# :
-# theme switch -> amber -> Enter
+# Shift+T until amber is active
 # pause 2 seconds
 # q
 ```
@@ -103,8 +106,9 @@ Recipe:
 
 ```bash
 # Step 1: seed a fake unfinished journal:
-mkdir -p ~/.cache/aws-tui/transfers
-cat > ~/.cache/aws-tui/transfers/seedabc.jsonl <<'EOF'
+CACHE_DIR="$(uv run python -c 'from aws_tui.infra.paths import cache_home; print(cache_home())')"
+mkdir -p "$CACHE_DIR/transfers"
+cat > "$CACHE_DIR/transfers/seedabc.jsonl" <<'EOF'
 {"kind":"begin","transfer_id":"seedabc","source_uri":"local:///tmp/api.json","destination_uri":"s3://bucket/api.json","bytes_total":4200000,"upload_id":"mpu-zzz","ts":"2026-06-13T23:45:11Z"}
 {"kind":"part","part_index":1,"etag":"\"a\"","bytes_written":2097152,"ts":"2026-06-13T23:45:13Z"}
 EOF
@@ -113,16 +117,16 @@ asciinema rec -t "aws-tui: resume after crash" \
     docs/assets/resume.cast
 # inside:
 aws-tui
-# observe: resume modal pops up listing the seeded transfer
-# press k (keep for later) or a (abort all) — either works for the demo
+# planned v0.9 capture: resume modal pops up listing the seeded transfer
+# press k (keep for later) or a (abort all) - either works once wired
 # q
 ```
 
-Cleanup after recording: `rm ~/.cache/aws-tui/transfers/seedabc.jsonl`.
+Cleanup after recording: `rm "$CACHE_DIR/transfers/seedabc.jsonl"`.
 
 Embed below "What happens on next launch" in the resume recipe.
 
-## 6. Crash modal (cookbook: resume after a crash, second half)
+## 6. Crash dump / planned crash modal (cookbook: resume after a crash, second half)
 
 Format: PNG screenshot.
 
@@ -139,7 +143,6 @@ gets dumped on a crash" section.
 
 ## 7. When you're done
 
-Once the artifacts land, update the `<!-- screenshot: TODO ... -->`
-markers in `README.md` and `docs/cookbook.md` and (optionally) delete
-this file. The CHANGELOG entry for the docs-completion can be a
-trailing `docs:` commit.
+Once the artifacts land, embed them in the target sections named above
+and (optionally) delete this file. The CHANGELOG entry for the
+docs-completion can be a trailing `docs:` commit.

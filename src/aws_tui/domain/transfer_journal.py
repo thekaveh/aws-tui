@@ -3,14 +3,15 @@
 Each transfer owns one append-only JSONL file at
 ``~/.cache/aws-tui/transfers/<id>.jsonl``. The journal records:
 
-- a ``begin`` line with source/destination URIs and the optional S3
-  multipart ``upload_id`` and total size,
-- one ``part`` line per completed part (index + etag + bytes),
+- a ``begin`` line with source/destination URIs, total size, and an
+  optional S3 multipart ``upload_id`` for future explicit-MPU flows,
+- optional ``part`` lines when a transfer implementation supplies
+  completed part metadata,
 - a terminal ``finished`` or ``aborted`` marker.
 
 On startup, :meth:`TransferJournal.find_unfinished` scans the directory
-and replays each file, returning the in-flight entries so the resume
-machinery can pick them up.
+and replays each file, returning the in-flight entries so future
+startup resume machinery can pick them up.
 
 The journal is intentionally sync-only — file writes are cheap and
 fsync semantics are clearer without async indirection. Domain layer
@@ -19,6 +20,7 @@ operations can call it from anywhere.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -37,6 +39,13 @@ def _default_journal_dir() -> Path:
     # preserves the layer boundary (domain → infra is technically allowed
     # but cleaner to avoid for a fallback constant like this).
     return Path.home() / ".cache" / "aws-tui" / "transfers"
+
+
+def _ensure_private_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        with contextlib.suppress(OSError):
+            path.chmod(0o700)
 
 
 def _now_iso() -> str:
@@ -73,9 +82,7 @@ class TransferJournal:
         # and multipart upload IDs that shouldn't be readable by other
         # local users on shared systems. Match ConfigStore.save's
         # defense-in-depth.
-        from aws_tui.infra.paths import ensure_private_dir
-
-        ensure_private_dir(self._dir)
+        _ensure_private_dir(self._dir)
 
     # ------------------------------------------------------------------
     # Lifecycle

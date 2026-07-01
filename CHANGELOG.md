@@ -72,15 +72,20 @@ will be set at cut time.
   provider returns ``IsTruncated=True`` without a
   ``NextContinuationToken`` (MinIO has historically shipped this
   edge case). Pattern now matches ``emr_logs.py::list_log_files``.
+- **Resume modal no longer advertises unwired resume-all.** Automatic
+  transfer resume remains deferred, so resume-all is removed; abort all
+  and keep-for-later are wired, while decide-each remains a deferred
+  no-op placeholder.
 
 ### Docs
 
 - ``docs/superpowers/specs/`` — added the demo-mode and
   cross-platform-readiness design specs (in ``fc55c6a``).
-- ``SECURITY.md`` — supported-version table now declares 0.8.x as
-  latest; ``docs/homebrew-bootstrap.md`` adopts the §3.9 numbered
-  heading mandate; ``docs/recording-todo.md`` retargets to "v0.8.0
-  docs feel done".
+- ``SECURITY.md`` — supported-version table now distinguishes the
+  pending 0.8.x line from the latest tagged 0.7.x release;
+  ``docs/homebrew-bootstrap.md`` adopts the §3.9 numbered heading
+  mandate; ``docs/recording-todo.md`` retargets to "v0.8.0 docs feel
+  done".
 - README §4 — indexed three previously-orphaned post-tag specs
   (public-release-pipeline, cross-platform-readiness, demo-mode)
   and the maintainer-facing ``docs/RELEASING.md`` +
@@ -135,13 +140,12 @@ will be set at cut time.
   ``EmrServerlessPage.action_open_application_picker``; with the
   popover now actually visible the keystroke produces the
   expected affordance.
-- **EMR Serverless icon settled on ``💥`` COLLISION** (PR #83,
-  item #3). U+1F4A5 — fourth icon attempt (PR #77 bare ``⚡`` →
-  PR #79 ``🔥`` → PR #81 ``⚡️`` with VS-16 → PR #83 ``💥``).
-  SMP single-codepoint, 2-cell colour reliably, keeps the
-  spark / electricity / explosion semantic without the
-  BMP+VS-16 fallback risk that PR #81's ``⚡️`` carried on a
-  user's terminal. Updated at the descriptor in
+- **EMR Serverless icon settled back on ``🔥`` FIRE.** PR #83
+  tried ``💥`` after earlier ``⚡`` / ``⚡️`` experiments, but the
+  collision glyph rendered too small beside the S3 bucket icon. The
+  shipped descriptor uses the PR #79 fire glyph: SMP single-codepoint,
+  2-cell colour reliably, and full bounding box. Updated at the
+  descriptor in
   ``services/emr_serverless/service.py`` and the dropdown
   labels in ``ui/widgets/emr_serverless/application_picker.py``;
   the documented icon contract in ``nav_menu.py`` is now
@@ -179,7 +183,7 @@ will be set at cut time.
 ### Added (prior entries)
 
 - **EMR Serverless read-only browser** (PR #76, service PR-A). New
-  ``💥`` nav-rail entry next to S3, gated to AWS-only connections.
+  ``🔥`` nav-rail entry next to S3, gated to AWS-only connections.
   Applications dropdown, master-detail Job Runs pane + Job Run Detail
   pane with multi-select state-filter chips, three independent
   pollers (apps 30 s / runs 10 s with 6:1 decay when no active runs /
@@ -210,15 +214,15 @@ will be set at cut time.
   "Commands"; the strip is also split into a service-actions row
   (focused-pane block) and a global row, with hamburger margin /
   border alignment tightened in the same PR.
-- **EMR Serverless icon — the ⚡️ ↔ 🔥 ↔ ⚡ ↔ 💥 saga** (PR #77 /
+- **EMR Serverless icon — the ⚡️ ↔ 🔥 ↔ ⚡ ↔ 💥 ↔ 🔥 saga** (PR #77 /
   #79 / #81 / #83). Bare `⚡` (PR #76) rendered as a narrow 1-cell
   text-style stroke in SF Mono / JetBrains Mono / Fira Code,
   mis-aligning the nav-rail's 2-cell emoji column. PR #77 forced
   emoji presentation with `⚡️` (BMP U+26A1 + U+FE0F VS-16);
   PR #79 briefly tried `🔥` (SMP, reliable 2-cell colour);
   PR #81 returned to `⚡️` with VS-16 per user ask; PR #83 picked
-  `💥` (SMP U+1F4A5 COLLISION) as the final settled glyph after
-  the BMP+VS-16 form broke layout again on the user's stack. The
+  `💥` (SMP U+1F4A5 COLLISION), then the shipped descriptor returned
+  to `🔥` after collision rendered too small beside the S3 bucket. The
   documented icon contract is codified in
   `nav_menu.py::_format_collapsed_prompt` /
   `_format_expanded_prompt` — SMP single-codepoint, no VS-16.
@@ -482,18 +486,14 @@ will be set at cut time.
   ``utf-8``. Three call sites updated:
   ``_discover_aws_profiles`` (config + credentials) and
   ``_read_aws_credentials_profile``.
-- **(third maintenance loop, pass 15)** ``composition.build_app_context``
-  now passes ``config.keybindings.bindings`` to ``KeymapStore``
-  as the ``overlay`` argument. The Deferred-section entry
-  promised "`[keybindings]` overlays in `config.toml` parse and
-  validate but do not yet affect the live keymap" — the live-
-  keymap half is gated on the deferred ``BindingResolver`` work,
-  but the parse-and-validate half wasn't actually happening
-  because ``KeymapStore()`` was constructed with no args.
-  Users who had a ``[keybindings]`` block in their config saw it
-  silently ignored. A malformed overlay (``UnknownAction``) is
-  now caught and logged rather than crashing startup; the
-  keymap falls back to defaults.
+- **(third maintenance loop, pass 15 / corrected in pass 10 of this run)**
+  ``composition.build_app_context`` validates
+  ``config.keybindings.bindings`` by constructing a temporary
+  ``KeymapStore(overlay=...)``. The runtime-visible keymap remains
+  the v0.8.x default map so the Commands strip cannot advertise
+  keys that ``AwsTuiApp.BINDINGS`` does not dispatch yet. A
+  malformed overlay (``UnknownAction``) is caught and logged rather
+  than crashing startup.
 - **(third maintenance loop, pass 18)** ``CrossFsCopy.copy`` now
   deletes the partial destination on a mid-stream write failure
   (or worker cancellation). Previously a copy that raised after
@@ -2002,7 +2002,8 @@ tracked so the next minor release can pick them up without rediscovery:
 - Initial project scaffold (M0): public GitHub repo, MIT license, VMx submodule, uv-managed dependencies, src-layout, hello-world Textual `AwsTuiApp` with `q`-to-quit, CI matrix on macos-14 / ubuntu-22.04 across Python 3.11–3.13.
 - Full design spec at `docs/superpowers/specs/2026-06-13-aws-tui-design.md`.
 
-[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/thekaveh/aws-tui/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/thekaveh/aws-tui/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/thekaveh/aws-tui/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/thekaveh/aws-tui/compare/v0.4.0...v0.5.0

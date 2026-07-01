@@ -1,9 +1,12 @@
-"""ChromeVM — aggregate of HintLegendVM, StatusBarVM, ToastStackVM.
+"""ChromeVM — aggregate of HintLegendVM, retained StatusBarVM, ToastStackVM.
 
 The chrome is the persistent UI furniture that never gets disposed during a
-session — only at app exit. It is composed as a facade around three
-independent child VMs (we don't use VMx's :class:`AggregateVM3` here
-because our child VMs are facades; AggregateVMs require real VMx VMs).
+session — only at app exit. Production chrome no longer mounts a
+``StatusBar`` widget, but the ``StatusBarVM`` stays subscribed so older
+message-flow and bookkeeping tests keep exercising the same hub path. This
+facade wraps the three independent child VMs (we don't use VMx's
+:class:`AggregateVM3` here because our child VMs are facades; AggregateVMs
+require real VMx VMs).
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 
 
 class ChromeVM:
-    """Cross-service chrome aggregate (hint legend, status bar, toasts)."""
+    """Cross-service chrome aggregate (hint legend, retained status VM, toasts)."""
 
     def __init__(
         self,

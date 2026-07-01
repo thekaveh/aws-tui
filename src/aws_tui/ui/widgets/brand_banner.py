@@ -1,14 +1,14 @@
-"""BrandBanner — block-art aws-tui logo with a Rich gradient.
+"""BrandBanner — block-art aws-tui logo with per-theme Rich gradients.
 
 Stylistic twin of the genai-vanilla bootstrap-wizard banner:
 
 - Same heavy-block / box-drawing letterforms (``██╗ ╔══╝ ╚═╝``).
-- Same 15-stop blue→cyan 256-color gradient applied char-by-char per
-  line (``color(17)`` dark navy → ``color(195)`` pale blue).
+- Six-row vertical palette selected per active theme, falling back to
+  carbon when a custom theme has no registered banner palette.
 
 The widget is intentionally static — it owns no VM state and presents
-identity, not behavior. Mounted above the StatusBar with its own rounded
-border via the parent screen's layout.
+identity, not behavior. Mounted above the main content area with its own
+rounded border via the parent screen's layout.
 """
 
 from __future__ import annotations
@@ -97,11 +97,10 @@ _LETTERS: dict[str, tuple[str, str, str, str, str, str]] = {
 
 _WORD = "AWS-TUI"
 
-# 15-stop blue→cyan gradient, identical to genai-vanilla's banner palette.
-# This is the *carbon* (default) palette — the one bouncing the user
-# off the original genai-vanilla source code. The other themes use
-# similar 6-stop sweeps in their own accent color family, picked from
-# the 256-color palette and tuned to roughly track each theme's accent.
+# Six-row carbon (default) palette, inspired by genai-vanilla's blue/cyan
+# banner. The other themes use matching 6-stop sweeps in their own accent
+# color family, picked from the 256-color palette and tuned to roughly
+# track each theme's accent.
 _GRADIENT: tuple[str, ...] = (
     "color(17)",
     "color(18)",
@@ -248,11 +247,8 @@ def _palette_for(theme_name: str) -> tuple[str, ...]:
 class BrandBanner(Widget):
     """Top-of-screen block-art "aws-tui" banner inside its own subtle border.
 
-    Palette is byte-for-byte the same 15-stop blue→cyan sweep from
-    genai-vanilla's ``bootstrapper/utils/banner.py``
-    (``color(17)`` Dark Navy → ``color(195)`` Pale Blue). The gradient
-    flows vertically: each row of the 6-row block gets one solid color
-    from the palette, top dark to bottom light.
+    The gradient flows vertically: each row of the 6-row block gets one
+    solid color from the active theme's registered palette.
     """
 
     # Only structural CSS lives here — colors / borders are theme tokens

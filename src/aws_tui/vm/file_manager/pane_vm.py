@@ -440,9 +440,10 @@ class PaneVM:
 
     @property
     def viewmodel(self) -> PaneViewModel:
-        marked = sum(1 for e in self._entries if e.is_marked)
+        marked_entries = self.marked_entries
+        marked = len(marked_entries)
         total_bytes = sum((e.entry.size or 0) for e in self._entries)
-        marked_bytes = sum((e.entry.size or 0) for e in self._entries if e.is_marked)
+        marked_bytes = sum((e.entry.size or 0) for e in marked_entries)
         placeholder, severity = self._placeholder_for_current_state()
         return PaneViewModel(
             breadcrumb=self._path.segments,
@@ -660,6 +661,8 @@ class PaneVM:
         if not (0 <= target_index < len(self._filtered)):
             return
         entry_vm = self._entries[self._filtered[target_index]]
+        if entry_vm.is_parent_link:
+            return
         if not self._is_multiselect_mode:
             self._set_multiselect(True)
         entry_vm.toggle_mark()
@@ -726,7 +729,7 @@ class PaneVM:
         ``await delete_marked()`` returning AFTER the reload has
         repopulated entries. ``r`` re-runs the reload manually on
         the rare cancel-mid-finally path."""
-        targets = [e.entry.name for e in self._entries if e.is_marked]
+        targets = [e.entry.name for e in self.marked_entries]
         if not targets:
             return
         failures: list[tuple[str, BaseException]] = []
@@ -927,6 +930,8 @@ class PaneVM:
         target = self._cursor_target()
         if target is None:
             return
+        if target.is_parent_link:
+            return
         if not self._is_multiselect_mode:
             self._set_multiselect(True)
         target.toggle_mark()
@@ -946,7 +951,9 @@ class PaneVM:
         if not self._is_multiselect_mode:
             self._set_multiselect(True)
         for idx in self._filtered:
-            self._entries[idx].set_marked(True)
+            entry = self._entries[idx]
+            if not entry.is_parent_link:
+                entry.set_marked(True)
         self._notify("viewmodel")
 
     def _clear_marks(self) -> None:

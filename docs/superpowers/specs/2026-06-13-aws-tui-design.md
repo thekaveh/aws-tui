@@ -38,10 +38,12 @@
 >   `[Unreleased]` ▸ `Deferred / v0.8 roadmap`.
 > - **§4.2 keymap table** — the table itself lists several defaults
 >   that no `BINDINGS` entry currently routes: `Ctrl+K` /
->   `Ctrl+P` / `/` / `n` / `v` / `a`, and the original `m` = move
->   / `s` = services rail mapping (now `m` = toggle nav menu and
->   `s` is unbound; see [`docs/keybindings.md`](../../keybindings.md)
->   for the live key map). New since v0.1.0: `,` opens Settings
+>   `Ctrl+P` / `/` / `n` / `v` / `a`, plus the original `m` = move
+>   mapping (currently reserved/unbound while move remains deferred)
+>   and lowercase `s` = services rail mapping (the live app uses
+>   uppercase `S` for source/app switching; see
+>   [`docs/keybindings.md`](../../keybindings.md) for the live key
+>   map). New since v0.1.0: `,` opens Settings
 >   (PR #54). These entries become active when the BindingResolver
 >   lands; consult `keybindings.md` for the authoritative current
 >   set.
@@ -55,7 +57,7 @@
 
 ## 0. Summary
 
-aws-tui is a sleek, macOS-tailored terminal UI for the AWS CLI's domain — a dual-pane Norton-Commander–style file manager for S3 in v1, with a service-plugin spine so adding EC2 / IAM / Lambda / DynamoDB / CloudWatch / ECS later is additive. Authentication is fully delegated to the AWS CLI and boto3 credential chain — if a user has run `aws sso login`, aws-tui picks it up silently. Both panes consume a `FileSystemProvider` interface, so the S3↔Local split is symmetric. The same code paths and UI also serve S3-compatible backends (MinIO, Cloudflare R2, Backblaze B2, Wasabi). The UI layer is built on Textual with a fully MVVM architecture provided by VMx, four built-in themes (Carbon default + Voidline / Lattice / Amber CRT), and full user theme override via Textual `.tcss` files.
+aws-tui is a sleek, macOS-tailored terminal UI for the AWS CLI's domain — a dual-pane Norton-Commander–style file manager for S3 in v1, with a service-plugin spine so adding EC2 / IAM / Lambda / DynamoDB / CloudWatch / ECS later is additive. Authentication is fully delegated to the AWS CLI and boto3 credential chain — if a user has run `aws sso login`, aws-tui picks it up silently. Both panes consume a `FileSystemProvider` interface, so the S3↔Local split is symmetric. The same code paths and UI also serve S3-compatible backends (MinIO, Cloudflare R2, Backblaze B2, Wasabi). The UI layer is built on Textual with a fully MVVM architecture provided by VMx, ten built-in themes (Carbon default, Voidline, Lattice, Amber CRT, Solarized Light, GitHub Light, One Light, Nord, Dracula, Gruvbox Dark), and full user theme override via Textual `.tcss` files.
 
 ## 1. Goals & non-goals
 
@@ -67,7 +69,7 @@ aws-tui is a sleek, macOS-tailored terminal UI for the AWS CLI's domain — a du
 - **Service-plugin spine** — adding a new AWS service later is a new folder under `services/<name>/` + one line in the registry, no edits anywhere else.
 - **First-class S3-compatible support** — MinIO, R2, B2, Wasabi all work day one through the same code path.
 - **Automagic auth** — cached SSO tokens are picked up silently; AWS profiles auto-discover on every launch.
-- **Real theming** — four built-in themes, the default theme is itself configurable, and users can drop `.tcss` overrides.
+- **Real theming** — ten built-in themes, the default theme is itself configurable, and users can drop `.tcss` overrides.
 - **Distribution via `pipx`** day one (`pipx install git+https://github.com/thekaveh/aws-tui`); PyPI once VMx publishes.
 
 ### 1.2 Non-goals (explicit, so they don't sneak in)
@@ -381,7 +383,7 @@ A single dim row at the bottom of the screen. Its content is a `DerivedProperty<
 
 ### 4.5 Themes
 
-Four built-ins ship; default is **Carbon** but the default is itself configurable (`theme = voidline` in config). Users can drop `~/.config/aws-tui/theme.tcss` for fine-grained overrides on top of the active built-in, or full custom themes under `~/.config/aws-tui/themes/<name>.tcss` selectable like any built-in.
+Ten built-ins ship (four dark originals, three light themes, and three community palettes); default is **Carbon** but the default is itself configurable (`theme = voidline` in config). Users can drop `<config-dir>/theme.tcss` for fine-grained overrides on top of the active built-in, or full custom themes under `<config-dir>/themes/<name>.tcss` selectable like any built-in.
 
 #### Carbon (default) — near-monochrome with ice-blue accent
 
@@ -824,7 +826,15 @@ Modal: "2 transfers from a previous session were not finished.
         [resume all] [abort all] [decide each] [keep journal for later]"
 ```
 
-"Abort all" calls `AbortMultipartUpload` per `upload_id` and deletes the journal files. `docs/connections.md` recommends users set a **1-day MPU abort lifecycle rule** on their buckets as a backstop for any orphaned MPUs.
+This early sketch predates the shipped v0.7 modal contract. The live
+implementation and tests are authoritative: startup scans pending
+journals, presents resume decisions through the transfer modal, keeps
+`decide each` intentionally deferred, and preserves journal files when
+abort cleanup cannot safely acquire or enter the S3 client. "Abort all"
+calls `AbortMultipartUpload` per `upload_id` and deletes only journals
+whose remote abort path completes. `docs/connections.md` recommends
+users set a **1-day MPU abort lifecycle rule** on their buckets as a
+backstop for any orphaned MPUs.
 
 ### 7.7 Inline pane placeholders
 

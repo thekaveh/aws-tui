@@ -332,17 +332,30 @@ class InMemoryEmr:
         if detail is not None:
             self._details[(application_id, job_run_id)] = replace(detail, state=state)
 
-    def dispose(self) -> None:
-        """Cancel any in-flight clone state-machine tasks.
+    async def aclose(self) -> None:
+        """Cancel and drain any in-flight clone state-machine tasks.
 
-        Called by ``EmrServerlessPageVM.dispose`` and (in tests)
-        ``DemoEmr.dispose()`` via test fixtures. Idempotent; safe
-        to call multiple times.
+        Called by app shutdown while the Textual event loop is still
+        alive, so cancellation can settle before the loop closes.
         """
-        for task in list(self._state_tasks):
+        tasks = tuple(self._state_tasks)
+        for task in tasks:
             if not task.done():
                 task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._state_tasks.clear()
+
+    def dispose(self) -> None:
+        """Request cancellation for in-flight clone state-machine tasks.
+
+        Synchronous callers cannot drain tasks; the done callback
+        removes them once the loop advances. Prefer :meth:`aclose`
+        during async shutdown.
+        """
+        for task in tuple(self._state_tasks):
+            if not task.done():
+                task.cancel()
 
 
 __all__ = ["InMemoryEmr"]

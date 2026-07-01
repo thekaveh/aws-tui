@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from aws_tui.ui.widgets.dual_pane import DualPane
+from aws_tui.ui.widgets.toast import ToastStack
+from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from tests.snapshot.apps.main_screen import MainScreenApp
 from tests.snapshot.conftest import TERMINAL_SIZE, THEMES
 
@@ -41,9 +44,26 @@ def test_main_screen_renders_nav_and_panes(theme: str) -> None:
         f"test should have generated it. Did the snapshot file path change?"
     )
     svg = p.read_text()
-    # MainScreenApp fixture renders the brand banner + DualPane + hint
-    # legend (no NavMenu — that's exercised by tests/snapshot/test_nav_menu.py).
-    # Assert each of those three regions has something visible.
-    assert "aws.tui" in svg, f"banner glyph missing in main-screen SVG for theme {theme!r}"
+    # MainScreenApp fixture renders the production-shaped chrome:
+    # brand banner + focus-coordinated NavMenu + DualPane + hint legend
+    # + overlays. Assert each region has something visible.
+    assert "Apache" in svg, f"banner pedigree missing in main-screen SVG for {theme!r}"
+    assert "License" in svg, f"banner pedigree missing in main-screen SVG for {theme!r}"
+    assert "S3" in svg, f"nav menu S3 label missing in main-screen SVG for theme {theme!r}"
     assert "copy" in svg, f"hint-legend 'copy' label missing for theme {theme!r}"
     assert "delete" in svg, f"hint-legend 'delete' label missing for theme {theme!r}"
+
+
+@pytest.mark.asyncio
+async def test_main_screen_harness_mounts_production_overlay_widgets() -> None:
+    """The harness includes production overlay widgets even if the SVG layer omits them."""
+    app = MainScreenApp(theme="carbon")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        assert app.query_one(ToastStack) is not None
+        dual = app.query_one("#content-dual-pane", DualPane)
+        assert dual._focus_coordinator is app._focus_coordinator  # type: ignore[attr-defined]
+        transfers = app.query_one(TransfersOverlay)
+        assert transfers is not None
+        assert [vm.id for vm in transfers.vm.transfers] == ["snap-copy-001"]

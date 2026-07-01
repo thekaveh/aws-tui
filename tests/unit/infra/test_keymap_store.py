@@ -16,6 +16,11 @@ class TestDefaults:
         store = KeymapStore()
         assert store.resolve("app.command_palette") == (":", "ctrl+k")
 
+    def test_vi_navigation_defaults_match_live_app_bindings(self) -> None:
+        store = KeymapStore()
+        assert store.resolve("pane.move_up") == ("up", "k")
+        assert store.resolve("pane.move_down") == ("down", "j")
+
     def test_unknown_action_raises(self) -> None:
         store = KeymapStore()
         with pytest.raises(UnknownAction):

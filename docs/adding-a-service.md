@@ -1,17 +1,19 @@
 # Adding a new service
 
-> v0.7.0 ships the `s3` service; post-tag PRs #76–#83 added
-> `emr-serverless` (read-only browser + clone-job-run) as the
-> second concrete implementation. This doc is the pattern for the
+> v0.8.0 ships the `s3` and `emr-serverless` services; EMR includes
+> the read-only browser, job-run logs, and clone-job-run modal. This
+> doc is the pattern for the
 > next ones (EC2, IAM, Lambda, ...). For a richer reference than S3
 > (dedicated domain client + per-service VM subtree + per-service
 > UI widget tree + service-specific modal), read
 > `src/aws_tui/services/emr_serverless/` alongside `s3/`.
 
-aws-tui's service-plugin spine is designed so adding a top-level AWS
-(or S3-compatible) service is **additive**: a new folder under
-`src/aws_tui/services/<name>/` and one registration call in
-`composition.py`. No other layer changes.
+aws-tui's service-plugin spine keeps service construction additive: a
+new folder under `src/aws_tui/services/<name>/` and one registration
+call in `composition.py`. Today the app shell still owns the view
+factory, so non-`DualPane` services also need an explicit route in
+`AwsTuiApp._mount_initial_service_view` / `_mount_service_view` until
+the planned service-owned view-factory contract lands.
 
 ## 1. The `Service` protocol
 Declared in `src/aws_tui/vm/services_protocol.py`, re-exported from
@@ -81,7 +83,12 @@ needs a `construct → destruct → dispose` surface.
     registry.register(cast("Service", ec2_service))
     ```
 
-4. **Reuse existing VM families** where possible:
+4. **Add app-shell view routing** if the service does not return a
+   `DualPaneVM`. `AwsTuiApp` currently maps `emr-serverless` to
+   `EmrServerlessPage` and wraps every other service VM in `DualPane`.
+   Add the matching widget factory branch alongside that EMR route.
+
+5. **Reuse existing VM families** where possible:
     - For storage-like services (lists with hierarchy): the file-
       manager VMs in `vm/file_manager/` work as-is — write a new
       `FileSystemProvider` (see `src/aws_tui/domain/filesystem.py`
@@ -91,7 +98,7 @@ needs a `construct → destruct → dispose` surface.
       `ListPaneVM` under `vm/<service>/` and a corresponding widget
       family under `ui/widgets/<service>/`.
 
-5. **Layer rules.** Services live one layer above domain, so they may
+6. **Layer rules.** Services live one layer above domain, so they may
     import from `domain/`, `infra/`, and the public VM surface
     (`vm/services_protocol.py`, `vm/messages.py`, and the file-manager
     VMs in `vm/file_manager/` for storage-like services that reuse
@@ -99,12 +106,12 @@ needs a `construct → destruct → dispose` surface.
     widget imports) and Textual itself — enforced by
     `scripts/check-layers.sh`. See §3 below for the full cheat-sheet.
 
-6. **Tests.** Add unit tests under `tests/unit/services/<name>/` and,
+7. **Tests.** Add unit tests under `tests/unit/services/<name>/` and,
     if your service touches AWS, integration tests under
     `tests/integration/services/<name>/` against `moto` or a vendor
     container.
 
-7. **Update docs.** Add any vendor / API quirks to
+8. **Update docs.** Add any vendor / API quirks to
     `docs/connections.md`. Update the README's features list.
 
 ## 3. Layer rules cheat-sheet for services
@@ -137,9 +144,9 @@ protocol applies.
 
 ## 5. Reference: the shipped services
 
-### 5.1. S3 (v0.7.0)
-`src/aws_tui/services/s3/service.py` is the first concrete service in
-v0.7.0. Read it end-to-end (~80 lines):
+### 5.1. S3
+`src/aws_tui/services/s3/service.py` is the first concrete service.
+Read it end-to-end (~80 lines):
 
 - `descriptor` declares `id = "s3"`, label `"S3"`, icon `"🪣"`
   (U+1FAA3 BUCKET — true emoji codepoint, renders coloured in any
@@ -156,19 +163,20 @@ v0.7.0. Read it end-to-end (~80 lines):
 - `bind_hub(hub)` late-wires the hub since the service is registered
   before `RootVM` has its hub.
 
-### 5.2. EMR Serverless (post-tag, PRs #76–#83)
+### 5.2. EMR Serverless
 `src/aws_tui/services/emr_serverless/service.py` is the second
 shipped service and demonstrates the richer per-service pattern:
 
 - `descriptor` declares `id = "emr-serverless"`, label `"EMR"`, icon
-  `"💥"` — U+1F4A5 COLLISION (SMP single-codepoint, 2 cells, in
+  `"🔥"` — U+1F525 FIRE (SMP single-codepoint, 2 cells, in
   colour reliably across SF Mono / JetBrains Mono / Fira Code). See
   the ``services/emr_serverless/service.py`` module docstring for
   the full icon saga (PR #76 bare ``⚡`` U+26A1 → PR #77 ``⚡️``
   with VS-16 → PR #79 ``🔥`` → PR #81 back to ``⚡️`` → PR #83
-  ``💥``). The documented "icon contract" future services should
-  follow up front: **SMP single-codepoint, no VS-16 dance** — the
-  glyph must reliably occupy 2 cells in monospace terminals
+  ``💥`` → reverted to ``🔥`` after ``💥`` rendered too small). The
+  documented "icon contract" future services should follow up front:
+  **SMP single-codepoint, no VS-16 dance** — the glyph must reliably
+  occupy 2 cells in monospace terminals
   without a variation-selector trick.
 - `supports()` is AWS-only (`connection.kind == "aws"`).
 - Domain client lives at `domain/emr_serverless.py` (async
@@ -177,14 +185,16 @@ shipped service and demonstrates the richer per-service pattern:
   the write-side `start_job_run` (added PR #83 for the clone flow),
   dedicated `_map_boto_error` adapter).
 - VM subtree at `vm/emr_serverless/` (`EmrServerlessPageVM`
-  orchestrates `ApplicationsVM` + `JobRunsVM` + `JobRunDetailVM`;
-  `JobRunCloneVM` sits alongside, instantiated per modal-mount).
+  orchestrates `ApplicationsVM` + `JobRunsVM` + `JobRunDetailVM` +
+  `JobRunLogsVM`; `JobRunCloneVM` sits alongside, instantiated per
+  modal-mount).
 - UI widget tree at `ui/widgets/emr_serverless/`
   (`ApplicationPicker` + `JobRunsPane` + `JobRunDetailPane` +
-  `EmrServerlessPage` composer + `JobRunCloneModal`).
-- Three independent `set_interval` pollers (apps 30 s / runs 10 s
-  with 6:1 decay when no active runs / detail 5 s with
-  terminal-state suppression).
+  `JobRunLogsPane` + `EmrServerlessPage` composer +
+  `JobRunCloneModal` + `LogFilterModal`).
+- Three independent production `set_interval` pollers (apps 60 s /
+  runs 60 s with terminal-state suppression / detail 30 s). Demo mode
+  uses shorter 30 s / 30 s / 5 s cadences so sample data feels live.
 - **Service-specific modal pattern** (PR #83). `JobRunCloneModal`
   is pushed via `app.push_screen` from the page binding
   (`Binding("c", "clone_selected_run", "Clone")`). The

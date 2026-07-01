@@ -3,8 +3,8 @@
 Active theme content is the concatenation of three layers (later wins):
 
 1. The built-in ``<name>.tcss`` shipped with the package under
-   ``src/aws_tui/ui/themes/``. v0.7.x ships four full palettes:
-   ``carbon`` (default), ``voidline``, ``lattice``, and ``amber``.
+   ``src/aws_tui/ui/themes/``. The built-in set is defined by
+   :attr:`ThemeStore.BUILTIN_NAMES`.
 2. A user-defined ``~/.config/aws-tui/themes/<name>.tcss`` that
    completely replaces the built-in if present.
 3. A user overlay ``~/.config/aws-tui/theme.tcss`` appended on top of

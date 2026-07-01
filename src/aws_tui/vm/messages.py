@@ -3,8 +3,8 @@
 VMx's :class:`vmx.messages.protocols.Message` is a structural Protocol — any
 class that exposes ``sender_name: str`` and ``sender_object: object`` satisfies
 it. These envelopes are immutable, slot-backed dataclasses that publish on the
-shared :class:`vmx.MessageHub` so reactive subscribers (status bar, chrome,
-toasts, hint legend) can react without hard references between VMs.
+shared :class:`vmx.MessageHub` so reactive subscribers (retained status VM,
+chrome, toasts, hint legend) can react without hard references between VMs.
 
 The envelopes carry plain infra types (:class:`Connection`, :class:`TokenState`)
 to keep the VM layer free of Textual / boto3 imports.
@@ -94,7 +94,7 @@ class AuthExpiredMessage:
 class TransferProgressMessage:
     """Published by ``domain.CrossFsCopy`` / ``CrossFsMove`` workers.
 
-    Subscribers: :class:`TransferVM` (per-transfer detail),
+    Subscribers: :class:`TransferVM` (per-transfer detail), retained
     :class:`StatusBarVM` (aggregate counter).
 
     ``source_label`` / ``destination_label`` are optional — included so

@@ -84,7 +84,7 @@ class S3ConnectionsVM:
 
     def add(self, entry: ConnectionEntry) -> None:
         """Validate uniqueness, persist via ConfigStore, publish 'added'."""
-        if entry.name in self.names:
+        if entry.name in {c.name for c in self._resolver.list()}:
             raise ValueError(f"connection {entry.name!r} already exists")
         self._config_store.add_connection(entry)
         self._hub.send(ConnectionListChangedMessage(names=(entry.name,), change="added"))
@@ -122,6 +122,7 @@ class S3ConnectionsVM:
             kind="s3-compatible",
             region=form.region,
             endpoint_url=form.endpoint_url,
+            credentials="static",
             access_key_id=form.access_key_id,
             secret_access_key=form.secret_access_key,
             force_path_style=form.force_path_style,

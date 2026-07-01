@@ -18,6 +18,7 @@ is absent. Tests can override both via the keyword arguments on
 from __future__ import annotations
 
 import contextlib
+import sys
 from pathlib import Path
 
 from platformdirs import user_cache_dir, user_config_dir
@@ -31,7 +32,7 @@ def ensure_private_dir(path: Path) -> None:
     Mirrors ``ConfigStore.save``'s defense-in-depth for the config
     directory: aws-tui's cache subdirectories (log, transfers, crash)
     contain endpoint URLs, partial-upload identifiers, and crash dumps
-    with the last 1000 log lines + last 100 user actions — none of
+    with traceback/log context — none of
     which should be readable by other local users on a shared system.
 
     The chmod is best-effort: filesystems that don't support POSIX
@@ -61,7 +62,7 @@ def config_home() -> Path:
     path), otherwise falls back to the platform-native location resolved
     by ``platformdirs.user_config_dir``."""
     legacy = _legacy_xdg_config()
-    if legacy.exists():
+    if sys.platform != "win32" and legacy.exists():
         return legacy
     return Path(user_config_dir(_APP_NAME, appauthor=False, roaming=True))
 
@@ -70,7 +71,7 @@ def cache_home() -> Path:
     """Return the user-cache directory for aws-tui (same legacy-first
     rules as :func:`config_home`)."""
     legacy = _legacy_xdg_cache()
-    if legacy.exists():
+    if sys.platform != "win32" and legacy.exists():
         return legacy
     return Path(user_cache_dir(_APP_NAME, appauthor=False))
 

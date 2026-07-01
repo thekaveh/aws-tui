@@ -21,6 +21,7 @@ from aws_tui.infra import paths
 def test_config_home_prefers_legacy_when_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(paths.sys, "platform", "darwin")
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     legacy = tmp_path / ".config" / "aws-tui"
     legacy.mkdir(parents=True)
@@ -31,6 +32,7 @@ def test_config_home_prefers_legacy_when_present(
 def test_cache_home_prefers_legacy_when_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(paths.sys, "platform", "linux")
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     legacy = tmp_path / ".cache" / "aws-tui"
     legacy.mkdir(parents=True)
@@ -59,6 +61,19 @@ def test_config_home_falls_back_to_platformdirs(
     assert "aws-tui" not in str(resolved.relative_to(tmp_path))  # not the legacy slot
 
 
+def test_config_home_ignores_legacy_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    legacy = tmp_path / ".config" / "aws-tui"
+    legacy.mkdir(parents=True)
+    native = tmp_path / "AppData" / "Roaming" / "aws-tui"
+    monkeypatch.setattr(paths, "user_config_dir", lambda *a, **kw: str(native))
+
+    assert paths.config_home() == native
+
+
 def test_cache_home_falls_back_to_platformdirs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -71,5 +86,18 @@ def test_cache_home_falls_back_to_platformdirs(
         "user_cache_dir",
         lambda *a, **kw: str(native),
     )
+
+    assert paths.cache_home() == native
+
+
+def test_cache_home_ignores_legacy_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    legacy = tmp_path / ".cache" / "aws-tui"
+    legacy.mkdir(parents=True)
+    native = tmp_path / "AppData" / "Local" / "aws-tui" / "Cache"
+    monkeypatch.setattr(paths, "user_cache_dir", lambda *a, **kw: str(native))
 
     assert paths.cache_home() == native

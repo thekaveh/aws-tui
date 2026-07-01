@@ -1,10 +1,10 @@
-"""ResumeVM — facade for the "unfinished transfers from a previous session" modal.
+"""ResumeVM — facade for the deferred unfinished-transfer modal.
 
-Wired into :mod:`aws_tui.composition` post-startup: after the connection
-picker resolves, scan ``TransferJournal.find_unfinished()`` and, if the
-list is non-empty, present a :class:`ResumeModal` bound to this VM. The
-VM holds an immutable snapshot of :class:`TransferJournalEntry` rows and
-exposes a single async ``ask()`` returning a :class:`ResumeAction`.
+The VM holds an immutable snapshot of :class:`TransferJournalEntry` rows
+and exposes a single async ``ask()`` returning a :class:`ResumeAction`.
+The app does not yet scan ``TransferJournal.find_unfinished()`` at
+startup, so this VM is currently covered as modal/application
+scaffolding rather than a wired launch flow.
 
 The matching apply step (resume / abort / keep) lives in the composition
 root, not on this VM — keeping the VM strictly view-side simplifies

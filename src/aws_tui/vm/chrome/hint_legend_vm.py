@@ -1,7 +1,7 @@
 """HintLegendVM — derives the bottom contextual hint row.
 
 The legend lists action chips (``<key> <label>``) appropriate to the focused
-VM, followed by always-visible app-level fallbacks (``: cmd``, ``? help``).
+VM, followed by always-visible app-level fallbacks (theme, help, quit).
 The focused VM identifier flows through :class:`FocusChangedMessage`;
 key labels flow through :class:`KeymapStore` (re-resolved on every rebuild).
 
@@ -29,7 +29,6 @@ from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
 _GLOBAL_ACTIONS: tuple[str, ...] = (
     "app.themes",
     "app.cycle_theme",
-    "app.command_palette",
     "app.help",
     "app.quit",
 )
@@ -53,7 +52,6 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "pane.refresh",
         "app.swap_source",
         "emr.clone",
-        "emr.logs.filter",
     ),
     # Settings is a static configuration page — no per-item
     # affordances apply. Pre-PR-81 it showed ``pane.refresh`` but
@@ -88,7 +86,6 @@ _ACTION_LABELS: dict[str, str] = {
     "pane.select_all": "all",
     "pane.toggle_select": "select",
     "pane.enter_multiselect": "multi",
-    "app.command_palette": "cmd",
     "app.help": "help",
     "app.themes": "themes",
     # Both ``app.cycle_theme`` and ``app.swap_source`` semantically

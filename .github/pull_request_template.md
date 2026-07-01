@@ -12,7 +12,7 @@
 - [ ] Integration tests added / updated (if AWS or S3-compat path changed)
 - [ ] Snapshot tests regenerated (if View layer changed)
 - [ ] Manually launched the TUI and verified the golden path
-- [ ] No new layer violations (`ruff check .` passes)
+- [ ] No new layer violations (`./scripts/check-layers.sh` or `uv run pre-commit run --all-files` passes)
 
 ## Notes for reviewer
 

@@ -21,7 +21,8 @@ scripts/test-services/s3/down.sh --purge # stop AND wipe the data volume
 ```
 
 Then add the snippet at `scripts/test-services/s3/config-snippet.toml`
-to `~/.config/aws-tui/config.toml` and launch `aws-tui`.
+to `<config-dir>/config.toml` and launch `aws-tui`. See
+[`docs/platforms.md`](../../docs/platforms.md) for the exact OS path.
 
 | Bucket | Shape |
 |---|---|
@@ -36,8 +37,8 @@ of the module) and re-run `up.sh` to refresh.
 
 ## 2. Extending to other AWS services
 
-When aws-tui ships its second service (EC2, IAM, Lambda, …), add a
-sibling sub-directory and follow the s3/ layout:
+When adding another locally mocked AWS service (EC2, IAM, Lambda, …),
+add a sibling sub-directory and follow the s3/ layout:
 
 ```
 scripts/test-services/<service>/

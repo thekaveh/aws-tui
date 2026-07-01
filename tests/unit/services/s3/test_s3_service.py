@@ -13,6 +13,7 @@ from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.s3 import S3Service
+from aws_tui.services.s3 import service as s3_service_module
 from aws_tui.services.s3.service import _aioboto3_session_for
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.services_protocol import Service
@@ -87,6 +88,30 @@ def test_s3_service_build_vm_returns_dualpane(tmp_path: Path) -> None:
     # Setup should be deferred until awaited — verify left has no entries yet.
     assert dual.left.entries == ()
     dual.dispose()
+
+
+def test_s3_service_provider_threads_verify_tls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class RecordingS3FS:
+        def __init__(self, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+    monkeypatch.setattr(s3_service_module, "_aioboto3_session_for", lambda _conn: object())
+    monkeypatch.setattr(s3_service_module, "S3FS", RecordingS3FS)
+    svc = S3Service(
+        transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
+        hub=_hub(),
+        dispatcher=NULL_DISPATCHER,
+        local_root=tmp_path / "local",
+    )
+
+    provider = svc._make_s3_provider(_minio_conn())
+
+    assert isinstance(provider, RecordingS3FS)
+    assert calls[0]["verify_tls"] is False
 
 
 @pytest.mark.asyncio

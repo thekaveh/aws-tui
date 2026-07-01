@@ -21,6 +21,17 @@ def config_path(tmp_path: Path) -> Path:
     return tmp_path / "config.toml"
 
 
+def test_default_path_uses_platform_config_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aws_tui.infra import config_store
+
+    config_home = tmp_path / "native-config"
+    monkeypatch.setattr(config_store, "config_home", lambda: config_home)
+
+    assert ConfigStore().path == config_home / "config.toml"
+
+
 def test_missing_file_returns_empty_config(config_path: Path) -> None:
     store = ConfigStore(path=config_path)
     cfg = store.load()
@@ -75,6 +86,21 @@ def test_invalid_kind_raises(config_path: Path) -> None:
     )
     store = ConfigStore(path=config_path)
     with pytest.raises(ConfigError, match="kind"):
+        store.load()
+
+
+@pytest.mark.parametrize("field", ["force_path_style", "verify_tls"])
+def test_connection_boolean_fields_reject_string_values(config_path: Path, field: str) -> None:
+    config_path.write_text(
+        "[connections.minio]\n"
+        'kind = "s3-compatible"\n'
+        'endpoint_url = "https://minio.local"\n'
+        f'{field} = "false"\n',
+        encoding="utf-8",
+    )
+    store = ConfigStore(path=config_path)
+
+    with pytest.raises(ConfigError, match=field):
         store.load()
 
 

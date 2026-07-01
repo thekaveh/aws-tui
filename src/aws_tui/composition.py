@@ -194,21 +194,19 @@ def build_app_context(
         )
         initial_theme = "carbon"
     # The CHANGELOG ``### Deferred / v0.9 roadmap`` entry promises
-    # that ``[keybindings]`` overlays in ``config.toml`` "parse and
-    # validate but do not yet affect the live keymap" — wiring the
-    # overlay into ``KeymapStore`` is what delivers the parse-and-
-    # validate half. The live-keymap half is gated on the deferred
-    # ``BindingResolver`` work. A malformed overlay (unknown action
-    # id, etc.) is caught and logged rather than crashing startup;
-    # the keymap silently falls back to defaults.
+    # that ``[keybindings]`` overlays in ``config.toml`` parse and
+    # validate but do not yet affect the live keymap. Validate the
+    # overlay here, then keep the runtime-visible ``KeymapStore`` on
+    # defaults so the command legend cannot advertise keys that
+    # ``AwsTuiApp.BINDINGS`` does not actually dispatch yet.
     try:
-        keymap_store = KeymapStore(overlay=keybindings_overlay)
+        KeymapStore(overlay=keybindings_overlay)
     except UnknownAction as exc:
         _logger.warning(
             "composition.keymap_overlay.invalid",
             extra={"error": str(exc), "error_type": type(exc).__name__},
         )
-        keymap_store = KeymapStore()
+    keymap_store = KeymapStore()
     theme_store = ThemeStore(
         user_themes_dir=config_dir / "themes",
         user_overlay=config_dir / "theme.tcss",
@@ -322,8 +320,10 @@ async def apply_resume_decision(
       :class:`TransferVM` placeholders that pick up where the journal left
       off; that scaffolding lives in the file-manager VM and is not yet
       hooked up to this entry point). Logged for observability.
-    - ``ABORT_ALL`` invokes ``AbortMultipartUpload`` per entry's
-      ``upload_id`` (if any), then purges every journal file.
+    - ``ABORT_ALL`` invokes ``AbortMultipartUpload`` when an entry
+      carries an ``upload_id`` (the production transfer path does not
+      currently record one), then purges successfully handled journal
+      files.
     - ``DECIDE_EACH`` is treated as ``KEEP_FOR_LATER`` per plan §M6 T2.
     - ``KEEP_FOR_LATER`` is a no-op.
     """
@@ -337,42 +337,54 @@ async def apply_resume_decision(
             # Cannot abort without an S3 connection — keep the journals
             # so the next session can try again.
             return
-        async with await aws_session.client(connection, "s3") as client:
-            for entry in entries:
-                bucket, key = _parse_s3_uri(entry.destination_uri)
-                abort_succeeded = True
-                if bucket and key and entry.upload_id:
-                    try:
-                        await client.abort_multipart_upload(
-                            Bucket=bucket, Key=key, UploadId=entry.upload_id
-                        )
-                    except Exception as exc:
-                        # Keep the journal so the next session can retry. If
-                        # we purged here, the MPU would continue to live on
-                        # S3 (consuming storage quota) with no local record
-                        # of it — silent data leak. The bucket-level MPU
-                        # lifecycle rule recommended in connections.md is
-                        # the backstop, but the journal is the recovery
-                        # path the user actually drives. The catch is broad
-                        # by design (botocore raises many shapes, and the
-                        # journal-preservation contract is verified by
-                        # ``test_abort_all_preserves_journal_when_s3_abort_fails``);
-                        # we log here so operators can still see *why* an
-                        # abort failed without reproducing it.
-                        abort_succeeded = False
-                        _logger.warning(
-                            "resume.abort.failed",
-                            extra={
-                                "transfer_id": entry.transfer_id,
-                                "bucket": bucket,
-                                "key": key,
-                                "error": str(exc),
-                                "error_type": type(exc).__name__,
-                            },
-                        )
-                if abort_succeeded:
-                    journal.mark_aborted(entry.transfer_id)
-                    journal.purge(entry.transfer_id)
+        try:
+            client_cm = await aws_session.client(connection, "s3")
+            async with client_cm as client:
+                for entry in entries:
+                    bucket, key = _parse_s3_uri(entry.destination_uri)
+                    abort_succeeded = True
+                    if bucket and key and entry.upload_id:
+                        try:
+                            await client.abort_multipart_upload(
+                                Bucket=bucket, Key=key, UploadId=entry.upload_id
+                            )
+                        except Exception as exc:
+                            # Keep the journal so the next session can retry. If
+                            # we purged here, the MPU would continue to live on
+                            # S3 (consuming storage quota) with no local record
+                            # of it — silent data leak. The bucket-level MPU
+                            # lifecycle rule recommended in connections.md is
+                            # the backstop, but the journal is the recovery
+                            # path the user actually drives. The catch is broad
+                            # by design (botocore raises many shapes, and the
+                            # journal-preservation contract is verified by
+                            # ``test_abort_all_preserves_journal_when_s3_abort_fails``);
+                            # we log here so operators can still see *why* an
+                            # abort failed without reproducing it.
+                            abort_succeeded = False
+                            _logger.warning(
+                                "resume.abort.failed",
+                                extra={
+                                    "transfer_id": entry.transfer_id,
+                                    "bucket": bucket,
+                                    "key": key,
+                                    "error": str(exc),
+                                    "error_type": type(exc).__name__,
+                                },
+                            )
+                    if abort_succeeded:
+                        journal.mark_aborted(entry.transfer_id)
+                        journal.purge(entry.transfer_id)
+        except Exception as exc:
+            _logger.warning(
+                "resume.abort.client_acquisition_failed",
+                extra={
+                    "connection": connection.name,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return
         return
     if decision is ResumeAction.DECIDE_EACH:
         # Fall back per plan §M6 T2.

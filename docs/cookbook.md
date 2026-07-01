@@ -3,7 +3,7 @@
 > Common recipes for daily aws-tui use. Each recipe is end-to-end —
 > commands you can copy/paste plus the in-app key sequence.
 
-1. [Connect to a local MinIO](#1-connect-to-a-local-minio)
+1. [Connect to and switch between data sources](#1-connect-to-and-switch-between-data-sources)
 2. [Switch the theme on the fly](#2-switch-the-theme-on-the-fly)
 3. [Customize a keybinding](#3-customize-a-keybinding)
 4. [Resume after a crash](#4-resume-after-a-crash)
@@ -34,7 +34,7 @@ scripts/test-services/s3/up.sh
 ```
 
 This wraps `docker compose` + `seed.py` and prints the config snippet
-to add to `~/.config/aws-tui/config.toml`. Teardown is
+to add to `<config-dir>/config.toml`. Teardown is
 `scripts/test-services/s3/down.sh` (add `--purge` to wipe the data
 volume). See `scripts/test-services/README.md` for the seeded
 dataset and how to extend it.
@@ -43,10 +43,10 @@ dataset and how to extend it.
 
 ```bash
 docker run --rm -d --name minio \
-    -p 9000:9000 -p 9001:9001 \
+    -p 127.0.0.1:9000:9000 -p 127.0.0.1:9001:9001 \
     -e MINIO_ROOT_USER=minioadmin \
     -e MINIO_ROOT_PASSWORD=minioadmin \
-    minio/minio:latest server /data --console-address ":9001"
+    minio/minio:RELEASE.2025-09-07T16-13-09Z server /data --console-address ":9001"
 ```
 
 ### 1.2. Store the credentials in the macOS Keychain (recommended)
@@ -69,9 +69,9 @@ security add-generic-password \
 (The Python `keyring` library aws-tui uses delegates to the macOS
 Keychain by default.)
 
-### 1.3. Add via the in-TUI first-run / add form
-The first time you run aws-tui with no connections configured, the
-welcome modal pops up — pick **add s3-compatible** and fill the form:
+### 1.3. Add via the in-TUI Settings form
+Open Settings with `,`, add an S3-compatible connection, and fill the
+form:
 
 | Field | Value |
 |---|---|
@@ -96,7 +96,7 @@ kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
 credentials = "keychain:minio-local"
 force_path_style = true
-verify_tls = true
+verify_tls = false              # http:// MinIO -> no cert to verify
 ```
 
 ### 1.4. Add by editing the file directly
@@ -185,7 +185,7 @@ the cycle immediately, no relaunch.
 
 > Expired SSO tokens are detected offline at launch via the SSO
 > cache freshness probe (see
-> [connections.md §3](connections.md#3-auto-discovery--sso-cache-probe));
+> [connections.md §3](connections.md#3-auto-discovery-sso-cache-probe));
 > a profile with an expired token surfaces an "auth required"
 > placeholder instead of hanging.
 
@@ -199,10 +199,11 @@ the in-app Settings page. Example config covering a local MinIO, a
 Cloudflare R2 production bucket, and a Backblaze B2 archive:
 
 ```toml
-# ~/.config/aws-tui/config.toml
+# <config-dir>/config.toml
 
 [connections.minio-local]
 kind = "s3-compatible"
+credentials = "static"
 endpoint_url = "http://localhost:9000"
 region = "us-east-1"
 access_key_id = "minioadmin"
@@ -212,6 +213,7 @@ verify_tls = false
 
 [connections.r2-prod]
 kind = "s3-compatible"
+credentials = "static"
 endpoint_url = "https://<account>.r2.cloudflarestorage.com"
 region = "auto"
 access_key_id = "<r2-key-id>"
@@ -220,6 +222,7 @@ force_path_style = false
 
 [connections.b2-archive]
 kind = "s3-compatible"
+credentials = "static"
 endpoint_url = "https://s3.us-west-002.backblazeb2.com"
 region = "us-west-002"
 access_key_id = "<b2-key-id>"
@@ -251,13 +254,13 @@ stylesheet instantly without a restart:
   the modal — handy when you just want to flip carbon ↔ voidline.
 
 > The command-palette path (`:` then `theme switch ▸ voidline`) is
-> spec'd in the design but not wired in v0.7.x — the palette
+> spec'd in the design but not wired in v0.8.x — the palette
 > registers no entries yet, so `t` / `Shift+T` are the working
 > shortcuts.
 
 ### 2.2. Persistent
 ```toml
-# ~/.config/aws-tui/config.toml
+# <config-dir>/config.toml
 [defaults]
 theme = "voidline"
 ```
@@ -269,16 +272,16 @@ the full per-theme palette breakdown.
 
 ### 2.3. Add a custom theme
 Copy `src/aws_tui/ui/themes/carbon.tcss` to
-`~/.config/aws-tui/themes/midnight.tcss`, edit the palette tokens,
+`<config-dir>/themes/midnight.tcss`, edit the palette tokens,
 and pick it from the theme picker (`t`) like any built-in. See
 [theming.md](theming.md#32-full-custom-themes) for the full token table.
 
 ### 2.4. Tweak just one or two colors
-Drop `~/.config/aws-tui/theme.tcss` and override what you need; the
+Drop `<config-dir>/theme.tcss` and override what you need; the
 overlay layers on top of the active built-in:
 
 ```tcss
-/* ~/.config/aws-tui/theme.tcss */
+/* <config-dir>/theme.tcss */
 .modal-title { color: #ff3df8; }
 Footer { background: #050505; }
 ```
@@ -287,20 +290,17 @@ Footer { background: #050505; }
 
 ## 3. Customize a keybinding
 
-> **v0.7.x status:** the `KeymapStore` accepts a `[keybindings]`
-> overlay (passed via the constructor) and validates that every
-> action id maps to a known one. The composition root does not yet
-> read the overlay from `config.toml` — that wiring is part of the
-> input-router work deferred from M6. The schema below is the
-> intended shape for when the loader lands; today the same effect
-> is achievable by editing
-> `src/aws_tui/infra/keymap_store.py::DEFAULT_BINDINGS` directly in
-> a fork.
+> **v0.8.x status:** the composition root reads `[keybindings]`,
+> validates action ids through `KeymapStore`, and logs/falls back to
+> defaults when an overlay is invalid. Runtime dispatch still uses
+> `AwsTuiApp.BINDINGS`, so user overrides are future-ready config and
+> do not change command chips or live keys until the post-v0.8
+> input-router work lands.
 
-Goal: rebind copy (`pane.copy`) from `c` to `y` (vim yank).
+Future-ready example: rebind copy (`pane.copy`) from `c` to `y` (vim yank).
 
 ```toml
-# ~/.config/aws-tui/config.toml
+# <config-dir>/config.toml
 [keybindings]
 "pane.copy" = "y"
 ```
@@ -320,78 +320,80 @@ Set the action to an empty list:
 "pane.delete" = []   # nope, no quick delete
 ```
 
-In a future release you'll be able to trigger the action through
-the command palette (`:` then search "delete"); the palette is
-spec'd but deferred to v0.9, so for v0.8.x an empty
-`[keybindings]` value effectively removes the action until you
-rebind it.
+When the input router lands, an empty `[keybindings]` value will remove
+the keybinding until you edit the config back. In v0.8.x the table is
+validated but does not change live dispatch, so `d` still follows
+`AwsTuiApp.BINDINGS`.
 
 ### 3.2. See the active map
 The full list of action IDs lives in
 [`docs/keybindings.md`](keybindings.md#3-action-ids) and is the same set
 declared in `src/aws_tui/infra/keymap_store.py:DEFAULT_BINDINGS`. There
-is no `--print-bindings` CLI flag in v0.7; the launch path enters the
+is no `--print-bindings` CLI flag in v0.8; the launch path enters the
 TUI directly.
 
-### 3.3. Unknown action IDs raise on startup
+### 3.3. Unknown action IDs fall back to defaults
 If you overlay an action id that isn't in `KeymapStore.DEFAULT_BINDINGS`
-(e.g. typo `pane.cpy`), `KeymapStore.resolve` raises `UnknownAction`
-on startup. That's deliberate — silently dropping a binding is the
-worst kind of bug.
+(e.g. typo `pane.cpy`), startup logs the `UnknownAction` and falls back
+to the default keymap. That's deliberate: a bad override should not make
+the TUI unlaunchable, and the log still gives maintainers the exact
+action id to fix.
 
 ---
 
 ## 4. Resume after a crash
-Long-running multipart uploads survive aws-tui crashes. Here's the
-flow:
+Long-running transfers leave local journals so interrupted work can be
+inspected or cleaned up. Full startup resume and explicit S3 multipart
+replay remain deferred in v0.8.x; this recipe documents the current
+journal shape plus the planned modal flow.
 
 ### 4.1. What gets saved
-After each completed multipart part, the in-flight transfer appends
-a JSONL line to `~/.cache/aws-tui/transfers/<id>.jsonl`:
+The production transfer path writes a `begin` line and a terminal
+`finished` or `aborted` line to `<cache-dir>/transfers/<id>.jsonl`:
 
 ```jsonl
-{"kind":"begin","transfer_id":"abc123","source_uri":"local:///x.bin","destination_uri":"s3://bucket/x.bin","bytes_total":104857600,"upload_id":"mpu-aaa","ts":"2026-06-13T23:45:11Z"}
-{"kind":"part","part_index":1,"etag":"\"d41d...\"","bytes_written":8388608,"ts":"2026-06-13T23:45:13Z"}
-{"kind":"part","part_index":2,"etag":"\"098f...\"","bytes_written":8388608,"ts":"2026-06-13T23:45:18Z"}
+{"kind":"begin","transfer_id":"abc123","source_uri":"local:///x.bin","destination_uri":"s3://bucket/x.bin","bytes_total":104857600,"upload_id":null,"ts":"2026-06-13T23:45:11Z"}
+{"kind":"finished","ts":"2026-06-13T23:45:18Z"}
 ```
 
-On normal completion it gets a trailing `{"kind":"finished",...}`
-line; on user cancel a `{"kind":"aborted",...}` line. Either
-terminates the journal.
+The journal schema can also replay optional `part` lines and an
+`upload_id` for future explicit-MPU flows, but the current S3 transfer
+path delegates multipart internals to boto and does not record those
+values.
 
 ### 4.2. What happens on next launch
-`composition.py` calls `TransferJournal.find_unfinished()` after the
-connection resolves. If any journal lacks a terminal record, the
-resume modal pops up:
+v0.8.x writes durable transfer journals, but startup scanning and the
+resume modal are not wired yet. The planned modal flow will scan
+`TransferJournal.find_unfinished()` after the connection resolves and
+surface entries that lack a terminal record:
 
 ```
 2 transfers from a previous session were not finished.
   - api-2026-06-13.json  (3.4 M / 4.2 M, 82%)
   - db-slowq-06-13.csv   (279 k / 892 k, 31%)
-  [resume all] [abort all] [decide each] [keep for later]
+  [abort all] [decide each] [keep for later]
 ```
 
 | Choice | What it does |
 |---|---|
-| **resume all** | Rebuilds in-flight `TransferVM`s from the journal and continues the multipart upload from the next part. *(In v0.7.0 this is a no-op pending hookup with file-manager TransferVMs; the journal stays on disk for next time.)* |
-| **abort all** | Calls `AbortMultipartUpload` per `upload_id` against the active S3 connection (cleans up server-side); marks the journal `aborted` and `purge()`s the file. |
-| **decide each** | *(v0.7.0: equivalent to **keep for later**; per-entry modal lands in a follow-up.)* |
-| **keep for later** | No mutation. The modal shows again on next launch. |
+| **abort all** | Planned: mark journals `aborted`, purge them, and call `AbortMultipartUpload` only for entries that carry an `upload_id`. The current production transfer path does not record S3 MPU IDs yet, so bucket lifecycle cleanup remains the server-side backstop. |
+| **decide each** | Deferred in v0.8.x: equivalent to **keep for later** until the per-entry modal lands. |
+| **keep for later** | Planned: no mutation; once startup scanning is wired, the modal will show again on next launch. |
 
 ### 4.3. Manual cleanup
 If you want to nuke the journals without going through the modal:
 
 ```bash
-rm -f ~/.cache/aws-tui/transfers/*.jsonl
+rm -f "<cache-dir>"/transfers/*.jsonl
 ```
 
-(But: this leaves orphaned MPUs on the server. The
-[1-day MPU abort lifecycle rule](connections.md#6-recommended-1-day-mpu-abort-lifecycle-rule)
-is your backstop.)
+For S3 uploads that were interrupted outside aws-tui's normal cancel
+path, the [1-day MPU abort lifecycle rule](connections.md#6-recommended-1-day-mpu-abort-lifecycle-rule)
+is the server-side backstop.
 
 ### 4.4. What gets dumped on a crash
 If aws-tui hits an unhandled exception, it writes
-`~/.cache/aws-tui/crash/<ts>.txt`:
+`<cache-dir>/crash/<ts>.txt`:
 
 ```
 aws-tui crash dump
@@ -401,27 +403,24 @@ exception: TypeError: unsupported operand type(s) for +: ...
 == traceback ==
   ...
 
-== last user actions ==
-2026-06-14T12:00:00 pane.move_down
-2026-06-14T12:00:01 pane.refresh
-2026-06-14T12:00:02 pane.delete
-
 == log tail ==
 ... (last 1000 lines of aws-tui.log)
 ```
 
-A crash modal also pops up:
+The crash dump writer is live in v0.8.x. The interactive crash modal
+below exists as UI scaffolding but is not wired into the unhandled
+exception path yet:
 
 ```
 unexpected error
   TypeError: ...
 
-  ~/.cache/aws-tui/crash/2026-06-14T12-00-00.txt
+  <cache-dir>/crash/2026-06-14T12-00-00.txt
 
   [view trace]  [continue]  [quit]
 ```
 
-The `continue` button is enabled only when the last user action was
+The planned `continue` button is enabled only when the last user action was
 **read-only** (navigation, refresh, filter, palette open). Writes
 (delete, copy, move, rename) disable it — you can't safely continue a
 write that may have partially executed.

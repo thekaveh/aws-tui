@@ -4,18 +4,17 @@
 > For the deep dive (VM tree, lifecycle invariants, capability matrix,
 > end-to-end flows), read the spec.
 
-aws-tui follows a **strict five-layer architecture** with one-way
-dependencies:
+aws-tui follows a five-layer architecture with enforced forbidden edges:
 
 ```
 View (Textual)  →  ViewModel (VMx)  →  Service plugins  →  Domain ops  →  Infrastructure
 ```
 
-Each layer imports only from layers beneath it. `scripts/check-layers.sh`
-greps for any forbidden imports across the five subtrees and is run by
-CI on every push; it's the active enforcement today. The
-`flake8-tidy-imports` ruff plugin is planned as a follow-up but is not
-yet wired (the empty config block would be a no-op).
+`scripts/check-layers.sh` parses imports with `ast`, resolves relative
+imports, and checks the banned edges in the script. `app.py` and
+`composition.py` are trusted composition roots and are not scanned.
+`services/` is a service-composition boundary: it can import concrete
+VMs to build service pages, but it cannot import Textual widgets.
 
 ## 1. Layers
 - **View** — Textual widgets and `.tcss` themes
@@ -26,9 +25,11 @@ yet wired (the empty config block would be a no-op).
 - **ViewModel** — VMx-based viewmodels with reactive commands and
   property-changed messages (`src/aws_tui/vm/`). Never imports
   Textual; tests run headless. Subtrees:
-  - `vm/chrome/` — persistent shell (status bar, hint legend, toasts,
+  - `vm/chrome/` — persistent shell state (hint legend, toasts,
     overlays like command palette / confirm / quick look / crash /
-    resume / first-run).
+    resume / first-run, plus a retained `StatusBarVM` subscriber for
+    legacy status bookkeeping even though no `StatusBar` widget is
+    mounted in the production chrome).
   - `vm/file_manager/` — pane / dual-pane / entry / transfer VMs.
   - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
     `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
@@ -43,11 +44,11 @@ yet wired (the empty config block would be a no-op).
     `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias),
     `vm/content_host_vm.py`, `vm/root_vm.py`.
 - **Service plugins** — One folder per top-level service
-  (`src/aws_tui/services/`). v0.7.0 ships `s3`; post-tag PRs #76–#83
-  add `emr-serverless` (read-only browser + clone-job-run —
-  applications listing, job-runs master-detail, state-filter chips,
-  clone-and-edit modal via `c`; no cancel / logs / vanilla submit
-  yet — PR-B / remainder-of-PR-C follow).
+  (`src/aws_tui/services/`). v0.8.0 ships `s3` and
+  `emr-serverless` (read-only browser + clone-job-run plus job-run
+  logs — applications listing, job-runs master-detail, state-filter
+  chips, clone-and-edit modal via `c`; cancel / vanilla submit are
+  still deferred).
   Each service implements the `Service` protocol (declared in
   `vm/services_protocol.py`, re-exported from `services/__init__.py`).
 - **Domain** — `FileSystemProvider` protocol with `LocalFS` and `S3FS`
@@ -70,9 +71,10 @@ handlers.
 
 - `needs_first_run(...)` — true when neither config nor `~/.aws/`
   knows any connection (spec §6.4 Flow 5).
-- `apply_resume_decision(...)` — applies the user's choice from the
-  transfer-resume modal (calls `AbortMultipartUpload` per
-  `upload_id` on ``ABORT_ALL``; purges journal files).
+- `apply_resume_decision(...)` — deferred transfer-resume helper:
+  applies a modal choice to journal entries and calls
+  `AbortMultipartUpload` only when an entry carries an `upload_id`
+  (the current production transfer path does not record MPU IDs).
 - `add_s3_compat_connection(form)` — materializes the in-TUI
   S3-compatible form into a config-store entry.
 
@@ -103,25 +105,16 @@ the same observable plus dispose-on-unmount.
 ## 5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
-| Unit | 537 | VM, domain, infra behavior; no I/O |
-| Snapshot | 214 (10 themes × 21 scenes + content-presence guards) | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards (per PR #53 lesson) |
-| Integration (in-process) | 40 | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
-| E2E | 5 | Pilot-driven user journeys |
-| Integration (MinIO) | 9 | MinIO via testcontainers (opt-in, `-m integration`) |
+| Unit | Recount with `uv run pytest tests/unit --collect-only -q | tail -1` | VM, domain, infra behavior; no I/O |
+| Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards (per PR #53 lesson) |
+| Integration (in-process) | Recount with `uv run pytest tests/integration --collect-only -q | tail -1` | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
+| E2E | Recount with `uv run pytest tests/e2e --collect-only -q | tail -1` | Pilot-driven user journeys |
+| Integration (MinIO) | Recount with `uv run pytest -m integration --collect-only -q | tail -1` | MinIO via testcontainers (opt-in, `-m integration`) |
 
-Default tier total: **1193** (`uv run pytest --collect-only -q | tail -1`
-as of PR #83 — the live count drifts with each post-tag PR). Opt-in
-MinIO tier: **9** (`uv run pytest -m integration`). Per-tier counts in
-the table above are the M6 / v0.7.0 snapshot; the totals drift with
-each post-tag PR (e.g. the third overnight-maintenance loop added 134
-snapshot content-presence guard tests, the EMR Serverless PR-A
-landing plus its four follow-ups added ~120 more, the fourth
-overnight-maintenance loop added another ~80, and PR #83 added 37
-unit / integration / snapshot tests around the clone-job-run modal
-plus the hint-legend disabled-chip wiring — bringing the snapshot
-golden file count to 214 across 10 subdirectories in
-`tests/snapshot/__snapshots__/`). Recount with
-`uv run pytest --collect-only -q`.
+Default tier total drifts with each post-tag PR. Recount with
+`uv run pytest --collect-only -q | tail -1`; recount snapshot goldens
+with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
+Opt-in MinIO tier: `uv run pytest -m integration`.
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)
 with `uv run pytest`. Opt into the MinIO tier with
@@ -129,10 +122,11 @@ with `uv run pytest`. Opt into the MinIO tier with
 default `addopts` filter excludes (`-m 'not integration'`).
 
 ## 6. Layer-rule check
-`scripts/check-layers.sh` shells out to `grep -RnE` across the five
-layer subtrees with the banned-import patterns inlined. The
-composition root and `app.py` are deliberately excluded — they live at
-`src/aws_tui/` top-level so the check never inspects them.
+`scripts/check-layers.sh` parses Python imports with `ast` across the
+five layer subtrees, resolves relative imports to absolute module names,
+and matches them against the banned-import rules inlined in the script.
+The composition root and `app.py` are deliberately excluded — they live
+at `src/aws_tui/` top-level so the check never inspects them.
 
 ## 7. Where to start reading the code
 1. `src/aws_tui/composition.py` — see how everything wires.

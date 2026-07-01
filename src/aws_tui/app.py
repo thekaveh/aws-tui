@@ -7,6 +7,7 @@ stays focused on the Textual side (compose, mounting, action handlers).
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import logging
@@ -14,11 +15,13 @@ import os
 import sys
 from collections import deque
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from reactivex.abc import DisposableBase
+from rich.markup import escape
 
 if TYPE_CHECKING:
+    from aws_tui.domain.filesystem import FileSystemProvider
     from aws_tui.vm.file_manager.pane_vm import PaneState
 
 from textual.app import App, ComposeResult
@@ -187,7 +190,7 @@ class AwsTuiApp(App[None]):
         Binding("right", "modal_right", "→", show=False, priority=True),
         Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("question_mark", "help", "Help", show=True, priority=True),
-        Binding("colon", "help", "Cmd", show=True, priority=True),
+        Binding("colon", "help", "Help", show=True, priority=True),
         Binding("t", "themes", "Themes", show=True, priority=True),
         Binding("T", "cycle_theme", "Cycle theme", show=True, priority=True),
         Binding("comma", "open_settings", "Settings", show=True, priority=True),
@@ -253,6 +256,7 @@ class AwsTuiApp(App[None]):
         # explicit recovery paths.
         self._chain_resolved_to_local: bool = False
         self._chain_initial_conn: Connection | None = None
+        self._pending_boot_nav_selection: str | None = None
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -349,7 +353,7 @@ class AwsTuiApp(App[None]):
                 group="content-mount",
             )
         else:
-            self._mount_no_connection_placeholder()
+            await self._mount_no_connection_placeholder()
 
         if ctx.demo:
             self.call_after_refresh(self._focus_demo_launch_nav)
@@ -360,7 +364,7 @@ class AwsTuiApp(App[None]):
             notifications.advise(
                 ctx.root_vm.chrome.toast_stack,
                 subject="Source",
-                message="Demo mode active — try every feature; nothing persists",
+                message="Demo mode active — AWS data resets; local pane is real",
             )
         else:
             # Drop Textual's automatic first-focus pass. By default Textual
@@ -482,6 +486,13 @@ class AwsTuiApp(App[None]):
             ctx.log_sink.info("app.boot_chain.local_fallback", initial=initial_conn.name)
         finally:
             self._boot_in_flight = False
+            selected = self._pending_boot_nav_selection
+            self._pending_boot_nav_selection = None
+            if selected is not None and ctx.root_vm.services_menu.selected_id == selected:
+                if selected == SETTINGS_NAV_ID:
+                    await self._mount_settings_view()
+                else:
+                    await self._mount_service_view(selected)
 
     def _build_attempt_chain(self, initial: Connection) -> list[Connection]:
         """Order the resolver's connection list with ``initial`` first.
@@ -557,7 +568,7 @@ class AwsTuiApp(App[None]):
                     error_type=type(exc).__name__,
                 )
                 return "error"
-            self._mount_initial_service_view()
+            await self._mount_initial_service_view()
             try:
                 return await asyncio.wait_for(self._attempt_future, timeout=90.0)
             except TimeoutError:
@@ -680,24 +691,23 @@ class AwsTuiApp(App[None]):
         ``aws sso login --profile X`` and relaunches (or until the
         ``r`` retry path clears the mark).
         """
-        from aws_tui.domain.local_fs import LocalFS
         from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
         from aws_tui.vm.file_manager.pane_vm import PaneVM
 
         ctx = self._app_ctx
+        await self._cancel_transfer_workers_before_content_swap()
         # Mark the connection unreachable so the swap-source ring
         # skips it (consistent with the reactive auto-fallback path).
         self._mark_connection_unreachable(initial_conn.kind, initial_conn.name)
 
-        # Reach into the S3Service for its local_root configuration —
-        # tests inject a custom root via this field, production
-        # defaults to None (current working dir). Without this the
-        # LocalFS would always start at CWD even in tests.
+        # Reach into the S3Service for its local_root configuration through
+        # _make_local_provider. Tests inject a custom root via this field,
+        # production defaults to None (current working dir). Without this
+        # the LocalFS would always start at CWD even in tests.
         s3_service = ctx.registry.get("s3")
-        local_root = getattr(s3_service, "_local_root", None)
 
-        def _make_local() -> LocalFS:
-            return LocalFS(root=local_root) if local_root else LocalFS()
+        def _make_local() -> FileSystemProvider:
+            return self._make_local_provider()
 
         left = PaneVM(
             provider=_make_local(),
@@ -717,9 +727,6 @@ class AwsTuiApp(App[None]):
             path_protocol="",
             connection_key=None,
         )
-        # Defensive: keep S3Service satisfied even if it inspects
-        # local_root later.
-        _ = s3_service
         # Pull the transfer journal from the S3Service the same way
         # build_vm does so cross-pane copy/move journals stay
         # consistent across the fallback.
@@ -902,7 +909,7 @@ class AwsTuiApp(App[None]):
             initial_conn = connections[0]
         return initial_conn
 
-    def _mount_initial_service_view(self) -> None:
+    async def _mount_initial_service_view(self) -> None:
         """Mount the current service's view widget into the content host.
 
         ``switch_service`` updates the VM tree; the View layer has to follow
@@ -918,9 +925,9 @@ class AwsTuiApp(App[None]):
             _svc_id = ctx.root_vm.content_host.current_id
             if current_vm is not None:
                 host = self.query_one("#content-host", Container)
-                host.remove_children()
+                await host.remove_children()
                 if _svc_id == "emr-serverless":
-                    host.mount(
+                    await host.mount(
                         EmrServerlessPage(
                             current_vm,
                             hub=ctx.hub,
@@ -929,7 +936,7 @@ class AwsTuiApp(App[None]):
                         )
                     )
                 else:
-                    host.mount(
+                    await host.mount(
                         DualPane(
                             current_vm,
                             hub=ctx.hub,
@@ -953,23 +960,26 @@ class AwsTuiApp(App[None]):
                     ctx.root_vm.chrome.toast_stack,
                     subject="Mount",
                     message=f"Service view failed: {type(exc).__name__}",
-                    action="see ~/.cache/aws-tui/log/aws-tui.log",
+                    action=f"see {ctx.log_sink.path}",
                     toast_id="mount-service-failed",
                 )
 
-    def _mount_no_connection_placeholder(self) -> None:
+    async def _mount_no_connection_placeholder(self) -> None:
         """Render a clear "configure one and relaunch" message when no
         AWS / S3-compatible connection resolves at startup.
         """
+        ctx = self._app_ctx
+        config_path = escape(str(ctx.config_store.path))
         with contextlib.suppress(Exception):
             host = self.query_one("#content-host", Container)
-            host.mount(
+            await host.remove_children()
+            await host.mount(
                 Static(
                     "\n  No AWS profile or S3-compatible connection found.\n\n"
                     "  To get started, do ONE of the following and relaunch:\n\n"
                     "    1. Run [b]aws configure[/]                      (interactive AWS keys setup)\n"
                     "    2. Run [b]aws configure sso[/]                  (interactive SSO setup)\n"
-                    "    3. Edit [b]~/.config/aws-tui/config.toml[/]     (add an AWS or S3-compatible connection)\n\n"
+                    f"    3. Edit [b]{config_path}[/]     (add an AWS or S3-compatible connection)\n\n"
                     "  See [b]docs/connections.md[/] in the repo for the [b][connections.<name>][/] schema and\n"
                     "  vendor quirks (MinIO, R2, B2, Wasabi).\n\n"
                     "  Press [b]q[/] to quit.",
@@ -978,6 +988,15 @@ class AwsTuiApp(App[None]):
                     markup=True,
                 )
             )
+
+    async def _cancel_transfer_workers_before_content_swap(self) -> None:
+        """Stop copy/delete workers before disposing the active file panes."""
+        from textual.worker import WorkerCancelled
+
+        workers = self.workers.cancel_group(self, "transfer-ops")
+        if workers:
+            with contextlib.suppress(WorkerCancelled):
+                await self.workers.wait_for_complete(workers)
 
     # ── Action handlers ────────────────────────────────────────────────────
 
@@ -1699,9 +1718,13 @@ class AwsTuiApp(App[None]):
         self._raise_theme_changed_toast(nxt)
 
     def action_mark_up(self) -> None:
+        if len(self.screen_stack) > 1:
+            return
         self._extend_selection(-1)
 
     def action_mark_down(self) -> None:
+        if len(self.screen_stack) > 1:
+            return
         self._extend_selection(1)
 
     def _extend_selection(self, delta: int) -> None:
@@ -1772,13 +1795,6 @@ class AwsTuiApp(App[None]):
         focused = getattr(dual, "focused_pane", None)
         if focused is None:
             return
-        try:
-            from aws_tui.domain.local_fs import LocalFS
-            from aws_tui.domain.s3_fs import S3FS
-            from aws_tui.services.s3.service import _aioboto3_session_for
-        except Exception:
-            return
-
         _LOCAL_LABEL = "local"
         candidates, skipped = _build_swap_candidates(ctx)
         # Bug 4 fix: deduplicate skip toasts — only raise when the skipped
@@ -1816,18 +1832,12 @@ class AwsTuiApp(App[None]):
         new_provider: object
         new_protocol: str
         if payload == "local":
-            new_provider = LocalFS()
+            new_provider = self._make_local_provider()
             new_protocol = ""
         else:
             assert not isinstance(payload, str)  # narrows payload to Connection
             conn = payload
-            session = _aioboto3_session_for(conn)
-            new_provider = S3FS(
-                session=session,
-                bucket=None,
-                endpoint_url=conn.endpoint_url,
-                force_path_style=conn.force_path_style,
-            )
+            new_provider = self._make_s3_provider_for_connection(conn)
             new_protocol = "s3:"
 
         swap = getattr(focused, "swap_provider", None)
@@ -1850,6 +1860,47 @@ class AwsTuiApp(App[None]):
             connection_key=new_conn_key,
         )
 
+    def _make_s3_provider_for_connection(self, conn: Connection) -> FileSystemProvider:
+        """Build the S3 pane provider through the registered S3 service.
+
+        Demo and integration contexts inject ``S3Service.s3_fs_factory`` so
+        every S3 provider must flow through the service; otherwise source
+        switching can bypass seeded in-memory data and reach real boto
+        sessions. The fallback keeps tiny unit harnesses that instantiate
+        ``AwsTuiApp`` via ``object.__new__`` working.
+        """
+        from aws_tui.domain.s3_fs import S3FS
+        from aws_tui.services.s3.service import _aioboto3_session_for
+
+        ctx = getattr(self, "_app_ctx", None)
+        if ctx is not None:
+            with contextlib.suppress(Exception):
+                service = ctx.registry.get("s3")
+                make_provider = getattr(service, "_make_s3_provider", None)
+                if make_provider is not None:
+                    return cast("FileSystemProvider", make_provider(conn))
+
+        session = _aioboto3_session_for(conn)
+        return S3FS(
+            session=session,
+            bucket=None,
+            endpoint_url=conn.endpoint_url,
+            force_path_style=conn.force_path_style,
+            verify_tls=conn.verify_tls,
+        )
+
+    def _make_local_provider(self) -> FileSystemProvider:
+        """Build a LocalFS using the registered S3 service's local root."""
+        from aws_tui.domain.local_fs import LocalFS
+
+        ctx = getattr(self, "_app_ctx", None)
+        if ctx is not None:
+            with contextlib.suppress(Exception):
+                local_root = getattr(ctx.registry.get("s3"), "_local_root", None)
+                if local_root is not None:
+                    return LocalFS(root=local_root)
+        return LocalFS()
+
     def action_open_settings(self) -> None:
         """Select the Settings entry in the nav menu (programmatic equivalent
         of clicking it). Bound to ``,`` (comma)."""
@@ -1860,13 +1911,11 @@ class AwsTuiApp(App[None]):
 
         Mirrors the local-branch of ``action_swap_source``.
         """
-        from aws_tui.domain.local_fs import LocalFS
-
         swap = getattr(pane, "swap_provider", None)
         if swap is None:
             return
         await swap(
-            LocalFS(),
+            self._make_local_provider(),
             identity_label="local",
             path_protocol="",
             connection_key=None,
@@ -1880,19 +1929,12 @@ class AwsTuiApp(App[None]):
         ``infra.connection_resolver``; runtime attribute access is safe
         (Connection is the only thing the resolver returns).
         """
-        from aws_tui.domain.s3_fs import S3FS
-        from aws_tui.services.s3.service import _aioboto3_session_for, _format_pane_title
+        from aws_tui.services.s3.service import _format_pane_title
 
         swap = getattr(pane, "swap_provider", None)
         if swap is None:
             return
-        session = _aioboto3_session_for(conn)  # type: ignore[arg-type]
-        provider = S3FS(
-            session=session,
-            bucket=None,
-            endpoint_url=conn.endpoint_url,  # type: ignore[attr-defined]
-            force_path_style=conn.force_path_style,  # type: ignore[attr-defined]
-        )
+        provider = self._make_s3_provider_for_connection(conn)  # type: ignore[arg-type]
         await swap(
             provider,
             identity_label=_format_pane_title(conn),  # type: ignore[arg-type]
@@ -2111,7 +2153,9 @@ class AwsTuiApp(App[None]):
             key = pane.current_connection_key
             if key is None:
                 continue
-            _, pane_name = key
+            pane_kind, pane_name = key
+            if pane_kind != "s3-compatible":
+                continue
             if pane_name not in names:
                 continue
             if deleted:
@@ -2214,14 +2258,6 @@ class AwsTuiApp(App[None]):
             return
         if not isinstance(msg.sender_object, NavMenuVM):
             return
-        # Skip the seed selected_id change that on_mount fires while
-        # priming the initial service. on_mount drives that mount
-        # synchronously via _mount_initial_service_view; if we ALSO
-        # spawn a mount worker here, the two race against the same
-        # #content-host and one silently clobbers the other → blank
-        # screen at startup.
-        if self._boot_in_flight:
-            return
         ctx = self._app_ctx
         selected = ctx.root_vm.services_menu.selected_id
         if selected is None:
@@ -2232,6 +2268,30 @@ class AwsTuiApp(App[None]):
         # The legend's right-hand globals (themes/help/quit) are
         # independent of this.
         ctx.root_vm.chrome.hint_legend.set_current_service(selected)
+        # Skip the seed selected_id change that on_mount fires while
+        # priming the initial service. on_mount drives that mount
+        # synchronously via _mount_initial_service_view; if we ALSO
+        # spawn a mount worker here, the two race against the same
+        # #content-host and one silently clobbers the other → blank
+        # screen at startup.
+        if self._boot_in_flight:
+            if selected != "s3":
+                self._pending_boot_nav_selection = None
+                self._boot_in_flight = False
+                self.workers.cancel_group(self, "content-mount")
+                if selected == SETTINGS_NAV_ID:
+                    self.run_worker(
+                        self._mount_settings_view(),
+                        exclusive=True,
+                        group="content-mount",
+                    )
+                else:
+                    self.run_worker(
+                        self._mount_service_view(selected),
+                        exclusive=True,
+                        group="content-mount",
+                    )
+            return
         # Serialize the two mount workers via an exclusive worker
         # group so a rapid Settings → S3 → Settings toggle can't race
         # against itself. Without exclusivity, the awaited
@@ -2272,6 +2332,7 @@ class AwsTuiApp(App[None]):
         from aws_tui.vm.settings.settings_vm import SettingsVM
 
         ctx = self._app_ctx
+        await self._cancel_transfer_workers_before_content_swap()
         settings_vm = SettingsVM(s3=ctx.s3_connections_vm, hub=ctx.hub, dispatcher=ctx.dispatcher)
         try:
             await ctx.root_vm.content_host.set_content(settings_vm, service_id=SETTINGS_NAV_ID)
@@ -2332,20 +2393,33 @@ class AwsTuiApp(App[None]):
         a cancelled worker may have left behind.
         """
         ctx = self._app_ctx
-        # Honor the boot-chain's local-fallback decision on
-        # Settings → S3 toggle. Without this, re-mounting the s3
-        # DualPane re-attempts every chain-failed connection
-        # (60s+ wait per unreachable s3 endpoint) and lands on the
-        # same UNREACHABLE error pane the chain just navigated past.
-        # The session-sticky flag is cleared by ``r`` retries on a
-        # pane that actually succeed (see ``_on_pane_state_changed``).
+        await self._cancel_transfer_workers_before_content_swap()
+        # Explicit S3 selection after boot-chain local fallback is a
+        # retry. Earlier builds made the fallback sticky for the whole
+        # session, which left users unable to recover from Settings
+        # after fixing credentials. Retry the remembered initial
+        # connection once; if it still fails, remount local-on-both so
+        # the content host never stays stranded on the previous screen.
         if (
             service_id == "s3"
             and self._chain_resolved_to_local
             and self._chain_initial_conn is not None
         ):
+            retry_conn = self._chain_initial_conn
+            self._chain_resolved_to_local = False
+            ctx.unreachable_connections.discard((retry_conn.kind, retry_conn.name))
+            self._last_skip_toast_set = None
+            outcome = await self._try_connection(retry_conn)
+            if outcome == "ok":
+                self._chain_initial_conn = None
+                return
+            self._mark_connection_unreachable(retry_conn.kind, retry_conn.name)
+            self._raise_failure_toast(retry_conn, outcome)
+            self._raise_local_fallback_toast()
+            self._chain_resolved_to_local = True
+            self._chain_initial_conn = retry_conn
             await self._mount_local_only_dual_pane(
-                initial_conn=self._chain_initial_conn,
+                initial_conn=retry_conn,
                 reason="chain-exhausted",
             )
             return
@@ -2395,9 +2469,9 @@ class AwsTuiApp(App[None]):
     def record_action(self, action_id: str) -> None:
         """Record an action id in the ring buffer and track it as the latest.
 
-        Called by the input router / action invokers so the crash modal can
-        decide whether ``continue`` is safe and the dump can include the
-        last 100 user actions per spec §7.10.
+        Intended for the deferred input-router / action-invoker wiring so
+        the crash modal can decide whether ``continue`` is safe and the dump
+        can include the last 100 user actions per spec §7.10.
         """
         ts = datetime.now(UTC).isoformat()
         self._action_ring.append(f"{ts} {action_id}")
@@ -2570,7 +2644,7 @@ class AwsTuiApp(App[None]):
             # connection switches within the same AppContext, so we dispose
             # it here (on app shutdown) rather than in EmrServerlessPageVM.
             if ctx.demo_emr is not None:
-                ctx.demo_emr.dispose()
+                await ctx.demo_emr.aclose()
 
 
 def main() -> None:
@@ -2582,14 +2656,30 @@ def main() -> None:
     saved :class:`CrashReport` is printed here before the exception is
     re-raised so the user knows where the dump landed.
 
-    Recognises one CLI flag: ``--version`` prints the version + demo
-    status and exits without launching the UI.
+    Recognises ``--help``, ``--version``, and ``--demo`` before
+    launching the UI.
     """
     from aws_tui.demo import is_demo_mode_enabled
 
-    demo = is_demo_mode_enabled()
+    parser = argparse.ArgumentParser(
+        prog="aws-tui",
+        description="Cross-platform TUI for AWS and S3-compatible services.",
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="launch with deterministic in-memory demo data and no real AWS calls",
+    )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="print the aws-tui version and demo-mode status, then exit",
+    )
+    args = parser.parse_args()
 
-    if "--version" in sys.argv:
+    demo = args.demo or is_demo_mode_enabled(argv=[])
+
+    if args.version:
         status = "enabled" if demo else "disabled"
         # Match the pip convention: ``project-name 0.8.0``.
         print(f"aws-tui {__version__} (demo: {status})")

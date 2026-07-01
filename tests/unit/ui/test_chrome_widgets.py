@@ -110,7 +110,10 @@ async def test_hint_legend_renders_with_registered_actions() -> None:
             def _strip_text(host: HintLegend) -> str:
                 return " ".join(str(s.render()) for s in host.query(Static))
 
-            assert "cmd" in _strip_text(widget)  # fallback action surfaces
+            strip = _strip_text(widget)
+            assert "themes" in strip
+            assert "help" in strip
+            assert "cmd" not in strip
             from aws_tui.vm.messages import FocusChangedMessage
 
             hub.send(FocusChangedMessage(focused_vm_id="pane.left"))

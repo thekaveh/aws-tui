@@ -89,6 +89,42 @@ async def test_demo_mode_renders_s3_pane_with_demo_files(tmp_path) -> None:
             ctx.root_vm.dispose()
 
 
+async def test_demo_mode_shift_s_uses_seeded_connection_factory(tmp_path) -> None:
+    """Shift+S must keep demo panes on seeded in-memory providers.
+
+    The boot path starts on ``demo-dev``. Cycling once moves the focused
+    pane to ``demo-prod``; if that path bypasses ``S3Service``'s demo
+    factory it will try to construct a real boto-backed S3FS instead of
+    rendering the seeded ``data-lake`` objects.
+    """
+    from aws_tui.ui.widgets.pane import EntryRow
+
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(context=ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            for _ in range(5):
+                await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+                await pilot.pause()
+
+            await pilot.press("S")  # Shift+S
+            for _ in range(5):
+                await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+                await pilot.pause()
+
+            dual = ctx.root_vm.content_host.current
+            focused = dual.focused_pane
+            all_text = " ".join(str(w.render()) for w in app.query(EntryRow))
+
+            assert focused.identity_label == "aws s3 · demo-prod · us-east-1"
+            assert "data-lake" in all_text
+            assert "etl-output" in all_text
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
 async def test_demo_mode_launch_selects_menu_not_s3_panes(tmp_path) -> None:
     """Demo launch starts with the nav/menu pane visually selected.
 

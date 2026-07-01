@@ -182,6 +182,7 @@ class S3Service:
             bucket=None,
             endpoint_url=connection.endpoint_url,
             force_path_style=connection.force_path_style,
+            verify_tls=connection.verify_tls,
         )
 
 

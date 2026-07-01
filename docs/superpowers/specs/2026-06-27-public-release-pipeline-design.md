@@ -52,22 +52,27 @@ Serverless service and many UX fixes).
 
 ### 3. Release workflow (`.github/workflows/release.yml`)
 
-Single workflow, four jobs in sequence:
+Single workflow, five jobs in sequence:
 
-1. **`verify`** — checks tag matches `__version__`; re-runs unit +
-   lint + pkg jobs from `ci.yml` (called via `workflow_call`).
-2. **`publish-pypi`** — uses **PyPI Trusted Publisher (OIDC)** via
-   `pypa/gh-action-pypi-publish@v1`. No PyPI secret. Publishes
+1. **`verify`** — checks tag matches `__version__` for PyPI
+   publishes, then runs the test, audit, pre-commit, layer, build,
+   and `twine check` gates inline. TestPyPI rehearsals patch the
+   package version to a unique `X.Y.Z.dev<run_number>` before build.
+2. **`smoke-install`** — installs the built wheel on macOS, Linux,
+   and Windows and runs the console `--version` smoke check.
+3. **`publish-pypi`** — uses **PyPI Trusted Publisher (OIDC)** via
+   `pypa/gh-action-pypi-publish@release/v1`. No PyPI secret. Publishes
    wheel + sdist + sigstore attestation. Guarded by a GitHub
    Environment named `pypi` with **required reviewer = the
    maintainer** so every release pauses for one approval click.
-3. **`publish-github`** — creates GitHub Release. Body = the
+4. **`publish-github`** — creates GitHub Release. Body = the
    changelog section just cut, parsed out by a shell snippet
    between `## [<version>]` and the next `## [` header. Attaches
    wheel + sdist artifacts.
-4. **`bump-homebrew`** (depends on `publish-pypi`) — fetches the
-   published sdist's sha256, uses `peter-evans/create-pull-request@v6`
-   to open a PR in `thekaveh/homebrew-aws-tui` updating the
+5. **`bump-homebrew`** (depends on `publish-pypi`) — hashes the
+   release workflow's built sdist artifact, uses
+   `peter-evans/create-pull-request@v6` to open a PR in
+   `thekaveh/homebrew-aws-tui` updating the
    formula's `url` + `sha256`. **Manual merge** — keeps Homebrew
    users one human-in-the-loop step removed from a bad upload.
 
@@ -132,9 +137,10 @@ maintainer does them once before the first 0.8.0 cut.
 
 - **Tag/version mismatch.** Verify job fails fast → no publish.
   Fix: amend the cut PR's `version.py`, retag.
-- **PyPI publish succeeds, GitHub Release fails.** Independent
-  jobs. Wheel is already on PyPI (immutable). Fix: re-run
-  `publish-github` via workflow_dispatch.
+- **PyPI publish succeeds, GitHub Release fails.** Wheel is already
+  on PyPI (immutable). Fix manually from the existing tag and built
+  artifacts with `gh release create` / `gh release upload`; do not
+  rerun the PyPI publish path for the same version.
 - **Homebrew bump PR has wrong sha256.** Manual merge is the
   gate — review the diff. `pip install aws-tui` unaffected.
 - **Bad release shipped to PyPI.** **PyPI does not allow

@@ -3,16 +3,18 @@ name: release
 # Two entry points:
 #
 # - ``push: tags: ['v*']`` — the routine release path. Tag a
-#   commit ``vX.Y.Z`` and push: the pipeline runs verify → pypi →
-#   github-release → homebrew-bump.
+#   commit ``vX.Y.Z`` and push: the pipeline runs verify →
+#   smoke-install → pypi → github-release → homebrew-bump.
 #
 # - ``workflow_dispatch`` with ``target = testpypi | pypi`` — the
 #   dry-run lane. ``testpypi`` publishes to test.pypi.org and
 #   skips the GitHub Release + Homebrew bump (rehearses changes
 #   to the release machinery itself without burning a real
-#   version number). ``pypi`` is identical to the tag-push path
-#   but lets the maintainer rerun a failed publish without
-#   re-tagging.
+#   version number). ``pypi`` must be run from the matching tag and
+#   is only for retrying before PyPI accepts the version. After PyPI
+#   publish succeeds, recover GitHub Release/Homebrew failures with
+#   the manual steps in ``docs/RELEASING.md`` because PyPI versions
+#   are immutable.
 
 on:
   push:
@@ -36,6 +38,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  UV_VERSION: "0.11.19"
+
 jobs:
   # ── Gate: tag matches __version__ + green tests + clean build ──────────
   verify:
@@ -44,15 +49,19 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       target: ${{ steps.target.outputs.target }}
+      tag_sha: ${{ steps.version.outputs.tag_sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --python 3.12
+        run: uv sync --frozen --python 3.12
 
       # Resolve the target channel: ``testpypi`` for the rehearsal
       # ``workflow_dispatch``, ``pypi`` for everything else (tag
@@ -66,16 +75,22 @@ jobs:
             echo "target=pypi" >> "$GITHUB_OUTPUT"
           fi
 
-      # The tag-push path requires the tag ref (``vX.Y.Z``) to match
-      # ``aws_tui.__version__`` exactly. The workflow_dispatch path
-      # has no tag; we read ``__version__`` directly and let the
-      # publish job's TestPyPI/PyPI uniqueness check catch a
-      # duplicate.
+      # The PyPI path requires the tag ref (``vX.Y.Z``) to match
+      # ``aws_tui.__version__`` exactly and point at a commit already
+      # reachable from origin/main. The TestPyPI rehearsal path can
+      # run from a branch ref and intentionally skips the tag check.
       - name: tag-version match
         id: version
         run: |
           PKG_VERSION="$(uv run --python 3.12 python -c 'import aws_tui; print(aws_tui.__version__)')"
-          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          TAG_REF="v${PKG_VERSION}"
+          PUBLISH_VERSION="$PKG_VERSION"
+          if [[ "${{ steps.target.outputs.target }}" == "testpypi" ]]; then
+            PUBLISH_VERSION="${PKG_VERSION}.dev${GITHUB_RUN_NUMBER}"
+            PKG_VERSION="$PKG_VERSION" PUBLISH_VERSION="$PUBLISH_VERSION" python -c 'import os; from pathlib import Path; path = Path("src/aws_tui/version.py"); text = path.read_text(); old = "__version__ = \"" + os.environ["PKG_VERSION"] + "\""; new = "__version__ = \"" + os.environ["PUBLISH_VERSION"] + "\""; path.write_text(text.replace(old, new))'
+          fi
+          echo "version=$PUBLISH_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_sha=$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if [[ "${{ github.event_name }}" == "push" ]]; then
             REF="${{ github.ref_name }}"
             TAG_VERSION="${REF#v}"
@@ -84,12 +99,48 @@ jobs:
               exit 1
             fi
             echo "tag $REF matches __version__ $PKG_VERSION ✓"
+          elif [[ "${{ steps.target.outputs.target }}" == "pypi" ]]; then
+            if [[ "${{ github.ref_type }}" != "tag" || "${{ github.ref_name }}" != "$TAG_REF" ]]; then
+              echo "::error::manual PyPI publish must run from existing tag '$TAG_REF' (current ref: ${{ github.ref_type }}/${{ github.ref_name }})" >&2
+              exit 1
+            fi
+            echo "workflow_dispatch pypi target is pinned to tag $TAG_REF"
           else
-            echo "workflow_dispatch — publishing __version__ $PKG_VERSION (no tag check)"
+            echo "workflow_dispatch — publishing TestPyPI rehearsal version $PUBLISH_VERSION (base __version__ $PKG_VERSION; no tag check)"
+          fi
+          TAG_SHA="$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || true)"
+          if [[ "${{ steps.target.outputs.target }}" == "pypi" ]]; then
+            if [[ -z "$TAG_SHA" ]]; then
+              echo "::error::missing release tag '$TAG_REF'" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+              echo "::error::release tag '$TAG_REF' points to $TAG_SHA, which is not reachable from origin/main" >&2
+              exit 1
+            fi
+            echo "release tag $TAG_REF points to main history ($TAG_SHA)"
           fi
 
       - name: pytest (unit + in-process integration)
         run: uv run --python 3.12 pytest tests/unit tests/integration -v
+
+      - name: pytest (MinIO integration tier)
+        run: uv run --python 3.12 pytest -m integration -v
+
+      - name: pytest (snapshot tier)
+        run: uv run --python 3.12 pytest tests/snapshot -v
+
+      - name: pytest (e2e tier)
+        run: uv run --python 3.12 pytest tests/e2e -v
+
+      - name: export locked requirements
+        run: uv export --frozen --format requirements-txt --no-hashes --output-file "$RUNNER_TEMP/requirements-audit.txt"
+
+      - name: install Python 3.11 for audit
+        run: uv python install 3.11
+
+      - name: pip-audit (locked dependencies)
+        run: uv run --python 3.11 pip-audit -r "$RUNNER_TEMP/requirements-audit.txt"
 
       - name: pre-commit (all hooks)
         run: uv run --python 3.12 pre-commit run --all-files --show-diff-on-failure
@@ -98,7 +149,7 @@ jobs:
         run: ./scripts/check-layers.sh
 
       - name: build wheel + sdist
-        run: uv build
+        run: uv build --no-build-isolation
 
       - name: twine check
         run: uv run twine check dist/*
@@ -110,10 +161,44 @@ jobs:
           path: dist/
           retention-days: 7
 
+  # ── Gate: clean install from the built wheel on every supported OS ─────
+  smoke-install:
+    name: smoke install (${{ matrix.os }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: install Python 3.12
+        run: uv python install 3.12
+      - name: install built wheel and run console entry point
+        shell: bash
+        run: |
+          uv venv --python 3.12 smoke-venv
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            PY="smoke-venv/Scripts/python.exe"
+            AWS_TUI="smoke-venv/Scripts/aws-tui.exe"
+          else
+            PY="smoke-venv/bin/python"
+            AWS_TUI="smoke-venv/bin/aws-tui"
+          fi
+          uv pip install --python "$PY" dist/*.whl
+          "$AWS_TUI" --version
+
   # ── PyPI / TestPyPI publish via Trusted Publisher (OIDC) ───────────────
   publish-pypi:
     name: publish (${{ needs.verify.outputs.target }})
-    needs: verify
+    needs: [verify, smoke-install]
     runs-on: ubuntu-24.04
     # Environment gates the publish step on the maintainer's
     # approval click. ``pypi`` is configured with a required
@@ -137,14 +222,14 @@ jobs:
 
       - name: publish to TestPyPI
         if: needs.verify.outputs.target == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@v1
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
           attestations: true
 
       - name: publish to PyPI
         if: needs.verify.outputs.target == 'pypi'
-        uses: pypa/gh-action-pypi-publish@v1
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           attestations: true
 
@@ -201,6 +286,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.verify.outputs.version }}
           BODY: ${{ steps.changelog.outputs.body }}
+          TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
         run: |
           # ``--target`` pins the release to the tag's commit (the
           # workflow_dispatch path may run from any ref; the tag-push
@@ -208,6 +294,7 @@ jobs:
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --notes "${BODY}" \
+            --target "${TAG_SHA}" \
             dist/*
 
   # ── Open a bump PR against the Homebrew tap ────────────────────────────
@@ -229,43 +316,78 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
-      # PyPI publishes the sdist with a deterministic URL+sha256;
-      # the formula installs from that sdist. Compute the sha256
-      # directly off the artifact we just published so we don't
-      # race PyPI's CDN.
-      - name: download published sdist
+      - name: check formula exists
+        id: formula
+        working-directory: tap
+        run: |
+          if [[ -f "Formula/aws-tui.rb" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Formula/aws-tui.rb not found in tap repo; first release must bootstrap the formula manually after PyPI publish."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: download built artifacts
+        if: steps.formula.outputs.exists == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+      # The formula installs from PyPI's deterministic sdist URL, but
+      # its sha256 comes from the already-built artifact so this job
+      # does not depend on PyPI file CDN freshness.
+      - name: hash built sdist
+        if: steps.formula.outputs.exists == 'true'
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           PKG="aws_tui-${VERSION}.tar.gz"
-          # Try PyPI's files URL pattern (sdist filename is canonical).
-          curl --fail --location --silent --show-error \
-            -o "$PKG" \
-            "https://files.pythonhosted.org/packages/source/a/aws-tui/$PKG"
-          SHA="$(sha256sum "$PKG" | awk '{print $1}')"
+          if [[ ! -f "dist/$PKG" ]]; then
+            echo "::error::missing built sdist dist/$PKG" >&2
+            exit 1
+          fi
+          SHA="$(sha256sum "dist/$PKG" | awk '{print $1}')"
           echo "PKG_URL=https://files.pythonhosted.org/packages/source/a/aws-tui/$PKG" >> "$GITHUB_ENV"
           echo "PKG_SHA=$SHA" >> "$GITHUB_ENV"
 
       - name: bump formula
+        if: steps.formula.outputs.exists == 'true'
         working-directory: tap
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           FORMULA="Formula/aws-tui.rb"
-          if [[ ! -f "$FORMULA" ]]; then
-            echo "::error::$FORMULA not found in tap repo — bootstrap the formula by hand after the first PyPI release" >&2
-            exit 1
-          fi
-          # Replace the url and sha256 lines. The bootstrap formula
-          # follows the standard Language::Python::Virtualenv layout
-          # so these two fields are the only diff per release.
-          sed -i.bak \
-            -e "s|url \".*\"|url \"${PKG_URL}\"|" \
-            -e "s|sha256 \".*\"|sha256 \"${PKG_SHA}\"|" \
-            "$FORMULA"
-          rm "${FORMULA}.bak"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          formula = Path("Formula/aws-tui.rb")
+          lines = formula.read_text(encoding="utf-8").splitlines(keepends=True)
+          in_resource = False
+          replaced_url = False
+          replaced_sha = False
+          for idx, line in enumerate(lines):
+              stripped = line.strip()
+              if stripped.startswith("resource "):
+                  in_resource = True
+              if not in_resource and stripped.startswith('url "'):
+                  indent = line[: len(line) - len(line.lstrip())]
+                  lines[idx] = f'{indent}url "{os.environ["PKG_URL"]}"\n'
+                  replaced_url = True
+                  continue
+              if not in_resource and stripped.startswith('sha256 "'):
+                  indent = line[: len(line) - len(line.lstrip())]
+                  lines[idx] = f'{indent}sha256 "{os.environ["PKG_SHA"]}"\n'
+                  replaced_sha = True
+                  continue
+          if not (replaced_url and replaced_sha):
+              raise SystemExit("top-level url/sha256 not found in Homebrew formula")
+          formula.write_text("".join(lines), encoding="utf-8")
+          PY
 
       - name: open bump PR
+        if: steps.formula.outputs.exists == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           path: tap
@@ -279,4 +401,4 @@ jobs:
             - PyPI: https://pypi.org/project/aws-tui/${{ needs.verify.outputs.version }}/
             - Release: https://github.com/thekaveh/aws-tui/releases/tag/v${{ needs.verify.outputs.version }}
 
-            sha256 computed from the freshly-published sdist.
+            sha256 computed from the verified build artifact.

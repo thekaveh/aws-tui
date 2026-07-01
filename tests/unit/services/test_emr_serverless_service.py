@@ -1,7 +1,7 @@
 """Service-protocol tests for EmrServerlessService.
 
-Pins the ⚡ icon + supports(connection.kind == 'aws') contract so
-the nav rail correctly filters on s3-compatible connections."""
+Pins the 🔥 descriptor icon + supports(connection.kind == 'aws') contract
+so the nav rail correctly filters out s3-compatible connections."""
 
 from __future__ import annotations
 

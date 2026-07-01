@@ -2369,10 +2369,9 @@ PR review.
 ### A.2. Test invocation
 
 ```bash
-# Full suite — the two deselects are known env/flake issues, not failures:
-uv run pytest tests/ -q \
-  --deselect tests/unit/vm/file_manager/test_dual_pane_vm.py::test_dual_copy_across_cancel_event_interrupts_in_flight_copy \
-  --deselect tests/unit/vm/test_vmx_smoke.py::test_aggregate_vm3_lazy_factories
+# Full default suite. The pyproject marker filter excludes MinIO
+# testcontainer tests (`-m 'not integration'`) unless explicitly requested.
+uv run pytest -q
 
 # Quick tier-targeted runs during development:
 uv run pytest tests/unit/vm/                # VM unit tests (~6,500 LOC)
@@ -2381,7 +2380,9 @@ uv run pytest tests/snapshot/               # Textual SVG goldens (10 themes)
 uv run pytest tests/integration/            # MinIO testcontainer + pilot-driven flows
 ```
 
-Expect `1439 passed, 11 deselected, 274 snapshots` on a green run.
+Expect every default-tier test to pass. Recount the current inventory
+with `uv run pytest --collect-only -q | tail -1`; recount snapshot
+goldens with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
 
 ### A.3. Lint, type, layers
 

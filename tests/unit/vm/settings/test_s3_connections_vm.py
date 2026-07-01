@@ -110,6 +110,17 @@ def test_add_duplicate_name_rejected(tmp_path: Path) -> None:
     vm.dispose()
 
 
+def test_add_rejects_name_collision_with_non_s3_connection(tmp_path: Path) -> None:
+    vm, _, store = _make_vm(tmp_path)
+    store.add_connection(ConnectionEntry(name="shared", kind="aws", profile="shared"))
+
+    with pytest.raises(ValueError, match="already exists"):
+        vm.add(_entry("shared"))
+
+    assert store.load().connections["shared"].kind == "aws"
+    vm.dispose()
+
+
 def test_update_with_renamed_entry_rejected(tmp_path: Path) -> None:
     vm, _, _ = _make_vm(tmp_path)
     vm.add(_entry("old"))

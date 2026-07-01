@@ -1,10 +1,9 @@
 """Snapshot tests for the six pane-state placeholders per spec §7.7.
 
 Each state x theme produces one golden. Per the watchout, this is a sizable
-test surface — we only ship one state ('empty') x four themes plus a
-'auth_required' x four themes set in the canonical suite. Other states are
-covered by a single snapshot under Carbon to keep CI fast and goldens
-manageable.
+test surface — we ship the high-signal 'empty' and 'auth_required' states
+across the full built-in theme set. Other states are covered by a single
+snapshot under Carbon to keep CI fast and goldens manageable.
 """
 
 from __future__ import annotations

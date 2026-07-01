@@ -159,6 +159,53 @@ async def test_set_content_does_not_block_on_slow_setup() -> None:
     host.dispose()
 
 
+async def test_dispose_before_setup_task_runs_cancels_without_creating_coroutine() -> None:
+    """Immediate teardown must not leak an unawaited setup coroutine.
+
+    ``set_content`` returns after adoption, before the background task
+    necessarily gets a loop turn. If ``dispose`` cancels that task
+    immediately, ``setup()`` should not have created an inner coroutine
+    object that no task owns.
+    """
+
+    setup_called = False
+
+    class _DeferredSetupVM:
+        def __init__(self) -> None:
+            self.is_constructed = False
+            self.status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.is_constructed = True
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        def setup(self) -> object:
+            nonlocal setup_called
+            setup_called = True
+
+            async def _inner() -> None:
+                await asyncio.sleep(0)
+
+            return _inner()
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    vm = _DeferredSetupVM()
+    await host.set_content(cast("ComponentVM", vm), service_id="s3")
+
+    assert host.current is vm
+    assert host._setup_task is not None
+    assert not setup_called
+
+    host.dispose()
+    await asyncio.sleep(0)
+
+    assert not setup_called
+    assert vm.status == ConstructionStatus.DISPOSED
+
+
 async def test_set_content_cancels_prior_setup_task_on_swap() -> None:
     """Re-entering ``set_content`` with a different service id must
     cancel the prior VM's setup task — otherwise the cancelled VM's

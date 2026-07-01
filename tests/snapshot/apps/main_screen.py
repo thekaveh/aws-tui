@@ -1,8 +1,9 @@
-"""Main-screen snapshot harness.
+"""Production-shaped main-screen snapshot harness.
 
-Composes a self-contained Textual App that renders the full chrome +
-dual pane against an in-memory file tree. Theme name comes via constructor
-argument so the same code parametrizes across the four themes.
+Composes a self-contained Textual App that renders the production chrome
+shape (BrandBanner + NavMenu + content host + HintLegend + overlays)
+against an in-memory file tree. Theme name comes via constructor
+argument so the same code parametrizes across every built-in theme.
 """
 
 from __future__ import annotations
@@ -12,18 +13,23 @@ from textual.containers import Container, Horizontal
 from vmx import MessageHub, RxDispatcher
 
 from aws_tui.domain.transfer_journal import TransferJournal
-from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
+from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.nav_menu import NavMenu
-from aws_tui.ui.widgets.status_bar import StatusBar
+from aws_tui.ui.widgets.toast import ToastStack
+from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
-from aws_tui.vm.chrome.status_bar_vm import StatusBarVM
+from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
+from aws_tui.vm.file_manager.transfer_vm import TransferModel
+from aws_tui.vm.file_manager.transfers_vm import TransfersVM
+from aws_tui.vm.messages import TransferState
 from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 from tests.snapshot.apps._seed import seed_left, seed_right
@@ -68,13 +74,30 @@ def _connection() -> Connection:
 class MainScreenApp(App[None]):
     """Renders the full main screen for snapshot tests."""
 
+    LAYOUT_CSS = """
+    Screen {
+        layers: base dropdown notifications;
+    }
+    #main-area {
+        height: 1fr;
+        width: 1fr;
+        margin: 0 1;
+    }
+    BrandBanner {
+        margin: 1 1 0 1;
+    }
+    #content-host {
+        height: 1fr;
+        width: 1fr;
+    }
+    """
     CSS = ""  # populated dynamically per theme in __init__
 
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self._theme_store = ThemeStore()
         # Inject the theme CSS as the app's stylesheet.
-        self.CSS = self._theme_store.load(theme)
+        self.CSS = self.LAYOUT_CSS + "\n" + self._theme_store.load(theme)
         self._theme_name = theme
 
         # VM tree
@@ -82,9 +105,26 @@ class MainScreenApp(App[None]):
         self._dispatcher = RxDispatcher.immediate()
         self._keymap = KeymapStore()
 
-        self._status_vm = StatusBarVM(hub=self._hub, dispatcher=self._dispatcher)
         self._hint_vm = HintLegendVM(
             hub=self._hub, dispatcher=self._dispatcher, keymap=self._keymap
+        )
+        self._toast_vm = ToastStackVM(hub=self._hub, dispatcher=self._dispatcher)
+        self._transfers_vm = TransfersVM(hub=self._hub, dispatcher=self._dispatcher)
+        self._transfers_vm.register(
+            TransferModel(
+                id="snap-copy-001",
+                direction="download",
+                source_label="s3://kaveh-dev/etl-input/raw/events/2026-06-27.json.gz",
+                destination_label="~/Downloads/2026-06-27.json.gz",
+                bytes_done=1_024_000,
+                bytes_total=2_310_000,
+                state=TransferState.RUNNING,
+            )
+        )
+        self._focus_coordinator = FocusCoordinatorVM(
+            hub=self._hub,
+            dispatcher=self._dispatcher,
+            initial=FocusSlot.S3_LEFT,
         )
         self._hint_vm.register_focusable(
             "pane.left",
@@ -110,19 +150,32 @@ class MainScreenApp(App[None]):
         self._journal_dir = None
 
     def compose(self) -> ComposeResult:
-        # StatusBar at top
-        yield StatusBar(self._status_vm, hub=self._hub, id="status-bar")
+        yield BrandBanner(
+            theme_name=self._theme_name,
+            hub=self._hub,
+            demo=False,
+            id="brand-banner",
+        )
         with Horizontal(id="main-area"):
-            yield NavMenu(vm=self._menu_vm, hub=self._hub, id="services-menu")
+            yield NavMenu(
+                vm=self._menu_vm,
+                hub=self._hub,
+                focus_coordinator=self._focus_coordinator,
+                id="nav-menu",
+            )
             # Placeholder for dual pane — actually populated in on_mount after
             # we've awaited the seeds.
-            yield Container(id="dual-pane-host")
+            yield Container(id="content-host")
         yield HintLegend(self._hint_vm, hub=self._hub, id="hint-legend")
+        yield ToastStack(self._toast_vm, hub=self._hub, id="toast-stack")
+        yield TransfersOverlay(self._transfers_vm, hub=self._hub, id="transfers-overlay")
 
     async def on_mount(self) -> None:
         # Construct VMs.
-        self._status_vm.construct()
         self._hint_vm.construct()
+        self._toast_vm.construct()
+        self._transfers_vm.construct()
+        self._focus_coordinator.construct()
         self._menu_vm.construct()
 
         # Now seed FS and build dual pane VM.
@@ -149,11 +202,17 @@ class MainScreenApp(App[None]):
         await self._dual_vm.setup()
 
         # Mount the DualPane widget.
-        host = self.query_one("#dual-pane-host", Container)
-        host.mount(DualPane(self._dual_vm, hub=self._hub))
+        host = self.query_one("#content-host", Container)
+        host.mount(
+            DualPane(
+                self._dual_vm,
+                hub=self._hub,
+                focus_coordinator=self._focus_coordinator,
+                id="content-dual-pane",
+            )
+        )
 
         # Drive connection + focus so chrome surfaces real text.
-        self._status_vm.update_connection(_connection(), TokenState.CONNECTED)
         self._menu_vm.update_connection(_connection())
         self._menu_vm.switch_service_command.execute("s3")
         from aws_tui.vm.messages import FocusChangedMessage

@@ -6,8 +6,8 @@ aws-tui is pre-release. Only the latest tagged release receives security fixes.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.8.x   | latest    |
-| 0.7.x   | no        |
+| 0.8.x   | pending / unreleased |
+| 0.7.x   | latest tagged release |
 | < 0.7   | no        |
 
 ## 2. Reporting a vulnerability
@@ -26,8 +26,8 @@ aws-tui orchestrates the AWS CLI and the `boto3` credential chain for AWS connec
 
 ### 3.1. S3-compatible static credentials are persisted on disk
 
-When a user adds an `s3-compatible` connection with `credentials = "static"` (the default written by the in-TUI first-run / add form), the `access_key_id` and `secret_access_key` are persisted **in plaintext** to `~/.config/aws-tui/config.toml` (or the platform-specific equivalent — see `docs/platforms.md`). Permissions on that file follow your home-directory umask. For non-throwaway credentials we recommend the `credentials = "keychain:<service>"` source, which delegates secret storage to the OS keychain via the `keyring` library. The static-credentials path emits a sticky launch-time toast as a reminder.
+When a user adds an `s3-compatible` connection with `credentials = "static"` (the default written by the in-TUI add form), the `access_key_id` and `secret_access_key` are persisted **in plaintext** to `<config-dir>/config.toml` (see `docs/platforms.md` for the exact OS path). On POSIX filesystems aws-tui creates the config directory with owner-only permissions and writes the config file through an owner-only temporary file; platforms without POSIX permission bits depend on the OS profile's normal user isolation. For non-throwaway credentials we recommend the `credentials = "keychain:<service>"` source, which delegates secret storage to the OS keychain via the `keyring` library. The static-credentials path emits a sticky launch-time toast as a reminder.
 
 ### 3.2. Crash dumps can contain log content
 
-The crash-recovery flow writes a dump to `~/.cache/aws-tui/crash/<ts>.txt` containing the traceback, the last 1000 lines of the JSON log, and the last 100 user-action records. aws-tui's own source code does not log secrets, but a user who has added third-party logging or who shares a crash file with a maintainer should review the file first — values logged at boot (e.g. endpoint URLs containing embedded credentials, pre-signed URL query strings) would be reproduced verbatim.
+The crash-recovery flow writes a dump to `<cache-dir>/crash/<ts>.txt` containing the traceback, the last 1000 lines of the JSON log, and the last 100 user-action records. aws-tui's own source code does not log secrets, but a user who has added third-party logging or who shares a crash file with a maintainer should review the file first — values logged at boot (e.g. endpoint URLs containing embedded credentials, pre-signed URL query strings) would be reproduced verbatim.

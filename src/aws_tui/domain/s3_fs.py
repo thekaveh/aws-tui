@@ -107,6 +107,10 @@ class S3FS:
     force_path_style:
         When True, S3 addressing uses path-style URLs (required by
         MinIO and many S3-compatible servers).
+    verify_tls:
+        Whether botocore should verify TLS certificates for HTTPS
+        endpoints. Set False for explicitly configured self-signed
+        development endpoints.
     """
 
     def __init__(
@@ -117,11 +121,13 @@ class S3FS:
         prefix: str = "",
         endpoint_url: str | None = None,
         force_path_style: bool = False,
+        verify_tls: bool = True,
     ) -> None:
         self._session = session
         self._bucket: str | None = bucket
         self._prefix: str = prefix.strip("/")
         self._endpoint_url: str | None = endpoint_url
+        self._verify_tls: bool = verify_tls
         # Apply the same retry / timeout policy spec §6.3 + §7.3 mandates for
         # every AWS client. infra/AwsSession.client() does the equivalent for
         # service callers; S3FS is constructed directly with an aioboto3
@@ -142,6 +148,7 @@ class S3FS:
         kwargs: dict[str, Any] = {"config": self._config}
         if self._endpoint_url is not None:
             kwargs["endpoint_url"] = self._endpoint_url
+        kwargs["verify"] = self._verify_tls
         return self._session.client("s3", **kwargs)
 
     def _key_for(self, path: PathRef) -> str:

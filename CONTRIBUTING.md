@@ -7,8 +7,9 @@ Thanks for your interest. aws-tui is pre-release; the API and config schema may 
 ```bash
 git clone https://github.com/thekaveh/aws-tui.git
 cd aws-tui
-./scripts/bootstrap.sh           # uv sync + pre-commit hooks
-uv run pytest                    # run unit tests
+./scripts/bootstrap.sh           # uv sync --frozen + pre-commit hooks
+uv run pytest                    # default non-Docker suite
+uv run pytest tests/unit         # unit-only fast path
 ./scripts/dev.sh                 # launch with Textual dev tools (live-reload .tcss)
 ```
 
@@ -20,7 +21,7 @@ This repo follows a strict layer architecture; see [docs/architecture.md](docs/a
 View (Textual)  →  ViewModel (VMx)  →  Service plugins  →  Domain ops  →  Infrastructure
 ```
 
-`scripts/check-layers.sh` greps each layer for forbidden imports and fails CI on any violation. (The `flake8-tidy-imports` ruff plugin will replace the grep script once cross-layer imports start to appear — until then, the empty rule block would be a no-op.)
+`scripts/check-layers.sh` parses imports with `ast`, resolves relative imports, and fails CI on any forbidden edge.
 
 ## 3. Commits
 
@@ -37,7 +38,7 @@ Scopes follow the layer names (`infra`, `domain`, `vm`, `services`, `ui`, `app`,
 
 - Branch from `main`. Open the PR early; mark draft until ready.
 - CI must be green. Snapshot test changes need explicit review of the goldens diff.
-- New services go under `src/aws_tui/services/<name>/` and register in `src/aws_tui/services/__init__.py`. See [docs/adding-a-service.md](docs/adding-a-service.md).
+- New services go under `src/aws_tui/services/<name>/` and register in `src/aws_tui/composition.py`. See [docs/adding-a-service.md](docs/adding-a-service.md).
 - Adding an AWS API call? Run integration tests against `moto`. For S3-compatible quirks, add a note in [docs/connections.md](docs/connections.md).
 
 ## 5. Code of conduct

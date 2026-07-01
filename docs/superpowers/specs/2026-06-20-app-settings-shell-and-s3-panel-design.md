@@ -298,6 +298,8 @@ def on_dismiss(self, *, panes: tuple[PaneVM, PaneVM]) -> None:
         if key is None:
             continue
         kind, name = key
+        if kind != "s3-compatible":
+            continue
         if name in self._dirty_connection_names:
             try:
                 new_conn = self._resolver.get(name)
@@ -516,8 +518,7 @@ Test apps (`tests/snapshot/apps/`):
 - **`test_delete_active_connection_reverts_pane_to_local`:** seed TOML with
   `minio-local`, mount app with left pane bound to `minio-local`, open
   settings, click Delete, confirm, dismiss modal, assert toast
-  ("Left pane reverted to local") and `pane.current_connection_key ==
-  ("local", "local")`.
+  ("Left pane reverted to local") and `pane.current_connection_key is None`.
 
 ### 9.4 Snapshot count delta
 

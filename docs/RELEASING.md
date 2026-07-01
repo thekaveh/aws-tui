@@ -7,7 +7,7 @@ edit changelog + version + README
         ↓
 open release PR · merge
         ↓
-git tag vX.Y.Z && git push --tags
+git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
         ↓
 approve `pypi` environment in GitHub Actions (one click)
         ↓
@@ -50,7 +50,8 @@ Then tag the merge commit and push:
 
 ```bash
 git checkout main && git pull --ff-only
-git tag vX.Y.Z && git push --tags
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
 The `release.yml` workflow fires. Watch it:
@@ -61,16 +62,22 @@ gh run watch
 
 When the `publish-pypi` job hits the **environment approval gate**,
 click **Approve** in the Actions UI. That's the safety belt that
-makes the whole pipeline forgiving — if the verify job somehow
-let a bad tag through, this is your last chance to stop.
+makes the whole pipeline forgiving — if the verify or smoke-install
+jobs somehow let a bad tag through, this is your last chance to stop.
 
 After approval the pipeline:
-1. Publishes to PyPI via Trusted Publisher (sigstore attestation).
-2. Creates the GitHub Release with the changelog section as body
+1. Publishes only after `verify` builds the artifacts and
+   `smoke-install` clean-installs the built wheel on macOS, Linux, and
+   Windows.
+2. Publishes to PyPI via Trusted Publisher (sigstore attestation).
+3. Creates the GitHub Release with the changelog section as body
    and wheel + sdist attached.
-3. Opens a PR in `thekaveh/homebrew-aws-tui` bumping the formula.
+4. Opens a PR in `thekaveh/homebrew-aws-tui` bumping the formula when
+   the formula has already been bootstrapped. On the first PyPI release,
+   the Homebrew job emits a notice and skips cleanly; bootstrap the
+   formula manually afterward.
 
-Skim the Homebrew PR and merge it.
+Skim the Homebrew PR and merge it when one is created.
 
 Done.
 
@@ -81,15 +88,20 @@ job, a tweaked artifact layout, anything that risks burning a
 real version number.
 
 ```bash
-gh workflow run release.yml -f target=testpypi
+gh workflow run release.yml --ref <branch-or-tag-with-workflow-changes> -f target=testpypi
 ```
 
 The dry-run skips the GitHub Release + Homebrew steps and pushes
-the wheel to test.pypi.org instead. Verify the install end-to-end:
+the wheel to test.pypi.org instead. The workflow rewrites the package
+version to `X.Y.Z.dev<run_number>` for this lane so rehearsals are
+repeatable despite TestPyPI's immutable versions. Use `--ref` to point
+at the branch or tag containing the release-workflow changes you are
+rehearsing; otherwise GitHub runs the workflow from the default branch.
+Verify the install end-to-end:
 
 ```bash
 python -m venv /tmp/aws-tui-dry && source /tmp/aws-tui-dry/bin/activate
-pip install -i https://test.pypi.org/simple/ \
+pip install --pre -i https://test.pypi.org/simple/ \
     --extra-index-url https://pypi.org/simple/ \
     aws-tui
 aws-tui --version
@@ -108,22 +120,26 @@ is always "fix forward, never overwrite":
   (Project → Manage → Release → "Yank release"). Yanking hides
   the version from `pip install aws-tui` solver resolutions but
   keeps existing `aws-tui==X.Y.Z` pins working. Then cut a patch
-  version (e.g. `X.Y.Z+1`) with the fix.
-- **GitHub Release wrong / missing.** Re-run the
-  `publish-github` job via `workflow_dispatch` after fixing the
-  cause. The wheel is already on PyPI; the GitHub Release is a
-  thin wrapper around the changelog section + artifact mirror.
-- **Homebrew bump PR has wrong sha256.** Don't merge it. The
-  Formula edit is one `sed` away from correct; close the PR and
-  re-run the `bump-homebrew` job, or hand-edit if PyPI is
-  serving a stale sha.
+  version (for example, `0.8.1` after `0.8.0`) with the fix.
+- **GitHub Release wrong / missing after PyPI succeeded.** Do **not**
+  re-run the PyPI publish path for the same version. Create or repair
+  the release manually from the existing tag and checked artifacts
+  (`gh release create vX.Y.Z --target <tag-sha> dist/*`, or
+  `gh release upload` for missing assets), using the matching
+  changelog section as notes.
+- **Homebrew bump PR has wrong sha256.** Don't merge it. Close the PR
+  and hand-edit the formula against the PyPI sdist sha256 once PyPI is
+  serving the final artifact.
 - **Tag/version mismatch.** The `verify` job fails fast and
   publishes nothing. Fix `version.py`, retag.
 
-## 4. One-time bring-up (already done for v0.8.0)
+## 4. One-time bring-up
 
 These four console steps are not automatable. The maintainer
 does them once before the first release through this pipeline.
+PyPI/TestPyPI Trusted Publisher and GitHub environments may already
+exist; the Homebrew bootstrap waits until the first PyPI artifact is
+actually published.
 
 ### 4.1. PyPI Trusted Publisher
 
@@ -151,9 +167,9 @@ environment:
 ### 4.3. Homebrew tap repo
 
 1. Create empty repo `thekaveh/homebrew-aws-tui` on GitHub.
-2. After the first PyPI release (v0.8.0) lands, bootstrap the
+2. After the first PyPI release lands, bootstrap the
    formula manually — see [`docs/homebrew-bootstrap.md`](homebrew-bootstrap.md).
-   From v0.8.1 onward the `bump-homebrew` workflow opens PRs
+   From the next release onward the `bump-homebrew` workflow opens PRs
    automatically.
 
 ### 4.4. Homebrew tap token
@@ -181,7 +197,7 @@ calendar reminder for the expiry date.
 
 Semantic Versioning. Pre-1.0 we're explicit:
 
-- **Patch (`X.Y.Z+1`)**: bug fixes only, no API changes, no
+- **Patch (`X.Y.(Z+1)`, e.g. `0.8.1`)**: bug fixes only, no API changes, no
   feature additions.
 - **Minor (`X.Y+1.0`)**: new features, bug fixes; backward-
   compatible for users of the canonical `aws-tui` CLI.

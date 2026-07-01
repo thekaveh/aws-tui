@@ -85,8 +85,8 @@ class EmrServerlessService:
 
     def supports(self, connection: Connection) -> bool:
         """EMR Serverless is AWS-only — s3-compatible connections
-        never see the ⚡ icon in the nav rail (the NavMenuVM filter
-        consults this)."""
+        never see the EMR nav row because the NavMenuVM filter consults
+        this predicate."""
         return connection.kind == "aws"
 
     def build_vm(self, connection: Connection) -> "EmrServerlessPageVM":  # noqa: UP037
