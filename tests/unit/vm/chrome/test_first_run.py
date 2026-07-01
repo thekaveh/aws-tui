@@ -77,7 +77,7 @@ async def test_dispose_while_open_resolves_skip() -> None:
 def test_form_is_valid_when_all_fields_set() -> None:
     f = S3CompatForm(
         name="minio",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="https://user:pass@example.com/bucket?X-Amz-Signature=sig",
         region="us-east-1",
         access_key_id="AKID",
         secret_access_key="SECRET",
@@ -99,7 +99,7 @@ def test_form_is_invalid_when_field_missing() -> None:
 def test_form_repr_masks_credentials() -> None:
     f = S3CompatForm(
         name="minio",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="https://user:pass@example.com/bucket?X-Amz-Signature=sig",
         region="us-east-1",
         access_key_id="AKID",
         secret_access_key="SECRET",
@@ -112,6 +112,11 @@ def test_form_repr_masks_credentials() -> None:
     assert "AKID" not in rendered
     assert "SECRET" not in rendered
     assert "TOKEN" not in rendered
+    assert "user" not in rendered
+    assert "pass" not in rendered
+    assert "X-Amz-Signature" not in rendered
+    assert "sig" not in rendered
+    assert "endpoint_url='example.com/bucket'" in rendered
     assert "access_key_id='***'" in rendered
     assert "secret_access_key='***'" in rendered
     assert "session_token='***'" in rendered

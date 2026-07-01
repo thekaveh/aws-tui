@@ -99,3 +99,20 @@ def test_non_empty_message_is_returned_verbatim(exc_cls: type[ProviderError]) ->
     state, error_text = map_provider_error(exc_cls(msg))
     assert error_text == msg
     assert state is not None
+
+
+def test_provider_error_message_redacts_endpoint_secrets() -> None:
+    state, error_text = map_provider_error(
+        ProviderUnreachableError(
+            "failed to reach https://user:pass@example.com/bucket?X-Amz-Signature=sig token=abc123"
+        )
+    )
+
+    assert state is PaneState.UNREACHABLE
+    assert error_text is not None
+    assert "user" not in error_text
+    assert "pass" not in error_text
+    assert "X-Amz-Signature" not in error_text
+    assert "sig" not in error_text
+    assert "abc123" not in error_text
+    assert "token=[REDACTED]" in error_text

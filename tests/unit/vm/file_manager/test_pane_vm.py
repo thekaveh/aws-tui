@@ -52,6 +52,40 @@ async def _make_pane(fs: InMemoryFS, *, hub: MessageHub[Message] | None = None) 
     return pane
 
 
+class _EndpointSecretFailureFS:
+    async def list(self, _path: PathRef) -> list[FileEntry]:
+        raise ProviderUnreachableError(
+            "failed to reach https://user:pass@example.com/bucket?X-Amz-Signature=sig token=abc123"
+        )
+
+    async def stat(self, _path: PathRef) -> FileEntry:
+        raise NotImplementedError
+
+    async def mkdir(self, _path: PathRef) -> None:
+        raise NotImplementedError
+
+    async def delete(self, _path: PathRef) -> None:
+        raise NotImplementedError
+
+    async def rename(self, _src: PathRef, _dst: PathRef) -> None:
+        raise NotImplementedError
+
+    async def read_stream(
+        self, _path: PathRef, *, chunk_size: int = 8 * 1024 * 1024
+    ) -> AsyncIterator[bytes]:
+        raise NotImplementedError
+
+    async def write_stream(
+        self,
+        _path: PathRef,
+        _source: AsyncIterator[bytes],
+        *,
+        total_size: int | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> None:
+        raise NotImplementedError
+
+
 @pytest.mark.asyncio
 async def test_pane_setup_lists_root() -> None:
     fs = await _seed_fs()
@@ -62,6 +96,27 @@ async def test_pane_setup_lists_root() -> None:
     assert pane.state == PaneState.IDLE
     pane.dispose()
     assert pane.status == ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_pane_placeholder_redacts_endpoint_secrets() -> None:
+    pane = PaneVM(
+        provider=_EndpointSecretFailureFS(),
+        hub=_hub(),
+        dispatcher=NULL_DISPATCHER,
+    )
+    pane.construct()
+    await pane.setup()
+
+    placeholder = pane.viewmodel.placeholder_text or ""
+    assert pane.state == PaneState.UNREACHABLE
+    assert "user" not in placeholder
+    assert "pass" not in placeholder
+    assert "X-Amz-Signature" not in placeholder
+    assert "sig" not in placeholder
+    assert "abc123" not in placeholder
+    assert "token=[REDACTED]" in placeholder
+    pane.dispose()
 
 
 @pytest.mark.asyncio

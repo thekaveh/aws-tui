@@ -36,7 +36,7 @@ def test_connection_entry_repr_masks_static_credentials() -> None:
     entry = ConnectionEntry(
         name="minio",
         kind="s3-compatible",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="https://user:pass@example.com/bucket?X-Amz-Signature=sig",
         credentials="static",
         access_key_id="AKID",
         secret_access_key="SECRET",
@@ -48,6 +48,11 @@ def test_connection_entry_repr_masks_static_credentials() -> None:
     assert "AKID" not in rendered
     assert "SECRET" not in rendered
     assert "TOKEN" not in rendered
+    assert "user" not in rendered
+    assert "pass" not in rendered
+    assert "X-Amz-Signature" not in rendered
+    assert "sig" not in rendered
+    assert "endpoint_url='example.com/bucket'" in rendered
     assert "access_key_id='***'" in rendered
     assert "secret_access_key='***'" in rendered
     assert "session_token='***'" in rendered

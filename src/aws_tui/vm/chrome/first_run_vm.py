@@ -25,6 +25,8 @@ from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage, RelayC
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.infra.redaction import safe_endpoint_display
+
 
 class FirstRunAction(StrEnum):
     """User decision on the first-run modal."""
@@ -55,7 +57,8 @@ class S3CompatForm:
         masked_secret = "***" if self.secret_access_key else None
         masked_token = "***" if self.session_token else None
         return (
-            f"S3CompatForm(name={self.name!r}, endpoint_url={self.endpoint_url!r}, "
+            f"S3CompatForm(name={self.name!r}, "
+            f"endpoint_url={safe_endpoint_display(self.endpoint_url)!r}, "
             f"region={self.region!r}, access_key_id={masked_id!r}, "
             f"secret_access_key={masked_secret!r}, session_token={masked_token!r}, "
             f"force_path_style={self.force_path_style!r}, verify_tls={self.verify_tls!r})"

@@ -28,6 +28,7 @@ from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.s3_fs import S3FS
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.redaction import safe_endpoint_display
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.services_protocol import ServiceDescriptor
@@ -190,13 +191,9 @@ class S3Service:
 def _strip_scheme(url: str | None) -> str | None:
     """Strip ``http://`` / ``https://`` so the endpoint reads cleanly in
     the pane's border subtitle (``localhost:64093`` instead of
-    ``http://localhost:64093``)."""
-    if not url:
-        return url
-    for scheme in ("https://", "http://"):
-        if url.startswith(scheme):
-            return url[len(scheme) :]
-    return url
+    ``http://localhost:64093``), while also dropping URL userinfo,
+    query strings, and fragments from user-visible labels."""
+    return safe_endpoint_display(url)
 
 
 def _format_pane_title(connection: Connection) -> str:

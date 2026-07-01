@@ -64,6 +64,37 @@ def redact_text(text: str) -> str:
     )
 
 
+def safe_endpoint_display(url: str | None) -> str | None:
+    """Return a user-visible endpoint label without URL credentials,
+    query strings, or fragments.
+
+    The actual configured endpoint remains untouched for boto. This
+    helper is only for UI/repr surfaces such as pane titles and Settings
+    rows, where signed URLs or userinfo would otherwise leak into
+    screenshots and crash triage.
+    """
+    if not url:
+        return url
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return redact_text(url)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return redact_text(url)
+
+    host = parts.hostname
+    if not host:
+        return redact_text(url)
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    netloc = f"{host}:{port}" if port is not None else host
+    return f"{netloc}{parts.path}"
+
+
 def _redact_url(raw: str) -> str:
     try:
         parts = urlsplit(raw)
@@ -77,4 +108,10 @@ def _redact_url(raw: str) -> str:
     return urlunsplit(SplitResult(parts.scheme, netloc, parts.path, query, parts.fragment))
 
 
-__all__ = ["is_sensitive_key", "redact_mapping", "redact_text", "redact_value"]
+__all__ = [
+    "is_sensitive_key",
+    "redact_mapping",
+    "redact_text",
+    "redact_value",
+    "safe_endpoint_display",
+]

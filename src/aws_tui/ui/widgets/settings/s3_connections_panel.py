@@ -9,6 +9,7 @@ from textual.widget import Widget
 from textual.widgets import Button, Static
 from vmx import Message, MessageHub
 
+from aws_tui.infra.redaction import safe_endpoint_display
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.settings.connection_form import (
     ConnectionFormCancelled,
@@ -134,7 +135,11 @@ class S3ConnectionsPanel(Widget):
                 Horizontal(
                     _RowAccent("▎", classes="row-accent"),
                     Static(c.name, classes="row-name", markup=False),
-                    Static(c.endpoint_url or "", classes="row-endpoint", markup=False),
+                    Static(
+                        safe_endpoint_display(c.endpoint_url) or "",
+                        classes="row-endpoint",
+                        markup=False,
+                    ),
                     Static(c.region, classes="row-region", markup=False),
                     _ChipEdit("✎", id=f"edit-{idx}", classes="row-chip-edit"),
                     _ChipDelete("✕", id=f"delete-{idx}", classes="row-chip-delete"),

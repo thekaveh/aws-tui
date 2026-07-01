@@ -23,6 +23,7 @@ from typing import Any, Final
 import tomli_w
 
 from aws_tui.infra.paths import config_home
+from aws_tui.infra.redaction import safe_endpoint_display
 
 #: The two supported connection kinds.
 VALID_KINDS: Final[frozenset[str]] = frozenset({"aws", "s3-compatible"})
@@ -61,7 +62,8 @@ class ConnectionEntry:
         return (
             f"ConnectionEntry(name={self.name!r}, kind={self.kind!r}, "
             f"profile={self.profile!r}, region={self.region!r}, "
-            f"endpoint_url={self.endpoint_url!r}, credentials={self.credentials!r}, "
+            f"endpoint_url={safe_endpoint_display(self.endpoint_url)!r}, "
+            f"credentials={self.credentials!r}, "
             f"access_key_id={masked_id!r}, secret_access_key={masked_secret!r}, "
             f"session_token={masked_token!r}, "
             f"force_path_style={self.force_path_style!r}, verify_tls={self.verify_tls!r})"

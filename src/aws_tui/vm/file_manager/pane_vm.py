@@ -44,11 +44,17 @@ from aws_tui.domain.filesystem import (
     ProviderError,
     ProviderUnreachableError,
 )
+from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._composition import FilteredCompositeVM
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
 
 #: Module-level singleton for the default initial path (root).
 _ROOT_PATH: PathRef = PathRef(())
+
+
+def _visible_error_text(exc: BaseException) -> str | None:
+    text = str(exc)
+    return redact_text(text) if text else None
 
 
 class PaneState(StrEnum):
@@ -802,27 +808,27 @@ class PaneVM:
                 self._replace_entries([])
                 self._set_state(PaneState.EMPTY)
             else:
-                self._error_text = str(exc) or None
+                self._error_text = _visible_error_text(exc)
                 self._replace_entries([])
                 self._set_state(PaneState.ERROR)
             return
         except AuthRequiredError as exc:
-            self._error_text = str(exc) or None
+            self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.AUTH_REQUIRED)
             return
         except PermissionDeniedError as exc:
-            self._error_text = str(exc) or None
+            self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.FORBIDDEN)
             return
         except ProviderUnreachableError as exc:
-            self._error_text = str(exc) or None
+            self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.UNREACHABLE)
             return
         except ProviderError as exc:
-            self._error_text = str(exc) or None
+            self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.ERROR)
             return
@@ -833,7 +839,7 @@ class PaneVM:
             # net the worker exception is swallowed by Textual's
             # ``run_worker`` machinery and the pane is permanently
             # stuck on LOADING with no user path to recovery.
-            self._error_text = f"unexpected error: {exc}"
+            self._error_text = redact_text(f"unexpected error: {exc}")
             self._replace_entries([])
             self._set_state(PaneState.ERROR)
             return

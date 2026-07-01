@@ -22,6 +22,7 @@ from typing import Final
 
 from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
 from aws_tui.infra.keychain import KeychainBackend
+from aws_tui.infra.redaction import safe_endpoint_display
 
 SOURCE_CONFIG: Final[str] = "config"
 SOURCE_AUTO: Final[str] = "auto-aws-profile"
@@ -76,7 +77,8 @@ class Connection:
         return (
             f"Connection(name={self.name!r}, kind={self.kind!r}, "
             f"region={self.region!r}, source={self.source!r}, "
-            f"profile={self.profile!r}, endpoint_url={self.endpoint_url!r}, "
+            f"profile={self.profile!r}, "
+            f"endpoint_url={safe_endpoint_display(self.endpoint_url)!r}, "
             f"access_key_id={masked_id!r}, "
             f"secret_access_key={masked_secret!r}, "
             f"session_token={masked_token!r}, "

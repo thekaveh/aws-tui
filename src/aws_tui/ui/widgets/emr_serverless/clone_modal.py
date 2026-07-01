@@ -20,6 +20,7 @@ from textual.widgets import Input, Static, TextArea
 from vmx import Message, MessageHub
 
 from aws_tui.domain.filesystem import ProviderError
+from aws_tui.infra.redaction import redact_text
 from aws_tui.ui.widgets.modal_button import ModalButton as _ModalButton
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 
@@ -175,7 +176,8 @@ class JobRunCloneModal(ModalScreen[str | None]):
             try:
                 new_id = await self._vm.submit()
             except ProviderError as exc:
-                self._show_error(str(exc) or type(exc).__name__)
+                text = str(exc)
+                self._show_error(redact_text(text) if text else type(exc).__name__)
                 return
             except Exception as exc:
                 # Defensive net for non-ProviderError raises (e.g. a
@@ -186,7 +188,7 @@ class JobRunCloneModal(ModalScreen[str | None]):
                 # can correct the form or cancel — instead of
                 # letting the exception crash through Textual's
                 # default error handler and bring down the EMR page.
-                self._show_error(f"unexpected error: {exc}")
+                self._show_error(redact_text(f"unexpected error: {exc}"))
                 return
         finally:
             # Clear the guard before dismiss so the next clone

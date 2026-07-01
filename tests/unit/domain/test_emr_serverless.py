@@ -129,6 +129,14 @@ def _client_error(code: str, op: str = "ListApplications") -> botocore.exception
     [
         (botocore.exceptions.NoCredentialsError(), AuthRequiredError),
         (
+            botocore.exceptions.PartialCredentialsError(
+                provider="shared-credentials",
+                cred_var="aws_secret_access_key",
+            ),
+            AuthRequiredError,
+        ),
+        (botocore.exceptions.ProfileNotFound(profile="missing"), AuthRequiredError),
+        (
             botocore.exceptions.TokenRetrievalError(provider="sso", error_msg="token expired"),
             AuthRequiredError,
         ),
@@ -250,6 +258,37 @@ class _StubSession:
     def client(self, service_name: str, **kwargs: object) -> _StubClient:
         assert service_name == "emr-serverless"
         return self._stub
+
+
+class _CredentialRetrievalContextFailure:
+    async def __aenter__(self) -> _CredentialRetrievalContextFailure:
+        raise botocore.exceptions.CredentialRetrievalError(
+            provider="credential-process",
+            error_msg="SECRET_TOKEN=leaked",
+        )
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class _ContextFailureSession:
+    def client(self, service_name: str, **kwargs: object) -> _CredentialRetrievalContextFailure:
+        assert service_name == "emr-serverless"
+        assert "config" in kwargs
+        return _CredentialRetrievalContextFailure()
+
+
+@pytest.mark.asyncio
+async def test_list_applications_maps_client_context_auth_failure() -> None:
+    client = EmrServerlessClient(session=_ContextFailureSession())  # type: ignore[arg-type]
+
+    with pytest.raises(AuthRequiredError) as exc_info:
+        await client.list_applications()
+
+    msg = str(exc_info.value)
+    assert "credential process failed" in msg
+    assert "SECRET_TOKEN" not in msg
+    assert "leaked" not in msg
 
 
 @pytest.mark.asyncio

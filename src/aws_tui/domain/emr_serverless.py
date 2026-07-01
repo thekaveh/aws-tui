@@ -179,6 +179,8 @@ def _map_boto_error(exc: BaseException) -> ProviderError | None:
     if isinstance(
         exc,
         botocore.exceptions.NoCredentialsError
+        | botocore.exceptions.PartialCredentialsError
+        | botocore.exceptions.ProfileNotFound
         | botocore.exceptions.TokenRetrievalError
         | botocore.exceptions.CredentialRetrievalError,
     ):
@@ -229,10 +231,10 @@ class EmrServerlessClient:
         self._region_name = region_name
 
     async def list_applications(self) -> list[ApplicationSummary]:
-        async with self._session.client(
-            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
-        ) as c:
-            try:
+        try:
+            async with self._session.client(
+                "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+            ) as c:
                 items: list[dict[str, Any]] = []
                 next_token: str | None = None
                 while True:
@@ -254,11 +256,11 @@ class EmrServerlessClient:
                     )
                     for a in items
                 ]
-            except Exception as exc:
-                mapped = _map_boto_error(exc)
-                if mapped is None:
-                    raise
-                raise mapped from exc
+        except Exception as exc:
+            mapped = _map_boto_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
 
     async def list_job_runs_page(
         self,
@@ -285,10 +287,10 @@ class EmrServerlessClient:
         retained for non-paged callers (tests, future scripts) that
         want a one-shot "give me everything up to N" semantics.
         """
-        async with self._session.client(
-            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
-        ) as c:
-            try:
+        try:
+            async with self._session.client(
+                "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+            ) as c:
                 kwargs: dict[str, Any] = {"applicationId": application_id}
                 if start_token is not None:
                     kwargs["nextToken"] = start_token
@@ -308,11 +310,11 @@ class EmrServerlessClient:
                     summaries = [s for s in summaries if s.state in states]
                 summaries.sort(key=lambda s: s.created_at, reverse=True)
                 return summaries, resp.get("nextToken")
-            except Exception as exc:
-                mapped = _map_boto_error(exc)
-                if mapped is None:
-                    raise
-                raise mapped from exc
+        except Exception as exc:
+            mapped = _map_boto_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
 
     async def list_job_runs(
         self,
@@ -327,10 +329,10 @@ class EmrServerlessClient:
         a single-state ``states`` parameter but multi-state requires
         client-side filtering anyway, so we fetch unfiltered and
         keep the logic in one place."""
-        async with self._session.client(
-            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
-        ) as c:
-            try:
+        try:
+            async with self._session.client(
+                "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+            ) as c:
                 items: list[dict[str, object]] = []
                 next_token: str | None = None
                 while len(items) < max_results:
@@ -357,17 +359,17 @@ class EmrServerlessClient:
                     summaries = [s for s in summaries if s.state in states]
                 summaries.sort(key=lambda s: s.created_at, reverse=True)
                 return summaries[:max_results]
-            except Exception as exc:
-                mapped = _map_boto_error(exc)
-                if mapped is None:
-                    raise
-                raise mapped from exc
+        except Exception as exc:
+            mapped = _map_boto_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
 
     async def get_job_run(self, application_id: str, job_run_id: str) -> JobRunDetail:
-        async with self._session.client(
-            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
-        ) as c:
-            try:
+        try:
+            async with self._session.client(
+                "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+            ) as c:
                 resp = await c.get_job_run(applicationId=application_id, jobRunId=job_run_id)
                 r = resp["jobRun"]
                 spark = r.get("jobDriver", {}).get("sparkSubmit", {})
@@ -392,11 +394,11 @@ class EmrServerlessClient:
                     duration_ms=(duration_seconds * 1000) if duration_seconds is not None else None,
                     s3_monitoring_log_uri=log_uri,
                 )
-            except Exception as exc:
-                mapped = _map_boto_error(exc)
-                if mapped is None:
-                    raise
-                raise mapped from exc
+        except Exception as exc:
+            mapped = _map_boto_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
 
     async def start_job_run(
         self,
@@ -415,10 +417,10 @@ class EmrServerlessClient:
         re-run. Errors from boto3 are mapped through
         :func:`_map_boto_error` to the domain :class:`ProviderError`
         hierarchy so the modal can surface a typed error inline."""
-        async with self._session.client(
-            "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
-        ) as c:
-            try:
+        try:
+            async with self._session.client(
+                "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+            ) as c:
                 spark_submit: dict[str, Any] = {
                     "entryPoint": entry_point,
                     "entryPointArguments": list(entry_point_arguments),
@@ -434,8 +436,8 @@ class EmrServerlessClient:
                     kwargs["name"] = name
                 resp = await c.start_job_run(**kwargs)
                 return cast(str, resp["jobRunId"])
-            except Exception as exc:
-                mapped = _map_boto_error(exc)
-                if mapped is None:
-                    raise
-                raise mapped from exc
+        except Exception as exc:
+            mapped = _map_boto_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc

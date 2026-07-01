@@ -75,6 +75,21 @@ def test_s3_compatible_format_strips_https_scheme_too() -> None:
     assert title == "s3-compatible · r2-prod · abc.r2.cloudflarestorage.com"
 
 
+def test_s3_compatible_format_drops_endpoint_secrets() -> None:
+    title = _format_pane_title(
+        _s3c(
+            name="r2-prod",
+            endpoint="https://user:pass@example.com/bucket?X-Amz-Signature=sig#frag",
+        )
+    )
+
+    assert title == "s3-compatible · r2-prod · example.com/bucket"
+    assert "user" not in title
+    assert "pass" not in title
+    assert "X-Amz-Signature" not in title
+    assert "sig" not in title
+
+
 def test_strip_scheme_handles_edge_cases() -> None:
     assert _strip_scheme(None) is None
     assert _strip_scheme("") == ""

@@ -14,7 +14,13 @@ from aws_tui.domain.filesystem import (
     ProviderError,
     ProviderUnreachableError,
 )
+from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.file_manager.pane_vm import PaneState
+
+
+def _visible_error_text(exc: BaseException) -> str | None:
+    text = str(exc)
+    return redact_text(text) if text else None
 
 
 def map_provider_error(exc: ProviderError) -> tuple[PaneState, str | None]:
@@ -25,12 +31,12 @@ def map_provider_error(exc: ProviderError) -> tuple[PaneState, str | None]:
     ``ProviderError`` subclass — the fall-through default, kept for
     forward compatibility."""
     if isinstance(exc, AuthRequiredError):
-        return PaneState.AUTH_REQUIRED, str(exc) or None
+        return PaneState.AUTH_REQUIRED, _visible_error_text(exc)
     if isinstance(exc, ProviderUnreachableError):
-        return PaneState.UNREACHABLE, str(exc) or None
+        return PaneState.UNREACHABLE, _visible_error_text(exc)
     if isinstance(exc, PermissionDeniedError):
-        return PaneState.FORBIDDEN, str(exc) or None
-    return PaneState.ERROR, str(exc) or None
+        return PaneState.FORBIDDEN, _visible_error_text(exc)
+    return PaneState.ERROR, _visible_error_text(exc)
 
 
 __all__ = ["map_provider_error"]

@@ -28,6 +28,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_serverless import ApplicationState, ApplicationSummary
 from aws_tui.domain.filesystem import ProviderError
+from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -229,7 +230,7 @@ class ApplicationsVM:
             # stuck on LOADING with no user path to recovery (a
             # manual ``r`` re-enters LOADING and re-throws). Same
             # shield JobRunLogsVM.load already has; mirror it here.
-            self._error_text = f"unexpected error: {exc}"
+            self._error_text = redact_text(f"unexpected error: {exc}")
             self._set_state(PaneState.ERROR)
             return
         new_apps: tuple[ApplicationSummary, ...] = tuple(apps)

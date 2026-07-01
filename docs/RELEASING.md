@@ -104,17 +104,21 @@ VERSION="X.Y.Z.dev<RUN_NUMBER>"  # copy from the release workflow's verify outpu
 uv python install 3.13
 uv venv --python 3.13 /tmp/aws-tui-dry
 source /tmp/aws-tui-dry/bin/activate
-pip install --pre -i https://test.pypi.org/simple/ \
-    --extra-index-url https://pypi.org/simple/ \
-    "aws-tui==$VERSION"
+mkdir -p /tmp/aws-tui-dry-artifacts
+pip download --pre --no-deps -i https://test.pypi.org/simple/ \
+    "aws-tui==$VERSION" \
+    -d /tmp/aws-tui-dry-artifacts
+pip install --index-url https://pypi.org/simple/ \
+    /tmp/aws-tui-dry-artifacts/aws_tui-"$VERSION"-*.whl
 aws-tui --version
 ```
 
-The `--extra-index-url` lets pip resolve the runtime dependencies
-(boto3, textual, etc.) from real PyPI; TestPyPI only carries the
-aws-tui rehearsal artifact. Pinning the exact `X.Y.Z.dev<N>` version is
-intentional: once `X.Y.Z` exists on PyPI, an unpinned install may prefer
-the final PyPI release over the TestPyPI rehearsal.
+The download step intentionally uses `--no-deps` so only the aws-tui
+rehearsal artifact comes from TestPyPI. The install step then resolves
+runtime dependencies (boto3, textual, etc.) from real PyPI only. Pinning
+the exact `X.Y.Z.dev<N>` version is intentional: once `X.Y.Z` exists on
+PyPI, an unpinned install may prefer the final PyPI release over the
+TestPyPI rehearsal.
 
 ## 1.3. Rollback
 

@@ -65,8 +65,10 @@ Linux, and Windows. Powered by
   vanilla submit form remain deferred. AWS-only (does not surface
   for s3-compatible connections).
 - **Silent SSO.** Auto-discovers every AWS profile from
-  `~/.aws/{config,credentials}` and cheaply probes the SSO token cache
-  on launch (one `stat`, one ~1 KB JSON read, sub-millisecond).
+  `~/.aws/{config,credentials}`. SSO-backed profiles get a cheap
+  token-cache freshness probe on launch (one `stat`, one ~1 KB JSON
+  read, sub-millisecond); non-SSO profiles go straight to live boto
+  credential-chain validation.
   Honors `$AWS_PROFILE` between `[defaults].connection` and the
   first-auto fallback so SSO setups where `[default]` has no creds
   still pick the right profile.

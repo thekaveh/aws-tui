@@ -15,6 +15,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
 from aws_tui.domain.filesystem import ProviderError
+from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -127,7 +128,7 @@ class JobRunDetailVM:
             # stuck on LOADING.
             if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
                 return
-            self._error_text = f"unexpected error: {exc}"
+            self._error_text = redact_text(f"unexpected error: {exc}")
             self._set_state(PaneState.ERROR)
             return
         if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):

@@ -37,6 +37,30 @@ def store(tmp_path: Path) -> ConfigStore:
     return ConfigStore(path=tmp_path / "config.toml")
 
 
+def test_connection_repr_masks_endpoint_url_secrets() -> None:
+    conn = Connection(
+        name="r2-prod",
+        kind="s3-compatible",
+        region="us-east-1",
+        source="config",
+        endpoint_url="https://user:pass@example.com/bucket?X-Amz-Signature=sig",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        session_token="TOKEN",
+    )
+
+    rendered = repr(conn)
+
+    assert "user" not in rendered
+    assert "pass" not in rendered
+    assert "X-Amz-Signature" not in rendered
+    assert "sig" not in rendered
+    assert "endpoint_url='example.com/bucket'" in rendered
+    assert "AKID" not in rendered
+    assert "SECRET" not in rendered
+    assert "TOKEN" not in rendered
+
+
 class TestList:
     def test_empty_config_no_aws_files_returns_empty_list(
         self, tmp_path: Path, store: ConfigStore

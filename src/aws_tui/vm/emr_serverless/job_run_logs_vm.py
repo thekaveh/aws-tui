@@ -31,6 +31,7 @@ from aws_tui.domain.emr_logs import (
     parse_log_uri,
 )
 from aws_tui.domain.filesystem import ProviderError
+from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 
 
@@ -360,7 +361,7 @@ class JobRunLogsVM:
             # Same identity guard as the ProviderError branch above.
             if (self._application_id, self._job_run_id, self._log_uri) != target:
                 return
-            self._error_text = f"unexpected error: {exc}"
+            self._error_text = redact_text(f"unexpected error: {exc}")
             self._set_state(LogsState.ERROR)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────

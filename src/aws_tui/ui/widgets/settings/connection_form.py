@@ -73,6 +73,10 @@ def _validate_endpoint_url(form: S3CompatForm) -> str | None:
         return "must start with http:// or https://"
     if not parsed.netloc:
         return "missing host"
+    if parsed.username or parsed.password:
+        return "must not include username or password"
+    if parsed.query or parsed.fragment:
+        return "must not include query or fragment"
     return None
 
 
@@ -506,6 +510,10 @@ def _validate_s3_form_value(field: str, value: str) -> str | None:
             return "must start with http:// or https://"
         if not parsed.netloc:
             return "missing host"
+        if parsed.username or parsed.password:
+            return "must not include username or password"
+        if parsed.query or parsed.fragment:
+            return "must not include query or fragment"
         return None
     if field == "session_token":
         return None

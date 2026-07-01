@@ -33,6 +33,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
 from aws_tui.domain.filesystem import ProviderError
+from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -286,7 +287,7 @@ class JobRunsVM:
             # is permanently stuck on LOADING.
             if self._application_id != target_app_id:
                 return
-            self._error_text = f"unexpected error: {exc}"
+            self._error_text = redact_text(f"unexpected error: {exc}")
             self._set_state(PaneState.ERROR)
             return
         if self._application_id != target_app_id:
@@ -365,7 +366,8 @@ class JobRunsVM:
             # pagination back.
             if (self._application_id, self._next_token) != (target_app_id, target_token):
                 return  # pagination identity changed mid-flight; drop the stale error
-            self._error_text = str(exc) or None
+            text = str(exc)
+            self._error_text = redact_text(text) if text else None
             self._next_token = None
             self._notify("runs")
             return
@@ -378,7 +380,7 @@ class JobRunsVM:
             # with zero diagnostic.
             if (self._application_id, self._next_token) != (target_app_id, target_token):
                 return
-            self._error_text = f"unexpected error: {exc}"
+            self._error_text = redact_text(f"unexpected error: {exc}")
             self._next_token = None
             self._notify("runs")
             return
