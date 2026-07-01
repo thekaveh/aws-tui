@@ -397,6 +397,9 @@ legacy test compatibility, not the widget's runtime validation surface.
 When the user clicks Save on the inline form:
 1. `ConnectionFormInline` validates one last time + emits `ConnectionFormSubmitted`.
 2. `S3ConnectionsPanel` handler calls `vm.add(entry)` or `vm.update(name, entry)`.
+   Post-ship hardening: the shared `entry_from_s3_form` mapper trims text
+   fields and converts blank `session_token` values to `None` before any
+   `ConfigStore` write.
 3. The VM persists via `ConfigStore` and publishes `ConnectionListChangedMessage`.
 4. Subscribers react: `AwsTuiApp` drops deleted names from
    `unreachable_connections` (delete path); pane-reload logic in the app

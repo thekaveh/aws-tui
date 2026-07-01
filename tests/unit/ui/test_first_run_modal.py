@@ -106,6 +106,7 @@ async def test_add_s3_compat_flow_persists_and_dismisses(tmp_path: Path) -> None
                 region="us-east-1",
                 access_key_id="AK",
                 secret_access_key="SK",
+                session_token="SESSION",
                 force_path_style=True,
                 verify_tls=True,
             )
@@ -118,7 +119,8 @@ async def test_add_s3_compat_flow_persists_and_dismisses(tmp_path: Path) -> None
         # Modal should have dismissed with ADD_S3_COMPAT.
         assert dismissed_result == [FirstRunAction.ADD_S3_COMPAT]
         # Connection must be persisted to the config store.
-        assert "test-conn" in store.load().connections
+        entry = store.load().connections["test-conn"]
+        assert entry.session_token == "SESSION"
     finally:
         vm.dispose()
         hub.dispose()

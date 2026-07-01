@@ -32,6 +32,53 @@ def test_default_path_uses_platform_config_home(
     assert ConfigStore().path == config_home / "config.toml"
 
 
+def test_connection_entry_repr_masks_static_credentials() -> None:
+    entry = ConnectionEntry(
+        name="minio",
+        kind="s3-compatible",
+        endpoint_url="http://localhost:9000",
+        credentials="static",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        session_token="TOKEN",
+    )
+
+    rendered = repr(entry)
+
+    assert "AKID" not in rendered
+    assert "SECRET" not in rendered
+    assert "TOKEN" not in rendered
+    assert "access_key_id='***'" in rendered
+    assert "secret_access_key='***'" in rendered
+    assert "session_token='***'" in rendered
+
+
+def test_config_repr_uses_masked_connection_entries() -> None:
+    config = Config(
+        connections={
+            "minio": ConnectionEntry(
+                name="minio",
+                kind="s3-compatible",
+                credentials="static",
+                access_key_id="AKID",
+                secret_access_key="SECRET",
+                session_token="TOKEN",
+            )
+        },
+        defaults=Defaults(),
+        keybindings=Keybindings(),
+    )
+
+    rendered = repr(config)
+
+    assert "AKID" not in rendered
+    assert "SECRET" not in rendered
+    assert "TOKEN" not in rendered
+    assert "access_key_id='***'" in rendered
+    assert "secret_access_key='***'" in rendered
+    assert "session_token='***'" in rendered
+
+
 def test_missing_file_returns_empty_config(config_path: Path) -> None:
     store = ConfigStore(path=config_path)
     cfg = store.load()

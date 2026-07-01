@@ -244,6 +244,7 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
             pilot.app.query_one("#form-region", Input).value = "us-east-1"
             pilot.app.query_one("#form-access_key_id", Input).value = "AKIATEST"
             pilot.app.query_one("#form-secret_access_key", Input).value = "SECRETTEST"
+            pilot.app.query_one("#form-session_token", Input).value = "SESSIONTEST"
             await pilot.pause()
 
             # Post the submission event the form would emit on Save click.
@@ -253,6 +254,7 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
                 region="us-east-1",
                 access_key_id="AKIATEST",
                 secret_access_key="SECRETTEST",
+                session_token="SESSIONTEST",
                 force_path_style=True,
                 verify_tls=True,
             )
@@ -268,6 +270,7 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
     entry = cfg.connections["minio-test"]
     assert entry.endpoint_url == "http://localhost:9000"
     assert entry.credentials == "static"
+    assert entry.session_token == "SESSIONTEST"
 
     from aws_tui.infra.connection_resolver import ConnectionResolver
 
@@ -276,6 +279,7 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
     ).resolve("minio-test")
     assert resolved.access_key_id == "AKIATEST"
     assert resolved.secret_access_key == "SECRETTEST"
+    assert resolved.session_token == "SESSIONTEST"
 
 
 @pytest.mark.asyncio

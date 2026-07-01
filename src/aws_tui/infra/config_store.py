@@ -33,7 +33,7 @@ class ConfigError(Exception):
     references an unknown connection."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class ConnectionEntry:
     """A single ``[connections.<name>]`` block from the config file.
 
@@ -53,6 +53,19 @@ class ConnectionEntry:
     session_token: str | None = None
     force_path_style: bool = False
     verify_tls: bool = True
+
+    def __repr__(self) -> str:
+        masked_id = "***" if self.access_key_id else None
+        masked_secret = "***" if self.secret_access_key else None
+        masked_token = "***" if self.session_token else None
+        return (
+            f"ConnectionEntry(name={self.name!r}, kind={self.kind!r}, "
+            f"profile={self.profile!r}, region={self.region!r}, "
+            f"endpoint_url={self.endpoint_url!r}, credentials={self.credentials!r}, "
+            f"access_key_id={masked_id!r}, secret_access_key={masked_secret!r}, "
+            f"session_token={masked_token!r}, "
+            f"force_path_style={self.force_path_style!r}, verify_tls={self.verify_tls!r})"
+        )
 
 
 @dataclass(frozen=True, slots=True)

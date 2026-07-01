@@ -29,6 +29,13 @@ SOURCE_AUTO: Final[str] = "auto-aws-profile"
 _DEFAULT_REGION: Final[str] = "us-east-1"
 
 
+def _blank_to_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 class ConnectionNotFound(Exception):
     """Raised when ``resolve`` or ``materialize`` cannot find a connection."""
 
@@ -253,23 +260,24 @@ class ConnectionResolver:
             service = spec[len("keychain:") :]
             if self._keychain is None:
                 return None, None, None
+            token = self._keychain.get(service, "session_token")
             return (
                 self._keychain.get(service, "access_key_id"),
                 self._keychain.get(service, "secret_access_key"),
-                self._keychain.get(service, "session_token"),
+                _blank_to_none(token),
             )
         if spec.startswith("env:"):
             prefix = spec[len("env:") :]
             return (
                 os.environ.get(f"{prefix}ACCESS_KEY_ID"),
                 os.environ.get(f"{prefix}SECRET_ACCESS_KEY"),
-                os.environ.get(f"{prefix}SESSION_TOKEN"),
+                _blank_to_none(os.environ.get(f"{prefix}SESSION_TOKEN")),
             )
         if spec.startswith("aws-profile:"):
             profile = spec[len("aws-profile:") :]
             return self._read_aws_credentials_profile(profile)
         if spec == "static":
-            return entry.access_key_id, entry.secret_access_key, entry.session_token
+            return entry.access_key_id, entry.secret_access_key, _blank_to_none(entry.session_token)
         # Unknown / empty spec — let the caller deal with missing keys.
         return None, None, None
 
@@ -285,7 +293,7 @@ class ConnectionResolver:
         return (
             parser.get(profile, "aws_access_key_id", fallback=None),
             parser.get(profile, "aws_secret_access_key", fallback=None),
-            parser.get(profile, "aws_session_token", fallback=None),
+            _blank_to_none(parser.get(profile, "aws_session_token", fallback=None)),
         )
 
 

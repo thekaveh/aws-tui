@@ -85,7 +85,7 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
                 classes="modal-body first-run-bullet",
             )
             yield Static(
-                "  skip for now (you can add later via : connection add)",
+                "  skip for now (you can add later from Settings)",
                 classes="modal-body first-run-bullet",
             )
             yield ConnectionFormInline(hub=self._hub)

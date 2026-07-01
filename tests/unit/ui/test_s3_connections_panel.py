@@ -119,13 +119,15 @@ async def test_panel_routes_form_submission_to_vm_add(tmp_path: Path) -> None:
                 region="us-east-1",
                 access_key_id="K",
                 secret_access_key="S",
+                session_token="TOKEN",
                 force_path_style=True,
                 verify_tls=True,
             )
             panel.post_message(ConnectionFormSubmitted(form=form, mode="add", original_name=None))
             await pilot.pause()
         # After event handling the row must be persisted.
-        assert "from-event" in store.load().connections
+        entry = store.load().connections["from-event"]
+        assert entry.session_token == "TOKEN"
     finally:
         s3_vm.dispose()
 

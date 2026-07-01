@@ -221,6 +221,30 @@ class TestS3CompatibleCredentialDispatch:
         assert c.endpoint_url == "http://localhost:9000"
         assert c.force_path_style is True
 
+    def test_keychain_blank_session_token_resolves_as_none(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        kc = InMemoryKeychain()
+        kc.set("minio-local", "access_key_id", "AKIA-MINIO")
+        kc.set("minio-local", "secret_access_key", "shh")
+        kc.set("minio-local", "session_token", "   ")
+        store.add_connection(
+            ConnectionEntry(
+                name="minio-local",
+                kind="s3-compatible",
+                endpoint_url="http://localhost:9000",
+                region="us-east-1",
+                credentials="keychain:minio-local",
+            )
+        )
+        resolver = ConnectionResolver(
+            config_store=store,
+            keychain=kc,
+            aws_config_path=tmp_path / "missing",
+            aws_credentials_path=tmp_path / "missing",
+        )
+        assert resolver.resolve("minio-local").session_token is None
+
     def test_env_credentials(
         self, tmp_path: Path, store: ConfigStore, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -245,6 +269,28 @@ class TestS3CompatibleCredentialDispatch:
         assert c.access_key_id == "AKIA-R2"
         assert c.secret_access_key == "supersecret"
         assert c.session_token == "envsession"
+
+    def test_env_blank_session_token_resolves_as_none(
+        self, tmp_path: Path, store: ConfigStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKIA-R2")
+        monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "supersecret")
+        monkeypatch.setenv("R2_SESSION_TOKEN", "")
+        store.add_connection(
+            ConnectionEntry(
+                name="r2",
+                kind="s3-compatible",
+                endpoint_url="https://r2.example.com",
+                region="auto",
+                credentials="env:R2_",
+            )
+        )
+        resolver = ConnectionResolver(
+            config_store=store,
+            aws_config_path=tmp_path / "missing",
+            aws_credentials_path=tmp_path / "missing",
+        )
+        assert resolver.resolve("r2").session_token is None
 
     def test_aws_profile_credentials(self, tmp_path: Path, store: ConfigStore) -> None:
         cfg, creds = _write_aws_files(
@@ -275,6 +321,34 @@ class TestS3CompatibleCredentialDispatch:
         assert c.secret_access_key == "sharedsecret"
         assert c.session_token == "sharedsession"
 
+    def test_aws_profile_blank_session_token_resolves_as_none(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        cfg, creds = _write_aws_files(
+            tmp_path,
+            credentials_body=(
+                "[shared]\n"
+                "aws_access_key_id = AKIA-SHARED\n"
+                "aws_secret_access_key = sharedsecret\n"
+                "aws_session_token =   \n"
+            ),
+        )
+        store.add_connection(
+            ConnectionEntry(
+                name="wasabi",
+                kind="s3-compatible",
+                endpoint_url="https://s3.wasabisys.com",
+                region="us-east-1",
+                credentials="aws-profile:shared",
+            )
+        )
+        resolver = ConnectionResolver(
+            config_store=store,
+            aws_config_path=cfg,
+            aws_credentials_path=creds,
+        )
+        assert resolver.resolve("wasabi").session_token is None
+
     def test_static_credentials(self, tmp_path: Path, store: ConfigStore) -> None:
         store.add_connection(
             ConnectionEntry(
@@ -297,6 +371,28 @@ class TestS3CompatibleCredentialDispatch:
         assert c.access_key_id == "AKIA-STATIC"
         assert c.secret_access_key == "staticsecret"
         assert c.session_token == "staticsession"
+
+    def test_static_blank_session_token_resolves_as_none(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        store.add_connection(
+            ConnectionEntry(
+                name="static-r2",
+                kind="s3-compatible",
+                endpoint_url="https://r2.example.com",
+                region="auto",
+                credentials="static",
+                access_key_id="AKIA-STATIC",
+                secret_access_key="staticsecret",
+                session_token=" ",
+            )
+        )
+        resolver = ConnectionResolver(
+            config_store=store,
+            aws_config_path=tmp_path / "missing",
+            aws_credentials_path=tmp_path / "missing",
+        )
+        assert resolver.resolve("static-r2").session_token is None
 
     def test_s3_compat_without_keychain_returns_none_keys(
         self, tmp_path: Path, store: ConfigStore

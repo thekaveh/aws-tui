@@ -79,6 +79,10 @@ will be set at cut time.
 - **First-run S3-compatible save failures no longer crash the error
   handler.** The modal now uses supported Textual notification kwargs in
   test harnesses and the unified toast taxonomy in production.
+- **S3-compatible credential hardening.** Settings and first-run now share
+  normalized form-to-config mapping, blank optional session tokens resolve
+  as absent across static/env/keychain/profile sources, and
+  ``S3CompatForm`` / ``ConnectionEntry`` reprs mask static credentials.
 - **Crash reports now log through the configured JSON log sink.** The
   `crash.captured` event records exception type, dump path, and the last
   recorded action; wired app actions now populate the action ring before
@@ -121,6 +125,8 @@ will be set at cut time.
 - GitHub Actions workflow dependencies are pinned to immutable commit
   SHAs, with inline version comments preserving their human-readable
   source refs.
+- Workflow guard tests now assert executable pytest command lines and scan
+  nested integration tests for marker drift.
 
 ## 1.2. [0.8.0] - 2026-06-27
 
