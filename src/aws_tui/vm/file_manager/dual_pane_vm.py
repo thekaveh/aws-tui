@@ -254,6 +254,13 @@ class DualPaneVM:
         await self._left.setup()
         await self._right.setup()
 
+    def set_focused(self, pane: FocusedPane) -> None:
+        """Explicitly set the active pane."""
+        if self._focused is pane:
+            return
+        self._focused = pane
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "focused"))
+
     # ── Async cross-pane operations ────────────────────────────────────────
 
     async def copy_across(
@@ -622,8 +629,8 @@ class DualPaneVM:
         return self._left if self._focused is FocusedPane.LEFT else self._right
 
     def _switch_focus(self) -> None:
-        self._focused = FocusedPane.RIGHT if self._focused is FocusedPane.LEFT else FocusedPane.LEFT
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "focused"))
+        target = FocusedPane.RIGHT if self._focused is FocusedPane.LEFT else FocusedPane.LEFT
+        self.set_focused(target)
 
     def _signal_copy_requested(self) -> None:
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "copy_requested"))

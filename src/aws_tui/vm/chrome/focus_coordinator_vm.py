@@ -126,6 +126,27 @@ class FocusCoordinatorVM:
         self._focused_slot = slot
         self._emit_changed()
 
+    def cycle_s3_focus(self, *, reverse: bool = False) -> None:
+        """Rotate the S3 focus ring.
+
+        Forward: LEFT -> RIGHT -> NAV -> LEFT.
+        Reverse: LEFT -> NAV -> RIGHT -> LEFT.
+        """
+        if reverse:
+            order = (FocusSlot.S3_LEFT, FocusSlot.NAV_MENU, FocusSlot.S3_RIGHT)
+        else:
+            order = (FocusSlot.S3_LEFT, FocusSlot.S3_RIGHT, FocusSlot.NAV_MENU)
+        self._cycle(order)
+
+    def cycle_settings_focus(self, *, reverse: bool = False) -> None:
+        """Rotate the two-slot Settings focus ring.
+
+        ``reverse`` is accepted for API symmetry with service rings; a
+        two-slot ring has the same destination in both directions.
+        """
+        _ = reverse
+        self._cycle((FocusSlot.SETTINGS, FocusSlot.NAV_MENU))
+
     def modal_open(self) -> None:
         """Push the MODAL precedence slot. Saves the prior non-modal
         slot so :meth:`modal_close` can restore it."""
@@ -166,6 +187,14 @@ class FocusCoordinatorVM:
     def _emit_changed(self) -> None:
         self._on_changed.on_next(self._focused_slot)
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "focused_slot"))
+
+    def _cycle(self, order: tuple[FocusSlot, ...]) -> None:
+        try:
+            idx = order.index(self._focused_slot)
+        except ValueError:
+            self.set_focused_slot(order[0])
+            return
+        self.set_focused_slot(order[(idx + 1) % len(order)])
 
 
 __all__ = ["FocusCoordinatorVM", "FocusSlot"]

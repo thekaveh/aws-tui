@@ -48,7 +48,9 @@ from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.version import __version__
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
+from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.messages import ConnectionListChangedMessage, ThemeChangedMessage
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
@@ -176,7 +178,7 @@ class AwsTuiApp(App[None]):
         # consumes the key for its built-in focus traversal before the App
         # handler ever fires — that's the "Tab does nothing" symptom.
         Binding("tab", "switch_focus", "Switch pane", show=True, priority=True),
-        Binding("shift+tab", "switch_focus", "Switch pane", show=False, priority=True),
+        Binding("shift+tab", "switch_focus_reverse", "Switch pane", show=False, priority=True),
         Binding("up,k", "move_up", "↑", show=True, priority=True),
         Binding("down,j", "move_down", "↓", show=True, priority=True),
         Binding("enter", "descend", "Open", show=True, priority=True),
@@ -349,19 +351,8 @@ class AwsTuiApp(App[None]):
         else:
             self._mount_no_connection_placeholder()
 
-        # Drop Textual's automatic first-focus pass. By default Textual
-        # focuses the first focusable widget on mount, which on the S3
-        # screen is the NavMenu's services OptionList — the user then
-        # has to press Tab once just to MOVE focus off the rail before
-        # the second Tab actually toggles LEFT ↔ RIGHT. User report:
-        # "the menu box comes focused / selected when the app is
-        # launched". Same ``set_focus(None)`` trick the snapshot
-        # fixtures already use (``_UnfocusedMixin``); deferred via
-        # ``call_after_refresh`` so it runs AFTER Textual's first
-        # focus pass instead of being silently undone by it.
-        self.call_after_refresh(lambda: self.set_focus(None))
-
         if ctx.demo:
+            self.call_after_refresh(self._focus_demo_launch_nav)
             # Spec: one-shot Advisory toast on mount so the user
             # learns the in-session contract on first run. The
             # persistent banner subtitle keeps reminding them
@@ -371,6 +362,17 @@ class AwsTuiApp(App[None]):
                 subject="Source",
                 message="Demo mode active — try every feature; nothing persists",
             )
+        else:
+            # Drop Textual's automatic first-focus pass. By default Textual
+            # focuses the first focusable widget on mount, which on the S3
+            # screen is the NavMenu's services OptionList — the user then
+            # has to press Tab once just to MOVE focus off the rail before
+            # the second Tab actually toggles LEFT ↔ RIGHT. Same
+            # ``set_focus(None)`` trick the snapshot fixtures already use
+            # (``_UnfocusedMixin``); deferred via ``call_after_refresh`` so
+            # it runs AFTER Textual's first focus pass instead of being
+            # silently undone by it.
+            self.call_after_refresh(lambda: self.set_focus(None))
 
     async def _initial_mount_worker(
         self, *, initial_conn: Connection, auth_state: TokenState
@@ -1012,14 +1014,12 @@ class AwsTuiApp(App[None]):
         # so cleanup still runs instead of being silently dropped.
         self.run_worker(self.action_quit(), exclusive=True, group="shutdown")
 
-    def _dual_pane(self) -> object | None:
+    def _dual_pane(self) -> DualPaneVM | None:
         """Return the currently-hosted ``DualPaneVM`` (or None).
 
         Returns None when the content host is showing a non-file-manager
         view (e.g. SettingsView).
         """
-        from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
-
         current = self._app_ctx.root_vm.content_host.current
         return current if isinstance(current, DualPaneVM) else None
 
@@ -1057,87 +1057,55 @@ class AwsTuiApp(App[None]):
         return emr_page.left_pane
 
     def action_switch_focus(self) -> None:
-        """Tab cycle. NavMenu is a regular slot — user feedback
-        (post-PR-#93): "I also want the menu pane be treated like
-        any other pane in the app, which mean tab switching should
-        allow for it being among the switchable panes to be
-        selected / focused".
+        """Move to the next app-wide focus slot."""
+        self._cycle_focus(reverse=False)
 
-        Slot order:
+    def action_switch_focus_reverse(self) -> None:
+        """Move to the previous app-wide focus slot."""
+        self._cycle_focus(reverse=True)
 
-        - **S3** (3-slot): NAV → LEFT → RIGHT
-        - **EMR** (4-slot): NAV → LEFT → DETAIL → LOGS — delegated
-          to :meth:`EmrServerlessPage.action_cycle_panes_forward`.
-        - **Settings-only** (no DualPane mounted): NAV ↔ Content
-          (the previous 2-way preserved so keyboard users can leave
-          the Settings page without a mouse).
-
-        Pane widgets decline Textual focus by design (they use a CSS
-        ``-focused`` class toggled by ``DualPaneVM``); the NavMenu
-        DOES accept Textual focus (it's an OptionList container).
-        We bridge the two: ``self.set_focus(nav-list)`` for the NAV
-        slot, then ``self.set_focus(None)`` when moving to a pane
-        slot so Textual's focus chain stops chasing the OptionList.
-        """
-        # EMR page owns its own 4-slot Tab cycle. Delegate
-        # immediately so the App-level priority binding never falls
-        # through to the S3 / Settings branches below.
+    def _cycle_focus(self, *, reverse: bool) -> None:
+        # EMR page owns its own 4-slot Tab cycle.
         with contextlib.suppress(Exception):
             emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
-            emr_page.action_cycle_panes_forward()
+            if reverse:
+                emr_page.action_cycle_panes_back()
+            else:
+                emr_page.action_cycle_panes_forward()
             return
 
-        try:
-            nav = self.query_one("#nav-menu", NavMenu)
-        except Exception:
-            nav = None
-        dual = self._dual_pane()
+        coordinator = self._app_ctx.focus_coordinator
+        if self._dual_pane() is None:
+            coordinator.cycle_settings_focus(reverse=reverse)
+        else:
+            coordinator.cycle_s3_focus(reverse=reverse)
+        self._project_focus_slot(coordinator.focused_slot)
 
-        if dual is None:
-            # Settings-only screen — 2-way cycle between content
-            # host and NavMenu so keyboard users can leave the
-            # Settings page without a mouse.
-            if nav is not None:
-                if self._nav_has_focus():
-                    with contextlib.suppress(Exception):
-                        self.set_focus(None)
-                else:
-                    with contextlib.suppress(Exception):
-                        self._focus_active_nav_list(nav)
+    def _project_focus_slot(self, slot: FocusSlot) -> None:
+        if slot is FocusSlot.NAV_MENU:
+            with contextlib.suppress(Exception):
+                nav = self.query_one("#nav-menu", NavMenu)
+                self._focus_active_nav_list(nav)
             return
-
-        # S3 screen — 3-slot ring: NAV → LEFT → RIGHT → NAV.
-        # NavMenu is the only slot that accepts Textual focus; the
-        # two file panes don't (they decline focus by design and
-        # display a CSS ``-focused`` class via DualPaneVM). We
-        # derive the current slot from the combination of "does
-        # Textual focus sit on the NavMenu" + ``DualPaneVM.focused``.
-        switch_focus = getattr(dual, "switch_focus_command", None)
-        if nav is not None and self._nav_has_focus():
-            # NAV → LEFT. Drop NavMenu focus first so Textual's
-            # focus chain stops chasing the OptionList, then nudge
-            # DualPaneVM onto LEFT (toggle only if currently RIGHT
-            # — ``switch_focus_command`` is a flip, no set-LEFT
-            # primitive exists on the VM).
+        if slot is FocusSlot.S3_LEFT or slot is FocusSlot.S3_RIGHT:
             with contextlib.suppress(Exception):
                 self.set_focus(None)
-            focused_pane = getattr(dual, "focused", None)
-            focused_name = getattr(focused_pane, "value", None)
-            if focused_name != "left" and switch_focus is not None:
-                switch_focus.execute()
+            dual = self._dual_pane()
+            if dual is None:
+                return
+            target = FocusedPane.LEFT if slot is FocusSlot.S3_LEFT else FocusedPane.RIGHT
+            dual.set_focused(target)
             return
-        focused_pane = getattr(dual, "focused", None)
-        focused_name = getattr(focused_pane, "value", None)
-        if focused_name == "left":
-            # LEFT → RIGHT (flip the VM's focused pane).
-            if switch_focus is not None:
-                switch_focus.execute()
-            return
-        # RIGHT → NAV (default branch — also catches the boot-time
-        # "no pane focused yet" state).
-        if nav is not None:
+        if slot is FocusSlot.SETTINGS:
             with contextlib.suppress(Exception):
-                self._focus_active_nav_list(nav)
+                settings = self.query_one(SettingsView)
+                settings.focus_default()
+
+    def _focus_demo_launch_nav(self) -> None:
+        self._app_ctx.focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
+        with contextlib.suppress(Exception):
+            nav = self.query_one("#nav-menu", NavMenu)
+            self._focus_active_nav_list(nav)
 
     def focus_active_service_pane(self) -> None:
         """Move focus to the currently-active service's default pane.
@@ -1164,6 +1132,7 @@ class AwsTuiApp(App[None]):
         """
         current_id = self._app_ctx.root_vm.content_host.current_id
         if current_id == "s3":
+            self._app_ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_LEFT)
             with contextlib.suppress(Exception):
                 dual_widget = self.query_one("#content-dual-pane", DualPane)
                 dual_widget.focus_left_pane()
@@ -2138,7 +2107,7 @@ class AwsTuiApp(App[None]):
         dual = self._dual_pane()
         if dual is None:
             return
-        for pane in (dual.left, dual.right):  # type: ignore[attr-defined]
+        for pane in (dual.left, dual.right):
             key = pane.current_connection_key
             if key is None:
                 continue

@@ -64,6 +64,43 @@ def test_set_focused_slot_to_same_is_noop() -> None:
         vm.dispose()
 
 
+def test_cycle_s3_focus_forward_rotates_left_right_nav() -> None:
+    vm = _make(initial=FocusSlot.S3_LEFT)
+    try:
+        vm.cycle_s3_focus()
+        assert vm.focused_slot is FocusSlot.S3_RIGHT
+        vm.cycle_s3_focus()
+        assert vm.focused_slot is FocusSlot.NAV_MENU
+        vm.cycle_s3_focus()
+        assert vm.focused_slot is FocusSlot.S3_LEFT
+    finally:
+        vm.dispose()
+
+
+def test_cycle_s3_focus_reverse_rotates_left_nav_right() -> None:
+    vm = _make(initial=FocusSlot.S3_LEFT)
+    try:
+        vm.cycle_s3_focus(reverse=True)
+        assert vm.focused_slot is FocusSlot.NAV_MENU
+        vm.cycle_s3_focus(reverse=True)
+        assert vm.focused_slot is FocusSlot.S3_RIGHT
+        vm.cycle_s3_focus(reverse=True)
+        assert vm.focused_slot is FocusSlot.S3_LEFT
+    finally:
+        vm.dispose()
+
+
+def test_cycle_settings_focus_toggles_settings_and_nav() -> None:
+    vm = _make(initial=FocusSlot.SETTINGS)
+    try:
+        vm.cycle_settings_focus()
+        assert vm.focused_slot is FocusSlot.NAV_MENU
+        vm.cycle_settings_focus(reverse=True)
+        assert vm.focused_slot is FocusSlot.SETTINGS
+    finally:
+        vm.dispose()
+
+
 # -------------------- modal precedence --------------------
 
 

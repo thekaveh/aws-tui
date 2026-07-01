@@ -78,6 +78,24 @@ async def test_dual_switch_focus(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dual_set_focused_is_explicit_and_idempotent(tmp_path: Path) -> None:
+    dp, hub = await _make_dual(tmp_path)
+    notified: list[str] = []
+    sub = hub.messages.subscribe(on_next=lambda m: notified.append(getattr(m, "property_name", "")))
+    try:
+        dp.set_focused(FocusedPane.RIGHT)
+        assert dp.focused == FocusedPane.RIGHT
+        dp.set_focused(FocusedPane.RIGHT)
+        assert notified.count("focused") == 1
+        dp.set_focused(FocusedPane.LEFT)
+        assert dp.focused == FocusedPane.LEFT
+        assert notified.count("focused") == 2
+    finally:
+        sub.dispose()
+        dp.dispose()
+
+
+@pytest.mark.asyncio
 async def test_focused_and_other_pane_swap_with_focus(tmp_path: Path) -> None:
     """``focused_pane`` and ``other_pane`` track ``focused`` correctly.
 
@@ -118,6 +136,7 @@ async def test_dual_copy_across_publishes_transfer_progress(tmp_path: Path) -> N
     dp.left.toggle_select_command.execute()
     assert dp.left.marked_entries[0].entry.name == "alpha.txt"
     await dp.copy_across()
+    await dp.right.refresh()
     # Right pane should now have alpha.txt.
     names = [e.entry.name for e in dp.right.entries]
     assert "alpha.txt" in names
@@ -218,6 +237,7 @@ async def test_dual_copy_across_cancel_event_interrupts_in_flight_copy(
         def __init__(self) -> None:
             super().__init__()
             self._block_event = asyncio.Event()
+            self.read_started = asyncio.Event()
             self.read_was_cancelled = False
             self._entry = FileEntry(
                 name="big-file.bin",
@@ -251,6 +271,7 @@ async def test_dual_copy_across_cancel_event_interrupts_in_flight_copy(
 
         async def _blocking_gen(self) -> _AsyncIterator[bytes]:
             yield b""
+            self.read_started.set()
             try:
                 await self._block_event.wait()
             except asyncio.CancelledError:
@@ -294,6 +315,7 @@ async def test_dual_copy_across_cancel_event_interrupts_in_flight_copy(
             if dp._cancel_events:
                 break
         assert dp._cancel_events, "copy_across never populated _cancel_events"
+        await asyncio.wait_for(left_provider.read_started.wait(), timeout=2.0)
 
         # Fire the cancel-request as if the user clicked the chip.
         transfer_id = next(iter(dp._cancel_events.keys()))
@@ -327,6 +349,8 @@ async def test_dual_move_across_deletes_source(tmp_path: Path) -> None:
     dp.left.enter_multiselect_command.execute()
     dp.left.toggle_select_command.execute()  # marks alpha.txt
     await dp.move_across()
+    await dp.left.refresh()
+    await dp.right.refresh()
     left_names = [e.entry.name for e in dp.left.entries]
     right_names = [e.entry.name for e in dp.right.entries]
     assert "alpha.txt" not in left_names

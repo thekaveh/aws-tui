@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 
+from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widget import Widget
@@ -54,6 +55,7 @@ class DualPane(HubSubscriberMixin, Widget):
         self._vm: DualPaneVM = vm
         self._hub: MessageHub[Message] = hub
         self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
+        self._coord_sub: DisposableBase | None = None
         self._left_widget: Pane | None = None
         self._right_widget: Pane | None = None
 
@@ -77,7 +79,14 @@ class DualPane(HubSubscriberMixin, Widget):
             yield self._right_widget
 
     def on_mount(self) -> None:
-        self._sync_focus()
+        if self._focus_coordinator is not None:
+            self._coord_sub = self._focus_coordinator.on_focused_slot_changed.subscribe(
+                on_next=self._on_focus_slot_changed
+            )
+        if self._should_preserve_external_nav_focus():
+            self._apply_visual_focus(FocusSlot.NAV_MENU)
+        else:
+            self._sync_focus()
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
@@ -85,34 +94,47 @@ class DualPane(HubSubscriberMixin, Widget):
         )
 
     def on_unmount(self) -> None:
+        if self._coord_sub is not None:
+            self._coord_sub.dispose()
+            self._coord_sub = None
         self.unsubscribe_from_vm()
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    def _should_preserve_external_nav_focus(self) -> bool:
+        if self._focus_coordinator is None:
+            return False
+        if self._focus_coordinator.focused_slot is not FocusSlot.NAV_MENU:
+            return False
+        return self.app.focused is not None
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name == "focused":
             self.call_after_refresh(self._sync_focus)
 
+    def _on_focus_slot_changed(self, slot: FocusSlot) -> None:
+        if slot is FocusSlot.S3_LEFT:
+            self._vm.set_focused(FocusedPane.LEFT)
+            self.call_after_refresh(lambda: self._apply_visual_focus(slot))
+            return
+        if slot is FocusSlot.S3_RIGHT:
+            self._vm.set_focused(FocusedPane.RIGHT)
+            self.call_after_refresh(lambda: self._apply_visual_focus(slot))
+            return
+        self.call_after_refresh(lambda: self._apply_visual_focus(slot))
+
     def _sync_focus(self) -> None:
+        focused = self._vm.focused
+        slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
+        self._apply_visual_focus(slot)
+        if self._focus_coordinator is not None:
+            self._focus_coordinator.set_focused_slot(slot)
+
+    def _apply_visual_focus(self, slot: FocusSlot) -> None:
         if self._left_widget is None or self._right_widget is None:
             return
-        focused = self._vm.focused
-        self._left_widget.set_focused(focused is FocusedPane.LEFT)
-        self._right_widget.set_focused(focused is FocusedPane.RIGHT)
-        # Project the new pane focus through the coordinator. The
-        # coordinator is the single source of truth for which slot
-        # holds focus app-wide; without this projection the
-        # ``-rail-active`` Screen class set by NavMenu.on_focus
-        # stays put when Tab / mouse-click moves focus from the
-        # rail into a file pane, and the per-theme
-        # ``Screen.-rail-active Pane.-focused`` rule dims the
-        # focused pane's border instead of highlighting it. The
-        # MVVM projection is symmetric with NavMenu.on_focus →
-        # set_focused_slot(NAV_MENU); now the pane move also drives
-        # the coordinator slot.
-        if self._focus_coordinator is not None:
-            slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
-            self._focus_coordinator.set_focused_slot(slot)
+        self._left_widget.set_focused(slot is FocusSlot.S3_LEFT)
+        self._right_widget.set_focused(slot is FocusSlot.S3_RIGHT)
 
     def focus_focused_pane(self) -> None:
         """Move Textual focus to whichever pane the VM marks active.

@@ -40,6 +40,14 @@ def _make_ctx_with_emr_fake(config_dir: Path, cache_dir: Path) -> tuple[object, 
     return ctx, fake
 
 
+async def _await_emr_mount(pilot: object, app: AwsTuiApp) -> None:
+    await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+    setup_task = app.app_ctx.root_vm.content_host._setup_task  # type: ignore[attr-defined]
+    if setup_task is not None and not setup_task.done():
+        await setup_task
+    await pilot.pause()  # type: ignore[attr-defined]
+
+
 _AWS_TOML = (
     "[connections.dev]\n"
     'kind = "aws"\n'
@@ -72,8 +80,7 @@ async def test_emr_page_mounts_on_aws_connection(tmp_path: Path) -> None:
             await pilot.pause()
             # Switch to EMR via the menu VM (avoids keymap routing).
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
             host = pilot.app.query_one("#content-host")
             assert len(host.query(EmrServerlessPage)) == 1, (
                 "expected EmrServerlessPage mounted in #content-host"
@@ -124,8 +131,7 @@ async def test_emr_page_tab_cycle_includes_nav_then_left_detail_logs(tmp_path: P
             await pilot.pause()
             # Switch to EMR.
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
 
             left = pilot.app.query_one(JobRunsPane)
             right_detail = pilot.app.query_one(JobRunDetailPane)
@@ -201,8 +207,7 @@ async def test_emr_left_pane_auto_focuses_and_arrow_keys_move_cursor(tmp_path: P
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
 
             left = pilot.app.query_one(JobRunsPane)
 
@@ -263,8 +268,7 @@ async def test_emr_left_cursor_move_repoints_right_detail(tmp_path: Path) -> Non
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
 
             # First run is auto-selected by the page VM's setup().
             detail_vm = ctx.root_vm.content_host.current.job_run_detail
@@ -307,8 +311,7 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
 
             from aws_tui.ui.widgets.emr_serverless.job_runs_pane import _JobRunRow
 
@@ -364,8 +367,7 @@ async def test_emr_page_c_key_pushes_clone_modal(tmp_path: Path) -> None:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
 
             # The page VM should now hold a detail for r-001 via the
             # auto-select-first-run path in ``EmrServerlessPageVM.setup``.
@@ -427,8 +429,7 @@ async def test_emr_picker_commit_cascades_to_runs_pane(tmp_path: Path) -> None:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
 
             page_vm = ctx.root_vm.content_host.current
             page = pilot.app.query_one(EmrServerlessPage)
@@ -490,8 +491,7 @@ async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
 
             page_vm = ctx.root_vm.content_host.current
             initial_app_id = page_vm.applications.selected_id
@@ -532,8 +532,7 @@ async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> N
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
 
             left = pilot.app.query_one(JobRunsPane)
             right_logs = pilot.app.query_one(JobRunLogsPane)
@@ -598,8 +597,7 @@ async def test_emr_logs_pane_starts_idle_on_run_select(tmp_path: Path) -> None:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await _await_emr_mount(pilot, app)
 
             page_vm = ctx.root_vm.content_host.current
             logs_vm = page_vm.job_run_logs

@@ -204,6 +204,7 @@ class NavMenu(Widget, can_focus=True):
                 screen.add_class("-rail-active")
             else:
                 screen.remove_class("-rail-active")
+        self._repaint_rows()
 
     # ── Actions ──────────────────────────────────────────────────────────────
 
@@ -371,7 +372,7 @@ class NavMenu(Widget, can_focus=True):
             row = NavRow(
                 descriptor_id=item.descriptor.id,
                 label=display,
-                is_selected=(idx == cursor_idx),
+                is_selected=(idx == cursor_idx and self._nav_slot_is_visual_focus()),
                 is_settings=is_settings,
             )
             if is_settings:
@@ -400,7 +401,13 @@ class NavMenu(Widget, can_focus=True):
         """
         selected_id = self._vm.selected_id
         for row in self.query(NavRow):
-            row.set_selected(row.descriptor_id == selected_id)
+            row.set_selected(self._nav_slot_is_visual_focus() and row.descriptor_id == selected_id)
+
+    def _nav_slot_is_visual_focus(self) -> bool:
+        return (
+            self._focus_coordinator is None
+            or self._focus_coordinator.focused_slot is FocusSlot.NAV_MENU
+        )
 
 
 __all__ = ["NavMenu"]
