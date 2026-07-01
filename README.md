@@ -30,7 +30,8 @@ Linux, and Windows. Powered by
   The left-rail nav menu is always visible — Tab cycles in/out of it
   as a regular pane (post-PR-#94). Move, rename, and the dedicated
   `v` multi-select-mode entry point are spec'd but deferred to v0.9 —
-  see [`docs/keybindings.md`](docs/keybindings.md) §1.4 and the
+  see [`docs/keybindings.md` file operations](docs/keybindings.md#113-file-operations)
+  and [action IDs](docs/keybindings.md#13-action-ids), plus the
   `Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
   `CHANGELOG.md`.
 - **One-key source switcher.** `Shift+S` cycles the focused pane
@@ -96,25 +97,27 @@ Linux, and Windows. Powered by
   `<config-dir>/config.toml` for routine endpoint changes.
 - **Keymap schema ready; runtime rebinding deferred.** Action ↔
   keystroke IDs are defined and validated, but `AwsTuiApp` still routes
-  the wired v0.8.x bindings directly. See [`docs/keybindings.md`](docs/keybindings.md)
-  §2 for the current wired list and the v0.9 input-router plan.
+  the wired v0.8.x bindings directly. See
+  [`docs/keybindings.md` customizing](docs/keybindings.md#12-customizing)
+  and [action IDs](docs/keybindings.md#13-action-ids) for the current
+  wired list and the v0.9 input-router plan.
 - **Streaming Quick Look (deferred).** Spec'd on `Space` to stream the
   first 64 KB with a syntax tint, plus a full-file `$PAGER` shell-out.
   The `pane.quick_look` action handler isn't wired in v0.8.x — tracked
   under `[Unreleased] Deferred` in `CHANGELOG.md` and
-  [`docs/keybindings.md`](docs/keybindings.md) §1.4.
+  [`docs/keybindings.md` overlays](docs/keybindings.md#114-overlays).
 - **Command palette (deferred).** Spec'd on `:` or `Ctrl+K` as a
   fuzzy-filterable list of every action — including dynamic ones like
   `connection switch <name>` and `theme switch <name>`. In v0.8.x `:`
   opens the help overlay as a placeholder and `Ctrl+K` is unbound; the
   full palette ships post-v0.8. See `[Unreleased] Deferred` in
-  `CHANGELOG.md` and `keybindings.md` §1.4.
+  `CHANGELOG.md` and [`keybindings.md` overlays](docs/keybindings.md#114-overlays).
 - **Layered architecture with enforced forbidden edges.** View ▸ ViewModel
   ▸ Service ▸ Domain ▸ Infra, with `app.py` / `composition.py` as trusted
   composition roots and services allowed to compose concrete VMs; enforced
   by `scripts/check-layers.sh`. Mypy strict-clean.
-  See [`docs/architecture.md`](docs/architecture.md) §5 for the current
-  test-tier table; the default tier runs unit / in-process integration /
+  See [`docs/architecture.md` testing pyramid](docs/architecture.md#15-testing-pyramid)
+  for the current test-tier table; the default tier runs unit / in-process integration /
   snapshot / e2e, with a 9-test MinIO tier opt-in via
   `uv run pytest -m integration`.
 
@@ -166,7 +169,7 @@ If you've run `aws sso login --profile <name>` recently, aws-tui picks
 up the cached token silently (no network round-trip just to render the
 UI). Otherwise the picker shows the connection in `login needed`
 state — the `auth.authenticate` action is spec'd as `a` in
-[`docs/keybindings.md`](docs/keybindings.md) §1.6 but its
+[`docs/keybindings.md` connection/auth](docs/keybindings.md#116-connection-auth) but its
 runtime wiring is deferred to v0.9 (the `BindingResolver`
 work — see the `Deferred / v0.9 roadmap` block in `CHANGELOG.md`).
 Today, run `aws sso login --profile <name>` in your shell and
@@ -260,6 +263,7 @@ preserved when present.
 | `AWS_PROFILE` | unset | Pick this AWS profile at launch when `[defaults].connection` is unset. Honored between config and first-auto-discovered fallback. |
 | `AWS_DEFAULT_REGION` | unset | Used only by AWS tooling outside aws-tui; aws-tui resolves connection regions from `[connections.*].region`, AWS profile config, or `us-east-1`. |
 | `AWS_REGION` | unset | Same caveat as `AWS_DEFAULT_REGION`: set a profile/config region for aws-tui connection selection. |
+| `AWS_TUI_DEMO` | unset | Truthy values `1`, `true`, and `yes` launch demo mode with seeded in-memory data. Equivalent to `aws-tui --demo`. |
 | `${PREFIX}_ACCESS_KEY_ID` / `${PREFIX}_SECRET_ACCESS_KEY` | per-connection | Read by `ConnectionResolver` when a `[connections.<name>]` entry in `config.toml` sets `credentials = "env:PREFIX_"`. See [`docs/connections.md`](docs/connections.md) for the full pattern. |
 | `XDG_CONFIG_HOME` | per-OS default | Linux: used by `platformdirs` when no legacy `~/.config/aws-tui` directory already exists. macOS and Windows use the platform-native location regardless. |
 | `XDG_CACHE_HOME` | per-OS default | Linux: used by `platformdirs` when no legacy `~/.cache/aws-tui` directory already exists. macOS and Windows use the platform-native location regardless. |

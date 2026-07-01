@@ -257,17 +257,18 @@ jobs:
           name: dist
           path: dist/
 
-      # Parse the changelog section between ``## [X.Y.Z]`` and the
-      # next ``## [`` header. Awk is portable and runs in ubuntu's
-      # default image without extra setup.
+      # Parse the changelog section between ``## [X.Y.Z]`` (or the
+      # NUMBERED_DOCS form ``## 1.2. [X.Y.Z]``) and the next release
+      # header. Awk is portable and runs in ubuntu's default image
+      # without extra setup.
       - name: extract changelog section
         id: changelog
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           BODY="$(awk -v ver="$VERSION" '
-            $0 ~ ("^## \\[" ver "\\]") { capture=1; next }
-            capture && /^## \[/ { exit }
+            $0 ~ ("^## (([0-9]+\\.)+ )?\\[" ver "\\]") { capture=1; next }
+            capture && /^## (([0-9]+\.)+ )?\[/ { exit }
             capture { print }
           ' CHANGELOG.md)"
           if [[ -z "$BODY" ]]; then

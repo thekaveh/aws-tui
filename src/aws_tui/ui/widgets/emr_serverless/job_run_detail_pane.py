@@ -12,8 +12,9 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
-from textual.binding import BindingType
+from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
+from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Static
 
@@ -49,7 +50,14 @@ class JobRunDetailPane(Widget, can_focus=True):
     }
     """
 
-    BINDINGS: ClassVar[list[BindingType]] = []
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("r", "request_refresh", "Refresh", show=False),
+    ]
+
+    class RefreshRequested(TextualMessage):
+        """User pressed r to refresh the focused detail pane."""
+
+        pass
 
     def __init__(
         self,
@@ -77,6 +85,9 @@ class JobRunDetailPane(Widget, can_focus=True):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+    def action_request_refresh(self) -> None:
+        self.post_message(self.RefreshRequested())
 
     # ── Internal ────────────────────────────────────────────────────────────
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Rename `[Unreleased]` to `[<version>] - <today>` in CHANGELOG.md
-# and prepend a fresh empty `[Unreleased]` block.
+# and prepend a fresh empty `[Unreleased]` block. Numbered changelog
+# headings from the maintenance policy are preserved and renumbered.
 #
 # Usage:  scripts/cut-changelog.sh 0.8.0
 #
@@ -30,31 +31,80 @@ if [[ ! -f "$CHANGELOG" ]]; then
   exit 66
 fi
 
-if ! grep -q '^## \[Unreleased\]' "$CHANGELOG"; then
+if ! grep -Eq '^## ([0-9]+(\.[0-9]+)*\. )?\[Unreleased\]' "$CHANGELOG"; then
   echo "error: CHANGELOG.md is missing the '## [Unreleased]' header — already cut?" >&2
   exit 65
 fi
 
-if grep -q "^## \[$VERSION\]" "$CHANGELOG"; then
+if grep -Eq "^## ([0-9]+(\.[0-9]+)*\. )?\[$VERSION\]" "$CHANGELOG"; then
   echo "error: CHANGELOG.md already has a '## [$VERSION]' header — refusing to overwrite" >&2
   exit 65
 fi
 
 TODAY="$(date +%Y-%m-%d)"
 
-# Replace the `## [Unreleased]` header with a fresh empty Unreleased
-# block followed by the new version header. Portable awk so this runs
-# on macOS BSD awk + Linux gawk without surprises.
+# Replace the `[Unreleased]` header with a fresh empty Unreleased
+# block followed by the new version header. The Python helper keeps
+# NUMBERED_DOCS headings coherent: old `1.1.x` Unreleased subsections
+# become `1.2.x`, old `1.2` releases become `1.3`, etc.
 TMP="$(mktemp)"
-awk -v ver="$VERSION" -v today="$TODAY" '
-  /^## \[Unreleased\]/ {
-    print "## [Unreleased]";
-    print "";
-    print "## [" ver "] - " today;
-    next;
-  }
-  { print }
-' "$CHANGELOG" > "$TMP"
+python3 - "$VERSION" "$TODAY" "$CHANGELOG" > "$TMP" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+version, today, changelog_path = sys.argv[1:]
+lines = Path(changelog_path).read_text(encoding="utf-8").splitlines()
+release_header = re.compile(r"^(##) (?:(\d+(?:\.\d+)*)\. )?\[([^\]]+)\](.*)$")
+numbered_heading = re.compile(r"^(#{2,6}) (\d+(?:\.\d+)*)\. (.*)$")
+
+unreleased_idx: int | None = None
+unreleased_nums: list[int] | None = None
+for idx, line in enumerate(lines):
+    match = release_header.match(line)
+    if match and match.group(3) == "Unreleased":
+        unreleased_idx = idx
+        if match.group(2):
+            unreleased_nums = [int(part) for part in match.group(2).split(".")]
+        break
+
+if unreleased_idx is None:
+    raise SystemExit("missing Unreleased header")
+
+if unreleased_nums is not None and len(unreleased_nums) != 2:
+    raise SystemExit("numbered changelog release headings must be depth 2")
+
+def shift_numbering(line: str) -> str:
+    if unreleased_nums is None:
+        return line
+    match = numbered_heading.match(line)
+    if not match:
+        return line
+    nums = [int(part) for part in match.group(2).split(".")]
+    top, release_index = unreleased_nums
+    if len(nums) >= 2 and nums[0] == top and nums[1] >= release_index:
+        nums[1] += 1
+        return f"{match.group(1)} {'.'.join(str(part) for part in nums)}. {match.group(3)}"
+    return line
+
+out = lines[:unreleased_idx]
+if unreleased_nums is None:
+    out.extend(["## [Unreleased]", "", f"## [{version}] - {today}"])
+else:
+    top, release_index = unreleased_nums
+    out.extend(
+        [
+            f"## {top}.{release_index}. [Unreleased]",
+            "",
+            f"## {top}.{release_index + 1}. [{version}] - {today}",
+        ]
+    )
+out.extend(shift_numbering(line) for line in lines[unreleased_idx + 1 :])
+print("\n".join(out))
+print()
+PY
 
 mv "$TMP" "$CHANGELOG"
 

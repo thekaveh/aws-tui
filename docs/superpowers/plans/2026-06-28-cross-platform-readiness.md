@@ -475,7 +475,7 @@ When CI is green on every matrix leg, Task 2 is done.
 
 - [ ] **Step 1: Create the document skeleton.**
 
-```bash
+````bash
 cat > docs/installing.md << 'EOF'
 # Installing aws-tui
 
@@ -666,7 +666,7 @@ Manual sign-off log:
 | _TBD_ | _v0.8.0_ | Ubuntu 24.04 | pipx | _PENDING_ |
 | _TBD_ | _v0.8.0_ | Windows 11 / Windows Terminal | pipx | _PENDING_ |
 EOF
-```
+````
 
 - [ ] **Step 2: Verify the document renders.**
 
@@ -700,7 +700,7 @@ git commit -m "docs(cross-platform): per-platform install paths (Task 3)"
 
 ---
 
-### 18.2.1. Task 4: Release-time smoke install gate
+### 1.2.4. Task 4: Release-time smoke install gate
 
 **Goal:** Add a `smoke-install` matrix job to `.github/workflows/release.yml` that downloads the just-built wheel and runs the "Recommended: pipx" install on each of `{macos-14, ubuntu-24.04, windows-latest}`. The PyPI publish step waits on it; a smoke-install failure blocks the publish.
 
@@ -836,7 +836,7 @@ git commit -m "ci(cross-platform): smoke-install gate before PyPI publish (Task 
 
 ---
 
-### 18.2.2. Task 5: README install section restructure + per-platform polish
+### 1.2.5. Task 5: README install section restructure + per-platform polish
 
 **Goal:** The README is the front door — restructure the "Install" section so a first-time visitor on any of the three OSes sees their command verbatim, without scrolling past the other two. Cross-link to `docs/installing.md` for the full per-path matrix. Add a one-line "Terminal recommendation" callout for Windows.
 
@@ -861,7 +861,7 @@ Note the line range of the existing Install / Quickstart section so the next ste
 
 Find the section heading (likely `## Install` or similar) and replace its body with:
 
-```markdown
+````markdown
 ## Install
 
 Pick your platform. Each command produces the same binary; the differences are which package manager you ask to run it. See [`docs/installing.md`](docs/installing.md) for alternative install paths.
@@ -896,7 +896,7 @@ pipx install aws-tui
 ```sh
 aws-tui --version
 ```
-```
+````
 
 Keep the exact text of the rest of the README unchanged. Do NOT touch the project status line, features list, etc.
 
@@ -940,7 +940,7 @@ git commit -m "docs(cross-platform): per-platform README install section (Task 5
 
 ---
 
-## 19.1. Self-Review
+## 1.3. Self-Review
 
 **1. Spec coverage**
 

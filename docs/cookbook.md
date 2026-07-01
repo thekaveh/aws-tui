@@ -46,7 +46,7 @@ docker run --rm -d --name minio \
     -p 127.0.0.1:9000:9000 -p 127.0.0.1:9001:9001 \
     -e MINIO_ROOT_USER=minioadmin \
     -e MINIO_ROOT_PASSWORD=minioadmin \
-    minio/minio:RELEASE.2025-09-07T16-13-09Z server /data --console-address ":9001"
+    minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data --console-address ":9001"
 ```
 
 ### 1.1.2. Store the credentials in the macOS Keychain (recommended)

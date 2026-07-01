@@ -236,7 +236,8 @@ the dual-pane cursor.
 The target architecture is action-registry dispatch: views should route
 through action IDs and `BindingResolver` so rebinding can be purely
 config-driven. v0.8.x is not there yet; the live app still has a
-hard-coded `AwsTuiApp.BINDINGS` table for the wired keys listed in §2,
+hard-coded `AwsTuiApp.BINDINGS` table for the wired keys listed in
+[§1.2](#12-customizing),
 with direct forwarding into VM commands. Keep new action IDs registered
 in `KeymapStore` / `ActionRegistry` now so the later router handoff is a
 mechanical swap rather than a vocabulary migration.

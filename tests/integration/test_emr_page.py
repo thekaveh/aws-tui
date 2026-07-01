@@ -565,6 +565,90 @@ async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_emr_detail_focus_swallows_cursor_keys(tmp_path: Path) -> None:
+    """Detail is a real focus slot, so global cursor bindings must not
+    fall back to the runs pane while the visible focus border is on
+    detail."""
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    fake.add_job_run(application_id="00emr", job_run_id="r-001", name="first")
+    fake.add_job_run_detail(application_id="00emr", job_run_id="r-001")
+    fake.add_job_run(application_id="00emr", job_run_id="r-002", name="second")
+    fake.add_job_run_detail(application_id="00emr", job_run_id="r-002")
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            left = pilot.app.query_one(JobRunsPane)
+            right_detail = pilot.app.query_one(JobRunDetailPane)
+            page_vm = ctx.root_vm.content_host.current
+            selected_before = page_vm.job_run_detail.detail.job_run_id
+            cursor_before = left._cursor_index()  # type: ignore[attr-defined]
+
+            right_detail.focus()
+            await pilot.pause()
+            assert right_detail.has_focus or right_detail.has_focus_within
+
+            await pilot.press("down")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            assert left._cursor_index() == cursor_before  # type: ignore[attr-defined]
+            assert page_vm.job_run_detail.detail.job_run_id == selected_before
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_detail_focus_refreshes_detail_pane(tmp_path: Path) -> None:
+    """Pressing r on focused detail refreshes detail, not the runs list."""
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    fake.add_job_run(application_id="00emr", job_run_id="r-001", name="first")
+    fake.add_job_run_detail(
+        application_id="00emr",
+        job_run_id="r-001",
+        entry_point="s3://bucket/original.py",
+    )
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            right_detail = pilot.app.query_one(JobRunDetailPane)
+            page_vm = ctx.root_vm.content_host.current
+            assert page_vm.job_run_detail.detail.entry_point == "s3://bucket/original.py"
+
+            fake.add_job_run_detail(
+                application_id="00emr",
+                job_run_id="r-001",
+                entry_point="s3://bucket/refreshed.py",
+            )
+            right_detail.focus()
+            await pilot.pause()
+            assert right_detail.has_focus or right_detail.has_focus_within
+
+            await pilot.press("r")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            assert page_vm.job_run_detail.detail.entry_point == "s3://bucket/refreshed.py"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_emr_logs_pane_starts_idle_on_run_select(tmp_path: Path) -> None:
     """Task 14 optional: on-demand contract — logs VM transitions
     EMPTY_TARGET → IDLE when a run is selected, WITHOUT auto-loading.

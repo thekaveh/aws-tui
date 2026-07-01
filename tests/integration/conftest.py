@@ -41,6 +41,11 @@ from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 from tests.unit.domain._in_memory_fs import InMemoryFS
 
+_MINIO_IMAGE = (
+    "minio/minio:RELEASE.2025-09-07T16-13-09Z"
+    "@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+)
+
 
 @pytest.fixture(scope="session")
 def minio_endpoint() -> Iterator[tuple[str, str, str]]:
@@ -56,7 +61,7 @@ def minio_endpoint() -> Iterator[tuple[str, str, str]]:
         pytest.skip(f"testcontainers MinIO unavailable: {exc}")
 
     try:
-        container = MinioContainer()
+        container = MinioContainer(image=_MINIO_IMAGE)
         container.start()
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"could not start MinIO container (Docker missing?): {exc}")

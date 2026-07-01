@@ -6,7 +6,7 @@
 
 **Architecture:** One Protocol, two concrete providers (LocalFS via anyio+aiofiles, S3FS via aioboto3), one cross-fs streamer that reads from any provider and writes to any provider, one journal for resumable transfers. The dual-pane UI (M3+) will consume the same Protocol from both sides.
 
-**Tech Stack:** `anyio` (filesystem ops on threadpool), `aiofiles` (streaming reads/writes), `aioboto3` (S3), `moto` (in-process AWS mock for unit-tier integration tests), `testcontainers-python` with `minio/minio:RELEASE.*` (real S3-compat for the strict tier).
+**Tech Stack:** `anyio` (filesystem ops on threadpool), `aiofiles` (streaming reads/writes), `aioboto3` (S3), `moto` (in-process AWS mock for unit-tier integration tests), `testcontainers-python` with `minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` (real S3-compat for the strict tier).
 
 ---
 

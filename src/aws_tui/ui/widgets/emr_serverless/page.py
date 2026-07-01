@@ -479,6 +479,12 @@ class EmrServerlessPage(Widget):
         # per overlap.
         self.run_worker(self._vm.refresh_focused("runs"), exclusive=True, group="emr-poll-runs")
 
+    def on_job_run_detail_pane_refresh_requested(
+        self, _event: JobRunDetailPane.RefreshRequested
+    ) -> None:
+        """User pressed r while the detail pane owns focus."""
+        self.run_worker(self._vm.refresh_focused("detail"), exclusive=True, group="emr-poll-detail")
+
     def on_job_runs_pane_load_more_requested(self, _event: JobRunsPane.LoadMoreRequested) -> None:
         """User asked for the next page of runs (PgDn or click on
         the bottom sentinel). Run as ``exclusive=True`` so a slow
