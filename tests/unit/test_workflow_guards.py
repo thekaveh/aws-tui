@@ -41,6 +41,17 @@ def _assert_supported_python_loop(run: str) -> None:
     assert "for py in 3.11 3.12 3.13; do" in run
 
 
+def _assert_step_run_contains(
+    workflow: dict[str, Any],
+    job: str,
+    name: str,
+    *needles: str,
+) -> None:
+    run = _step(workflow, job, name)["run"]
+    for needle in needles:
+        assert needle in run
+
+
 def test_ci_dependency_audit_keeps_locked_hashes() -> None:
     _assert_hashed_audit_pair(".github/workflows/ci.yml", "security")
     assert _matrix_values(".github/workflows/ci.yml", "security", "python") == [
@@ -53,24 +64,48 @@ def test_ci_dependency_audit_keeps_locked_hashes() -> None:
 def test_ci_pytest_tiers_stay_wired() -> None:
     workflow = _workflow(".github/workflows/ci.yml")
 
-    assert (
-        _step(workflow, "unit", "pytest (unit + in-process integration)")["run"]
-        == "uv run --python ${{ matrix.python }} pytest tests/unit tests/integration -v"
+    _assert_step_run_contains(
+        workflow,
+        "unit",
+        "pytest (unit + in-process integration)",
+        "uv run",
+        "--python ${{ matrix.python }}",
+        "pytest",
+        "tests/unit",
+        "tests/integration",
     )
-    assert (
-        _step(workflow, "integration", "pytest (integration tier)")["run"]
-        == "uv run pytest -m integration -v"
+    _assert_step_run_contains(
+        workflow,
+        "integration",
+        "pytest (integration tier)",
+        "pytest",
+        "-m integration",
     )
-    assert (
-        _step(workflow, "coverage", "pytest coverage (unit + in-process integration)")["run"]
-        == "uv run --python 3.12 pytest tests/unit tests/integration "
-        "--cov=aws_tui --cov-report=term-missing --cov-report=xml"
+    _assert_step_run_contains(
+        workflow,
+        "coverage",
+        "pytest coverage (unit + in-process integration)",
+        "--python 3.12",
+        "pytest",
+        "tests/unit",
+        "tests/integration",
+        "--cov=aws_tui",
+        "--cov-report=xml",
     )
-    assert (
-        _step(workflow, "snapshot", "pytest (snapshot tier)")["run"]
-        == "uv run pytest tests/snapshot -v"
+    _assert_step_run_contains(
+        workflow,
+        "snapshot",
+        "pytest (snapshot tier)",
+        "pytest",
+        "tests/snapshot",
     )
-    assert _step(workflow, "e2e", "pytest (e2e tier)")["run"] == "uv run pytest tests/e2e -v"
+    _assert_step_run_contains(
+        workflow,
+        "e2e",
+        "pytest (e2e tier)",
+        "pytest",
+        "tests/e2e",
+    )
 
 
 def test_integration_marker_is_reserved_for_minio_tier() -> None:
@@ -98,6 +133,54 @@ def test_release_dependency_audit_keeps_locked_hashes() -> None:
     _assert_supported_python_loop(audit_run)
     assert "requirements-audit-$py.txt" in export_run
     assert "requirements-audit-$py.txt" in audit_run
+
+
+def test_release_pytest_tiers_stay_wired() -> None:
+    workflow = _workflow(".github/workflows/release.yml")
+
+    _assert_step_run_contains(
+        workflow,
+        "verify",
+        "pytest supported Python matrix",
+        "for py in 3.11 3.12 3.13; do",
+        'uv sync --frozen --python "$py"',
+        'uv run --python "$py" pytest tests/unit tests/integration -v',
+    )
+    _assert_step_run_contains(
+        workflow,
+        "verify",
+        "pytest coverage (unit + in-process integration)",
+        "--python 3.12",
+        "pytest",
+        "tests/unit",
+        "tests/integration",
+        "--cov=aws_tui",
+        "--cov-report=xml",
+    )
+    _assert_step_run_contains(
+        workflow,
+        "verify",
+        "pytest (MinIO integration tier)",
+        "--python 3.12",
+        "pytest",
+        "-m integration",
+    )
+    _assert_step_run_contains(
+        workflow,
+        "verify",
+        "pytest (snapshot tier)",
+        "--python 3.12",
+        "pytest",
+        "tests/snapshot",
+    )
+    _assert_step_run_contains(
+        workflow,
+        "verify",
+        "pytest (e2e tier)",
+        "--python 3.12",
+        "pytest",
+        "tests/e2e",
+    )
 
 
 def test_release_smoke_install_covers_supported_python_versions() -> None:

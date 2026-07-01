@@ -43,6 +43,7 @@ _FIELDS: tuple[tuple[str, str, str, bool], ...] = (
     ("region", "Region", "us-east-1", False),
     ("access_key_id", "Access key ID", "", False),
     ("secret_access_key", "Secret access key", "", True),
+    ("session_token", "Session token", "", True),
 )
 
 
@@ -324,7 +325,14 @@ class ConnectionFormInline(Widget):
     @on(Input.Changed)
     def _on_input_changed(self, event: Input.Changed) -> None:
         field = event.input.id.removeprefix("form-") if event.input.id else ""
-        if field not in {"name", "endpoint_url", "region", "access_key_id", "secret_access_key"}:
+        if field not in {
+            "name",
+            "endpoint_url",
+            "region",
+            "access_key_id",
+            "secret_access_key",
+            "session_token",
+        }:
             return
         # Drive the form VM — re-runs all validators and updates
         # ``errors`` / ``can_submit`` reactively.
@@ -498,6 +506,8 @@ def _validate_s3_form_value(field: str, value: str) -> str | None:
             return "must start with http:// or https://"
         if not parsed.netloc:
             return "missing host"
+        return None
+    if field == "session_token":
         return None
     if not stripped:
         return "required"

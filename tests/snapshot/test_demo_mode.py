@@ -130,7 +130,5 @@ def test_demo_mode_renders_chip_and_seed_data(theme: str) -> None:
     assert "DEMO MODE" in svg_plain or "Demo mode active" in svg_plain, (
         f"no DEMO affordance visible in {theme}"
     )
-    # Either a bucket name or the demo connection name proves seeding.
-    assert "demo-dev" in svg_plain or "etl-input" in svg_plain, (
-        f"no demo seed artifact rendered in {theme}"
-    )
+    assert "etl-input/" in svg_plain, f"no demo seed artifact rendered in {theme}"
+    assert "2 obj" in svg_plain, f"no settled demo pane summary rendered in {theme}"

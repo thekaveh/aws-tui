@@ -53,6 +53,11 @@ def test_required_field_accepts_nonempty(field: str) -> None:
     assert _validate_s3_form_value(field, "valid") is None
 
 
+@pytest.mark.parametrize("value", ["", "   ", "SESSION"])
+def test_session_token_is_optional(value: str) -> None:
+    assert _validate_s3_form_value("session_token", value) is None
+
+
 def test_construction_smoke() -> None:
     """Sanity-check that the widget instantiates without an app context."""
     from typing import cast
@@ -113,12 +118,14 @@ async def test_submit_does_not_close_form_so_parent_can_keep_open_on_error(
         pilot.app.query_one("#form-region", Input).value = "us-east-1"
         pilot.app.query_one("#form-access_key_id", Input).value = "K"
         pilot.app.query_one("#form-secret_access_key", Input).value = "S"
+        pilot.app.query_one("#form-session_token", Input).value = "TOKEN"
         await pilot.pause()
         form._submit()
         await pilot.pause()
 
     # Submission fired
     assert len(submissions) == 1
+    assert submissions[0].form.session_token == "TOKEN"
     # CRITICAL: form must NOT have closed itself
     assert form.has_class("-open"), (
         "ConnectionFormInline._submit() closed the form — parent can no "
