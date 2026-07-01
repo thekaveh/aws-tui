@@ -11,7 +11,7 @@
 ## 1.1. Global Constraints
 
 - 10-theme parity: every per-theme CSS block must land in all 10 theme files (`carbon`, `voidline`, `lattice`, `amber`, `solarized-light`, `github-light`, `one-light`, `nord`, `dracula`, `gruvbox-dark`).
-- **Every new snapshot test MUST be paired with a content-presence guard** per the PR #53 lesson — assert key text/glyphs appear in the rendered `.raw` SVG, not just that all themes match each other. See [memory note](/Users/kaveh/.claude/projects/-Users-kaveh-repos-aws-tui/memory/snapshot-test-content-guards.md).
+- **Every new snapshot test MUST be paired with a content-presence guard** per the PR #53 lesson — assert key text/glyphs appear in the rendered `.raw` SVG, not just that all themes match each other. Historical context lived in the local `snapshot-test-content-guards` memory note.
 - No new third-party dependencies.
 - Nav-menu cursor highlight matches the file-pane row cursor: `$bg-sel` background, `$accent` foreground, no border.
 - One inline form open at a time within the Connections section.
@@ -1793,7 +1793,7 @@ ConnectionFormInline .form-footer {
 }
 ```
 
-NOTE: per the project's [textual-design-system-gotchas memory note](/Users/kaveh/.claude/projects/-Users-kaveh-repos-aws-tui/memory/textual-design-system-gotchas.md),
+NOTE: per the project's historical `textual-design-system-gotchas` memory note,
 Textual reserves `$text-muted` and overrides it with alpha-blend
 expressions. Using it in `border-*` properties causes CSS parse failures.
 The block above uses `$text-muted` only in `color:` and `text-style:` —

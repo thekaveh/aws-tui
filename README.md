@@ -232,9 +232,10 @@ Numbered hierarchically for navigation.
    3. [Homebrew bootstrap](docs/homebrew-bootstrap.md) — one-shot bootstrap for the `thekaveh/homebrew-aws-tui` tap immediately after the first PyPI release. After that, the bump-homebrew job in `release.yml` opens PRs against the tap automatically.
    4. [Consumed contract ledger](docs/contract-ledger.md) — pinned external API/tooling contracts checked during maintenance passes.
 5. **Project meta**
-   1. [Contributing](CONTRIBUTING.md) — development setup, commit conventions, code of conduct.
-   2. [Security policy](SECURITY.md) — vulnerability reporting + supported versions.
-   3. [Changelog](CHANGELOG.md) — per-pass + per-release deltas.
+   1. [Contributing](CONTRIBUTING.md) — development setup and commit conventions.
+   2. [Code of Conduct](CODE_OF_CONDUCT.md) — contributor behavior expectations and enforcement.
+   3. [Security policy](SECURITY.md) — vulnerability reporting + supported versions.
+   4. [Changelog](CHANGELOG.md) — per-pass + per-release deltas.
 
 ## 1.5. File locations
 
