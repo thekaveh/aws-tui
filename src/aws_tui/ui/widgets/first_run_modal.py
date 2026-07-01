@@ -11,6 +11,8 @@ The modal offers three buttons mapping to :class:`FirstRunAction`:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
@@ -27,6 +29,16 @@ from aws_tui.ui.widgets.settings.connection_form import (
     ConnectionFormSubmitted,
 )
 from aws_tui.vm.chrome.first_run_vm import FirstRunAction, FirstRunVM
+
+if TYPE_CHECKING:
+    from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
+
+
+def _toast_stack_from_app_ctx(ctx: object) -> ToastStackVM | None:
+    root_vm = getattr(ctx, "root_vm", None)
+    chrome = getattr(root_vm, "chrome", None)
+    toast_stack = getattr(chrome, "toast_stack", None)
+    return cast("ToastStackVM | None", toast_stack)
 
 
 class FirstRunModal(ModalScreen[FirstRunAction]):
@@ -128,7 +140,7 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
             # after the first failure and the user would be stuck.
             self.query_one(ConnectionFormInline).clear_submitting()
             message = f"Couldn't save connection: {exc}"
-            toast_stack = getattr(getattr(self.app, "_app_ctx", None), "toast_stack", None)
+            toast_stack = _toast_stack_from_app_ctx(ctx)
             if toast_stack is not None:
                 notifications.error(
                     toast_stack,
@@ -137,10 +149,9 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
                     action="Fix the config path or permissions, then retry.",
                 )
             else:
-                # Harness fallback: Textual 8's Widget.notify has no markup
-                # flag, so user/error text must go through the unified helper
-                # in production and use only supported notify kwargs here.
-                self.notify(message, severity="error", timeout=8)
+                # Harness fallback: production uses the unified toast helper,
+                # while vanilla Textual test apps still need a visible error.
+                self.notify(message, severity="error", timeout=8, markup=False)
             return
         self.query_one(ConnectionFormInline).close()
         self._vm.add_s3_compat_command.execute()
