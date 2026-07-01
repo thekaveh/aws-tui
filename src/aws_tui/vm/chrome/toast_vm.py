@@ -77,7 +77,6 @@ class ToastVM:
         on_dismiss: Callable[[ToastVM], None] | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._is_dismissed: bool = False
         self._on_dismiss: Callable[[ToastVM], None] | None = on_dismiss
 

@@ -52,11 +52,7 @@ class JobRunLogsEmptyTargetApp(App[None]):
 
     async def on_mount(self) -> None:
         host = self.query_one("#content-host", Container)
-        pane = JobRunLogsPane(
-            self._vm,
-            hub=self._vm._hub,  # type: ignore[attr-defined]
-            id="logs-pane",
-        )
+        pane = JobRunLogsPane(self._vm, id="logs-pane")
         await host.mount(pane)
 
 
@@ -75,11 +71,7 @@ class JobRunLogsIdleApp(App[None]):
     async def on_mount(self) -> None:
         self._vm.set_target("a1", "r1", "s3://my-bucket/logs/")
         host = self.query_one("#content-host", Container)
-        pane = JobRunLogsPane(
-            self._vm,
-            hub=self._vm._hub,  # type: ignore[attr-defined]
-            id="logs-pane",
-        )
+        pane = JobRunLogsPane(self._vm, id="logs-pane")
         await host.mount(pane)
 
 
@@ -107,11 +99,7 @@ class JobRunLogsLoadingApp(App[None]):
             kind=LogFileKind.DRIVER_STDERR,
         )
         host = self.query_one("#content-host", Container)
-        pane = JobRunLogsPane(
-            self._vm,
-            hub=self._vm._hub,  # type: ignore[attr-defined]
-            id="logs-pane",
-        )
+        pane = JobRunLogsPane(self._vm, id="logs-pane")
         await host.mount(pane)
 
 
@@ -143,11 +131,7 @@ class JobRunLogsReadyApp(App[None]):
             kind=LogFileKind.DRIVER_STDERR,
         )
         host = self.query_one("#content-host", Container)
-        pane = JobRunLogsPane(
-            self._vm,
-            hub=self._vm._hub,  # type: ignore[attr-defined]
-            id="logs-pane",
-        )
+        pane = JobRunLogsPane(self._vm, id="logs-pane")
         await host.mount(pane)
 
 
@@ -166,11 +150,7 @@ class JobRunLogsNoLogConfigApp(App[None]):
     async def on_mount(self) -> None:
         self._vm.set_target("a1", "r1", None)
         host = self.query_one("#content-host", Container)
-        pane = JobRunLogsPane(
-            self._vm,
-            hub=self._vm._hub,  # type: ignore[attr-defined]
-            id="logs-pane",
-        )
+        pane = JobRunLogsPane(self._vm, id="logs-pane")
         await host.mount(pane)
 
 
@@ -192,11 +172,7 @@ class JobRunLogsErrorApp(App[None]):
         self._vm._state = LogsState.ERROR
         self._vm._error_text = "ResourceNotFoundException — bucket not found"
         host = self.query_one("#content-host", Container)
-        pane = JobRunLogsPane(
-            self._vm,
-            hub=self._vm._hub,  # type: ignore[attr-defined]
-            id="logs-pane",
-        )
+        pane = JobRunLogsPane(self._vm, id="logs-pane")
         await host.mount(pane)
 
 

@@ -63,6 +63,20 @@ class LogFilterModal(ModalScreen[LogFilter | None]):
                 "\n".join(self._current.patterns),
                 id="log-patterns",
             )
+            # Inline regex-validation error slot; hidden until the
+            # user presses Apply with a bad pattern. See
+            # ``_show_validation_error``.
+            # ``markup=False`` is mandatory here — the slot renders
+            # ``f"⚠ {message}"`` where ``message`` is the str(ValueError)
+            # from LogFilter.__post_init__, e.g. ``invalid regex
+            # pattern '[abc': missing ], unterminated character set
+            # at position 0: [abc``. Without the guard the error
+            # message designed to GUIDE the user past their typo
+            # would itself crash on the unclosed ``[`` in the
+            # echoed pattern.
+            err = Static("", id="log-patterns-error", classes="modal-field-error", markup=False)
+            err.styles.display = "none"
+            yield err
 
             with Horizontal(classes="switch-row"):
                 yield Static("Show all", classes="modal-field-label")
@@ -112,8 +126,32 @@ class LogFilterModal(ModalScreen[LogFilter | None]):
         self.dismiss(None)
 
     def action_apply(self) -> None:
-        new_filter = self._build_filter()
+        # ``LogFilter.__post_init__`` validates every regex eagerly.
+        # If the user typed an invalid pattern (e.g. ``(``,
+        # ``[abc``), surface the error inline and keep the modal
+        # open so they can fix it — without this the modal would
+        # close, the bad filter would reach the stream loop, and
+        # the pane would land in opaque ``LogsState.ERROR``.
+        try:
+            new_filter = self._build_filter()
+        except ValueError as exc:
+            self._show_validation_error(str(exc))
+            return
         self.dismiss(new_filter)
+
+    def _show_validation_error(self, message: str) -> None:
+        """Render the regex-validation message under the TextArea.
+
+        Looks up the placeholder Static added in compose(); falls
+        back to a no-op if not found (defensive — the modal should
+        always have it but tests sometimes mount a stripped-down
+        variant)."""
+        try:
+            err = self.query_one("#log-patterns-error", Static)
+        except Exception:
+            return
+        err.update(f"⚠ {message}")
+        err.styles.display = "block"
 
     def action_reset(self) -> None:
         """Reset form to DEFAULT_LOG_FILTER without dismissing."""

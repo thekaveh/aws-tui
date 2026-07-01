@@ -45,7 +45,6 @@ class ResumeVM:
         dispatcher: Dispatcher,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
 
         self._entries: tuple[TransferJournalEntry, ...] = tuple(entries)
         self._is_open: bool = False

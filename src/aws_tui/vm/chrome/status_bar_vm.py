@@ -58,7 +58,6 @@ class StatusBarVM:
         dispatcher: Dispatcher,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
 
         self._connection: Connection | None = None
         self._auth_state: TokenState | None = None

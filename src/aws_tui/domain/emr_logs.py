@@ -48,6 +48,20 @@ class LogFilter:
     mode: FilterMode = FilterMode.MATCH
     case_insensitive: bool = True
 
+    def __post_init__(self) -> None:
+        # Validate every pattern eagerly so an invalid regex (a
+        # stray ``(``, ``[abc``, ``*foo`` etc. in the user's filter
+        # text) surfaces as a typed ValueError the modal can catch
+        # at Apply time — instead of crashing ``stream_log`` mid-
+        # iteration and surfacing through the VM's bottom-of-stack
+        # ``except Exception`` as an opaque "unexpected error", with
+        # all matches collected so far silently dropped.
+        for pattern in self.patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid regex pattern {pattern!r}: {exc}") from exc
+
     def matches(self, line: str) -> bool:
         if self.mode is FilterMode.PASSTHROUGH:
             return True
@@ -267,20 +281,35 @@ async def stream_log(
             decompressed = gzip.GzipFile(fileobj=buf, mode="rb")
             lines_scanned = 0
             matched: list[str] = []
-            for raw in decompressed:
-                line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                lines_scanned += 1
-                if filter_.matches(line):
-                    matched.append(line)
-                if len(matched) >= _LINE_BUFFER_BATCH:
-                    yield LogChunk(
-                        lines=tuple(matched),
-                        bytes_read=bytes_read,
-                        lines_scanned=lines_scanned,
-                        matched_count=len(matched),
-                        truncated=False,
-                    )
-                    matched = []
+            # When ``truncated=True`` the buffer ends mid-deflate-block,
+            # so iterating ``decompressed`` raises ``EOFError`` (or
+            # ``gzip.BadGzipFile`` from CPython internals) once it
+            # walks off the end of the legible prefix. Catch BOTH
+            # around the loop body so the partial matches collected so
+            # far still surface as the final TRUNCATED chunk — without
+            # this, every log larger than ``max_bytes`` surfaces as
+            # ``LogsState.ERROR`` and the user loses the matched lines
+            # the design intended to show.
+            try:
+                for raw in decompressed:
+                    line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                    lines_scanned += 1
+                    if filter_.matches(line):
+                        matched.append(line)
+                    if len(matched) >= _LINE_BUFFER_BATCH:
+                        yield LogChunk(
+                            lines=tuple(matched),
+                            bytes_read=bytes_read,
+                            lines_scanned=lines_scanned,
+                            matched_count=len(matched),
+                            truncated=False,
+                        )
+                        matched = []
+            except (EOFError, gzip.BadGzipFile):
+                # Mid-deflate truncation. Force the truncated flag on
+                # the final chunk so the View paints the truncation
+                # banner; the matches we DID collect are still valid.
+                truncated = True
             yield LogChunk(
                 lines=tuple(matched),
                 bytes_read=bytes_read,

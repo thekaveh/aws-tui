@@ -41,18 +41,27 @@ from textual.widgets import Static
 from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.ui.widgets.nav_row import NavRow
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
 
+    from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
     from aws_tui.vm.nav_menu_vm import NavItemVM, NavMenuVM
 
 
-#: Canonical id for the synthetic Settings nav peer (defined by
-#: NavMenuVM._rebuild_items). The Settings row is pushed to the
-#: bottom of the rail via a flex spacer; logically it's still
-#: in the same cursor-navigable list as the services.
-_SETTINGS_NAV_ID: str = "settings"
+#: Round-3 / PR #101: per-service default focus slot. On ENTER,
+#: ``action_commit`` projects this slot through the coordinator so
+#: VM subscribers observe the user's intent to "enter" the service
+#: without the View-layer having to inspect the destination page's
+#: widget tree. Mapping uses the same service ids ``ServiceDescriptor``
+#: registers (``ServiceRegistry.register``).
+_SERVICE_DEFAULT_SLOT: dict[str, FocusSlot] = {
+    "s3": FocusSlot.S3_LEFT,
+    "emr-serverless": FocusSlot.EMR_RUNS,
+    SETTINGS_NAV_ID: FocusSlot.SETTINGS,
+}
 
 
 class NavMenu(Widget, can_focus=True):
@@ -98,19 +107,27 @@ class NavMenu(Widget, can_focus=True):
         *,
         vm: NavMenuVM,
         hub: MessageHub[Message],
+        focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: NavMenuVM = vm
         self._hub: MessageHub[Message] = hub
+        self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
+        self._coord_sub: DisposableBase | None = None
         self._sub: DisposableBase | None = None
         # Flat ordered list of every visible item (services then
         # Settings). Cursor moves across this whole list — there
         # is NO separation between services and Settings at the
         # navigation level. ``_cursor_index`` indexes into it.
         self._items: list[NavItemVM] = []
-        self._cursor_index: int = 0
+        # Round-3 directive (spec §9.bis.11, §3.2.bis row 1): the
+        # cursor index is NO LONGER a stored field. It's derived on
+        # demand from ``vm.selected_id`` (the VM-owned canonical
+        # slot). Arrow handlers compute the NEXT id and call
+        # ``switch_service_command.execute(next_id)`` instead of
+        # mutating a local index.
 
     @property
     def vm(self) -> NavMenuVM:
@@ -130,49 +147,110 @@ class NavMenu(Widget, can_focus=True):
         self.border_title = "menu"
         self._rebuild_rows()
         self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # Subscribe to the focus coordinator (round-3 / §4.3 / Phase
+        # 7) so the screen's ``-rail-active`` class follows the VM-
+        # owned slot, not direct Screen-class mutation on this
+        # widget's focus events.
+        if self._focus_coordinator is not None:
+            self._coord_sub = self._focus_coordinator.on_focused_slot_changed.subscribe(
+                on_next=self._apply_focus_slot_class
+            )
+            # Apply the initial state once.
+            self._apply_focus_slot_class(self._focus_coordinator.focused_slot)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+        if self._coord_sub is not None:
+            self._coord_sub.dispose()
+            self._coord_sub = None
 
     # ── Focus chrome coordination ─────────────────────────────────────────────
 
     def on_focus(self, event: events.Focus) -> None:
-        """When the rail gains Textual focus, mark the screen so the
-        per-theme CSS can dim the file-pane border. User feedback
-        (post-PR-#97): "Both the menu and the left/right panes can
-        be shown as focused / selected which again is confusing.
-        Only one pane should be selected at a time including the
-        menu." The dual file pane keeps its VM-driven ``-focused``
-        class for non-visual reasons (transfers / commands routing),
-        so we drive the visual via a sibling-scope ``-nav-active``
-        class on the Screen instead of mutating the pane VM.
-        """
+        """When the rail gains Textual focus, project the slot
+        through the :class:`FocusCoordinatorVM` (round-3 / §4.3).
+        The coordinator's ``on_focused_slot_changed`` subscriber
+        (wired in :meth:`on_mount`) is what mutates the
+        Screen's class — no direct Screen mutation here. Fallback to
+        the legacy direct mutation when no coordinator is wired
+        (e.g. test harnesses that haven't migrated yet)."""
+        if self._focus_coordinator is not None:
+            self._focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
+            return
         with contextlib.suppress(Exception):
-            self.screen.add_class("-nav-active")
+            self.screen.add_class("-rail-active")
 
     def on_blur(self, event: events.Blur) -> None:
-        """Symmetric to :meth:`on_focus`: drop the screen-level
-        marker so the file pane lights up again."""
+        """Symmetric to :meth:`on_focus`. When a coordinator is
+        wired, blurring doesn't directly demote the slot — the slot
+        only changes when something ELSE gains focus and projects
+        its own slot through the coordinator. The class mutation is
+        handled by the coordinator subscription."""
+        if self._focus_coordinator is not None:
+            return
         with contextlib.suppress(Exception):
-            self.screen.remove_class("-nav-active")
+            self.screen.remove_class("-rail-active")
+
+    def _apply_focus_slot_class(self, slot: object) -> None:
+        """Mutate the Screen's ``-rail-active`` class from the
+        coordinator's projected slot. Single source of truth: this
+        is the only place the class is touched when a coordinator is
+        wired."""
+        with contextlib.suppress(Exception):
+            screen = self.screen
+            if slot is FocusSlot.NAV_MENU:
+                screen.add_class("-rail-active")
+            else:
+                screen.remove_class("-rail-active")
+        self._repaint_rows()
 
     # ── Actions ──────────────────────────────────────────────────────────────
+
+    def _cursor_index(self) -> int:
+        """Derived cursor index over ``vm.selected_id``. Returns 0
+        when no service is selected (the default focus row)."""
+        return self._index_of(self._vm.selected_id, default=0)
 
     def action_cursor_up(self) -> None:
         if not self._items:
             return
-        if self._cursor_index > 0:
-            self._cursor_index -= 1
-            self._after_cursor_move()
+        cur = self._cursor_index()
+        if cur <= 0:
+            return
+        target_id = self._items[cur - 1].descriptor.id
+        self._after_cursor_move(target_id)
 
     def action_cursor_down(self) -> None:
         if not self._items:
             return
-        if self._cursor_index + 1 < len(self._items):
-            self._cursor_index += 1
-            self._after_cursor_move()
+        cur = self._cursor_index()
+        if cur + 1 >= len(self._items):
+            return
+        target_id = self._items[cur + 1].descriptor.id
+        self._after_cursor_move(target_id)
+
+    def _after_cursor_move(self, target_id: str) -> None:
+        """Cursor moved by arrow key or click — drive the VM's
+        selection slot; the View paints from the resulting
+        PropertyChangedMessage.
+
+        Round-3 directive §9.bis.11 / PR #98(2) closure: when a
+        :class:`FocusCoordinatorVM` is wired (the live app), the
+        ``call_after_refresh(self.focus)`` re-grab is unnecessary —
+        the destination page's :meth:`_maybe_focus_*` chain reads
+        the coordinator's `focused_slot` (which is `NAV_MENU` here
+        because :meth:`on_focus` projected it) and bails on the
+        rail-walk gate. No focus race, no defensive re-grab. The
+        legacy re-grab fallback is preserved when no coordinator is
+        wired so test harnesses that haven't migrated still pass.
+        """
+        if target_id == self._vm.selected_id:
+            return
+        self._vm.switch_service_command.execute(target_id)
+        if self._focus_coordinator is None:
+            self.call_after_refresh(self.focus)
 
     def action_commit(self) -> None:
         """ENTER on a service row = "go INTO this service": ensure the
@@ -206,13 +284,24 @@ class NavMenu(Widget, can_focus=True):
         """
         if not self._items:
             return
-        target_id = self._items[self._cursor_index].descriptor.id
+        target_id = self._items[self._cursor_index()].descriptor.id
         needs_switch = target_id != self._vm.selected_id
         app = self.app
         with contextlib.suppress(Exception):
             app.set_focus(None)
         if needs_switch:
             self._vm.switch_service_command.execute(target_id)
+        # Round-3 directive §9.bis.11 / PR #101 closure: project the
+        # service's default focus slot through the coordinator so VM-
+        # side subscribers observe the user's intent to "enter" the
+        # service. The App-level :meth:`focus_active_service_pane`
+        # below still drives the actual Textual `set_focus` call —
+        # the coordinator becomes the data source, the dispatcher
+        # remains the View-side projection mechanism.
+        if self._focus_coordinator is not None:
+            slot = _SERVICE_DEFAULT_SLOT.get(target_id)
+            if slot is not None:
+                self._focus_coordinator.set_focused_slot(slot)
         focus_active = getattr(app, "focus_active_service_pane", None)
         if callable(focus_active):
             focus_active()
@@ -228,9 +317,8 @@ class NavMenu(Widget, can_focus=True):
                 target_id = target.descriptor_id
                 for idx, item in enumerate(self._items):
                     if item.descriptor.id == target_id:
-                        if idx != self._cursor_index:
-                            self._cursor_index = idx
-                            self._after_cursor_move()
+                        if idx != self._cursor_index():
+                            self._after_cursor_move(target_id)
                         elif target_id != self._vm.selected_id:
                             self._vm.switch_service_command.execute(target_id)
                         return
@@ -244,8 +332,15 @@ class NavMenu(Widget, can_focus=True):
             return
         if msg.sender_object is not self._vm:
             return
-        if msg.property_name in ("items", "selected_id"):
+        # ``items`` changes require re-mounting the row widgets;
+        # ``selected_id`` only flips the ``-selected`` class on the
+        # already-mounted rows. Routing the lighter path through
+        # ``_repaint_rows`` honours the per-arrow-keypress
+        # responsiveness target the method's docstring records.
+        if msg.property_name == "items":
             self._rebuild_rows()
+        elif msg.property_name == "selected_id":
+            self._repaint_rows()
 
     def _rebuild_rows(self) -> None:
         """Re-mount all NavRows from the current VM items list.
@@ -263,24 +358,8 @@ class NavMenu(Widget, can_focus=True):
         services_container.remove_children()
         settings_container.remove_children()
 
-        # Try to preserve the cursor's current selection across
-        # the rebuild. If the user's previous cursor row vanished
-        # (e.g., a connection-switch dropped one service), fall
-        # back to whichever row the VM's ``selected_id`` points
-        # at, or 0.
-        prior_id = self._items[self._cursor_index].descriptor.id if self._items else None
         self._items = list(self._vm.items)
-        selected_id = self._vm.selected_id
-        if prior_id is not None:
-            for idx, item in enumerate(self._items):
-                if item.descriptor.id == prior_id:
-                    self._cursor_index = idx
-                    break
-            else:
-                self._cursor_index = self._index_of(selected_id, default=0)
-        else:
-            self._cursor_index = self._index_of(selected_id, default=0)
-
+        cursor_idx = self._cursor_index()
         # Mount the rows. Services first, Settings last (visually
         # pushed to the bottom by the flex spacer). The Settings row
         # uses the descriptor's ICON (a gear glyph ``⚙️``) instead of
@@ -288,12 +367,12 @@ class NavMenu(Widget, can_focus=True):
         # User feedback (post-PR-#97): "Let's switch back the Settings
         # to the gear emoji and then make the menu pane narrower."
         for idx, item in enumerate(self._items):
-            is_settings = item.descriptor.id == _SETTINGS_NAV_ID
+            is_settings = item.descriptor.id == SETTINGS_NAV_ID
             display = item.descriptor.icon if is_settings else item.descriptor.label
             row = NavRow(
                 descriptor_id=item.descriptor.id,
                 label=display,
-                is_selected=(idx == self._cursor_index),
+                is_selected=(idx == cursor_idx and self._nav_slot_is_visual_focus()),
                 is_settings=is_settings,
             )
             if is_settings:
@@ -309,44 +388,26 @@ class NavMenu(Widget, can_focus=True):
                 return idx
         return default
 
-    def _after_cursor_move(self) -> None:
-        """Cursor moved by arrow key or click. Three things:
-
-        1. Re-paint row chrome so the new cursor row carries the
-           ``-selected`` class (and the previous one drops it).
-        2. Scroll the cursor row into view if needed.
-        3. Execute the master-detail switch — user feedback:
-           "arrow key among the menu items … should result in
-           changing the service as selected item, or selecting
-           the settings".
-        4. Re-grab Textual focus AFTER the swap. The newly-mounted
-           page's ``on_mount`` calls ``call_after_refresh(<pane>.focus)``
-           to land focus on its LEFT pane — stealing focus from the
-           rail mid-arrow-walk. User feedback (post-PR-#97): "I can
-           use arrow keys to move down to EMR, but then the focus
-           automatically is out of the menu and into the job runs
-           which means I can't use arrow keys to move further down
-           the menu". Queueing our ``self.focus`` after the page's
-           ``call_after_refresh`` puts NavMenu LAST in the
-           run-after-next-refresh queue, so we win the focus race.
-        """
-        self._repaint_rows()
-        if 0 <= self._cursor_index < len(self._items):
-            target_id = self._items[self._cursor_index].descriptor.id
-            if target_id != self._vm.selected_id:
-                self._vm.switch_service_command.execute(target_id)
-                self.call_after_refresh(self.focus)
-
     def _repaint_rows(self) -> None:
         """Flip the ``-selected`` class on every mounted row to
-        match the current cursor index. Avoids a full re-mount on
-        every arrow keypress."""
+        match the current cursor (derived from ``vm.selected_id``).
+        Avoids a full re-mount on every arrow keypress.
+
+        Delegates to ``NavRow.set_selected`` which updates BOTH the
+        CSS class AND the row's internal ``_is_selected`` field +
+        triggers a re-render — without the row's re-render the
+        ribbon glyph ``▌`` stays on the originally-mounted row even
+        though the CSS class moves.
+        """
+        selected_id = self._vm.selected_id
         for row in self.query(NavRow):
-            on_cursor = (
-                0 <= self._cursor_index < len(self._items)
-                and row.descriptor_id == self._items[self._cursor_index].descriptor.id
-            )
-            row.set_class(on_cursor, "-selected")
+            row.set_selected(self._nav_slot_is_visual_focus() and row.descriptor_id == selected_id)
+
+    def _nav_slot_is_visual_focus(self) -> bool:
+        return (
+            self._focus_coordinator is None
+            or self._focus_coordinator.focused_slot is FocusSlot.NAV_MENU
+        )
 
 
 __all__ = ["NavMenu"]

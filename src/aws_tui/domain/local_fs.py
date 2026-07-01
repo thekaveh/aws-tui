@@ -56,10 +56,23 @@ class LocalFS:
     # ------------------------------------------------------------------
 
     def _resolve(self, path: PathRef) -> AnyioPath:
-        """Map a PathRef to a concrete anyio.Path on the host."""
+        """Map a PathRef to a concrete anyio.Path on the host.
+
+        When ``root`` was provided the docstring contract promises
+        "no ``..`` traversal" — but ``Path.joinpath`` does NOT
+        normalize ``..`` and the OS interprets it literally, so a
+        ``PathRef(segments=("..", "..", "etc", "passwd"))`` would
+        escape the sandbox. Resolve the joined path and verify it
+        stays under ``_root``; raise ``ProviderError`` otherwise so
+        the violation surfaces typed (rather than silently reading
+        outside the sandbox or raising a generic OSError later).
+        """
         if self._root is not None:
-            # Treat the PathRef as relative to root, regardless of leading "/".
-            host = self._root.joinpath(*path.segments) if path.segments else self._root
+            joined = self._root.joinpath(*path.segments) if path.segments else self._root
+            resolved = joined.resolve()
+            if resolved != self._root and not resolved.is_relative_to(self._root):
+                raise ProviderError(f"path {path.as_posix()!r} escapes sandbox root {self._root}")
+            host = resolved
         else:
             host = Path(path.as_posix())
         return AnyioPath(host)

@@ -87,6 +87,25 @@ class NavRow(Widget):
     def descriptor_id(self) -> str:
         return self._descriptor_id
 
+    def set_selected(self, value: bool) -> None:
+        """Reactively update the visual selection state.
+
+        Called by ``NavMenu._repaint_rows`` when the VM's
+        ``selected_id`` changes. Updates BOTH the ``-selected`` CSS
+        class (for theme-driven row chrome) AND the internal
+        ``_is_selected`` field that ``render()`` reads to choose
+        between the ribbon glyph ``▌`` and a blank spacer — then
+        triggers a re-render. Without the ``refresh()`` the CSS
+        class would flip but the rendered text would keep the
+        OLD ribbon position because Textual doesn't auto-refresh
+        on class changes.
+        """
+        if self._is_selected == value:
+            return
+        self._is_selected = value
+        self.set_class(value, "-selected")
+        self.refresh()
+
     def render(self) -> Text:
         # ``Text.append`` adds literal text — NOT parsed as Rich
         # markup — so descriptor labels containing characters like

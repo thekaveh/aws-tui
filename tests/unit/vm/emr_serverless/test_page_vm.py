@@ -68,11 +68,24 @@ async def test_select_job_run_propagates_to_detail() -> None:
 
 @pytest.mark.asyncio
 async def test_dispose_cascades_to_children() -> None:
+    """``dispose()`` must reach the four child VMs (applications /
+    job_runs / job_run_detail / job_run_logs) — the prior body only
+    asserted "didn't raise on double-dispose", which would silently
+    pass a regression that disposed ``_inner`` while skipping the
+    children. ``ApplicationsVM`` / ``JobRunsVM`` expose ``status``
+    proxies; ``JobRunDetailVM`` / ``JobRunLogsVM`` do not, so we
+    read their inner status via test-only dunder access — the
+    cascade is what matters, not the public surface."""
+    from vmx.lifecycle.status import ConstructionStatus
+
     page, _ = _make()
-    # Mark each child's _inner so we can observe dispose via the wrapper
-    # signal. The simpler observable is that dispose() doesn't raise
-    # after construct(); a second dispose() should be a no-op.
+    assert page.applications.status is ConstructionStatus.CONSTRUCTED
+    assert page.job_runs.status is ConstructionStatus.CONSTRUCTED
     page.dispose()
+    assert page.applications.status is ConstructionStatus.DISPOSED
+    assert page.job_runs.status is ConstructionStatus.DISPOSED
+    assert page.job_run_detail._inner.status is ConstructionStatus.DISPOSED  # type: ignore[attr-defined]
+    assert page.job_run_logs._inner.status is ConstructionStatus.DISPOSED  # type: ignore[attr-defined]
     page.dispose()  # idempotent
 
 

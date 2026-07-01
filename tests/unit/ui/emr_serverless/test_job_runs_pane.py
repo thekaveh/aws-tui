@@ -38,7 +38,7 @@ class _PaneApp(App[None]):
         self._hub = hub
 
     def compose(self) -> ComposeResult:
-        yield JobRunsPane(self._vm, hub=self._hub, id="pane")
+        yield JobRunsPane(self._vm, id="pane")
 
 
 # ── Key-binding contract: digit toggles state filter on / off ────────────────

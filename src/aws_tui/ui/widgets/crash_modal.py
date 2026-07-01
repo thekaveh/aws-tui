@@ -60,12 +60,21 @@ class CrashModal(ModalScreen[CrashChoice]):
         report = self._vm.report
         with Container():
             yield Static("unexpected error", classes="modal-title")
+            # ``markup=False`` everywhere a CrashReport field flows
+            # through Static. Exception messages, tracebacks, and
+            # dump paths routinely contain ``[…]`` (``KeyError:
+            # '[foo]'``, ``IndexError: ... [0]``, repr of dicts in
+            # ``__str__``) which Rich would parse as style tags and
+            # crash on. The crash modal is the LAST widget that's
+            # allowed to crash — its whole job is to surface
+            # crashes; a second crash here is a hard app freeze.
             yield Static(
                 f"{report.exception_type}: {report.exception_message}",
                 classes="modal-body crash-exc",
+                markup=False,
             )
-            yield Static(report.traceback_short, classes="modal-body crash-trace")
-            yield Static(str(report.dump_path), classes="modal-body crash-dump-path")
+            yield Static(report.traceback_short, classes="modal-body crash-trace", markup=False)
+            yield Static(str(report.dump_path), classes="modal-body crash-dump-path", markup=False)
             with Horizontal(classes="modal-footer"):
                 yield ModalButton("view trace", button_id="crash-view-btn")
                 # ``continue`` is the safe-side primary action when the

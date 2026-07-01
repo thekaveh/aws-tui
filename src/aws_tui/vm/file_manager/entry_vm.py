@@ -94,7 +94,6 @@ class EntryVM:
         id_prefix: str = "entry",
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
 
         initial_state = EntryState(entry=entry, is_selected=False, is_marked=False)
         # Name is unique-enough within a pane (entries within a directory

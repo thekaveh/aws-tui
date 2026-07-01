@@ -82,12 +82,30 @@ class ConfirmModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Container():
-            yield Static(self._request.title, classes="modal-title")
+            # ``markup=False`` on the title too — callers like
+            # s3_connections_panel build titles via
+            # ``f"Delete connection {name!r}?"`` where ``name`` can
+            # come from a config.toml that allows quoted bracketed
+            # keys (``[connections."minio[v2]"]``). R24 caught
+            # body_lines and path; the title was the asymmetric
+            # holdout.
+            yield Static(self._request.title, classes="modal-title", markup=False)
+            # ``markup=False`` on every user-/path-controlled Static.
+            # Real filenames and S3 keys legally contain ``[`` and
+            # ``]`` (``releases[2025].tar.gz``, ``report[draft].pdf``,
+            # ``array[0].json``) which Rich would parse as style tags.
+            # Without the guard the very next copy/delete confirmation
+            # on such a name crashes the modal AND leaves the
+            # ``ConfirmationVM.ask`` future un-resolved (the
+            # caller's await never returns). body_lines also gets
+            # the guard as defense-in-depth — call sites may surface
+            # service messages with bracketed content (S3 error
+            # quotations, ARNs, etc.) that we don't fully control.
             for path_entry in self._request.paths:
-                yield Static(path_entry.label, classes="modal-path-label")
-                yield Static(path_entry.path, classes="modal-path-value")
+                yield Static(path_entry.label, classes="modal-path-label", markup=False)
+                yield Static(path_entry.path, classes="modal-path-value", markup=False)
             for line in self._request.body_lines:
-                yield Static(line, classes="modal-body")
+                yield Static(line, classes="modal-body", markup=False)
             footer_classes = "modal-footer -danger" if self._request.danger else "modal-footer"
             with Horizontal(classes=footer_classes):
                 yield _ModalButton(

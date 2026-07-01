@@ -115,8 +115,20 @@ async def test_load_preconditions_not_met_returns_without_state_change() -> None
     vm.dispose()
 
 
-async def test_load_while_already_loading_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A second load() call while state == LOADING returns immediately."""
+async def test_load_while_already_loading_proceeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second load() call while state == LOADING must NOT short-circuit.
+
+    The VM-level "if state is LOADING: return" guard used to live
+    here but stranded the pane on the LOADING placeholder forever
+    after a CancelledError (round-23): the prior task raised out
+    WITHOUT resetting state, the new worker hit the guard and
+    no-oped, the user was stuck. The canonical idempotence guard
+    now lives at the View layer via ``run_worker(exclusive=True,
+    group="emr-logs")`` — it cancels the prior worker before
+    re-entering, so a "second load while LOADING" IS the
+    cancellation re-entry path. This test pins that the VM proceeds
+    so the new worker can re-establish target + lines + cache.
+    """
     list_call_count = 0
 
     async def _list_files(**kwargs: object) -> list[LogFile]:
@@ -132,10 +144,12 @@ async def test_load_while_already_loading_is_idempotent(monkeypatch: pytest.Monk
 
     vm = _make()
     vm.set_target("app1", "run1", _LOG_URI)
-    # Force into LOADING state directly (bypasses _set_state guard).
+    # Force into LOADING state directly to simulate a cancelled-but-
+    # state-not-reset prior task. The VM-level guard is intentionally
+    # gone (see docstring) so load() proceeds.
     vm._state = LogsState.LOADING  # type: ignore[assignment]
-    await vm.load()  # should short-circuit
-    assert list_call_count == 0
+    await vm.load()
+    assert list_call_count == 1
     vm.dispose()
 
 

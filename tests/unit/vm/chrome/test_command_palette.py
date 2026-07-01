@@ -188,7 +188,15 @@ def test_palette_entry_immutable() -> None:
 
 
 def test_dispose_releases_commands() -> None:
+    """``dispose()`` releases every RelayCommand without raising.
+
+    The original test asserted "execute is a no-op after dispose"
+    — that turned out to be wishful: ``RelayCommand.dispose`` in
+    vmx 8.x does not gate later ``execute()`` calls, so the
+    contract this test actually pins is "dispose runs cleanly and
+    a subsequent ``execute()`` does not raise". A future vmx
+    upgrade that adds use-after-dispose protection can tighten
+    this assertion."""
     vm = _build()
     vm.dispose()
-    # Subsequent execute calls on disposed commands are safe (no-ops).
-    vm.open_command.execute()
+    vm.open_command.execute()  # must not raise

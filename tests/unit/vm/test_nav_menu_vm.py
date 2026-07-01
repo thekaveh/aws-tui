@@ -247,6 +247,159 @@ def test_nav_menu_always_includes_settings_item_last() -> None:
         vm.dispose()
 
 
+# -------------------- Phase 1: composite-backed selection (§4.2.0) --------------------
+
+
+def test_selected_id_derives_from_composite_current_not_a_stored_field() -> None:
+    """selected_id is a derived @property over ``_inner.current``; no
+    hand-rolled ``_selected_id`` field exists on the VM. Regression
+    anchor for the §4.2.0 finish-the-incomplete-adoption work."""
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    menu = _menu(reg)
+    menu.update_connection(_aws_conn())
+    assert not hasattr(menu, "_selected_id"), (
+        "NavMenuVM must not have a hand-rolled _selected_id field; "
+        "selection lives in CompositeVM.current after Phase 1."
+    )
+    menu.switch_service_command.execute("s3")
+    # Public surface unchanged: selected_id reflects the active id.
+    assert menu.selected_id == "s3"
+    # The composite's current slot is the source of truth.
+    assert menu._inner.current is not None
+    assert menu._inner.current.model.id == "s3"
+    menu.dispose()
+
+
+def test_switch_service_promotes_to_composite_current_slot() -> None:
+    """``_switch_service`` mutates the inner composite's ``current``
+    slot — that's how Phase 1 collapses the dual-state per §4.2.0."""
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    reg.register(FakeService("ec2", "EC2", accepts_aws=True, accepts_s3_compat=False))
+    menu = _menu(reg)
+    menu.update_connection(_aws_conn())
+    # No selection yet → composite.current is None.
+    assert menu._inner.current is None
+    menu.switch_service_command.execute("ec2")
+    # composite.current is now the inner of the EC2 NavItemVM.
+    ec2_item = next(i for i in menu.items if i.descriptor.id == "ec2")
+    assert menu._inner.current is ec2_item.inner
+    # Switching again moves the cursor.
+    menu.switch_service_command.execute("s3")
+    s3_item = next(i for i in menu.items if i.descriptor.id == "s3")
+    assert menu._inner.current is s3_item.inner
+    menu.dispose()
+
+
+def test_per_item_is_selected_is_projected_from_composite_current() -> None:
+    """Every ``NavItemVM.is_selected`` is updated when the composite's
+    current cursor moves — there is exactly one True flag at a time."""
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    reg.register(FakeService("ec2", "EC2", accepts_aws=True, accepts_s3_compat=False))
+    menu = _menu(reg)
+    menu.update_connection(_aws_conn())
+    menu.switch_service_command.execute("s3")
+    selected = [item for item in menu.items if item.is_selected]
+    assert len(selected) == 1
+    assert selected[0].descriptor.id == "s3"
+    menu.switch_service_command.execute("settings")
+    selected = [item for item in menu.items if item.is_selected]
+    assert len(selected) == 1
+    assert selected[0].descriptor.id == "settings"
+    menu.dispose()
+
+
+def test_switching_to_already_selected_service_is_idempotent() -> None:
+    """Re-selecting the active service emits no ``selected_id``
+    PropertyChanged and leaves composite.current unchanged."""
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    hub = _hub()
+    menu = ServicesMenuVM(registry=reg, hub=hub, dispatcher=NULL_DISPATCHER)
+    menu.construct()
+    try:
+        menu.update_connection(_aws_conn())
+        menu.switch_service_command.execute("s3")
+        first_current = menu._inner.current
+        notified: list[str] = []
+        sub = hub.messages.subscribe(
+            on_next=lambda m: notified.append(getattr(m, "property_name", ""))
+        )
+        try:
+            menu.switch_service_command.execute("s3")  # same id
+            assert "selected_id" not in notified
+            assert menu._inner.current is first_current
+        finally:
+            sub.dispose()
+    finally:
+        menu.dispose()
+
+
+def test_unknown_service_id_is_silent_no_op() -> None:
+    """Switching to an id not in items leaves selection unchanged.
+    Regression contract for tests that pass unknown ids."""
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    menu = _menu(reg)
+    menu.update_connection(_aws_conn())
+    menu.switch_service_command.execute("s3")
+    assert menu.selected_id == "s3"
+    menu.switch_service_command.execute("does-not-exist")
+    assert menu.selected_id == "s3"  # unchanged
+    menu.dispose()
+
+
+def test_rebuild_dropping_selected_service_clears_selection_and_emits() -> None:
+    """When ``update_connection`` reduces the menu and removes the
+    currently-selected service, the composite drops ``current`` to None
+    (via CompositeVM._remove_at) and the VM emits
+    ``selected_id`` PropertyChanged so View consumers stay in sync."""
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    reg.register(FakeService("ec2", "EC2", accepts_aws=True, accepts_s3_compat=False))
+    hub = _hub()
+    menu = ServicesMenuVM(registry=reg, hub=hub, dispatcher=NULL_DISPATCHER)
+    menu.construct()
+    try:
+        menu.update_connection(_aws_conn())
+        menu.switch_service_command.execute("ec2")
+        assert menu.selected_id == "ec2"
+        notified: list[str] = []
+        sub = hub.messages.subscribe(
+            on_next=lambda m: notified.append(getattr(m, "property_name", ""))
+        )
+        try:
+            # MinIO connection drops EC2; selection should clear.
+            menu.update_connection(_minio_conn())
+            assert menu.selected_id is None
+            assert "selected_id" in notified
+        finally:
+            sub.dispose()
+    finally:
+        menu.dispose()
+
+
+def test_composite_on_collection_changed_fires_on_rebuild() -> None:
+    """Switching from AWS (3 services) to MinIO (1 service) mutates
+    the composite — its on_collection_changed Observable must fire."""
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    reg.register(FakeService("ec2", "EC2", accepts_aws=True, accepts_s3_compat=False))
+    menu = _menu(reg)
+    menu.update_connection(_aws_conn())
+    events: list[object] = []
+    sub = menu._inner.on_collection_changed.subscribe(on_next=events.append)
+    try:
+        menu.update_connection(_minio_conn())
+        # At minimum one remove event for EC2 should have fired.
+        assert len(events) > 0
+    finally:
+        sub.dispose()
+        menu.dispose()
+
+
 def test_nav_menu_vm_refreshes_on_connection_list_change() -> None:
     """When a ConnectionListChangedMessage arrives on the hub, the
     nav menu re-derives its filter — same path that

@@ -43,6 +43,33 @@ class FocusedPane(StrEnum):
     RIGHT = "right"
 
 
+def _schedule_detached_refresh(pane: PaneVM) -> None:
+    """Schedule ``pane.refresh()`` as a fire-and-forget task.
+
+    Used by the copy/move finally cleanup so the refresh survives
+    outer-worker cancellation. Awaiting refresh inside a cancelled
+    coroutine raises CancelledError at the first internal await
+    (after ``_reload`` synchronously flipped state to LOADING),
+    leaving the pane stuck on LOADING. Detaching lets the outer
+    cancellation propagate cleanly while the refresh continues to
+    run on its own. The done-callback drains task.exception() so
+    a refresh failure doesn't surface as ``Task exception was
+    never retrieved`` to stderr.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # No running loop (sync-driven tests); caller can refresh manually.
+    task = loop.create_task(pane.refresh())
+    task.add_done_callback(_drain_refresh_exception)
+
+
+def _drain_refresh_exception(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    _ = task.exception()
+
+
 def _pane_uri(pane: PaneVM, leaf: str) -> str:
     """Build a stable scheme-prefixed label for transfer source/
     destination identifiers.
@@ -75,7 +102,6 @@ class DualPaneVM:
         transfer_journal: TransferJournal,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._left: PaneVM = left
         self._right: PaneVM = right
         self._journal: TransferJournal = transfer_journal
@@ -178,9 +204,21 @@ class DualPaneVM:
         # Subscribe AFTER children construct so any cancel message that
         # somehow arrives mid-construction doesn't fire before the
         # children are ready to handle the subsequent state shuffle.
-        self._cancel_sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # ``if … is None`` guard makes construct→destruct→construct
+        # cycles safe: each construct must subscribe exactly once.
+        # Mirrors NavMenuVM / StatusBarVM / HintLegendVM symmetric
+        # construct/destruct contracts.
+        if self._cancel_sub is None:
+            self._cancel_sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
 
     def destruct(self) -> None:
+        # Release the hub subscription FIRST — without this it
+        # outlives destruct (the hub keeps the bound method alive,
+        # pinning the DualPaneVM + both panes + _cancel_events
+        # registry). Symmetric with ``construct``'s subscribe.
+        if self._cancel_sub is not None:
+            self._cancel_sub.dispose()
+            self._cancel_sub = None
         self._right.destruct()
         self._left.destruct()
         self._inner.destruct()
@@ -215,6 +253,13 @@ class DualPaneVM:
     async def setup(self) -> None:
         await self._left.setup()
         await self._right.setup()
+
+    def set_focused(self, pane: FocusedPane) -> None:
+        """Explicitly set the active pane."""
+        if self._focused is pane:
+            return
+        self._focused = pane
+        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "focused"))
 
     # ── Async cross-pane operations ────────────────────────────────────────
 
@@ -266,14 +311,45 @@ class DualPaneVM:
                     )
                     self._journal.mark_finished(transfer_id)
         finally:
-            for _, transfer_id in transfer_ids:
+            for entry, transfer_id in transfer_ids:
                 self._cancel_events.pop(transfer_id, None)
                 if transfer_id not in consumed:
                     # Loop never reached this entry — mark its
                     # journal file ABORTED so ``find_unfinished``
-                    # doesn't surface it on next launch.
+                    # doesn't surface it on next launch, AND publish
+                    # a terminal TransferProgressMessage so the
+                    # in-memory TransferVM the pre-register placed
+                    # in PENDING leaves the active set (otherwise
+                    # the status-bar aggregate + cancel_all predicate
+                    # stay "active" with phantom queued rows visible
+                    # in the transfers overlay).
                     self._journal.mark_aborted(transfer_id)
-        await dst_pane.refresh()
+                    self._hub.send(
+                        TransferProgressMessage(
+                            transfer_id=transfer_id,
+                            bytes_transferred=0,
+                            bytes_total=entry.entry.size,
+                            state=TransferState.CANCELLED,
+                        )
+                    )
+            # Refresh the destination pane INSIDE the finally so
+            # the user sees the partial result even when the loop
+            # raised mid-batch. Files 1..K-1 are physically present
+            # on disk; without this the pane would still show the
+            # pre-batch listing and a retry with
+            # ``on_conflict=OVERWRITE`` would silently clobber, or
+            # ERROR would hit EEXIST on the partial set.
+            #
+            # FIRE-AND-FORGET: under outer-worker cancellation, an
+            # awaited refresh would raise CancelledError at its
+            # first internal await (after _reload synchronously
+            # flipped state to LOADING) — leaving the pane stuck
+            # on LOADING with no entries. ``suppress(Exception)``
+            # doesn't catch CancelledError (a BaseException), so
+            # the bug stood. Detach as a task so the refresh
+            # survives outer cancellation; drain its exception via
+            # the done-callback (same R36/R40 shield).
+            _schedule_detached_refresh(dst_pane)
 
     async def move_across(
         self, *, on_conflict: ConflictResolution = ConflictResolution.ERROR
@@ -315,12 +391,31 @@ class DualPaneVM:
                     )
                     self._journal.mark_finished(transfer_id)
         finally:
-            for _, transfer_id in transfer_ids:
+            for entry, transfer_id in transfer_ids:
                 self._cancel_events.pop(transfer_id, None)
                 if transfer_id not in consumed:
+                    # See ``copy_across`` for the parity rationale —
+                    # publish CANCELLED so the in-memory TransferVM
+                    # doesn't stay in PENDING forever and inflate the
+                    # status-bar / transfers-overlay active count.
                     self._journal.mark_aborted(transfer_id)
-        await src_pane.refresh()
-        await dst_pane.refresh()
+                    self._hub.send(
+                        TransferProgressMessage(
+                            transfer_id=transfer_id,
+                            bytes_transferred=0,
+                            bytes_total=entry.entry.size,
+                            state=TransferState.CANCELLED,
+                        )
+                    )
+            # Refresh BOTH panes inside the finally — see
+            # ``copy_across`` for the rationale. Move is even more
+            # sensitive: files 1..K-1 are both copied AND deleted
+            # from src, so the source pane must redraw or the user
+            # sees ghost rows for entries that are gone. Same
+            # fire-and-forget detach as copy_across so outer-worker
+            # cancellation doesn't strand the panes in LOADING.
+            _schedule_detached_refresh(src_pane)
+            _schedule_detached_refresh(dst_pane)
 
     async def delete_in_focused(self) -> None:
         """Delete every marked entry in the focused pane."""
@@ -370,16 +465,37 @@ class DualPaneVM:
                     )
                 )
         except Exception:
-            # Disk-full / permission-denied on ``_journal.begin`` (or
-            # any other failure mid-loop) leaves entries 1..N-1 with
-            # cancel-event registrations that the caller's ``finally``
-            # block would otherwise never clean up — the caller only
-            # iterates the RETURNED ``transfer_ids``, which never
-            # materializes when this method raises. Reap them here so
-            # the dict can't grow unboundedly across many failed
-            # batches.
-            for _, transfer_id in transfer_ids:
+            # Mid-loop failure (e.g. ``_journal.begin`` hits disk-full
+            # or permission-denied, ``_hub.send`` raises from a
+            # subscriber) leaves entries 1..K-1 with THREE half-done
+            # side effects that the caller's ``finally`` would
+            # otherwise never reach (the caller iterates the RETURNED
+            # ``transfer_ids``, which never materializes when this
+            # method raises):
+            #   1. cancel_event registrations (memory only)
+            #   2. journal files in PENDING state (resume modal will
+            #      surface them on next launch as phantom resumable
+            #      transfers)
+            #   3. in-memory TransferVMs in PENDING (status-bar
+            #      aggregate, transfers overlay, cancel_all predicate
+            #      all read off these)
+            # Reap all three so a single mid-batch raise can't
+            # accumulate phantom queued transfers across the session.
+            # Symmetric with the round-19 cleanup in copy_across /
+            # move_across's finally.
+            for entry, transfer_id in transfer_ids:
                 self._cancel_events.pop(transfer_id, None)
+                with contextlib.suppress(Exception):
+                    self._journal.mark_aborted(transfer_id)
+                with contextlib.suppress(Exception):
+                    self._hub.send(
+                        TransferProgressMessage(
+                            transfer_id=transfer_id,
+                            bytes_transferred=0,
+                            bytes_total=entry.entry.size,
+                            state=TransferState.CANCELLED,
+                        )
+                    )
             raise
         return transfer_ids
 
@@ -449,6 +565,26 @@ class DualPaneVM:
                 {copy_task, cancel_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
+        except BaseException:
+            # Outer-worker cancellation (a second ``c``/``d`` press
+            # cancels the prior ``run_worker(group="transfer-ops")``
+            # via exclusive=True; Settings switch; shutdown). Without
+            # this branch the asyncio.wait raises CancelledError, the
+            # finally below only cleans up cancel_task, and copy_task
+            # is left running in the background — a multi-MB S3
+            # upload would keep writing bytes after the user-facing
+            # copy command has logically aborted. Cancel + await
+            # copy_task too, then re-raise so the caller's own
+            # cancellation chain stays intact.
+            if not copy_task.done():
+                copy_task.cancel()
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await copy_task
+            if not cancel_task.done():
+                cancel_task.cancel()
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await cancel_task
+            raise
         finally:
             if not cancel_task.done():
                 cancel_task.cancel()
@@ -493,8 +629,8 @@ class DualPaneVM:
         return self._left if self._focused is FocusedPane.LEFT else self._right
 
     def _switch_focus(self) -> None:
-        self._focused = FocusedPane.RIGHT if self._focused is FocusedPane.LEFT else FocusedPane.LEFT
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "focused"))
+        target = FocusedPane.RIGHT if self._focused is FocusedPane.LEFT else FocusedPane.LEFT
+        self.set_focused(target)
 
     def _signal_copy_requested(self) -> None:
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "copy_requested"))

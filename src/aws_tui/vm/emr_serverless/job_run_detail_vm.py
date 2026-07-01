@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import reactivex as rx
+from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
@@ -31,12 +33,12 @@ class JobRunDetailVM:
     ) -> None:
         self._client = client
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._application_id: str | None = None
         self._job_run_id: str | None = None
         self._detail: JobRunDetail | None = None
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
+        self._disposed: bool = False
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -45,6 +47,12 @@ class JobRunDetailVM:
             .services(hub, dispatcher)
             .build()
         )
+        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement
+        # path): fires the name of the property that just changed,
+        # scoped to THIS VM instance. The detail-pane view subscribes
+        # here instead of filtering shared MessageHub events by
+        # ``sender_object``.
+        self._on_property_changed: Subject[str] = Subject()
 
     # ── Public surface ──────────────────────────────────────────────────────
 
@@ -60,6 +68,13 @@ class JobRunDetailVM:
     def error_text(self) -> str | None:
         return self._error_text
 
+    @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Per-VM-instance Observable scoped to THIS detail VM. PR
+        #103 retirement path — Views subscribing here are immune to
+        cross-VM `state` collisions on the shared hub."""
+        return self._on_property_changed
+
     def set_target(self, application_id: str | None, job_run_id: str | None) -> None:
         """Re-point the detail view at a new run. If either id is
         None, clears."""
@@ -68,11 +83,17 @@ class JobRunDetailVM:
         self._application_id = application_id
         self._job_run_id = job_run_id
         self._detail = None
+        # Clear the prior target's error text — sibling parity with
+        # JobRunLogsVM.set_target, PaneVM._reload, JobRunsVM.
+        # set_application (added round 34). Without this the prior
+        # run's "permission denied" message would briefly accompany
+        # the new run's LOADING state.
+        self._error_text = None
         if application_id is None or job_run_id is None:
             self._set_state(PaneState.EMPTY)
         else:
             self._set_state(PaneState.LOADING)
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", "detail"))
+        self._notify("detail")
 
     def is_terminal_state(self) -> bool:
         return self._detail is not None and self._detail.state in _TERMINAL_STATES
@@ -81,15 +102,41 @@ class JobRunDetailVM:
         if self._application_id is None or self._job_run_id is None:
             self._set_state(PaneState.EMPTY)
             return
+        # Capture target identity BEFORE the await — a concurrent
+        # ``set_target(new_app, new_run)`` (from picker / cycle /
+        # row click) landing during the get_job_run round trip must
+        # not let the prior run's detail clobber the new target's
+        # state. The detail poller and user actions run in different
+        # Textual worker groups, so ``exclusive=True`` doesn't
+        # prevent cross-group interleaving.
+        target_app_id = self._application_id
+        target_run_id = self._job_run_id
         self._set_state(PaneState.LOADING)
         try:
-            d = await self._client.get_job_run(self._application_id, self._job_run_id)
+            d = await self._client.get_job_run(target_app_id, target_run_id)
         except ProviderError as exc:
+            if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
+                return  # target changed mid-flight; drop the stale error
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
             return
+        except Exception as exc:  # defensive
+            # Non-ProviderError escape — same shield JobRunLogsVM
+            # has. Without this the worker exception is swallowed
+            # by Textual's run_worker and the detail pane stays
+            # stuck on LOADING.
+            if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
+                return
+            self._error_text = f"unexpected error: {exc}"
+            self._set_state(PaneState.ERROR)
+            return
+        if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
+            return  # target changed mid-flight; drop the stale detail
+        # Success path — drop any error text carried forward from
+        # a prior failed poll (sibling parity with PaneVM._reload).
+        self._error_text = None
         self._detail = d
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", "detail"))
+        self._notify("detail")
         self._set_state(PaneState.IDLE)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
@@ -98,15 +145,27 @@ class JobRunDetailVM:
         self._inner.construct()
 
     def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
+        self._on_property_changed.on_completed()
+        self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    def _notify(self, prop: str) -> None:
+        """Emit a PropertyChanged event on BOTH the shared hub AND
+        the per-VM-instance Observable (round-3 / PR #103 retirement
+        path). Mirrors the helper on the other EMR VMs."""
+        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", prop))
+        self._on_property_changed.on_next(prop)
 
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:
             return
         self._state = state
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_detail", "state"))
+        self._notify("state")
 
 
 __all__ = ["JobRunDetailVM"]

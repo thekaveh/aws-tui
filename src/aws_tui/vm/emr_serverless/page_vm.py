@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from reactivex.abc import DisposableBase
 from vmx import ComponentVMOf, Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
@@ -63,7 +62,6 @@ class EmrServerlessPageVM:
             hub=hub,
             dispatcher=dispatcher,
         )
-        self._sub: DisposableBase | None = None
 
     @property
     def connection(self) -> Connection:
@@ -97,16 +95,11 @@ class EmrServerlessPageVM:
         self.job_runs.construct()
         self.job_run_detail.construct()
         self.job_run_logs.construct()
-        # Wire master-detail.
-        self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
 
     def dispose(self) -> None:
         if self._disposed:
             return
         self._disposed = True
-        if self._sub is not None:
-            self._sub.dispose()
-            self._sub = None
         self.job_run_logs.dispose()
         self.job_run_detail.dispose()
         self.job_runs.dispose()
@@ -130,12 +123,17 @@ class EmrServerlessPageVM:
         self.applications.select(app_id)
         self.job_runs.set_application(app_id)
         await self.job_runs.refresh()
-        # Detail follows the first run (if any) on application switch.
+        # Detail + logs follow the first run (if any) on application
+        # switch. Without the explicit ``job_run_logs.set_target(None,
+        # None, None)`` in the empty-runs branch, the logs pane keeps
+        # showing the PRIOR app's lines while the picker, runs list,
+        # and detail pane all flip — a visible cross-app stale read.
         runs = self.job_runs.runs
         if runs:
             await self.select_job_run(runs[0].job_run_id)
         else:
             self.job_run_detail.set_target(None, None)
+            self.job_run_logs.set_target(None, None, None)
 
     async def cycle_application(self, direction: int) -> None:
         """Select the next (``direction=1``) or previous
@@ -188,13 +186,6 @@ class EmrServerlessPageVM:
             await self.job_runs.refresh()
         else:
             await self.job_run_detail.refresh()
-
-    # ── Internal ────────────────────────────────────────────────────────────
-
-    def _on_hub_message(self, msg: object) -> None:
-        # Reserved for future-tier subscriptions (PR-B wires log-state
-        # observation here). PR-A has no hub-driven side effects.
-        return
 
 
 __all__ = ["EmrServerlessPageVM"]

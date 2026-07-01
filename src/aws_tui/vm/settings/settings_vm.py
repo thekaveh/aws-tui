@@ -32,8 +32,6 @@ class SettingsVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
-        self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._s3: S3ConnectionsVM = s3
         self._inner: ComponentVM = (
             ComponentVM.builder().name("settings").services(hub, dispatcher).build()

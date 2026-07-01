@@ -87,7 +87,7 @@ Pane.-focused {
    left/right panes can be shown as focused / selected which
    again is confusing." The class is driven by NavMenu.on_focus
    / on_blur — see ui/widgets/nav_menu.py. */
-Screen.-nav-active Pane.-focused {
+Screen.-rail-active Pane.-focused {
     border: solid $rule-dim;
 }
 

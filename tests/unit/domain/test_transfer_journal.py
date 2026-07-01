@@ -95,7 +95,16 @@ def test_purge_removes_file(tmp_path: Path) -> None:
 
 def test_purge_missing_is_safe(tmp_path: Path) -> None:
     j = TransferJournal(base_dir=tmp_path)
+    # Seed one real entry so we can assert purge-of-unknown leaves it
+    # untouched. Without the survivor a regression that purged
+    # everything (e.g. mis-globbing the base_dir) would still pass a
+    # "doesn't raise" test.
+    survivor = j.begin(source_uri="s", destination_uri="d")
+    pre = {e.transfer_id for e in j.find_unfinished()}
     j.purge("deadbeefcafebabe")  # never existed
+    post = {e.transfer_id for e in j.find_unfinished()}
+    assert pre == post
+    assert survivor in post
 
 
 def test_base_dir_is_created_when_missing(tmp_path: Path) -> None:

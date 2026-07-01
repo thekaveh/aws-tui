@@ -59,7 +59,6 @@ class ConfirmationVM:
         dispatcher: Dispatcher,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
 
         self._request: ConfirmRequest | None = None
         self._is_open: bool = False

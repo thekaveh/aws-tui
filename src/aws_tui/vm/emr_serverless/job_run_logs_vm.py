@@ -15,12 +15,15 @@ import asyncio
 from collections import OrderedDict
 from enum import StrEnum
 
+import reactivex as rx
+from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_logs import (
     DEFAULT_LOG_FILTER,
     EmrServerlessLogsClient,
+    FilterMode,
     LogFile,
     LogFileKind,
     LogFilter,
@@ -68,7 +71,6 @@ class JobRunLogsVM:
     ) -> None:
         self._client: EmrServerlessLogsClient = client
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -90,15 +92,26 @@ class JobRunLogsVM:
         self._bytes_read: int = 0
         self._lines_scanned: int = 0
         self._filter: LogFilter = DEFAULT_LOG_FILTER
-        # In-flight cancellation token
-        self._load_task: asyncio.Task[None] | None = None
-        # LRU response cache: key=(app_id, run_id, file_key, filter_hash);
-        # value=(lines, truncated). Capped at :data:`_CACHE_MAX_ENTRIES`
-        # so recent navigation stays snappy without unbounded memory
-        # growth. Cleared on application switch in :meth:`set_target`.
-        self._cache: OrderedDict[tuple[str, str, str, int], tuple[tuple[str, ...], bool]] = (
-            OrderedDict()
-        )
+        self._disposed: bool = False
+        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement
+        # path): fires the name of the property that just changed,
+        # scoped to THIS VM instance. The logs-pane view subscribes
+        # here instead of filtering shared MessageHub events by
+        # ``sender_object``.
+        self._on_property_changed: Subject[str] = Subject()
+        # LRU response cache: key=(app_id, run_id, file_key, patterns,
+        # mode, case_insensitive); value=(lines, truncated). Use the
+        # raw filter triple instead of hash(triple) — hash() collapses
+        # structurally-distinct filters to a single int, so two
+        # different filter configurations can collide and the second
+        # would silently hit a cache entry built from the first,
+        # serving the wrong filtered line set. LogFilter is a frozen
+        # dataclass so the tuple is hashable directly. Cleared on
+        # application switch in :meth:`set_target`.
+        self._cache: OrderedDict[
+            tuple[str, str, str, tuple[str, ...], FilterMode, bool],
+            tuple[tuple[str, ...], bool],
+        ] = OrderedDict()
 
     # ── Properties (snapshot accessors) ─────────────────────────────────────
 
@@ -139,6 +152,13 @@ class JobRunLogsVM:
         return self._application_id
 
     @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Per-VM-instance Observable scoped to THIS logs VM. PR
+        #103 retirement path — Views subscribing here are immune to
+        cross-VM `state` collisions on the shared hub."""
+        return self._on_property_changed
+
+    @property
     def job_run_id(self) -> str | None:
         return self._job_run_id
 
@@ -160,7 +180,6 @@ class JobRunLogsVM:
         # snappy.
         if app_id != self._application_id:
             self._cache.clear()
-        self._cancel_load()
         self._application_id = app_id
         self._job_run_id = run_id
         self._log_uri = log_uri
@@ -182,7 +201,7 @@ class JobRunLogsVM:
         if filter_ == self._filter:
             return
         self._filter = filter_
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "filter"))
+        self._notify("filter")
 
     def select_log_file(self, kind: LogFileKind) -> None:
         """Pick a file from ``available_files`` by kind. No-op if
@@ -194,22 +213,45 @@ class JobRunLogsVM:
         self._lines = ()
         self._bytes_read = 0
         self._lines_scanned = 0
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "current_file"))
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
+        self._notify("current_file")
+        self._notify("lines")
 
     # ── Network actions ───────────────────────────────────────────────────
 
     async def load(self) -> None:
-        """Fetch + stream the selected log file. Idempotent — a
-        second call while already loading is a no-op."""
-        if self._state is LogsState.LOADING:
-            return
+        """Fetch + stream the selected log file.
+
+        View-side ``exclusive=True, group="emr-logs"`` cancels any
+        in-flight load before re-entering, so a second call while
+        ``state is LOADING`` is the cancellation path — the prior
+        worker is being torn down. Do NOT early-return on LOADING
+        here: that would strand the pane on the LOADING placeholder
+        because the prior task's ``CancelledError`` raises out
+        WITHOUT resetting state, then this fresh worker would no-op
+        on the stale flag. The fresh worker re-establishes target
+        identity below before any state mutation.
+        """
         if self._application_id is None or self._job_run_id is None or self._log_uri is None:
             return
+        # Capture target identity BEFORE any await — a concurrent
+        # set_target(new_app, new_run, new_uri) landing mid-stream
+        # must not let the previous run's lines pollute the new
+        # target's state nor poison the LRU cache under the prior
+        # key. The load worker and set_target run in different
+        # contexts (Textual worker vs synchronous VM call), and
+        # set_target deliberately leaves the load() worker alive
+        # (cancellation is a view-side concern via worker group
+        # ``emr-logs``).
+        target = (self._application_id, self._job_run_id, self._log_uri)
+        # Do NOT eagerly wipe self._lines / _bytes_read / _lines_scanned
+        # here — if list_files / stream raise (transient
+        # ProviderUnreachableError on ``r`` for example) we'd land in
+        # ERROR with an empty _lines, losing the 4000 lines the user
+        # was looking at a moment ago. Mirror the round-35 load_more
+        # discipline: preserve prior READY state until we KNOW we
+        # have new content to write. The cache-hit fast path and
+        # per-chunk writes below overwrite atomically.
         self._set_state(LogsState.LOADING)
-        self._lines = ()
-        self._bytes_read = 0
-        self._lines_scanned = 0
         try:
             loc = parse_log_uri(self._log_uri)
             run_prefix = build_run_prefix(loc, self._application_id, self._job_run_id)
@@ -217,10 +259,15 @@ class JobRunLogsVM:
                 bucket=loc.bucket,
                 run_prefix=run_prefix,
             )
+            if (self._application_id, self._job_run_id, self._log_uri) != target:
+                return  # target changed mid-flight; drop the stale list
+            # Past list_files, about to commit to a fresh stream —
+            # NOW it's safe to drop the prior accumulator.
+            self._lines = ()
+            self._bytes_read = 0
+            self._lines_scanned = 0
             self._available_files = tuple(files)
-            self._hub.send(
-                PropertyChangedMessage.create(self, "emr.job_run_logs", "available_files")
-            )
+            self._notify("available_files")
             if not files:
                 self._set_state(LogsState.NO_FILES)
                 return
@@ -232,21 +279,15 @@ class JobRunLogsVM:
                         files[0],
                     ),
                 )
-                self._hub.send(
-                    PropertyChangedMessage.create(self, "emr.job_run_logs", "current_file")
-                )
+                self._notify("current_file")
             truncated = False
             cache_key = (
                 self._application_id,
                 self._job_run_id,
                 self._current_file.key,
-                hash(
-                    (
-                        self._filter.patterns,
-                        self._filter.mode,
-                        self._filter.case_insensitive,
-                    )
-                ),
+                self._filter.patterns,
+                self._filter.mode,
+                self._filter.case_insensitive,
             )
             if cache_key in self._cache:
                 # LRU bump: move the freshly-accessed entry to the
@@ -255,7 +296,7 @@ class JobRunLogsVM:
                 self._cache.move_to_end(cache_key)
                 cached_lines, cached_truncated = self._cache[cache_key]
                 self._lines = cached_lines
-                self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
+                self._notify("lines")
                 self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
             buffered: list[str] = []
@@ -265,21 +306,45 @@ class JobRunLogsVM:
                 max_bytes=_MAX_RAW_BYTES,
                 filter_=self._filter,
             ):
+                # Re-check target on EVERY chunk — set_target runs
+                # in a different worker group (emr-select-run /
+                # emr-select-app) and does NOT cancel emr-logs, so
+                # the stream can keep feeding chunks AFTER the user
+                # moved on. Without this guard, ``_notify("lines")``
+                # would paint the OLD run's lines under the NEW
+                # run's pane header. (Post-loop guard only catches
+                # the cache-write — the per-chunk paints already
+                # shipped to the view.)
+                if (self._application_id, self._job_run_id, self._log_uri) != target:
+                    return
                 buffered.extend(chunk.lines)
                 if len(buffered) > _MAX_MATCHED_LINES:
                     buffered = buffered[-_MAX_MATCHED_LINES:]
                 self._lines = tuple(buffered)
                 self._bytes_read = chunk.bytes_read
                 self._lines_scanned = chunk.lines_scanned
-                self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "lines"))
-                self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "progress"))
+                self._notify("lines")
+                self._notify("progress")
                 truncated = chunk.truncated
+            if (self._application_id, self._job_run_id, self._log_uri) != target:
+                # Target changed during stream — drop the cache write
+                # (would key under the wrong target) and the state
+                # transition (caller already moved on).
+                return
             self._cache[cache_key] = (self._lines, truncated)
             # LRU eviction: drop the oldest entry until back under cap.
             while len(self._cache) > _CACHE_MAX_ENTRIES:
                 self._cache.popitem(last=False)
             self._set_state(LogsState.TRUNCATED if truncated else LogsState.READY)
         except ProviderError as exc:
+            # Identity guard on the error path too — set_target is
+            # synchronous and does NOT cancel the in-flight load
+            # worker. Without this check the OLD target's error
+            # text would stomp the NEW target's state, leaving the
+            # logs pane stuck on ERROR with an error message
+            # describing the prior run's failure.
+            if (self._application_id, self._job_run_id, self._log_uri) != target:
+                return
             new_state, self._error_text = map_provider_error(exc)
             # Re-map the file-pane states the EMR mapper returns to a
             # logs-specific state. UNREACHABLE / AUTH_REQUIRED /
@@ -292,6 +357,9 @@ class JobRunLogsVM:
             # so the placeholder reflects the most recent intent.
             raise
         except Exception as exc:  # defensive
+            # Same identity guard as the ProviderError branch above.
+            if (self._application_id, self._job_run_id, self._log_uri) != target:
+                return
             self._error_text = f"unexpected error: {exc}"
             self._set_state(LogsState.ERROR)
 
@@ -301,11 +369,18 @@ class JobRunLogsVM:
         self._inner.construct()
 
     def dispose(self) -> None:
-        self._cancel_load()
+        if self._disposed:
+            return
+        self._disposed = True
         # Drop the response cache so a recycled VM (e.g. test
         # harnesses or future content-host reuse) doesn't carry
-        # stale entries forward.
+        # stale entries forward. In-flight ``load()`` workers are
+        # owned by the view (Textual's ``run_worker(group="emr-logs")``
+        # auto-cancels on widget unmount) — the VM holds no task
+        # handle of its own.
         self._cache.clear()
+        self._on_property_changed.on_completed()
+        self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Internal ───────────────────────────────────────────────────────────
@@ -314,17 +389,18 @@ class JobRunLogsVM:
         if self._state == new_state:
             return
         self._state = new_state
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", "state"))
+        self._notify("state")
+
+    def _notify(self, prop: str) -> None:
+        """Emit a PropertyChanged event on BOTH the shared hub AND
+        the per-VM-instance Observable (round-3 / PR #103 retirement
+        path)."""
+        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", prop))
+        self._on_property_changed.on_next(prop)
 
     def _notify_all(self) -> None:
         for prop in ("state", "lines", "current_file", "available_files", "filter"):
-            self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", prop))
-
-    def _cancel_load(self) -> None:
-        task = self._load_task
-        self._load_task = None
-        if task is not None and not task.done():
-            task.cancel()
+            self._notify(prop)
 
 
 __all__ = ["JobRunLogsVM", "LogsState"]

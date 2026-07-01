@@ -28,7 +28,6 @@ from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Static
-from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.emr_logs import LogFileKind
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
@@ -136,21 +135,27 @@ class JobRunLogsPane(Widget, can_focus=True):
         self,
         vm: JobRunLogsVM,
         *,
-        hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: JobRunLogsVM = vm
-        self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="logs-chip-row"):
             pass  # Chips are added dynamically in _refresh_chips
-        yield Static("", classes="logs-filter-row", id="logs-filter")
+        # ``markup=False`` on the filter row — its content is
+        # ``f"filter: {' · '.join(filter.patterns)}{hint}"`` and
+        # those patterns ARE user-typed regex strings. Common
+        # patterns like ``[INFO]``, ``[ERROR]``, ``[0-9]+`` are
+        # the obvious thing a user types to filter logs, and Rich
+        # would try to parse them as style tags and crash the
+        # filter-row render. (The status Static is dev-controlled
+        # text but gets the guard for parity.)
+        yield Static("", classes="logs-filter-row", id="logs-filter", markup=False)
         yield VerticalScroll(id="logs-body")
-        yield Static("", classes="logs-status", id="logs-status")
+        yield Static("", classes="logs-status", id="logs-status", markup=False)
 
     def on_mount(self) -> None:
         self.border_title = "logs"
@@ -158,7 +163,10 @@ class JobRunLogsPane(Widget, can_focus=True):
         self._refresh_filter_row()
         self._refresh_body()
         self._refresh_status()
-        self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # Round-3 / PR #103 retirement: subscribe to the VM's
+        # per-instance Observable instead of filtering the shared
+        # hub by sender_object.
+        self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
@@ -216,21 +224,16 @@ class JobRunLogsPane(Widget, can_focus=True):
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _on_hub_message(self, msg: object) -> None:
-        if not isinstance(msg, PropertyChangedMessage):
-            return
-        # Sender filter — sibling EMR VMs (JobRunsVM, JobRunDetailVM,
-        # ApplicationsVM) all expose a ``state`` property on the
-        # same hub. Without this, arrow-walking the runs list
-        # cascades into JobRunsVM.state echoes that this pane would
-        # treat as a reason to re-render its body + status row.
-        if getattr(msg, "sender_object", None) is not self._vm:
-            return
-        if msg.property_name in {"available_files", "current_file"}:
+    def _on_vm_property_changed(self, prop: str) -> None:
+        """Round-3 directive: per-VM Observable subscription. The
+        cross-VM `state` collisions PR #103 hub-filter was guarding
+        against can't reach here because this Subject is scoped to
+        JobRunLogsVM only."""
+        if prop in {"available_files", "current_file"}:
             self.call_after_refresh(self._refresh_chips)
-        elif msg.property_name == "filter":
+        elif prop == "filter":
             self.call_after_refresh(self._refresh_filter_row)
-        elif msg.property_name in {"state", "lines", "progress"}:
+        elif prop in {"state", "lines", "progress"}:
             self.call_after_refresh(self._refresh_body)
             self.call_after_refresh(self._refresh_status)
 

@@ -150,7 +150,6 @@ class HintLegendVM:
         keymap: KeymapStore,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
         self._keymap: KeymapStore = keymap
 
         self._registry: dict[str, tuple[str, ...]] = {}

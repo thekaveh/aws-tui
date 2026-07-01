@@ -33,10 +33,10 @@ from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
-from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
+from aws_tui.vm.file_manager.pane_vm import PaneState
 
 #: Colored Rich-markup glyphs per application state. The glyph SHAPE
 #: alone is distinguishable on monochrome terminals (●/◐/◑/○/◌/✗
@@ -118,13 +118,11 @@ class ApplicationPicker(Widget):
         self,
         vm: ApplicationsVM,
         *,
-        hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: ApplicationsVM = vm
-        self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
@@ -136,7 +134,12 @@ class ApplicationPicker(Widget):
         yield OptionList(*self._build_options(), id="app-options")
 
     def on_mount(self) -> None:
-        self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        # Round-3 directive §9.bis.11 / PR #103 retirement: subscribe
+        # to the VM's per-instance Observable rather than the shared
+        # hub. Eliminates the need for `sender_object` filtering —
+        # this subscription only fires for THIS ApplicationsVM
+        # instance.
+        self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
@@ -187,34 +190,30 @@ class ApplicationPicker(Widget):
         self.toggle_open()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option.id is not None:
+        # ``__placeholder__`` is the synthetic disabled row used for
+        # error / loading states (see ``_build_options``). Belt-and-
+        # braces guard — Textual's OptionList already suppresses
+        # selection on disabled rows, but a key-driven Enter while
+        # the row is the only option could slip through.
+        if event.option.id is not None and event.option.id != "__placeholder__":
             self._vm.select(event.option.id)
             self.post_message(self.ApplicationCommitted(event.option.id))
         self.remove_class("-open")
 
-    def _on_hub_message(self, msg: object) -> None:
-        if not isinstance(msg, PropertyChangedMessage):
-            return
-        # Sender filter — the EMR child VMs (JobRunsVM,
-        # JobRunDetailVM, JobRunLogsVM) ALL share this hub AND all
-        # expose ``state`` AND ``selected_id``. Without this, a
-        # cursor move on the runs pane would echo a JobRunsVM
-        # selected_id change here and force a trigger-label
-        # refresh; a detail.refresh()'s state walk would cascade
-        # into here too. The picker only cares about its own
-        # ApplicationsVM.
-        if getattr(msg, "sender_object", None) is not self._vm:
-            return
-        # Trigger label depends on the selected app's name + state
-        # glyph; refresh it on any of these property changes (cheap).
-        # The OptionList rebuild is heavy (``clear_options`` +
-        # re-add wipes the visible dropdown for a frame), so only do
-        # it when the applications LIST itself changed — not on
-        # every ``selected_id`` echo. User feedback (post-PR-#99):
-        # "this also applied to the emr applications as well".
-        if msg.property_name in {"applications", "selected_id", "state"}:
+    def _on_vm_property_changed(self, prop: str) -> None:
+        """Round-3 directive: per-VM Observable subscription. The
+        Subject only fires for events on THIS VM instance, so no
+        `sender_object` filter is needed (PR #103 retirement).
+
+        Trigger label depends on the selected app's name + state
+        glyph; refresh it on any of these property changes (cheap).
+        The OptionList rebuild is heavier and only fires on
+        list-or-state changes (PR #100(b) absorbed at the VM via
+        dedup-on-set — no no-change events reach here).
+        """
+        if prop in {"applications", "selected_id", "state"}:
             self.call_after_refresh(self._refresh_trigger)
-        if msg.property_name in {"applications", "state"}:
+        if prop in {"applications", "state"}:
             self.call_after_refresh(self._refresh_options)
 
     def _refresh_trigger(self) -> None:
@@ -229,26 +228,13 @@ class ApplicationPicker(Widget):
             opts = self.query_one("#app-options", OptionList)
         except Exception:
             return
-        # Diff guard: skip the rebuild when the option fingerprint
-        # (id + prompt for every row, in order) is unchanged. The
-        # 30 s applications poller fires ``PropertyChangedMessage``
-        # on every tick even when the upstream data is identical
-        # (the in-memory demo provider returns the same list every
-        # time); a naive ``clear_options`` + re-add wipes the
-        # rendered dropdown for a frame, which reads as a flicker
-        # when the user has the dropdown open. Build the new list
-        # FIRST, compare, then only mutate the OptionList if it
-        # actually differs.
-        new_options = self._build_options()
-        new_fingerprint = tuple((o.id, str(o.prompt)) for o in new_options)
-        current_fingerprint = tuple(
-            (opts.get_option_at_index(i).id, str(opts.get_option_at_index(i).prompt))
-            for i in range(opts.option_count)
-        )
-        if new_fingerprint == current_fingerprint:
-            return
+        # The dedup-on-set guard that used to live here (PR #100(b)) has
+        # moved into ApplicationsVM.refresh() per the round-3 directive
+        # (spec §9.bis.11 + §9.bis.9 / Q-A): the VM no-ops on a no-change
+        # poll, so a PropertyChangedMessage reaching this handler means
+        # the data actually changed. The View just rebuilds.
         opts.clear_options()
-        for opt in new_options:
+        for opt in self._build_options():
             opts.add_option(opt)
 
     def _focus_dropdown(self) -> None:
@@ -268,6 +254,29 @@ class ApplicationPicker(Widget):
         of the app, and then followed by the status of the app. I
         want this changed to just the status indicator, followed
         by the name. No need for the emoji"."""
+        # Surface VM error states explicitly so the trigger reads
+        # actionable copy instead of "(no application)" — which is
+        # indistinguishable from a successful empty listing. Mirrors
+        # the per-state branching JobRunsPane / JobRunDetailPane do
+        # for the same PaneState machine.
+        # Trigger Static is markup-enabled (line 133), so AWS
+        # error_text containing ``[…]`` would crash the trigger
+        # render. Escape via _escape_markup — same guard
+        # _build_options already applies for the same content.
+        state = self._vm.state
+        if state is PaneState.UNREACHABLE:
+            msg = self._vm.error_text or "endpoint unreachable — press r to retry"
+            return f"⚠ {_escape_markup(msg)}"
+        if state is PaneState.AUTH_REQUIRED:
+            return "⚠ auth required — aws sso login --profile <X>"
+        if state is PaneState.FORBIDDEN:
+            msg = self._vm.error_text or "permission denied — check IAM policy"
+            return f"⚠ {_escape_markup(msg)}"
+        if state is PaneState.ERROR:
+            msg = self._vm.error_text or "error — press r to retry"
+            return f"⚠ {_escape_markup(msg)}"
+        if state is PaneState.LOADING:
+            return "loading…"
         apps = self._vm.applications
         sid = self._vm.selected_id
         if not apps:
@@ -296,7 +305,36 @@ class ApplicationPicker(Widget):
         textual state name. The colour + shape of the glyph carries
         the state semantics. User feedback drove the fire-emoji
         drop; the colored-glyph + name format keeps the row short
-        and visually grouped."""
+        and visually grouped.
+
+        Error states (UNREACHABLE / AUTH_REQUIRED / FORBIDDEN /
+        ERROR) and LOADING surface as a single non-selectable
+        placeholder row carrying ``error_text`` — without this the
+        dropdown either shows the stale apps from the prior poll
+        (clickable but pointing at a meaningless app id once
+        ``list_applications`` resumes) or an empty list with no
+        actionable copy. Parity with the trigger label which
+        round-13 already branches on the same five states."""
+        state = self._vm.state
+        if state is PaneState.LOADING:
+            return [Option(prompt="loading…", id="__placeholder__", disabled=True)]
+        if state is PaneState.UNREACHABLE:
+            msg = self._vm.error_text or "endpoint unreachable — press r to retry"
+            return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
+        if state is PaneState.AUTH_REQUIRED:
+            return [
+                Option(
+                    prompt="⚠ auth required — aws sso login --profile <X>",
+                    id="__placeholder__",
+                    disabled=True,
+                )
+            ]
+        if state is PaneState.FORBIDDEN:
+            msg = self._vm.error_text or "permission denied — check IAM policy"
+            return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
+        if state is PaneState.ERROR:
+            msg = self._vm.error_text or "error — press r to retry"
+            return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
         return [
             Option(
                 # Name is AWS-controlled — escape Rich markup

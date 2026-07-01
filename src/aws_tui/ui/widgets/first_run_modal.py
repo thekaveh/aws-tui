@@ -121,10 +121,25 @@ class FirstRunModal(ModalScreen[FirstRunAction]):
             ctx = self.app._app_ctx  # type: ignore[attr-defined]
             add_s3_compat_connection(config_store=ctx.config_store, form=event.form)
         except Exception as exc:
+            # ``markup=False`` — OSError subclasses (PermissionError,
+            # FileNotFoundError, OSError on disk-full / read-only-FS)
+            # stringify with a leading ``[Errno N]`` that Rich would
+            # parse as a style tag and crash the toast render. The
+            # toast is the LAST thing the user has left to learn
+            # why their config save failed — letting it crash a
+            # second time is the worst possible UX.
+            #
+            # ``clear_submitting()`` re-arms the form's re-entrancy
+            # flag so the user can retry after fixing the underlying
+            # problem (e.g. freeing disk space). Without this the
+            # Submit button would silently no-op after the first
+            # failure and the user would be stuck.
+            self.query_one(ConnectionFormInline).clear_submitting()
             self.notify(
                 f"Couldn't save connection: {exc}",
                 severity="error",
                 timeout=8,
+                markup=False,
             )
             return
         self.query_one(ConnectionFormInline).close()

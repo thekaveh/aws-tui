@@ -213,8 +213,11 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
         async with app.run_test() as pilot:
             await _await_boot(pilot, app)
             await pilot.press("comma")
+            await app.workers.wait_for_complete(  # type: ignore[attr-defined]
+                list(app.workers._workers)  # type: ignore[attr-defined]
+            )
             await pilot.pause()
-            await pilot.click("#delete-minio-local")
+            await pilot.click("#delete-0")
             await pilot.pause()
             # ConfirmModal opens; danger defaults focus to Cancel — press
             # Right then Enter to confirm.
