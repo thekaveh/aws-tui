@@ -46,7 +46,7 @@ The `credentials` field is dispatched at runtime:
 | `keychain:<service>` | macOS Keychain via the Python `keyring` library |
 | `env:PREFIX_*` | `${PREFIX_ACCESS_KEY_ID}` + `${PREFIX_SECRET_ACCESS_KEY}` |
 | `aws-profile:<name>` | An existing entry in `~/.aws/credentials` |
-| `static` | Inline `access_key_id` / `secret_access_key` in `config.toml` — startup warning + sticky toast |
+| `static` | Inline `access_key_id` / `secret_access_key` in `config.toml` — startup warning toast |
 
 Recommended order of preference: `keychain` ▸ `env` ▸ `aws-profile`
 ▸ `static`. The in-TUI Settings form writes a `static` entry; the
@@ -71,7 +71,7 @@ an `(auto)` badge in the picker.
 > spec'd but deferred to v0.9 — the palette doesn't register
 > connection-management entries in v0.8.x. To materialize today, add
 > the `[connections.<name>]` block to `<config-dir>/config.toml`
-> by hand (the schema is shown in §1 above).
+> by hand (the schema is shown in [§1.1](#11-config-schema-config-dirconfigtoml)).
 
 For each AWS connection, `AwsSession.probe_token(conn)` performs a
 cheap freshness check **without calling AWS**:
@@ -125,9 +125,10 @@ Why this is useful day-to-day:
   v0.9.
 
 The `,` key opens **Settings** where you can add, edit, or delete
-`s3-compatible` connections (see [`docs/cookbook.md`](cookbook.md) §1
-for the MinIO walkthrough). AWS profiles are read-only from aws-tui's
-perspective — manage those through the standard `~/.aws/` tooling.
+`s3-compatible` connections (see the
+[`docs/cookbook.md` MinIO walkthrough](cookbook.md#11-connect-to-and-switch-between-data-sources)).
+AWS profiles are read-only from aws-tui's perspective — manage those
+through the standard `~/.aws/` tooling.
 
 `Shift+S` filters out connections that have been observed unreachable
 during the session (e.g. a stopped MinIO container). A one-line info
@@ -144,7 +145,7 @@ unreachable pane and recovering it also clears the mark.
   part vs. 5 GiB max); long-lived buckets need keys with `b2-` prefix.
 - **MinIO** — uses path-style URLs (`force_path_style = true`);
   self-signed TLS dev setups need `verify_tls = false` (will emit a
-  sticky toast at launch).
+  warning toast at launch).
 - **Wasabi** — mostly behaves like AWS; region matters (us-east-1 vs.
   us-east-2 buckets).
 - **Ceph RGW / SeaweedFS** — typically path-style + custom region.

@@ -100,16 +100,19 @@ rehearsing; otherwise GitHub runs the workflow from the default branch.
 Verify the install end-to-end:
 
 ```bash
-python -m venv /tmp/aws-tui-dry && source /tmp/aws-tui-dry/bin/activate
+VERSION="X.Y.Z.dev<RUN_NUMBER>"  # copy from the release workflow's verify output
+python3 -m venv /tmp/aws-tui-dry && source /tmp/aws-tui-dry/bin/activate
 pip install --pre -i https://test.pypi.org/simple/ \
     --extra-index-url https://pypi.org/simple/ \
-    aws-tui
+    "aws-tui==$VERSION"
 aws-tui --version
 ```
 
 The `--extra-index-url` lets pip resolve the runtime dependencies
 (boto3, textual, etc.) from real PyPI; TestPyPI only carries the
-aws-tui rehearsal artifact.
+aws-tui rehearsal artifact. Pinning the exact `X.Y.Z.dev<N>` version is
+intentional: once `X.Y.Z` exists on PyPI, an unpinned install may prefer
+the final PyPI release over the TestPyPI rehearsal.
 
 ## 1.3. Rollback
 
@@ -130,6 +133,11 @@ is always "fix forward, never overwrite":
 - **Homebrew bump PR has wrong sha256.** Don't merge it. Close the PR
   and hand-edit the formula against the PyPI sdist sha256 once PyPI is
   serving the final artifact.
+- **Smoke install fails on one OS.** No PyPI artifact has shipped yet;
+  the gate caught the problem before the approval step. Fix forward on
+  `main`, move or recreate the tag on the fixed commit before any PyPI
+  approval, and re-run the workflow. Do not yank or retag a published
+  version because nothing has been published yet.
 - **Tag/version mismatch.** The `verify` job fails fast and
   publishes nothing. Fix `version.py`, retag.
 

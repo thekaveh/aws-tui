@@ -601,7 +601,7 @@ For `kind = "s3-compatible"`, the `credentials` field is dispatched:
 | `keychain:<service>` | macOS Keychain via `keyring` |
 | `env:PREFIX_*` | `${PREFIX_ACCESS_KEY_ID}` + `${PREFIX_SECRET_ACCESS_KEY}` |
 | `aws-profile:<name>` | reuses an entry in `~/.aws/credentials` |
-| `static` | from config file — startup warning + sticky toast |
+| `static` | from config file — startup warning toast |
 
 ### 1.7.3. Auto-discovery + SSO cache probe
 

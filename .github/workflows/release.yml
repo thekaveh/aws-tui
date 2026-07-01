@@ -87,7 +87,7 @@ jobs:
           PUBLISH_VERSION="$PKG_VERSION"
           if [[ "${{ steps.target.outputs.target }}" == "testpypi" ]]; then
             PUBLISH_VERSION="${PKG_VERSION}.dev${GITHUB_RUN_NUMBER}"
-            PKG_VERSION="$PKG_VERSION" PUBLISH_VERSION="$PUBLISH_VERSION" python -c 'import os; from pathlib import Path; path = Path("src/aws_tui/version.py"); text = path.read_text(); old = "__version__ = \"" + os.environ["PKG_VERSION"] + "\""; new = "__version__ = \"" + os.environ["PUBLISH_VERSION"] + "\""; path.write_text(text.replace(old, new))'
+            PKG_VERSION="$PKG_VERSION" PUBLISH_VERSION="$PUBLISH_VERSION" uv run --python 3.12 python -c 'import os; from pathlib import Path; path = Path("src/aws_tui/version.py"); text = path.read_text(); old = "__version__ = \"" + os.environ["PKG_VERSION"] + "\""; new = "__version__ = \"" + os.environ["PUBLISH_VERSION"] + "\""; path.write_text(text.replace(old, new))'
           fi
           echo "version=$PUBLISH_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag_sha=$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -362,7 +362,7 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           FORMULA="Formula/aws-tui.rb"
-          python - <<'PY'
+          python3 - <<'PY'
           import os
           from pathlib import Path
 

@@ -10,6 +10,13 @@ correctly, and every CI lane green on all three platforms.
 
 ## 1.2. Where we are today
 
+> **Post-ship status note (2026-07-01):** the install-path
+> documentation described below landed as `docs/platforms.md` rather
+> than `docs/installing.md`, and the release workflow gate landed as
+> `smoke-install` rather than `release-smoke`. The older deliverable
+> names remain in this design record to preserve the original planning
+> context.
+
 - **Platforms claimed.** `pyproject.toml` advertises macOS, Linux,
   and Windows classifiers. CI's `unit` job runs the matrix
   `{macos-14, ubuntu-24.04, windows-latest} × {py 3.11, 3.12, 3.13}`.

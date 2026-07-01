@@ -19,6 +19,7 @@ Walks through three setups people hit on day one:
 - **§1.6** — jump between AWS profiles with one keystroke
   (multi-account flows).
 - **§1.7** — run several `s3-compatible` endpoints side-by-side.
+
 You have a MinIO running on `http://localhost:9000` with the dev
 credentials `minioadmin / minioadmin`. Goal: a `minio-local`
 connection in aws-tui that points at it.
@@ -82,9 +83,9 @@ form:
 | Secret access key | `minioadmin` |
 
 That writes a `static` entry to `config.toml`. Note: every launch with
-a `static`-credentials connection emits a sticky toast warning, per the
+a `static`-credentials connection emits a warning toast, per the
 credential-source preference order documented in
-[connections.md §2](connections.md#12-credential-sources-for-s3-compatible-connections);
+[connections.md §1.2](connections.md#12-credential-sources-for-s3-compatible-connections);
 the recommended path is to migrate to a `keychain:` source once
 you've verified the connection works. To do that, edit your config
 file (see [docs/platforms.md](platforms.md) for the path on each OS)

@@ -253,7 +253,9 @@ class EmrServerlessPage(Widget):
         # have a second tick land while the first is mid-flight —
         # Textual silently skips overlapping ticks rather than
         # queueing them, which is the right semantic for a poller.
-        self.run_worker(self._vm.applications.refresh(), exclusive=True, group="emr-poll-apps")
+        self.run_worker(
+            self._vm.refresh_focused("applications"), exclusive=True, group="emr-poll-apps"
+        )
 
     def _tick_runs(self) -> None:
         # Cadence-decay: when no active runs, only refresh every 6th tick (~6 min).

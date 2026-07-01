@@ -17,7 +17,7 @@ if ! command -v uv >/dev/null 2>&1; then
 error: aws-tui requires uv >= ${UV_MIN_VERSION}; found: not installed.
 
 Install a current uv first, for example:
-  python -m pip install --upgrade uv
+  python3 -m pip install --upgrade uv
   # or: brew install uv
 EOF
   exit 1
@@ -60,7 +60,7 @@ if ! version_ge "$UV_MIN_VERSION" "$UV_ACTUAL_VERSION"; then
 error: aws-tui requires uv >= ${UV_MIN_VERSION}; found ${UV_ACTUAL_VERSION}.
 
 Install a current uv first, for example:
-  python -m pip install --upgrade uv
+  python3 -m pip install --upgrade uv
   # or: brew upgrade uv
 EOF
   exit 1

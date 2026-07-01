@@ -2,7 +2,21 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-python - <<'PY'
+if command -v uv >/dev/null 2>&1; then
+  PYTHON_RUNNER=(uv run python)
+elif command -v python3 >/dev/null 2>&1 && python3 - <<'PY' >/dev/null 2>&1
+import sys
+
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
+then
+  PYTHON_RUNNER=(python3)
+else
+  echo "error: uv or python3 >= 3.11 is required to run layer checks" >&2
+  exit 127
+fi
+
+"${PYTHON_RUNNER[@]}" - <<'PY'
 from __future__ import annotations
 
 import ast

@@ -125,6 +125,40 @@ async def test_toggle_settings_s3_settings_does_not_crash(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_startup_warns_for_plaintext_static_credentials_and_disabled_tls(
+    tmp_path: Path,
+) -> None:
+    """Config-risk toasts must match the docs/security promises."""
+    config_dir = _prep(
+        tmp_path,
+        "[connections.minio-local]\n"
+        'kind = "s3-compatible"\n'
+        'endpoint_url = "http://127.0.0.1:9000"\n'
+        'region = "us-east-1"\n'
+        'credentials = "static"\n'
+        'access_key_id = "AKIATEST"\n'
+        'secret_access_key = "SECRETTEST"\n'
+        "verify_tls = false\n",
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    ctx.connection_resolver.list = lambda: []  # type: ignore[assignment,method-assign]
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            toasts = {
+                toast.model.id: toast.model for toast in ctx.root_vm.chrome.toast_stack.toasts
+            }
+            assert "config-static-credentials" in toasts
+            assert "config-verify-tls-disabled" in toasts
+            assert "minio-local" in toasts["config-static-credentials"].text
+            assert "minio-local" in toasts["config-verify-tls-disabled"].text
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
 async def test_comma_selects_settings_and_swaps_main_area(tmp_path: Path) -> None:
     """Press comma → SettingsView becomes the ContentHost's current content."""
     config_dir = _prep(tmp_path)

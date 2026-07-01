@@ -121,6 +121,32 @@ class EmrServerlessPageVM:
         if sorted_apps and self.applications.selected_id is None:
             await self.select_application(sorted_apps[0].id)
 
+    async def refresh_applications(self) -> None:
+        """Refresh applications and reconcile dependent page state.
+
+        ``ApplicationsVM.refresh()`` only owns the picker list and selected id.
+        The page VM owns the master/detail cascade, so if a refresh clears the
+        current selection we either select the next sorted application or clear
+        the dependent runs/detail/logs targets.
+        """
+        previous_selected = self.applications.selected_id
+        await self.applications.refresh()
+        selected = self.applications.selected_id
+        if selected is not None:
+            if selected != previous_selected or self.job_runs.application_id != selected:
+                await self.select_application(selected)
+            return
+
+        sorted_apps = self.applications.sorted_applications
+        if sorted_apps:
+            await self.select_application(sorted_apps[0].id)
+            return
+
+        if previous_selected is not None or self.job_runs.application_id is not None:
+            self.job_runs.set_application(None)
+            self.job_run_detail.set_target(None, None)
+            self.job_run_logs.set_target(None, None, None)
+
     async def select_application(self, app_id: str) -> None:
         self.applications.select(app_id)
         self.job_runs.set_application(app_id)
@@ -183,7 +209,7 @@ class EmrServerlessPageVM:
     async def refresh_focused(self, focus: Literal["applications", "runs", "detail"]) -> None:
         """Manual refresh — invoked by the ``r`` keybinding."""
         if focus == "applications":
-            await self.applications.refresh()
+            await self.refresh_applications()
         elif focus == "runs":
             await self.job_runs.refresh()
         else:

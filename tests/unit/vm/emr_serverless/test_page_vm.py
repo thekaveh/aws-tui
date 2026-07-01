@@ -183,6 +183,38 @@ async def test_cycle_application_with_fewer_than_two_apps_is_noop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_applications_refresh_reselects_when_current_app_disappears() -> None:
+    """Application refresh must keep the page-level master/detail state coherent.
+
+    Poller/manual application refreshes call through ``refresh_focused("applications")``.
+    If the currently-selected application vanishes, the page should select the next
+    sorted app and re-scope runs/detail/logs instead of leaving them on the removed app.
+    """
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="alpha")
+    fake.add_application(app_id="b2", name="beta")
+    fake.add_job_run(application_id="a1", job_run_id="r-old")
+    fake.add_job_run_detail(application_id="a1", job_run_id="r-old")
+    fake.add_job_run(application_id="b2", job_run_id="r-new")
+    fake.add_job_run_detail(application_id="b2", job_run_id="r-new")
+    await page.setup()
+    assert page.applications.selected_id == "a1"
+    assert page.job_runs.application_id == "a1"
+
+    fake._apps.pop("a1")  # type: ignore[attr-defined]
+
+    await page.refresh_focused("applications")
+
+    assert page.applications.selected_id == "b2"
+    assert page.job_runs.application_id == "b2"
+    assert [r.job_run_id for r in page.job_runs.runs] == ["r-new"]
+    assert page.job_run_detail.detail is not None
+    assert page.job_run_detail.detail.job_run_id == "r-new"
+    assert page.job_run_logs.application_id == "b2"
+    assert page.job_run_logs.job_run_id == "r-new"
+
+
+@pytest.mark.asyncio
 async def test_select_job_run_cascades_to_logs_vm_with_log_uri() -> None:
     """When select_job_run cascades to logs VM, it should transition
     to LogsState.IDLE if the detail has s3_monitoring_log_uri."""

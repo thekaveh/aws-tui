@@ -70,7 +70,15 @@ path = "src/aws_tui/version.py"
 packages = ["src/aws_tui"]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/.claude", "/.overnight-maint", "/.superpowers"]
+exclude = [
+  "/.claude",
+  "/.github",
+  "/.overnight-maint",
+  "/.superpowers",
+  "/docs/superpowers",
+  "/scripts/test-services",
+  "/tests",
+]
 
 [dependency-groups]
 dev = [

@@ -121,9 +121,9 @@ App-level `priority=True` and short-circuit through
 | Reset log filter | `Shift+F` | Clears the logs filter and returns to the default log view. |
 | Scroll log lines up / down | `↑` `↓` (also `k` / `j`) | Navigate the loaded log line view (when RIGHT-logs pane is focused). |
 
-> **Logs pane design note:** the detail pane no longer has its own `r`
-> refresh path; the 5-second detail poller keeps it fresh
-> automatically. `r` now reloads the logs pane when focused there.
+> **Right-pane refresh note:** `r` refreshes the currently focused
+> right-side surface: detail focus reloads the selected job-run detail;
+> logs focus re-fetches logs from S3.
 
 ## 1.2. Customizing
 

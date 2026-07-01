@@ -22,6 +22,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import Final
 
+from aws_tui.infra.redaction import redact_text
+
 _LOG_TAIL_LINES: Final[int] = 1000
 _ACTION_TAIL_LINES: Final[int] = 100
 
@@ -112,14 +114,19 @@ class CrashDump:
         ts = timestamp if timestamp is not None else datetime.now(UTC)
         path = self._dir / _filename_for(ts)
         tb: TracebackType | None = exc.__traceback__
-        tb_text = "".join(traceback.format_exception(type(exc), exc, tb))
-        log_tail = _tail_text(log_path, _LOG_TAIL_LINES) if log_path is not None else ""
-        action_tail = _format_actions(action_ring, _ACTION_TAIL_LINES) if action_ring else ""
+        exc_text = redact_text(str(exc))
+        tb_text = redact_text("".join(traceback.format_exception(type(exc), exc, tb)))
+        log_tail = (
+            redact_text(_tail_text(log_path, _LOG_TAIL_LINES)) if log_path is not None else ""
+        )
+        action_tail = (
+            redact_text(_format_actions(action_ring, _ACTION_TAIL_LINES)) if action_ring else ""
+        )
 
         body = (
             f"aws-tui crash dump\n"
             f"timestamp: {ts.isoformat()}\n"
-            f"exception: {type(exc).__name__}: {exc}\n"
+            f"exception: {type(exc).__name__}: {exc_text}\n"
             f"\n"
             f"== traceback ==\n"
             f"{tb_text.rstrip()}\n"

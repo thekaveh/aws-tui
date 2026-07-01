@@ -122,12 +122,21 @@ class ConfigStore:
                 defaults=Defaults(),
                 keybindings=Keybindings(),
             )
+        if not self._read_only:
+            self._harden_existing_path()
         try:
             with self._path.open("rb") as fh:
                 raw = tomllib.load(fh)
         except tomllib.TOMLDecodeError as exc:
             raise ConfigError(f"config.toml is not valid TOML: {exc}") from exc
         return self._parse(raw)
+
+    def _harden_existing_path(self) -> None:
+        """Best-effort owner-only permissions for manually-created configs."""
+        with contextlib.suppress(OSError, NotImplementedError):
+            self._path.parent.chmod(0o700)
+        with contextlib.suppress(OSError, NotImplementedError):
+            self._path.chmod(0o600)
 
     @staticmethod
     def _parse(raw: dict[str, Any]) -> Config:

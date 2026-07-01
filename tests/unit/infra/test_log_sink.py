@@ -52,6 +52,24 @@ def test_info_writes_one_json_line(sink: LogSink, tmp_path: Path) -> None:
     assert ts.endswith("Z") or "+" in ts or ts.count("-") >= 3
 
 
+def test_secret_fields_and_url_credentials_are_redacted(sink: LogSink, tmp_path: Path) -> None:
+    sink.warning(
+        "s3.failed",
+        endpoint_url="https://user:pass@example.com/bucket?X-Amz-Signature=abc123",
+        secret_access_key="SECRET",
+        access_token="TOKEN",
+    )
+    sink.flush()
+
+    raw = (tmp_path / "aws-tui.log").read_text(encoding="utf-8")
+    assert "SECRET" not in raw
+    assert "TOKEN" not in raw
+    assert "pass" not in raw
+    assert "abc123" not in raw
+    assert "example.com" in raw
+    assert "[REDACTED]" in raw
+
+
 def test_all_levels_round_trip(sink: LogSink, tmp_path: Path) -> None:
     sink.debug("dbg")
     sink.info("nfo")

@@ -39,6 +39,30 @@ def test_write_contains_traceback_and_marker(tmp_path: Path) -> None:
     assert "== log tail ==" in text
 
 
+def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
+    log = tmp_path / "aws-tui.log"
+    log.write_text(
+        "endpoint=https://user:pass@example.com/bucket?X-Amz-Signature=abc123 "
+        "secret_access_key=SECRET\n",
+        encoding="utf-8",
+    )
+    try:
+        raise RuntimeError("failed https://user:pass@example.com/bucket?token=tok123")
+    except RuntimeError as exc:
+        dump = CrashDump(base_dir=tmp_path / "crash")
+        path = dump.write(
+            exc=exc,
+            log_path=log,
+            action_ring=["open token=actiontok", "copy password=hunter2"],
+        )
+
+    text = path.read_text(encoding="utf-8")
+    for leaked in ["user:pass", "abc123", "SECRET", "tok123", "actiontok", "hunter2"]:
+        assert leaked not in text
+    assert "example.com" in text
+    assert "[REDACTED]" in text
+
+
 def test_write_appends_log_tail(tmp_path: Path) -> None:
     log = tmp_path / "aws-tui.log"
     log.write_text(

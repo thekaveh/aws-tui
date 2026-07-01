@@ -320,6 +320,36 @@ def test_save_chmods_parent_dir_to_0o700(tmp_path: Path) -> None:
     )
 
 
+def test_load_chmods_existing_config_and_parent_to_owner_only(tmp_path: Path) -> None:
+    """Manually-created config files should be hardened before parsing."""
+    import stat
+    import sys
+
+    if sys.platform.startswith("win"):
+        pytest.skip("POSIX permission bits not enforced on Windows")
+    config_dir = tmp_path / "manual"
+    config_dir.mkdir()
+    config_path = config_dir / "config.toml"
+    config_path.write_text(
+        "[connections.minio]\n"
+        'kind = "s3-compatible"\n'
+        'endpoint_url = "http://localhost:9000"\n'
+        'region = "us-east-1"\n'
+        'credentials = "static"\n'
+        'access_key_id = "AKIA"\n'
+        'secret_access_key = "SECRET"\n',
+        encoding="utf-8",
+    )
+    config_dir.chmod(0o755)
+    config_path.chmod(0o644)
+
+    cfg = ConfigStore(path=config_path).load()
+
+    assert cfg.connections["minio"].credentials == "static"
+    assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+
+
 # ── read_only (demo-mode) tests ────────────────────────────────────────────
 
 

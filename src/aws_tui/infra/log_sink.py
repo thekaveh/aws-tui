@@ -19,6 +19,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Final
 
+from aws_tui.infra.redaction import redact_mapping
+
 _LOGGER_NAME: Final[str] = "aws_tui"
 _FILE_NAME: Final[str] = "aws-tui.log"
 _DEFAULT_MAX_BYTES: Final[int] = 5 * 1024 * 1024  # 5 MiB
@@ -41,7 +43,7 @@ class _JsonLineFormatter(logging.Formatter):
         }
         extra = getattr(record, "json_fields", None)
         if isinstance(extra, dict):
-            payload.update(extra)
+            payload.update(redact_mapping(extra))
         return json.dumps(payload, default=str, separators=(",", ":"))
 
 

@@ -1393,7 +1393,7 @@ connection = "kaveh-dev"
 | `keychain:<service>` | macOS Keychain via Python `keyring` |
 | `env:PREFIX_*` | `${PREFIX_ACCESS_KEY_ID}` + `${PREFIX_SECRET_ACCESS_KEY}` |
 | `aws-profile:<name>` | An existing entry in `~/.aws/credentials` |
-| `static` | Inline `access_key_id` / `secret_access_key` (startup warning + sticky toast) |
+| `static` | Inline `access_key_id` / `secret_access_key` (startup warning toast) |
 
 ## Vendor quirks (manual checklist)
 

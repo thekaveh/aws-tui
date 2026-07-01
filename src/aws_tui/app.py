@@ -99,6 +99,46 @@ def _raise_skip_toast(ctx: AppContext, skipped: list[str]) -> None:
     )
 
 
+def _raise_config_risk_toasts(ctx: AppContext) -> None:
+    """Warn once at launch for plaintext or TLS-disabled S3 configs."""
+    try:
+        cfg = ctx.config_store.load()
+    except Exception as exc:
+        ctx.log_sink.warning(
+            "app.config_risk_scan.failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return
+
+    static_names: list[str] = []
+    tls_disabled_names: list[str] = []
+    for entry in cfg.connections.values():
+        if entry.kind != "s3-compatible":
+            continue
+        if entry.credentials == "static":
+            static_names.append(entry.name)
+        if entry.verify_tls is False:
+            tls_disabled_names.append(entry.name)
+
+    if static_names:
+        notifications.advise(
+            ctx.root_vm.chrome.toast_stack,
+            subject="Settings",
+            message=f"plaintext static credentials in {', '.join(static_names)}",
+            action="move secrets to keychain or env-backed credentials",
+            toast_id="config-static-credentials",
+        )
+    if tls_disabled_names:
+        notifications.advise(
+            ctx.root_vm.chrome.toast_stack,
+            subject="Settings",
+            message=f"TLS verification disabled for {', '.join(tls_disabled_names)}",
+            action="enable verify_tls unless this is local development",
+            toast_id="config-verify-tls-disabled",
+        )
+
+
 def _join_path(base: str, name: str) -> str:
     """Append ``name`` to ``base`` with a single ``/`` separator. Used
     only by the copy confirm modal to surface source/destination paths."""
@@ -307,6 +347,9 @@ class AwsTuiApp(App[None]):
         # ContentHostVM disposes its hosted VM on swap-out, and a
         # singleton would crash on the second Settings switch with
         # ``StatusTransitionError('Cannot construct from state Disposed.')``.
+
+        if not ctx.demo:
+            _raise_config_risk_toasts(ctx)
 
         self._apply_initial_theme()
 
