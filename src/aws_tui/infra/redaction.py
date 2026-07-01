@@ -13,8 +13,9 @@ _SENSITIVE_KEY = re.compile(
     re.IGNORECASE,
 )
 _KEY_VALUE = re.compile(
-    r"\b([A-Za-z0-9_.-]*(?:secret|password|token|credential|access[_-]?key|signature)"
-    r"[A-Za-z0-9_.-]*)(\s*[:=]\s*)([^\s,;]+)",
+    r'(?<![A-Za-z0-9_.-])("?)([A-Za-z0-9_.-]*'
+    r"(?:secret|password|token|credential|access[_-]?key|signature)"
+    r'[A-Za-z0-9_.-]*)\1(\s*[:=]\s*)("[^"]*"|[^\s,;}]+)',
     re.IGNORECASE,
 )
 _URL = re.compile(r"https?://[^\s\"'<>]+")
@@ -47,7 +48,12 @@ def redact_mapping(fields: Mapping[str, Any]) -> dict[str, object]:
 
 def redact_text(text: str) -> str:
     text = _URL.sub(lambda match: _redact_url(match.group(0)), text)
-    return _KEY_VALUE.sub(lambda match: f"{match.group(1)}{match.group(2)}{_REDACTED}", text)
+    return _KEY_VALUE.sub(
+        lambda match: (
+            f"{match.group(1)}{match.group(2)}{match.group(1)}{match.group(3)}{_REDACTED}"
+        ),
+        text,
+    )
 
 
 def _redact_url(raw: str) -> str:

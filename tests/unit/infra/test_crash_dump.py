@@ -43,7 +43,9 @@ def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
     log = tmp_path / "aws-tui.log"
     log.write_text(
         "endpoint=https://user:pass@example.com/bucket?X-Amz-Signature=abc123 "
-        "secret_access_key=SECRET\n",
+        "secret_access_key=SECRET "
+        '{"access_token": "JSONTOKEN", "password": "JSONPASS"} '
+        'credentials = "TOMLCREDS"\n',
         encoding="utf-8",
     )
     try:
@@ -57,7 +59,17 @@ def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
         )
 
     text = path.read_text(encoding="utf-8")
-    for leaked in ["user:pass", "abc123", "SECRET", "tok123", "actiontok", "hunter2"]:
+    for leaked in [
+        "user:pass",
+        "abc123",
+        "SECRET",
+        "JSONTOKEN",
+        "JSONPASS",
+        "TOMLCREDS",
+        "tok123",
+        "actiontok",
+        "hunter2",
+    ]:
         assert leaked not in text
     assert "example.com" in text
     assert "[REDACTED]" in text

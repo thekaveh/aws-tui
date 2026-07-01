@@ -15,9 +15,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui import __version__
+from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.log_sink import LogSink
+from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 
 
 def test_package_imports() -> None:
@@ -239,6 +242,97 @@ def test_build_crash_report_writes_crash_log_event(tmp_path: Path) -> None:
     assert len(crash_records) == 1
     assert crash_records[0]["exception_type"] == "RuntimeError"
     assert crash_records[0]["dump_path"] == str(report.dump_path)
+
+
+def test_build_crash_report_redacts_modal_and_stderr_fields(tmp_path: Path) -> None:
+    from aws_tui import app as app_module
+
+    log_sink = LogSink(base_dir=tmp_path / "log")
+    app = object.__new__(app_module.AwsTuiApp)
+    app._app_ctx = SimpleNamespace(log_sink=log_sink)  # type: ignore[attr-defined]
+    app._action_ring = deque(maxlen=100)  # type: ignore[attr-defined]
+    app._last_action_id = None  # type: ignore[attr-defined]
+
+    try:
+        try:
+            raise RuntimeError(
+                "failed https://user:pass@example.com/bucket?token=tok123 secret_access_key=SECRET"
+            )
+        except RuntimeError as exc:
+            report = app._build_crash_report(exc)
+    finally:
+        log_sink.close()
+
+    rendered = f"{report.exception_message}\n{report.traceback_short}"
+    for leaked in ["user:pass", "tok123", "SECRET"]:
+        assert leaked not in rendered
+    assert "example.com" in rendered
+    assert "[REDACTED]" in rendered
+
+
+def _config_risk_ctx(tmp_path: Path, toml_text: str) -> object:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_path = config_dir / "config.toml"
+    config_path.write_text(toml_text, encoding="utf-8")
+    return SimpleNamespace(
+        config_store=ConfigStore(path=config_path),
+        log_sink=LogSink(base_dir=tmp_path / "log"),
+        root_vm=SimpleNamespace(
+            chrome=SimpleNamespace(
+                toast_stack=ToastStackVM(
+                    hub=MessageHub(),
+                    dispatcher=NULL_DISPATCHER,
+                )
+            )
+        ),
+    )
+
+
+def test_config_risk_toasts_ignore_safe_credentials_and_aws_entries(tmp_path: Path) -> None:
+    from aws_tui import app as app_module
+
+    ctx = _config_risk_ctx(
+        tmp_path,
+        "[connections.aws]\n"
+        'kind = "aws"\n'
+        'profile = "dev"\n'
+        "\n"
+        "[connections.keychain]\n"
+        'kind = "s3-compatible"\n'
+        'endpoint_url = "https://example.com"\n'
+        'region = "us-east-1"\n'
+        'credentials = "keychain:minio"\n'
+        "verify_tls = true\n"
+        "\n"
+        "[connections.env]\n"
+        'kind = "s3-compatible"\n'
+        'endpoint_url = "https://example.net"\n'
+        'region = "us-east-1"\n'
+        'credentials = "env:R2_"\n'
+        "verify_tls = true\n",
+    )
+    try:
+        app_module._raise_config_risk_toasts(ctx)  # type: ignore[arg-type]
+        assert ctx.root_vm.chrome.toast_stack.toasts == ()
+    finally:
+        ctx.log_sink.close()
+
+
+def test_config_risk_scan_logs_and_continues_on_invalid_config(tmp_path: Path) -> None:
+    from aws_tui import app as app_module
+
+    ctx = _config_risk_ctx(tmp_path, "[connections.bad]\nkind = ")
+    try:
+        app_module._raise_config_risk_toasts(ctx)  # type: ignore[arg-type]
+        assert ctx.root_vm.chrome.toast_stack.toasts == ()
+        ctx.log_sink.flush()
+    finally:
+        ctx.log_sink.close()
+
+    raw = (tmp_path / "log" / "aws-tui.log").read_text(encoding="utf-8")
+    assert "app.config_risk_scan.failed" in raw
+    assert "ConfigError" in raw
 
 
 @pytest.mark.asyncio

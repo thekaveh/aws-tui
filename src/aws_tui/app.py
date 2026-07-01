@@ -32,6 +32,7 @@ from aws_tui.composition import AppContext, build_app_context
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.infra.redaction import redact_text
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
@@ -2561,8 +2562,8 @@ class AwsTuiApp(App[None]):
         report = CrashReport(
             timestamp=datetime.now(UTC),
             exception_type=type(exc).__name__,
-            exception_message=str(exc) or repr(exc),
-            traceback_short=CrashDump.short_traceback(exc),
+            exception_message=redact_text(str(exc) or repr(exc)),
+            traceback_short=redact_text(CrashDump.short_traceback(exc)),
             dump_path=dump_path,
             can_continue=CrashReport.is_safe_to_continue(last_id),
             last_action_id=last_id,

@@ -58,13 +58,19 @@ def test_secret_fields_and_url_credentials_are_redacted(sink: LogSink, tmp_path:
         endpoint_url="https://user:pass@example.com/bucket?X-Amz-Signature=abc123",
         secret_access_key="SECRET",
         access_token="TOKEN",
+        nested={
+            "AuthorizationToken": "NESTED",
+            "items": [{"password": "HUNTER2"}],
+        },
     )
     sink.flush()
 
     raw = (tmp_path / "aws-tui.log").read_text(encoding="utf-8")
     assert "SECRET" not in raw
     assert "TOKEN" not in raw
-    assert "pass" not in raw
+    assert "NESTED" not in raw
+    assert "HUNTER2" not in raw
+    assert "user:pass" not in raw
     assert "abc123" not in raw
     assert "example.com" in raw
     assert "[REDACTED]" in raw

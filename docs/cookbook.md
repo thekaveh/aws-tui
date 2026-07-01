@@ -187,8 +187,11 @@ the cycle immediately, no relaunch.
 > Expired SSO tokens are detected offline at launch via the SSO
 > cache freshness probe (see
 > [connections.md §3](connections.md#13-auto-discovery-sso-cache-probe));
-> a profile with an expired token surfaces an "auth required"
-> placeholder instead of hanging.
+> expired or missing SSO profiles are skipped by the boot chain,
+> marked unreachable for the session, and surfaced through a recovery
+> toast while the app mounts local panes instead of hanging. Run
+> `aws sso login --profile <name>` and relaunch, or use the explicit
+> retry path when prompted.
 
 ---
 

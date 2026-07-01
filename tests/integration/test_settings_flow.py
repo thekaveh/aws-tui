@@ -159,6 +159,37 @@ async def test_startup_warns_for_plaintext_static_credentials_and_disabled_tls(
 
 
 @pytest.mark.asyncio
+async def test_demo_mode_suppresses_config_risk_toasts(tmp_path: Path) -> None:
+    """Demo mode must not warn on or mutate a user-style config file."""
+    config_dir = _prep(
+        tmp_path,
+        "[connections.minio-local]\n"
+        'kind = "s3-compatible"\n'
+        'endpoint_url = "http://127.0.0.1:9000"\n'
+        'region = "us-east-1"\n'
+        'credentials = "static"\n'
+        'access_key_id = "AKIATEST"\n'
+        'secret_access_key = "SECRETTEST"\n'
+        "verify_tls = false\n",
+    )
+    ctx = build_app_context(
+        config_dir=config_dir,
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            ids = {toast.model.id for toast in ctx.root_vm.chrome.toast_stack.toasts}
+            assert "config-static-credentials" not in ids
+            assert "config-verify-tls-disabled" not in ids
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
 async def test_comma_selects_settings_and_swaps_main_area(tmp_path: Path) -> None:
     """Press comma → SettingsView becomes the ContentHost's current content."""
     config_dir = _prep(tmp_path)
