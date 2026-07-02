@@ -32,8 +32,9 @@ the first contained VMx 3.1.0 replacements: S3 settings forms now delegate form
 validation and approve gating directly to VMx `FormVM`, and the command palette
 now delegates score-ranked projection to VMx `ScoredFilteredCompositeVM`.
 `PaneVM` also now delegates visible-entry projection to VMx
-`FilteredCompositeVM`, and `FocusCoordinatorVM` now delegates active-slot and
-modal restore state to VMx `DiscriminatorVM`. `JobRunsVM` now delegates its
+`FilteredCompositeVM`, and `FocusCoordinatorVM` now delegates active-slot state
+to VMx `DiscriminatorVM` while keeping explicit modal-restore override
+semantics in the aws-tui facade. `JobRunsVM` now delegates its
 forward-only AWS token pagination accumulator and current token to VMx
 `TokenPagedComposition`. Result-bearing chrome modal facades now delegate
 result completion and cancellation defaults to VMx `ModalVM`. Shared-hub
@@ -267,17 +268,23 @@ Implemented refactor:
   - shared hub `PropertyChangedMessage`,
   - lifecycle `status` proxy expected by tests.
 - Replaced `_focused_slot`, `_saved_slot`, and the local changed subject with
-  an inner `DiscriminatorVM[FocusSlot]`.
+  an inner `DiscriminatorVM[FocusSlot]` plus a small facade-owned modal restore
+  stack.
 - Subscribed to `DiscriminatorVM.active_changed` and republished
   `PropertyChangedMessage("focused_slot")`.
 - Preserved the implicit modal-close override contract:
   `set_focused_slot(non_modal)` while modal is active switches directly to the
   requested slot and leaves no stale modal restore.
+- Use `set_active_key()` for modal open/close instead of VMx's public
+  `modal_open()` / `modal_close()` helpers because aws-tui also supports
+  explicit non-modal replacement while modal is active. The facade-owned stack
+  preserves that contract without mutating VMx private state.
 
 Notes:
 
-- This preserved the public facade while deleting bespoke active-key and modal
-  restore state.
+- This preserved the public facade while deleting bespoke active-key state.
+  Modal restore state remains intentionally facade-owned until VMx exposes a
+  public "replace modal with explicit active key" operation.
 
 ### 1.4.6. Modal VMs -> `ModalVM` and `DialogService.present`
 
@@ -394,7 +401,7 @@ aws-tui impact:
 
 ## 1.5. Prioritized implementation backlog
 
-### Phase A — compatibility and report, already in this branch
+### 1.5.1. Phase A — compatibility and report, already in this branch
 
 - Bump VMx to `>=3.1.0,<4.0.0`.
 - Fix removed alias usage.
@@ -405,14 +412,14 @@ aws-tui impact:
 - Replace `CommandPaletteVM`'s bespoke score/rank projection with VMx
   `ScoredFilteredCompositeVM` and record the replacement metric ledger.
 
-### Phase B — contained VM-layer swaps, implemented
+### 1.5.2. Phase B — contained VM-layer swaps, implemented
 
 1. `PaneVM` backed by VMx `FilteredCompositeVM`.
 2. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
 
 These should each be separate commits with focused tests.
 
-### Phase C — higher-coupling flow refactors, partially implemented
+### 1.5.3. Phase C — higher-coupling flow refactors, partially implemented
 
 Implemented:
 
@@ -500,21 +507,21 @@ At the end of the adoption series, produce one roll-up table:
 | `FormVM` validators | 184 | 0 | 184 | -171 | -0.08 pp |
 | `ScoredFilteredCompositeVM` | 9 | 0 | 9 | +22 | +0.01 pp |
 | `FilteredCompositeVM` | 283 | 0 | 283 | -322 | -0.07 pp |
-| `DiscriminatorVM` | 7 | 0 | 7 | +5 | -0.01 pp |
-| `TokenPagedComposition` | -40 | 0 | -40 | +11 | +0.02 pp |
+| `DiscriminatorVM` | 3 | 0 | 3 | +25 | latest suite 83.64% |
+| `TokenPagedComposition` | -37 | 0 | -37 | +59 | latest suite 83.64% |
 | `ModalVM` result primitives | 13 | 0 | 13 | +12 | -0.03 pp |
 | `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `when_property_changed` | 0 | -12 | -12 | 0 | -0.02 pp |
 | `AsyncRelayCommand` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
-| **Total implemented so far** | 456 | -12 | 444 | -443 | -0.18 pp |
+| **Total implemented so far** | 455 | -12 | 443 | -375 | latest suite 83.64% |
 
 Current headline metric:
 
 ```text
-VMx 3.1.0 adoption has saved 444 implementation LOC so far:
-  456 in viewmodels
+VMx 3.1.0 adoption has saved 443 implementation LOC so far:
+  455 in viewmodels
   -12 in views
-with -443 net test LOC and -0.18 coverage-point change.
+with -375 net test LOC and latest full-suite coverage at 83.64%.
 ```
 
 Positive implementation LOC saved means the newer VMx version reduced bespoke
@@ -568,15 +575,15 @@ The implemented replacement ledger:
 |---|---|
 | Replacement ID | `vmx31-discriminator-focus-coordinator` |
 | VMx 2.x-era implementation | Hand-rolled `FocusCoordinatorVM` active slot, saved modal slot, and local changed subject. |
-| VMx 3.1.0 primitive | `vmx.DiscriminatorVM[FocusSlot]` with `active_key`, `active_changed`, `is_active`, `set_active_key`, `modal_open`, and `modal_close`. |
+| VMx 3.1.0 primitive | `vmx.DiscriminatorVM[FocusSlot]` with `active_key`, `active_changed`, `is_active`, and `set_active_key`; modal restore remains facade-owned to preserve explicit non-modal replacement without private VMx mutation. |
 | VM files touched | `src/aws_tui/vm/chrome/focus_coordinator_vm.py`. |
 | View files touched | None. |
-| Tests changed | Added VMx composition shape coverage and rewrote modal-restore assertions in `tests/unit/vm/chrome/test_focus_coordinator_vm.py` to avoid removed private state. |
+| Tests changed | Added VMx composition shape coverage and public-surface regression tests in `tests/unit/vm/chrome/test_focus_coordinator_vm.py` to avoid VMx private modal-stack mutation. |
 | Behavior preserved | Public `focused_slot`, `is_modal`, `on_focused_slot_changed`, hub `PropertyChangedMessage("focused_slot")`, focus-cycle rings, modal open/close restoration, explicit non-modal override while modal is active, and lifecycle proxying. |
-| Behavior intentionally changed | Internal active-key and modal restore state now live in VMx `DiscriminatorVM`; no user-visible behavior change. |
+| Behavior intentionally changed | Internal active-key state now lives in VMx `DiscriminatorVM`; modal restore state remains facade-owned to avoid VMx private state access. No user-visible behavior change. |
 | Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
-| LOC metric | `vm_deleted=28`, `vm_added=21`, `vm_loc_saved=7`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=7`; `test_deleted=8`, `test_added=13`, `test_loc_delta=+5`. |
-| Coverage metric | Before `83.11%`; after `83.10%` over `1243 passed, 9 deselected`; `coverage_delta=-0.01` percentage points. |
+| LOC metric | `vm_deleted=28`, `vm_added=25`, `vm_loc_saved=3`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=3`; `test_deleted=8`, `test_added=33`, `test_loc_delta=+25`. |
+| Coverage metric | Original replacement delta was not isolated after the public-surface maintenance fix; latest full-suite verification is `83.64%` over `1815 passed, 9 deselected`. |
 
 | Field | Value |
 |---|---|
@@ -589,8 +596,8 @@ The implemented replacement ledger:
 | Behavior preserved | Public `runs`, `has_more`, `selected_id`, state-filtering, refresh dedup-on-set, selection restoration/clear, load-more append behavior, load-more error handling without destructive reset, and stale application/token response dropping. |
 | Behavior intentionally changed | Internal pagination accumulator and current token now live in VMx `TokenPagedComposition`; no user-visible behavior change. |
 | Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
-| LOC metric | `vm_deleted=93`, `vm_added=133`, `vm_loc_saved=-40`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=-40`; `test_deleted=0`, `test_added=11`, `test_loc_delta=+11`. |
-| Coverage metric | Before `83.10%`; after `83.12%` over `1244 passed, 9 deselected`; `coverage_delta=+0.02` percentage points. |
+| LOC metric | `vm_deleted=93`, `vm_added=130`, `vm_loc_saved=-37`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=-37`; `test_deleted=0`, `test_added=59`, `test_loc_delta=+59`. |
+| Coverage metric | Original replacement delta was not isolated after the public-surface maintenance fix; latest full-suite verification is `83.64%` over `1815 passed, 9 deselected`. |
 
 | Field | Value |
 |---|---|

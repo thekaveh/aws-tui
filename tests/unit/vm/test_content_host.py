@@ -206,6 +206,52 @@ async def test_dispose_before_setup_task_runs_cancels_without_creating_coroutine
     assert vm.status == ConstructionStatus.DISPOSED
 
 
+async def test_destruct_cancels_pending_setup_task() -> None:
+    """Destruct mirrors dispose for pending setup ownership.
+
+    A public RootVM.destruct() cascade should not leave the current
+    content's background setup task running against a destructed VM.
+    """
+
+    setup_started = asyncio.Event()
+    setup_cancelled = asyncio.Event()
+
+    class _SlowSetupVM:
+        def __init__(self) -> None:
+            self.is_constructed = False
+            self.status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.is_constructed = True
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            setup_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                setup_cancelled.set()
+                raise
+
+        def destruct(self) -> None:
+            self.status = ConstructionStatus.DESTRUCTED
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    vm = _SlowSetupVM()
+    await host.set_content(cast("ComponentVM", vm), service_id="s3")
+    await asyncio.wait_for(setup_started.wait(), timeout=1.0)
+
+    host.destruct()
+    await asyncio.wait_for(setup_cancelled.wait(), timeout=1.0)
+
+    assert host._setup_task is None
+    assert vm.status == ConstructionStatus.DESTRUCTED
+    host.dispose()
+
+
 async def test_set_content_cancels_prior_setup_task_on_swap() -> None:
     """Re-entering ``set_content`` with a different service id must
     cancel the prior VM's setup task — otherwise the cancelled VM's

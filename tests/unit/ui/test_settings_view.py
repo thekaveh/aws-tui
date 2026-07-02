@@ -17,6 +17,12 @@ from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 from aws_tui.vm.settings.settings_vm import SettingsVM
 
 
+def test_settings_view_does_not_import_textual_private_widgets() -> None:
+    source = Path("src/aws_tui/ui/widgets/settings_view.py").read_text(encoding="utf-8")
+
+    assert "textual.widgets._collapsible" not in source
+
+
 def _hub() -> MessageHub[Message]:
     return cast("MessageHub[Message]", MessageHub())
 

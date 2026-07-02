@@ -78,6 +78,7 @@ class ContentHostVM:
         self._inner.construct()
 
     def destruct(self) -> None:
+        self._cancel_pending_setup()
         if self._current is not None:
             self._current.destruct()
         self._inner.destruct()

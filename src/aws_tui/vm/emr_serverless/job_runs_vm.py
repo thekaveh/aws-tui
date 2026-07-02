@@ -121,10 +121,8 @@ class JobRunsVM:
         self._application_id: str | None = None
         self._pager_refresh_existing_count: int = 0
         self._paging_identity: tuple[str | None, str | None] | None = None
-        self._pager: TokenPagedComposition[JobRunItemVM, str] = TokenPagedComposition(
-            self._fetch_page,
-            pages_equal=self._pages_equal,
-        )
+        self._pager: TokenPagedComposition[JobRunItemVM, str] = self._new_pager()
+        self._has_more_suppressed: bool = False
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
         self._state_filter: frozenset[JobRunState] = _ALL_STATES
@@ -187,7 +185,7 @@ class JobRunsVM:
         """``True`` when at least one more page of runs is available
         for the current application. The pane shows a "load more"
         sentinel row in that case; ``PgDn`` triggers ``load_more``."""
-        return self._pager.current_token is not None
+        return self._pager.current_token is not None and not self._has_more_suppressed
 
     @property
     def status(self) -> ConstructionStatus:
@@ -214,6 +212,7 @@ class JobRunsVM:
         self._application_id = app_id
         prior_selected_id = self.selected_id
         self._clear_items()
+        self._has_more_suppressed = False
         # Clear the prior app's error text — without this the
         # window between set_application and refresh's next state
         # write briefly carries the OLD app's error_text alongside
@@ -281,6 +280,7 @@ class JobRunsVM:
         # cross-group interleaving.
         target_app_id = self._application_id
         self._set_state(PaneState.LOADING)
+        self._has_more_suppressed = False
         prior_items = self._items
         prior_selected_id = self.selected_id
         self._pager_refresh_existing_count = len(prior_items)
@@ -328,7 +328,7 @@ class JobRunsVM:
         application is selected. Errors map the same way as
         :meth:`refresh`; on error we KEEP the existing accumulated
         runs (no destructive reset on a paging failure)."""
-        if self._application_id is None or self._pager.current_token is None:
+        if self._application_id is None or not self.has_more:
             return
         # Capture the app + token lineage before the await; concurrent
         # refresh/application switches must not append stale pages.
@@ -357,7 +357,7 @@ class JobRunsVM:
                 return  # pagination identity changed mid-flight; drop the stale error
             text = str(exc)
             self._error_text = redact_text(text) if text else None
-            self._set_pager_token(None)
+            self._has_more_suppressed = True
             self._notify("runs")
             return
         except Exception as exc:  # defensive
@@ -373,7 +373,7 @@ class JobRunsVM:
             ):
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
-            self._set_pager_token(None)
+            self._has_more_suppressed = True
             self._notify("runs")
             return
         finally:
@@ -408,15 +408,19 @@ class JobRunsVM:
         if self._disposed:
             return
         self._disposed = True
-        for item in self._items:
-            item.dispose()
-        self._reset_pager_storage()
+        self._clear_items()
         self._pager.dispose()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    def _new_pager(self) -> TokenPagedComposition[JobRunItemVM, str]:
+        return TokenPagedComposition(
+            self._fetch_page,
+            pages_equal=self._pages_equal,
+        )
 
     def _pages_equal(
         self,
@@ -457,7 +461,8 @@ class JobRunsVM:
             if item.inner in self._inner:
                 self._inner.remove(item.inner)
             item.dispose()
-        self._reset_pager_storage()
+        self._pager.dispose()
+        self._pager = self._new_pager()
 
     def _sync_inner_to_pager(
         self,
@@ -489,14 +494,6 @@ class JobRunsVM:
                 break
         if not restored:
             self._notify("selected_id")
-
-    def _set_pager_token(self, token: str | None) -> None:
-        self._pager._current_token = token
-
-    def _reset_pager_storage(self) -> None:
-        self._pager._items.clear()
-        self._pager._current_token = None
-        self._pager._loaded_once = False
 
     def _notify(self, prop: str) -> None:
         """Emit a PropertyChanged event on BOTH the shared hub AND

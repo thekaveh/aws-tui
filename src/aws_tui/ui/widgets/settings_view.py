@@ -14,7 +14,6 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Collapsible, Static
-from textual.widgets._collapsible import CollapsibleTitle
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.settings.s3_connections_panel import S3ConnectionsPanel
@@ -102,13 +101,11 @@ class SettingsView(Widget):
         # never actually moved focus. The user reported it: "I had
         # to toggle its collapse or expansion once so it's correctly
         # rendered as selected". The focusable child is the
-        # ``CollapsibleTitle`` (the toggle button at the top of the
-        # section); focusing IT does propagate ``:focus-within``
-        # back up to the Collapsible.
-        try:
-            first = self.query_one("#section-connections", Collapsible)
-            title = first.query_one(CollapsibleTitle)
-        except Exception:
+        # first focusable child (the toggle button at the top of the
+        # section in Textual 8.2.x); focusing it does propagate
+        # ``:focus-within`` back up to the Collapsible.
+        title = self._section_focus_target()
+        if title is None:
             return
         # ``call_after_refresh`` so the focus call lands AFTER the
         # widget tree finishes its initial focus pass; otherwise
@@ -120,7 +117,17 @@ class SettingsView(Widget):
         # Settings row should keep focus on the rail.
         self.call_after_refresh(lambda: self._maybe_focus(title))
 
-    def _maybe_focus(self, title: CollapsibleTitle) -> None:
+    def _section_focus_target(self) -> Widget | None:
+        try:
+            first = self.query_one("#section-connections", Collapsible)
+        except Exception:
+            return None
+        for node in first.walk_children(Widget):
+            if node.can_focus:
+                return node
+        return None
+
+    def _maybe_focus(self, title: Widget) -> None:
         """Land focus on the first section title UNLESS the NavMenu
         rail already owns Textual focus (user is arrow-walking).
 
@@ -149,10 +156,8 @@ class SettingsView(Widget):
         screen. Unlike :meth:`_maybe_focus`, this version does NOT
         gate on whether NavMenu already owns focus — the user just
         asked to leave NavMenu, so we always land the focus."""
-        try:
-            first = self.query_one("#section-connections", Collapsible)
-            title = first.query_one(CollapsibleTitle)
-        except Exception:
+        title = self._section_focus_target()
+        if title is None:
             return
         title.focus()
 

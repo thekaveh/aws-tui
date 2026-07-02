@@ -1,4 +1,4 @@
-# VMx FormVM S3 Settings Implementation Plan
+# 1. VMx FormVM S3 Settings Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, VMx 3.1.0 `FormVM`, reactivex observables, pytest, pytest-cov, ruff, mypy.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Runtime dependency remains `vmx>=3.1.0,<4.0.0`.
 - Public view-facing surface remains `model`, `errors`, `can_submit`, `set_field`, `submit_command`, `revert_command`, and `on_errors_changed`.
@@ -20,7 +20,7 @@
 
 ---
 
-## File Structure
+## 1.2. File Structure
 
 - Modify `src/aws_tui/vm/settings/s3_connection_form_vm.py`: replace `ValidatingFormVM` composition with `vmx.FormVM` plus local validator aggregation.
 - Modify `src/aws_tui/vm/_composition/__init__.py`: stop exporting the deleted validating-form primitive.
@@ -33,7 +33,7 @@
 
 ---
 
-### Task 1: Pin Facade Behavior And Architecture
+### 1.3.1. Task 1: Pin Facade Behavior And Architecture
 
 **Files:**
 - Modify: `tests/unit/vm/settings/test_s3_connection_form_vm.py`
@@ -111,7 +111,7 @@ Expected: the architecture test fails because `_inner` is still `ValidatingFormV
 
 ---
 
-### Task 2: Replace The Internal Primitive
+### 1.3.2. Task 2: Replace The Internal Primitive
 
 **Files:**
 - Modify: `src/aws_tui/vm/settings/s3_connection_form_vm.py`
@@ -191,7 +191,7 @@ Expected: all selected tests pass.
 
 ---
 
-### Task 3: Remove Obsolete Mini-Primitive
+### 1.3.3. Task 3: Remove Obsolete Mini-Primitive
 
 **Files:**
 - Delete: `src/aws_tui/vm/_composition/validating_form_vm.py`
@@ -237,7 +237,7 @@ Expected: no matches.
 
 ---
 
-### Task 4: Record Metrics And Verify
+### 1.3.4. Task 4: Record Metrics And Verify
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-07-02-vmx-3-1-adoption-audit.md`

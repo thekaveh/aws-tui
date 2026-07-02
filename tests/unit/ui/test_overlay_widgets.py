@@ -11,6 +11,7 @@ from vmx import MessageHub, RxDispatcher
 
 from aws_tui.ui.widgets.command_palette import CommandPalette, CommandPaletteItem
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.vm.chrome.command_palette_vm import (
     CommandPaletteVM,
@@ -103,6 +104,19 @@ async def test_confirm_modal_renders_request() -> None:
 
 
 # ── QuickLook ───────────────────────────────────────────────────────────────
+
+
+def test_help_modal_lists_current_shipped_app_bindings() -> None:
+    source = HelpModal.compose.__code__.co_consts
+    rendered_text = "\n".join(str(item) for item in source)
+
+    for expected in (
+        "open Settings",
+        "delete selected entry",
+        "cycle the focused pane source",
+        "extend selection",
+    ):
+        assert expected in rendered_text
 
 
 async def _bytes_iter(data: bytes) -> AsyncIterator[bytes]:
