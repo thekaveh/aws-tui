@@ -414,7 +414,132 @@ These touch more view/event boundaries and should be planned carefully.
 
 ---
 
-## 1.6. Tests to preserve or add during follow-up refactors
+## 1.6. Replacement savings and coverage tracking
+
+Each follow-up refactor should leave an audit trail that shows what VMx 3.1.0
+replaced and what the project gained from the replacement. The goal is not only
+to say "we adopted a better primitive"; it is to quantify how much bespoke
+aws-tui code disappeared from the VM and view layers while preserving behavior.
+
+### 1.6.1. Per-replacement ledger
+
+For each Phase B/C replacement, add a short ledger entry to the implementing
+commit or follow-up report:
+
+| Field | Required value |
+|---|---|
+| Replacement ID | Stable name, for example `vmx31-formvm-s3-settings`. |
+| VMx 2.x-era implementation | Local class/functions/files being replaced. |
+| VMx 3.1.0 primitive | Upstream primitive and public API used instead. |
+| VM files touched | `src/aws_tui/vm/...` files that changed or were deleted. |
+| View files touched | `src/aws_tui/ui/...` files that changed or were deleted, if any. |
+| Tests changed | Tests deleted, rewritten, or added. |
+| Behavior preserved | User-visible and VM-facing contracts that stayed unchanged. |
+| Behavior intentionally changed | Any semantic change, with a linked test. |
+| Coverage command | Exact pytest/coverage command run for this replacement. |
+| LOC metric | VM LOC saved, view LOC saved, test LOC delta, and net implementation LOC saved. |
+
+### 1.6.2. LOC accounting method
+
+Use line counts as a directional maintainability metric, not as the only
+measure of quality.
+
+- Count implementation LOC separately for:
+  - Viewmodel layer: `src/aws_tui/vm/**`
+  - View layer: `src/aws_tui/ui/**`
+- Exclude docs, lockfiles, generated snapshots, and purely formatting-only
+  churn from savings totals.
+- Track tests separately. Test LOC can increase while implementation LOC falls;
+  that is healthy when the new tests pin behavior delegated to VMx.
+- Report these numbers for each replacement:
+  - `vm_deleted`
+  - `vm_added`
+  - `vm_loc_saved = vm_deleted - vm_added`
+  - `view_deleted`
+  - `view_added`
+  - `view_loc_saved = view_deleted - view_added`
+  - `implementation_loc_saved = vm_loc_saved + view_loc_saved`
+  - `test_deleted`
+  - `test_added`
+  - `test_loc_delta = test_added - test_deleted`
+- Treat moved code as neutral when it is mechanically relocated without being
+  replaced by VMx. The savings number should represent bespoke code that no
+  longer exists because VMx owns the abstraction.
+
+A simple per-commit starting point is:
+
+```bash
+git diff --numstat <before-refactor>...HEAD -- src/aws_tui/vm src/aws_tui/ui tests
+```
+
+When a replacement spans multiple commits, calculate the metric over the merge
+base of the replacement branch and the final replacement commit. Record the
+commit range beside the ledger entry.
+
+### 1.6.3. Aggregate VMx 3.1.0 benefit metric
+
+At the end of the adoption series, produce one roll-up table:
+
+| Replacement | VM LOC saved | View LOC saved | Implementation LOC saved | Test LOC delta | Coverage delta |
+|---|---:|---:|---:|---:|---:|
+| `FormVM` validators | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `ScoredFilteredCompositeVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `FilteredCompositeVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `DiscriminatorVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `TokenPagedComposition` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `ModalVM` / `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `when_property_changed` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `AsyncRelayCommand` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| **Total** | sum implemented replacements | sum implemented replacements | sum implemented replacements | sum implemented replacements | final minus starting coverage |
+
+The headline metric should be:
+
+```text
+VMx 3.1.0 adoption saved {implementation_loc_saved_total} implementation LOC:
+  {vm_loc_saved_total} in viewmodels
+  {view_loc_saved_total} in views
+with {test_loc_delta_total} net test LOC and {coverage_delta} coverage-point change.
+```
+
+Positive implementation LOC saved means the newer VMx version reduced bespoke
+aws-tui code compared with the older VMx 2.6.1-compatible implementation.
+For this compatibility-and-report branch, the replacement-savings baseline is
+zero because the larger substitutions are explicitly deferred.
+
+### 1.6.4. Test coverage accounting
+
+Every replacement must preserve or improve confidence in the delegated
+behavior. Because VMx now owns more of the primitive behavior, aws-tui tests
+should move away from retesting VMx internals and toward facade contracts,
+integration boundaries, and view behavior.
+
+For each replacement:
+
+- Run the targeted tests listed in §1.7.
+- Run `uv run pytest tests/unit/vm tests/unit/ui -q`.
+- For larger view/event refactors, run the relevant snapshot tests.
+- Run coverage for unit and in-process integration tests:
+
+```bash
+uv run pytest tests/unit tests/integration \
+  --cov=aws_tui --cov-report=term-missing --cov-report=xml
+```
+
+Record:
+
+- overall coverage before/after,
+- files whose coverage materially dropped,
+- tests deleted because they only asserted local implementation details now
+  delegated to VMx,
+- tests added or rewritten to assert aws-tui facade behavior against the new
+  VMx primitive.
+
+Coverage drops are acceptable only when they come from deleting bespoke code and
+the remaining facade/view behavior is still covered by focused tests.
+
+---
+
+## 1.7. Tests to preserve or add during follow-up refactors
 
 For each replacement, keep these contracts green:
 
@@ -450,7 +575,7 @@ Run snapshot tests for view-affecting phases.
 
 ---
 
-## 1.7. Non-goals for this branch
+## 1.8. Non-goals for this branch
 
 - Do not replace all local VM facades wholesale.
 - Do not expose raw VMx primitives in public aws-tui VM surfaces where the
@@ -461,11 +586,13 @@ Run snapshot tests for view-affecting phases.
 
 ---
 
-## 1.8. Acceptance criteria for this branch
+## 1.9. Acceptance criteria for this branch
 
 - `pyproject.toml` and `uv.lock` resolve VMx 3.1.0.
 - Import-level VMx smoke tests pass.
 - Low-risk compatibility fixes are committed with the bump.
 - This report exists and maps the old vNext asks to concrete VMx 3.1.0
   replacement candidates.
+- This report defines how follow-up work will track replaced code, VM/view LOC
+  savings, test LOC deltas, and coverage changes.
 - Larger refactors are deferred into explicit follow-up phases.
