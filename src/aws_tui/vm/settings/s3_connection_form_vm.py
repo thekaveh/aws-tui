@@ -1,6 +1,6 @@
-"""S3ConnectionFormVM — custom VM composing ValidatingFormVM (round-3 §9.bis.5).
+"""S3ConnectionFormVM — custom VM composing VMx FormVM (round-3 §9.bis.5).
 
-Wraps a :class:`ValidatingFormVM` over :class:`S3CompatForm` and adds
+Wraps a :class:`vmx.FormVM` over :class:`S3CompatForm` and adds
 the cross-field invariants the S3-connection edit flow needs:
 
 - All visible fields (``name`` / ``endpoint_url`` / ``region`` /
@@ -8,10 +8,9 @@ the cross-field invariants the S3-connection edit flow needs:
 - ``endpoint_url`` must be present IFF ``force_path_style`` is True —
   the §9.bis.5 canonical cross-field example.
 
-The :class:`ValidatingFormVM` and its inner :class:`vmx.forms.FormVM`
-are NOT exposed publicly. Consumers (View widgets, tests) bind to the
-``model``, ``errors``, ``can_submit``, ``set_field``,
-``submit_command`` surface.
+The inner :class:`vmx.FormVM` is NOT exposed publicly. Consumers (view
+widgets, tests) bind to the ``model``, ``errors``, ``can_submit``,
+``set_field``, and ``submit_command`` facade surface.
 """
 
 from __future__ import annotations
@@ -21,13 +20,14 @@ from dataclasses import replace
 from typing import Any
 
 import reactivex as rx
-from vmx import RelayCommand
+from vmx import FormVM, RelayCommand
 
-from aws_tui.vm._composition import ValidatingFormVM
 from aws_tui.vm.chrome.first_run_vm import S3CompatForm
 
 #: Async persister: (form) -> Awaitable[None]. Raises on failure.
 S3FormPersister = Callable[[S3CompatForm], Awaitable[None]]
+S3FieldValidator = Callable[[S3CompatForm], str | None]
+S3ModelValidator = Callable[[S3CompatForm], dict[str, str]]
 
 
 def _require_non_empty(field_label: str) -> Callable[[S3CompatForm], str | None]:
@@ -75,6 +75,14 @@ class S3ConnectionFormVM:
         an unchanged-but-valid form (e.g. "save as new" flows).
     """
 
+    _REQUIRED_FIELDS = (
+        "name",
+        "endpoint_url",
+        "region",
+        "access_key_id",
+        "secret_access_key",
+    )
+
     def __init__(
         self,
         initial: S3CompatForm,
@@ -82,20 +90,20 @@ class S3ConnectionFormVM:
         persister: S3FormPersister,
         strict: bool = True,
     ) -> None:
-        self._inner: ValidatingFormVM[S3CompatForm] = ValidatingFormVM(
-            initial=initial, persister=persister, strict=strict
+        self._field_validators: dict[str, list[S3FieldValidator]] = {}
+        self._model_validators: list[S3ModelValidator] = []
+        self._inner: FormVM[S3CompatForm] = FormVM(
+            initial=initial,
+            persister=persister,
+            strict=strict,
+            validators={field: self._validate_field(field) for field in self._REQUIRED_FIELDS},
+            model_validator=self._validate_model,
         )
         # Field-presence validators.
-        for field in (
-            "name",
-            "endpoint_url",
-            "region",
-            "access_key_id",
-            "secret_access_key",
-        ):
-            self._inner.add_field_validator(field, _require_non_empty(field))
+        for field in self._REQUIRED_FIELDS:
+            self.add_field_validator(field, _require_non_empty(field))
         # Cross-field invariant — §9.bis.5 canonical example.
-        self._inner.add_model_validator(_endpoint_iff_force_path_style)
+        self.add_model_validator(_endpoint_iff_force_path_style)
         self._disposed = False
 
     # ── Public surface ──────────────────────────────────────────────────────
@@ -118,7 +126,7 @@ class S3ConnectionFormVM:
 
     @property
     def has_errors(self) -> bool:
-        return self._inner.has_errors
+        return not self._inner.is_valid
 
     @property
     def is_valid(self) -> bool:
@@ -140,24 +148,26 @@ class S3ConnectionFormVM:
 
     @property
     def on_errors_changed(self) -> rx.Observable[dict[str, str]]:
-        return self._inner.on_errors_changed
+        return self._inner.errors_changed
 
     # ── Registration ────────────────────────────────────────────────────────
 
-    def add_field_validator(self, field: str, fn: Callable[[S3CompatForm], str | None]) -> None:
+    def add_field_validator(self, field: str, fn: S3FieldValidator) -> None:
         """Register an EXTRA per-field validator on top of the
         built-in field-presence + cross-field invariants. Consumers
         (e.g. the View widget) use this to layer their own
         format-specific checks (regex on ``name``, URL parse on
-        ``endpoint_url``) without reaching into the composed
-        :class:`ValidatingFormVM` directly."""
-        self._inner.add_field_validator(field, fn)
+        ``endpoint_url``) without reaching into the composed VMx
+        :class:`FormVM` directly."""
+        self._field_validators.setdefault(field, []).append(fn)
+        self._revalidate()
 
-    def add_model_validator(self, fn: Callable[[S3CompatForm], dict[str, str]]) -> None:
+    def add_model_validator(self, fn: S3ModelValidator) -> None:
         """Register an EXTRA cross-field validator. See
         :meth:`add_field_validator` for the round-3 rationale.
         """
-        self._inner.add_model_validator(fn)
+        self._model_validators.append(fn)
+        self._revalidate()
 
     # ── Mutation ────────────────────────────────────────────────────────────
 
@@ -182,5 +192,31 @@ class S3ConnectionFormVM:
         self._disposed = True
         self._inner.dispose()
 
+    # ── Validation aggregation ──────────────────────────────────────────────
 
-__all__ = ["S3ConnectionFormVM", "S3FormPersister"]
+    def _validate_field(self, field: str) -> S3FieldValidator:
+        def _validator(form: S3CompatForm) -> str | None:
+            for validator in self._field_validators.get(field, ()):
+                message = validator(form)
+                if message is not None:
+                    return message
+            return None
+
+        return _validator
+
+    def _validate_model(self, form: S3CompatForm) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        for validator in self._model_validators:
+            errors.update(validator(form))
+        return errors
+
+    def _revalidate(self) -> None:
+        self._inner.set_model(self._inner.model)
+
+
+__all__ = [
+    "S3ConnectionFormVM",
+    "S3FieldValidator",
+    "S3FormPersister",
+    "S3ModelValidator",
+]

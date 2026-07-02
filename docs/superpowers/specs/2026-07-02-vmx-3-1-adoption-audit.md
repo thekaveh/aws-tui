@@ -27,20 +27,19 @@ vNext asks:
 - `when_property_changed`
 - `HierarchicalVM.invalidate_children()` / `invalidate_subtree()`
 
-This branch already bumps the dependency and applies only import/test hygiene
-needed to stay clean. The larger refactors should happen in a follow-up plan,
-because several replacements affect public VM contracts and view bindings.
+This branch bumps the dependency, applies import/test hygiene, and implements
+the first contained VMx 3.1.0 replacement: S3 settings forms now delegate form
+validation and approve gating directly to VMx `FormVM`.
 
-The highest-value follow-up refactors are:
+The highest-value remaining follow-up refactors are:
 
-1. Replace aws-tui's local `ValidatingFormVM` with VMx 3.1.0 `FormVM` validators.
-2. Replace `CommandPaletteVM`'s inlined score/rank machinery with
+1. Replace `CommandPaletteVM`'s inlined score/rank machinery with
    `ScoredFilteredCompositeVM`.
-3. Replace `PaneVM`'s local `FilteredCompositeVM` with VMx 3.1.0
+2. Replace `PaneVM`'s local `FilteredCompositeVM` with VMx 3.1.0
    `FilteredCompositeVM`, after pinning cursor movement semantics.
-4. Move `JobRunsVM` pagination state onto `TokenPagedComposition`.
-5. Rebase `FocusCoordinatorVM` on `DiscriminatorVM`.
-6. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
+3. Move `JobRunsVM` pagination state onto `TokenPagedComposition`.
+4. Rebase `FocusCoordinatorVM` on `DiscriminatorVM`.
+5. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
    `DialogService.present` host.
 
 ---
@@ -209,7 +208,7 @@ Notes:
 
 ### 1.4.4. Local `ValidatingFormVM` -> VMx `FormVM` validators
 
-Current code:
+Prior code:
 
 - `src/aws_tui/vm/_composition/validating_form_vm.py`
 - `src/aws_tui/vm/settings/s3_connection_form_vm.py`
@@ -225,23 +224,26 @@ VMx 3.1.0 candidate:
 - approve gating: `is_valid and (not strict or is_dirty)`
 - `approve_errors` and `approve_async()`
 
-Recommended refactor:
+Implemented refactor:
 
-- Delete local `ValidatingFormVM` after replacing it with direct VMx `FormVM`.
-- Keep `S3ConnectionFormVM` as the aws-tui domain facade because it owns
+- Deleted local `ValidatingFormVM` after replacing it with direct VMx `FormVM`.
+- Kept `S3ConnectionFormVM` as the aws-tui domain facade because it owns
   S3-specific field names, `set_field`, and extra widget-level validators.
-- Implement an aggregation layer inside `S3ConnectionFormVM` if multiple
+- Implemented an aggregation layer inside `S3ConnectionFormVM` because multiple
   validators per field remain required:
-  - VMx builder accepts one validator per field at build time.
-  - aws-tui currently allows `add_field_validator()` after construction.
-  - The facade can retain the additive API and rebuild/aggregate validators
-    into one VMx validator per field.
-- Preserve the endpoint-IFF-force-path-style model validator.
+  - VMx `FormVM` accepts one validator per field at construction time.
+  - aws-tui still allows `add_field_validator()` after construction.
+  - The facade owns closure-backed validator lists and calls `set_model()` to
+    revalidate after registration.
+- Preserved the endpoint-IFF-force-path-style model validator.
 
 Notes:
 
-- This is the top refactor candidate because VMx now covers the prior exact ask.
-- It will delete a local mini-primitive and simplify the settings form tests.
+- This branch completed the top refactor candidate because VMx now covers the
+  prior exact ask.
+- The old implementation-specific primitive tests were deleted; facade behavior
+  remains covered by S3 form tests, round-3 composition tests, UI inline-form
+  tests, and the unit/integration coverage run recorded in §1.6.3.
 
 ### 1.4.5. `FocusCoordinatorVM` -> `DiscriminatorVM`
 
@@ -392,13 +394,14 @@ aws-tui impact:
 - Fix removed alias usage.
 - Tighten disposed-command test expectation.
 - Record this audit.
+- Replace `S3ConnectionFormVM`'s local `ValidatingFormVM` dependency with VMx
+  `FormVM` validators and record the replacement metric ledger.
 
 ### Phase B — contained VM-layer swaps
 
-1. `S3ConnectionFormVM` backed by VMx `FormVM` validators.
-2. `CommandPaletteVM` backed by VMx `ScoredFilteredCompositeVM`.
-3. `PaneVM` backed by VMx `FilteredCompositeVM`.
-4. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
+1. `CommandPaletteVM` backed by VMx `ScoredFilteredCompositeVM`.
+2. `PaneVM` backed by VMx `FilteredCompositeVM`.
+3. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
 
 These should each be separate commits with focused tests.
 
@@ -482,7 +485,7 @@ At the end of the adoption series, produce one roll-up table:
 
 | Replacement | VM LOC saved | View LOC saved | Implementation LOC saved | Test LOC delta | Coverage delta |
 |---|---:|---:|---:|---:|---:|
-| `FormVM` validators | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `FormVM` validators | 184 | 0 | 184 | -171 | -0.08 pp |
 | `ScoredFilteredCompositeVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `FilteredCompositeVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `DiscriminatorVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
@@ -490,21 +493,35 @@ At the end of the adoption series, produce one roll-up table:
 | `ModalVM` / `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `when_property_changed` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `AsyncRelayCommand` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
-| **Total** | sum implemented replacements | sum implemented replacements | sum implemented replacements | sum implemented replacements | final minus starting coverage |
+| **Total implemented so far** | 184 | 0 | 184 | -171 | -0.08 pp |
 
-The headline metric should be:
+Current headline metric:
 
 ```text
-VMx 3.1.0 adoption saved {implementation_loc_saved_total} implementation LOC:
-  {vm_loc_saved_total} in viewmodels
-  {view_loc_saved_total} in views
-with {test_loc_delta_total} net test LOC and {coverage_delta} coverage-point change.
+VMx 3.1.0 adoption has saved 184 implementation LOC so far:
+  184 in viewmodels
+  0 in views
+with -171 net test LOC and -0.08 coverage-point change.
 ```
 
 Positive implementation LOC saved means the newer VMx version reduced bespoke
 aws-tui code compared with the older VMx 2.6.1-compatible implementation.
-For this compatibility-and-report branch, the replacement-savings baseline is
-zero because the larger substitutions are explicitly deferred.
+
+The implemented replacement ledger:
+
+| Field | Value |
+|---|---|
+| Replacement ID | `vmx31-formvm-s3-settings` |
+| VMx 2.x-era implementation | `ValidatingFormVM` in `src/aws_tui/vm/_composition/validating_form_vm.py`, plus S3 settings facade composition. |
+| VMx 3.1.0 primitive | `vmx.FormVM[S3CompatForm]` with `validators`, `model_validator`, `errors`, `errors_changed`, and strict `approve_command` gating. |
+| VM files touched | `src/aws_tui/vm/settings/s3_connection_form_vm.py`, `src/aws_tui/vm/_composition/__init__.py`, deleted `src/aws_tui/vm/_composition/validating_form_vm.py`. |
+| View files touched | `src/aws_tui/ui/widgets/settings/connection_form.py` comments/docstrings only; no view behavior changed. |
+| Tests changed | Deleted `tests/unit/vm/_composition/test_validating_form_vm.py`; added post-construction validator coverage in `tests/unit/vm/settings/test_s3_connection_form_vm.py`; updated round-3 composition assertion in `tests/unit/vm/test_round3_compliance.py`. |
+| Behavior preserved | Public `S3ConnectionFormVM` facade, field/model validators, cross-field endpoint invariant, `errors`, `has_errors`, `is_valid`, `can_submit`, `set_field`, `submit_command`, `revert_command`, and `on_errors_changed`. |
+| Behavior intentionally changed | Internal composition now uses VMx `FormVM` directly; no user-visible behavior change. |
+| Coverage command | Baseline: `/Users/kaveh/repos/aws-tui/.venv/bin/python -m pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml` in detached worktree at `f9a8b68`. After: `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml` in this worktree. |
+| LOC metric | `vm_deleted=252`, `vm_added=68`, `vm_loc_saved=184`; `view_deleted=4`, `view_added=4`, `view_loc_saved=0`; `implementation_loc_saved=184`; `test_deleted=204`, `test_added=33`, `test_loc_delta=-171`. |
+| Coverage metric | Baseline `83.25%` over `1275 passed, 9 deselected`; after `83.17%` over `1262 passed, 9 deselected`; `coverage_delta=-0.08` percentage points. |
 
 ### 1.6.4. Test coverage accounting
 
@@ -595,4 +612,6 @@ Run snapshot tests for view-affecting phases.
   replacement candidates.
 - This report defines how follow-up work will track replaced code, VM/view LOC
   savings, test LOC deltas, and coverage changes.
-- Larger refactors are deferred into explicit follow-up phases.
+- The first contained refactor, S3 settings `FormVM` adoption, is implemented
+  with LOC and coverage metrics recorded.
+- Remaining larger refactors are deferred into explicit follow-up phases.

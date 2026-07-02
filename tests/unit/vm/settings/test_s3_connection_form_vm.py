@@ -166,6 +166,34 @@ def test_can_submit_when_pristine_and_not_strict() -> None:
     f.dispose()
 
 
+# -------------------- extra validators --------------------
+
+
+def test_extra_field_validator_added_after_construction_revalidates_and_emits() -> None:
+    f = S3ConnectionFormVM(initial=_valid(), persister=_ok_persister, strict=False)
+    payloads: list[dict[str, str]] = []
+    sub = f.on_errors_changed.subscribe(on_next=payloads.append)
+    try:
+        f.add_field_validator(
+            "name",
+            lambda form: (
+                "name must start with team-" if not form.name.startswith("team-") else None
+            ),
+        )
+        assert f.errors == {"name": "name must start with team-"}
+        assert payloads == [{"name": "name must start with team-"}]
+        assert f.can_submit is False
+
+        f.set_field("name", "team-minio")
+
+        assert f.errors == {}
+        assert payloads == [{"name": "name must start with team-"}, {}]
+        assert f.can_submit is True
+    finally:
+        sub.dispose()
+        f.dispose()
+
+
 # -------------------- mutation --------------------
 
 

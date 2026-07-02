@@ -4,8 +4,8 @@ s3-compatible connection. Lifted from the deleted
 
 Round-3 directive §9.bis.11: the form's validation state is owned
 by :class:`S3ConnectionFormVM` (composes
-:class:`ValidatingFormVM[S3CompatForm]`), not by a private
-View-side helper. The widget consumes the VM's
+:class:`vmx.FormVM[S3CompatForm]`), not by a private View-side
+helper. The widget consumes the VM's
 ``can_submit`` / ``errors`` / ``model`` surface and routes
 ``Input.Changed`` through ``form_vm.set_field`` so the
 validators (field-presence + name-format + URL-format +
@@ -178,7 +178,7 @@ class ConnectionFormInline(Widget):
         super().__init__()
         self._hub: MessageHub[Message] = hub
         self._ctx: _OpenContext | None = None
-        # Form VM: composes ValidatingFormVM over S3CompatForm. A
+        # Form VM: composes VMx FormVM over S3CompatForm. A
         # blank model on construction; reset to actual values via
         # ``set_model`` when the form opens for add/edit. The form
         # is recreated each open so the snapshot/dirty state is
@@ -210,7 +210,7 @@ class ConnectionFormInline(Widget):
         and URL-format) on top of the VM's built-in field-presence
         + cross-field validators. Uses the form VM's public
         ``add_field_validator`` — no reach-through into the
-        inner :class:`ValidatingFormVM` (round-3 directive
+        inner VMx :class:`FormVM` (round-3 directive
         §9.bis.11: composed primitives stay private)."""
         self._form_vm.add_field_validator("name", _validate_name)
         self._form_vm.add_field_validator("endpoint_url", _validate_endpoint_url)
