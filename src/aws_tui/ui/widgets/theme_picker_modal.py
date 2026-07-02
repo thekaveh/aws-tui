@@ -61,6 +61,7 @@ class _ThemeRow(HubSubscriberMixin, Static):
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
+            property_names=("is_active",),
             on_property_changed=self._on_property_changed,
         )
 

@@ -91,6 +91,7 @@ class StatusBar(HubSubscriberMixin, Widget):
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
+            property_names=self.PROP_NAMES,
             on_property_changed=self._on_vm_property_changed,
         )
 

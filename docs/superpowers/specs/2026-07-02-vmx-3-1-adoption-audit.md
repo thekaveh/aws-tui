@@ -36,13 +36,14 @@ now delegates score-ranked projection to VMx `ScoredFilteredCompositeVM`.
 modal restore state to VMx `DiscriminatorVM`. `JobRunsVM` now delegates its
 forward-only AWS token pagination accumulator and current token to VMx
 `TokenPagedComposition`. Result-bearing chrome modal facades now delegate
-result completion and cancellation defaults to VMx `ModalVM`.
+result completion and cancellation defaults to VMx `ModalVM`. Shared-hub
+view subscriptions now use VMx `when_property_changed` for sender/property
+filtering.
 
 The highest-value remaining follow-up refactors are:
 
 1. Add an optional Textual `DialogService.present` host.
-2. Replace safe shared-hub property filters with `when_property_changed`.
-3. Evaluate `AsyncRelayCommand` for command-palette action scheduling.
+2. Evaluate `AsyncRelayCommand` for command-palette action scheduling.
 
 ---
 
@@ -315,7 +316,7 @@ Notes:
 
 ### 1.4.7. Shared-hub property filtering -> `when_property_changed`
 
-Current code:
+Prior code:
 
 - `src/aws_tui/ui/widgets/_subscriber.py`
 - Several widgets still filter `PropertyChangedMessage` by sender identity.
@@ -327,10 +328,13 @@ VMx 3.1.0 candidate:
 - `vmx.when_property_changed(hub, sender, property_name)`
 - `_ComponentVMBase.property_changed`
 
-Recommended refactor:
+Implemented refactor:
 
-- Replace manual sender/property filters in `_subscriber.py` with
-  `when_property_changed` where the widget knows the property names.
+- Replaced manual sender/property filtering in `_subscriber.py` with
+  `when_property_changed`.
+- Made existing widget property interests explicit at subscription sites:
+  pane rows, panes, status bar, hint legend, command palette, dual pane,
+  theme picker rows, and transfer rows.
 - Do not remove EMR per-VM `on_property_changed` streams in the same task; they
   are still useful because those VMs are facades, not VMx components.
 - Longer term, consider a small aws-tui facade base that exposes
@@ -339,8 +343,8 @@ Recommended refactor:
 Notes:
 
 - This is a view-layer cleanup candidate, not just VM-layer cleanup.
-- It should be kept separate from data-structure refactors to avoid mixing
-  event-source changes with behavior changes.
+- Kept separate from data-structure refactors to avoid mixing event-source
+  changes with behavior changes.
 
 ### 1.4.8. Async operations -> `AsyncRelayCommand`
 
@@ -414,12 +418,12 @@ Implemented:
 
 1. `JobRunsVM` pagination on `TokenPagedComposition`.
 2. Modal result primitives on `ModalVM`.
+3. Shared-hub subscription cleanup with `when_property_changed`.
 
 Remaining:
 
 1. Optional Textual `DialogService.present` host.
-2. Optional shared-hub subscription cleanup with `when_property_changed`.
-3. Optional localized `AsyncRelayCommand` adoption.
+2. Optional localized `AsyncRelayCommand` adoption.
 
 These touch more view/event boundaries and should be planned carefully.
 
@@ -500,17 +504,17 @@ At the end of the adoption series, produce one roll-up table:
 | `TokenPagedComposition` | -40 | 0 | -40 | +11 | +0.02 pp |
 | `ModalVM` result primitives | 13 | 0 | 13 | +12 | -0.03 pp |
 | `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
-| `when_property_changed` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `when_property_changed` | 0 | -12 | -12 | 0 | -0.02 pp |
 | `AsyncRelayCommand` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
-| **Total implemented so far** | 456 | 0 | 456 | -443 | -0.16 pp |
+| **Total implemented so far** | 456 | -12 | 444 | -443 | -0.18 pp |
 
 Current headline metric:
 
 ```text
-VMx 3.1.0 adoption has saved 456 implementation LOC so far:
+VMx 3.1.0 adoption has saved 444 implementation LOC so far:
   456 in viewmodels
-  0 in views
-with -443 net test LOC and -0.16 coverage-point change.
+  -12 in views
+with -443 net test LOC and -0.18 coverage-point change.
 ```
 
 Positive implementation LOC saved means the newer VMx version reduced bespoke
@@ -601,6 +605,20 @@ The implemented replacement ledger:
 | Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
 | LOC metric | `vm_deleted=58`, `vm_added=45`, `vm_loc_saved=13`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=13`; `test_deleted=0`, `test_added=12`, `test_loc_delta=+12`. |
 | Coverage metric | Before `83.12%`; after `83.09%` over `1244 passed, 9 deselected`; `coverage_delta=-0.03` percentage points. |
+
+| Field | Value |
+|---|---|
+| Replacement ID | `vmx31-when-property-changed-ui-subscribers` |
+| VMx 2.x-era implementation | Manual `PropertyChangedMessage` type, sender-object, and property-name filtering in `src/aws_tui/ui/widgets/_subscriber.py`. |
+| VMx 3.1.0 primitive | `vmx.when_property_changed(hub, sender, property_name)` merged across each widget's declared property set. |
+| VM files touched | None. |
+| View files touched | `src/aws_tui/ui/widgets/_subscriber.py`, `hint_legend.py`, `pane.py`, `command_palette.py`, `theme_picker_modal.py`, `transfers_overlay.py`, `status_bar.py`, `dual_pane.py`. |
+| Tests changed | No new tests; existing UI and integration subscriber coverage was preserved. |
+| Behavior preserved | Sender-identity filtering, property-name filtering, explicit unsubscription, and existing widget refresh behavior for pane rows, panes, status bar, hint legend, command palette, dual pane, theme picker rows, and transfer rows. |
+| Behavior intentionally changed | Subscription filtering now happens through VMx `when_property_changed`; widgets declare property interests at subscription time. No user-visible behavior change. |
+| Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
+| LOC metric | `vm_deleted=0`, `vm_added=0`, `vm_loc_saved=0`; `view_deleted=10`, `view_added=22`, `view_loc_saved=-12`; `implementation_loc_saved=-12`; `test_deleted=0`, `test_added=0`, `test_loc_delta=0`. |
+| Coverage metric | Before `83.09%`; after `83.07%` over `1244 passed, 9 deselected`; `coverage_delta=-0.02` percentage points. |
 
 ### 1.6.4. Test coverage accounting
 

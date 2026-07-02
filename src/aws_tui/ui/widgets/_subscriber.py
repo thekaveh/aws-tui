@@ -16,11 +16,12 @@ leaks one subscription per mount.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
+import reactivex as rx
 from reactivex.abc import DisposableBase
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Message, MessageHub, when_property_changed
 
 
 class HubSubscriberMixin:
@@ -37,20 +38,19 @@ class HubSubscriberMixin:
         *,
         hub: MessageHub[Message],
         vm: Any,
+        property_names: Iterable[str],
         on_property_changed: Callable[[str], None],
     ) -> None:
         """Subscribe to ``hub`` and invoke ``on_property_changed`` per match."""
         if self._hub_subscription is not None:
             self._hub_subscription.dispose()
 
-        def _on_message(msg: object) -> None:
-            if not isinstance(msg, PropertyChangedMessage):
-                return
-            if msg.sender_object is not vm:
-                return
-            on_property_changed(msg.property_name)
-
-        self._hub_subscription = hub.messages.subscribe(on_next=_on_message)
+        streams = tuple(
+            when_property_changed(hub, vm, property_name) for property_name in property_names
+        )
+        self._hub_subscription = rx.merge(*streams).subscribe(
+            on_next=lambda msg: on_property_changed(msg.property_name)
+        )
 
     def unsubscribe_from_vm(self) -> None:
         if self._hub_subscription is not None:

@@ -90,6 +90,7 @@ class DualPane(HubSubscriberMixin, Widget):
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
+            property_names=("focused",),
             on_property_changed=self._on_vm_property_changed,
         )
 
