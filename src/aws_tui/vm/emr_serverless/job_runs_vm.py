@@ -9,12 +9,11 @@ Phase 2 of the toolkit-adoption refactor (spec §4.2.1, §9.bis.2,
 §9.bis.11): the VM composes a :class:`CompositeVM` internally over a
 :class:`JobRunItemVM` facade per run. Selection lives in the
 composite's ``current`` slot — exposed publicly only as
-``selected_id`` (derived). Forward-only ``nextToken`` pagination is
-NOT delegated to ``PagedComposition`` (misfit per §9.bis.2); it stays
-as a VM-level ``_next_token`` field with ``load_more`` /
-``refresh`` methods that append to / reset the composite. The
-composite is NOT exposed in the public surface (round-3 directive
-§9.bis.11).
+``selected_id`` (derived). Forward-only AWS ``nextToken`` pagination
+is delegated to VMx ``TokenPagedComposition`` while this facade keeps
+target-staleness guards, filtering, selection restoration, and
+PropertyChanged notifications. Neither the pager nor the composite is
+exposed in the public surface (round-3 directive §9.bis.11).
 
 Closes the §9.bis.9 acceptance criteria for PR #99(b)
 (no ``selected_id`` PropertyChanged for a hub-watch to mis-route)
@@ -23,11 +22,19 @@ and PR #100(a) (single ``on_current_changed`` on selection move).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import reactivex as rx
 from reactivex.subject import Subject
-from vmx import ComponentVMOf, CompositeVM, Message, MessageHub, PropertyChangedMessage
+from vmx import (
+    ComponentVMOf,
+    CompositeVM,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+    TokenPagedComposition,
+)
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -112,8 +119,12 @@ class JobRunsVM:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._application_id: str | None = None
-        self._items: list[JobRunItemVM] = []  # paged accumulator (unfiltered)
-        self._next_token: str | None = None
+        self._pager_refresh_existing_count: int = 0
+        self._paging_identity: tuple[str | None, str | None] | None = None
+        self._pager: TokenPagedComposition[JobRunItemVM, str] = TokenPagedComposition(
+            self._fetch_page,
+            pages_equal=self._pages_equal,
+        )
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
         self._state_filter: frozenset[JobRunState] = _ALL_STATES
@@ -145,6 +156,10 @@ class JobRunsVM:
         )
 
     @property
+    def _items(self) -> list[JobRunItemVM]:
+        return self._pager.items
+
+    @property
     def selected_id(self) -> str | None:
         current = self._inner.current
         if current is None:
@@ -172,7 +187,7 @@ class JobRunsVM:
         """``True`` when at least one more page of runs is available
         for the current application. The pane shows a "load more"
         sentinel row in that case; ``PgDn`` triggers ``load_more``."""
-        return self._next_token is not None
+        return self._pager.current_token is not None
 
     @property
     def status(self) -> ConstructionStatus:
@@ -199,7 +214,6 @@ class JobRunsVM:
         self._application_id = app_id
         prior_selected_id = self.selected_id
         self._clear_items()
-        self._next_token = None
         # Clear the prior app's error text — without this the
         # window between set_application and refresh's next state
         # write briefly carries the OLD app's error_text alongside
@@ -254,7 +268,6 @@ class JobRunsVM:
         or the periodic poller."""
         if self._application_id is None:
             self._clear_items()
-            self._next_token = None
             self._set_state(PaneState.EMPTY)
             return
         # Capture the target identity BEFORE the await so a
@@ -268,11 +281,12 @@ class JobRunsVM:
         # cross-group interleaving.
         target_app_id = self._application_id
         self._set_state(PaneState.LOADING)
+        prior_items = self._items
+        prior_selected_id = self.selected_id
+        self._pager_refresh_existing_count = len(prior_items)
+        self._paging_identity = (target_app_id, None)
         try:
-            # Fetch unfiltered; filter is applied client-side via `runs` property.
-            runs, next_token = await self._client.list_job_runs_page(
-                target_app_id, start_token=None, states=None
-            )
+            await self._pager.refresh_command.execute_async()
         except ProviderError as exc:
             if self._application_id != target_app_id:
                 return  # target changed mid-flight; drop the stale error
@@ -290,37 +304,19 @@ class JobRunsVM:
             self._error_text = redact_text(f"unexpected error: {exc}")
             self._set_state(PaneState.ERROR)
             return
+        finally:
+            self._paging_identity = None
         if self._application_id != target_app_id:
             return  # target changed mid-flight; drop the stale response
-        new_runs: tuple[JobRunSummary, ...] = tuple(runs)
-        prior_selected_id = self.selected_id
 
-        # Dedup-on-set parity with ApplicationsVM (§9.bis.9 Q-A): if
-        # the freshly-fetched page matches the current accumulator
-        # head, the composite is NOT mutated and no `runs`/
-        # `selected_id` events fire. The next_token may still differ
-        # (the server can grow the result set without changing the
-        # first page); persist it unconditionally below.
-        unchanged = self._items_equal(new_runs)
+        # Dedup-on-set parity with ApplicationsVM (§9.bis.9 Q-A): if the
+        # pager kept the same item objects, the composite is NOT mutated and
+        # no `runs` / `selected_id` events fire. The token may still differ;
+        # TokenPagedComposition persists it internally.
+        unchanged = self._items == prior_items
         if not unchanged:
-            self._clear_items()
-            for summary in new_runs:
-                self._add_item(summary)
-            # CompositeVM.clear() during _clear_items drops current
-            # to None automatically. Restore selection by id if still
-            # present; otherwise emit the user-visible "selected_id"
-            # event so consumers update their cursor.
-            if prior_selected_id is not None:
-                restored = False
-                for item in self._items:
-                    if item.summary.job_run_id == prior_selected_id:
-                        self._inner.current = item.inner
-                        restored = True
-                        break
-                if not restored:
-                    self._notify("selected_id")
+            self._sync_inner_to_pager(prior_items, prior_selected_id=prior_selected_id)
             self._notify("runs")
-        self._next_token = next_token
         # Success path — drop any error text carried forward from a
         # prior failed poll (sibling parity with PaneVM._reload).
         self._error_text = None
@@ -332,26 +328,16 @@ class JobRunsVM:
         application is selected. Errors map the same way as
         :meth:`refresh`; on error we KEEP the existing accumulated
         runs (no destructive reset on a paging failure)."""
-        if self._application_id is None or self._next_token is None:
+        if self._application_id is None or self._pager.current_token is None:
             return
-        # Capture FULL pagination identity BEFORE the await:
-        # - app_id: a concurrent set_application landing mid-flight
-        #   would let stale rows leak into the new app's accumulator
-        # - next_token: a concurrent refresh() (different worker
-        #   group ``emr-poll-runs``) replaces _items and resets
-        #   _next_token mid-flight. If we only checked app_id, the
-        #   late load_more response would still _add_item rows
-        #   paginated from the STALE T1 cursor + overwrite
-        #   _next_token with the stale T3 continuation, leaving the
-        #   accumulator straddling two different pagination
-        #   lineages. (Round 14 added the app_id half; this closes
-        #   the token half — same root race.)
+        # Capture the app + token lineage before the await; concurrent
+        # refresh/application switches must not append stale pages.
         target_app_id = self._application_id
-        target_token = self._next_token
+        target_token = self._pager.current_token
+        prior_items = self._items
+        self._paging_identity = (target_app_id, target_token)
         try:
-            runs, next_token = await self._client.list_job_runs_page(
-                target_app_id, start_token=target_token, states=None
-            )
+            await self._pager.load_more_command.execute_async()
         except ProviderError as exc:
             # load_more is APPEND-only — a failure on the next-page
             # fetch must NOT destroy the already-loaded rows by
@@ -364,11 +350,14 @@ class JobRunsVM:
             # the token so the broken sentinel goes away. The user
             # can hit ``r`` to retry the whole list if they want
             # pagination back.
-            if (self._application_id, self._next_token) != (target_app_id, target_token):
+            if (self._application_id, self._pager.current_token) != (
+                target_app_id,
+                target_token,
+            ):
                 return  # pagination identity changed mid-flight; drop the stale error
             text = str(exc)
             self._error_text = redact_text(text) if text else None
-            self._next_token = None
+            self._set_pager_token(None)
             self._notify("runs")
             return
         except Exception as exc:  # defensive
@@ -378,23 +367,25 @@ class JobRunsVM:
             # it the worker exception is silently swallowed by
             # Textual's run_worker and PgDn appears to do nothing
             # with zero diagnostic.
-            if (self._application_id, self._next_token) != (target_app_id, target_token):
+            if (self._application_id, self._pager.current_token) != (
+                target_app_id,
+                target_token,
+            ):
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
-            self._next_token = None
+            self._set_pager_token(None)
             self._notify("runs")
             return
-        if (self._application_id, self._next_token) != (target_app_id, target_token):
+        finally:
+            self._paging_identity = None
+        if (self._application_id, target_token) != (target_app_id, target_token):
             return  # pagination identity changed mid-flight; drop the stale response
-        if not runs and next_token is None:
-            # Server returned an empty page + no more — just clear
-            # the token so the sentinel goes away.
-            self._next_token = None
+        if self._items == prior_items:
+            # Server returned an empty page or a stale no-op; just refresh the
+            # sentinel if the token changed.
             self._notify("runs")
             return
-        for summary in runs:
-            self._add_item(summary)
-        self._next_token = next_token
+        self._sync_inner_to_pager(prior_items, prior_selected_id=self.selected_id)
         self._notify("runs")
 
     def has_active_runs(self) -> bool:
@@ -419,29 +410,46 @@ class JobRunsVM:
         self._disposed = True
         for item in self._items:
             item.dispose()
-        self._items.clear()
+        self._reset_pager_storage()
+        self._pager.dispose()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _items_equal(self, new_runs: tuple[JobRunSummary, ...]) -> bool:
-        """Identity check for the dedup-on-set guard. The first N
-        entries of the new page must match our shadow ``_items`` 1:1
-        for refresh to be a no-op. Mirror of ApplicationsVM._items_equal.
-        """
-        if len(self._items) != len(new_runs):
+    def _pages_equal(
+        self,
+        fresh: Sequence[JobRunItemVM],
+        current_prefix: Sequence[JobRunItemVM],
+    ) -> bool:
+        if self._pager_refresh_existing_count != len(fresh):
             return False
-        for item, summary in zip(self._items, new_runs, strict=True):
-            if item.summary != summary:
-                return False
-        return True
+        return [item.summary for item in fresh] == [item.summary for item in current_prefix]
+
+    async def _fetch_page(self, token: str | None) -> tuple[tuple[JobRunItemVM, ...], str | None]:
+        target_app_id = self._application_id
+        runs, next_token = await self._client.list_job_runs_page(
+            target_app_id,
+            start_token=token,
+            states=None,
+        )
+        if self._paging_identity is not None:
+            app_id, expected_token = self._paging_identity
+            if token is None and self._application_id != app_id:
+                return tuple(self._pager.items), self._pager.current_token
+            if token is not None and (self._application_id, self._pager.current_token) != (
+                app_id,
+                expected_token,
+            ):
+                return (), self._pager.current_token
+        items = tuple(
+            JobRunItemVM(summary=summary, hub=self._hub, dispatcher=self._dispatcher)
+            for summary in runs
+        )
+        return items, next_token
 
     def _initial_children(self) -> tuple[ComponentVMOf[JobRunSummary], ...]:
-        # CompositeVM builder requires a children factory even when the
-        # initial population is empty. Items are added at runtime via
-        # _add_item; this seed runs once at construct().
         return tuple(item.inner for item in self._items)
 
     def _clear_items(self) -> None:
@@ -449,14 +457,46 @@ class JobRunsVM:
             if item.inner in self._inner:
                 self._inner.remove(item.inner)
             item.dispose()
-        self._items.clear()
+        self._reset_pager_storage()
 
-    def _add_item(self, summary: JobRunSummary) -> None:
-        item = JobRunItemVM(summary=summary, hub=self._hub, dispatcher=self._dispatcher)
-        self._items.append(item)
-        if self._inner.is_constructed:
-            item.construct()
-        self._inner.append(item.inner)
+    def _sync_inner_to_pager(
+        self,
+        prior_items: Sequence[JobRunItemVM],
+        *,
+        prior_selected_id: str | None,
+    ) -> None:
+        current_items = self._items
+        current_set = set(current_items)
+        for item in prior_items:
+            if item in current_set:
+                continue
+            if item.inner in self._inner:
+                self._inner.remove(item.inner)
+            item.dispose()
+        for item in current_items:
+            if item.inner in self._inner:
+                continue
+            if self._inner.is_constructed:
+                item.construct()
+            self._inner.append(item.inner)
+        if prior_selected_id is None:
+            return
+        restored = False
+        for item in current_items:
+            if item.summary.job_run_id == prior_selected_id:
+                self._inner.current = item.inner
+                restored = True
+                break
+        if not restored:
+            self._notify("selected_id")
+
+    def _set_pager_token(self, token: str | None) -> None:
+        self._pager._current_token = token
+
+    def _reset_pager_storage(self) -> None:
+        self._pager._items.clear()
+        self._pager._current_token = None
+        self._pager._loaded_once = False
 
     def _notify(self, prop: str) -> None:
         """Emit a PropertyChanged event on BOTH the shared hub AND

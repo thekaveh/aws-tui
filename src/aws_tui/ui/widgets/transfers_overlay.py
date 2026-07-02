@@ -146,6 +146,7 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
+            property_names=("state",),
             on_property_changed=self._on_vm_property_changed,
         )
 

@@ -40,11 +40,14 @@ def test_initial_state() -> None:
 
 
 async def test_ask_resolves_true_on_confirm() -> None:
+    from vmx import ModalVM
+
     vm = _build()
     task = asyncio.create_task(vm.ask(_req()))
     await asyncio.sleep(0)  # let ask() set up the future
     assert vm.is_open
     assert vm.request is not None
+    assert isinstance(vm._modal, ModalVM)
     vm.confirm_command.execute()
     result = await task
     assert result is True

@@ -41,7 +41,7 @@ dependencies = [
   # Upper bounds match the vmx posture — next-major caps insulate
   # downstream `pip install aws-tui` from a transitive breaking
   # change between releases. Bump deliberately, not by accident.
-  "vmx>=2.6.0,<3.0.0",
+  "vmx>=3.1.0,<4.0.0",
   "textual>=8.2.7,<9",
   "boto3>=1.34,<2",
   "aioboto3>=13,<16",

@@ -94,10 +94,24 @@ def test_focus_coordinator_vm_composes_componentvm_internally() -> None:
     vm.dispose()
 
 
+def test_command_palette_vm_composes_scored_filter_internally() -> None:
+    from vmx import ScoredFilteredCompositeVM
+
+    from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
+
+    vm = CommandPaletteVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    assert hasattr(vm, "_scored_filter")
+    assert isinstance(vm._scored_filter, ScoredFilteredCompositeVM)
+    assert not any("scored_filter" in name for name in dir(vm) if not name.startswith("_"))
+    vm.dispose()
+
+
 # -------------------- Settings VMs --------------------
 
 
-def test_s3_connection_form_vm_composes_validating_form_vm_internally() -> None:
+def test_s3_connection_form_vm_composes_vmx_form_vm_internally() -> None:
+    from vmx import FormVM
+
     from aws_tui.vm.chrome.first_run_vm import S3CompatForm
     from aws_tui.vm.settings.s3_connection_form_vm import S3ConnectionFormVM
 
@@ -113,8 +127,8 @@ def test_s3_connection_form_vm_composes_validating_form_vm_internally() -> None:
     )
     vm = S3ConnectionFormVM(initial=blank, persister=_persist)
     assert hasattr(vm, "_inner")
-    # The inner is a ValidatingFormVM (which itself wraps a FormVM);
-    # neither is exposed publicly.
+    assert isinstance(vm._inner, FormVM)
+    # The VMx FormVM is composed internally and not exposed publicly.
     assert not any("inner" in name for name in dir(vm) if not name.startswith("_"))
     vm.dispose()
 

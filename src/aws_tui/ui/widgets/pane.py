@@ -137,6 +137,7 @@ class EntryRow(HubSubscriberMixin, Widget):
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._entry_vm,
+            property_names=("is_selected", "is_marked"),
             on_property_changed=self._on_entry_changed,
         )
 
@@ -304,6 +305,11 @@ class Pane(HubSubscriberMixin, Widget):
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
+            property_names=(
+                *_BODY_REFRESH_PROPS,
+                *_CHROME_REFRESH_PROPS,
+                *_SCROLL_TRACK_PROPS,
+            ),
             on_property_changed=self._on_vm_property_changed,
         )
 

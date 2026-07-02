@@ -37,6 +37,16 @@ def test_initial_state() -> None:
     vm.dispose()
 
 
+def test_palette_uses_vmx_scored_filtered_composite() -> None:
+    from vmx import ScoredFilteredCompositeVM
+
+    vm = _build()
+    try:
+        assert isinstance(vm._scored_filter, ScoredFilteredCompositeVM)
+    finally:
+        vm.dispose()
+
+
 def test_register_entries_and_filter_by_substring() -> None:
     vm = _build()
     vm.register_entry(_entry("e1", "empty bucket"), lambda: None)
@@ -188,15 +198,8 @@ def test_palette_entry_immutable() -> None:
 
 
 def test_dispose_releases_commands() -> None:
-    """``dispose()`` releases every RelayCommand without raising.
-
-    The original test asserted "execute is a no-op after dispose"
-    — that turned out to be wishful: ``RelayCommand.dispose`` in
-    vmx 8.x does not gate later ``execute()`` calls, so the
-    contract this test actually pins is "dispose runs cleanly and
-    a subsequent ``execute()`` does not raise". A future vmx
-    upgrade that adds use-after-dispose protection can tighten
-    this assertion."""
+    """``dispose()`` releases every RelayCommand and leaves it inert."""
     vm = _build()
     vm.dispose()
+    assert not vm.open_command.can_execute()
     vm.open_command.execute()  # must not raise

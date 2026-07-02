@@ -74,6 +74,7 @@ class CommandPalette(HubSubscriberMixin, ModalScreen[None]):
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
+            property_names=("filtered_entries", "selected_index"),
             on_property_changed=self._on_vm_property_changed,
         )
         self.query_one("#palette-input", Input).focus()

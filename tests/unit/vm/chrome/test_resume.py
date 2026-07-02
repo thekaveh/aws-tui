@@ -54,9 +54,12 @@ def test_initial_state() -> None:
 
 
 async def test_resume_all_resolves() -> None:
+    from vmx import ModalVM
+
     vm = _build()
     task = asyncio.create_task(vm.ask())
     await asyncio.sleep(0)
+    assert isinstance(vm._modal, ModalVM)
     vm.resume_all_command.execute()
     assert await task is ResumeAction.RESUME_ALL
     vm.dispose()

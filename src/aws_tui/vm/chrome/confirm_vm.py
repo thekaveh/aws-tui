@@ -1,9 +1,7 @@
 """ConfirmationVM — modal confirm overlay.
 
-This is a thin shim around an :class:`asyncio.Future` rather than VMx's
-``vmx.notifications.ConfirmationVM`` — the notifications subpackage's
-notification-hub indirection is overkill for our single-modal use case and
-would force callers to wire a separate ``INotificationHub``.
+This is a thin facade over VMx ``ModalVM``. VMx owns result completion while
+this class owns confirm-specific request data, commands, and hub events.
 
 The async ``ask(request)`` opens the modal and returns the user's choice as
 a boolean. Only one ``ask`` may be in flight at a time.
@@ -11,10 +9,9 @@ a boolean. Only one ``ask`` may be in flight at a time.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 
-from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage, RelayCommand
+from vmx import ComponentVM, Message, MessageHub, ModalVM, PropertyChangedMessage, RelayCommand
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -62,7 +59,7 @@ class ConfirmationVM:
 
         self._request: ConfirmRequest | None = None
         self._is_open: bool = False
-        self._future: asyncio.Future[bool] | None = None
+        self._modal: ModalVM[bool] | None = None
         self._disposed: bool = False
 
         self._inner: ComponentVM = (
@@ -119,10 +116,8 @@ class ConfirmationVM:
         if self._disposed:
             return
         self._disposed = True
-        # If we tear down with a pending ask, resolve it as False so the
-        # awaiter unblocks rather than leaks.
-        if self._future is not None and not self._future.done():
-            self._future.set_result(False)
+        if self._modal is not None:
+            self._modal.dispose()
         self._confirm_command.dispose()
         self._cancel_command.dispose()
         self._inner.dispose()
@@ -131,28 +126,27 @@ class ConfirmationVM:
 
     async def ask(self, request: ConfirmRequest) -> bool:
         """Open the modal with ``request`` and await the user's choice."""
-        if self._is_open or self._future is not None:
+        if self._is_open or self._modal is not None:
             raise RuntimeError("confirmation is already open")
         if self._disposed:
             raise RuntimeError("confirmation has been disposed")
-        loop = asyncio.get_running_loop()
-        self._future = loop.create_future()
+        self._modal = ModalVM(False)
         self._set_request(request)
         self._set_open(True)
         try:
-            return await self._future
+            return await self._modal.wait_result()
         finally:
             # Always clear UI state on resolution.
-            self._future = None
+            self._modal = None
             self._set_open(False)
             self._set_request(None)
 
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _resolve(self, value: bool) -> None:
-        if self._future is None or self._future.done():
+        if self._modal is None or self._modal.is_dismissed:
             return
-        self._future.set_result(value)
+        self._modal.dismiss(value)
 
     def _set_open(self, value: bool) -> None:
         if self._is_open == value:
