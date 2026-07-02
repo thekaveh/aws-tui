@@ -5,22 +5,20 @@ builds a :class:`CrashReport` describing the crash, writes the dump via
 :class:`aws_tui.infra.crash_dump.CrashDump`, and instantiates a
 ``CrashVM(report)`` which the modal binds to.
 
-The VM is a thin shim around an :class:`asyncio.Future[CrashChoice]`
-(same pattern as :class:`ConfirmationVM`). Only one ask may be in flight
-at a time; the typical caller pushes the modal, awaits ``ask()``, then
-acts on the returned :class:`CrashChoice`.
+The VM is a thin facade over VMx ``ModalVM[CrashChoice]``. Only one ask may
+be in flight at a time; the typical caller pushes the modal, awaits
+``ask()``, then acts on the returned :class:`CrashChoice`.
 """
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage, RelayCommand
+from vmx import ComponentVM, Message, MessageHub, ModalVM, PropertyChangedMessage, RelayCommand
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -116,7 +114,7 @@ class CrashVM:
 
         self._report: CrashReport = report
         self._is_open: bool = False
-        self._future: asyncio.Future[CrashChoice] | None = None
+        self._modal: ModalVM[CrashChoice] | None = None
         self._disposed: bool = False
 
         self._inner: ComponentVM = (
@@ -188,8 +186,8 @@ class CrashVM:
         if self._disposed:
             return
         self._disposed = True
-        if self._future is not None and not self._future.done():
-            self._future.set_result(CrashChoice.QUIT)
+        if self._modal is not None:
+            self._modal.dispose()
         self._continue_command.dispose()
         self._view_trace_command.dispose()
         self._quit_command.dispose()
@@ -199,25 +197,24 @@ class CrashVM:
 
     async def ask(self) -> CrashChoice:
         """Open the crash modal and await the user's choice."""
-        if self._is_open or self._future is not None:
+        if self._is_open or self._modal is not None:
             raise RuntimeError("crash modal is already open")
         if self._disposed:
             raise RuntimeError("crash modal has been disposed")
-        loop = asyncio.get_running_loop()
-        self._future = loop.create_future()
+        self._modal = ModalVM(CrashChoice.QUIT)
         self._set_open(True)
         try:
-            return await self._future
+            return await self._modal.wait_result()
         finally:
-            self._future = None
+            self._modal = None
             self._set_open(False)
 
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _resolve(self, choice: CrashChoice) -> None:
-        if self._future is None or self._future.done():
+        if self._modal is None or self._modal.is_dismissed:
             return
-        self._future.set_result(choice)
+        self._modal.dismiss(choice)
 
     def _set_open(self, value: bool) -> None:
         if self._is_open == value:

@@ -35,12 +35,12 @@ now delegates score-ranked projection to VMx `ScoredFilteredCompositeVM`.
 `FilteredCompositeVM`, and `FocusCoordinatorVM` now delegates active-slot and
 modal restore state to VMx `DiscriminatorVM`. `JobRunsVM` now delegates its
 forward-only AWS token pagination accumulator and current token to VMx
-`TokenPagedComposition`.
+`TokenPagedComposition`. Result-bearing chrome modal facades now delegate
+result completion and cancellation defaults to VMx `ModalVM`.
 
 The highest-value remaining follow-up refactors are:
 
-1. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
-   `DialogService.present` host.
+1. Add an optional Textual `DialogService.present` host.
 2. Replace safe shared-hub property filters with `when_property_changed`.
 3. Evaluate `AsyncRelayCommand` for command-palette action scheduling.
 
@@ -280,7 +280,7 @@ Notes:
 
 ### 1.4.6. Modal VMs -> `ModalVM` and `DialogService.present`
 
-Current code:
+Prior code:
 
 - `ConfirmationVM`, `ResumeVM`, `FirstRunVM`, `CrashVM`
 - Each owns `asyncio.Future[...]`, `is_open`, result commands, and disposal
@@ -292,12 +292,14 @@ VMx 3.1.0 candidates:
 - `vmx.ModalVM[T]`
 - `DialogService.present(modal_vm)`
 
-Recommended refactor:
+Implemented refactor:
 
-- Short term: compose or subclass `ModalVM[T]` inside each modal VM to replace
-  the repeated future/result/dispose machinery.
-- Medium term: add a Textual dialog host implementing `DialogService.present`
-  and route modal presentation through it.
+- Composed a one-shot `ModalVM[T]` inside each `ask()` call to replace repeated
+  future/result/dispose machinery.
+- Kept existing `is_open` properties, request/report/entry data, command
+  predicates, and hub `PropertyChangedMessage("is_open")` notifications.
+- Medium-term follow-up: add a Textual dialog host implementing
+  `DialogService.present` and route modal presentation through it.
 - Keep existing modal-specific data and commands:
   - `ConfirmationVM` still owns `ConfirmRequest`.
   - `ResumeVM` still owns transfer-journal entries.
@@ -306,10 +308,10 @@ Recommended refactor:
 
 Notes:
 
-- This is not a one-line replacement. `ModalVM` gives the result primitive; the
-  Textual host integration decides how much view-layer code disappears.
-- A good first task is to refactor only `ConfirmationVM`, then apply the pattern
-  to the other three.
+- Shape tests now assert each result-bearing chrome modal uses VMx `ModalVM`
+  while an ask is active.
+- `DialogService.present` remains separate because it affects Textual screen
+  hosting rather than VM result state.
 
 ### 1.4.7. Shared-hub property filtering -> `when_property_changed`
 
@@ -411,13 +413,13 @@ These should each be separate commits with focused tests.
 Implemented:
 
 1. `JobRunsVM` pagination on `TokenPagedComposition`.
+2. Modal result primitives on `ModalVM`.
 
 Remaining:
 
-1. Modal result primitives on `ModalVM`.
-2. Optional Textual `DialogService.present` host.
-3. Optional shared-hub subscription cleanup with `when_property_changed`.
-4. Optional localized `AsyncRelayCommand` adoption.
+1. Optional Textual `DialogService.present` host.
+2. Optional shared-hub subscription cleanup with `when_property_changed`.
+3. Optional localized `AsyncRelayCommand` adoption.
 
 These touch more view/event boundaries and should be planned carefully.
 
@@ -496,18 +498,19 @@ At the end of the adoption series, produce one roll-up table:
 | `FilteredCompositeVM` | 283 | 0 | 283 | -322 | -0.07 pp |
 | `DiscriminatorVM` | 7 | 0 | 7 | +5 | -0.01 pp |
 | `TokenPagedComposition` | -40 | 0 | -40 | +11 | +0.02 pp |
-| `ModalVM` / `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `ModalVM` result primitives | 13 | 0 | 13 | +12 | -0.03 pp |
+| `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `when_property_changed` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `AsyncRelayCommand` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
-| **Total implemented so far** | 443 | 0 | 443 | -455 | -0.13 pp |
+| **Total implemented so far** | 456 | 0 | 456 | -443 | -0.16 pp |
 
 Current headline metric:
 
 ```text
-VMx 3.1.0 adoption has saved 443 implementation LOC so far:
-  443 in viewmodels
+VMx 3.1.0 adoption has saved 456 implementation LOC so far:
+  456 in viewmodels
   0 in views
-with -455 net test LOC and -0.13 coverage-point change.
+with -443 net test LOC and -0.16 coverage-point change.
 ```
 
 Positive implementation LOC saved means the newer VMx version reduced bespoke
@@ -584,6 +587,20 @@ The implemented replacement ledger:
 | Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
 | LOC metric | `vm_deleted=93`, `vm_added=133`, `vm_loc_saved=-40`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=-40`; `test_deleted=0`, `test_added=11`, `test_loc_delta=+11`. |
 | Coverage metric | Before `83.10%`; after `83.12%` over `1244 passed, 9 deselected`; `coverage_delta=+0.02` percentage points. |
+
+| Field | Value |
+|---|---|
+| Replacement ID | `vmx31-modalvm-chrome-results` |
+| VMx 2.x-era implementation | Per-modal `asyncio.Future[...]` result fields in `ConfirmationVM`, `ResumeVM`, `FirstRunVM`, and `CrashVM`. |
+| VMx 3.1.0 primitive | One-shot `vmx.ModalVM[T]` instances with `dismiss()`, `dispose()`, and `wait_result()`. |
+| VM files touched | `src/aws_tui/vm/chrome/confirm_vm.py`, `src/aws_tui/vm/chrome/resume_vm.py`, `src/aws_tui/vm/chrome/first_run_vm.py`, `src/aws_tui/vm/chrome/crash_vm.py`. |
+| View files touched | None. |
+| Tests changed | Added VMx `ModalVM` shape assertions to the existing chrome modal VM tests. |
+| Behavior preserved | Public `ask()` APIs, single-open guard, `is_open`, modal-specific data, command predicates, disposal fallback results, and hub `PropertyChangedMessage("is_open")` notifications. |
+| Behavior intentionally changed | Internal result completion and disposal cancellation now use VMx `ModalVM`; no user-visible behavior change. |
+| Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
+| LOC metric | `vm_deleted=58`, `vm_added=45`, `vm_loc_saved=13`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=13`; `test_deleted=0`, `test_added=12`, `test_loc_delta=+12`. |
+| Coverage metric | Before `83.12%`; after `83.09%` over `1244 passed, 9 deselected`; `coverage_delta=-0.03` percentage points. |
 
 ### 1.6.4. Test coverage accounting
 

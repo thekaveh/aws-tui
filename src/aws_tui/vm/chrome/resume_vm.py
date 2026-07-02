@@ -14,11 +14,10 @@ without pulling boto3 into ``vm/chrome/``.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Sequence
 from enum import StrEnum
 
-from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage, RelayCommand
+from vmx import ComponentVM, Message, MessageHub, ModalVM, PropertyChangedMessage, RelayCommand
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -48,7 +47,7 @@ class ResumeVM:
 
         self._entries: tuple[TransferJournalEntry, ...] = tuple(entries)
         self._is_open: bool = False
-        self._future: asyncio.Future[ResumeAction] | None = None
+        self._modal: ModalVM[ResumeAction] | None = None
         self._disposed: bool = False
 
         self._inner: ComponentVM = (
@@ -122,8 +121,8 @@ class ResumeVM:
         if self._disposed:
             return
         self._disposed = True
-        if self._future is not None and not self._future.done():
-            self._future.set_result(ResumeAction.KEEP_FOR_LATER)
+        if self._modal is not None:
+            self._modal.dispose()
         self._resume_all_command.dispose()
         self._abort_all_command.dispose()
         self._decide_each_command.dispose()
@@ -134,25 +133,24 @@ class ResumeVM:
 
     async def ask(self) -> ResumeAction:
         """Open the modal and return the user's decision."""
-        if self._is_open or self._future is not None:
+        if self._is_open or self._modal is not None:
             raise RuntimeError("resume modal is already open")
         if self._disposed:
             raise RuntimeError("resume modal has been disposed")
-        loop = asyncio.get_running_loop()
-        self._future = loop.create_future()
+        self._modal = ModalVM(ResumeAction.KEEP_FOR_LATER)
         self._set_open(True)
         try:
-            return await self._future
+            return await self._modal.wait_result()
         finally:
-            self._future = None
+            self._modal = None
             self._set_open(False)
 
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _resolve(self, action: ResumeAction) -> None:
-        if self._future is None or self._future.done():
+        if self._modal is None or self._modal.is_dismissed:
             return
-        self._future.set_result(action)
+        self._modal.dismiss(action)
 
     def _set_open(self, value: bool) -> None:
         if self._is_open == value:

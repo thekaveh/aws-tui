@@ -29,9 +29,12 @@ def test_initial_state() -> None:
 
 
 async def test_add_aws_resolves() -> None:
+    from vmx import ModalVM
+
     vm = _build()
     task = asyncio.create_task(vm.ask())
     await asyncio.sleep(0)
+    assert isinstance(vm._modal, ModalVM)
     vm.add_aws_command.execute()
     assert await task is FirstRunAction.ADD_AWS
     vm.dispose()

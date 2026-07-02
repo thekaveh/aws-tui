@@ -17,11 +17,10 @@ root so the layer rules stay clean. The VM resolves an
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
 
-from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage, RelayCommand
+from vmx import ComponentVM, Message, MessageHub, ModalVM, PropertyChangedMessage, RelayCommand
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -88,7 +87,7 @@ class FirstRunVM:
         self._hub: MessageHub[Message] = hub
 
         self._is_open: bool = False
-        self._future: asyncio.Future[FirstRunAction] | None = None
+        self._modal: ModalVM[FirstRunAction] | None = None
         self._disposed: bool = False
 
         self._inner: ComponentVM = (
@@ -145,8 +144,8 @@ class FirstRunVM:
         if self._disposed:
             return
         self._disposed = True
-        if self._future is not None and not self._future.done():
-            self._future.set_result(FirstRunAction.SKIP)
+        if self._modal is not None:
+            self._modal.dispose()
         self._add_aws_command.dispose()
         self._add_s3_compat_command.dispose()
         self._skip_command.dispose()
@@ -156,25 +155,24 @@ class FirstRunVM:
 
     async def ask(self) -> FirstRunAction:
         """Open the modal and return the user's choice."""
-        if self._is_open or self._future is not None:
+        if self._is_open or self._modal is not None:
             raise RuntimeError("first-run modal is already open")
         if self._disposed:
             raise RuntimeError("first-run modal has been disposed")
-        loop = asyncio.get_running_loop()
-        self._future = loop.create_future()
+        self._modal = ModalVM(FirstRunAction.SKIP)
         self._set_open(True)
         try:
-            return await self._future
+            return await self._modal.wait_result()
         finally:
-            self._future = None
+            self._modal = None
             self._set_open(False)
 
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _resolve(self, action: FirstRunAction) -> None:
-        if self._future is None or self._future.done():
+        if self._modal is None or self._modal.is_dismissed:
             return
-        self._future.set_result(action)
+        self._modal.dismiss(action)
 
     def _set_open(self, value: bool) -> None:
         if self._is_open == value:

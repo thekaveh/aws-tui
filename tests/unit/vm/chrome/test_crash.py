@@ -50,10 +50,13 @@ def test_initial_state() -> None:
 
 
 async def test_ask_resolves_quit() -> None:
+    from vmx import ModalVM
+
     vm = _build()
     task = asyncio.create_task(vm.ask())
     await asyncio.sleep(0)
     assert vm.is_open
+    assert isinstance(vm._modal, ModalVM)
     vm.quit_command.execute()
     result = await task
     assert result is CrashChoice.QUIT
