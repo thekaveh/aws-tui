@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -114,3 +115,26 @@ def test_close_is_idempotent(tmp_path: Path) -> None:
     s.info("hi")
     s.close()
     s.close()  # second close must not raise
+
+
+def test_capture_stdlib_aws_tui_warnings_when_enabled(tmp_path: Path) -> None:
+    s = LogSink(base_dir=tmp_path, capture_stdlib=True)
+    try:
+        logging.getLogger("aws_tui.infra.aws_session").warning(
+            "aws_session.aclose_failed",
+            extra={
+                "error": "secret_access_key=SHOULD_NOT_LEAK",
+                "error_type": "RuntimeError",
+            },
+        )
+        s.flush()
+    finally:
+        s.close()
+
+    raw = (tmp_path / "aws-tui.log").read_text(encoding="utf-8")
+    assert "SHOULD_NOT_LEAK" not in raw
+    lines = _read_log_lines(tmp_path)
+    assert lines[-1]["event"] == "aws_session.aclose_failed"
+    assert lines[-1]["level"] == "WARNING"
+    assert lines[-1]["error"] == "secret_access_key=[REDACTED]"
+    assert lines[-1]["error_type"] == "RuntimeError"

@@ -25,6 +25,9 @@ _LOGGER_NAME: Final[str] = "aws_tui"
 _FILE_NAME: Final[str] = "aws-tui.log"
 _DEFAULT_MAX_BYTES: Final[int] = 5 * 1024 * 1024  # 5 MiB
 _DEFAULT_BACKUP_COUNT: Final[int] = 5
+_STANDARD_LOG_RECORD_ATTRS: Final[frozenset[str]] = frozenset(
+    logging.LogRecord("", 0, "", 0, "", (), None).__dict__
+) | {"asctime", "message"}
 
 
 class _JsonLineFormatter(logging.Formatter):
@@ -44,6 +47,14 @@ class _JsonLineFormatter(logging.Formatter):
         extra = getattr(record, "json_fields", None)
         if isinstance(extra, dict):
             payload.update(redact_mapping(extra))
+        else:
+            stdlib_extra = {
+                key: value
+                for key, value in record.__dict__.items()
+                if key not in _STANDARD_LOG_RECORD_ATTRS
+            }
+            if stdlib_extra:
+                payload.update(redact_mapping(stdlib_extra))
         return json.dumps(payload, default=str, separators=(",", ":"))
 
 
@@ -99,6 +110,7 @@ class LogSink:
         base_dir: Path | None = None,
         max_bytes: int = _DEFAULT_MAX_BYTES,
         backup_count: int = _DEFAULT_BACKUP_COUNT,
+        capture_stdlib: bool = False,
     ) -> None:
         if base_dir is None:
             from aws_tui.infra.paths import cache_home
@@ -137,6 +149,16 @@ class LogSink:
         self._logger.setLevel(logging.DEBUG)
         self._logger.propagate = False
         self._logger.addHandler(self._handler)
+        self._stdlib_logger: logging.Logger | None = None
+        self._stdlib_previous_level: int | None = None
+        self._stdlib_previous_propagate: bool | None = None
+        if capture_stdlib:
+            self._stdlib_logger = logging.getLogger(_LOGGER_NAME)
+            self._stdlib_previous_level = self._stdlib_logger.level
+            self._stdlib_previous_propagate = self._stdlib_logger.propagate
+            self._stdlib_logger.setLevel(logging.DEBUG)
+            self._stdlib_logger.propagate = False
+            self._stdlib_logger.addHandler(self._handler)
         self._closed: bool = False
 
     @property
@@ -173,6 +195,12 @@ class LogSink:
             return
         self._handler.flush()
         self._logger.removeHandler(self._handler)
+        if self._stdlib_logger is not None:
+            self._stdlib_logger.removeHandler(self._handler)
+            if self._stdlib_previous_level is not None:
+                self._stdlib_logger.setLevel(self._stdlib_previous_level)
+            if self._stdlib_previous_propagate is not None:
+                self._stdlib_logger.propagate = self._stdlib_previous_propagate
         self._handler.close()
         # Release the logger from the module-level registry too.
         # ``Logger.manager.loggerDict`` holds a STRONG reference per

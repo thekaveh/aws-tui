@@ -28,7 +28,7 @@ will be set at cut time.
 - **NavMenu ENTER opens the service** (PR #101). Pressing ``Enter``
   on a service row in the rail now shifts focus to that service's
   default pane — S3 → LEFT pane, EMR → Job Runs, Settings → first
-  section's ``CollapsibleTitle``. ``NavMenu.action_commit`` drops
+  section's first focusable control. ``NavMenu.action_commit`` drops
   rail focus before calling the new ``App.focus_active_service_pane``;
   page-side auto-focus is gated on "is NavMenu still focused?" so
   arrow-walking the rail still keeps focus there (only ``Enter``
@@ -105,6 +105,20 @@ will be set at cut time.
 - **EMR Serverless service package facade now matches S3.**
   `from aws_tui.services.emr_serverless import EmrServerlessService`
   works and is pinned by an import-contract test.
+- **VMx public-surface adoption cleanup.** Focus coordination no longer
+  clears VMx's private modal stack, ContentHost setup tasks are cancelled
+  on teardown, and EMR Job Runs pagination resets by replacing the VMx
+  pager instead of mutating its private token/item storage.
+- **App stdlib warnings now land in the JSON log sink.** The composed app
+  opts into an `aws_tui.*` logging bridge so config/keymap fallback,
+  resume-abort, first-run, and AWS client-shutdown warnings are captured
+  with the same structured redaction as direct `LogSink` calls.
+- **Settings focus avoids private Textual imports.** SettingsView now
+  locates the first public focusable child in the Connections section
+  instead of importing Textual's private collapsible title widget.
+- **Help modal key coverage caught up with shipped bindings.** The modal
+  now lists Settings, theme cycling, delete, extend-selection, and pane
+  source-cycling shortcuts that were already present in the app.
 
 ### 1.1.4. Docs
 
@@ -127,6 +141,8 @@ will be set at cut time.
   standard Markdown links instead of wiki-style links.
 - The consumed-contract ledger now records the EMR Serverless
   botocore contract and immutable GitHub Actions workflow refs.
+- `docs/superpowers/plans/` now has a numbered index of plan documents,
+  and recent VMx adoption plan/spec headings are hierarchically numbered.
 
 ### 1.1.5. Build
 
@@ -145,6 +161,8 @@ will be set at cut time.
 - TestPyPI release dry-run docs now download only the aws-tui rehearsal
   artifact from TestPyPI and resolve dependencies from real PyPI during
   the local install check.
+- Pre-commit now includes ShellCheck for repository shell scripts via
+  `shellcheck-py`, matching the maintenance verification path.
 
 ## 1.2. [0.8.0] - 2026-06-27
 

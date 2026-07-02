@@ -234,7 +234,7 @@ Numbered hierarchically for navigation.
    9. [VMx toolkit adoption](docs/superpowers/specs/2026-06-28-vmx-toolkit-adoption-design.md) — historical case-by-case retrofit of the VM layer to use VMx 2.6.1-era `CompositeVM` / `FormVM` / `IDialogService` primitives; records the analytical mistakes the design review went through (§1.3) so future VMx migration work does not repeat them.
    10. [VMx vNext upstream asks](docs/superpowers/specs/2026-06-28-vmx-upstream-vnext-asks.md) — feedback report for VMx maintainers, derived from the aws-tui toolkit-adoption review and focused on primitives that would reduce custom wrapper code.
    11. [VMx 3.1.0 adoption audit](docs/superpowers/specs/2026-07-02-vmx-3-1-adoption-audit.md) — current VMx 3.1.0 bump report mapping new upstream primitives (`TokenPagedComposition`, `FilteredCompositeVM`, `ScoredFilteredCompositeVM`, `FormVM` validators, `ModalVM`, `DiscriminatorVM`) to aws-tui VM/view refactor candidates.
-   12. [Implementation plans (M0–M6 and post-tag specs)](docs/superpowers/plans/) — per-milestone breakdowns + per-spec implementation plans; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
+   12. [Implementation plan index](docs/superpowers/plans/README.md) — per-milestone and post-tag implementation plans with one-line descriptions; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
    2. [Release procedure](docs/RELEASING.md) — cut-a-release checklist: version bump, CHANGELOG, tag, publish, Homebrew bump.

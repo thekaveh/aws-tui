@@ -7,6 +7,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.emr_serverless import JobRunState
+from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm.emr_serverless.job_runs_vm import _ACTIVE_STATES, JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
@@ -243,6 +244,53 @@ async def test_set_application_resets_paging_state() -> None:
     vm.set_application("a2")
     assert vm.has_more is False
     assert vm.runs == ()
+
+
+@pytest.mark.asyncio
+async def test_set_application_replaces_pager_instead_of_mutating_private_storage() -> None:
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_application(app_id="a2", name="other")
+    fake.page_size = 1
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
+    vm.set_application("a1")
+    await vm.refresh()
+    old_pager = vm._pager
+
+    vm.set_application("a2")
+
+    assert vm._pager is not old_pager
+    assert vm.has_more is False
+    assert vm.runs == ()
+
+
+@pytest.mark.asyncio
+async def test_load_more_error_suppresses_has_more_without_mutating_pager_token() -> None:
+    class _PagingErrorClient(_InMemoryEmr):
+        async def list_job_runs_page(self, *args: object, **kwargs: object) -> object:
+            if kwargs.get("start_token") is not None:
+                raise ProviderError("next page failed")
+            return await super().list_job_runs_page(*args, **kwargs)  # type: ignore[arg-type]
+
+    fake = _PagingErrorClient()
+    hub: MessageHub[Message] = MessageHub()
+    vm = JobRunsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    fake.add_application(app_id="a1", name="etl")
+    fake.page_size = 1
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
+    vm.set_application("a1")
+    await vm.refresh()
+    token_before = vm._pager.current_token
+    assert token_before is not None
+
+    await vm.load_more()
+
+    assert vm._pager.current_token == token_before
+    assert vm.has_more is False
+    assert vm.error_text == "next page failed"
 
 
 # -------------------- Phase 2: composite-backed selection (§4.2.1) --------------------

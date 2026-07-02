@@ -168,7 +168,7 @@ def build_app_context(
     if cache_dir is None:
         cache_dir = cache_home()
 
-    log_sink = LogSink(base_dir=cache_dir / "log")
+    log_sink = LogSink(base_dir=cache_dir / "log", capture_stdlib=True)
     # read_only=demo: in demo mode all write methods on ConfigStore are
     # silent no-ops so the user's real config.toml is never mutated.
     config_store = ConfigStore(path=config_dir / "config.toml", read_only=demo)

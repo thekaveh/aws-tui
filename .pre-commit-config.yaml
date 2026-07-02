@@ -59,6 +59,12 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: shellcheck
+        name: shellcheck
+        entry: ./scripts/run-with-uv.sh shellcheck
+        language: system
+        files: ^scripts/.*\.sh$
+
   - repo: https://github.com/ComPWA/taplo-pre-commit
     rev: ade0f95ddcf661c697d4670d2cfcbe95d0048a0a # v0.9.3
     hooks:

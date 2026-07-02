@@ -88,9 +88,16 @@ class HelpModal(ModalScreen[None]):
 
                 yield Static("File operations", classes="help-section")
                 yield self._key_row("c", "copy selected entry to the other pane")
+                yield self._key_row("d", "delete selected entry")
+                yield self._key_row("Shift+↑ / ↓", "extend selection")
+
+                yield Static("Connections", classes="help-section")
+                yield self._key_row("Shift+S", "cycle the focused pane source")
 
                 yield Static("App", classes="help-section")
+                yield self._key_row(",", "open Settings")
                 yield self._key_row("t", "open the theme picker (keyboard-navigable)")
+                yield self._key_row("T", "cycle theme")
                 yield self._key_row("?  or  :", "this help overlay")
                 yield self._key_row("q / Ctrl+C", "quit")
 

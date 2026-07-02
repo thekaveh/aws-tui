@@ -193,6 +193,26 @@ def test_set_non_modal_while_modal_clears_saved_slot() -> None:
     vm.dispose()
 
 
+def test_set_non_modal_while_modal_uses_public_discriminator_api() -> None:
+    """The facade owns restore semantics; it must not mutate VMx internals."""
+
+    class _PrivateModalStackSentinel:
+        def clear(self) -> None:
+            raise AssertionError("FocusCoordinatorVM must not clear VMx private modal stack")
+
+    vm = _make()
+    vm.set_focused_slot(FocusSlot.S3_LEFT)
+    vm.modal_open()
+    vm._focus_discriminator._modal_stack = _PrivateModalStackSentinel()
+    try:
+        vm.set_focused_slot(FocusSlot.EMR_RUNS)
+        assert vm.focused_slot is FocusSlot.EMR_RUNS
+        vm.modal_close()
+        assert vm.focused_slot is FocusSlot.EMR_RUNS
+    finally:
+        vm.dispose()
+
+
 # -------------------- hub propagation --------------------
 
 

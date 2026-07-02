@@ -394,7 +394,7 @@ aws-tui impact:
 
 ## 1.5. Prioritized implementation backlog
 
-### Phase A — compatibility and report, already in this branch
+### 1.5.1. Phase A — compatibility and report, already in this branch
 
 - Bump VMx to `>=3.1.0,<4.0.0`.
 - Fix removed alias usage.
@@ -405,14 +405,14 @@ aws-tui impact:
 - Replace `CommandPaletteVM`'s bespoke score/rank projection with VMx
   `ScoredFilteredCompositeVM` and record the replacement metric ledger.
 
-### Phase B — contained VM-layer swaps, implemented
+### 1.5.2. Phase B — contained VM-layer swaps, implemented
 
 1. `PaneVM` backed by VMx `FilteredCompositeVM`.
 2. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
 
 These should each be separate commits with focused tests.
 
-### Phase C — higher-coupling flow refactors, partially implemented
+### 1.5.3. Phase C — higher-coupling flow refactors, partially implemented
 
 Implemented:
 

@@ -70,6 +70,7 @@ class FocusCoordinatorVM:
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._focus_discriminator: DiscriminatorVM[FocusSlot] = DiscriminatorVM(initial)
+        self._modal_restore_stack: list[FocusSlot] = []
         self._focus_sub: DisposableBase = self._focus_discriminator.active_changed.subscribe(
             on_next=self._emit_changed
         )
@@ -120,11 +121,9 @@ class FocusCoordinatorVM:
             return
         if self.focused_slot is FocusSlot.MODAL:
             # Implicit close — the caller is overriding the saved slot.
-            # VMx 3.1 exposes modal push/pop, but not "replace modal
-            # with this explicit active key"; clearing the restore
-            # stack preserves this facade's pre-existing no-stale-restore
-            # contract for set_focused_slot(non_modal) while modal.
-            self._focus_discriminator._modal_stack.clear()
+            # The facade owns restore semantics so VMx internals remain
+            # replaceable across compatible VMx releases.
+            self._modal_restore_stack.clear()
         if self.focused_slot is slot:
             return
         self._focus_discriminator.set_active_key(slot)
@@ -155,14 +154,18 @@ class FocusCoordinatorVM:
         slot so :meth:`modal_close` can restore it."""
         if self.focused_slot is FocusSlot.MODAL:
             return
-        self._focus_discriminator.modal_open(FocusSlot.MODAL)
+        self._modal_restore_stack.append(self.focused_slot)
+        self._focus_discriminator.set_active_key(FocusSlot.MODAL)
 
     def modal_close(self) -> None:
         """Pop the MODAL precedence slot. Restores the prior
         non-modal slot. No-op when no modal is open."""
         if self.focused_slot is not FocusSlot.MODAL:
             return
-        self._focus_discriminator.modal_close()
+        restore = (
+            self._modal_restore_stack.pop() if self._modal_restore_stack else FocusSlot.NAV_MENU
+        )
+        self._focus_discriminator.set_active_key(restore)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -177,6 +180,7 @@ class FocusCoordinatorVM:
             return
         self._disposed = True
         self._focus_sub.dispose()
+        self._modal_restore_stack.clear()
         self._focus_discriminator.dispose()
         self._inner.dispose()
 
