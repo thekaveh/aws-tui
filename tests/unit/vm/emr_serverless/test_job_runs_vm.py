@@ -39,6 +39,17 @@ async def test_set_application_loads_runs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_job_runs_uses_vmx_token_pager() -> None:
+    from vmx import TokenPagedComposition
+
+    vm, _fake = _make()
+    try:
+        assert isinstance(vm._pager, TokenPagedComposition)
+    finally:
+        vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_state_filter_drops_runs_not_matching() -> None:
     vm, fake = _make()
     _seed_runs(fake, "a1")

@@ -33,13 +33,16 @@ validation and approve gating directly to VMx `FormVM`, and the command palette
 now delegates score-ranked projection to VMx `ScoredFilteredCompositeVM`.
 `PaneVM` also now delegates visible-entry projection to VMx
 `FilteredCompositeVM`, and `FocusCoordinatorVM` now delegates active-slot and
-modal restore state to VMx `DiscriminatorVM`.
+modal restore state to VMx `DiscriminatorVM`. `JobRunsVM` now delegates its
+forward-only AWS token pagination accumulator and current token to VMx
+`TokenPagedComposition`.
 
 The highest-value remaining follow-up refactors are:
 
-1. Move `JobRunsVM` pagination state onto `TokenPagedComposition`.
-2. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
+1. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
    `DialogService.present` host.
+2. Replace safe shared-hub property filters with `when_property_changed`.
+3. Evaluate `AsyncRelayCommand` for command-palette action scheduling.
 
 ---
 
@@ -104,15 +107,16 @@ VMx 3.1.0 candidate:
   `refresh_command`, `on_collection_changed`, `on_property_changed`,
   `pages_equal`, and optional `auto_construct_on_add`.
 
-Recommended refactor:
+Implemented refactor:
 
-- Replace `_items` and `_next_token` with a token pager over
-  `JobRunItemVM` or `ComponentVMOf[JobRunSummary]`.
+- Replaced `_items` and `_next_token` storage with
+  `TokenPagedComposition[JobRunItemVM, str]`.
 - Keep `CompositeVM.current` as the selection source of truth.
-- Keep the target-identity guards from current `refresh()` / `load_more()`;
-  the pager fetch closure must capture `(application_id, token)` and drop stale
-  results when the application changes.
-- Use `pages_equal` to preserve the existing first-page dedup-on-set behavior.
+- Kept the target-identity guards from `refresh()` / `load_more()`; the pager
+  fetch closure drops stale results when application or token lineage changes.
+- Used `pages_equal` to preserve first-page dedup-on-set behavior, including
+  the aws-tui rule that a refresh after loading extra pages collapses back to
+  the first page rather than retaining stale appended pages.
 - Surface `has_more` from the pager.
 
 Notes:
@@ -121,12 +125,9 @@ Notes:
   pagination ask from the prior spec.
 - Do not blindly expose `TokenPagedComposition.load_more_command` to the view
   until the existing stale-target and pane-state transitions are preserved.
-
-Estimated cleanup:
-
-- Moderate source reduction in `JobRunsVM`.
-- Tests should move from asserting `_next_token` side effects toward asserting
-  pager-backed `has_more`, stale-target guards, and selection preservation.
+- The implementation is intentionally not a LOC reduction: preserving aws-tui's
+  stale app/token guards and CompositeVM selection bridge around VMx's simpler
+  pager costs 40 net VM LOC.
 
 ### 1.4.2. Local `FilteredCompositeVM` -> VMx `FilteredCompositeVM`
 
@@ -405,13 +406,18 @@ aws-tui impact:
 
 These should each be separate commits with focused tests.
 
-### Phase C — higher-coupling flow refactors
+### Phase C — higher-coupling flow refactors, partially implemented
+
+Implemented:
 
 1. `JobRunsVM` pagination on `TokenPagedComposition`.
-2. Modal result primitives on `ModalVM`.
-3. Optional Textual `DialogService.present` host.
-4. Optional shared-hub subscription cleanup with `when_property_changed`.
-5. Optional localized `AsyncRelayCommand` adoption.
+
+Remaining:
+
+1. Modal result primitives on `ModalVM`.
+2. Optional Textual `DialogService.present` host.
+3. Optional shared-hub subscription cleanup with `when_property_changed`.
+4. Optional localized `AsyncRelayCommand` adoption.
 
 These touch more view/event boundaries and should be planned carefully.
 
@@ -489,19 +495,19 @@ At the end of the adoption series, produce one roll-up table:
 | `ScoredFilteredCompositeVM` | 9 | 0 | 9 | +22 | +0.01 pp |
 | `FilteredCompositeVM` | 283 | 0 | 283 | -322 | -0.07 pp |
 | `DiscriminatorVM` | 7 | 0 | 7 | +5 | -0.01 pp |
-| `TokenPagedComposition` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `TokenPagedComposition` | -40 | 0 | -40 | +11 | +0.02 pp |
 | `ModalVM` / `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `when_property_changed` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `AsyncRelayCommand` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
-| **Total implemented so far** | 483 | 0 | 483 | -466 | -0.15 pp |
+| **Total implemented so far** | 443 | 0 | 443 | -455 | -0.13 pp |
 
 Current headline metric:
 
 ```text
-VMx 3.1.0 adoption has saved 483 implementation LOC so far:
-  483 in viewmodels
+VMx 3.1.0 adoption has saved 443 implementation LOC so far:
+  443 in viewmodels
   0 in views
-with -466 net test LOC and -0.15 coverage-point change.
+with -455 net test LOC and -0.13 coverage-point change.
 ```
 
 Positive implementation LOC saved means the newer VMx version reduced bespoke
@@ -564,6 +570,20 @@ The implemented replacement ledger:
 | Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
 | LOC metric | `vm_deleted=28`, `vm_added=21`, `vm_loc_saved=7`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=7`; `test_deleted=8`, `test_added=13`, `test_loc_delta=+5`. |
 | Coverage metric | Before `83.11%`; after `83.10%` over `1243 passed, 9 deselected`; `coverage_delta=-0.01` percentage points. |
+
+| Field | Value |
+|---|---|
+| Replacement ID | `vmx31-token-paged-job-runs` |
+| VMx 2.x-era implementation | Manual `JobRunsVM` `_items` accumulator and `_next_token` field with custom `refresh()` / `load_more()` token mutation. |
+| VMx 3.1.0 primitive | `vmx.TokenPagedComposition[JobRunItemVM, str]` with `items`, `current_token`, `refresh_command`, `load_more_command`, and `pages_equal`. |
+| VM files touched | `src/aws_tui/vm/emr_serverless/job_runs_vm.py`. |
+| View files touched | None. |
+| Tests changed | Added VMx composition shape coverage in `tests/unit/vm/emr_serverless/test_job_runs_vm.py`; existing pagination, dedup, stale-target, selection, UI, and acceptance tests were preserved. |
+| Behavior preserved | Public `runs`, `has_more`, `selected_id`, state-filtering, refresh dedup-on-set, selection restoration/clear, load-more append behavior, load-more error handling without destructive reset, and stale application/token response dropping. |
+| Behavior intentionally changed | Internal pagination accumulator and current token now live in VMx `TokenPagedComposition`; no user-visible behavior change. |
+| Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
+| LOC metric | `vm_deleted=93`, `vm_added=133`, `vm_loc_saved=-40`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=-40`; `test_deleted=0`, `test_added=11`, `test_loc_delta=+11`. |
+| Coverage metric | Before `83.10%`; after `83.12%` over `1244 passed, 9 deselected`; `coverage_delta=+0.02` percentage points. |
 
 ### 1.6.4. Test coverage accounting
 
