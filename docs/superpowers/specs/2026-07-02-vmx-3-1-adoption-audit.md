@@ -31,14 +31,14 @@ This branch bumps the dependency, applies import/test hygiene, and implements
 the first contained VMx 3.1.0 replacements: S3 settings forms now delegate form
 validation and approve gating directly to VMx `FormVM`, and the command palette
 now delegates score-ranked projection to VMx `ScoredFilteredCompositeVM`.
+`PaneVM` also now delegates visible-entry projection to VMx
+`FilteredCompositeVM`.
 
 The highest-value remaining follow-up refactors are:
 
-1. Replace `PaneVM`'s local `FilteredCompositeVM` with VMx 3.1.0
-   `FilteredCompositeVM`, after pinning cursor movement semantics.
-2. Move `JobRunsVM` pagination state onto `TokenPagedComposition`.
-3. Rebase `FocusCoordinatorVM` on `DiscriminatorVM`.
-4. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
+1. Move `JobRunsVM` pagination state onto `TokenPagedComposition`.
+2. Rebase `FocusCoordinatorVM` on `DiscriminatorVM`.
+3. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
    `DialogService.present` host.
 
 ---
@@ -130,7 +130,7 @@ Estimated cleanup:
 
 ### 1.4.2. Local `FilteredCompositeVM` -> VMx `FilteredCompositeVM`
 
-Current code:
+Prior code:
 
 - `src/aws_tui/vm/_composition/filtered_composite_vm.py`
 - Used by `PaneVM`.
@@ -146,27 +146,22 @@ VMx 3.1.0 candidate:
 - Provides `visible`, `visible_count`, `current`, `set_predicate`,
   `move_to_next_visible`, `move_to_previous_visible`, `on_changed`, `dispose`.
 
-Recommended refactor:
+Implemented refactor:
 
 - Replace the aws-tui helper import with `from vmx import FilteredCompositeVM,
   FilteredCursorPolicy`.
 - Update `PaneVM` to pass `FilteredCursorPolicy.SNAP_TO_FIRST`.
-- Decide whether Pane cursor movement must keep clamping semantics, wrapping
-  semantics, or delegate to VMx movement:
-  - `PaneVM._move_cursor()` currently clamps by index.
-  - aws-tui local `FilteredCompositeVM` movement wraps, but `PaneVM` does not
-    currently call those movement methods.
-  - VMx 3.1.0 movement clamps.
+- Preserved `PaneVM._move_cursor()` as the public cursor movement source, so
+  the replacement does not change pane navigation semantics.
 - Keep `PaneVM`'s filtered-position index bridge if the view public contract
   remains `cursor_index: int`.
 
 Notes:
 
-- This can delete the local helper and most of
-  `tests/unit/vm/_composition/test_filtered_composite_vm.py` after equivalent
-  consumer tests are redirected to VMx behavior.
-- The upstream primitive is close enough that this should be a contained
-  follow-up task.
+- Deleted the local helper package and implementation-specific helper tests.
+- Added a consumer shape test that pins `PaneVM` to VMx
+  `FilteredCompositeVM`.
+- Focused pane and pane-contract tests preserve filter/cursor behavior.
 
 ### 1.4.3. `CommandPaletteVM` scoring -> `ScoredFilteredCompositeVM`
 
@@ -402,8 +397,7 @@ aws-tui impact:
 
 ### Phase B — contained VM-layer swaps
 
-1. `PaneVM` backed by VMx `FilteredCompositeVM`.
-2. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
+1. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
 
 These should each be separate commits with focused tests.
 
@@ -489,21 +483,21 @@ At the end of the adoption series, produce one roll-up table:
 |---|---:|---:|---:|---:|---:|
 | `FormVM` validators | 184 | 0 | 184 | -171 | -0.08 pp |
 | `ScoredFilteredCompositeVM` | 9 | 0 | 9 | +22 | +0.01 pp |
-| `FilteredCompositeVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `FilteredCompositeVM` | 283 | 0 | 283 | -322 | -0.07 pp |
 | `DiscriminatorVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `TokenPagedComposition` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `ModalVM` / `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `when_property_changed` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `AsyncRelayCommand` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
-| **Total implemented so far** | 193 | 0 | 193 | -149 | -0.07 pp |
+| **Total implemented so far** | 476 | 0 | 476 | -471 | -0.14 pp |
 
 Current headline metric:
 
 ```text
-VMx 3.1.0 adoption has saved 193 implementation LOC so far:
-  193 in viewmodels
+VMx 3.1.0 adoption has saved 476 implementation LOC so far:
+  476 in viewmodels
   0 in views
-with -149 net test LOC and -0.07 coverage-point change.
+with -471 net test LOC and -0.14 coverage-point change.
 ```
 
 Positive implementation LOC saved means the newer VMx version reduced bespoke
@@ -538,6 +532,20 @@ The implemented replacement ledger:
 | Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
 | LOC metric | `vm_deleted=26`, `vm_added=17`, `vm_loc_saved=9`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=9`; `test_deleted=0`, `test_added=22`, `test_loc_delta=+22`. |
 | Coverage metric | Before `83.17%`; after `83.18%` over `1264 passed, 9 deselected`; `coverage_delta=+0.01` percentage points. |
+
+| Field | Value |
+|---|---|
+| Replacement ID | `vmx31-filtered-composite-pane` |
+| VMx 2.x-era implementation | Local `FilteredCompositeVM` in `src/aws_tui/vm/_composition/filtered_composite_vm.py`, used only by `PaneVM`. |
+| VMx 3.1.0 primitive | `vmx.FilteredCompositeVM[ComponentVMOf[EntryState]]` with `FilteredCursorPolicy.SNAP_TO_FIRST`. |
+| VM files touched | `src/aws_tui/vm/file_manager/pane_vm.py`; deleted `src/aws_tui/vm/_composition/filtered_composite_vm.py` and `src/aws_tui/vm/_composition/__init__.py`. |
+| View files touched | None. |
+| Tests changed | Deleted implementation-only `tests/unit/vm/_composition/test_filtered_composite_vm.py`; added VMx composition shape coverage in `tests/unit/vm/file_manager/test_pane_vm.py`. |
+| Behavior preserved | Public pane `filtered_entries`, `cursor_index`, filter text behavior, selection bridge, current-entry projection, clamp-style cursor movement, and pane viewmodel projection. |
+| Behavior intentionally changed | Internal visible-entry projection now uses VMx `FilteredCompositeVM`; no user-visible behavior change. |
+| Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
+| LOC metric | `vm_deleted=293`, `vm_added=10`, `vm_loc_saved=283`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=283`; `test_deleted=334`, `test_added=12`, `test_loc_delta=-322`. |
+| Coverage metric | Before `83.18%`; after `83.11%` over `1242 passed, 9 deselected`; `coverage_delta=-0.07` percentage points. |
 
 ### 1.6.4. Test coverage accounting
 

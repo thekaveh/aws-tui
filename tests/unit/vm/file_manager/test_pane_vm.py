@@ -306,6 +306,18 @@ async def test_pane_filter_restricts_cursor_navigation() -> None:
     pane.dispose()
 
 
+@pytest.mark.asyncio
+async def test_pane_uses_vmx_filtered_composite() -> None:
+    from vmx import FilteredCompositeVM
+
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    try:
+        assert isinstance(pane._filtered_composite, FilteredCompositeVM)
+    finally:
+        pane.dispose()
+
+
 class _UnreachableFS:
     async def list(self, _path: PathRef) -> list[FileEntry]:
         raise ProviderUnreachableError("dns failure")

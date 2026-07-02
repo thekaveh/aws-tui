@@ -24,6 +24,8 @@ from enum import StrEnum
 from vmx import (
     ComponentVMOf,
     CompositeVM,
+    FilteredCompositeVM,
+    FilteredCursorPolicy,
     Message,
     MessageHub,
     PropertyChangedMessage,
@@ -45,7 +47,6 @@ from aws_tui.domain.filesystem import (
     ProviderUnreachableError,
 )
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._composition import FilteredCompositeVM
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
 
 #: Module-level singleton for the default initial path (root).
@@ -246,7 +247,11 @@ class PaneVM:
         # except inside that subscription. The composite is NOT
         # exposed in the public surface.
         self._filtered_composite: FilteredCompositeVM[ComponentVMOf[EntryState]] = (
-            FilteredCompositeVM(self._inner, predicate=self._filter_predicate)
+            FilteredCompositeVM(
+                self._inner,
+                predicate=self._filter_predicate,
+                cursor_policy=FilteredCursorPolicy.SNAP_TO_FIRST,
+            )
         )
         # Single source of truth: subscription re-derives ``_filtered``
         # whenever the composite's visible set changes (predicate or
@@ -1001,12 +1006,9 @@ class PaneVM:
         # Single source of truth: nudge the FilteredCompositeVM; its
         # ``on_changed`` subscription wired in __init__ re-derives
         # ``_filtered`` via _sync_filtered_from_composite. Pass a
-        # FRESH closure each call because set_predicate is
-        # identity-checked on the predicate object — passing the
-        # bound method (always the same identity) would silently
-        # no-op when the filter_text changes. The fresh closure
-        # guarantees ``set_predicate`` always fires ``on_changed``,
-        # so no follow-up sync is needed.
+        # FRESH closure each call to avoid retaining a stale filter
+        # predicate if the VMx implementation ever optimizes
+        # same-object predicate updates.
         def _live_predicate(inner: ComponentVMOf[EntryState]) -> bool:
             return self._filter_predicate(inner)
 
