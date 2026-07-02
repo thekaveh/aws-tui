@@ -37,6 +37,16 @@ def test_initial_state() -> None:
     vm.dispose()
 
 
+def test_palette_uses_vmx_scored_filtered_composite() -> None:
+    from vmx import ScoredFilteredCompositeVM
+
+    vm = _build()
+    try:
+        assert isinstance(vm._scored_filter, ScoredFilteredCompositeVM)
+    finally:
+        vm.dispose()
+
+
 def test_register_entries_and_filter_by_substring() -> None:
     vm = _build()
     vm.register_entry(_entry("e1", "empty bucket"), lambda: None)

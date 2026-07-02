@@ -94,6 +94,18 @@ def test_focus_coordinator_vm_composes_componentvm_internally() -> None:
     vm.dispose()
 
 
+def test_command_palette_vm_composes_scored_filter_internally() -> None:
+    from vmx import ScoredFilteredCompositeVM
+
+    from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
+
+    vm = CommandPaletteVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    assert hasattr(vm, "_scored_filter")
+    assert isinstance(vm._scored_filter, ScoredFilteredCompositeVM)
+    assert not any("scored_filter" in name for name in dir(vm) if not name.startswith("_"))
+    vm.dispose()
+
+
 # -------------------- Settings VMs --------------------
 
 

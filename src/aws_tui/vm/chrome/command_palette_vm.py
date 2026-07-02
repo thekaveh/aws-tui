@@ -9,20 +9,9 @@ to keep the dependency footprint tiny. The view layer reads
 
 Round-3 directive (spec §9.bis.11): the registry composes
 :class:`vmx.CompositeVM` over per-entry :class:`PaletteEntryVM`
-facades. ``_recompute_filtered`` walks that composite directly to
-produce ``filtered_entries``; it is invoked imperatively from every
-mutation path (``filter_text`` setter, ``register_entry``,
-``unregister_entry``) rather than subscribed to
-``on_collection_changed`` because those are the only paths that
-mutate the composite. Neither the inner ``CompositeVM`` nor the
-scoring machinery is exposed in the public surface — consumers bind
-to ``filter_text`` / ``filtered_entries`` / ``selected_index``.
-
-The rank-by-score inlined here is what spec §9.bis.3 calls
-``ScoredFilteredCompositeVM`` — it is NOT a thin layer on top of
-``FilteredCompositeVM`` (the palette is the only consumer today, so
-the scored variant has not been lifted into ``vm/_composition/``).
-A second scored-filter consumer would justify promoting it.
+facades. VMx ``ScoredFilteredCompositeVM`` owns the hidden/ranked visible
+projection; the facade still exposes the app-specific
+``filter_text`` / ``filtered_entries`` / ``selected_index`` surface.
 """
 
 from __future__ import annotations
@@ -42,6 +31,7 @@ from vmx import (
     PropertyChangedMessage,
     RelayCommand,
     RelayCommandOf,
+    ScoredFilteredCompositeVM,
 )
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
@@ -201,6 +191,9 @@ class CommandPaletteVM:
         )
 
         self._filter_text: str = ""
+        self._scored_filter: ScoredFilteredCompositeVM[ComponentVMOf[PaletteEntry]] = (
+            ScoredFilteredCompositeVM(self._inner_registry, scorer=self._score_for_vmx)
+        )
         self._filtered: tuple[PaletteEntry, ...] = ()
         self._selected_index: int = 0
         self._is_open: bool = False
@@ -418,19 +411,17 @@ class CommandPaletteVM:
     def _initial_children(self) -> tuple[ComponentVMOf[PaletteEntry], ...]:
         return tuple(item.inner for item in self._items.values())
 
+    def _score_for_vmx(self, item_inner: ComponentVMOf[PaletteEntry]) -> int | None:
+        score = _score(item_inner.model, self._filter_text)
+        if score is None:
+            return None
+        # VMx ScoredFilteredCompositeVM ranks higher scores first; aws-tui's
+        # palette scorer historically ranks lower scores first.
+        return -score
+
     def _recompute_filtered(self) -> None:
-        query = self._filter_text
-        # Walk the composite's children in insertion order to preserve
-        # stable tiebreakers (matches the pre-Phase-2 behaviour).
-        scored: list[tuple[int, int, PaletteEntry]] = []
-        for insertion_idx, item_inner in enumerate(self._inner_registry):
-            entry = item_inner.model
-            score = _score(entry, query)
-            if score is None:
-                continue
-            scored.append((score, insertion_idx, entry))
-        scored.sort(key=lambda t: (t[0], t[1]))
-        new_filtered = tuple(e for _, _, e in scored)
+        self._scored_filter.refresh_scores()
+        new_filtered = tuple(item_inner.model for item_inner in self._scored_filter.visible)
         if new_filtered != self._filtered:
             self._filtered = new_filtered
             self._hub.send(PropertyChangedMessage.create(self, self.name, "filtered_entries"))

@@ -28,18 +28,17 @@ vNext asks:
 - `HierarchicalVM.invalidate_children()` / `invalidate_subtree()`
 
 This branch bumps the dependency, applies import/test hygiene, and implements
-the first contained VMx 3.1.0 replacement: S3 settings forms now delegate form
-validation and approve gating directly to VMx `FormVM`.
+the first contained VMx 3.1.0 replacements: S3 settings forms now delegate form
+validation and approve gating directly to VMx `FormVM`, and the command palette
+now delegates score-ranked projection to VMx `ScoredFilteredCompositeVM`.
 
 The highest-value remaining follow-up refactors are:
 
-1. Replace `CommandPaletteVM`'s inlined score/rank machinery with
-   `ScoredFilteredCompositeVM`.
-2. Replace `PaneVM`'s local `FilteredCompositeVM` with VMx 3.1.0
+1. Replace `PaneVM`'s local `FilteredCompositeVM` with VMx 3.1.0
    `FilteredCompositeVM`, after pinning cursor movement semantics.
-3. Move `JobRunsVM` pagination state onto `TokenPagedComposition`.
-4. Rebase `FocusCoordinatorVM` on `DiscriminatorVM`.
-5. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
+2. Move `JobRunsVM` pagination state onto `TokenPagedComposition`.
+3. Rebase `FocusCoordinatorVM` on `DiscriminatorVM`.
+4. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
    `DialogService.present` host.
 
 ---
@@ -90,7 +89,7 @@ larger VM/view refactors below.
 
 ### 1.4.1. `JobRunsVM` pagination -> `TokenPagedComposition`
 
-Current code:
+Prior code:
 
 - `src/aws_tui/vm/emr_serverless/job_runs_vm.py`
 - Holds `_items: list[JobRunItemVM]`, `_next_token: str | None`,
@@ -184,27 +183,29 @@ VMx 3.1.0 candidates:
 - `vmx.ScoredFilteredCompositeVM`
 - `vmx.AsyncRelayCommand`
 
-Recommended refactor:
+Implemented refactor:
 
 - Keep `PaletteEntryVM` and the registry composite.
-- Add a `ScoredFilteredCompositeVM` over the registry:
+- Added a `ScoredFilteredCompositeVM` over the registry:
   - scorer closure reads `self._filter_text`
   - score returns `None` when hidden
   - call `refresh_scores()` when `filter_text`, registration, or
     unregistration changes
-- Derive `filtered_entries` from `scored.visible`.
-- Keep `selected_index` as public view contract for now, but map it to
-  `scored.current` internally or introduce `selected_entry`.
-- Consider replacing `_pending_tasks` with `AsyncRelayCommand` only after
-  deciding how command-palette action errors should surface to the user.
+- Derived `filtered_entries` from `scored.visible`.
+- Kept `selected_index` as the public view contract.
+- Preserved stable tie-breaking by returning `-_score(...)`, because VMx
+  `ScoredFilteredCompositeVM` ranks higher scores first while the existing
+  aws-tui scorer ranks lower scores first.
+- Left `_pending_tasks` and async action error routing unchanged; `AsyncRelayCommand`
+  remains a separate optional refactor because palette action errors currently
+  emit `PropertyChangedMessage("action_failed")`.
 
 Notes:
 
-- This is one of the cleanest direct wins: it removes bespoke score/rank list
+- This was one of the cleanest direct wins: it removes bespoke score/rank list
   maintenance while preserving the existing score function.
-- Keep stable tie-breaking: VMx `ScoredFilteredCompositeVM` sorts by descending
-  score, but aws-tui `_score()` treats lower scores as better. Either invert the
-  score or adjust the scorer to produce higher-is-better values.
+- Shape tests now assert `CommandPaletteVM` composes VMx
+  `ScoredFilteredCompositeVM` internally.
 
 ### 1.4.4. Local `ValidatingFormVM` -> VMx `FormVM` validators
 
@@ -396,12 +397,13 @@ aws-tui impact:
 - Record this audit.
 - Replace `S3ConnectionFormVM`'s local `ValidatingFormVM` dependency with VMx
   `FormVM` validators and record the replacement metric ledger.
+- Replace `CommandPaletteVM`'s bespoke score/rank projection with VMx
+  `ScoredFilteredCompositeVM` and record the replacement metric ledger.
 
 ### Phase B — contained VM-layer swaps
 
-1. `CommandPaletteVM` backed by VMx `ScoredFilteredCompositeVM`.
-2. `PaneVM` backed by VMx `FilteredCompositeVM`.
-3. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
+1. `PaneVM` backed by VMx `FilteredCompositeVM`.
+2. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
 
 These should each be separate commits with focused tests.
 
@@ -486,22 +488,22 @@ At the end of the adoption series, produce one roll-up table:
 | Replacement | VM LOC saved | View LOC saved | Implementation LOC saved | Test LOC delta | Coverage delta |
 |---|---:|---:|---:|---:|---:|
 | `FormVM` validators | 184 | 0 | 184 | -171 | -0.08 pp |
-| `ScoredFilteredCompositeVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `ScoredFilteredCompositeVM` | 9 | 0 | 9 | +22 | +0.01 pp |
 | `FilteredCompositeVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `DiscriminatorVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `TokenPagedComposition` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `ModalVM` / `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `when_property_changed` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `AsyncRelayCommand` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
-| **Total implemented so far** | 184 | 0 | 184 | -171 | -0.08 pp |
+| **Total implemented so far** | 193 | 0 | 193 | -149 | -0.07 pp |
 
 Current headline metric:
 
 ```text
-VMx 3.1.0 adoption has saved 184 implementation LOC so far:
-  184 in viewmodels
+VMx 3.1.0 adoption has saved 193 implementation LOC so far:
+  193 in viewmodels
   0 in views
-with -171 net test LOC and -0.08 coverage-point change.
+with -149 net test LOC and -0.07 coverage-point change.
 ```
 
 Positive implementation LOC saved means the newer VMx version reduced bespoke
@@ -522,6 +524,20 @@ The implemented replacement ledger:
 | Coverage command | Baseline: `/Users/kaveh/repos/aws-tui/.venv/bin/python -m pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml` in detached worktree at `f9a8b68`. After: `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml` in this worktree. |
 | LOC metric | `vm_deleted=252`, `vm_added=68`, `vm_loc_saved=184`; `view_deleted=4`, `view_added=4`, `view_loc_saved=0`; `implementation_loc_saved=184`; `test_deleted=204`, `test_added=33`, `test_loc_delta=-171`. |
 | Coverage metric | Baseline `83.25%` over `1275 passed, 9 deselected`; after `83.17%` over `1262 passed, 9 deselected`; `coverage_delta=-0.08` percentage points. |
+
+| Field | Value |
+|---|---|
+| Replacement ID | `vmx31-scored-filter-command-palette` |
+| VMx 2.x-era implementation | Manual `_recompute_filtered()` score/rank list in `src/aws_tui/vm/chrome/command_palette_vm.py`. |
+| VMx 3.1.0 primitive | `vmx.ScoredFilteredCompositeVM[ComponentVMOf[PaletteEntry]]`. |
+| VM files touched | `src/aws_tui/vm/chrome/command_palette_vm.py`. |
+| View files touched | None. |
+| Tests changed | Added VMx composition shape tests in `tests/unit/vm/chrome/test_command_palette.py` and `tests/unit/vm/test_round3_compliance.py`. |
+| Behavior preserved | Existing `_score()` matching semantics, stable insertion-order tie-breaking, public `filtered_entries`, `selected_index`, register/unregister, command execution, and async action scheduling behavior. |
+| Behavior intentionally changed | Internal projection now uses VMx `ScoredFilteredCompositeVM`; no user-visible behavior change. |
+| Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
+| LOC metric | `vm_deleted=26`, `vm_added=17`, `vm_loc_saved=9`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=9`; `test_deleted=0`, `test_added=22`, `test_loc_delta=+22`. |
+| Coverage metric | Before `83.17%`; after `83.18%` over `1264 passed, 9 deselected`; `coverage_delta=+0.01` percentage points. |
 
 ### 1.6.4. Test coverage accounting
 
