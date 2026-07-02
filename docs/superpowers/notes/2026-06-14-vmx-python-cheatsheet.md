@@ -21,8 +21,7 @@ from vmx import (
     CompositeVM, CompositeVMBuilder,
     # aggregates (1..6)
     AggregateVM1, AggregateVM2, AggregateVM3, AggregateVM4, AggregateVM5, AggregateVM6,
-    AggregateVM1Builder, AggregateVM2Builder, AggregateVM3Builder,  # aliases for AggregateVMBuilderN
-    AggregateVMBuilder1, AggregateVMBuilder2, AggregateVMBuilder3,
+    AggregateVM1Builder, AggregateVM2Builder, AggregateVM3Builder,
     # commands
     RelayCommand, RelayCommandOf,
     # messages + hub
@@ -44,8 +43,8 @@ from vmx.notifications import (
 )
 ```
 
-`vmx.AggregateVM3Builder` is **identical** to `vmx.AggregateVMBuilder3` (both
-names exported). The naming "AggregateVMBuilderN" is the underlying class.
+`vmx.AggregateVM3Builder` is the exported builder name in VMx 3.1.0. The older
+`AggregateVMBuilderN` aliases were removed in VMx 3.0.0.
 
 ## 1.2. The builder pattern (no direct VM subclassing)
 
@@ -126,11 +125,11 @@ pass `NULL_MESSAGE_HUB`/`NULL_DISPATCHER` explicitly.
 ### 1.2.4. AggregateVM3 (and 1..6)
 
 ```python
-from vmx import AggregateVM3, AggregateVMBuilder3
+from vmx import AggregateVM3, AggregateVM3Builder
 # NB: AggregateVM3 has no static .builder() method — you instantiate the builder class.
 
 agg = (
-    AggregateVMBuilder3[HintLegendVM, StatusBarVM, ToastStackVM]()
+    AggregateVM3Builder[HintLegendVM, StatusBarVM, ToastStackVM]()
     .name("chrome")
     .services(hub, dispatcher)
     .component_1(lambda: build_hint_legend_vm())
@@ -348,7 +347,7 @@ For unit tests, use `NULL_DISPATCHER` (cheaper) or `RxDispatcher.immediate()`.
 
 ```bash
 uv run python -c "
-from vmx import ComponentVM, CompositeVM, AggregateVM3, AggregateVMBuilder3, NULL_MESSAGE_HUB, NULL_DISPATCHER
+from vmx import ComponentVM, CompositeVM, AggregateVM3, AggregateVM3Builder, NULL_MESSAGE_HUB, NULL_DISPATCHER
 
 c = ComponentVM.builder().name('c').with_null_services().build()
 c.construct(); assert c.is_constructed; c.dispose()
@@ -357,7 +356,7 @@ cp = (CompositeVM.builder().name('p').services(NULL_MESSAGE_HUB, NULL_DISPATCHER
       .children(lambda: [ComponentVM.builder().name('k').with_null_services().build()]).build())
 cp.construct(); assert cp.count == 1; cp.dispose()
 
-agg = (AggregateVMBuilder3().name('a').services(NULL_MESSAGE_HUB, NULL_DISPATCHER)
+agg = (AggregateVM3Builder().name('a').services(NULL_MESSAGE_HUB, NULL_DISPATCHER)
        .component_1(lambda: ComponentVM.builder().name('1').with_null_services().build())
        .component_2(lambda: ComponentVM.builder().name('2').with_null_services().build())
        .component_3(lambda: ComponentVM.builder().name('3').with_null_services().build())
@@ -410,7 +409,7 @@ This pattern repeats throughout M3:
 ## 1.12. Plan deviations recorded
 
 - `AggregateVM3` has **no static `.builder()`** — instantiate
-  `AggregateVMBuilder3()` directly. The plan said "ChromeVM as AggregateVM3 of
+  `AggregateVM3Builder()` directly. The plan said "ChromeVM as AggregateVM3 of
   hint+status+toast"; this is true, but our `ChromeVM` is a **facade** that
   holds an `AggregateVM3` instance, not a subclass.
 - `ComponentVM[T]` is NOT a generic — `ComponentVMOf[M]` is. For most of our

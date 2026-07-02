@@ -312,7 +312,7 @@ requires-dist = [
     { name = "platformdirs", specifier = ">=4,<5" },
     { name = "textual", specifier = ">=8.2.7,<9" },
     { name = "tomli-w", specifier = ">=1.0,<2" },
-    { name = "vmx", specifier = ">=2.6.0,<3.0.0" },
+    { name = "vmx", specifier = ">=3.1.0,<4.0.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -2733,14 +2733,14 @@ wheels = [
 
 [[package]]
 name = "vmx"
-version = "2.6.1"
+version = "3.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "reactivex" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/40/ab/353333efd9ef565f69288e11aeadef90aaea6fa30d2c3f835ac3b421a947/vmx-2.6.1.tar.gz", hash = "sha256:df918db60f87f9e4406a44107f4c25ed7097c2de0e91c38b7922ef52f5875f8a", size = 170234, upload-time = "2026-06-17T02:28:59.652Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/fd/e1ddac43bda036ca9adc3c609c2db3eb2387f3a3a3cb17580d79fb0fc473/vmx-3.1.0.tar.gz", hash = "sha256:788f6a8fd7b769a2425ca66713804eda4447ce51ce3e57a27825c2d74bc9a97d", size = 206508, upload-time = "2026-07-02T00:32:12.511Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/77/055d99bd02707c1fbf7752e613cca5bb7b34475b6edb3a790a552c487499/vmx-2.6.1-py3-none-any.whl", hash = "sha256:7fb6937046197bdd3b28537ca7a7204236354aa6c289b77301cc843eb552fc4c", size = 112362, upload-time = "2026-06-17T02:28:58.256Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/9b/e13febc03ed9eba1829b48bc3240c2b6f430c7c920ce16e7880b1215629d/vmx-3.1.0-py3-none-any.whl", hash = "sha256:aab6343d2d0fe41e44ee417bed738819ce92fb713b7496279a6835641a38430c", size = 133233, upload-time = "2026-07-02T00:32:11.083Z" },
 ]
 
 [[package]]
