@@ -35,6 +35,16 @@ def test_initial_can_be_overridden() -> None:
     vm.dispose()
 
 
+def test_focus_coordinator_uses_vmx_discriminator() -> None:
+    from vmx import DiscriminatorVM
+
+    vm = _make()
+    try:
+        assert isinstance(vm._focus_discriminator, DiscriminatorVM)
+    finally:
+        vm.dispose()
+
+
 # -------------------- set_focused_slot --------------------
 
 
@@ -149,15 +159,9 @@ def test_modal_close_when_not_modal_is_noop() -> None:
         vm.dispose()
 
 
-def test_modal_close_defaults_to_nav_menu_when_no_saved_slot() -> None:
-    """Defensive — should never happen via normal API, but guards
-    against modal_close being called without a matching open."""
+def test_set_focused_slot_modal_then_close_restores_prior_slot() -> None:
     vm = _make()
-    # Force MODAL slot via set_focused_slot (which routes through
-    # modal_open and SAVES nav_menu).
     vm.set_focused_slot(FocusSlot.MODAL)
-    # Now manually clear saved_slot to exercise the defensive branch.
-    vm._saved_slot = None  # type: ignore[attr-defined]
     vm.modal_close()
     assert vm.focused_slot is FocusSlot.NAV_MENU
     vm.dispose()
@@ -184,7 +188,8 @@ def test_set_non_modal_while_modal_clears_saved_slot() -> None:
     vm.modal_open()
     vm.set_focused_slot(FocusSlot.EMR_RUNS)
     assert vm.focused_slot is FocusSlot.EMR_RUNS
-    assert vm._saved_slot is None  # type: ignore[attr-defined]
+    vm.modal_close()
+    assert vm.focused_slot is FocusSlot.EMR_RUNS
     vm.dispose()
 
 

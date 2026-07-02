@@ -31,8 +31,8 @@ from __future__ import annotations
 from enum import StrEnum
 
 import reactivex as rx
-from reactivex.subject import Subject
-from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
+from reactivex.abc import DisposableBase
+from vmx import ComponentVM, DiscriminatorVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -69,10 +69,10 @@ class FocusCoordinatorVM:
         initial: FocusSlot = FocusSlot.NAV_MENU,
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._focused_slot: FocusSlot = initial
-        # Non-modal slot saved when a modal opens; restored on close.
-        self._saved_slot: FocusSlot | None = None
-        self._on_changed: Subject[FocusSlot] = Subject()
+        self._focus_discriminator: DiscriminatorVM[FocusSlot] = DiscriminatorVM(initial)
+        self._focus_sub: DisposableBase = self._focus_discriminator.active_changed.subscribe(
+            on_next=self._emit_changed
+        )
         self._disposed = False
         self._inner: ComponentVM = (
             ComponentVM.builder().name("focus_coordinator").services(hub, dispatcher).build()
@@ -82,19 +82,19 @@ class FocusCoordinatorVM:
 
     @property
     def focused_slot(self) -> FocusSlot:
-        return self._focused_slot
+        return self._focus_discriminator.active_key
 
     @property
     def is_modal(self) -> bool:
         """True while a modal has been opened via :meth:`modal_open`
         and not yet closed."""
-        return self._focused_slot is FocusSlot.MODAL
+        return self._focus_discriminator.is_active(FocusSlot.MODAL)
 
     @property
     def on_focused_slot_changed(self) -> rx.Observable[FocusSlot]:
         """Hot Observable. Fires every time ``focused_slot`` changes;
         the payload is the NEW slot."""
-        return self._on_changed
+        return self._focus_discriminator.active_changed
 
     @property
     def status(self) -> ConstructionStatus:
@@ -118,13 +118,16 @@ class FocusCoordinatorVM:
         if slot is FocusSlot.MODAL:
             self.modal_open()
             return
-        if self._focused_slot is FocusSlot.MODAL:
+        if self.focused_slot is FocusSlot.MODAL:
             # Implicit close — the caller is overriding the saved slot.
-            self._saved_slot = None
-        if self._focused_slot is slot:
+            # VMx 3.1 exposes modal push/pop, but not "replace modal
+            # with this explicit active key"; clearing the restore
+            # stack preserves this facade's pre-existing no-stale-restore
+            # contract for set_focused_slot(non_modal) while modal.
+            self._focus_discriminator._modal_stack.clear()
+        if self.focused_slot is slot:
             return
-        self._focused_slot = slot
-        self._emit_changed()
+        self._focus_discriminator.set_active_key(slot)
 
     def cycle_s3_focus(self, *, reverse: bool = False) -> None:
         """Rotate the S3 focus ring.
@@ -150,21 +153,16 @@ class FocusCoordinatorVM:
     def modal_open(self) -> None:
         """Push the MODAL precedence slot. Saves the prior non-modal
         slot so :meth:`modal_close` can restore it."""
-        if self._focused_slot is FocusSlot.MODAL:
+        if self.focused_slot is FocusSlot.MODAL:
             return
-        self._saved_slot = self._focused_slot
-        self._focused_slot = FocusSlot.MODAL
-        self._emit_changed()
+        self._focus_discriminator.modal_open(FocusSlot.MODAL)
 
     def modal_close(self) -> None:
         """Pop the MODAL precedence slot. Restores the prior
         non-modal slot. No-op when no modal is open."""
-        if self._focused_slot is not FocusSlot.MODAL:
+        if self.focused_slot is not FocusSlot.MODAL:
             return
-        restored = self._saved_slot if self._saved_slot is not None else FocusSlot.NAV_MENU
-        self._saved_slot = None
-        self._focused_slot = restored
-        self._emit_changed()
+        self._focus_discriminator.modal_close()
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -178,19 +176,18 @@ class FocusCoordinatorVM:
         if self._disposed:
             return
         self._disposed = True
-        self._on_changed.on_completed()
-        self._on_changed.dispose()
+        self._focus_sub.dispose()
+        self._focus_discriminator.dispose()
         self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _emit_changed(self) -> None:
-        self._on_changed.on_next(self._focused_slot)
+    def _emit_changed(self, _slot: FocusSlot) -> None:
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "focused_slot"))
 
     def _cycle(self, order: tuple[FocusSlot, ...]) -> None:
         try:
-            idx = order.index(self._focused_slot)
+            idx = order.index(self.focused_slot)
         except ValueError:
             self.set_focused_slot(order[0])
             return

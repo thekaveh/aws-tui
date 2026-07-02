@@ -32,13 +32,13 @@ the first contained VMx 3.1.0 replacements: S3 settings forms now delegate form
 validation and approve gating directly to VMx `FormVM`, and the command palette
 now delegates score-ranked projection to VMx `ScoredFilteredCompositeVM`.
 `PaneVM` also now delegates visible-entry projection to VMx
-`FilteredCompositeVM`.
+`FilteredCompositeVM`, and `FocusCoordinatorVM` now delegates active-slot and
+modal restore state to VMx `DiscriminatorVM`.
 
 The highest-value remaining follow-up refactors are:
 
 1. Move `JobRunsVM` pagination state onto `TokenPagedComposition`.
-2. Rebase `FocusCoordinatorVM` on `DiscriminatorVM`.
-3. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
+2. Rebase result-bearing modal VMs on `ModalVM`, then optionally add a Textual
    `DialogService.present` host.
 
 ---
@@ -243,7 +243,7 @@ Notes:
 
 ### 1.4.5. `FocusCoordinatorVM` -> `DiscriminatorVM`
 
-Current code:
+Prior code:
 
 - `src/aws_tui/vm/chrome/focus_coordinator_vm.py`
 - Tracks `focused_slot`, `is_modal`, `on_focused_slot_changed`,
@@ -256,7 +256,7 @@ VMx 3.1.0 candidate:
 - Provides `active_key`, `active_changed`, `is_active`, `set_active_key`,
   `modal_open`, `modal_close`, `dispose`.
 
-Recommended refactor:
+Implemented refactor:
 
 - Keep `FocusCoordinatorVM` as the aws-tui facade because it owns:
   - the `FocusSlot` enum,
@@ -264,15 +264,18 @@ Recommended refactor:
   - Textual bridge naming,
   - shared hub `PropertyChangedMessage`,
   - lifecycle `status` proxy expected by tests.
-- Replace `_focused_slot`, `_saved_slot`, and `_on_changed` with an inner
-  `DiscriminatorVM[FocusSlot]`.
-- Subscribe to `DiscriminatorVM.active_changed` and republish
+- Replaced `_focused_slot`, `_saved_slot`, and the local changed subject with
+  an inner `DiscriminatorVM[FocusSlot]`.
+- Subscribed to `DiscriminatorVM.active_changed` and republished
   `PropertyChangedMessage("focused_slot")`.
+- Preserved the implicit modal-close override contract:
+  `set_focused_slot(non_modal)` while modal is active switches directly to the
+  requested slot and leaves no stale modal restore.
 
 Notes:
 
-- This is a low-risk medium-value refactor. It preserves the public facade while
-  deleting bespoke modal-stack and active-key state.
+- This preserved the public facade while deleting bespoke active-key and modal
+  restore state.
 
 ### 1.4.6. Modal VMs -> `ModalVM` and `DialogService.present`
 
@@ -395,9 +398,10 @@ aws-tui impact:
 - Replace `CommandPaletteVM`'s bespoke score/rank projection with VMx
   `ScoredFilteredCompositeVM` and record the replacement metric ledger.
 
-### Phase B — contained VM-layer swaps
+### Phase B — contained VM-layer swaps, implemented
 
-1. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
+1. `PaneVM` backed by VMx `FilteredCompositeVM`.
+2. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
 
 These should each be separate commits with focused tests.
 
@@ -484,20 +488,20 @@ At the end of the adoption series, produce one roll-up table:
 | `FormVM` validators | 184 | 0 | 184 | -171 | -0.08 pp |
 | `ScoredFilteredCompositeVM` | 9 | 0 | 9 | +22 | +0.01 pp |
 | `FilteredCompositeVM` | 283 | 0 | 283 | -322 | -0.07 pp |
-| `DiscriminatorVM` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
+| `DiscriminatorVM` | 7 | 0 | 7 | +5 | -0.01 pp |
 | `TokenPagedComposition` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `ModalVM` / `DialogService.present` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `when_property_changed` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
 | `AsyncRelayCommand` | record after implementation | record after implementation | record after implementation | record after implementation | record after implementation |
-| **Total implemented so far** | 476 | 0 | 476 | -471 | -0.14 pp |
+| **Total implemented so far** | 483 | 0 | 483 | -466 | -0.15 pp |
 
 Current headline metric:
 
 ```text
-VMx 3.1.0 adoption has saved 476 implementation LOC so far:
-  476 in viewmodels
+VMx 3.1.0 adoption has saved 483 implementation LOC so far:
+  483 in viewmodels
   0 in views
-with -471 net test LOC and -0.14 coverage-point change.
+with -466 net test LOC and -0.15 coverage-point change.
 ```
 
 Positive implementation LOC saved means the newer VMx version reduced bespoke
@@ -546,6 +550,20 @@ The implemented replacement ledger:
 | Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
 | LOC metric | `vm_deleted=293`, `vm_added=10`, `vm_loc_saved=283`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=283`; `test_deleted=334`, `test_added=12`, `test_loc_delta=-322`. |
 | Coverage metric | Before `83.18%`; after `83.11%` over `1242 passed, 9 deselected`; `coverage_delta=-0.07` percentage points. |
+
+| Field | Value |
+|---|---|
+| Replacement ID | `vmx31-discriminator-focus-coordinator` |
+| VMx 2.x-era implementation | Hand-rolled `FocusCoordinatorVM` active slot, saved modal slot, and local changed subject. |
+| VMx 3.1.0 primitive | `vmx.DiscriminatorVM[FocusSlot]` with `active_key`, `active_changed`, `is_active`, `set_active_key`, `modal_open`, and `modal_close`. |
+| VM files touched | `src/aws_tui/vm/chrome/focus_coordinator_vm.py`. |
+| View files touched | None. |
+| Tests changed | Added VMx composition shape coverage and rewrote modal-restore assertions in `tests/unit/vm/chrome/test_focus_coordinator_vm.py` to avoid removed private state. |
+| Behavior preserved | Public `focused_slot`, `is_modal`, `on_focused_slot_changed`, hub `PropertyChangedMessage("focused_slot")`, focus-cycle rings, modal open/close restoration, explicit non-modal override while modal is active, and lifecycle proxying. |
+| Behavior intentionally changed | Internal active-key and modal restore state now live in VMx `DiscriminatorVM`; no user-visible behavior change. |
+| Coverage command | `uv run pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml`. |
+| LOC metric | `vm_deleted=28`, `vm_added=21`, `vm_loc_saved=7`; `view_deleted=0`, `view_added=0`, `view_loc_saved=0`; `implementation_loc_saved=7`; `test_deleted=8`, `test_added=13`, `test_loc_delta=+5`. |
+| Coverage metric | Before `83.11%`; after `83.10%` over `1243 passed, 9 deselected`; `coverage_delta=-0.01` percentage points. |
 
 ### 1.6.4. Test coverage accounting
 
