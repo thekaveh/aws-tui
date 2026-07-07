@@ -30,7 +30,7 @@ updates:
           - "testcontainers*"
           - "types-*"
     labels: ["dependencies", "python"]
-
+    target-branch: develop
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -38,7 +38,7 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
-
+    target-branch: develop
   # Tracks bumps for the local-dev MinIO container declared in
   # scripts/test-services/s3/docker-compose.yml. Keeps the supply-
   # chain-reproducibility pin (no ``:latest``) maintained without
@@ -50,7 +50,7 @@ updates:
       day: monday
     open-pull-requests-limit: 2
     labels: ["dependencies", "docker"]
-
+    target-branch: develop
   # Tracks the pinned hook versions in ``.pre-commit-config.yaml``
   # (pre-commit-hooks, astral-sh/ruff-pre-commit, ComPWA/taplo-pre-commit).
   # Without this entry the pinned ``rev:`` values drift behind upstream
@@ -65,3 +65,4 @@ updates:
       day: monday
     open-pull-requests-limit: 2
     labels: ["dependencies", "tooling"]
+    target-branch: develop
