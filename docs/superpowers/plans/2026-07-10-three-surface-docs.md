@@ -1049,10 +1049,8 @@ def test_render_mkdocs_yml_has_nav_and_no_repo_url(tmp_path):
 
 
 def test_build_check_is_deterministic(tmp_path):
-    m, root = _fixture(tmp_path)
-    (root / "docs" / "manifest.yaml").write_text(
-        (root / "docs" / "index.md").read_text() and _manifest_yaml()
-    )
+    _m, root = _fixture(tmp_path)
+    (root / "docs" / "manifest.yaml").write_text(_manifest_yaml())
     # build --check must not raise (idempotent regeneration).
     build(root / "docs" / "manifest.yaml", root, site=True, wiki=True, check=True)
 
