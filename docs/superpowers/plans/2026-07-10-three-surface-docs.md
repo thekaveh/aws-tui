@@ -23,7 +23,7 @@
 - Per-doc numbering is preserved: every published doc keeps `# 1. Title` / `## 1.x`. Nav labels come from the manifest `title:` (no leading number).
 - Dependency floors: `mkdocs-material>=9.6,<10.0`, `pyyaml>=6.0,<7.0`, `cairosvg>=2.7,<3.0`.
 - CI triggers cover **both** `main` and `develop` (gotcha #22). Actions are pinned by SHA to match existing workflows.
-- All Python invocations go through `uv run` (the repo is uv-managed).
+- All Python invocations go through `uv run` (the repo is uv-managed). **macOS cairo exception:** cairosvg loads `libcairo` via dlopen at import; on macOS Homebrew's libcairo is off the default dyld path AND `uv run` drops `DYLD_*` (SIP), so any cairo-touching command (`render_diagrams`, `build_docs`, `check_docs`) must run as `DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix cairo)/lib" ./.venv/bin/python -m scripts.docs.<x>` (run `uv sync --group docs` first so `.venv` exists). On Linux/CI, apt's libcairo2 is on a standard path and plain `uv run python` works. `mkdocs`/`push_wiki` don't touch cairo. The Makefile (Task 10) encapsulates this via an OS-detected `DOCS_PY`. Also: `import cairosvg` raises `OSError` (not `ImportError`) when libcairo is unloadable, so raster tests guard on `(ImportError, OSError)`, not `importorskip` alone.
 - Every commit message ends with the two trailers used in this repo:
   ```
   Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
@@ -1969,9 +1969,14 @@ This canonical PNG path renders in-repo on GitHub; the surface renderers rewrite
 
 - [ ] **Step 7: Generate the committed PNG + verify the manifest loads**
 
-Run:
+The Makefile doesn't exist yet (Task 10), so render with an OS-aware invocation (see Global Constraints → macOS cairo exception). Run:
 ```bash
-uv run python -m scripts.docs.render_diagrams
+# Render the architecture diagram → SVG (site) + committed PNG.
+if [ "$(uname -s)" = "Darwin" ]; then
+  DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix cairo)/lib" ./.venv/bin/python -m scripts.docs.render_diagrams
+else
+  uv run python -m scripts.docs.render_diagrams
+fi
 uv run python -c "from pathlib import Path; from scripts.docs.manifest import load_manifest; load_manifest(Path('docs/manifest.yaml'), Path('.')); print('manifest OK')"
 ls -l docs/diagrams/img/architecture.png
 ```
@@ -1999,34 +2004,50 @@ git commit -m "docs: canonical index + manifest + theme assets + architecture di
 - [ ] **Step 1: Write `Makefile`**
 
 ```makefile
-PYTHON ?= uv run python
+# cairosvg needs libcairo. On macOS, Homebrew installs it OUTSIDE the default
+# dyld search path AND `uv run` drops DYLD_* (SIP strips it across the exec
+# chain), so the docs render fails under `uv run`. Work around it by calling the
+# venv python directly with DYLD_FALLBACK_LIBRARY_PATH pointed at Homebrew's
+# cairo. On Linux (incl. CI), apt's libcairo2 is on a standard path and
+# `uv run python` works. Run `uv sync --group docs` first so `.venv` exists.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  CAIRO_PREFIX := $(shell brew --prefix cairo 2>/dev/null)
+  DOCS_PY := DYLD_FALLBACK_LIBRARY_PATH=$(CAIRO_PREFIX)/lib ./.venv/bin/python
+else
+  DOCS_PY := uv run python
+endif
 
-.PHONY: help docs-build docs-serve docs-check docs-wiki
+.PHONY: help docs-diagrams docs-build docs-serve docs-check docs-wiki
 
 help:
-	@echo "docs-build   render diagrams + site, then mkdocs --strict"
-	@echo "docs-serve   render diagrams + site, then mkdocs serve"
-	@echo "docs-check   render diagrams + check_docs + mkdocs --strict"
-	@echo "docs-wiki    render wiki + push_wiki --check (no network)"
+	@echo "docs-diagrams  render diagram masters -> SVG (site) + PNG (committed)"
+	@echo "docs-build     render diagrams + site, then mkdocs --strict"
+	@echo "docs-serve     render diagrams + site, then mkdocs serve"
+	@echo "docs-check     render diagrams + check_docs + mkdocs --strict"
+	@echo "docs-wiki      render wiki + push_wiki --check (no network)"
+
+docs-diagrams:
+	$(DOCS_PY) -m scripts.docs.render_diagrams
 
 docs-build:
-	$(PYTHON) -m scripts.docs.render_diagrams
-	$(PYTHON) -m scripts.docs.build_docs --site
+	$(DOCS_PY) -m scripts.docs.render_diagrams
+	$(DOCS_PY) -m scripts.docs.build_docs --site
 	uv run mkdocs build --strict
 
 docs-serve:
-	$(PYTHON) -m scripts.docs.render_diagrams
-	$(PYTHON) -m scripts.docs.build_docs --site
+	$(DOCS_PY) -m scripts.docs.render_diagrams
+	$(DOCS_PY) -m scripts.docs.build_docs --site
 	uv run mkdocs serve
 
 docs-check:
-	$(PYTHON) -m scripts.docs.render_diagrams
-	$(PYTHON) -m scripts.docs.check_docs
+	$(DOCS_PY) -m scripts.docs.render_diagrams
+	$(DOCS_PY) -m scripts.docs.check_docs
 	uv run mkdocs build --strict
 
 docs-wiki:
-	$(PYTHON) -m scripts.docs.build_docs --wiki
-	$(PYTHON) -m scripts.docs.push_wiki --check
+	$(DOCS_PY) -m scripts.docs.build_docs --wiki
+	$(DOCS_PY) -m scripts.docs.push_wiki --check
 ```
 
 - [ ] **Step 2: Verify targets run**
