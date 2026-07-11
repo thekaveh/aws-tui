@@ -1,0 +1,39 @@
+name: docs
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "docs/**"
+      - "scripts/docs/**"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "docs/**"
+      - "scripts/docs/**"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: install libcairo2
+        run: sudo apt-get update && sudo apt-get install -y libcairo2
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      - name: install Python 3.12
+        run: uv python install 3.12
+      - name: sync (docs group)
+        run: uv sync --frozen --group docs
+      - name: docs check (render + check_docs + mkdocs --strict)
+        run: make docs-check
+      - name: ruff (docs scripts)
+        run: uv run ruff check scripts/docs/
+      - name: pytest (docs scripts)
+        run: uv run pytest tests/docs -v

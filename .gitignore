@@ -68,3 +68,8 @@ snapshot_report.html
 # Local environment overrides
 .env
 .env.local
+
+# three-surface docs — generated surfaces + mkdocs output (regenerated, never committed)
+/generated/
+/mkdocs.yml
+/site/
