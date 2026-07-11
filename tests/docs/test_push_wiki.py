@@ -15,6 +15,11 @@ def test_authenticated_remote_uses_key_path():
     assert "IdentitiesOnly=yes" in cmd
 
 
+def test_authenticated_remote_quotes_key_path_with_space():
+    cmd = authenticated_remote(DEFAULT_REMOTE, "/tmp/my key/wiki_key")
+    assert "'/tmp/my key/wiki_key'" in cmd  # shlex.quote wraps the spaced path
+
+
 def test_sync_wiki_preserves_git_and_removes_stale(tmp_path):
     src = tmp_path / "src"
     dst = tmp_path / "dst"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,7 @@ _DEFAULT_IDENT = {
 
 
 def authenticated_remote(remote: str, key_path: str | Path) -> str:
-    return f"ssh -i {key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+    return f"ssh -i {shlex.quote(str(key_path))} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
 
 def _env_with_ident() -> dict[str, str]:
