@@ -158,6 +158,12 @@
           </pattern>
         </defs>
 
+        <!-- Opaque canvas background (matches page body) so the diagram is
+             self-contained when rasterized standalone (PNG export); text on
+             low-opacity bands otherwise loses contrast against a
+             transparent/white canvas instead of the intended dark page. -->
+        <rect width="100%" height="100%" fill="#020617" />
+
         <!-- Background Grid -->
         <rect width="100%" height="100%" fill="url(#grid)" />
 
@@ -358,7 +364,7 @@
           <li>&bull; VMx VMs with reactive commands</li>
           <li>&bull; RootVM, file_manager VMs, emr_serverless VMs</li>
           <li>&bull; Never imports Textual; tests run headless</li>
-          <li>&bull; construct &#8594; run &#8594; destruct &#8594; dispose</li>
+          <li>&bull; construct -&gt; run -&gt; destruct -&gt; dispose</li>
         </ul>
       </div>
 
