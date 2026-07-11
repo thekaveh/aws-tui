@@ -1,0 +1,28 @@
+# Single source of truth for the three-surface docs: hierarchy + nav order +
+# published page set. Humans edit ONLY the canonical docs/*.md + this file;
+# generated/site + generated/wiki + mkdocs.yml are regenerated and gitignored.
+surfaces: [repo, site, wiki]
+numbering: per-doc
+sections:
+  - { id: overview, title: Overview, source: docs/index.md }
+  - id: getting-started
+    title: Getting Started
+    children:
+      - { id: install, title: Installation, source: docs/homebrew-bootstrap.md }
+      - { id: platforms, title: Platforms, source: docs/platforms.md }
+      - { id: connections, title: Connections, source: docs/connections.md }
+  - id: using
+    title: Using aws-tui
+    children:
+      - { id: keybindings, title: Keybindings, source: docs/keybindings.md }
+      - { id: cookbook, title: Cookbook, source: docs/cookbook.md }
+      - { id: theming, title: Theming, source: docs/theming.md }
+  - id: development
+    title: Development
+    children:
+      - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture] }
+      - { id: adding-service, title: Adding a Service, source: docs/adding-a-service.md }
+      - { id: contract-ledger, title: Contract Ledger, source: docs/contract-ledger.md }
+  - { id: releasing, title: Releasing, source: docs/RELEASING.md }
+diagrams:
+  - { id: architecture, master: docs/diagrams/architecture.html }

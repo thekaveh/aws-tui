@@ -1,5 +1,7 @@
 # 1. Architecture
 
+![aws-tui layered MVVM architecture — View over ViewModel over Domain, wired by a composition root, with a startup→mount→dispose lifecycle.](diagrams/img/architecture.png)
+
 > Human-readable mirror of §2 of [the design spec](superpowers/specs/2026-06-13-aws-tui-design.md).
 > For the deep dive (VM tree, lifecycle invariants, capability matrix,
 > end-to-end flows), read the spec.
