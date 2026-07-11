@@ -5,6 +5,13 @@ from scripts.docs.manifest import parse_manifest
 from scripts.docs.render_diagrams import copy_assets, extract_svg, render_all, svg_to_png
 
 
+def _require_cairosvg():
+    try:
+        import cairosvg  # noqa: F401
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"cairosvg/libcairo unavailable: {exc}")
+
+
 def test_extract_svg_pulls_inline_svg():
     html = "<html><body><svg width='10'><rect/></svg></body></html>"
     assert extract_svg(html) == "<svg width='10'><rect/></svg>"
@@ -27,7 +34,7 @@ def test_extract_svg_raises_when_absent():
 
 
 def test_svg_to_png_writes_png_magic(tmp_path):
-    pytest.importorskip("cairosvg")
+    _require_cairosvg()
     svg = "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4' fill='red'/></svg>"
     out = tmp_path / "x.png"
     svg_to_png(svg, out, width=4)
@@ -35,7 +42,7 @@ def test_svg_to_png_writes_png_magic(tmp_path):
 
 
 def test_render_all_writes_svg_and_png(tmp_path):
-    pytest.importorskip("cairosvg")
+    _require_cairosvg()
     (tmp_path / "docs" / "diagrams").mkdir(parents=True)
     (tmp_path / "docs" / "diagrams" / "d.html").write_text(
         "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4'/></svg>"
