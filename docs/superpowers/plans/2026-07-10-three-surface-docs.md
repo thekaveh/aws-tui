@@ -2046,9 +2046,19 @@ docs-check:
 	uv run mkdocs build --strict
 
 docs-wiki:
+	$(DOCS_PY) -m scripts.docs.render_diagrams
 	$(DOCS_PY) -m scripts.docs.build_docs --wiki
 	$(DOCS_PY) -m scripts.docs.push_wiki --check
 ```
+
+> Note (design refinement during implementation): `build()` does **not** call
+> `render_all` — refreshing the committed PNGs is the explicit `render_diagrams`
+> step's job (run first by every Make target), `render_site` writes its own site
+> SVGs from the masters, and `render_wiki` copies the committed PNGs. This avoids
+> a stray partial `generated/site/` tree when `build(wiki=True)` runs on a
+> diagram-bearing manifest. The CI `pages.yml` wiki job intentionally copies the
+> **committed** PNG (no `render_diagrams`) so the wiki stays byte-identical to the
+> in-repo surface.
 
 - [ ] **Step 2: Verify targets run**
 

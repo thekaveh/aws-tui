@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 from scripts.docs.manifest import Manifest, Section, load_manifest
-from scripts.docs.render_diagrams import copy_assets, extract_svg, render_all
+from scripts.docs.render_diagrams import copy_assets, extract_svg
 from scripts.docs.transforms import (
     build_source_map,
     output_name,
@@ -197,14 +197,6 @@ def build(
     repo_root = Path(repo_root)
     manifest = load_manifest(path, repo_root)
     generated = repo_root / "generated"
-    # Refresh committed PNGs + site SVGs whenever there are diagrams.
-    if manifest.diagrams:
-        render_all(
-            manifest,
-            repo_root,
-            generated / "site" / "assets" / "img",
-            repo_root / "docs" / "diagrams" / "img",
-        )
     if site or check:
         render_site(manifest, repo_root, generated / "site")
         (repo_root / "mkdocs.yml").write_text(render_mkdocs_yml(manifest), encoding="utf-8")
