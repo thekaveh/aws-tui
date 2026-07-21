@@ -56,6 +56,34 @@ def _describe(action_id: str) -> str:
     return action_id.rsplit(".", 1)[-1].replace("_", " ").title()
 
 
+#: Actions whose first keystroke is shown in Textual's help footer. Cursor
+#: moves, back-focus, modal nav, and marks stay hidden — the bottom hint
+#: legend renders those context-sensitive chips itself.
+_VISIBLE_ACTIONS: frozenset[str] = frozenset(
+    {
+        "app.quit",
+        "pane.switch_focus",
+        "pane.move_up",
+        "pane.move_down",
+        "pane.descend",
+        "pane.ascend",
+        "pane.refresh",
+        "app.help",
+        "app.themes",
+        "app.cycle_theme",
+        "app.open_settings",
+        "pane.copy",
+        "pane.delete",
+        "app.swap_source",
+    }
+)
+
+#: Every handled action binds with ``priority=True`` (so the App handler wins
+#: over Textual's Screen-level focus traversal) EXCEPT quit. Listing only the
+#: exception keeps this in step with Textual's ``priority=False`` default.
+_NON_PRIORITY_ACTIONS: frozenset[str] = frozenset({"app.quit"})
+
+
 class BindingResolver:
     """Bridge between Textual's BINDINGS list and our ``KeymapStore``.
 
@@ -87,31 +115,34 @@ class BindingResolver:
         """Materialize the Textual ``Binding`` list for the active keymap.
 
         For each ``(action_id, keys)`` in the keymap we emit one Binding
-        per keystroke. ``action`` on the emitted ``Binding`` is the
-        Textual-style name produced by :meth:`_textual_action_name`
-        (dots → underscores, e.g. ``"app.quit"`` → ``"app_quit"``);
-        Textual then invokes the matching ``action_<name>`` method on
-        the ``App``. The :class:`ActionRegistry` is the eventual
-        indirection point for that dispatch — it is constructed by
-        ``AwsTuiApp`` today but the BINDINGS field is still a
-        hard-coded ``ClassVar``, so ``ActionRegistry.invoke`` does not
-        yet sit on the runtime path (tracked in
-        ``CHANGELOG.md`` ▸ ``[0.8.0] Deferred / v0.9 roadmap``).
-        Visible only when the action id is among the chip-worthy
-        app/pane actions; auxiliary aliases (``ctrl+c`` for quit,
-        ``shift+tab`` for back-focus) are emitted with ``show=False``
-        so the help footer stays clean.
+        per keystroke — but **only when the action has a registered handler**
+        (``ActionRegistry.has``). Deferred/unwired actions (e.g.
+        ``pane.quick_look``, ``app.command_palette``) stay in the keymap for
+        documentation but produce no runtime binding, so no keystroke maps to
+        a handler that does not exist.
+
+        ``action`` is the parameterized ``dispatch('<action_id>')`` form;
+        ``AwsTuiApp.action_dispatch`` forwards it to the
+        :class:`ActionRegistry`, which holds the real handler. Only the first
+        keystroke of a chip-worthy action is shown in Textual's footer;
+        every handled action binds ``priority=True`` except quit (see
+        :data:`_VISIBLE_ACTIONS` / :data:`_NON_PRIORITY_ACTIONS`).
         """
         bindings: list[Binding] = []
         for action_id, keys in self._keymap.all().items():
+            if not self._actions.has(action_id):
+                continue  # handlerless (deferred) action stays unbound
             description = _describe(action_id)
+            priority = action_id not in _NON_PRIORITY_ACTIONS
+            visible = action_id in _VISIBLE_ACTIONS
             for index, key in enumerate(keys):
                 bindings.append(
                     Binding(
                         key=key,
-                        action=self._textual_action_name(action_id),
+                        action=f"dispatch({action_id!r})",
                         description=description,
-                        show=index == 0 and self._is_visible_action(action_id),
+                        show=index == 0 and visible,
+                        priority=priority,
                     )
                 )
         return bindings
@@ -129,38 +160,6 @@ class BindingResolver:
             return self._keymap.resolve(action_id)
         except UnknownAction:
             return ()
-
-    # ── Internal ────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _textual_action_name(action_id: str) -> str:
-        """Convert an aws-tui action id into a Textual action method name.
-
-        Textual treats the binding action as a method name (``action_<name>``
-        on the App / Screen). We replace dots with underscores so
-        ``pane.copy`` becomes ``pane_copy`` — the App must expose
-        ``action_pane_copy``, which simply forwards to the registry.
-        """
-        return action_id.replace(".", "_")
-
-    @staticmethod
-    def _is_visible_action(action_id: str) -> bool:
-        # Pane-cursor + modal-cancel bindings are not show-worthy in Textual's
-        # built-in footer because our own hint-legend renders the
-        # context-sensitive chips already. We surface only the always-visible
-        # app-level actions.
-        return action_id in {
-            "app.quit",
-            "app.command_palette",
-            "app.help",
-            "app.themes",
-            "app.cycle_theme",
-            "app.swap_source",
-            "pane.copy",
-            "pane.move",
-            "pane.delete",
-            "pane.refresh",
-        }
 
 
 __all__ = ["BindingResolver"]
