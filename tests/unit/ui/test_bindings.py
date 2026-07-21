@@ -7,79 +7,82 @@ from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
 
 
-def test_to_textual_bindings_covers_every_keymap_entry() -> None:
+def _registry(*ids: str) -> ActionRegistry:
+    r = ActionRegistry()
+    for i in ids:
+        r.register(i, lambda: None)
+    return r
+
+
+def test_only_registered_actions_emit_bindings() -> None:
     keymap = KeymapStore()
-    actions = ActionRegistry()
-    resolver = BindingResolver(keymap=keymap, actions=actions)
-
-    bindings = resolver.to_textual_bindings()
-
-    # Expect at least one Binding per action; multi-key actions emit more.
-    total_keys = sum(len(keys) for keys in keymap.all().values())
-    assert len(bindings) == total_keys
-
-
-def test_to_textual_bindings_replaces_dots_with_underscores() -> None:
-    keymap = KeymapStore()
-    actions = ActionRegistry()
-    resolver = BindingResolver(keymap=keymap, actions=actions)
-
-    bindings = resolver.to_textual_bindings()
-    quit_binding = next(b for b in bindings if b.key == "q")
-    assert quit_binding.action == "app_quit"
-
-
-def test_to_textual_bindings_makes_secondary_keys_hidden() -> None:
-    keymap = KeymapStore()
-    actions = ActionRegistry()
-    resolver = BindingResolver(keymap=keymap, actions=actions)
-
-    bindings = resolver.to_textual_bindings()
-    # `app.quit` has ("q", "ctrl+c"); the second should be show=False.
-    q_binding = next(b for b in bindings if b.key == "q")
-    ctrl_c_binding = next(b for b in bindings if b.key == "ctrl+c")
-    assert q_binding.show is True
-    assert ctrl_c_binding.show is False
-
-
-def test_to_textual_bindings_hides_cursor_chips() -> None:
-    """Cursor moves are routed via the binding layer but never appear in the
-    Textual footer chip — the bottom hint legend already shows them."""
-    keymap = KeymapStore()
-    actions = ActionRegistry()
+    actions = _registry("app.quit")  # nothing else registered
     resolver = BindingResolver(keymap=keymap, actions=actions)
     bindings = resolver.to_textual_bindings()
-    move_up_bindings = [b for b in bindings if b.action == "pane_move_up"]
-    assert move_up_bindings  # exists
-    assert all(b.show is False for b in move_up_bindings)
+    # Only app.quit's two keys emit; deferred/handlerless emit nothing.
+    assert {b.key for b in bindings} == {"q", "ctrl+c"}
 
 
-def test_resolve_action_id_roundtrip() -> None:
-    keymap = KeymapStore()
-    actions = ActionRegistry()
-    resolver = BindingResolver(keymap=keymap, actions=actions)
-
-    assert resolver.resolve_action_id("q") == "app.quit"
-    assert resolver.resolve_action_id(":") == "app.command_palette"
-    assert resolver.resolve_action_id("nope-no-such-key") is None
+def test_binding_action_uses_dispatch_form() -> None:
+    actions = _registry("pane.copy")
+    resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
+    (copy,) = [b for b in resolver.to_textual_bindings() if b.key == "c"]
+    assert copy.action == "dispatch('pane.copy')"
 
 
-def test_keys_for_returns_tuple() -> None:
-    keymap = KeymapStore()
-    actions = ActionRegistry()
-    resolver = BindingResolver(keymap=keymap, actions=actions)
+def test_priority_true_except_quit() -> None:
+    actions = _registry("app.quit", "pane.switch_focus")
+    resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
+    by_key = {b.key: b for b in resolver.to_textual_bindings()}
+    assert by_key["q"].priority is False
+    assert by_key["tab"].priority is True
 
-    assert resolver.keys_for("app.quit") == ("q", "ctrl+c")
-    assert resolver.keys_for("does.not.exist") == ()
+
+def test_first_key_visible_secondary_hidden() -> None:
+    # Byte-identical to the live BINDINGS: move_up is a visible action, so its
+    # first key shows and the vi-alias is hidden; a non-visible action's keys
+    # stay hidden entirely.
+    actions = _registry("app.quit", "pane.move_up", "pane.switch_focus_back")
+    resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
+    by_key = {b.key: b for b in resolver.to_textual_bindings()}
+    assert by_key["q"].show is True  # visible action, first key
+    assert by_key["ctrl+c"].show is False  # secondary key of a visible action
+    assert by_key["up"].show is True  # move_up is visible (matches live app)
+    assert by_key["k"].show is False  # secondary (vi alias) hidden
+    assert by_key["shift+tab"].show is False  # switch_focus_back not visible
+
+
+def test_punctuation_keys_translate_to_textual_names() -> None:
+    # ":" -> colon, "," -> comma, "?" -> question_mark (a literal Binding(",")
+    # is invalid in Textual, which splits on comma).
+    actions = _registry("app.help", "app.open_settings")
+    resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
+    keys = {b.key for b in resolver.to_textual_bindings()}
+    assert "colon" in keys
+    assert ":" not in keys
+    assert "question_mark" in keys
+    assert "?" not in keys
+    assert "comma" in keys
+    assert "," not in keys
 
 
 def test_overlay_keymap_reflects_in_bindings() -> None:
     keymap = KeymapStore(overlay={"app.quit": "Q"})
-    actions = ActionRegistry()
-    resolver = BindingResolver(keymap=keymap, actions=actions)
-
-    bindings = resolver.to_textual_bindings()
-    quit_bindings = [b for b in bindings if b.action == "app_quit"]
+    resolver = BindingResolver(keymap=keymap, actions=_registry("app.quit"))
+    quit_bindings = [b for b in resolver.to_textual_bindings() if b.key == "Q"]
     # Single key now since overlay replaces wholesale.
     assert len(quit_bindings) == 1
-    assert quit_bindings[0].key == "Q"
+    assert quit_bindings[0].action == "dispatch('app.quit')"
+
+
+def test_resolve_action_id_roundtrip() -> None:
+    resolver = BindingResolver(keymap=KeymapStore(), actions=ActionRegistry())
+    assert resolver.resolve_action_id("q") == "app.quit"
+    assert resolver.resolve_action_id(":") == "app.help"  # ":" now aliases help
+    assert resolver.resolve_action_id("nope-no-such-key") is None
+
+
+def test_keys_for_returns_tuple() -> None:
+    resolver = BindingResolver(keymap=KeymapStore(), actions=ActionRegistry())
+    assert resolver.keys_for("app.quit") == ("q", "ctrl+c")
+    assert resolver.keys_for("does.not.exist") == ()

@@ -27,12 +27,19 @@ class KeymapStore:
 
     DEFAULT_BINDINGS: ClassVar[dict[str, tuple[str, ...]]] = {
         "app.quit": ("q", "ctrl+c"),
-        "app.command_palette": (":", "ctrl+k"),
-        "app.help": ("?",),
+        # ``:`` is aliased to ``app.help`` until the command palette is
+        # wired; when it lands, move ``:`` back here and drop it from help.
+        "app.command_palette": ("ctrl+k",),
+        "app.help": ("?", ":"),
+        "app.open_settings": (",",),
         "pane.move_up": ("up", "k"),
         "pane.move_down": ("down", "j"),
         "pane.descend": ("enter",),
-        "pane.ascend": ("backspace", "left"),
+        "pane.ascend": ("backspace",),
+        "pane.modal_left": ("left",),
+        "pane.modal_right": ("right",),
+        "pane.mark_up": ("shift+up",),
+        "pane.mark_down": ("shift+down",),
         "pane.switch_focus": ("tab",),
         "pane.switch_focus_back": ("shift+tab",),
         "pane.quick_look": ("space",),

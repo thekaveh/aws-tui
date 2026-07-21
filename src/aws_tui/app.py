@@ -13,6 +13,7 @@ import contextlib
 import os
 import sys
 from collections import deque
+from collections.abc import Awaitable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from aws_tui.vm.file_manager.pane_vm import PaneState
 
 from textual.app import App, ComposeResult
-from textual.binding import Binding, BindingType
+from textual.binding import BindingsMap, BindingType
 from textual.containers import Container, Horizontal
 from textual.widgets import OptionList, Static
 
@@ -210,41 +211,13 @@ class AwsTuiApp(App[None]):
     """
 
     # Minimum-viable input router (input-router-deferred from M6). The
-    # `[keybindings]` overlay in config.toml is parsed by `KeymapStore` but
-    # the action→Textual handler indirection isn't wired yet; until it is,
-    # the bindings here drive the most essential navigation actions
-    # directly. Spec §4.2 documents the full set.
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("q", "quit", "Quit", show=True),
-        Binding("ctrl+c", "quit", "Quit", show=False),
-        # priority=True puts these *ahead* of Textual's Screen-level defaults
-        # for focus rotation (Tab/Shift+Tab/arrows). Without priority, Screen
-        # consumes the key for its built-in focus traversal before the App
-        # handler ever fires — that's the "Tab does nothing" symptom.
-        Binding("tab", "switch_focus", "Switch pane", show=True, priority=True),
-        Binding("shift+tab", "switch_focus_reverse", "Switch pane", show=False, priority=True),
-        Binding("up,k", "move_up", "↑", show=True, priority=True),
-        Binding("down,j", "move_down", "↓", show=True, priority=True),
-        Binding("enter", "descend", "Open", show=True, priority=True),
-        Binding("backspace", "ascend", "Up", show=True, priority=True),
-        Binding("left", "modal_left_or_ascend", "←", show=False, priority=True),
-        Binding("right", "modal_right", "→", show=False, priority=True),
-        Binding("r", "refresh", "Refresh", show=True, priority=True),
-        Binding("question_mark", "help", "Help", show=True, priority=True),
-        Binding("colon", "help", "Help", show=True, priority=True),
-        Binding("t", "themes", "Themes", show=True, priority=True),
-        Binding("T", "cycle_theme", "Cycle theme", show=True, priority=True),
-        Binding("comma", "open_settings", "Settings", show=True, priority=True),
-        Binding("c", "copy", "Copy", show=True, priority=True),
-        Binding("d", "delete", "Delete", show=True, priority=True),
-        # ``m`` (toggle nav rail expand/collapse) was dropped in the
-        # nav-as-pane rework — the rail is always visible at a single
-        # fixed width and shows TEXT labels (no icons), so there is
-        # nothing to toggle.
-        Binding("S", "swap_source", "Swap source", show=True, priority=True),
-        Binding("shift+up", "mark_up", "Mark ↑", show=False, priority=True),
-        Binding("shift+down", "mark_down", "Mark ↓", show=False, priority=True),
-    ]
+    # Bindings are installed at runtime in ``__init__`` from
+    # ``BindingResolver.to_textual_bindings()`` so ``config.toml``
+    # ``[keybindings]`` overlays take effect. Textual's base-App bindings
+    # (``ctrl+q`` quit, ``ctrl+p`` command palette) survive ``super().__init__``
+    # and are preserved. The empty ClassVar keeps Textual's binding machinery
+    # happy before the resolver install.
+    BINDINGS: ClassVar[list[BindingType]] = []
 
     def __init__(self, context: AppContext | None = None) -> None:
         super().__init__()
@@ -256,7 +229,35 @@ class AwsTuiApp(App[None]):
             actions=self._actions,
         )
         # Register handlers for the action ids the BindingResolver advertises.
+        # The resolver materializes a Textual binding only for registered ids,
+        # so deferred/unwired actions (quick_look, command_palette, …) stay
+        # unbound. Each id maps to its existing ``action_*`` handler.
         self._actions.register("app.quit", self._handle_quit)
+        self._actions.register("pane.switch_focus", self.action_switch_focus)
+        self._actions.register("pane.switch_focus_back", self.action_switch_focus_reverse)
+        self._actions.register("pane.move_up", self.action_move_up)
+        self._actions.register("pane.move_down", self.action_move_down)
+        self._actions.register("pane.descend", self.action_descend)
+        self._actions.register("pane.ascend", self.action_ascend)
+        self._actions.register("pane.modal_left", self.action_modal_left_or_ascend)
+        self._actions.register("pane.modal_right", self.action_modal_right)
+        self._actions.register("pane.refresh", self.action_refresh)
+        self._actions.register("app.help", self.action_help)
+        self._actions.register("app.themes", self.action_themes)
+        self._actions.register("app.cycle_theme", self.action_cycle_theme)
+        self._actions.register("app.open_settings", self.action_open_settings)
+        self._actions.register("pane.copy", self.action_copy)
+        self._actions.register("pane.delete", self.action_delete)
+        self._actions.register("app.swap_source", self.action_swap_source)
+        self._actions.register("pane.mark_up", self.action_mark_up)
+        self._actions.register("pane.mark_down", self.action_mark_down)
+        # Install the resolver-materialized bindings, keeping Textual's built-in
+        # ``ctrl+q`` (alt-quit) and ``ctrl+p`` (command palette) that arrived via
+        # ``super().__init__``. ``ctrl+c`` is overridden by the resolver's
+        # ``app.quit`` binding (Textual's default maps it to help_quit).
+        installed = list(self._resolver.to_textual_bindings())
+        for key, binds in BindingsMap(installed).key_to_bindings.items():
+            self._bindings.key_to_bindings[key] = list(binds)
         # Action ring buffer feeds the crash dump per spec §7.10. Each entry
         # is a short ISO-timestamped action id string; we keep the most
         # recent ``_ACTION_RING_SIZE`` to bound memory.
@@ -1085,6 +1086,16 @@ class AwsTuiApp(App[None]):
         # cannot await. Schedule the async path on the event loop
         # so cleanup still runs instead of being silently dropped.
         self.run_worker(self.action_quit(), exclusive=True, group="shutdown")
+
+    def action_dispatch(self, action_id: str) -> None | Awaitable[None]:
+        """Single Textual action behind every resolver-materialized binding.
+
+        Each installed ``Binding`` uses ``dispatch('<action_id>')``; Textual
+        calls this method, which forwards to the :class:`ActionRegistry` that
+        holds the real handler. Returning the handler's awaitable (if any)
+        lets Textual await async actions.
+        """
+        return self._actions.invoke(action_id)
 
     def _dual_pane(self) -> DualPaneVM | None:
         """Return the currently-hosted ``DualPaneVM`` (or None).
