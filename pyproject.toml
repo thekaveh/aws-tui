@@ -92,6 +92,7 @@ dev = [
   "pytest-asyncio>=0.23",
   "pytest-cov>=4",
   "pytest-xdist>=3",
+  "pytest-rerunfailures>=14",
   "pytest-textual-snapshot>=1",
   "moto[server,s3]>=5",
   "testcontainers[minio]>=4",

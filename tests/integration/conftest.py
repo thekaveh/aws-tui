@@ -202,3 +202,31 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
             # background worker still holding a file open at teardown
             # time on Windows) doesn't fail the whole test.
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+_INTEGRATION_DIR = Path(__file__).parent
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Auto-retry the integration tier (pytest-rerunfailures).
+
+    The full-app Textual ``pilot`` tests under ``tests/integration/`` are
+    timing-sensitive: under concurrent-matrix load on slow CI runners
+    (notably Windows) a pilot step can miss its window and the test fails
+    non-deterministically (``asyncio.CancelledError``, an assertion on a
+    not-yet-settled state, etc.). A different test flakes each run, so
+    this is inherent timing jitter, not a product bug. Retry integration
+    items up to twice so a transient miss doesn't redden CI; a real,
+    deterministic failure still fails after every attempt.
+
+    A subdir conftest's ``pytest_collection_modifyitems`` receives the
+    whole session's items, so scope the marker to files under this
+    directory — unit tests must keep failing fast on the first attempt.
+    """
+    flaky = pytest.mark.flaky(reruns=2, reruns_delay=1)
+    for item in items:
+        try:
+            item.path.relative_to(_INTEGRATION_DIR)
+        except ValueError:
+            continue
+        item.add_marker(flaky)
