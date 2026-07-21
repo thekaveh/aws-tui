@@ -5,6 +5,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+# These tests exercise the repo's POSIX developer/CI shell scripts by invoking
+# them through ``/bin/bash`` with a POSIX ``PATH``. They are inapplicable on
+# Windows (no ``/bin/bash``; the scripts are POSIX-only dev tooling), matching
+# the repo's existing convention of skipping POSIX-only tests on ``win32``.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX shell scripts invoked via /bin/bash; not applicable on Windows",
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASE_PATH = "/usr/bin:/bin"
 

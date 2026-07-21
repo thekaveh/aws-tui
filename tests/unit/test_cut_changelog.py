@@ -2,8 +2,19 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from datetime import date
 from pathlib import Path
+
+import pytest
+
+# ``cut-changelog.sh`` is a POSIX bash script (release tooling); this test runs
+# it through ``bash`` via subprocess, which is not available/applicable on
+# Windows. Skip there, matching the repo's POSIX-only test convention.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="cut-changelog.sh is a POSIX bash script; not applicable on Windows",
+)
 
 
 def test_cut_changelog_preserves_and_shifts_numbered_headings(tmp_path: Path) -> None:
