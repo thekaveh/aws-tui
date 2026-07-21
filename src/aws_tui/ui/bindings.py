@@ -1,9 +1,12 @@
-"""BindingResolver — deferred bridge from :class:`KeymapStore` to Textual bindings.
+"""BindingResolver — bridge from :class:`KeymapStore` to Textual bindings.
 
 Textual widgets get their key bindings via a ``BINDINGS`` class attribute
-that lists :class:`textual.binding.Binding` objects. The app still ships
-hard-coded ``AwsTuiApp.BINDINGS`` in v0.8.x; ``config.toml`` keybinding
-overlays are parsed and validated but not yet routed through this resolver.
+that lists :class:`textual.binding.Binding` objects. ``AwsTuiApp`` installs
+these at runtime from :meth:`BindingResolver.to_textual_bindings` (see
+``AwsTuiApp.__init__``), so ``config.toml`` ``[keybindings]`` overlays take
+effect. A binding is emitted only for an action with a registered
+:class:`ActionRegistry` handler; each dispatches through the App's single
+``action_dispatch`` entry point.
 
 The action description shown by Textual's help footer is taken from a
 small label map kept in this module; missing entries fall back to the
@@ -83,6 +86,18 @@ _VISIBLE_ACTIONS: frozenset[str] = frozenset(
 #: exception keeps this in step with Textual's ``priority=False`` default.
 _NON_PRIORITY_ACTIONS: frozenset[str] = frozenset({"app.quit"})
 
+#: The keymap stores user-facing key literals, but Textual delivers punctuation
+#: under key *names* (a ``:`` press arrives as ``"colon"``) and treats ``","``
+#: as the multi-key separator (``Binding(",")`` raises ``InvalidBinding``). Map
+#: the punctuation we bind to Textual's names; letters, named keys, and
+#: modifier combos (``tab``, ``ctrl+c``, ``shift+up``) pass through unchanged.
+_KEY_NAME_OVERRIDES: dict[str, str] = {
+    ",": "comma",
+    ":": "colon",
+    "?": "question_mark",
+    "/": "slash",
+}
+
 
 class BindingResolver:
     """Bridge between Textual's BINDINGS list and our ``KeymapStore``.
@@ -138,7 +153,7 @@ class BindingResolver:
             for index, key in enumerate(keys):
                 bindings.append(
                     Binding(
-                        key=key,
+                        key=_KEY_NAME_OVERRIDES.get(key, key),
                         action=f"dispatch({action_id!r})",
                         description=description,
                         show=index == 0 and visible,

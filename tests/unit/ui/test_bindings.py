@@ -52,6 +52,20 @@ def test_first_key_visible_secondary_hidden() -> None:
     assert by_key["shift+tab"].show is False  # switch_focus_back not visible
 
 
+def test_punctuation_keys_translate_to_textual_names() -> None:
+    # ":" -> colon, "," -> comma, "?" -> question_mark (a literal Binding(",")
+    # is invalid in Textual, which splits on comma).
+    actions = _registry("app.help", "app.open_settings")
+    resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
+    keys = {b.key for b in resolver.to_textual_bindings()}
+    assert "colon" in keys
+    assert ":" not in keys
+    assert "question_mark" in keys
+    assert "?" not in keys
+    assert "comma" in keys
+    assert "," not in keys
+
+
 def test_overlay_keymap_reflects_in_bindings() -> None:
     keymap = KeymapStore(overlay={"app.quit": "Q"})
     resolver = BindingResolver(keymap=keymap, actions=_registry("app.quit"))
