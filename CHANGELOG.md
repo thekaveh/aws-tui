@@ -19,6 +19,14 @@ will be set at cut time.
 
 ### 1.1.1. Added
 
+- **Quick Look preview** (`Space`). Pressing `Space` on a file opens the
+  built-in Quick Look modal streaming the first 64 KB of the cursor file
+  (mime guessed from the extension); directories / the `..` link / an empty
+  pane are ignored. Registers the `pane.quick_look` handler the keystone
+  reserved, driving the existing `QuickLookVM` + `QuickLook` modal via the FS
+  provider's `read_stream`. Deferred to follow-ons: the mouse-click
+  (`preview_requested`) trigger and the full-file `$PAGER` shell-out. Spec:
+  `docs/superpowers/specs/2026-07-21-quick-look-wiring-design.md`.
 - **Keybinding overlays now take effect** (`BindingResolver` keystone).
   `AwsTuiApp` installs its key bindings at runtime from
   `BindingResolver.to_textual_bindings()` instead of a hard-coded
