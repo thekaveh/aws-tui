@@ -19,6 +19,13 @@ will be set at cut time.
 
 ### 1.1.1. Added
 
+- **Command palette** (`:` / `Ctrl+K`). Opens a fuzzy-filterable palette of
+  app commands — Theme picker, Cycle theme, Swap pane source, Settings, Help,
+  Quit — each dispatching through the same `ActionRegistry` path as its key
+  binding. `:` moves back from help to the palette (help keeps `?`), per the
+  keystone plan. Deferred: dynamic commands (`switch connection/theme <name>`)
+  and consolidating with Textual's built-in `Ctrl+P` palette. Spec:
+  `docs/superpowers/specs/2026-07-21-command-palette-wiring-design.md`.
 - **Quick Look preview** (`Space`). Pressing `Space` on a file opens the
   built-in Quick Look modal streaming the first 64 KB of the cursor file
   (mime guessed from the extension); directories / the `..` link / an empty

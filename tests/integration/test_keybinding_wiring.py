@@ -31,7 +31,8 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("right", "dispatch('pane.modal_right')", False, True),
     ("r", "dispatch('pane.refresh')", True, True),
     ("question_mark", "dispatch('app.help')", True, True),
-    ("colon", "dispatch('app.help')", False, True),
+    ("colon", "dispatch('app.command_palette')", True, True),
+    ("ctrl+k", "dispatch('app.command_palette')", False, True),
     ("t", "dispatch('app.themes')", True, True),
     ("T", "dispatch('app.cycle_theme')", True, True),
     ("comma", "dispatch('app.open_settings')", True, True),
@@ -63,9 +64,9 @@ def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore
     app = AwsTuiApp(app_context_factory())
     keys = set(app._bindings.key_to_bindings)
     # Deferred (handlerless) actions' keys must NOT be bound: filter (slash),
-    # enter_multiselect (v), select_all/authenticate (a), move (m), new (n),
-    # command_palette (ctrl+k). (`space` is now bound to pane.quick_look.)
-    for k in ("slash", "v", "a", "m", "n", "ctrl+k"):
+    # enter_multiselect (v), select_all/authenticate (a), move (m), new (n).
+    # (`space`->quick_look and `:`/`ctrl+k`->command_palette are now wired.)
+    for k in ("slash", "v", "a", "m", "n"):
         assert k not in keys, f"{k} should be unbound (handlerless)"
 
 
