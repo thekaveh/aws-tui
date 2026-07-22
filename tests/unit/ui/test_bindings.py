@@ -55,10 +55,10 @@ def test_first_key_visible_secondary_hidden() -> None:
 def test_punctuation_keys_translate_to_textual_names() -> None:
     # ":" -> colon, "," -> comma, "?" -> question_mark (a literal Binding(",")
     # is invalid in Textual, which splits on comma).
-    actions = _registry("app.help", "app.open_settings")
+    actions = _registry("app.command_palette", "app.help", "app.open_settings")
     resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
     keys = {b.key for b in resolver.to_textual_bindings()}
-    assert "colon" in keys
+    assert "colon" in keys  # ":" (app.command_palette) -> colon
     assert ":" not in keys
     assert "question_mark" in keys
     assert "?" not in keys
@@ -78,7 +78,7 @@ def test_overlay_keymap_reflects_in_bindings() -> None:
 def test_resolve_action_id_roundtrip() -> None:
     resolver = BindingResolver(keymap=KeymapStore(), actions=ActionRegistry())
     assert resolver.resolve_action_id("q") == "app.quit"
-    assert resolver.resolve_action_id(":") == "app.help"  # ":" now aliases help
+    assert resolver.resolve_action_id(":") == "app.command_palette"
     assert resolver.resolve_action_id("nope-no-such-key") is None
 
 

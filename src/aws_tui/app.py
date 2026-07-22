@@ -16,6 +16,7 @@ import sys
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
 
@@ -41,6 +42,7 @@ from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
 from aws_tui.ui.widgets.brand_banner import BrandBanner
+from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
@@ -54,6 +56,7 @@ from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.version import __version__
+from aws_tui.vm.chrome.command_palette_vm import PaletteEntry
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
@@ -65,6 +68,17 @@ from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 _ACTION_RING_SIZE = 100
 _QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
+
+#: Curated app-level commands surfaced in the command palette (action_id, label).
+#: Each dispatches through the ActionRegistry — the same path as its key binding.
+_PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("app.themes", "Theme picker"),
+    ("app.cycle_theme", "Cycle theme"),
+    ("app.swap_source", "Swap pane source"),
+    ("app.open_settings", "Settings"),
+    ("app.help", "Help"),
+    ("app.quit", "Quit"),
+)
 
 
 async def _first_bytes(source: AsyncIterator[bytes], limit: int) -> AsyncIterator[bytes]:
@@ -305,6 +319,7 @@ class AwsTuiApp(App[None]):
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
+        self._actions.register("app.command_palette", self.action_command_palette)
         # Install the resolver-materialized bindings, keeping Textual's built-in
         # ``ctrl+q`` (alt-quit) and ``ctrl+p`` (command palette) that arrived via
         # ``super().__init__``. ``ctrl+c`` is overridden by the resolver's
@@ -321,6 +336,7 @@ class AwsTuiApp(App[None]):
         # unhandled exception so ``main()`` can print the dump path and
         # re-raise after the app has torn down.
         self._crash_report: CrashReport | None = None
+        self._command_palette_populated: bool = False
         self._pane_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
         self._nav_selection_sub: DisposableBase | None = None
@@ -1180,6 +1196,30 @@ class AwsTuiApp(App[None]):
         content = _build_quick_look_content(entry, pane.provider, path=pane.path.join(entry.name))
         self._app_ctx.quick_look_vm.open_command.execute(content)
         self.push_screen(QuickLook(self._app_ctx.quick_look_vm, hub=self._app_ctx.hub))
+
+    def _populate_command_palette(self) -> None:
+        """Register the curated app commands into the palette (idempotent).
+
+        Each entry's action dispatches through the ActionRegistry, so selecting
+        a command is identical to pressing its key. ``register_entry`` replaces
+        by id, so re-running is a no-op; the flag just avoids redundant work.
+        """
+        if self._command_palette_populated:
+            return
+        vm = self._app_ctx.command_palette_vm
+        for action_id, label in _PALETTE_COMMANDS:
+            vm.register_entry(
+                PaletteEntry(id=action_id, label=label, category="app"),
+                partial(self._actions.invoke, action_id),
+            )
+        self._command_palette_populated = True
+
+    def action_command_palette(self) -> None:
+        """Open the fuzzy command palette (bound to ``:`` / ``Ctrl+K``)."""
+        self.record_action("app.command_palette")
+        self._populate_command_palette()
+        self._app_ctx.command_palette_vm.open_command.execute()
+        self.push_screen(CommandPalette(self._app_ctx.command_palette_vm, hub=self._app_ctx.hub))
 
     def _dual_pane(self) -> DualPaneVM | None:
         """Return the currently-hosted ``DualPaneVM`` (or None).
