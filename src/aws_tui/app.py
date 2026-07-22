@@ -24,7 +24,7 @@ from rich.markup import escape
 
 if TYPE_CHECKING:
     from aws_tui.domain.filesystem import FileEntry, FileSystemProvider, PathRef
-    from aws_tui.vm.file_manager.pane_vm import PaneState
+    from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 
 from textual.app import App, ComposeResult
 from textual.binding import BindingsMap, BindingType
@@ -32,6 +32,7 @@ from textual.containers import Container, Horizontal
 from textual.widgets import OptionList, Static
 
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.domain.filesystem import EntryKind
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
@@ -47,6 +48,7 @@ from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.nav_menu import NavMenu
+from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
@@ -302,6 +304,7 @@ class AwsTuiApp(App[None]):
         self._actions.register("app.swap_source", self.action_swap_source)
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
+        self._actions.register("pane.quick_look", self.action_quick_look)
         # Install the resolver-materialized bindings, keeping Textual's built-in
         # ``ctrl+q`` (alt-quit) and ``ctrl+p`` (command palette) that arrived via
         # ``super().__init__``. ``ctrl+c`` is overridden by the resolver's
@@ -1147,6 +1150,36 @@ class AwsTuiApp(App[None]):
         lets Textual await async actions.
         """
         return self._actions.invoke(action_id)
+
+    def _focused_file_pane(self) -> PaneVM | None:
+        """Return the focused file-manager pane, or None when not applicable.
+
+        Mirrors ``action_copy``'s dual-pane lookup; None when the file manager
+        isn't the active page (e.g. the Settings / EMR pages have no panes).
+        """
+        dual = self._dual_pane()
+        if dual is None:
+            return None
+        return getattr(dual, "focused_pane", None)
+
+    def action_quick_look(self) -> None:
+        """Open a 64 KB Quick Look preview for the focused pane's cursor file.
+
+        Bound to ``Space`` via ``pane.quick_look``. No-op unless a file sits
+        under the cursor — directories, the ``..`` parent link, and an empty
+        pane are ignored.
+        """
+        self.record_action("pane.quick_look")
+        pane = self._focused_file_pane()
+        if pane is None:
+            return
+        entry_vm = pane.selected_entry
+        if entry_vm is None or entry_vm.kind is not EntryKind.FILE:
+            return
+        entry = entry_vm.entry
+        content = _build_quick_look_content(entry, pane.provider, path=pane.path.join(entry.name))
+        self._app_ctx.quick_look_vm.open_command.execute(content)
+        self.push_screen(QuickLook(self._app_ctx.quick_look_vm, hub=self._app_ctx.hub))
 
     def _dual_pane(self) -> DualPaneVM | None:
         """Return the currently-hosted ``DualPaneVM`` (or None).
