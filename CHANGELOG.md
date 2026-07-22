@@ -19,6 +19,30 @@ will be set at cut time.
 
 ### 1.1.1. Added
 
+- **Quick Look preview** (`Space`). Pressing `Space` on a file opens the
+  built-in Quick Look modal streaming the first 64 KB of the cursor file
+  (mime guessed from the extension); directories / the `..` link / an empty
+  pane are ignored. Registers the `pane.quick_look` handler the keystone
+  reserved, driving the existing `QuickLookVM` + `QuickLook` modal via the FS
+  provider's `read_stream`. Deferred to follow-ons: the mouse-click
+  (`preview_requested`) trigger and the full-file `$PAGER` shell-out. Spec:
+  `docs/superpowers/specs/2026-07-21-quick-look-wiring-design.md`.
+- **Keybinding overlays now take effect** (`BindingResolver` keystone).
+  `AwsTuiApp` installs its key bindings at runtime from
+  `BindingResolver.to_textual_bindings()` instead of a hard-coded
+  `BINDINGS` ClassVar, so a `[keybindings]` table in `config.toml`
+  remaps any handled action on the live keymap (e.g. `pane.copy = "y"`).
+  Each binding dispatches through a single `action_dispatch(id)` into the
+  `ActionRegistry`; the resolver emits a binding only for actions with a
+  registered handler, so deferred/unwired actions stay unbound. Default
+  behavior is byte-identical to the previous bindings — guarded by a
+  fidelity test over every installed binding (key/action/show/priority)
+  and a pilot test that the priority `tab` binding still fires (no "Tab
+  does nothing" regression). Clears the `[0.8.0]` *"BindingResolver is
+  constructed but unwired"* deferred item; the features that ride on it
+  (Quick Look, command palette) still need their own handlers before
+  their keys bind. Spec:
+  `docs/superpowers/specs/2026-07-21-binding-resolver-keystone-design.md`.
 - **Demo mode** (PR #97 + #104 polish). ``AWS_TUI_DEMO=1`` or
   ``--demo`` boots the full UI against seeded in-memory S3 + EMR
   fakes — no AWS credentials, no real network calls. Persistent

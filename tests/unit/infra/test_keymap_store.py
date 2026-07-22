@@ -14,12 +14,25 @@ class TestDefaults:
 
     def test_resolve_command_palette_default(self) -> None:
         store = KeymapStore()
-        assert store.resolve("app.command_palette") == (":", "ctrl+k")
+        # ":" is aliased to help until the command palette is wired; the
+        # palette keeps only ctrl+k for now.
+        assert store.resolve("app.command_palette") == ("ctrl+k",)
 
     def test_vi_navigation_defaults_match_live_app_bindings(self) -> None:
         store = KeymapStore()
         assert store.resolve("pane.move_up") == ("up", "k")
         assert store.resolve("pane.move_down") == ("down", "j")
+
+    def test_default_bindings_reproduce_runtime_keys(self) -> None:
+        d = KeymapStore().all()
+        assert d["app.help"] == ("?", ":")
+        assert d["app.command_palette"] == ("ctrl+k",)  # ":" moved to help
+        assert d["pane.ascend"] == ("backspace",)  # "left" split out
+        assert d["pane.modal_left"] == ("left",)
+        assert d["pane.modal_right"] == ("right",)
+        assert d["app.open_settings"] == (",",)
+        assert d["pane.mark_up"] == ("shift+up",)
+        assert d["pane.mark_down"] == ("shift+down",)
 
     def test_unknown_action_raises(self) -> None:
         store = KeymapStore()
@@ -57,7 +70,7 @@ class TestOverlay:
     def test_unrelated_defaults_untouched_by_overlay(self) -> None:
         store = KeymapStore(overlay={"app.quit": "ctrl+d"})
         assert store.resolve("pane.copy") == ("c",)
-        assert store.resolve("app.command_palette") == (":", "ctrl+k")
+        assert store.resolve("app.command_palette") == ("ctrl+k",)
 
     def test_all_includes_overlay_overrides(self) -> None:
         store = KeymapStore(overlay={"app.quit": "ctrl+d"})
