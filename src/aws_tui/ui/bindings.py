@@ -65,6 +65,7 @@ def _describe(action_id: str) -> str:
 _VISIBLE_ACTIONS: frozenset[str] = frozenset(
     {
         "app.quit",
+        "app.command_palette",
         "pane.switch_focus",
         "pane.move_up",
         "pane.move_down",
