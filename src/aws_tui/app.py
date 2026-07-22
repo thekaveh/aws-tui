@@ -10,10 +10,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import mimetypes
 import os
 import sys
 from collections import deque
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
@@ -22,7 +23,7 @@ from reactivex.abc import DisposableBase
 from rich.markup import escape
 
 if TYPE_CHECKING:
-    from aws_tui.domain.filesystem import FileSystemProvider
+    from aws_tui.domain.filesystem import FileEntry, FileSystemProvider, PathRef
     from aws_tui.vm.file_manager.pane_vm import PaneState
 
 from textual.app import App, ComposeResult
@@ -54,12 +55,62 @@ from aws_tui.version import __version__
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.messages import ConnectionListChangedMessage, ThemeChangedMessage
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 _ACTION_RING_SIZE = 100
+_QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
+
+
+async def _first_bytes(source: AsyncIterator[bytes], limit: int) -> AsyncIterator[bytes]:
+    """Yield chunks from ``source`` until ``limit`` bytes have been emitted.
+
+    Bounds a Quick Look preview to the first ``limit`` bytes regardless of the
+    provider's chunk size, truncating the final chunk if it would overshoot.
+    """
+    remaining = limit
+    async for chunk in source:
+        if remaining <= 0:
+            break
+        if len(chunk) > remaining:
+            yield chunk[:remaining]
+            break
+        yield chunk
+        remaining -= len(chunk)
+
+
+async def _stream_preview(
+    provider: FileSystemProvider, path: PathRef, limit: int
+) -> AsyncIterator[bytes]:
+    """Await the provider's stream, then yield only its first ``limit`` bytes.
+
+    ``read_stream`` is ``async def`` (returns the iterator once awaited), so the
+    await is deferred into this lazy generator — the file isn't opened until the
+    view starts consuming the preview.
+    """
+    source = await provider.read_stream(path, chunk_size=limit)
+    async for chunk in _first_bytes(source, limit):
+        yield chunk
+
+
+def _build_quick_look_content(
+    entry: FileEntry, provider: FileSystemProvider, *, path: PathRef
+) -> QuickLookContent:
+    """Build a 64 KB Quick Look preview payload for ``entry``.
+
+    ``mime`` is guessed from the filename (falling back to a generic binary
+    type); ``chunks`` streams only the first ``_QUICK_LOOK_PREVIEW_BYTES``.
+    """
+    mime, _ = mimetypes.guess_type(entry.name)
+    return QuickLookContent(
+        title=entry.name,
+        mime=mime or "application/octet-stream",
+        chunks=_stream_preview(provider, path, _QUICK_LOOK_PREVIEW_BYTES),
+        line_count_estimate=None,
+    )
 
 
 def _build_swap_candidates(
