@@ -107,7 +107,11 @@ dev = [
   "pip-audit>=2.10.1",
   "shellcheck-py>=0.11.0.1",
 ]
-docs = ["mkdocs-material>=9.7.7,<10.0", "pyyaml>=6.0,<7.0", "cairosvg>=2.7,<3.0"]
+docs = [
+  "mkdocs-material>=9.7.7,<10.0",
+  "pyyaml>=6.0,<7.0",
+  "cairosvg>=2.7,<3.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
