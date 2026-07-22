@@ -40,6 +40,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("S", "dispatch('app.swap_source')", True, True),
     ("shift+up", "dispatch('pane.mark_up')", False, True),
     ("shift+down", "dispatch('pane.mark_down')", False, True),
+    ("space", "dispatch('pane.quick_look')", False, True),
     ("ctrl+q", "quit", False, True),
     ("ctrl+p", "command_palette", False, True),
 }
@@ -61,10 +62,10 @@ def test_default_bindings_are_byte_identical(app_context_factory) -> None:  # ty
 def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     app = AwsTuiApp(app_context_factory())
     keys = set(app._bindings.key_to_bindings)
-    # Deferred (handlerless) actions' keys must NOT be bound: quick_look/
-    # toggle_select (space), filter (slash), enter_multiselect (v),
-    # select_all/authenticate (a), move (m), new (n), command_palette (ctrl+k).
-    for k in ("space", "slash", "v", "a", "m", "n", "ctrl+k"):
+    # Deferred (handlerless) actions' keys must NOT be bound: filter (slash),
+    # enter_multiselect (v), select_all/authenticate (a), move (m), new (n),
+    # command_palette (ctrl+k). (`space` is now bound to pane.quick_look.)
+    for k in ("slash", "v", "a", "m", "n", "ctrl+k"):
         assert k not in keys, f"{k} should be unbound (handlerless)"
 
 
