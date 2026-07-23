@@ -2848,8 +2848,16 @@ class AwsTuiApp(App[None]):
             ctx.confirm_vm.dispose()
         with contextlib.suppress(Exception):
             ctx.transfers_vm.dispose()
+        # Keep the hosted VM's graceful shutdown alive through caller
+        # cancellation. Root disposal must not race its hook.
         with contextlib.suppress(Exception, asyncio.CancelledError):
-            await ctx.root_vm.content_host.shutdown()
+            host_shutdown = asyncio.create_task(ctx.root_vm.content_host.shutdown())
+            while not host_shutdown.done():
+                try:
+                    await asyncio.shield(host_shutdown)
+                except asyncio.CancelledError:
+                    continue
+            await host_shutdown
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
         with contextlib.suppress(Exception):
