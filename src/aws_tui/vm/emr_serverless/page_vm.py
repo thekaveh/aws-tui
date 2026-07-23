@@ -224,6 +224,8 @@ class EmrServerlessPageVM:
         if self.applications.selected_id is not None:
             return
         apps = self.applications.sorted_applications
+        if not apps:
+            return
         stored_id = self._selection_store.get(self._selection_scope, "application_id")
         if stored_id is not None and any(app.id == stored_id for app in apps):
             await self.select_application(stored_id)

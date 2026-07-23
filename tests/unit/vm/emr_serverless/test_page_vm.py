@@ -6,11 +6,18 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG, ApplicationState, JobRunState
+from aws_tui.domain.emr_serverless import (
+    EMR_BOTO_CONFIG,
+    ApplicationState,
+    ApplicationSummary,
+    JobRunState,
+)
+from aws_tui.domain.filesystem import ProviderUnreachableError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
@@ -52,6 +59,35 @@ async def test_setup_loads_applications_and_auto_selects_first() -> None:
     assert {a.id for a in page.applications.applications} == {"a1", "a2"}
     # Auto-select the first app so the LEFT pane has something to load.
     assert page.applications.selected_id in {"a1", "a2"}
+
+
+@pytest.mark.asyncio
+async def test_setup_handles_empty_initial_application_list() -> None:
+    page, _ = _make()
+
+    await page.setup()
+
+    assert page.applications.state is PaneState.EMPTY
+    assert page.applications.selected_id is None
+    assert page.job_runs.application_id is None
+
+
+@pytest.mark.asyncio
+async def test_setup_handles_failed_initial_application_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, fake = _make()
+
+    async def fail_list_applications() -> list[ApplicationSummary]:
+        raise ProviderUnreachableError("network blip")
+
+    monkeypatch.setattr(fake, "list_applications", fail_list_applications)
+
+    await page.setup()
+
+    assert page.applications.state is PaneState.UNREACHABLE
+    assert page.applications.selected_id is None
+    assert page.job_runs.application_id is None
 
 
 @pytest.mark.asyncio
