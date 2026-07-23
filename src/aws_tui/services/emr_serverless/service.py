@@ -31,6 +31,7 @@ from aws_tui.domain.emr_serverless import (
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm.service_source_vm import ServiceSelectionStore
 from aws_tui.vm.services_protocol import ServiceDescriptor
 
 if TYPE_CHECKING:
@@ -165,6 +166,7 @@ class EmrServerlessService:
         self._dispatcher: Dispatcher = dispatcher
         self._client_factory: EmrClientFactory | None = emr_client_factory
         self._logs_client_factory: EmrLogsClientFactory | None = emr_logs_client_factory
+        self._selection_store = ServiceSelectionStore()
 
     # ── Service protocol ────────────────────────────────────────────────────
 
@@ -190,6 +192,7 @@ class EmrServerlessService:
             hub=self._hub,
             dispatcher=self._dispatcher,
             connection=connection,
+            selection_store=self._selection_store,
         )
 
     # ── Internal ────────────────────────────────────────────────────────────
