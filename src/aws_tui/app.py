@@ -51,6 +51,7 @@ from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.quick_look import QuickLook
+from aws_tui.ui.widgets.service_view_factory import build_service_view
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
@@ -1049,24 +1050,16 @@ class AwsTuiApp(App[None]):
             if current_vm is not None:
                 host = self.query_one("#content-host", Container)
                 await host.remove_children()
-                if _svc_id == "emr-serverless":
-                    await host.mount(
-                        EmrServerlessPage(
-                            current_vm,
-                            hub=ctx.hub,
-                            focus_coordinator=ctx.focus_coordinator,
-                            id="content-emr-page",
-                        )
+                await host.mount(
+                    build_service_view(
+                        _svc_id or "unknown",
+                        current_vm,
+                        hub=ctx.hub,
+                        focus_coordinator=ctx.focus_coordinator,
+                        dual_pane_class=DualPane,
+                        emr_page_class=EmrServerlessPage,
                     )
-                else:
-                    await host.mount(
-                        DualPane(
-                            current_vm,
-                            hub=ctx.hub,
-                            focus_coordinator=ctx.focus_coordinator,
-                            id="content-dual-pane",
-                        )
-                    )
+                )
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.failed",
@@ -2641,24 +2634,16 @@ class AwsTuiApp(App[None]):
             current_vm = ctx.root_vm.content_host.current
             if current_vm is not None:
                 await host.remove_children()
-                if service_id == "emr-serverless":
-                    await host.mount(
-                        EmrServerlessPage(
-                            current_vm,
-                            hub=ctx.hub,
-                            focus_coordinator=ctx.focus_coordinator,
-                            id="content-emr-page",
-                        )
+                await host.mount(
+                    build_service_view(
+                        service_id,
+                        current_vm,
+                        hub=ctx.hub,
+                        focus_coordinator=ctx.focus_coordinator,
+                        dual_pane_class=DualPane,
+                        emr_page_class=EmrServerlessPage,
                     )
-                else:
-                    await host.mount(
-                        DualPane(
-                            current_vm,
-                            hub=ctx.hub,
-                            focus_coordinator=ctx.focus_coordinator,
-                            id="content-dual-pane",
-                        )
-                    )
+                )
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.mount_failed",

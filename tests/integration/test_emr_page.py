@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from aws_tui import app as app_module
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
 from aws_tui.services.emr_serverless.service import EmrServerlessService
@@ -70,9 +71,20 @@ _S3COMPAT_TOML = (
 
 
 @pytest.mark.asyncio
-async def test_emr_page_mounts_on_aws_connection(tmp_path: Path) -> None:
+async def test_emr_page_mounts_on_aws_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    factory_calls: list[str] = []
+    original_factory = app_module.build_service_view
+
+    def recording_factory(service_id: str, vm: object, **kwargs: object) -> object:
+        factory_calls.append(service_id)
+        return original_factory(service_id, vm, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(app_module, "build_service_view", recording_factory)
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
@@ -85,6 +97,7 @@ async def test_emr_page_mounts_on_aws_connection(tmp_path: Path) -> None:
             assert len(host.query(EmrServerlessPage)) == 1, (
                 "expected EmrServerlessPage mounted in #content-host"
             )
+            assert "emr-serverless" in factory_calls
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
