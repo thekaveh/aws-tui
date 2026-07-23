@@ -90,6 +90,27 @@ async def test_unfocused_pane_unaffected_by_vm_swap() -> None:
         right.dispose()
 
 
+@pytest.mark.asyncio
+async def test_pane_source_swap_does_not_change_active_connection() -> None:
+    """The S3 dual-pane path owns independent sources, not RootVM state."""
+    from aws_tui.app import AwsTuiApp
+    from aws_tui.composition import build_app_context
+
+    ctx = build_app_context(demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            dual = app._dual_pane()
+            assert dual is not None
+            active = ctx.root_vm.active_connection
+            assert active is not None
+            await app.action_swap_source()
+            assert ctx.root_vm.active_connection == active
+    finally:
+        ctx.root_vm.dispose()
+
+
 def test_all_four_pane_combinations_are_constructible() -> None:
     """Sanity: the user can put any of {S3, local} x {S3, local} into
     the dual-pane. This is what swap_provider enables."""

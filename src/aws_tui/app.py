@@ -152,6 +152,37 @@ def _build_swap_candidates(
     return candidates, skipped
 
 
+def _service_source_candidates(ctx: AppContext, service_id: str) -> tuple[Connection, ...]:
+    """Return AWS connections supported by one single-context service."""
+    service = ctx.registry.get(service_id)
+    return tuple(
+        sorted(
+            (
+                connection
+                for connection in ctx.connection_resolver.list()
+                if connection.kind == "aws" and service.supports(connection)
+            ),
+            key=lambda connection: (connection.name, connection.region),
+        )
+    )
+
+
+def _next_service_source(
+    candidates: tuple[Connection, ...],
+    active: Connection | None,
+) -> Connection | None:
+    """Return the next connection in a stable service source ring."""
+    if not candidates:
+        return None
+    if active is None:
+        return candidates[0]
+    active_key = active.name, active.region
+    for index, connection in enumerate(candidates):
+        if (connection.name, connection.region) == active_key:
+            return candidates[(index + 1) % len(candidates)]
+    return candidates[0]
+
+
 def _raise_skip_toast(ctx: AppContext, skipped: list[str]) -> None:
     """Raise a one-line INFO toast naming the skipped connections.
 
@@ -1958,33 +1989,18 @@ class AwsTuiApp(App[None]):
             move.execute(delta)
 
     async def action_swap_source(self) -> None:
-        """Cycle the focused pane through every available source.
+        """Cycle the current service's source.
 
-        The cycle is built from ``ConnectionResolver.list()`` (TOML +
-        auto-discovered AWS profiles) plus the local filesystem. Each
-        press of ``Shift+S`` advances to the next candidate, wrapping
-        at the end, so the user can spin through ``aws s3 · default ·
-        us-east-1`` → ``s3-compatible · minio-local · localhost:64093``
-        → ``local`` → ``aws s3 · default · …`` without opening the
-        connection picker.
-
-        The current position is found by matching the focused pane's
-        identity label against each candidate's computed label.
-
-        On the EMR page (no DualPaneVM hosted), ``Shift+S`` cycles
-        to the NEXT application (wraps at end) — user feedback:
-        "shift + s … doesn't result in an actual app switching",
-        they want an actual switch, not just opening the picker.
-        The picker is still openable explicitly via ``a``.
+        S3 retains independent source rings for its two panes. Other AWS
+        services rebuild under the next supported AWS connection.
         """
         self.record_action("app.swap_source")
-        emr = self._emr_page()
-        if emr is not None:
-            emr.action_cycle_application_forward()
-            return
         ctx = self._app_ctx
         dual = self._dual_pane()
         if dual is None:
+            service_id = ctx.root_vm.services_menu.selected_id
+            if service_id is not None and service_id != SETTINGS_NAV_ID:
+                await self._swap_single_context_source(service_id)
             return
         focused = getattr(dual, "focused_pane", None)
         if focused is None:
@@ -2053,6 +2069,33 @@ class AwsTuiApp(App[None]):
             path_protocol=new_protocol,
             connection_key=new_conn_key,
         )
+
+    async def _swap_single_context_source(self, service_id: str) -> None:
+        """Rebuild a non-S3 service under its next supported AWS profile."""
+        ctx = self._app_ctx
+        target = _next_service_source(
+            _service_source_candidates(ctx, service_id),
+            ctx.root_vm.active_connection,
+        )
+        if target is None:
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="no AWS profiles configured",
+            )
+            return
+        try:
+            auth_state = ctx.aws_session.probe_token(target).state
+        except Exception as exc:
+            ctx.log_sink.warning(
+                "service_source.probe_failed",
+                service_id=service_id,
+                connection=target.name,
+                error_type=type(exc).__name__,
+            )
+            auth_state = TokenState.MISSING
+        await ctx.root_vm.switch_connection_and_service(target, auth_state, service_id)
+        await self._mount_service_view(service_id)
 
     def _make_s3_provider_for_connection(self, conn: Connection) -> FileSystemProvider:
         """Build the S3 pane provider through the registered S3 service.

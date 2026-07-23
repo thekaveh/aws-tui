@@ -485,15 +485,10 @@ async def test_emr_picker_commit_cascades_to_runs_pane(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
-    """``Shift+S`` on the EMR page cycles to the next application
-    (wraps at the end). User feedback: pre-fix it just opened the
-    picker; user expected an actual app switch.
-
-    The keystroke routes through ``AwsTuiApp.action_swap_source``
-    which short-circuits to ``EmrServerlessPage.action_cycle_application_forward``
-    when the EMR page is mounted.
-    """
+async def test_emr_shift_s_rebuilds_under_current_profile_when_only_one_exists(
+    tmp_path: Path,
+) -> None:
+    """``Shift+S`` remounts EMR without cycling its application selection."""
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
     fake.add_application(app_id="00other", name="ad-hoc")
@@ -516,13 +511,11 @@ async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
 
-            # Selection moved off the initial app.
-            assert page_vm.applications.selected_id != initial_app_id, (
-                "Shift+S should actually switch the application — pre-fix "
-                "it only opened the picker, which the user reported as a bug."
-            )
-            # Cascade ran: runs pane is bound to the new app.
-            assert page_vm.job_runs.application_id == page_vm.applications.selected_id
+            replacement = ctx.root_vm.content_host.current
+            assert replacement is not page_vm
+            assert replacement.source.connection_key == ("dev", "us-east-1")
+            assert replacement.applications.selected_id == initial_app_id
+            assert replacement.job_runs.application_id == initial_app_id
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
