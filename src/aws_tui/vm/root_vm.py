@@ -105,6 +105,14 @@ class RootVM:
         return self._focused_vm_id
 
     @property
+    def active_connection(self) -> Connection | None:
+        return self._connection
+
+    @property
+    def active_auth_state(self) -> TokenState | None:
+        return self._auth_state
+
+    @property
     def status(self) -> ConstructionStatus:
         return self._inner.status
 
@@ -154,6 +162,21 @@ class RootVM:
         self._auth_state = auth_state
         # Send the message; NavMenuVM and StatusBarVM are subscribed.
         self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
+
+    async def switch_connection_and_service(
+        self,
+        connection: Connection,
+        auth_state: TokenState,
+        service_id: str,
+    ) -> None:
+        """Atomically switch connection and rebuild one supported service."""
+        service = self._registry.get(service_id)
+        if not service.supports(connection):
+            raise RuntimeError(
+                f"service {service_id!r} does not support connection {connection.name!r}"
+            )
+        await self.switch_connection_with(connection, auth_state)
+        await self.switch_service(service_id)
 
     async def switch_service(self, service_id: str) -> None:
         """Build the named service's VM tree and host it.

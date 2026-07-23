@@ -2848,6 +2848,8 @@ class AwsTuiApp(App[None]):
             ctx.confirm_vm.dispose()
         with contextlib.suppress(Exception):
             ctx.transfers_vm.dispose()
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await ctx.root_vm.content_host.shutdown()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
         with contextlib.suppress(Exception):

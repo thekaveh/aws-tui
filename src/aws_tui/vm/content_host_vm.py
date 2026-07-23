@@ -113,6 +113,7 @@ class ContentHostVM:
         # dispose it (the task holds a reference to the VM; if we
         # dispose first the task may dereference disposed state).
         self._cancel_pending_setup()
+        await self._shutdown_current()
         # Dispose the previous content first so its subscriptions / tasks
         # tear down before the new one wires up.
         if self._current is not None:
@@ -169,6 +170,21 @@ class ContentHostVM:
                 # task.done() and drops the reference, and
                 # asyncio's GC emits the warning.
                 self._setup_task.add_done_callback(self._on_setup_done)
+
+    async def shutdown(self) -> None:
+        """Await the current VM's optional graceful-shutdown hook."""
+        self._cancel_pending_setup()
+        await self._shutdown_current()
+
+    async def _shutdown_current(self) -> None:
+        if self._current is None:
+            return
+        shutdown = getattr(self._current, "shutdown", None)
+        if not callable(shutdown):
+            return
+        result = shutdown()
+        if inspect.isawaitable(result):
+            await result
 
     async def _run_setup(self, setup: Any) -> None:
         """Drive ``setup``'s awaitable; swallow cancellation cleanly.
