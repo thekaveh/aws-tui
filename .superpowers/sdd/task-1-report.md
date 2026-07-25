@@ -1,4 +1,4 @@
-# Foundation Task 1 Report: Shared Service Source Context
+# Glue Task 1 Report: Shared Catalog Domain Models
 
 ## Status
 
@@ -6,161 +6,91 @@ Complete.
 
 ## Implementation
 
-- Added `ServiceSourceContext`, `SelectionScope`, and `ServiceSelectionStore` in
-  `src/aws_tui/vm/service_source_vm.py`.
-- Added immutable EMR page source identity from the supplied `Connection` and exposed it as
-  `EmrServerlessPageVM.source`.
-- Added EMR application-selection persistence scoped by service ID, connection name, and region.
-  Restores only a stored application ID that is still present after application loading; otherwise
-  uses the existing first-sorted application fallback.
-- Made `EmrServerlessService` own one long-lived selection store and inject it into every page VM
-  it builds, retaining selections across page disposal and rebuilds for the lifetime of the service.
+- Added the immutable shared Glue catalog vocabulary in
+  `src/aws_tui/domain/data_catalog.py`.
+- Added frozen, slot-backed records for catalog, database, and table references;
+  columns and storage; database/table summaries and detail; partitions; and
+  column statistics.
+- Added `TableFormat` with the required Iceberg, Hive, Hudi, Delta, and Other
+  values.
+- Added reference properties that preserve connection and region security
+  context when deriving database and catalog references.
+- Normalized `TableDetail.parameters` and `ColumnStatistics.values` by key at
+  construction time for deterministic equality and snapshots.
+- Exported every public catalog type through `__all__`.
 
 ## TDD Evidence
 
 ### RED
 
-Initial required focused command:
+Added the focused tests before creating the production module, then ran:
 
 ```text
-uv run pytest tests/unit/vm/test_service_source_vm.py tests/unit/vm/emr_serverless/test_page_vm.py -q
+uv run pytest tests/unit/domain/test_data_catalog.py -q
 ```
 
-Result: collection failed as expected with
-`ModuleNotFoundError: No module named 'aws_tui.vm.service_source_vm'`.
-
-The service ownership regression also failed before the service-level store wiring:
+Result: collection failed as expected with:
 
 ```text
-test_service_reuses_selection_store_across_replacement_pages
-AssertionError: assert 'a1' == 'a2'
+ModuleNotFoundError: No module named 'aws_tui.domain.data_catalog'
 ```
 
 ### GREEN
 
-Focused verification:
+After implementing the catalog records, ran:
 
 ```text
-uv run pytest tests/unit/vm/test_service_source_vm.py tests/unit/vm/emr_serverless/test_page_vm.py -q
-18 passed in 3.17s
+uv run pytest tests/unit/domain/test_data_catalog.py -q
 ```
 
-Broader VM and service verification:
+Result:
 
 ```text
-uv run pytest tests/unit/vm tests/unit/services -q
-475 passed in 28.97s
+19 passed in 0.40s
 ```
 
-Static checks:
+Required static and formatting checks:
 
 ```text
-uv run ruff check <changed Python files>
+uv run mypy src/aws_tui/domain/data_catalog.py
+Success: no issues found in 1 source file
+
+uv run ruff check src/aws_tui/domain/data_catalog.py tests/unit/domain/test_data_catalog.py
 All checks passed!
 
-uv run mypy <changed source files>
-Success: no issues found in 3 source files
+uv run ruff format --check src/aws_tui/domain/data_catalog.py tests/unit/domain/test_data_catalog.py
+2 files already formatted
 
-uv run ruff format --check <changed Python files>
-5 files already formatted
+git diff --check
 ```
-
-## Tests Added
-
-- Source context profile/region formatting and matching-profile label omission.
-- Selection-store isolation by service, connection, and region.
-- EMR page source identity exposure.
-- Successful selection persistence.
-- Selection restoration for a replacement page when the application remains available.
-- Rejection of unavailable stored applications in favor of the normal fallback.
-- Service-owned store reuse across page rebuilds.
 
 ## Files
 
-- `src/aws_tui/vm/service_source_vm.py`
-- `src/aws_tui/vm/emr_serverless/page_vm.py`
-- `src/aws_tui/services/emr_serverless/service.py`
-- `tests/unit/vm/test_service_source_vm.py`
-- `tests/unit/vm/emr_serverless/test_page_vm.py`
+- `src/aws_tui/domain/data_catalog.py`
+- `tests/unit/domain/test_data_catalog.py`
+- `.superpowers/sdd/task-1-report.md`
 
 ## Self-Review
 
-- `ServiceSourceContext` and `SelectionScope` are frozen, slotted dataclasses as required.
-- The label uses the exact required separator and suppresses a profile equal to the connection name.
-- Selection memory is owned by the service plugin, not by a page VM, so disposal does not erase it.
-- A stored ID is only selected after membership in the newly loaded application list is confirmed.
-- Changes stay within the required foundation scope; no Glue, Athena, Iceberg, SQL, RootVM, or S3 behavior changed.
+- All ten requested records are frozen dataclasses with `slots=True` and the
+  exact requested fields and field order.
+- No boto clients, infrastructure imports, view models, UI code, or Iceberg
+  query behavior were added.
+- Derived references retain catalog name, connection name, and region.
+- Optional timestamps and response fields use the requested nullable types.
+- Tuple-valued parameters and statistics are immutable and deterministically
+  ordered by key.
+- The focused tests cover immutability, slots, field contracts, enum values,
+  nested references, storage locations, tuple ordering, and public exports.
 
 ## Concerns
 
 No implementation concerns.
 
-The default repository-wide `uv run pytest -q` was attempted twice, but the execution wrapper detached
-both runs without a final result; the detached processes were stopped. The focused suite, broader
-VM/service suite, and static checks above are the recorded verification evidence.
+The focused test and static checks emitted an unrelated shell startup warning
+from the local environment because `/Users/kaveh/.zshenv` references a missing
+temporary file under `/tmp/vmx-cargo-182/env`; it did not affect command exit
+status or results.
 
-## Important Task 1 Review Finding Follow-up
-
-### RED
-
-Added regression coverage for empty and failed initial application loads, then ran the required
-focused command before changing implementation code:
-
-```text
-uv run pytest tests/unit/vm/emr_serverless/test_page_vm.py tests/unit/vm/test_service_source_vm.py -q
-```
-
-Result:
-
-```text
-..FF................                                                     [100%]
-2 failed, 18 passed in 3.29s
-```
-
-Both new tests failed with the expected `IndexError: tuple index out of range` at
-`await self.select_application(apps[0].id)` in `_select_after_applications_load`.
-
-### GREEN
-
-Added the empty-list guard and reran the same focused command:
-
-```text
-uv run pytest tests/unit/vm/emr_serverless/test_page_vm.py tests/unit/vm/test_service_source_vm.py -q
-```
-
-Result:
-
-```text
-....................                                                     [100%]
-20 passed in 3.21s
-```
-
-Static checks covering the changed files:
-
-```text
-uv run ruff check src/aws_tui/vm/emr_serverless/page_vm.py tests/unit/vm/emr_serverless/test_page_vm.py
-All checks passed!
-
-uv run ruff format --check src/aws_tui/vm/emr_serverless/page_vm.py tests/unit/vm/emr_serverless/test_page_vm.py
-2 files already formatted
-
-uv run mypy src/aws_tui/vm/emr_serverless/page_vm.py
-Success: no issues found in 1 source file
-
-git diff --check
-```
-
-### Changed Files
-
-- `src/aws_tui/vm/emr_serverless/page_vm.py`
-- `tests/unit/vm/emr_serverless/test_page_vm.py`
-
-### Self-Review
-
-- `_select_after_applications_load` now returns before reading `apps[0]` when the application
-  list is empty, covering both `PaneState.EMPTY` and handled provider-error refreshes.
-- Non-empty behavior is unchanged: an available stored selection is restored, otherwise the
-  first sorted application is selected.
-- Regression tests assert that setup preserves the child VM's handled state and leaves both the
-  application and dependent job-run selection unset.
-- The diff is scoped to the reported defect and its focused tests; no unrelated behavior changed.
+The broader repository suite was not run because this task is intentionally
+scoped to the shared catalog models and their focused tests.
