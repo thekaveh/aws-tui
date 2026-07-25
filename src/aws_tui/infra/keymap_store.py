@@ -54,6 +54,7 @@ class KeymapStore:
         "app.themes": ("t",),
         "app.cycle_theme": ("T",),
         "app.swap_source": ("S",),
+        "emr.next_application": ("A",),
         "auth.authenticate": ("a",),
         "modal.cancel": ("escape",),
         # EMR-page-only — bound on ``EmrServerlessPage`` widget scope

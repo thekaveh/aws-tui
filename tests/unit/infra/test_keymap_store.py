@@ -16,6 +16,11 @@ class TestDefaults:
         store = KeymapStore()
         assert store.resolve("app.command_palette") == (":", "ctrl+k")
 
+    def test_emr_next_application_has_dedicated_binding(self) -> None:
+        store = KeymapStore()
+        assert store.resolve("app.swap_source") == ("S",)
+        assert store.resolve("emr.next_application") == ("A",)
+
     def test_vi_navigation_defaults_match_live_app_bindings(self) -> None:
         store = KeymapStore()
         assert store.resolve("pane.move_up") == ("up", "k")

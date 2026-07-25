@@ -51,6 +51,7 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "pane.descend",
         "pane.refresh",
         "app.swap_source",
+        "emr.next_application",
         "emr.clone",
     ),
     # Settings is a static configuration page — no per-item
@@ -98,10 +99,7 @@ _ACTION_LABELS: dict[str, str] = {
     # "rotate to the next theme").
     "app.cycle_theme": "switch theme",
     "app.swap_source": "switch source",
-    # Service-specific label overrides handled by ``_label_for`` (the
-    # user asked for "switch source" → "switch application" when EMR
-    # is active). The generic fallback is now "switch source" for
-    # S3 (was "swap src" pre-this-batch).
+    "emr.next_application": "switch app",
     "app.quit": "quit",
     "auth.authenticate": "sign in",
     "modal.cancel": "cancel",
@@ -334,17 +332,6 @@ class HintLegendVM:
         )
 
     def _label_for(self, action_id: str) -> str:
-        """Service-aware label lookup.
-
-        User feedback: "I also expect the switch source command to
-        become switch application command [when EMR is active]". The
-        action_id stays ``app.swap_source`` (binding routing is by
-        id), but the chip label flips to ``switch app`` when EMR is
-        the active service. Generic fallback is the ``_ACTION_LABELS``
-        table.
-        """
-        if action_id == "app.swap_source" and self._current_service_id == "emr-serverless":
-            return "switch app"
         return _ACTION_LABELS.get(action_id, action_id.rsplit(".", 1)[-1])
 
 

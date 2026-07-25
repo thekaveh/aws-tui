@@ -12,6 +12,7 @@ import pytest
 from aws_tui import app as app_module
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
@@ -54,6 +55,19 @@ _AWS_TOML = (
     'kind = "aws"\n'
     'profile = "dev"\n'
     'region = "us-east-1"\n'
+    "[defaults]\n"
+    'connection = "dev"\n'
+)
+
+_MULTI_PROFILE_AWS_TOML = (
+    "[connections.dev]\n"
+    'kind = "aws"\n'
+    'profile = "dev"\n'
+    'region = "us-east-1"\n'
+    "[connections.prod]\n"
+    'kind = "aws"\n'
+    'profile = "prod"\n'
+    'region = "us-west-2"\n'
     "[defaults]\n"
     'connection = "dev"\n'
 )
@@ -516,6 +530,60 @@ async def test_emr_shift_s_rebuilds_under_current_profile_when_only_one_exists(
             assert replacement.source.connection_key == ("dev", "us-east-1")
             assert replacement.applications.selected_id == initial_app_id
             assert replacement.job_runs.application_id == initial_app_id
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_shift_s_switches_profile_and_shift_a_cycles_application(
+    tmp_path: Path,
+) -> None:
+    config_dir = _prep(tmp_path, _MULTI_PROFILE_AWS_TOML)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    dev = ctx.connection_resolver.resolve("dev")
+    prod = ctx.connection_resolver.resolve("prod")
+    ctx.connection_resolver.list = lambda: [dev, prod]  # type: ignore[method-assign]
+
+    def build_client(connection: Connection) -> _InMemoryEmr:
+        fake = _InMemoryEmr()
+        if connection == dev:
+            fake.add_application(app_id="dev-app", name="development")
+        else:
+            fake.add_application(app_id="prod-app-a", name="analytics")
+            fake.add_application(app_id="prod-app-b", name="reporting")
+        return fake
+
+    for service in ctx.root_vm._registry.all():  # type: ignore[attr-defined]
+        if isinstance(service, EmrServerlessService):
+            service._client_factory = build_client  # type: ignore[assignment]
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            page = ctx.root_vm.content_host.current
+            initial_source = page.source.connection_key
+            initial_application = page.applications.selected_id
+            assert initial_application == "dev-app"
+
+            await pilot.press("S")
+            await _await_emr_mount(pilot, app)
+
+            page = ctx.root_vm.content_host.current
+            assert page.source.connection_key != initial_source
+            assert page.applications.selected_id != initial_application
+            selected_after_source_switch = page.applications.selected_id
+
+            await pilot.press("A")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            assert page.applications.selected_id != selected_after_source_switch
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

@@ -211,7 +211,7 @@ async def test_dispose_cascades_to_children() -> None:
 
 @pytest.mark.asyncio
 async def test_cycle_application_wraps_at_end_and_cascades() -> None:
-    """Pin Shift+S behaviour: ``cycle_application(1)`` selects the
+    """Pin Shift+A behaviour: ``cycle_application(1)`` selects the
     next app and wraps at the end. The full ``select_application``
     cascade runs so JobRuns + Detail panes refresh in lockstep —
     user feedback: "shift + s … doesn't result in an actual app

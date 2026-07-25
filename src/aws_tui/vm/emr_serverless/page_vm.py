@@ -172,14 +172,14 @@ class EmrServerlessPageVM:
         """Select the next (``direction=1``) or previous
         (``direction=-1``) application in the picker's user-facing
         order, wrapping at either end. Used by the EMR page's
-        ``Shift+S`` binding ("switch app") so the keypress visibly
+        ``Shift+A`` binding ("switch app") so the keypress visibly
         moves to the next app — the explicit picker (``a``) stays
         around for long-list lookup. No-op if fewer than 2 apps
         exist.
 
         Cycle source = :attr:`ApplicationsVM.sorted_applications`,
         not the raw boto order. This keeps the dropdown listing and
-        the Shift+S ring in lockstep — STARTED apps come first, then
+        the Shift+A ring in lockstep — STARTED apps come first, then
         transitional / idle / terminated, alphabetical within each
         group. User feedback: "make sure this newly ordered list of
         applications is the source of truth through which switch app

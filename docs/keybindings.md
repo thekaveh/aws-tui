@@ -71,7 +71,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Action | Default | Notes |
 |---|---|---|
 | Open Settings | `,` (comma) | Opens the in-app Settings nav page directly. Equivalent to arrow-keying down to the ⚙ Settings row in the rail and pressing `Enter`. |
-| Cycle focused pane source | `Shift+S` (`S`) | Steps through `local` → each AWS profile (`aws s3 · {profile} · {region}`) → each `s3-compatible` connection (`s3-compatible · {name} · {endpoint}`) → wrap. The fastest way to jump between AWS accounts or s3-compatible endpoints — one keystroke per source, no command-palette modal. New connections added via the in-app Settings page (or `<config-dir>/config.toml`) join the cycle automatically. Either pane can be on any of the four `{S3-class, local}` combinations independently. |
+| Switch source | `Shift+S` (`S`) | On S3, cycles the focused pane through `local` → each AWS profile → each `s3-compatible` connection → wrap. On single-context AWS services such as EMR, rebuilds the current service under the next configured AWS profile. |
 
 > **Nav-menu visibility:** the left rail is always visible at a single
 > fixed width and shows TEXT labels (Settings docked at the bottom as
@@ -107,7 +107,7 @@ App-level `priority=True` and short-circuit through
 | Action | Default | Notes |
 |---|---|---|
 | Open application picker | `a` | Opens the applications dropdown above the LEFT pane. |
-| Cycle next application | `Shift+S` | Cycles to the next EMR application without opening the picker. On S3 the same app-level action cycles pane sources; on EMR `AwsTuiApp.action_swap_source` short-circuits to the page's next-application behavior and the Commands chip labels it as "switch app". |
+| Cycle next application | `Shift+A` | Cycles to the next EMR application without opening the picker. `Shift+S` remains available to switch the EMR page to the next configured AWS profile. |
 | State filter chips | `1` `2` `3` `4` `5` | Multi-select toggles, one chip per state in this key order: `SUCCESS` / `RUNNING` / `PENDING` / `FAILED` / `CANCELLED`. Source of truth: ``_KEY_TO_STATE`` in ``ui/widgets/emr_serverless/job_runs_pane.py``. The transient pre-terminal states `SUBMITTED` / `SCHEDULED` / `QUEUED` / `CANCELLING` are NOT chip-filterable — they always render (they're members of the initial all-on default filter set and have no toggle key). |
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the LEFT-pane row cursor; master-detail follows the cursor (the RIGHT pane re-loads on every cursor move, not only on `Enter`). |
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
@@ -138,6 +138,7 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "app.themes" = "t"
 "app.cycle_theme" = "T"
 "app.swap_source" = "S"
+"emr.next_application" = "A"
 ```
 
 The default map is declared in `infra/keymap_store.py`. At composition
@@ -159,7 +160,7 @@ The bindings that **are** wired today (in v0.8.x) and routed straight
 through `AwsTuiApp.BINDINGS` rather than the keymap store: `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
 `Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
-`c`, `d`, `S` (Shift+S), `Shift+↑`, `Shift+↓`.
+`c`, `d`, `S` (Shift+S), `A` (Shift+A), `Shift+↑`, `Shift+↓`.
 
 ## 1.3. Action IDs
 
@@ -175,7 +176,7 @@ lands (see the §1 status note).
 | `app.help` | `?` | ✓ | Help overlay |
 | `app.themes` | `t` | ✓ | Open theme picker modal |
 | `app.cycle_theme` | `T` (`shift+t`) | ✓ | Cycle to next theme without opening the modal |
-| `app.swap_source` | `S` (`shift+s`) | ✓ | Cycle the focused pane: `local` → each AWS profile → each `s3-compatible` connection → wrap |
+| `app.swap_source` | `S` (`shift+s`) | ✓ | Switch the focused S3 pane source, or rebuild the current single-context AWS service under the next profile |
 | `pane.move_up` / `pane.move_down` | `↑` / `↓` (also `k` / `j`) | ✓ | Move cursor |
 | `pane.descend` | `enter` | ✓ | Descend into folder / bucket |
 | `pane.ascend` | `backspace` / `←` | ✓ | Parent path |
@@ -193,6 +194,7 @@ lands (see the §1 status note).
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
 | `pane.refresh` | `r` | ✓ | Re-run `provider.list()` |
 | `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Shell-out to `aws sso login` |
+| `emr.next_application` | `A` (`shift+a`) | ✓ | Cycle to the next EMR application |
 | `emr.clone` | `c` (when EMR page mounted) | ✓ | Open the EMR clone-job-run modal pre-filled from the focused run (PR #83) |
 | `emr.logs.filter` | `f` (when EMR logs pane focused) | widget-scoped | Open the EMR logs filter modal |
 | `modal.cancel` | `escape` | ✓ | Cancel / close current overlay (modal-owned) |

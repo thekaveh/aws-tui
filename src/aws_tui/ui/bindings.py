@@ -30,7 +30,8 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
     "app.help": "Help",
     "app.themes": "Theme picker",
     "app.cycle_theme": "Cycle theme",
-    "app.swap_source": "Swap pane source",
+    "app.swap_source": "Switch source",
+    "emr.next_application": "Next EMR application",
     "pane.move_up": "Up",
     "pane.move_down": "Down",
     "pane.descend": "Open",
@@ -79,6 +80,7 @@ _VISIBLE_ACTIONS: frozenset[str] = frozenset(
         "pane.copy",
         "pane.delete",
         "app.swap_source",
+        "emr.next_application",
     }
 )
 

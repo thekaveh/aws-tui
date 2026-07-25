@@ -151,24 +151,15 @@ def test_dispose_unsubscribes() -> None:
     assert legend.focused_vm_id == pre
 
 
-def test_set_current_service_swaps_to_emr_chips_and_relabels_swap_source() -> None:
-    """User asked for "switch source → switch application" when EMR
-    is the active service. The action_id (``app.swap_source``) stays
-    the same — only the chip label flips."""
+def test_set_current_service_shows_dedicated_emr_application_action() -> None:
+    """EMR exposes separate source switching and application cycling chips."""
     legend, _hub = _build()
     legend.set_current_service("emr-serverless")
     swap_chip = next(a for a in legend.actions if a.action_id == "app.swap_source")
-    assert swap_chip.action_label == "switch app", (
-        f"Expected 'switch app' label for app.swap_source on EMR; got {swap_chip.action_label!r}."
-    )
-    # On S3 the label is "switch source" — full word for clarity,
-    # matching the parallel "switch theme" / "switch app" / etc.
-    # User feedback: don't compress one to "swap src"/"cycle" and
-    # leave the others verbose; both source and theme commands now
-    # read "switch X".
-    legend.set_current_service("s3")
-    swap_chip = next(a for a in legend.actions if a.action_id == "app.swap_source")
     assert swap_chip.action_label == "switch source"
+    app_chip = next(a for a in legend.actions if a.action_id == "emr.next_application")
+    assert app_chip.key_label == "A"
+    assert app_chip.action_label == "switch app"
     legend.dispose()
 
 

@@ -221,6 +221,10 @@ class EmrServerlessPage(Widget):
     # ── Public accessors ────────────────────────────────────────────────────
 
     @property
+    def vm(self) -> EmrServerlessPageVM:
+        return self._vm
+
+    @property
     def left_pane(self) -> JobRunsPane | None:
         """LEFT pane (job runs list). Public so ``AwsTuiApp``'s
         global priority key handlers can forward Up/Down/Enter/r to
@@ -279,19 +283,6 @@ class EmrServerlessPage(Widget):
     def action_open_application_picker(self) -> None:
         if self._picker is not None:
             self._picker.toggle_open()
-
-    def action_cycle_application_forward(self) -> None:
-        """Select the next application in the picker's list
-        (wraps at the end). Drives the ``Shift+S`` "switch app"
-        affordance — user feedback: the keypress should ACTUALLY
-        switch, not just open the picker. The picker is still
-        opened explicitly with ``a``.
-        """
-        self.run_worker(
-            self._vm.cycle_application(1),
-            exclusive=True,
-            group="emr-cycle-app",
-        )
 
     def on_application_picker_application_committed(
         self, event: ApplicationPicker.ApplicationCommitted

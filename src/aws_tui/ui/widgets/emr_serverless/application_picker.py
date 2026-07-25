@@ -297,7 +297,7 @@ class ApplicationPicker(Widget):
         """Build the dropdown options.
 
         Sort comes from :attr:`ApplicationsVM.sorted_applications` —
-        the single source of truth shared with the Shift+S cycle so
+        the single source of truth shared with the Shift+A cycle so
         the order the user reads in the dropdown is the order they
         cycle through with the keybinding.
 

@@ -75,7 +75,7 @@ _QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
 _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("app.themes", "Theme picker"),
     ("app.cycle_theme", "Cycle theme"),
-    ("app.swap_source", "Swap pane source"),
+    ("app.swap_source", "Switch source"),
     ("app.open_settings", "Settings"),
     ("app.help", "Help"),
     ("app.quit", "Quit"),
@@ -343,6 +343,7 @@ class AwsTuiApp(App[None]):
         self._actions.register("pane.copy", self.action_copy)
         self._actions.register("pane.delete", self.action_delete)
         self._actions.register("app.swap_source", self.action_swap_source)
+        self._actions.register("emr.next_application", self.action_next_emr_application)
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
@@ -2064,6 +2065,12 @@ class AwsTuiApp(App[None]):
             path_protocol=new_protocol,
             connection_key=new_conn_key,
         )
+
+    async def action_next_emr_application(self) -> None:
+        self.record_action("emr.next_application")
+        page = self._emr_page()
+        if page is not None:
+            await page.vm.cycle_application(1)
 
     async def _swap_single_context_source(self, service_id: str) -> None:
         """Rebuild a non-S3 service under its next supported AWS profile."""

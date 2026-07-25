@@ -270,7 +270,7 @@ class JobRunsVM:
             self._set_state(PaneState.EMPTY)
             return
         # Capture the target identity BEFORE the await so a
-        # concurrent ``set_application(B)`` (from picker / Shift+S)
+        # concurrent ``set_application(B)`` (from picker / Shift+A)
         # that lands while ``list_job_runs_page`` is in flight
         # doesn't let app A's late response write into the
         # accumulator under app B's identity. The pollers

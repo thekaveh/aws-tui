@@ -39,6 +39,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("c", "dispatch('pane.copy')", True, True),
     ("d", "dispatch('pane.delete')", True, True),
     ("S", "dispatch('app.swap_source')", True, True),
+    ("A", "dispatch('emr.next_application')", True, True),
     ("shift+up", "dispatch('pane.mark_up')", False, True),
     ("shift+down", "dispatch('pane.mark_down')", False, True),
     ("space", "dispatch('pane.quick_look')", False, True),
