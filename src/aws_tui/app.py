@@ -156,14 +156,9 @@ def _service_source_candidates(ctx: AppContext, service_id: str) -> tuple[Connec
     """Return AWS connections supported by one single-context service."""
     service = ctx.registry.get(service_id)
     return tuple(
-        sorted(
-            (
-                connection
-                for connection in ctx.connection_resolver.list()
-                if connection.kind == "aws" and service.supports(connection)
-            ),
-            key=lambda connection: (connection.name, connection.region),
-        )
+        connection
+        for connection in ctx.connection_resolver.list()
+        if connection.kind == "aws" and service.supports(connection)
     )
 
 

@@ -59,9 +59,13 @@ def _aws_connections() -> tuple[Connection, Connection]:
     )
 
 
-def _disable_auto_profiles(ctx: AppContext, tmp_path: Path) -> None:
-    ctx.connection_resolver._aws_config_path = tmp_path / "no-aws-config"  # type: ignore[attr-defined]
-    ctx.connection_resolver._aws_credentials_path = tmp_path / "no-aws-credentials"  # type: ignore[attr-defined]
+def _configure_auto_profiles(ctx: AppContext, tmp_path: Path) -> None:
+    aws_config = tmp_path / "aws-config"
+    aws_config.write_text(
+        "[profile zulu]\nregion = eu-west-1\n\n[profile alpha]\nregion = ap-southeast-1\n"
+    )
+    ctx.connection_resolver._aws_config_path = aws_config
+    ctx.connection_resolver._aws_credentials_path = tmp_path / "no-aws-credentials"
 
 
 def test_service_candidates_include_only_supported_aws_connections(tmp_path: Path) -> None:
@@ -69,11 +73,13 @@ def test_service_candidates_include_only_supported_aws_connections(tmp_path: Pat
         config_dir=_three_source_config(tmp_path),
         cache_dir=tmp_path / "cache",
     )
-    _disable_auto_profiles(ctx, tmp_path)
+    _configure_auto_profiles(ctx, tmp_path)
     candidates = _service_source_candidates(ctx, "emr-serverless")
     assert [(connection.name, connection.region) for connection in candidates] == [
-        ("dev", "us-east-1"),
         ("prod-west", "us-west-2"),
+        ("dev", "us-east-1"),
+        ("zulu", "eu-west-1"),
+        ("alpha", "ap-southeast-1"),
     ]
 
 
@@ -88,7 +94,7 @@ def _multi_profile_emr_context(
 ) -> tuple[AppContext, list[str]]:
     ctx = build_app_context(demo=True, cache_dir=tmp_path / "cache")
     dev, prod = _aws_connections()
-    ctx.connection_resolver.list = lambda: [dev, prod]  # type: ignore[method-assign]
+    ctx.connection_resolver.list = lambda: [prod, dev]  # type: ignore[method-assign]
     calls: list[str] = []
 
     def build_client(connection: Connection) -> _InMemoryEmr:
@@ -99,13 +105,13 @@ def _multi_profile_emr_context(
 
     for service in ctx.registry.all():
         if isinstance(service, EmrServerlessService):
-            service._client_factory = build_client  # type: ignore[assignment]
+            service._client_factory = build_client
     return ctx, calls
 
 
 async def _await_service_mount(pilot: object, app: AwsTuiApp) -> None:
-    await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-    setup_task = app.app_ctx.root_vm.content_host._setup_task  # type: ignore[attr-defined]
+    await app.workers.wait_for_complete(list(app.workers._workers))
+    setup_task = app.app_ctx.root_vm.content_host._setup_task
     if setup_task is not None and not setup_task.done():
         await setup_task
     await pilot.pause()  # type: ignore[attr-defined]
@@ -114,10 +120,10 @@ async def _await_service_mount(pilot: object, app: AwsTuiApp) -> None:
 @pytest.mark.asyncio
 async def test_shift_s_rebuilds_emr_under_next_profile(tmp_path: Path) -> None:
     ctx, calls = _multi_profile_emr_context(tmp_path)
-    app = AwsTuiApp(ctx)  # type: ignore[arg-type]
+    app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await app.workers.wait_for_complete(list(app.workers._workers))
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
             await _await_service_mount(pilot, app)
@@ -128,10 +134,11 @@ async def test_shift_s_rebuilds_emr_under_next_profile(tmp_path: Path) -> None:
 
             after = ctx.root_vm.content_host.current
             assert before is not after
+            assert after is not None
             assert ctx.root_vm.active_connection is not None
-            assert ctx.root_vm.active_connection.name == "prod-west"
-            assert after.source.connection_key == ("prod-west", "us-west-2")
-            assert calls == ["dev", "prod-west"]
+            assert ctx.root_vm.active_connection.name == "dev"
+            assert after.source.connection_key == ("dev", "us-east-1")
+            assert calls == ["prod-west", "dev"]
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
