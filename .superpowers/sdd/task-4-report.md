@@ -187,3 +187,194 @@ uv run ruff format --check .
   any test, snapshot, static check, rasterization, or commit operation.
 - No Task 4 functional concern remains. Service registration and multi-profile
   demo behavior are intentionally absent until Task 5.
+
+## Visual/Interaction Review Fixes
+
+### Status
+
+All four post-implementation review findings were reproduced, fixed, and
+verified on 2026-07-25. The fix commit subject is:
+
+```text
+fix: address Glue UI review findings
+```
+
+The changes are limited to Glue widgets, the ten Glue theme blocks, focused
+regression tests, and the 55 affected Glue snapshots.
+
+### Root Causes
+
+1. Glue pane blocks set `border` but never set `border-title-color`, so inactive
+   titles inherited the low-contrast border color.
+2. `state_placeholder()` returned `-warning` and `-error`, but
+   `ResourceListPane.replace()` discarded that class. Textual then rendered the
+   disabled placeholder with its muted `option-list--option-disabled` token.
+3. `_ViewTab.action_select()` already existed, but `_ViewTab` had no Enter or
+   Space binding.
+4. `DetailRows` and its child `VerticalScroll` were both focusable, placing two
+   consecutive stops on one detail surface.
+
+### Strict TDD Evidence
+
+Focused DOM/class/binding/focus and all-theme token tests were added before
+production changes.
+
+RED command:
+
+```text
+uv run pytest tests/unit/ui/glue/test_page.py tests/unit/ui/test_themes.py -q
+```
+
+Observed RED result:
+
+```text
+24 failed, 166 passed in 3.93s
+```
+
+The failures mapped directly to the findings:
+
+```text
+2  focused-tab keyboard failures: Enter and Space left Catalog active
+1  list placeholder class failure: OptionList lacked -warning
+1  detail focus failure: focus_chain contained DetailRows and VerticalScroll
+10 inactive/focused pane-title token failures, one per built-in theme
+10 warning/error disabled-option token failures, one per built-in theme
+```
+
+The focused GREEN command was identical:
+
+```text
+uv run pytest tests/unit/ui/glue/test_page.py tests/unit/ui/test_themes.py -q
+```
+
+Observed GREEN result:
+
+```text
+190 passed in 4.05s
+```
+
+### Implementation Evidence
+
+- Every Glue theme now assigns inactive pane titles
+  `border-title-color: $text` and focused pane titles
+  `border-title-color: $accent`; the existing focused accent border remains.
+- `ResourceListPane.replace()` clears stale semantic classes, then applies the
+  current placeholder's `-warning` or `-error` class to its `OptionList`.
+- Every Glue theme maps warning/error list classes through Textual's disabled
+  option component:
+
+```text
+GluePage OptionList.-warning > .option-list--option-disabled { color: $warning; }
+GluePage OptionList.-error > .option-list--option-disabled { color: $danger; }
+```
+
+- `_ViewTab` binds `enter,space` to its existing `select` action.
+- `DetailRows` is no longer independently focusable. Its inner
+  `VerticalScroll` remains the one useful keyboard scroll target, and
+  `DetailRows:focus-within` continues to paint focused pane chrome.
+
+### Snapshot Evidence
+
+Only the Glue snapshot suite was regenerated:
+
+```text
+uv run pytest tests/snapshot/test_glue.py --snapshot-update -q
+
+55 snapshots updated.
+65 passed in 16.94s
+```
+
+`git diff --name-only` confirmed exactly 55 changed files under:
+
+```text
+tests/snapshot/__snapshots__/test_glue/
+```
+
+No other snapshot family changed. All 55 are affected because explicit pane
+title colors alter every Glue view/state at wide and compact sizes; forbidden
+snapshots additionally capture the semantic placeholder color change.
+
+### Final Test And Static Gates
+
+Final requested Glue UI/factory/theme/keymap/hint/snapshot gate:
+
+```text
+uv run pytest tests/unit/ui/glue \
+  tests/unit/ui/test_service_view_factory.py \
+  tests/unit/ui/test_themes.py \
+  tests/unit/infra/test_keymap_store.py \
+  tests/unit/vm/chrome/test_hint_legend.py \
+  tests/snapshot/test_glue.py -q
+
+285 passed in 44.65s
+55 snapshots passed
+```
+
+Final static and layer results:
+
+```text
+uv run mypy src/aws_tui
+Success: no issues found in 126 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+333 files already formatted
+
+bash scripts/check-layers.sh
+layer rules clean
+
+git diff --check -- . ':(exclude)tests/snapshot/__snapshots__/**'
+clean
+```
+
+### True-Color Raster Review
+
+The local shell exports `NO_COLOR=1`, so visual review renders explicitly
+removed it and enabled true color:
+
+```text
+env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor ...
+```
+
+Eight SVGs were exported, rasterized with `rsvg-convert`, and inspected:
+
+```text
+/tmp/aws-tui-glue-task4-review/carbon-populated-100x30.png
+/tmp/aws-tui-glue-task4-review/carbon-populated-150x44.png
+/tmp/aws-tui-glue-task4-review/carbon-forbidden-100x30.png
+/tmp/aws-tui-glue-task4-review/carbon-forbidden-150x44.png
+/tmp/aws-tui-glue-task4-review/github-light-populated-100x30.png
+/tmp/aws-tui-glue-task4-review/github-light-populated-150x44.png
+/tmp/aws-tui-glue-task4-review/github-light-forbidden-100x30.png
+/tmp/aws-tui-glue-task4-review/github-light-forbidden-150x44.png
+```
+
+Inspection findings:
+
+- Inactive `tables` and detail titles are readable on Carbon and GitHub Light;
+  the focused `databases` title and border retain a clear accent distinction.
+- Populated values, storage location, counts, and detail rows remain inside
+  their panes at both sizes with no text, border, footer, or scrollbar overlap.
+- Forbidden copy wraps cleanly at `100x30` and stays on one line plus continuation
+  at `150x44`; it is visibly semantic rather than disabled/muted.
+- SVG fill extraction confirmed the forbidden copy resolves to the exact theme
+  warning token at both sizes:
+
+```text
+carbon-forbidden-100x30.svg       #f0c674 == Carbon $warning
+carbon-forbidden-150x44.svg       #f0c674 == Carbon $warning
+github-light-forbidden-100x30.svg #9a6700 == GitHub Light $warning
+github-light-forbidden-150x44.svg #9a6700 == GitHub Light $warning
+```
+
+### Fix Concerns
+
+- The pre-existing shell warning
+  `/tmp/vmx-cargo-182/env: no such file or directory` still appears before
+  commands and did not affect any result.
+- The test environment's pre-existing `NO_COLOR=1` setting makes checked-in SVG
+  snapshots grayscale. Static token assertions plus the separate true-color
+  raster matrix verify the real theme colors.
+- No Glue functional or visual concern remains from these four findings.

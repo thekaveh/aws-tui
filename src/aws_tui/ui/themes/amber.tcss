@@ -816,10 +816,12 @@ GluePage DetailRows {
     background: $bg;
     color: $text;
     border: solid $rule-dim;
+    border-title-color: $text;
 }
 GluePage ResourceListPane:focus-within,
 GluePage DetailRows:focus-within {
     border: solid $accent;
+    border-title-color: $accent;
 }
 GluePage OptionList {
     background: $bg;
@@ -853,6 +855,12 @@ GluePage .glue-detail-placeholder {
 GluePage .glue-detail-row {
     background: $bg;
     color: $text;
+}
+GluePage OptionList.-warning > .option-list--option-disabled {
+    color: $warning;
+}
+GluePage OptionList.-error > .option-list--option-disabled {
+    color: $danger;
 }
 GluePage .glue-detail-placeholder.-warning,
 GluePage .glue-detail-row.-warning {

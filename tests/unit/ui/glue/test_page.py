@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
 from textual.widgets import OptionList, Select
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
@@ -9,8 +10,10 @@ from vmx.messages.protocols import Message
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
+from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
@@ -101,6 +104,24 @@ async def test_clicking_tab_switches_the_active_view() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["enter", "space"])
+async def test_focused_tab_activates_with_keyboard(key: str) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one("#glue-tab-jobs").focus()
+
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert vm.active_view == "jobs"
+        assert app.query_one(GlueJobsView).display
+
+
+@pytest.mark.asyncio
 async def test_refresh_action_refreshes_only_the_active_view() -> None:
     vm, fake = _build_vm()
     await vm.setup()
@@ -117,6 +138,53 @@ async def test_refresh_action_refreshes_only_the_active_view() -> None:
         assert len(fake.database_tokens) == before + 1
         assert fake.job_tokens == []
         assert fake.crawler_requests == []
+
+
+@pytest.mark.asyncio
+async def test_list_placeholder_preserves_semantic_state_classes() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.query_one("#glue-databases-pane", ResourceListPane)
+        options = pane.option_list
+
+        pane.replace(
+            (),
+            selected_id=None,
+            state=PaneState.FORBIDDEN,
+            error_text="permission denied",
+            has_more=False,
+        )
+        assert options.has_class("-warning")
+        assert not options.has_class("-error")
+
+        pane.replace(
+            (),
+            selected_id=None,
+            state=PaneState.ERROR,
+            error_text="request failed",
+            has_more=False,
+        )
+        assert options.has_class("-error")
+        assert not options.has_class("-warning")
+
+
+@pytest.mark.asyncio
+async def test_detail_pane_has_one_useful_scroll_focus_target() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#glue-table-detail-pane", DetailRows)
+        scroll = detail.query_one(VerticalScroll)
+        detail_targets = [widget for widget in app.screen.focus_chain if widget in (detail, scroll)]
+
+        assert detail_targets == [scroll]
 
 
 @pytest.mark.asyncio

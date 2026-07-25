@@ -191,6 +191,52 @@ def test_emr_logs_placeholder_selectors_match_nested_widget_tree(name: str) -> N
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
+def test_glue_pane_titles_use_readable_theme_tokens(name: str) -> None:
+    content = ThemeStore().load(name)
+
+    inactive = re.search(
+        r"GluePage\s+ResourceListPane,\s*"
+        r"GluePage\s+DetailRows\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+    focused = re.search(
+        r"GluePage\s+ResourceListPane:focus-within,\s*"
+        r"GluePage\s+DetailRows:focus-within\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+
+    assert inactive is not None
+    assert "border-title-color: $text;" in inactive.group(1)
+    assert focused is not None
+    assert "border-title-color: $accent;" in focused.group(1)
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_glue_list_placeholders_use_semantic_theme_tokens(name: str) -> None:
+    content = ThemeStore().load(name)
+
+    warning = re.search(
+        r"GluePage\s+OptionList\.-warning\s*>\s*"
+        r"\.option-list--option-disabled\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+    error = re.search(
+        r"GluePage\s+OptionList\.-error\s*>\s*"
+        r"\.option-list--option-disabled\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+
+    assert warning is not None
+    assert "color: $warning;" in warning.group(1)
+    assert error is not None
+    assert "color: $danger;" in error.group(1)
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
 @pytest.mark.parametrize(
     ("selector", "minimum"),
     [

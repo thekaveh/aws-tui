@@ -115,8 +115,12 @@ class ResourceListPane(Widget):
             error_text=error_text,
             empty_text=self._empty_text,
         )
+        options.remove_class("-warning")
+        options.remove_class("-error")
         if placeholder is not None and state is not PaneState.IDLE:
-            text, _classes = placeholder
+            text, classes = placeholder
+            if classes:
+                options.add_class(classes)
             options.add_option(
                 Option(Text(text, no_wrap=False), id="__placeholder__", disabled=True)
             )
@@ -139,7 +143,7 @@ class ResourceListPane(Widget):
         footer.update(f"{count} item{'s' if count != 1 else ''}{suffix}")
 
 
-class DetailRows(Widget, can_focus=True):
+class DetailRows(Widget):
     DEFAULT_CSS: ClassVar[str] = """
     DetailRows {
         height: 1fr;

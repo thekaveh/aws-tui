@@ -23,6 +23,10 @@ _VIEW_ORDER: tuple[GlueView, ...] = ("catalog", "jobs", "crawlers")
 
 
 class _ViewTab(Static, can_focus=True):
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("enter,space", "select", "Select", show=False),
+    ]
+
     class Selected(TextualMessage):
         def __init__(self, view: GlueView) -> None:
             super().__init__()
