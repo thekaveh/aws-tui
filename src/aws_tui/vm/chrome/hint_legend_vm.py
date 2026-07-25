@@ -54,6 +54,13 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "emr.next_application",
         "emr.clone",
     ),
+    "glue": (
+        "glue.catalog",
+        "glue.jobs",
+        "glue.crawlers",
+        "pane.refresh",
+        "app.swap_source",
+    ),
     # Settings is a static configuration page — no per-item
     # affordances apply. Pre-PR-81 it showed ``pane.refresh`` but
     # there's no handler for it on Settings (no DualPaneVM, no EMR
@@ -105,6 +112,9 @@ _ACTION_LABELS: dict[str, str] = {
     "modal.cancel": "cancel",
     "emr.clone": "clone",
     "emr.logs.filter": "filter logs",
+    "glue.catalog": "catalog",
+    "glue.jobs": "jobs",
+    "glue.crawlers": "crawlers",
 }
 
 

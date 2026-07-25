@@ -11,12 +11,14 @@ from vmx.messages.protocols import Message
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.service_view_factory import build_service_view
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from tests.unit.domain._in_memory_fs import InMemoryFS
 from tests.unit.ui.emr_serverless.test_emr_page_pollers import _build_page
+from tests.unit.ui.glue.test_page import _build_vm as _build_glue_vm
 
 
 def _build_dual_pane_vm(tmp_path: Path, hub: MessageHub[Message]) -> DualPaneVM:
@@ -73,6 +75,22 @@ def test_factory_builds_emr_page() -> None:
 
     assert isinstance(view, EmrServerlessPage)
     assert view.id == "content-emr-page"
+
+
+def test_factory_builds_glue_page() -> None:
+    glue_page_vm, _fake = _build_glue_vm()
+    hub = glue_page_vm.hub
+    focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
+
+    view = build_service_view(
+        "glue",
+        glue_page_vm,
+        hub=hub,
+        focus_coordinator=focus_coordinator,
+    )
+
+    assert isinstance(view, GluePage)
+    assert view.id == "content-glue-page"
 
 
 def test_factory_rejects_unknown_service() -> None:

@@ -21,6 +21,12 @@ class TestDefaults:
         assert store.resolve("app.swap_source") == ("S",)
         assert store.resolve("emr.next_application") == ("A",)
 
+    def test_glue_views_have_dedicated_number_bindings(self) -> None:
+        store = KeymapStore()
+        assert store.resolve("glue.catalog") == ("1",)
+        assert store.resolve("glue.jobs") == ("2",)
+        assert store.resolve("glue.crawlers") == ("3",)
+
     def test_vi_navigation_defaults_match_live_app_bindings(self) -> None:
         store = KeymapStore()
         assert store.resolve("pane.move_up") == ("up", "k")

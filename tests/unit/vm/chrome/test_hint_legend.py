@@ -185,3 +185,16 @@ def test_emr_serverless_service_chips_do_not_advertise_widget_scoped_filter() ->
     action_ids = {a.action_id for a in legend.actions}
     assert "emr.logs.filter" not in action_ids
     legend.dispose()
+
+
+def test_glue_service_chips_include_views_refresh_and_source() -> None:
+    legend, _hub = _build()
+    legend.set_current_service("glue")
+    chips = {action.action_id: action for action in legend.actions}
+    assert chips["glue.catalog"].action_label == "catalog"
+    assert chips["glue.catalog"].key_label == "1"
+    assert chips["glue.jobs"].action_label == "jobs"
+    assert chips["glue.crawlers"].action_label == "crawlers"
+    assert "pane.refresh" in chips
+    assert "app.swap_source" in chips
+    legend.dispose()

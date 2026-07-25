@@ -63,6 +63,9 @@ class KeymapStore:
         # focus context).
         "emr.clone": ("c",),
         "emr.logs.filter": ("f",),
+        "glue.catalog": ("1",),
+        "glue.jobs": ("2",),
+        "glue.crawlers": ("3",),
     }
 
     def __init__(self, *, overlay: dict[str, str | list[str]] | None = None) -> None:

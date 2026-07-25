@@ -789,3 +789,85 @@ JobRunLogsPane > .logs-status {
     background: $bg-elev;
     color: $text-muted;
 }
+
+/* ── AWS Glue ──────────────────────────────────────────────────────────── */
+GluePage {
+    background: $bg;
+    color: $text;
+}
+GluePage > #glue-view-tabs {
+    background: $bg-elev;
+    color: $text-muted;
+}
+GluePage .glue-view-tab {
+    border-left: solid $rule-dim;
+}
+GluePage .glue-view-tab.-active {
+    background: $bg-sel;
+    color: $accent;
+    text-style: bold;
+}
+GluePage .glue-view-tab:focus {
+    background: $bg-sel;
+    color: $accent-soft;
+}
+GluePage ResourceListPane,
+GluePage DetailRows {
+    background: $bg;
+    color: $text;
+    border: solid $rule-dim;
+}
+GluePage ResourceListPane:focus-within,
+GluePage DetailRows:focus-within {
+    border: solid $accent;
+}
+GluePage OptionList {
+    background: $bg;
+    color: $text;
+}
+GluePage OptionList > .option-list--option-highlighted {
+    background: $bg-sel;
+    color: $text;
+}
+GluePage Select,
+GluePage SelectCurrent,
+GluePage SelectOverlay {
+    background: $bg-elev;
+    color: $text;
+}
+GluePage Select:focus > SelectCurrent,
+GluePage SelectOverlay > .option-list--option-highlighted {
+    background: $bg-sel;
+    color: $accent;
+}
+GluePage SelectCurrent Static#label,
+GluePage SelectCurrent.-has-value Static#label,
+GluePage SelectCurrent .arrow {
+    color: $text;
+}
+GluePage .glue-list-footer,
+GluePage .glue-detail-placeholder {
+    background: $bg-elev;
+    color: $text-muted;
+}
+GluePage .glue-detail-row {
+    background: $bg;
+    color: $text;
+}
+GluePage .glue-detail-placeholder.-warning,
+GluePage .glue-detail-row.-warning {
+    color: $warning;
+}
+GluePage .glue-detail-placeholder.-error,
+GluePage .glue-detail-row.-state-failed,
+GluePage .glue-detail-row.-state-stopped,
+GluePage .glue-detail-row.-state-timeout {
+    color: $danger;
+}
+GluePage .glue-detail-row.-state-running {
+    color: $accent;
+}
+GluePage .glue-detail-row.-state-succeeded,
+GluePage .glue-detail-row.-state-ready {
+    color: $success;
+}
