@@ -520,3 +520,101 @@ layer rules clean
   `/tmp/vmx-cargo-182/env: no such file or directory` still appears before
   commands and did not affect tests, static checks, or Git operations.
 - No Task 4 functional or visual concern remains.
+
+## Jobs Detail Empty-Runs Fix
+
+### Scope
+
+Fixed the combined Glue Jobs detail pane so a selected job retains its
+job-level metadata when its runs pane is empty. The runs pane continues to
+render its explicit `no runs` placeholder. This applies both when the job has
+no runs and when the active state filter has no matching runs.
+
+### Strict TDD Evidence
+
+RED command:
+
+```text
+uv run pytest tests/unit/ui/glue/test_page.py -q
+```
+
+RED output:
+
+```text
+..........FF                                                             [100%]
+2 failed, 10 passed in 4.22s
+```
+
+Both new regressions failed because `#glue-job-detail-pane` had no
+`.glue-detail-row` widgets: `DetailRows.replace()` rendered the `no runs`
+placeholder for the Jobs VM's `PaneState.EMPTY` runs state.
+
+GREEN command:
+
+```text
+uv run pytest tests/unit/ui/glue/test_page.py -q
+```
+
+GREEN output:
+
+```text
+............                                                             [100%]
+12 passed in 4.17s
+```
+
+Focused Glue UI, production routing/keymap, theme, and snapshot command:
+
+```text
+uv run pytest tests/integration/test_glue_page_routing.py \
+  tests/integration/test_keybinding_wiring.py \
+  tests/unit/ui/glue \
+  tests/unit/ui/test_service_view_factory.py \
+  tests/unit/ui/test_themes.py \
+  tests/snapshot/test_glue.py -q
+```
+
+Output:
+
+```text
+55 snapshots passed.
+271 passed in 28.11s
+```
+
+Static commands and output:
+
+```text
+uv run ruff check src/aws_tui/ui/widgets/glue/jobs_view.py tests/unit/ui/glue/test_page.py
+All checks passed!
+
+uv run ruff format --check src/aws_tui/ui/widgets/glue/jobs_view.py tests/unit/ui/glue/test_page.py
+2 files already formatted
+
+uv run mypy src/aws_tui
+Success: no issues found in 126 source files
+
+bash scripts/check-layers.sh
+layer rules clean
+```
+
+### Changed Files
+
+- `src/aws_tui/ui/widgets/glue/jobs_view.py`
+- `tests/unit/ui/glue/test_page.py`
+- `.superpowers/sdd/task-4-report.md`
+
+### Self-review
+
+- The Jobs detail pane substitutes `PaneState.IDLE` only when a job remains
+  selected and the runs state is `PaneState.EMPTY`; it otherwise preserves the
+  existing state forwarding behavior.
+- With no selected job, `PaneState.EMPTY` still renders `select a job and run`.
+- With a selected run, the runs state remains `PaneState.IDLE`, so existing
+  job-and-run detail behavior is unchanged.
+- The two focused tests prove job details remain visible and the runs pane
+  still identifies the no-run state for both source conditions.
+
+### Concerns
+
+- The pre-existing shell warning
+  `/tmp/vmx-cargo-182/env: no such file or directory` appeared before each
+  command and did not affect results.

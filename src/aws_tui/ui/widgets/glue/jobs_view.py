@@ -15,6 +15,7 @@ from aws_tui.ui.widgets.glue.detail_rows import (
     display_time,
     display_value,
 )
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 
 _RUN_FILTERS = (
@@ -145,7 +146,11 @@ class GlueJobsView(Widget):
         )
         detail.replace(
             self._detail_values(),
-            state=self._vm.runs_state,
+            state=(
+                PaneState.IDLE
+                if self._vm.selected_job is not None and self._vm.runs_state is PaneState.EMPTY
+                else self._vm.runs_state
+            ),
             error_text=self._vm.runs_error_text,
             empty_text="select a job and run",
         )

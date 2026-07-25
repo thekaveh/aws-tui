@@ -231,3 +231,56 @@ async def test_jobs_and_crawlers_use_select_filters() -> None:
         await pilot.pause()
         assert vm.crawlers.state_filter == "RUNNING"
         assert fake.crawler_requests[-1] == (None, "RUNNING")
+
+
+@pytest.mark.asyncio
+async def test_selected_job_detail_is_retained_when_the_job_has_no_runs() -> None:
+    fake = InMemoryGlue()
+    fake.add_job("idle-job")
+    vm, _fake = _build_vm(fake)
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await page.action_select_view("jobs")
+        await pilot.pause()
+
+        detail = app.query_one("#glue-job-detail-pane", DetailRows)
+        runs = app.query_one("#glue-runs-pane", ResourceListPane)
+        detail_text = " ".join(str(static.render()) for static in detail.query(".glue-detail-row"))
+        run_placeholder = runs.option_list.get_option_at_index(0)
+
+        assert "Job             idle-job" in detail_text
+        assert "Role            GlueRole" in detail_text
+        assert run_placeholder.id == "__placeholder__"
+        assert str(run_placeholder.prompt) == "no runs"
+
+
+@pytest.mark.asyncio
+async def test_selected_job_detail_is_retained_when_filter_has_no_matching_runs() -> None:
+    fake = InMemoryGlue()
+    fake.add_run("nightly", "jr-1", "SUCCEEDED")
+    vm, _fake = _build_vm(fake)
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await page.action_select_view("jobs")
+        await pilot.pause()
+        jobs = page.query_one(GlueJobsView)
+        jobs.query_one("#glue-run-state-filter", Select).value = "FAILED"
+        await pilot.pause()
+
+        detail = app.query_one("#glue-job-detail-pane", DetailRows)
+        runs = app.query_one("#glue-runs-pane", ResourceListPane)
+        detail_text = " ".join(str(static.render()) for static in detail.query(".glue-detail-row"))
+        run_placeholder = runs.option_list.get_option_at_index(0)
+
+        assert "Job             nightly" in detail_text
+        assert "Script          s3://scripts/nightly.py" in detail_text
+        assert run_placeholder.id == "__placeholder__"
+        assert str(run_placeholder.prompt) == "no runs"
