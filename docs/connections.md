@@ -146,19 +146,23 @@ AWS profiles are read-only from aws-tui's perspective — manage those
 through the standard `~/.aws/` tooling.
 
 `Shift+S` filters out connections that have been observed unreachable
-during the session (e.g. a stopped MinIO container). A one-line info
-toast names what was skipped on the first press. Selecting S3 from the
-nav after a local-only fallback retries the initial connection and
-clears that connection's unreachable mark; pressing `r` on an
+during the session in S3 panes (e.g. a stopped MinIO container). A
+one-line info toast names what was skipped on the first press. Selecting
+S3 from the nav after a local-only fallback retries the initial connection
+and clears that connection's unreachable mark; pressing `r` on an
 unreachable pane and recovering it also clears the mark.
 
 ### Source scopes and service identity
 
 aws-tui has two source scopes. S3 keeps an independent source in each file
 pane, so the left and right panes can intentionally point at different
-connections or local storage. Single-context AWS services, including EMR
-Serverless, use the one active AWS connection owned by `RootVM`; `Shift+S`
-rebuilds that service under the next supported AWS profile and region.
+connections or local storage. Single-context AWS services use the one active
+AWS connection owned by `RootVM`; `Shift+S` rebuilds that service under the
+next supported AWS profile and region.
+Single-context AWS services, including EMR Serverless and future Glue/Athena
+pages, intentionally do not consult or mutate the S3 pane reachability set.
+Authentication and service API failures remain visible in the mounted service
+instead of filtering or removing the connection from that source ring.
 
 The compact source header on an EMR page identifies that rebuilt context as
 `connection-name · profile · region`, omitting `profile` when it matches the

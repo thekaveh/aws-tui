@@ -71,3 +71,73 @@ the earlier pre-interruption EMR snapshot suite also completed with `40 passed`.
 The final all-snapshots matrix remains explicitly incomplete by user-requested
 interruption. All Task 6-focused requirements and the full
 unit/integration/E2E tier are green.
+
+## Follow-up: Reachability Scope Documentation
+
+### RED Evidence
+
+Added `tests/docs/test_connections.py` before changing the documentation. The
+focused assertion was run with:
+
+```text
+uv run pytest tests/docs/test_connections.py -q
+```
+
+It failed as expected with exit code 1:
+
+```text
+F                                                                        [100%]
+AssertionError: assert '`Shift+S` filters out connections that have been observed unreachable during the session in S3 panes' in text
+1 failed in 0.02s
+```
+
+The failure demonstrated that the existing documentation made the
+unreachable-filter claim without the required S3-pane scope.
+
+### GREEN Evidence
+
+Scoped the unreachable-filter statement to S3 panes and documented that
+single-context EMR, future Glue/Athena pages, and their source rings do not
+consult or mutate the S3 pane reachability set; authentication and service API
+failures remain visible in the mounted service.
+
+The focused regression then passed:
+
+```text
+uv run pytest tests/docs/test_connections.py -q
+.                                                                        [100%]
+1 passed in 0.01s
+```
+
+The complete docs test suite passed with the repository's two documented
+optional Cairo skips (the direct `uv run` test command does not apply the
+macOS library fallback):
+
+```text
+uv run pytest tests/docs -q
+51 passed, 2 skipped in 0.41s
+```
+
+The repository docs gate also passed:
+
+```text
+make docs-check
+check_docs: clean
+INFO    -  Documentation built in 0.37 seconds
+```
+
+`git diff --check` passed. The configured pre-commit checks for the touched
+docs, test, and report files passed, including end-of-file, merge-conflict,
+Ruff, and architecture checks. The Material for MkDocs command emitted its
+upstream MkDocs 2.0 warning, but the strict build exited successfully.
+
+### Self-review
+
+- The docs assertion reads the canonical `docs/connections.md` source and
+  normalizes Markdown line wrapping, so prose reflow does not create a false
+  failure.
+- The wording now distinguishes S3-pane reachability from single-context
+  service source cycling and explicitly names EMR plus future Glue/Athena.
+- Only `docs/connections.md`, `tests/docs/test_connections.py`, and this report
+  are intended for the commit; no runtime source or generated binary changes
+  remain.
