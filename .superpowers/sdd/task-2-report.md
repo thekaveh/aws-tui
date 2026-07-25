@@ -1,4 +1,4 @@
-# Foundation Task 2 Report: Atomic RootVM Connection and Service Switching
+# Glue Task 2 Report: Paginated Glue Domain Client
 
 ## Status
 
@@ -6,200 +6,160 @@ Complete.
 
 ## Implementation
 
-- Added read-only `RootVM.active_connection` and `RootVM.active_auth_state` accessors.
-- Added `RootVM.switch_connection_and_service(connection, auth_state, service_id)`.
-  It resolves and validates the target service against the proposed connection before clearing
-  current content; then it delegates to the existing connection and service switch paths so
-  existing message publication, menu rollback, construction, and disposal behavior remain
-  authoritative.
-- Added `ContentHostVM.shutdown()` and its private `_shutdown_current()` helper. Replacement
-  paths cancel pending setup, await an optional hosted VM `shutdown()` hook, then perform the
-  existing synchronous disposal exactly once.
-- Updated `AwsTuiApp._aws_tui_shutdown()` to await the content host before its existing root
-  disposal cascade, preserving synchronous `RootVM.dispose()` as final local cleanup.
+- Added a one-page `GlueClient` for databases, tables, partitions, column statistics, jobs,
+  job runs, crawlers, crawler details, crawler metrics, and tags.
+- Added immutable Glue job, job-run, crawler, and crawler-metrics domain records. Every boto
+  response is validated and mapped before leaving the client.
+- Implemented exact token and optional-key omission semantics, API page sizes, 100-column
+  statistics batching, local crawler-state filtering, and deterministic tuple mappings.
+- Added cached, concurrency-safe STS caller identity resolution. Crawler ARNs use the partition
+  parsed from the STS ARN and support `aws`, `aws-us-gov`, and `aws-cn`.
+- Added bounded crawler detail supplementation with tags and metrics. Permission failures become
+  redacted partial-detail warnings; credential, transport, and unexpected errors still propagate.
+- Added canonical provider mappings for credentials, SSO token failures, access denial, Lake
+  Formation denial, not found, throttling, transport failure, and invalid requests.
 
 ## TDD Evidence
 
-### RED
+### Initial RED
 
-Added the RootVM atomic-switch, ContentHostVM shutdown-order, and app-shutdown ordering tests
-before production edits, then ran:
+Tests were added before the Glue production module:
 
 ```text
-uv run pytest tests/unit/vm/test_root_vm.py tests/unit/vm/test_content_host.py tests/unit/test_app_sanity.py -q
+uv run pytest tests/unit/domain/test_glue.py -q
 ```
 
 Result:
 
 ```text
-5 failed, 44 passed in 0.48s
+ERROR tests/unit/domain/test_glue.py
+ModuleNotFoundError: No module named 'aws_tui.domain.glue'
 ```
 
-The failures were the intended missing behavior:
+### Initial GREEN
 
-- `RootVM` had no `switch_connection_and_service`.
-- Replacing hosted content never invoked `old.shutdown`.
-- `ContentHostVM` had no async `shutdown` boundary for app exit.
-- App shutdown disposed the root without awaiting the host first.
-
-### GREEN
-
-After the minimal implementation, the same focused command passed:
+After the minimum implementation:
 
 ```text
-49 passed in 0.31s
+uv run pytest tests/unit/domain/test_glue.py -q
+41 passed
+
+uv run pytest tests/unit/domain/test_glue.py tests/unit/domain/test_data_catalog.py -q
+60 passed
 ```
 
-Broader VM regression:
+### Review RED
+
+Eight focused regression tests were then added before review fixes:
 
 ```text
-uv run pytest tests/unit/vm -q
-457 passed in 28.99s
+uv run pytest tests/unit/domain/test_glue.py -q
+8 failed, 41 passed
 ```
 
-Static and whitespace checks:
+The failures covered a missing required database list, modeled column-statistics errors,
+botocore models without `GetJobRuns.States`, incorrectly swallowed tag/metrics failures,
+concurrent STS cache misses, and two unmapped SSO token errors.
+
+### Final GREEN
+
+After the focused fixes:
 
 ```text
-uv run ruff check <changed Python files>
+uv run pytest tests/unit/domain/test_glue.py -q
+49 passed
+
+uv run pytest tests/unit/domain/test_glue.py tests/unit/domain/test_data_catalog.py -q
+68 passed
+```
+
+## Verification
+
+The completed implementation passed:
+
+```text
+uv run pytest tests/unit/domain -q
+233 passed in 15.57s
+
+uv run pytest tests/unit/domain/test_emr_serverless.py \
+  tests/unit/domain/test_emr_logs.py \
+  tests/unit/domain/test_s3_fs_auth_error_helper.py \
+  tests/unit/vm/emr_serverless/test_errors.py -q
+84 passed in 0.63s
+
+uv run mypy src
+Success: no issues found in 114 source files
+
+uv run ruff check .
 All checks passed!
 
-uv run ruff format --check <changed Python files>
-6 files already formatted
+uv run ruff format --check .
+311 files already formatted
 
-uv run mypy src/aws_tui/vm/root_vm.py src/aws_tui/vm/content_host_vm.py src/aws_tui/app.py
-Success: no issues found in 3 source files
+./scripts/check-layers.sh
+Layer rules clean.
+```
+
+Final bounded commit-time verification:
+
+```text
+uv run pytest tests/unit/domain/test_glue.py tests/unit/domain/test_data_catalog.py -q
+68 passed in 0.34s
+
+uv run mypy src/aws_tui/domain/glue.py src/aws_tui/domain/data_catalog.py
+Success: no issues found in 2 source files
+
+uv run ruff check src/aws_tui/domain/glue.py tests/unit/domain/test_glue.py \
+  tests/unit/domain/_fake_aws_client.py
+All checks passed!
+
+uv run ruff format --check src/aws_tui/domain/glue.py tests/unit/domain/test_glue.py \
+  tests/unit/domain/_fake_aws_client.py
+3 files already formatted
 
 git diff --check
 ```
 
 ## Tests Added
 
-- Atomic switch rebuilds the same service under the new connection, disposes the old VM, and
-  exposes the new active connection/auth state.
-- Unsupported atomic target is rejected before outgoing content disposal.
-- Content replacement awaits an optional hosted `shutdown()` before calling `dispose()`.
-- App shutdown awaits the content-host lifecycle boundary before root disposal.
+- Exact requests, omission of absent tokens and filters, one-call pagination, and returned tokens.
+- Mapping for databases, tables, table details, partitions, every supported column-statistics
+  variant, jobs, job runs, crawlers, crawler targets, metrics, tags, and deterministic ordering.
+- Column-statistics batching and modeled batch-error propagation.
+- Remote job-run state filtering where supported and one-page local compatibility filtering for
+  the repository's pinned botocore model.
+- Crawler-state local page filtering and empty crawler-metrics behavior.
+- STS account/partition ARN construction, identity caching, and concurrent single-flight access.
+- Partial supplemental permission warnings without erasing core crawler detail.
+- Canonical and redacted credential, SSO, provider, Lake Formation, service, and transport errors.
+- Required/malformed wire values never escaping as raw dictionaries.
 
 ## Files
 
-- `src/aws_tui/vm/root_vm.py`
-- `src/aws_tui/vm/content_host_vm.py`
-- `src/aws_tui/app.py`
-- `tests/unit/vm/test_root_vm.py`
-- `tests/unit/vm/test_content_host.py`
-- `tests/unit/test_app_sanity.py`
+- `src/aws_tui/domain/glue.py`
+- `tests/unit/domain/test_glue.py`
+- `tests/unit/domain/_fake_aws_client.py`
 - `.superpowers/sdd/task-2-report.md`
 
 ## Self-Review
 
-- Compatibility is checked before the existing connection switch clears hosted content, so an
-  unsupported target leaves the active page unchanged.
-- Valid switches continue through `switch_connection_with()` and `switch_service()`, retaining
-  connection-change publication and existing service-menu rollback behavior without duplicate
-  lifecycle ownership.
-- The optional hook is called only from async replacement/app-shutdown paths. Synchronous
-  `ContentHostVM.dispose()` remains a no-hook final cleanup path, so the app’s awaited handoff
-  does not double-dispose or double-shutdown a hosted VM.
-- No Glue, Athena, Iceberg, SQL, or S3 behavior was added or changed.
+- Public methods make one page request only; column-statistics batching and the two bounded crawler
+  supplements are the explicitly required exceptions.
+- Optional request fields are omitted rather than sent as `None`.
+- Supplemental permission failures are isolated, while authentication, network, malformed wire,
+  and unexpected failures remain visible to callers.
+- Error messages and supplemental warnings pass through the repository redactor.
+- No view-model, UI, Athena, or unrelated service code was changed.
+- An independent pre-fix review identified six substantive edge cases. Each was verified against
+  the brief and botocore model, covered by a failing test, fixed, and rerun green. A later automated
+  review command hung during repository inspection and was explicitly terminated without edits.
 
 ## Concerns
 
-No implementation concerns. The task brief named `tests/unit/vm/test_content_host_vm.py`, but
-this repository’s established ContentHostVM suite is `tests/unit/vm/test_content_host.py`; the
-new lifecycle coverage was added there rather than creating a duplicate test module.
+The task brief requires non-empty job-run states to map to Glue `States`, but the repository's
+pinned botocore `GetJobRuns` model rejects that parameter. The client capability-checks the model:
+capable or model-less clients receive `States`; the pinned real client omits the unsupported key
+and filters the single returned page locally. This preserves one-page behavior and can therefore
+return fewer rows while retaining the service's next token.
 
----
-
-# Foundation Task 2 P1 Fix Report: Preserve Hosted Shutdown Through Cancellation
-
-## Status
-
-Complete.
-
-## Root Cause and Fix
-
-`AwsTuiApp._aws_tui_shutdown()` awaited `ContentHostVM.shutdown()` directly inside a
-`suppress(Exception, asyncio.CancelledError)` block. Cancelling the app-exit task therefore
-cancelled the hosted VM's hook, suppressed that cancellation, and immediately ran synchronous
-`root_vm.dispose()`.
-
-The app now starts the host shutdown as its own task and awaits it through `asyncio.shield()`.
-Caller cancellation is absorbed by the existing app-exit policy while the loop continues waiting
-for the hosted hook. Only after that task completes does root disposal run. Exceptions from the
-hook retain the prior shutdown behavior: they are suppressed so the remaining exit cleanup can
-continue.
-
-## TDD Evidence
-
-### RED
-
-Added `test_app_shutdown_waits_for_host_after_cancellation` before changing production code and
-ran:
-
-```text
-uv run pytest tests/unit/test_app_sanity.py::test_app_shutdown_finishes_hosted_shutdown_after_cancellation_before_root_dispose -q
-```
-
-Result:
-
-```text
-1 failed in 0.28s
-```
-
-The assertion expected only `content.shutdown.started` after cancellation, but the old code had
-already appended `root.dispose`, proving disposal raced the blocked hosted shutdown hook.
-
-### GREEN
-
-After the production change, the focused regression passed:
-
-```text
-uv run pytest tests/unit/test_app_sanity.py::test_app_shutdown_finishes_hosted_shutdown_after_cancellation_before_root_dispose -q
-1 passed in 0.21s
-```
-
-After the test was renamed for formatting, the required focused suite passed:
-
-```text
-uv run pytest tests/unit/vm/test_content_host.py tests/unit/test_app_sanity.py tests/unit/vm/test_root_vm.py -q
-50 passed in 0.55s
-```
-
-## Static Checks
-
-```text
-uv run ruff check src/aws_tui/app.py tests/unit/test_app_sanity.py
-All checks passed!
-
-uv run ruff format --check src/aws_tui/app.py tests/unit/test_app_sanity.py
-2 files already formatted
-
-uv run mypy src/aws_tui/app.py
-Success: no issues found in 1 source file
-
-uv run pre-commit run --files src/aws_tui/app.py tests/unit/test_app_sanity.py .superpowers/sdd/task-2-report.md
-All applicable hooks passed: end-of-file, trailing-whitespace, large-file, merge-conflict,
-private-key, line-ending, Ruff, Ruff format, mypy, and architecture-layer checks.
-```
-
-## Files
-
-- `src/aws_tui/app.py`
-- `tests/unit/test_app_sanity.py`
-- `.superpowers/sdd/task-2-report.md`
-
-## Self-Review
-
-- The host shutdown task is created before its first await and shielded from every observed caller
-  cancellation, so a cancellation cannot reach the hosted VM hook.
-- Root disposal remains after the host task's completion, preserving the required lifecycle order.
-- The existing app-exit cancellation behavior is retained: cancellation does not interrupt the
-  rest of shutdown cleanup or prevent `action_quit()` from reaching `self.exit()`.
-- The regression blocks the hook, cancels the outer shutdown task, verifies root disposal has not
-  occurred, then releases the hook and checks the complete event ordering.
-
-## Concerns
-
-A hosted shutdown hook that never completes now delays root disposal and app exit. That is the
-intentional consequence of the required ordering; cancellation no longer permits disposing the
-root beneath an in-progress hosted shutdown.
+No other known implementation concerns.
