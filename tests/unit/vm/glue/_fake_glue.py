@@ -61,6 +61,7 @@ class InMemoryGlue:
         self.table_detail_requests: list[TableRef] = []
         self.crawler_detail_requests: list[str] = []
         self.crawlers_error: Exception | None = None
+        self._database_block: tuple[asyncio.Event, asyncio.Event] | None = None
         self._table_blocks: dict[str, tuple[asyncio.Event, asyncio.Event]] = {}
         self._detail_blocks: dict[TableRef, tuple[asyncio.Event, asyncio.Event]] = {}
         self._run_blocks: dict[str, tuple[asyncio.Event, asyncio.Event]] = {}
@@ -199,6 +200,16 @@ class InMemoryGlue:
         self._table_blocks[database_name] = (started, release)
         return started
 
+    def block_databases(self) -> asyncio.Event:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        self._database_block = (started, release)
+        return started
+
+    def release_databases(self) -> None:
+        if self._database_block is not None:
+            self._database_block[1].set()
+
     def release_tables(self, database_name: str) -> None:
         self._table_blocks[database_name][1].set()
 
@@ -235,6 +246,7 @@ class InMemoryGlue:
         start_token: str | None = None,
     ) -> tuple[list[DatabaseSummary], str | None]:
         self.database_tokens.append(start_token)
+        await _wait_for_block(self._database_block)
         return _page(self.databases, start_token, self.database_page_size)
 
     async def list_tables_page(

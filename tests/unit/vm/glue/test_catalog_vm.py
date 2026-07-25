@@ -53,6 +53,31 @@ async def test_catalog_uses_token_pagers_and_loads_more_at_each_level() -> None:
 
 
 @pytest.mark.asyncio
+async def test_refresh_notifies_database_pager_replacement_and_result() -> None:
+    fake = seeded_glue()
+    fake.add_database("warehouse")
+    fake.database_page_size = 1
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+    databases_started = fake.block_databases()
+
+    refresh = asyncio.create_task(vm.refresh_databases())
+    await databases_started.wait()
+
+    assert not vm.has_more_databases
+    assert notifications.count("has_more_databases") == 1
+
+    fake.release_databases()
+    await refresh
+
+    assert vm.has_more_databases
+    assert notifications.count("has_more_databases") == 2
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
 async def test_catalog_select_database_resets_tables_and_discards_stale_load() -> None:
     fake = InMemoryGlue()
     fake.add_table("a", "a-table")
@@ -133,6 +158,104 @@ async def test_table_detail_denial_does_not_strand_sibling_panes_loading() -> No
     assert vm.partitions_state is PaneState.EMPTY
     assert vm.statistics_state is PaneState.EMPTY
     assert vm.tables_state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_catalog_load_more_unexpected_errors_are_scoped_and_redacted() -> None:
+    class BrokenNextPages(InMemoryGlue):
+        async def list_databases_page(
+            self,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            if start_token is not None:
+                raise RuntimeError("Authorization: Bearer DATABASE_SECRET")
+            return await super().list_databases_page(start_token=start_token)
+
+        async def list_tables_page(
+            self,
+            database: str,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            if start_token is not None:
+                raise RuntimeError("Authorization: Bearer TABLE_SECRET")
+            return await super().list_tables_page(database, start_token=start_token)
+
+        async def list_partitions_page(
+            self,
+            ref,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            if start_token is not None:
+                raise RuntimeError("Authorization: Bearer PARTITION_SECRET")
+            return await super().list_partitions_page(ref, start_token=start_token)
+
+    fake = BrokenNextPages()
+    first = fake.add_table("analytics", "events")
+    fake.add_table("analytics", "sessions")
+    fake.add_database("warehouse")
+    fake.add_partition(first.ref, "2026-07-24")
+    fake.add_partition(first.ref, "2026-07-25")
+    fake.database_page_size = 1
+    fake.table_page_size = 1
+    fake.partition_page_size = 1
+    vm = make_catalog_vm(fake)
+
+    await vm.setup()
+    await vm.load_more_databases()
+    assert vm.databases_state is PaneState.ERROR
+    assert vm.databases_error_text is not None
+    assert "DATABASE_SECRET" not in vm.databases_error_text
+    assert "[REDACTED]" in vm.databases_error_text
+
+    await vm.select_database("analytics")
+    await vm.load_more_tables()
+    assert vm.tables_state is PaneState.ERROR
+    assert vm.tables_error_text is not None
+    assert "TABLE_SECRET" not in vm.tables_error_text
+    assert "[REDACTED]" in vm.tables_error_text
+
+    await vm.select_table("events")
+    await vm.load_more_partitions()
+    assert vm.partitions_state is PaneState.ERROR
+    assert vm.partitions_error_text is not None
+    assert "PARTITION_SECRET" not in vm.partitions_error_text
+    assert "[REDACTED]" in vm.partitions_error_text
+
+
+@pytest.mark.asyncio
+async def test_catalog_dispose_invalidates_blocked_load_without_notifications() -> None:
+    fake = seeded_glue()
+    tables_started = fake.block_tables("analytics")
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+
+    selection = asyncio.create_task(vm.select_database("analytics"))
+    await tables_started.wait()
+    notifications.clear()
+    generations = (
+        vm._database_generation,  # type: ignore[attr-defined]
+        vm._table_generation,  # type: ignore[attr-defined]
+        vm._detail_generation,  # type: ignore[attr-defined]
+        vm._partition_generation,  # type: ignore[attr-defined]
+    )
+
+    vm.dispose()
+    fake.release_tables("analytics")
+    await selection
+
+    assert notifications == []
+    assert (
+        vm._database_generation,  # type: ignore[attr-defined]
+        vm._table_generation,  # type: ignore[attr-defined]
+        vm._detail_generation,  # type: ignore[attr-defined]
+        vm._partition_generation,  # type: ignore[attr-defined]
+    ) == tuple(generation + 1 for generation in generations)
+    subscription.dispose()
 
 
 @pytest.mark.asyncio

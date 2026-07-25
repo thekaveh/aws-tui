@@ -41,6 +41,7 @@ class GluePageVM:
         self._active_view: GlueView = "catalog"
         self._loaded_views: set[GlueView] = set()
         self._disposed = False
+        self._lifecycle_generation = 0
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -87,44 +88,71 @@ class GluePageVM:
         if self._disposed:
             return
         self._disposed = True
+        self._lifecycle_generation += 1
         self.crawlers.dispose()
         self.jobs.dispose()
         self.catalog.dispose()
         self._inner.dispose()
 
     async def setup(self) -> None:
+        if self._disposed:
+            return
+        generation = self._lifecycle_generation
         stored_view = self._selection_store.get(self._selection_scope, "active_view")
         if stored_view in _VIEWS:
             self._active_view = stored_view  # type: ignore[assignment]
         elif stored_view is not None:
             self._selection_store.discard(self._selection_scope, "active_view")
-        await self._setup_view(self._active_view)
+        await self._setup_view(self._active_view, generation)
 
     async def select_view(self, view: GlueView) -> None:
         if view not in _VIEWS:
             raise ValueError(f"unknown Glue view: {view}")
+        if self._disposed:
+            return
+        generation = self._lifecycle_generation
         changed = view != self._active_view
         self._active_view = view
         self._selection_store.set(self._selection_scope, "active_view", view)
         if changed:
             self._notify("active_view")
-        await self._setup_view(view)
+        await self._setup_view(view, generation)
 
     async def select_database(self, database_name: str) -> None:
-        await self._select_database(database_name, preferred_table=None)
+        generation = self._lifecycle_generation
+        await self._select_database(
+            database_name,
+            preferred_table=None,
+            generation=generation,
+        )
 
     async def select_table(self, table_name: str) -> None:
+        generation = self._lifecycle_generation
+        await self._select_table(table_name, generation)
+
+    async def _select_table(self, table_name: str, generation: int) -> None:
         await self.catalog.select_table(table_name)
+        if not self._is_current(generation):
+            return
         if self.catalog.selected_table_name == table_name:
             self._selection_store.set(self._selection_scope, "table_name", table_name)
 
     async def select_job(self, job_name: str) -> None:
+        generation = self._lifecycle_generation
+        await self._select_job(job_name, generation)
+
+    async def _select_job(self, job_name: str, generation: int) -> None:
         await self.jobs.select_job(job_name)
+        if not self._is_current(generation):
+            return
         if self.jobs.selected_job_name == job_name:
             self._selection_store.set(self._selection_scope, "job_name", job_name)
 
     async def set_job_run_states(self, states: frozenset[str]) -> None:
+        generation = self._lifecycle_generation
         await self.jobs.set_run_state_filter(states)
+        if not self._is_current(generation):
+            return
         self._selection_store.set(
             self._selection_scope,
             "job_run_states",
@@ -132,12 +160,21 @@ class GluePageVM:
         )
 
     async def select_crawler(self, name: str) -> None:
+        generation = self._lifecycle_generation
+        await self._select_crawler(name, generation)
+
+    async def _select_crawler(self, name: str, generation: int) -> None:
         await self.crawlers.select_crawler(name)
+        if not self._is_current(generation):
+            return
         if self.crawlers.selected_crawler_name == name:
             self._selection_store.set(self._selection_scope, "crawler_name", name)
 
     async def set_crawler_state(self, state: str | None) -> None:
+        generation = self._lifecycle_generation
         await self.crawlers.set_state_filter(state)
+        if not self._is_current(generation):
+            return
         if state is None:
             self._selection_store.discard(self._selection_scope, "crawler_state")
         else:
@@ -150,30 +187,37 @@ class GluePageVM:
         if selected is None:
             self._selection_store.discard(self._selection_scope, "crawler_name")
             return
-        await self.select_crawler(selected)
+        await self._select_crawler(selected, generation)
 
     async def refresh_active(self) -> None:
+        if self._disposed:
+            return
+        generation = self._lifecycle_generation
         if self._active_view == "catalog":
             self._loaded_views.discard("catalog")
         elif self._active_view == "jobs":
             self._loaded_views.discard("jobs")
         else:
             self._loaded_views.discard("crawlers")
-        await self._setup_view(self._active_view)
+        await self._setup_view(self._active_view, generation)
 
-    async def _setup_view(self, view: GlueView) -> None:
-        if view in self._loaded_views:
+    async def _setup_view(self, view: GlueView, generation: int) -> None:
+        if not self._is_current(generation) or view in self._loaded_views:
             return
         if view == "catalog":
-            await self._setup_catalog()
+            await self._setup_catalog(generation)
         elif view == "jobs":
-            await self._setup_jobs()
+            await self._setup_jobs(generation)
         else:
-            await self._setup_crawlers()
+            await self._setup_crawlers(generation)
+        if not self._is_current(generation):
+            return
         self._loaded_views.add(view)
 
-    async def _setup_catalog(self) -> None:
+    async def _setup_catalog(self, generation: int) -> None:
         await self.catalog.setup()
+        if not self._is_current(generation):
+            return
         if self.catalog.databases_state not in _SUCCESS_STATES:
             return
         stored_database = self._selection_store.get(self._selection_scope, "database_name")
@@ -188,15 +232,22 @@ class GluePageVM:
             self._selection_store.discard(self._selection_scope, "table_name")
             return
         stored_table = self._selection_store.get(self._selection_scope, "table_name")
-        await self._select_database(database_name, preferred_table=stored_table)
+        await self._select_database(
+            database_name,
+            preferred_table=stored_table,
+            generation=generation,
+        )
 
     async def _select_database(
         self,
         database_name: str,
         *,
         preferred_table: str | None,
+        generation: int,
     ) -> None:
         await self.catalog.select_database(database_name)
+        if not self._is_current(generation):
+            return
         if self.catalog.selected_database_name != database_name:
             return
         self._selection_store.set(self._selection_scope, "database_name", database_name)
@@ -209,14 +260,18 @@ class GluePageVM:
         if table_name is None:
             self._selection_store.discard(self._selection_scope, "table_name")
             return
-        await self.select_table(table_name)
+        await self._select_table(table_name, generation)
 
-    async def _setup_jobs(self) -> None:
+    async def _setup_jobs(self, generation: int) -> None:
         stored_states = self._selection_store.get(self._selection_scope, "job_run_states")
         if stored_states is not None:
             states = frozenset(state for state in stored_states.split(",") if state)
             await self.jobs.set_run_state_filter(states)
+            if not self._is_current(generation):
+                return
         await self.jobs.setup()
+        if not self._is_current(generation):
+            return
         if self.jobs.jobs_state not in _SUCCESS_STATES:
             return
         stored_job = self._selection_store.get(self._selection_scope, "job_name")
@@ -225,9 +280,9 @@ class GluePageVM:
         if job_name is None:
             self._selection_store.discard(self._selection_scope, "job_name")
             return
-        await self.select_job(job_name)
+        await self._select_job(job_name, generation)
 
-    async def _setup_crawlers(self) -> None:
+    async def _setup_crawlers(self, generation: int) -> None:
         stored_state = self._selection_store.get(self._selection_scope, "crawler_state")
         if stored_state is None:
             await self.crawlers.setup()
@@ -235,6 +290,8 @@ class GluePageVM:
             await self.crawlers.set_state_filter(stored_state)
         else:
             await self.crawlers.setup()
+        if not self._is_current(generation):
+            return
         if self.crawlers.state not in _SUCCESS_STATES:
             return
         stored_name = self._selection_store.get(self._selection_scope, "crawler_name")
@@ -245,9 +302,14 @@ class GluePageVM:
         if crawler_name is None:
             self._selection_store.discard(self._selection_scope, "crawler_name")
             return
-        await self.select_crawler(crawler_name)
+        await self._select_crawler(crawler_name, generation)
+
+    def _is_current(self, generation: int) -> bool:
+        return not self._disposed and generation == self._lifecycle_generation
 
     def _notify(self, property_name: str) -> None:
+        if self._disposed:
+            return
         self._hub.send(PropertyChangedMessage.create(self, "glue.page", property_name))
 
 

@@ -18,9 +18,8 @@ from aws_tui.domain.data_catalog import (
     TableSummary,
 )
 from aws_tui.domain.filesystem import ProviderError
-from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.glue._errors import map_provider_error
+from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 
 
 class GlueCatalogVM:
@@ -171,6 +170,10 @@ class GlueCatalogVM:
         if self._disposed:
             return
         self._disposed = True
+        self._database_generation += 1
+        self._table_generation += 1
+        self._detail_generation += 1
+        self._partition_generation += 1
         self._partition_pager.dispose()
         self._table_pager.dispose()
         self._database_pager.dispose()
@@ -186,6 +189,7 @@ class GlueCatalogVM:
         old_pager = self._database_pager
         self._database_pager = self._make_database_pager()
         old_pager.dispose()
+        self._notify("has_more_databases")
         generation = self._database_generation
         self._databases_error_text = None
         self._set_state("_databases_state", PaneState.LOADING, "state")
@@ -200,12 +204,15 @@ class GlueCatalogVM:
         except Exception as exc:
             if generation != self._database_generation:
                 return
-            self._databases_error_text = redact_text(f"unexpected error: {exc}")
-            self._set_state("_databases_state", PaneState.ERROR, "state")
+            state, self._databases_error_text = map_unexpected_error(exc)
+            self._set_state("_databases_state", state, "state")
             return
         if generation != self._database_generation:
             return
         self._notify("databases")
+        self._notify("has_more_databases")
+        if not self.databases:
+            self._clear_database_selection()
         self._set_state(
             "_databases_state",
             PaneState.IDLE if self.databases else PaneState.EMPTY,
@@ -222,6 +229,12 @@ class GlueCatalogVM:
             if generation != self._database_generation:
                 return
             state, self._databases_error_text = map_provider_error(exc)
+            self._set_state("_databases_state", state, "state")
+            return
+        except Exception as exc:
+            if generation != self._database_generation:
+                return
+            state, self._databases_error_text = map_unexpected_error(exc)
             self._set_state("_databases_state", state, "state")
             return
         if generation == self._database_generation:
@@ -262,8 +275,8 @@ class GlueCatalogVM:
         except Exception as exc:
             if generation != self._table_generation:
                 return
-            self._tables_error_text = redact_text(f"unexpected error: {exc}")
-            self._set_state("_tables_state", PaneState.ERROR, "tables_state")
+            state, self._tables_error_text = map_unexpected_error(exc)
+            self._set_state("_tables_state", state, "tables_state")
             return
         if generation != self._table_generation:
             return
@@ -285,6 +298,12 @@ class GlueCatalogVM:
             if generation != self._table_generation:
                 return
             state, self._tables_error_text = map_provider_error(exc)
+            self._set_state("_tables_state", state, "tables_state")
+            return
+        except Exception as exc:
+            if generation != self._table_generation:
+                return
+            state, self._tables_error_text = map_unexpected_error(exc)
             self._set_state("_tables_state", state, "tables_state")
             return
         if generation == self._table_generation:
@@ -343,6 +362,12 @@ class GlueCatalogVM:
             state, self._partitions_error_text = map_provider_error(exc)
             self._set_state("_partitions_state", state, "partitions_state")
             return
+        except Exception as exc:
+            if generation != self._detail_generation:
+                return
+            state, self._partitions_error_text = map_unexpected_error(exc)
+            self._set_state("_partitions_state", state, "partitions_state")
+            return
         if generation == self._detail_generation:
             self._notify("partitions")
             self._notify("has_more_partitions")
@@ -358,8 +383,8 @@ class GlueCatalogVM:
         except Exception as exc:
             if generation != self._detail_generation:
                 return None
-            self._detail_error_text = redact_text(f"unexpected error: {exc}")
-            self._set_state("_detail_state", PaneState.ERROR, "detail_state")
+            state, self._detail_error_text = map_unexpected_error(exc)
+            self._set_state("_detail_state", state, "detail_state")
         return None
 
     async def _load_partitions(self, generation: int) -> None:
@@ -374,8 +399,8 @@ class GlueCatalogVM:
         except Exception as exc:
             if generation != self._detail_generation:
                 return
-            self._partitions_error_text = redact_text(f"unexpected error: {exc}")
-            self._set_state("_partitions_state", PaneState.ERROR, "partitions_state")
+            state, self._partitions_error_text = map_unexpected_error(exc)
+            self._set_state("_partitions_state", state, "partitions_state")
             return
         if generation != self._detail_generation:
             return
@@ -402,8 +427,8 @@ class GlueCatalogVM:
         except Exception as exc:
             if generation != self._detail_generation:
                 return
-            self._statistics_error_text = redact_text(f"unexpected error: {exc}")
-            self._set_state("_statistics_state", PaneState.ERROR, "statistics_state")
+            state, self._statistics_error_text = map_unexpected_error(exc)
+            self._set_state("_statistics_state", state, "statistics_state")
             return
         if generation != self._detail_generation:
             return
@@ -475,6 +500,32 @@ class GlueCatalogVM:
         self._partition_pager = self._make_partition_pager(ref)
         old_pager.dispose()
 
+    def _clear_database_selection(self) -> None:
+        self._table_generation += 1
+        self._detail_generation += 1
+        self._selected_database_name = None
+        self._selected_table_name = None
+        self._table_detail = None
+        self._column_statistics = ()
+        self._replace_table_pager(None)
+        self._replace_partition_pager(None)
+        self._tables_error_text = None
+        self._detail_error_text = None
+        self._partitions_error_text = None
+        self._statistics_error_text = None
+        self._set_state("_tables_state", PaneState.EMPTY, "tables_state")
+        self._set_state("_detail_state", PaneState.EMPTY, "detail_state")
+        self._set_state("_partitions_state", PaneState.EMPTY, "partitions_state")
+        self._set_state("_statistics_state", PaneState.EMPTY, "statistics_state")
+        self._notify("selected_database_name")
+        self._notify("selected_table_name")
+        self._notify("tables")
+        self._notify("has_more_tables")
+        self._notify("table_detail")
+        self._notify("partitions")
+        self._notify("has_more_partitions")
+        self._notify("column_statistics")
+
     def _set_state(self, field: str, state: PaneState, property_name: str) -> None:
         if getattr(self, field) == state:
             return
@@ -482,6 +533,8 @@ class GlueCatalogVM:
         self._notify(property_name)
 
     def _notify(self, property_name: str) -> None:
+        if self._disposed:
+            return
         self._hub.send(PropertyChangedMessage.create(self, "glue.catalog", property_name))
         self._on_property_changed.on_next(property_name)
 

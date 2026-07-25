@@ -11,9 +11,8 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueJobRunSummary, GlueJobSummary
-from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.glue._errors import map_provider_error
+from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 
 
 class GlueJobsVM:
@@ -123,6 +122,8 @@ class GlueJobsVM:
         if self._disposed:
             return
         self._disposed = True
+        self._job_generation += 1
+        self._run_generation += 1
         self._run_pager.dispose()
         self._job_pager.dispose()
         self._on_property_changed.on_completed()
@@ -151,13 +152,15 @@ class GlueJobsVM:
         except Exception as exc:
             if generation != self._job_generation:
                 return
-            self._jobs_error_text = redact_text(f"unexpected error: {exc}")
-            self._set_state("_jobs_state", PaneState.ERROR, "state")
+            state, self._jobs_error_text = map_unexpected_error(exc)
+            self._set_state("_jobs_state", state, "state")
             return
         if generation != self._job_generation:
             return
         self._notify("jobs")
         self._notify("has_more_jobs")
+        if not self.jobs:
+            self._clear_job_selection()
         self._set_state(
             "_jobs_state",
             PaneState.IDLE if self.jobs else PaneState.EMPTY,
@@ -174,6 +177,12 @@ class GlueJobsVM:
             if generation != self._job_generation:
                 return
             state, self._jobs_error_text = map_provider_error(exc)
+            self._set_state("_jobs_state", state, "state")
+            return
+        except Exception as exc:
+            if generation != self._job_generation:
+                return
+            state, self._jobs_error_text = map_unexpected_error(exc)
             self._set_state("_jobs_state", state, "state")
             return
         if generation == self._job_generation:
@@ -216,6 +225,12 @@ class GlueJobsVM:
             state, self._runs_error_text = map_provider_error(exc)
             self._set_state("_runs_state", state, "runs_state")
             return
+        except Exception as exc:
+            if generation != self._run_generation:
+                return
+            state, self._runs_error_text = map_unexpected_error(exc)
+            self._set_state("_runs_state", state, "runs_state")
+            return
         if generation == self._run_generation:
             self._notify("runs")
             self._notify("has_more_runs")
@@ -245,8 +260,8 @@ class GlueJobsVM:
         except Exception as exc:
             if generation != self._run_generation:
                 return
-            self._runs_error_text = redact_text(f"unexpected error: {exc}")
-            self._set_state("_runs_state", PaneState.ERROR, "runs_state")
+            state, self._runs_error_text = map_unexpected_error(exc)
+            self._set_state("_runs_state", state, "runs_state")
             return
         if generation != self._run_generation:
             return
@@ -271,6 +286,20 @@ class GlueJobsVM:
             return rows, next_token
 
         return TokenPagedComposition(fetch)
+
+    def _clear_job_selection(self) -> None:
+        self._run_generation += 1
+        old_pager = self._run_pager
+        self._selected_job_name = None
+        self._selected_run_id = None
+        self._run_pager = self._make_run_pager(None)
+        old_pager.dispose()
+        self._runs_error_text = None
+        self._set_state("_runs_state", PaneState.EMPTY, "runs_state")
+        self._notify("selected_job_name")
+        self._notify("selected_run_id")
+        self._notify("runs")
+        self._notify("has_more_runs")
 
     def _make_run_pager(
         self,
@@ -300,6 +329,8 @@ class GlueJobsVM:
         self._notify(property_name)
 
     def _notify(self, property_name: str) -> None:
+        if self._disposed:
+            return
         self._hub.send(PropertyChangedMessage.create(self, "glue.jobs", property_name))
         self._on_property_changed.on_next(property_name)
 

@@ -11,9 +11,8 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueCrawlerDetail, GlueCrawlerSummary
-from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.glue._errors import map_provider_error
+from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 
 
 class GlueCrawlersVM:
@@ -98,6 +97,8 @@ class GlueCrawlersVM:
         if self._disposed:
             return
         self._disposed = True
+        self._crawler_generation += 1
+        self._detail_generation += 1
         self._crawler_pager.dispose()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
@@ -123,6 +124,12 @@ class GlueCrawlersVM:
             if generation != self._crawler_generation:
                 return
             state, self._error_text = map_provider_error(exc)
+            self._set_state(state)
+            return
+        except Exception as exc:
+            if generation != self._crawler_generation:
+                return
+            state, self._error_text = map_unexpected_error(exc)
             self._set_state(state)
             return
         if generation == self._crawler_generation:
@@ -151,8 +158,8 @@ class GlueCrawlersVM:
         except Exception as exc:
             if generation != self._detail_generation:
                 return
-            self._detail_error_text = redact_text(f"unexpected error: {exc}")
-            self._set_detail_state(PaneState.ERROR)
+            state, self._detail_error_text = map_unexpected_error(exc)
+            self._set_detail_state(state)
             return
         if generation != self._detail_generation:
             return
@@ -187,8 +194,8 @@ class GlueCrawlersVM:
         except Exception as exc:
             if generation != self._crawler_generation:
                 return
-            self._error_text = redact_text(f"unexpected error: {exc}")
-            self._set_state(PaneState.ERROR)
+            state, self._error_text = map_unexpected_error(exc)
+            self._set_state(state)
             return
         if generation != self._crawler_generation:
             return
@@ -224,6 +231,8 @@ class GlueCrawlersVM:
         self._notify("detail_state")
 
     def _notify(self, property_name: str) -> None:
+        if self._disposed:
+            return
         self._hub.send(PropertyChangedMessage.create(self, "glue.crawlers", property_name))
         self._on_property_changed.on_next(property_name)
 

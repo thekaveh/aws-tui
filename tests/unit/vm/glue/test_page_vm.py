@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
@@ -200,6 +202,65 @@ async def test_refresh_active_reloads_crawlers_with_unchanged_stored_filter() ->
 
 
 @pytest.mark.asyncio
+async def test_empty_catalog_refresh_clears_selection_data_notifications_and_store() -> None:
+    fake = seeded_glue()
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(fake, selection_store=store)
+    await page.setup()
+    notifications: list[str] = []
+    subscription = page.catalog.on_property_changed.subscribe(on_next=notifications.append)
+    fake.databases.clear()
+
+    await page.refresh_active()
+
+    assert page.catalog.selected_database_name is None
+    assert page.catalog.selected_table_name is None
+    assert page.catalog.tables == ()
+    assert page.catalog.table_detail is None
+    assert page.catalog.partitions == ()
+    assert page.catalog.column_statistics == ()
+    assert page.catalog.tables_state is PaneState.EMPTY
+    assert page.catalog.detail_state is PaneState.EMPTY
+    assert page.catalog.partitions_state is PaneState.EMPTY
+    assert page.catalog.statistics_state is PaneState.EMPTY
+    assert store.get(scope, "database_name") is None
+    assert store.get(scope, "table_name") is None
+    assert {
+        "selected_database_name",
+        "selected_table_name",
+        "tables",
+        "table_detail",
+        "partitions",
+        "column_statistics",
+    }.issubset(notifications)
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_empty_jobs_refresh_clears_selection_runs_notifications_and_store() -> None:
+    fake = seeded_glue()
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(fake, selection_store=store)
+    await page.setup()
+    await page.select_view("jobs")
+    notifications: list[str] = []
+    subscription = page.jobs.on_property_changed.subscribe(on_next=notifications.append)
+    fake.jobs.clear()
+
+    await page.refresh_active()
+
+    assert page.jobs.selected_job_name is None
+    assert page.jobs.selected_run_id is None
+    assert page.jobs.runs == ()
+    assert page.jobs.runs_state is PaneState.EMPTY
+    assert store.get(scope, "job_name") is None
+    assert {"selected_job_name", "selected_run_id", "runs"}.issubset(notifications)
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
 async def test_crawler_access_denied_is_scoped_to_crawlers_view() -> None:
     fake = seeded_glue()
     fake.crawlers_error = PermissionDeniedError("glue:GetCrawlers denied")
@@ -209,6 +270,25 @@ async def test_crawler_access_denied_is_scoped_to_crawlers_view() -> None:
 
     assert page.crawlers.state is PaneState.FORBIDDEN
     assert page.catalog.state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_page_dispose_prevents_blocked_setup_from_mutating_page_or_store() -> None:
+    fake = seeded_glue()
+    databases_started = fake.block_databases()
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(fake, selection_store=store)
+    setup = asyncio.create_task(page.setup())
+    await databases_started.wait()
+
+    page.dispose()
+    fake.release_databases()
+    await setup
+
+    assert page._loaded_views == set()  # type: ignore[attr-defined]
+    assert store.get(scope, "database_name") is None
+    assert store.get(scope, "table_name") is None
 
 
 def test_dispose_cascades_once_without_disposing_service_store(

@@ -102,6 +102,85 @@ async def test_runs_error_is_scoped_to_runs_pane() -> None:
     assert vm.state is PaneState.IDLE
 
 
+@pytest.mark.asyncio
+async def test_jobs_load_more_unexpected_errors_are_scoped_and_redacted() -> None:
+    class BrokenNextPages(InMemoryGlue):
+        async def list_jobs_page(
+            self,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            if start_token is not None:
+                raise RuntimeError("Authorization: Bearer JOB_SECRET")
+            return await super().list_jobs_page(start_token=start_token)
+
+        async def list_job_runs_page(
+            self,
+            job_name: str,
+            *,
+            start_token: str | None = None,
+            states: tuple[str, ...] = (),
+        ) -> tuple[list, str | None]:
+            if start_token is not None:
+                raise RuntimeError("Authorization: Bearer RUN_SECRET")
+            return await super().list_job_runs_page(
+                job_name,
+                start_token=start_token,
+                states=states,
+            )
+
+    fake = BrokenNextPages()
+    fake.add_run("nightly", "jr-1")
+    fake.add_run("nightly", "jr-2")
+    fake.add_job("hourly")
+    fake.job_page_size = 1
+    fake.run_page_size = 1
+    vm = make_jobs_vm(fake)
+
+    await vm.setup()
+    await vm.load_more_jobs()
+    assert vm.jobs_state is PaneState.ERROR
+    assert vm.jobs_error_text is not None
+    assert "JOB_SECRET" not in vm.jobs_error_text
+    assert "[REDACTED]" in vm.jobs_error_text
+
+    await vm.select_job("nightly")
+    await vm.load_more_runs()
+    assert vm.runs_state is PaneState.ERROR
+    assert vm.runs_error_text is not None
+    assert "RUN_SECRET" not in vm.runs_error_text
+    assert "[REDACTED]" in vm.runs_error_text
+
+
+@pytest.mark.asyncio
+async def test_jobs_dispose_invalidates_blocked_load_without_notifications() -> None:
+    fake = seeded_glue()
+    runs_started = fake.block_runs("nightly")
+    vm = make_jobs_vm(fake)
+    await vm.setup()
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+
+    selection = asyncio.create_task(vm.select_job("nightly"))
+    await runs_started.wait()
+    notifications.clear()
+    generations = (
+        vm._job_generation,  # type: ignore[attr-defined]
+        vm._run_generation,  # type: ignore[attr-defined]
+    )
+
+    vm.dispose()
+    fake.release_runs("nightly")
+    await selection
+
+    assert notifications == []
+    assert (
+        vm._job_generation,  # type: ignore[attr-defined]
+        vm._run_generation,  # type: ignore[attr-defined]
+    ) == tuple(generation + 1 for generation in generations)
+    subscription.dispose()
+
+
 def test_jobs_dispose_reaches_both_pagers_once(monkeypatch: pytest.MonkeyPatch) -> None:
     vm = make_jobs_vm(seeded_glue())
     pagers = [vm._job_pager, vm._run_pager]  # type: ignore[attr-defined]

@@ -105,6 +105,63 @@ async def test_plain_crawler_access_denial_is_forbidden() -> None:
     assert vm.error_text == "glue:GetCrawlers denied"
 
 
+@pytest.mark.asyncio
+async def test_crawler_load_more_unexpected_error_is_scoped_and_redacted() -> None:
+    class BrokenNextPage(InMemoryGlue):
+        async def list_crawlers_page(
+            self,
+            *,
+            start_token: str | None = None,
+            state: str | None = None,
+        ) -> tuple[list, str | None]:
+            if start_token is not None:
+                raise RuntimeError("Authorization: Bearer CRAWLER_SECRET")
+            return await super().list_crawlers_page(start_token=start_token, state=state)
+
+    fake = BrokenNextPage()
+    fake.add_crawler("first")
+    fake.add_crawler("second")
+    fake.crawler_page_size = 1
+    vm = make_crawlers_vm(fake)
+
+    await vm.setup()
+    await vm.load_more_crawlers()
+
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text is not None
+    assert "CRAWLER_SECRET" not in vm.error_text
+    assert "[REDACTED]" in vm.error_text
+
+
+@pytest.mark.asyncio
+async def test_crawlers_dispose_invalidates_blocked_load_without_notifications() -> None:
+    fake = seeded_glue()
+    detail_started = fake.block_crawler_detail("ready-crawler")
+    vm = make_crawlers_vm(fake)
+    await vm.setup()
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+
+    selection = asyncio.create_task(vm.select_crawler("ready-crawler"))
+    await detail_started.wait()
+    notifications.clear()
+    generations = (
+        vm._crawler_generation,  # type: ignore[attr-defined]
+        vm._detail_generation,  # type: ignore[attr-defined]
+    )
+
+    vm.dispose()
+    fake.release_crawler_detail("ready-crawler")
+    await selection
+
+    assert notifications == []
+    assert (
+        vm._crawler_generation,  # type: ignore[attr-defined]
+        vm._detail_generation,  # type: ignore[attr-defined]
+    ) == tuple(generation + 1 for generation in generations)
+    subscription.dispose()
+
+
 def test_crawlers_dispose_reaches_pager_commands_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

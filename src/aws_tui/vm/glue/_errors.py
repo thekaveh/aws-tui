@@ -26,4 +26,8 @@ def map_provider_error(exc: ProviderError) -> tuple[PaneState, str | None]:
     return PaneState.ERROR, _visible_error_text(exc)
 
 
-__all__ = ["map_provider_error"]
+def map_unexpected_error(exc: BaseException) -> tuple[PaneState, str]:
+    return PaneState.ERROR, redact_text(f"unexpected error: {exc}")
+
+
+__all__ = ["map_provider_error", "map_unexpected_error"]
