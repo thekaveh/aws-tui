@@ -47,6 +47,7 @@ from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.nav_menu import NavMenu
@@ -344,6 +345,18 @@ class AwsTuiApp(App[None]):
         self._actions.register("pane.delete", self.action_delete)
         self._actions.register("app.swap_source", self.action_swap_source)
         self._actions.register("emr.next_application", self.action_next_emr_application)
+        self._actions.register(
+            "glue.catalog",
+            partial(self.action_select_glue_view, "catalog"),
+        )
+        self._actions.register(
+            "glue.jobs",
+            partial(self.action_select_glue_view, "jobs"),
+        )
+        self._actions.register(
+            "glue.crawlers",
+            partial(self.action_select_glue_view, "crawlers"),
+        )
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
@@ -1206,6 +1219,9 @@ class AwsTuiApp(App[None]):
         pane are ignored.
         """
         self.record_action("pane.quick_look")
+        glue_page = self._glue_page()
+        if glue_page is not None and glue_page.activate_focused(space=True):
+            return
         pane = self._focused_file_pane()
         if pane is None:
             return
@@ -1263,6 +1279,12 @@ class AwsTuiApp(App[None]):
             return self.query_one("#content-emr-page", EmrServerlessPage)
         return None
 
+    def _glue_page(self) -> GluePage | None:
+        """Return the mounted Glue page, or None for another service."""
+        with contextlib.suppress(Exception):
+            return self.query_one("#content-glue-page", GluePage)
+        return None
+
     def _emr_active_pane(self, emr_page: EmrServerlessPage) -> object | None:
         """Return whichever EMR pane should receive
         the next cursor/refresh action.
@@ -1299,6 +1321,11 @@ class AwsTuiApp(App[None]):
                 emr_page.action_cycle_panes_back()
             else:
                 emr_page.action_cycle_panes_forward()
+            return
+
+        glue_page = self._glue_page()
+        if glue_page is not None:
+            glue_page.cycle_focus(reverse=reverse)
             return
 
         coordinator = self._app_ctx.focus_coordinator
@@ -1454,6 +1481,10 @@ class AwsTuiApp(App[None]):
             else:
                 nav.action_cursor_down()
             return
+        glue_page = self._glue_page()
+        if glue_page is not None:
+            glue_page.move_focused(delta)
+            return
         # EMR page: forward Up/Down to the active EMR pane's cursor
         # or scroll action. Mirrors the S3 path's ``dual.focused_pane``
         # lookup. LEFT pane uses cursor actions; RIGHT-bottom pane
@@ -1578,6 +1609,9 @@ class AwsTuiApp(App[None]):
                 return
             nav.action_commit()
             return
+        glue_page = self._glue_page()
+        if glue_page is not None and glue_page.activate_focused(space=False):
+            return
         # EMR page: Enter on the LEFT pane commits the focused row
         # (posts ``JobRunsPane.RunSelected`` → page VM forwards to
         # ``select_job_run``). Enter on the RIGHT-bottom pane (logs)
@@ -1660,6 +1694,10 @@ class AwsTuiApp(App[None]):
 
     async def action_refresh(self) -> None:
         self.record_action("pane.refresh")
+        glue_page = self._glue_page()
+        if glue_page is not None:
+            await glue_page.action_refresh_active()
+            return
         # EMR page: ``r`` forwards to whichever pane currently holds
         # Textual focus. Runs/detail panes post ``RefreshRequested``;
         # logs calls ``action_reload`` to refresh/reload logs.
@@ -2071,6 +2109,12 @@ class AwsTuiApp(App[None]):
         page = self._emr_page()
         if page is not None:
             await page.vm.cycle_application(1)
+
+    async def action_select_glue_view(self, view: str) -> None:
+        self.record_action(f"glue.{view}")
+        page = self._glue_page()
+        if page is not None:
+            await page.action_select_view(view)
 
     async def _swap_single_context_source(self, service_id: str) -> None:
         """Rebuild a non-S3 service under its next supported AWS profile."""

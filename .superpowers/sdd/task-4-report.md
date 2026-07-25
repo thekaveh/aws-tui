@@ -378,3 +378,145 @@ github-light-forbidden-150x44.svg #9a6700 == GitHub Light $warning
   snapshots grayscale. Static token assertions plus the separate true-color
   raster matrix verify the real theme colors.
 - No Glue functional or visual concern remains from these four findings.
+
+## Production Router Re-review Fixes
+
+### Status
+
+The production priority-binding and configurable Glue action findings were
+reproduced and fixed on 2026-07-25.
+
+### Changed Files
+
+- `src/aws_tui/app.py`
+- `src/aws_tui/ui/widgets/glue/page.py`
+- `tests/integration/test_glue_page_routing.py`
+- `tests/integration/test_keybinding_wiring.py`
+- `tests/unit/ui/glue/test_page.py`
+- `.superpowers/sdd/task-4-report.md`
+
+### Root Causes
+
+1. `AwsTuiApp` installed priority bindings for Tab, Shift+Tab, Up/Down, Enter,
+   Space, and `r`, but its routing branches only forwarded those actions to
+   modals, navigation, S3, EMR, and settings. Textual therefore never delivered
+   the same keys to focused Glue controls.
+2. `glue.catalog`, `glue.jobs`, and `glue.crawlers` existed in `KeymapStore` but
+   had no `ActionRegistry` handlers. `BindingResolver` correctly omitted them,
+   leaving `GluePage`'s hardcoded `1/2/3` bindings as the only working path and
+   preventing configured rebindings.
+
+### Strict TDD Evidence
+
+The production-app regressions were added before production changes.
+
+RED command:
+
+```text
+uv run pytest tests/integration/test_glue_page_routing.py -q
+```
+
+Observed RED result:
+
+```text
+5 failed, 10 rerun in 16.02s
+```
+
+The five failures independently covered production Tab traversal, Enter/Space
+tab activation, list/filter arrow navigation, `r` refresh, and configured
+Glue-view bindings.
+
+Focused GREEN command:
+
+```text
+uv run pytest tests/integration/test_glue_page_routing.py \
+  tests/integration/test_keybinding_wiring.py \
+  tests/unit/ui/glue/test_page.py \
+  tests/unit/ui/test_bindings.py \
+  tests/unit/infra/test_keymap_store.py -q
+```
+
+Observed GREEN result:
+
+```text
+42 passed in 7.66s
+```
+
+### Implementation
+
+- Registered all three `glue.*` action IDs in `AwsTuiApp` and routed each to the
+  mounted `GluePage`.
+- Added mounted-Glue routing for forward/reverse Tab traversal, focused
+  `OptionList` and `Select` arrow handling, Enter/Space activation, detail
+  scrolling, and active-view refresh.
+- Preserved modal and navigation precedence before Glue routing.
+- Removed page-local `1/2/3/r` bindings so `KeymapStore` is the sole source of
+  production shortcuts. The production regression remaps views to `7/8/9` and
+  proves the old `2` default no longer switches views.
+- Kept the existing page actions as the reusable UI/VM boundary for isolated
+  unit tests.
+
+### Visual And Snapshot Impact
+
+There is no visual or snapshot change. No CSS, theme token, layout, pane state,
+markup handling, or detail-focus structure changed. The existing `100x30` and
+`150x44` snapshot matrix passed without updates:
+
+```text
+55 snapshots passed
+```
+
+### Final Verification
+
+Production routing, keymap, Glue UI, factory, theme, hint, and snapshot gate:
+
+```text
+uv run pytest tests/integration/test_glue_page_routing.py \
+  tests/integration/test_keybinding_wiring.py \
+  tests/unit/ui/glue \
+  tests/unit/ui/test_service_view_factory.py \
+  tests/unit/ui/test_themes.py \
+  tests/unit/ui/test_bindings.py \
+  tests/unit/infra/test_keymap_store.py \
+  tests/unit/vm/chrome/test_hint_legend.py \
+  tests/snapshot/test_glue.py -q
+
+304 passed in 27.61s
+55 snapshots passed
+```
+
+Static and architecture gates:
+
+```text
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+334 files already formatted
+
+uv run mypy src/aws_tui
+Success: no issues found in 126 source files
+
+bash scripts/check-layers.sh
+layer rules clean
+```
+
+### Self-review
+
+- Every new app route is gated by a mounted `#content-glue-page`; other service
+  behavior is unchanged.
+- Modal and navigation handlers still win before Glue focused-control routing.
+- Filter overlays continue through Textual's native `OptionList` selection
+  actions, including Enter commit and focus return.
+- Removing any Glue action registration breaks the runtime binding tests;
+  restoring page-local number bindings breaks the stale-default rebinding test.
+- Previously approved title contrast, semantic classes and resets, literal AWS
+  text, single detail-scroll focus targets, and stable layouts remain covered
+  by the unchanged Glue UI/theme/snapshot suites.
+
+### Concerns
+
+- The pre-existing shell warning
+  `/tmp/vmx-cargo-182/env: no such file or directory` still appears before
+  commands and did not affect tests, static checks, or Git operations.
+- No Task 4 functional or visual concern remains.

@@ -12,7 +12,7 @@ import pytest
 
 from aws_tui.app import AwsTuiApp
 
-# The full set the App must install under the default keymap: our 23
+# The full set the App must install under the default keymap: our
 # resolver-materialized bindings (dispatch form, Textual key names) plus
 # Textual's built-in ctrl+q (alt-quit) and ctrl+p (command palette) that
 # survive super().__init__(). (key, action, show, priority).
@@ -40,6 +40,9 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("d", "dispatch('pane.delete')", True, True),
     ("S", "dispatch('app.swap_source')", True, True),
     ("A", "dispatch('emr.next_application')", True, True),
+    ("1", "dispatch('glue.catalog')", False, True),
+    ("2", "dispatch('glue.jobs')", False, True),
+    ("3", "dispatch('glue.crawlers')", False, True),
     ("shift+up", "dispatch('pane.mark_up')", False, True),
     ("shift+down", "dispatch('pane.mark_down')", False, True),
     ("space", "dispatch('pane.quick_look')", False, True),

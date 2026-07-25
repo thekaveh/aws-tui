@@ -66,7 +66,7 @@ async def test_glue_page_composes_source_tabs_and_three_views() -> None:
 
 
 @pytest.mark.asyncio
-async def test_number_actions_switch_views_and_load_them_lazily() -> None:
+async def test_view_actions_switch_views_and_load_them_lazily() -> None:
     vm, fake = _build_vm()
     await vm.setup()
     app = _GlueApp(vm)
@@ -75,13 +75,13 @@ async def test_number_actions_switch_views_and_load_them_lazily() -> None:
         await pilot.pause()
         page = app.query_one(GluePage)
         page.query_one(GlueCatalogView).query_one(OptionList).focus()
-        await pilot.press("2")
+        await page.action_select_view("jobs")
         await pilot.pause()
         assert vm.active_view == "jobs"
         assert page.query_one(GlueJobsView).display
         assert fake.job_tokens == [None]
 
-        await pilot.press("3")
+        await page.action_select_view("crawlers")
         await pilot.pause()
         assert vm.active_view == "crawlers"
         assert page.query_one(GlueCrawlersView).display
@@ -132,7 +132,7 @@ async def test_refresh_action_refreshes_only_the_active_view() -> None:
         page = app.query_one(GluePage)
         before = len(fake.database_tokens)
         page.query_one(GlueCatalogView).query_one(OptionList).focus()
-        await pilot.press("r")
+        await page.action_refresh_active()
         await pilot.pause()
 
         assert len(fake.database_tokens) == before + 1

@@ -8,7 +8,7 @@ from textual.containers import Container, Horizontal
 from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import OptionList, Select, Static
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
@@ -79,13 +79,6 @@ class GluePage(HubSubscriberMixin, Widget):
     }
     """
 
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("1", "select_view('catalog')", "Catalog", show=False),
-        Binding("2", "select_view('jobs')", "Jobs", show=False),
-        Binding("3", "select_view('crawlers')", "Crawlers", show=False),
-        Binding("r", "refresh_active", "Refresh", show=False),
-    ]
-
     def __init__(
         self,
         vm: GluePageVM,
@@ -140,6 +133,48 @@ class GluePage(HubSubscriberMixin, Widget):
 
     async def action_refresh_active(self) -> None:
         await self._vm.refresh_active()
+
+    def cycle_focus(self, *, reverse: bool) -> None:
+        if reverse:
+            self.app.action_focus_previous()
+        else:
+            self.app.action_focus_next()
+
+    def move_focused(self, delta: int) -> None:
+        focused = self.app.focused
+        if not self._contains_focus(focused):
+            return
+        if isinstance(focused, OptionList):
+            if delta < 0:
+                focused.action_cursor_up()
+            else:
+                focused.action_cursor_down()
+            return
+        if isinstance(focused, Select):
+            focused.action_show_overlay()
+            return
+        action = getattr(
+            focused,
+            "action_scroll_up" if delta < 0 else "action_scroll_down",
+            None,
+        )
+        if action is not None:
+            action()
+
+    def activate_focused(self, *, space: bool) -> bool:
+        focused = self.app.focused
+        if not self._contains_focus(focused):
+            return False
+        if isinstance(focused, _ViewTab):
+            focused.action_select()
+        elif isinstance(focused, Select):
+            focused.action_show_overlay()
+        elif not space and isinstance(focused, OptionList):
+            focused.action_select()
+        return True
+
+    def _contains_focus(self, focused: Widget | None) -> bool:
+        return focused is not None and (focused is self or self in focused.ancestors_with_self)
 
     def _on_active_view_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._sync_view)
