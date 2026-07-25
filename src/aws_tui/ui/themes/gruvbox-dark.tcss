@@ -644,6 +644,12 @@ EmrServerlessPage {
     color: $text;
 }
 
+ServiceSourceHeader {
+    background: $bg-elev;
+    color: $text-muted;
+    border-left: solid $rule-dim;
+}
+
 EmrServerlessPage > .emr-left-column > .emr-app-box {
     background: $bg;
     color: $text;

@@ -36,6 +36,11 @@ VMs to build service pages, but it cannot import Textual widgets.
   - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
     `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
     (added post-tag by PR #76 and extended by PR #84; the read-only EMR Serverless browser with logs streaming).
+    Its immutable `ServiceSourceContext` carries the active connection name,
+    optional distinct AWS profile, and region to the service view; the shared
+    `ServiceSourceHeader` renders that identity above the EMR application picker.
+    `ServiceSelectionStore` scopes remembered service selections by
+    `(service_id, connection_name, region)`.
     `JobRunCloneVM` (PR #83) backs the clone-job-run modal — a
     sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
     per modal-mount with the focused run as the source.
@@ -146,6 +151,9 @@ at `src/aws_tui/` top-level so the check never inspects them.
    shipped service (post-tag), using the richer per-service
    subtree pattern (dedicated domain client + VM subtree + UI
    widget tree).
+   S3 owns independent sources for each pane, while single-context AWS services
+   use `RootVM`'s active connection and are rebuilt as a whole when their source
+   changes.
 5. `src/aws_tui/domain/cross_fs.py` — the engine that moves bytes
    between any pair of `FileSystemProvider`s.
 6. `src/aws_tui/ui/widgets/` — pure Textual widgets; per-VM smoke

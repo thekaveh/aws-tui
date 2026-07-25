@@ -152,6 +152,26 @@ nav after a local-only fallback retries the initial connection and
 clears that connection's unreachable mark; pressing `r` on an
 unreachable pane and recovering it also clears the mark.
 
+### Source scopes and service identity
+
+aws-tui has two source scopes. S3 keeps an independent source in each file
+pane, so the left and right panes can intentionally point at different
+connections or local storage. Single-context AWS services, including EMR
+Serverless, use the one active AWS connection owned by `RootVM`; `Shift+S`
+rebuilds that service under the next supported AWS profile and region.
+
+The compact source header on an EMR page identifies that rebuilt context as
+`connection-name · profile · region`, omitting `profile` when it matches the
+connection name. EMR application selection is scoped to service, connection
+name, and region, so switching back restores a valid prior application without
+crossing account or regional boundaries. Use **`Shift+A`** to cycle EMR
+applications; **`Shift+S`** always switches the source.
+
+An access failure from a service API, such as EMR Serverless `AccessDenied`, is
+service-scoped: it remains visible in that service page and does not mark the
+connection unreachable or remove it from the source cycle. A connection is
+only marked unreachable by connection-level S3 pane failures.
+
 ## 1.5. Vendor quirks (manual checklist)
 - **Cloudflare R2** — no bucket versioning, no replication;
   `region = "auto"`; uses HTTPS at

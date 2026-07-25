@@ -52,6 +52,7 @@ def test_emr_page_populated_renders_expected_glyphs_and_labels(theme: str) -> No
     )
     assert p.is_file(), f"expected snapshot {p.name} on disk; run --snapshot-update first"
     svg = p.read_text()
+    assert "demo-prod&#160;·&#160;us-east-1" in svg, f"service source missing for theme {theme!r}"
     assert "etl-pipeline-1" in svg, f"application name missing for theme {theme!r}"
     # The job-run NAME column is 1fr of a narrow LEFT pane (now 2/7
     # of total width post-PR-batch-7items), so the long fixture

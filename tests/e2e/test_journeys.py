@@ -11,6 +11,7 @@ tiers already cover widget-level rendering.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -18,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from aws_tui.app import AwsTuiApp
-from aws_tui.composition import AppContext
+from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.filesystem import (
     FileSystemProvider,
     PathRef,
@@ -26,9 +27,11 @@ from aws_tui.domain.filesystem import (
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
+from tests.unit.domain._in_memory_emr import _InMemoryEmr
 from tests.unit.domain._in_memory_fs import InMemoryFS
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -270,3 +273,69 @@ async def test_journey_5_delete_cancel(app_context: AppContext) -> None:
     # We assert the provider was untouched.
     assert fs.delete_calls == []
     pane.dispose()
+
+
+# ── Journey 6: EMR source switch ──────────────────────────────────────────
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_journey_6_switch_emr_profile_updates_visible_source(tmp_path: Path) -> None:
+    """EMR keeps its nav selection while ``Shift+S`` remounts its source."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        "[connections.dev]\n"
+        'kind = "aws"\n'
+        'profile = "dev"\n'
+        'region = "us-east-1"\n'
+        "[connections.prod]\n"
+        'kind = "aws"\n'
+        'profile = "prod"\n'
+        'region = "us-west-2"\n'
+        "[defaults]\n"
+        'connection = "dev"\n'
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    dev = ctx.connection_resolver.resolve("dev")
+    prod = ctx.connection_resolver.resolve("prod")
+    ctx.connection_resolver.list = lambda: [dev, prod]  # type: ignore[method-assign]
+
+    def build_client(connection: Connection) -> _InMemoryEmr:
+        client = _InMemoryEmr()
+        client.add_application(app_id=f"{connection.name}-app", name=connection.name)
+        return client
+
+    for service in ctx.registry.all():
+        if isinstance(service, EmrServerlessService):
+            service._client_factory = build_client
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_service_mount(pilot, app)
+
+            source_header = app.query_one("#emr-source-header")
+            initial_source = source_header.render().plain
+            assert initial_source in {"dev · us-east-1", "prod · us-west-2"}
+
+            await pilot.press("S")
+            await _await_service_mount(pilot, app)
+
+            source_header = app.query_one("#emr-source-header")
+            assert source_header.render().plain != initial_source
+            assert ctx.root_vm.services_menu.selected_id == "emr-serverless"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+async def _await_service_mount(pilot: object, app: AwsTuiApp) -> None:
+    await app.workers.wait_for_complete(list(app.workers._workers))
+    setup_task = app.app_ctx.root_vm.content_host._setup_task
+    if setup_task is not None and not setup_task.done():
+        await setup_task
+    await pilot.pause()  # type: ignore[attr-defined]

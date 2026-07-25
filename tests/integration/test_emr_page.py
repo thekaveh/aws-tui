@@ -12,6 +12,7 @@ import pytest
 from aws_tui import app as app_module
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
@@ -563,6 +564,7 @@ async def test_emr_shift_s_switches_profile_and_shift_a_cycles_application(
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
+            await ctx.root_vm.switch_connection_with(dev, TokenState.CONNECTED)
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
             await _await_emr_mount(pilot, app)
 
