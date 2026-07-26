@@ -9,9 +9,14 @@ from aws_tui.infra.connection_resolver import Connection
 
 
 class FakeAwsClient:
-    """Async AWS client with explicit mocks for the Glue Task 2 surface."""
+    """Async AWS client with explicit mocks for domain-client surfaces."""
 
     def __init__(self) -> None:
+        self.batch_get_named_query = AsyncMock()
+        self.get_query_execution = AsyncMock()
+        self.get_query_results = AsyncMock()
+        self.get_query_runtime_statistics = AsyncMock()
+        self.get_work_group = AsyncMock()
         self.get_caller_identity = AsyncMock()
         self.get_column_statistics_for_table = AsyncMock()
         self.get_crawler = AsyncMock()
@@ -24,6 +29,15 @@ class FakeAwsClient:
         self.get_table = AsyncMock()
         self.get_tables = AsyncMock()
         self.get_tags = AsyncMock()
+        self.list_data_catalogs = AsyncMock()
+        self.list_databases = AsyncMock()
+        self.list_named_queries = AsyncMock()
+        self.list_prepared_statements = AsyncMock()
+        self.list_query_executions = AsyncMock()
+        self.list_table_metadata = AsyncMock()
+        self.list_work_groups = AsyncMock()
+        self.start_query_execution = AsyncMock()
+        self.stop_query_execution = AsyncMock()
 
 
 class FakeAwsClientContext:
