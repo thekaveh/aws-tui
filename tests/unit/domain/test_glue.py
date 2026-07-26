@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
+from traceback import TracebackException
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import call
@@ -238,7 +239,7 @@ async def test_list_tables_page_passes_token_without_none_keys() -> None:
     )
 
 
-async def test_get_table_maps_columns_storage_parameters_and_iceberg_format() -> None:
+async def test_get_table_maps_columns_storage_redacted_parameters_and_iceberg_format() -> None:
     client, glue, _, _ = _client()
     ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
     glue.get_table.return_value = {
@@ -298,25 +299,28 @@ async def test_get_table_maps_columns_storage_parameters_and_iceberg_format() ->
         classification="iceberg",
         table_format=TableFormat.ICEBERG,
         parameters=(
-            ("classification", "iceberg"),
-            ("table_type", "ICEBERG"),
-            ("write.format.default", "parquet"),
+            ("classification", "[REDACTED]"),
+            ("table_type", "[REDACTED]"),
+            ("write.format.default", "[REDACTED]"),
         ),
     )
     glue.get_table.assert_awaited_once_with(DatabaseName="analytics", Name="events")
 
 
 @pytest.mark.parametrize(
-    ("parameters", "table_type", "expected"),
+    ("parameters", "input_format", "table_type", "expected"),
     [
-        ({"classification": "hudi"}, "EXTERNAL_TABLE", TableFormat.HUDI),
-        ({"spark.sql.sources.provider": "delta"}, "EXTERNAL_TABLE", TableFormat.DELTA),
-        ({"classification": "parquet"}, "EXTERNAL_TABLE", TableFormat.HIVE),
-        ({}, "UNKNOWN", TableFormat.OTHER),
+        ({"tableType": "ICEBERG"}, None, "EXTERNAL_TABLE", TableFormat.ICEBERG),
+        ({"classification": "hudi"}, None, "EXTERNAL_TABLE", TableFormat.HUDI),
+        ({"spark.sql.sources.provider": "delta"}, None, "EXTERNAL_TABLE", TableFormat.DELTA),
+        ({"classification": "parquet"}, "parquet-input", "EXTERNAL_TABLE", TableFormat.HIVE),
+        ({}, "view-input", "VIRTUAL_VIEW", TableFormat.OTHER),
+        ({}, None, "UNKNOWN", TableFormat.OTHER),
     ],
 )
 async def test_get_table_detects_supported_formats(
     parameters: dict[str, str],
+    input_format: str | None,
     table_type: str,
     expected: TableFormat,
 ) -> None:
@@ -326,6 +330,7 @@ async def test_get_table_detects_supported_formats(
             "Name": "events",
             "Parameters": parameters,
             "TableType": table_type,
+            "StorageDescriptor": {"InputFormat": input_format},
         }
     }
 
@@ -334,6 +339,34 @@ async def test_get_table_detects_supported_formats(
     )
 
     assert detail.table_format is expected
+
+
+async def test_get_table_ignores_malformed_optional_fields_for_a_view() -> None:
+    client, glue, _, _ = _client()
+    glue.get_table.return_value = {
+        "Table": {
+            "Name": "events_view",
+            "TableType": "VIRTUAL_VIEW",
+            "Parameters": {"classification": ["ICEBERG"]},
+            "StorageDescriptor": {
+                "InputFormat": {"not": "a string"},
+                "Compressed": "not-a-bool",
+                "NumberOfBuckets": True,
+                "Columns": ["not-a-mapping"],
+                "SerdeInfo": "not-a-mapping",
+            },
+            "PartitionKeys": ["not-a-mapping"],
+        }
+    }
+
+    detail = await client.get_table(
+        TableRef("AwsDataCatalog", "analytics", "events_view", "dev", "us-east-1")
+    )
+
+    assert detail.table_format is TableFormat.OTHER
+    assert detail.parameters == ()
+    assert detail.storage.input_format is None
+    assert detail.partition_keys == ()
 
 
 async def test_list_partitions_page_maps_one_page_and_omits_optional_token() -> None:
@@ -968,7 +1001,24 @@ def test_map_glue_error_redacts_visible_messages() -> None:
     )
 
     assert isinstance(mapped, PermissionDeniedError)
-    assert str(mapped) == "denied token=[REDACTED]"
+    assert str(mapped) == "Glue access denied"
+
+
+async def test_get_table_error_hides_provider_payload_and_raw_response() -> None:
+    client, glue, _, _ = _client()
+    glue.get_table.side_effect = _client_error(
+        "AccessDeniedException",
+        "PROVIDER_TEXT_SECRET raw boto response",
+    )
+
+    with pytest.raises(PermissionDeniedError) as exc_info:
+        await client.get_table(
+            TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+        )
+
+    rendered = "".join(TracebackException.from_exception(exc_info.value).format())
+    assert "PROVIDER_TEXT_SECRET" not in str(exc_info.value)
+    assert "PROVIDER_TEXT_SECRET" not in rendered
 
 
 @pytest.mark.parametrize(

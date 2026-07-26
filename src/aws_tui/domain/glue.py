@@ -20,9 +20,9 @@ from aws_tui.domain.data_catalog import (
     PartitionSummary,
     StorageDescriptor,
     TableDetail,
-    TableFormat,
     TableRef,
     TableSummary,
+    detect_table_format,
 )
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
@@ -168,22 +168,19 @@ _TRANSPORT_EXCEPTIONS = (
 def map_glue_error(exc: BaseException) -> ProviderError | None:
     """Map botocore and Glue wire failures to the provider error taxonomy."""
     if isinstance(exc, _CREDENTIAL_EXCEPTIONS):
-        if isinstance(exc, botocore.exceptions.CredentialRetrievalError):
-            return AuthRequiredError("credential process failed")
-        return AuthRequiredError(redact_text(str(exc) or "no AWS credentials"))
+        return AuthRequiredError("AWS credentials unavailable")
     if isinstance(exc, _TRANSPORT_EXCEPTIONS):
-        return ProviderUnreachableError(redact_text(str(exc) or "Glue endpoint unreachable"))
+        return ProviderUnreachableError("Glue endpoint unavailable")
     if isinstance(exc, botocore.exceptions.ClientError):
         error = exc.response.get("Error", {})
         code = str(error.get("Code", ""))
-        message = redact_text(str(error.get("Message", str(exc))))
         return _provider_error_for_code(
             code,
-            message,
+            _glue_error_message(code),
             lake_formation=_identifies_lake_formation(exc),
         )
     if isinstance(exc, botocore.exceptions.ParamValidationError):
-        return ValidationError(redact_text(str(exc)))
+        return ValidationError("invalid Glue request")
     if isinstance(exc, KeyError | TypeError | ValueError):
         return ValidationError(f"malformed Glue response: {redact_text(str(exc))}")
     return None
@@ -191,10 +188,28 @@ def map_glue_error(exc: BaseException) -> ProviderError | None:
 
 def raise_mapped_glue_error(exc: Exception) -> NoReturn:
     """Raise the mapped provider error, or preserve an unrelated exception."""
+    if isinstance(exc, ProviderError):
+        raise exc from None
     mapped = map_glue_error(exc)
     if mapped is None:
         raise exc
-    raise mapped from exc
+    raise mapped from None
+
+
+def _glue_error_message(code: str) -> str:
+    if code in _ACCESS_DENIED_CODES:
+        return "Glue access denied"
+    if code in _AUTH_CODES:
+        return "AWS credentials unavailable"
+    if code in _NOT_FOUND_CODES:
+        return "Glue resource not found"
+    if code in _THROTTLED_CODES:
+        return "Glue request throttled"
+    if code in _UNREACHABLE_CODES:
+        return "Glue service unavailable"
+    if code in _VALIDATION_CODES:
+        return "invalid Glue request"
+    return "Glue request failed"
 
 
 def _identifies_lake_formation(exc: botocore.exceptions.ClientError) -> bool:
@@ -504,18 +519,13 @@ class GlueClient:
         *,
         ref: TableRef,
     ) -> TableDetail:
-        storage = _optional_mapping(item, "StorageDescriptor")
-        parameters = _string_pairs(_optional_mapping(item, "Parameters"))
+        storage = _optional_table_mapping(item, "StorageDescriptor")
+        parameters = _optional_table_parameters(item)
         parameter_map = dict(parameters)
-        partition_items = _mapping_items(
-            _optional_sequence(item, "PartitionKeys"),
-            field="PartitionKeys",
-        )
-        column_items = _mapping_items(
-            _optional_sequence(storage, "Columns"),
-            field="StorageDescriptor.Columns",
-        )
-        serde = _optional_mapping(storage, "SerdeInfo")
+        partition_items = _optional_table_mapping_items(item, "PartitionKeys")
+        column_items = _optional_table_mapping_items(storage, "Columns")
+        serde = _optional_table_mapping(storage, "SerdeInfo")
+        input_format = _optional_table_string(storage, "InputFormat")
         return TableDetail(
             summary=self._map_table_summary(
                 item,
@@ -527,17 +537,18 @@ class GlueClient:
                 self._map_column(column, partition_key=True) for column in partition_items
             ),
             storage=StorageDescriptor(
-                location=_optional_string(storage, "Location"),
-                input_format=_optional_string(storage, "InputFormat"),
-                output_format=_optional_string(storage, "OutputFormat"),
-                serde=_optional_string(serde, "SerializationLibrary"),
-                compressed=_optional_bool(storage, "Compressed", default=False),
-                bucket_count=_optional_int(storage, "NumberOfBuckets") or 0,
+                location=_optional_table_string(storage, "Location"),
+                input_format=input_format,
+                output_format=_optional_table_string(storage, "OutputFormat"),
+                serde=_optional_table_string(serde, "SerializationLibrary"),
+                compressed=_optional_table_bool(storage, "Compressed", default=False),
+                bucket_count=_optional_table_int(storage, "NumberOfBuckets") or 0,
             ),
-            classification=parameter_map.get("classification"),
-            table_format=_detect_table_format(
+            classification=_table_parameter_value(parameter_map, "classification"),
+            table_format=detect_table_format(
                 parameters=parameter_map,
-                table_type=_optional_string(item, "TableType"),
+                input_format=input_format,
+                table_type=_optional_table_string(item, "TableType"),
             ),
             parameters=parameters,
         )
@@ -774,13 +785,16 @@ def _raise_column_statistics_errors(response: object) -> None:
     item = errors[0]
     detail = _optional_mapping(item, "Error")
     code = _optional_string(detail, "ErrorCode") or "ColumnStatisticsError"
-    message = _optional_string(detail, "ErrorMessage") or code
-    column_name = _optional_string(item, "ColumnName")
-    visible_message = f"{column_name}: {message}" if column_name else message
-    normalized = visible_message.lower()
+    normalized = " ".join(
+        str(candidate)
+        for candidate in (
+            code,
+            _optional_string(detail, "ErrorMessage") or "",
+        )
+    ).lower()
     raise _provider_error_for_code(
         code,
-        redact_text(visible_message),
+        f"{_glue_error_message(code)} [REDACTED]",
         lake_formation="lake formation" in normalized or "lakeformation" in normalized,
     )
 
@@ -809,6 +823,72 @@ def _optional_mapping(
     if not isinstance(value, Mapping):
         raise TypeError(f"{field} is not a mapping")
     return cast(Mapping[str, Any], value)
+
+
+def _optional_table_mapping(
+    mapping: Mapping[str, Any],
+    field: str,
+) -> Mapping[str, Any]:
+    value = mapping.get(field)
+    if not isinstance(value, Mapping):
+        return {}
+    return cast(Mapping[str, Any], value)
+
+
+def _optional_table_mapping_items(
+    mapping: Mapping[str, Any],
+    field: str,
+) -> list[Mapping[str, Any]]:
+    value = mapping.get(field)
+    if isinstance(value, str | bytes | bytearray) or not isinstance(value, Sequence):
+        return []
+    return [cast(Mapping[str, Any], item) for item in value if isinstance(item, Mapping)]
+
+
+def _optional_table_parameters(mapping: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    parameters = _optional_table_mapping(mapping, "Parameters")
+    return tuple(
+        sorted(
+            (
+                (key, value)
+                for key, value in parameters.items()
+                if isinstance(key, str) and isinstance(value, str)
+            ),
+            key=lambda item: item[0],
+        )
+    )
+
+
+def _table_parameter_value(parameters: Mapping[str, str], key: str) -> str | None:
+    normalized_key = key.casefold()
+    return next(
+        (
+            value
+            for parameter, value in parameters.items()
+            if parameter.casefold() == normalized_key
+        ),
+        None,
+    )
+
+
+def _optional_table_string(mapping: Mapping[str, Any], field: str) -> str | None:
+    value = mapping.get(field)
+    return value if isinstance(value, str) else None
+
+
+def _optional_table_bool(
+    mapping: Mapping[str, Any],
+    field: str,
+    *,
+    default: bool,
+) -> bool:
+    value = mapping.get(field)
+    return value if isinstance(value, bool) else default
+
+
+def _optional_table_int(mapping: Mapping[str, Any], field: str) -> int | None:
+    value = mapping.get(field)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _mapping_items(
@@ -930,34 +1010,6 @@ def _optional_bool(
     return value
 
 
-def _detect_table_format(
-    *,
-    parameters: Mapping[str, str],
-    table_type: str | None,
-) -> TableFormat:
-    markers = " ".join(
-        (
-            parameters.get("classification", ""),
-            parameters.get("table_type", ""),
-            parameters.get("spark.sql.sources.provider", ""),
-            parameters.get("metadata_location", ""),
-        )
-    ).lower()
-    if "iceberg" in markers:
-        return TableFormat.ICEBERG
-    if "hudi" in markers:
-        return TableFormat.HUDI
-    if "delta" in markers:
-        return TableFormat.DELTA
-    if "hive" in markers or table_type in {
-        "EXTERNAL_TABLE",
-        "MANAGED_TABLE",
-        "VIRTUAL_VIEW",
-    }:
-        return TableFormat.HIVE
-    return TableFormat.OTHER
-
-
 def _statistics_value(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -993,7 +1045,7 @@ def _crawler_targets(targets: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _supplemental_warning(label: str, error: ProviderError) -> str:
-    return redact_text(f"{label} unavailable: {error}")
+    return redact_text(f"{label} unavailable: {error} [REDACTED]")
 
 
 __all__ = [

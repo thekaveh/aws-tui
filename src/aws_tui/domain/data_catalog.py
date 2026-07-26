@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 
@@ -13,6 +14,35 @@ class TableFormat(StrEnum):
     HUDI = "hudi"
     DELTA = "delta"
     OTHER = "other"
+
+
+def detect_table_format(
+    parameters: Mapping[str, str],
+    input_format: str | None,
+    table_type: str | None,
+) -> TableFormat:
+    """Classify a physical Glue table from its normalized catalog metadata."""
+    normalized = {
+        key.casefold(): value.casefold()
+        for key, value in parameters.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    declared = normalized.get("table_type") or normalized.get("tabletype")
+    classification = normalized.get("classification")
+    provider = normalized.get("spark.sql.sources.provider")
+    if declared == "iceberg" or classification == "iceberg" or provider == "iceberg":
+        return TableFormat.ICEBERG
+    if classification == "hudi" or provider == "hudi":
+        return TableFormat.HUDI
+    if classification == "delta" or provider == "delta":
+        return TableFormat.DELTA
+
+    normalized_type = table_type.casefold() if isinstance(table_type, str) else None
+    if normalized_type == "virtual_view":
+        return TableFormat.OTHER
+    if normalized_type in {"external_table", "managed_table"} or input_format:
+        return TableFormat.HIVE
+    return TableFormat.OTHER
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,13 +128,19 @@ class TableDetail:
     columns: tuple[Column, ...]
     partition_keys: tuple[Column, ...]
     storage: StorageDescriptor
-    classification: str | None
+    classification: str | None = field(repr=False)
     table_format: TableFormat
-    parameters: tuple[tuple[str, str], ...]
+    parameters: tuple[tuple[str, str], ...] = field(repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "parameters", tuple(sorted(self.parameters, key=lambda item: item[0]))
+            self,
+            "parameters",
+            tuple(
+                sorted(
+                    ((key, "[REDACTED]") for key, _ in self.parameters), key=lambda item: item[0]
+                )
+            ),
         )
 
 
@@ -139,4 +175,5 @@ __all__ = [
     "TableFormat",
     "TableRef",
     "TableSummary",
+    "detect_table_format",
 ]

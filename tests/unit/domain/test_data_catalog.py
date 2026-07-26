@@ -19,6 +19,7 @@ from aws_tui.domain.data_catalog import (
     TableFormat,
     TableRef,
     TableSummary,
+    detect_table_format,
 )
 
 pytestmark = pytest.mark.unit
@@ -90,7 +91,7 @@ def test_storage_descriptor_keeps_s3_location() -> None:
     assert TableFormat.OTHER.value == "other"
 
 
-def test_table_detail_sorts_parameters_by_key() -> None:
+def test_table_detail_sorts_and_redacts_parameters() -> None:
     summary = TableSummary(
         TableRef("catalog", "db", "table", "conn", "region"), None, None, None, None, None
     )
@@ -99,12 +100,40 @@ def test_table_detail_sorts_parameters_by_key() -> None:
         columns=(),
         partition_keys=(),
         storage=StorageDescriptor(None, None, None, None, False, 0),
-        classification=None,
+        classification="provider-text",
         table_format=TableFormat.OTHER,
-        parameters=(("zeta", "last"), ("alpha", "first")),
+        parameters=(("zeta", "PARAMETER_SECRET"), ("alpha", "first")),
     )
 
-    assert detail.parameters == (("alpha", "first"), ("zeta", "last"))
+    assert detail.parameters == (("alpha", "[REDACTED]"), ("zeta", "[REDACTED]"))
+    assert "PARAMETER_SECRET" not in repr(detail)
+    assert "provider-text" not in repr(detail)
+
+
+@pytest.mark.parametrize(
+    ("parameters", "input_format", "table_type", "expected"),
+    [
+        ({"table_type": "ICEBERG"}, None, "EXTERNAL_TABLE", TableFormat.ICEBERG),
+        ({"tableType": "IceBeRg"}, None, "external_table", TableFormat.ICEBERG),
+        ({"classification": "hudi"}, None, "EXTERNAL_TABLE", TableFormat.HUDI),
+        ({"spark.sql.sources.provider": "delta"}, None, "EXTERNAL_TABLE", TableFormat.DELTA),
+        (
+            {"classification": "parquet"},
+            "MapredParquetInputFormat",
+            "EXTERNAL_TABLE",
+            TableFormat.HIVE,
+        ),
+        ({}, "view-input-format", "VIRTUAL_VIEW", TableFormat.OTHER),
+        ({}, None, "VIRTUAL_VIEW", TableFormat.OTHER),
+    ],
+)
+def test_detect_table_format_uses_case_insensitive_conservative_precedence(
+    parameters: dict[str, str],
+    input_format: str | None,
+    table_type: str | None,
+    expected: TableFormat,
+) -> None:
+    assert detect_table_format(parameters, input_format, table_type) is expected
 
 
 def test_column_statistics_sorts_values_by_key() -> None:
@@ -149,6 +178,7 @@ def test_public_types_are_exported() -> None:
         "TableFormat",
         "TableRef",
         "TableSummary",
+        "detect_table_format",
     }
 
 
