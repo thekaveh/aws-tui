@@ -433,86 +433,350 @@ class RepeatedCancellationClient(DelayedSubmissionClient):
                 continue
 
 
+class CancelableStopClient(RepeatedCancellationClient):
+    async def stop_query(self, execution_id: str) -> None:
+        self.stop_calls.append(execution_id)
+        self.stop_started.set()
+        await self.release_stop.wait()
+
+
+class BlockingPollStopClient(CancelableStopClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release.set()
+        self.poll_started = asyncio.Event()
+
+    async def get_query_execution(self, execution_id: str) -> QueryExecutionDetail:
+        self.poll_calls.append(execution_id)
+        self.poll_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class BlockingExitCleanupClient(CancelableStopClient):
+    def __init__(self, exit_path: str) -> None:
+        super().__init__()
+        self.release.set()
+        self.exit_path = exit_path
+
+    async def start_query(
+        self,
+        sql: str,
+        context: QueryContext,
+        *,
+        request_token: str,
+    ) -> QueryExecutionRef:
+        ref = await super().start_query(
+            sql,
+            context,
+            request_token=request_token,
+        )
+        if self.exit_path == "ref-mismatch":
+            return QueryExecutionRef(
+                ref.execution_id,
+                "other",
+                ref.region,
+                ref.workgroup,
+            )
+        return ref
+
+    async def get_query_execution(self, execution_id: str) -> QueryExecutionDetail:
+        self.poll_calls.append(execution_id)
+        if self.exit_path == "detail-mismatch":
+            wrong_context = QueryContext(
+                "other",
+                CONTEXT.region,
+                CONTEXT.workgroup,
+                CONTEXT.catalog,
+                CONTEXT.database,
+            )
+            return _detail(QueryState.RUNNING, context=wrong_context)
+        raise ProviderError("provider failure must remain private")
+
+
 @pytest.mark.asyncio
-async def test_runner_repeated_cancellation_waits_for_owned_submission_cleanup() -> None:
+async def test_runner_repeated_cancellation_during_poll_stop_stays_owned() -> None:
+    baseline = set(asyncio.all_tasks())
+    client = BlockingPollStopClient()
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+    task = asyncio.create_task(
+        runner.run(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-poll-repeated-cancel",
+            max_rows=1,
+        )
+    )
+    try:
+        await asyncio.wait_for(client.poll_started.wait(), timeout=1)
+
+        task.cancel()
+        await asyncio.wait_for(client.stop_started.wait(), timeout=1)
+        task.cancel()
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        assert not task.done()
+        assert len(runner._cleanup_operations) == 1
+        assert len(client.start_calls) == 1
+        assert client.stop_calls == ["query-1"]
+    finally:
+        client.release_stop.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+
+    await asyncio.sleep(0)
+    assert not runner._cleanup_operations
+    assert not {candidate for candidate in asyncio.all_tasks() - baseline if not candidate.done()}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exit_path",
+    ["ref-mismatch", "detail-mismatch", "poll-error"],
+)
+async def test_runner_cancellation_during_nonterminal_exit_cleanup_stays_observable(
+    exit_path: str,
+) -> None:
+    baseline = set(asyncio.all_tasks())
+    client = BlockingExitCleanupClient(exit_path)
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+    task = asyncio.create_task(
+        runner.run(
+            "SELECT 1",
+            CONTEXT,
+            request_token=f"metadata-{exit_path}-cancel",
+            max_rows=1,
+        )
+    )
+    try:
+        await asyncio.wait_for(client.stop_started.wait(), timeout=1)
+
+        task.cancel()
+        task.cancel()
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        assert not task.done()
+        assert len(runner._cleanup_operations) == 1
+        assert len(client.start_calls) == 1
+        assert client.stop_calls == ["query-1"]
+    finally:
+        client.release_stop.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+
+    await asyncio.sleep(0)
+    assert client.stop_calls == ["query-1"]
+    assert not runner._cleanup_operations
+    assert not {candidate for candidate in asyncio.all_tasks() - baseline if not candidate.done()}
+
+
+@pytest.mark.asyncio
+async def test_runner_repeated_cancellation_during_submission_cleanup_stays_owned() -> None:
+    baseline = set(asyncio.all_tasks())
     client = RepeatedCancellationClient()
     runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
     task = asyncio.create_task(
         runner.run(
             "SELECT 1",
             CONTEXT,
-            request_token="metadata-repeated-cancel",
+            request_token="metadata-submission-repeated-cancel",
             max_rows=1,
         )
     )
-    await asyncio.wait_for(client.accepted.wait(), timeout=1)
+    try:
+        await asyncio.wait_for(client.accepted.wait(), timeout=1)
 
-    task.cancel()
-    await asyncio.sleep(0)
-    task.cancel()
-    client.release.set()
-    await asyncio.wait_for(client.stop_started.wait(), timeout=1)
-    task.cancel()
-    await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        client.release.set()
+        await asyncio.wait_for(client.stop_started.wait(), timeout=1)
+        task.cancel()
+        await asyncio.sleep(0)
 
-    assert not task.done()
-    assert len(client.start_calls) == 1
+        assert not task.done()
+        assert len(runner._cleanup_operations) == 1
+        assert len(client.start_calls) == 1
+        assert client.stop_calls == ["query-1"]
+    finally:
+        client.release.set()
+        client.release_stop.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+
+    await asyncio.sleep(0)
     assert client.stop_calls == ["query-1"]
-
-    client.release_stop.set()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, timeout=1)
-
-    assert not runner._submission_finalizers
+    assert not runner._cleanup_operations
+    assert not {candidate for candidate in asyncio.all_tasks() - baseline if not candidate.done()}
 
 
 @pytest.mark.asyncio
-async def test_runner_shutdown_style_finalizer_cancellation_cannot_orphan_query() -> None:
+async def test_cleanup_recovers_waiter_cancelled_before_its_first_step() -> None:
+    baseline = set(asyncio.all_tasks())
     client = RepeatedCancellationClient()
     runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
-    task = asyncio.create_task(
-        runner.run(
+    retain_cleanup = runner._retain_cleanup
+    drain_cleanup = runner._drain_cleanup
+    submission = asyncio.create_task(
+        client.start_query(
             "SELECT 1",
             CONTEXT,
-            request_token="metadata-loop-shutdown",
-            max_rows=1,
+            request_token="metadata-waiter-before-start",
         )
     )
-    await asyncio.wait_for(client.accepted.wait(), timeout=1)
+    cleanup = retain_cleanup(submission_task=submission)
+    assert cleanup.waiter_task is not None
+    cancelled_waiter = cleanup.waiter_task
+    cancelled_waiter.cancel()
+    draining = asyncio.create_task(drain_cleanup(cleanup))
 
-    task.cancel()
-    await asyncio.sleep(0)
-    assert len(runner._submission_finalizers) == 1
-    finalizer = next(iter(runner._submission_finalizers))
-    submission = next(
-        candidate
-        for candidate in asyncio.all_tasks()
-        if "RepeatedCancellationClient.start_query"
-        in getattr(candidate.get_coro(), "__qualname__", "")
+    try:
+        await asyncio.wait_for(client.accepted.wait(), timeout=1)
+        client.release.set()
+        await asyncio.wait_for(client.stop_started.wait(), timeout=1)
+
+        assert not draining.done()
+        assert len(client.start_calls) == 1
+        assert client.stop_calls == ["query-1"]
+    finally:
+        client.release.set()
+        client.release_stop.set()
+        await asyncio.wait_for(draining, timeout=1)
+
+    assert cancelled_waiter.cancelled()
+    assert not runner._cleanup_operations
+    assert not {candidate for candidate in asyncio.all_tasks() - baseline if not candidate.done()}
+
+
+@pytest.mark.asyncio
+async def test_cleanup_recovers_waiter_cancelled_after_it_starts() -> None:
+    baseline = set(asyncio.all_tasks())
+    client = RepeatedCancellationClient()
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+    retain_cleanup = runner._retain_cleanup
+    drain_cleanup = runner._drain_cleanup
+    submission = asyncio.create_task(
+        client.start_query(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-waiter-after-start",
+        )
     )
-    submission.cancel()
-    finalizer.cancel()
-    client.release.set()
-    await asyncio.wait_for(client.stop_started.wait(), timeout=1)
-    for candidate in tuple(asyncio.all_tasks()):
-        if "AthenaQueryRunner._best_effort_stop" in getattr(
-            candidate.get_coro(),
-            "__qualname__",
-            "",
-        ):
-            candidate.cancel()
-    next(iter(runner._submission_finalizers)).cancel()
-    await asyncio.sleep(0)
+    cleanup = retain_cleanup(submission_task=submission)
+    draining = asyncio.create_task(drain_cleanup(cleanup))
 
-    assert not task.done()
+    try:
+        await asyncio.wait_for(client.accepted.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert cleanup.waiter_task is not None
+        started_waiter = cleanup.waiter_task
+        started_waiter.cancel()
+        await asyncio.sleep(0)
+        client.release.set()
+        await asyncio.wait_for(client.stop_started.wait(), timeout=1)
+
+        assert not draining.done()
+        assert len(client.start_calls) == 1
+        assert client.stop_calls == ["query-1"]
+    finally:
+        client.release.set()
+        client.release_stop.set()
+        await asyncio.wait_for(draining, timeout=1)
+
+    assert not runner._cleanup_operations
+    assert not {candidate for candidate in asyncio.all_tasks() - baseline if not candidate.done()}
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stop_wrapper_cancellation_drains_one_provider_stop() -> None:
+    baseline = set(asyncio.all_tasks())
+    client = CancelableStopClient()
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+    retain_cleanup = runner._retain_cleanup
+    drain_cleanup = runner._drain_cleanup
+    submission = asyncio.create_task(
+        client.start_query(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-stop-wrapper-cancel",
+        )
+    )
+    cleanup = retain_cleanup(submission_task=submission)
+    draining = asyncio.create_task(drain_cleanup(cleanup))
+
+    try:
+        await asyncio.wait_for(client.accepted.wait(), timeout=1)
+        client.release.set()
+        await asyncio.wait_for(client.stop_started.wait(), timeout=1)
+        assert cleanup.stop_task is not None
+        cleanup.stop_task.cancel()
+        await asyncio.sleep(0)
+
+        assert not draining.done()
+        assert len(client.start_calls) == 1
+        assert client.stop_calls == ["query-1"]
+    finally:
+        client.release.set()
+        client.release_stop.set()
+        await asyncio.wait_for(draining, timeout=1)
+
     assert client.stop_calls == ["query-1"]
+    assert not runner._cleanup_operations
+    assert not {candidate for candidate in asyncio.all_tasks() - baseline if not candidate.done()}
 
-    client.release_stop.set()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, timeout=1)
 
-    assert finalizer.done()
-    assert not runner._submission_finalizers
+@pytest.mark.asyncio
+async def test_cleanup_replaces_stop_request_cancelled_before_first_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = set(asyncio.all_tasks())
+    client = CancelableStopClient()
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+    original_create_task = asyncio.create_task
+    cancelled_before_start = False
+
+    def cancelling_create_task(coro: Any, *args: Any, **kwargs: Any) -> asyncio.Task[Any]:
+        nonlocal cancelled_before_start
+        task = original_create_task(coro, *args, **kwargs)
+        qualname = getattr(coro, "__qualname__", "")
+        if not cancelled_before_start and qualname in {
+            "AthenaQueryRunner.stop",
+            "AthenaQueryRunner._invoke_stop",
+        }:
+            cancelled_before_start = True
+            task.cancel()
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", cancelling_create_task)
+    submission = asyncio.create_task(
+        client.start_query(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-stop-request-before-start",
+        )
+    )
+    cleanup = runner._retain_cleanup(submission_task=submission)
+    draining = asyncio.create_task(runner._drain_cleanup(cleanup))
+
+    try:
+        await asyncio.wait_for(client.accepted.wait(), timeout=1)
+        client.release.set()
+        await asyncio.wait_for(client.stop_started.wait(), timeout=1)
+
+        assert cancelled_before_start
+        assert not draining.done()
+        assert len(client.start_calls) == 1
+        assert client.stop_calls == ["query-1"]
+    finally:
+        client.release.set()
+        client.release_stop.set()
+        await asyncio.wait_for(draining, timeout=1)
+
+    assert client.stop_calls == ["query-1"]
+    assert not runner._cleanup_operations
+    assert not {candidate for candidate in asyncio.all_tasks() - baseline if not candidate.done()}
 
 
 class PollFailureClient(RunnerClient):

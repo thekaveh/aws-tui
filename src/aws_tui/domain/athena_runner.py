@@ -94,6 +94,19 @@ class BoundedQueryResult:
     rows: tuple[tuple[str | None, ...], ...] = field(repr=False)
 
 
+@dataclass(eq=False, repr=False, slots=True)
+class _CleanupOperation:
+    """Own the submission-recovery and stop phases for one accepted query."""
+
+    submission_task: asyncio.Task[QueryExecutionRef] | None = None
+    ref: QueryExecutionRef | None = None
+    waiter_task: asyncio.Task[None] | None = None
+    stop_task: asyncio.Task[None] | None = None
+    stop_request_task: asyncio.Task[None] | None = None
+    stop_invoked: bool = False
+    complete: bool = False
+
+
 class AthenaQueryRunner:
     """Validate, execute, poll, and page a read-only Athena query."""
 
@@ -107,7 +120,7 @@ class AthenaQueryRunner:
         self._client = client
         self._policy = policy
         self._sleep = sleep
-        self._submission_finalizers: set[asyncio.Task[None]] = set()
+        self._cleanup_operations: set[_CleanupOperation] = set()
 
     @property
     def client(self) -> AthenaRunnerClient:
@@ -231,9 +244,9 @@ class AthenaQueryRunner:
         try:
             ref = await asyncio.shield(submission_task)
         except asyncio.CancelledError:
-            self._retain_submission_finalizer(submission_task)
+            cleanup = self._retain_cleanup(submission_task=submission_task)
             del submission_task
-            await self._drain_submission_finalizers()
+            await self._drain_cleanup(cleanup)
             raise
         except Exception as exc:
             prepared_error = _prepared_provider_error(exc, phase="start")
@@ -243,7 +256,10 @@ class AthenaQueryRunner:
         del submission_task
 
         if not _ref_matches_context(ref, context):
-            await self._best_effort_stop(ref)
+            cleanup = self._retain_cleanup(ref=ref)
+            cancelled = await self._drain_cleanup(cleanup)
+            if cancelled:
+                raise asyncio.CancelledError
             raise _PreparedRunError(
                 ValidationError,
                 "Athena query does not match the active context",
@@ -252,15 +268,22 @@ class AthenaQueryRunner:
         try:
             detail = await self._poll(ref, context)
         except asyncio.CancelledError:
-            await asyncio.shield(self._best_effort_stop(ref))
+            cleanup = self._retain_cleanup(ref=ref)
+            await self._drain_cleanup(cleanup)
             raise
         except _PreparedRunError:
-            await self._best_effort_stop(ref)
+            cleanup = self._retain_cleanup(ref=ref)
+            cancelled = await self._drain_cleanup(cleanup)
+            if cancelled:
+                raise asyncio.CancelledError from None
             raise
         except Exception as exc:
-            await self._best_effort_stop(ref)
             prepared_error = _prepared_provider_error(exc, phase="poll")
             del exc
+            cleanup = self._retain_cleanup(ref=ref)
+            cancelled = await self._drain_cleanup(cleanup)
+            if cancelled:
+                raise asyncio.CancelledError from None
             raise prepared_error from None
 
         state = detail.summary.state
@@ -358,46 +381,115 @@ class AthenaQueryRunner:
             token = next_token
         return columns or (), tuple(rows)
 
-    async def _finalize_cancelled_submission(
+    def _retain_cleanup(
         self,
-        task: asyncio.Task[QueryExecutionRef],
-    ) -> None:
-        try:
-            ref = await _await_task_through_cancellation(task)
-        except (asyncio.CancelledError, Exception):
-            return
-        stop_task = asyncio.create_task(self._best_effort_stop(ref))
-        await _await_task_through_cancellation(stop_task)
+        *,
+        submission_task: asyncio.Task[QueryExecutionRef] | None = None,
+        ref: QueryExecutionRef | None = None,
+    ) -> _CleanupOperation:
+        if (submission_task is None) == (ref is None):
+            raise ValueError("cleanup requires exactly one query owner")
+        cleanup = _CleanupOperation(submission_task=submission_task, ref=ref)
+        cleanup.waiter_task = asyncio.create_task(self._finalize_cleanup(cleanup))
+        self._cleanup_operations.add(cleanup)
+        return cleanup
 
-    def _retain_submission_finalizer(
-        self,
-        submission_task: asyncio.Task[QueryExecutionRef],
-    ) -> None:
-        finalizer = asyncio.create_task(self._finalize_cancelled_submission(submission_task))
-        self._submission_finalizers.add(finalizer)
+    async def _drain_cleanup(self, cleanup: _CleanupOperation) -> bool:
+        """Drain one owner and report cancellation received while waiting."""
 
-        def complete(task: asyncio.Task[None]) -> None:
-            self._submission_finalizers.discard(task)
-            if task.cancelled():
-                self._retain_submission_finalizer(submission_task)
+        current_task = asyncio.current_task()
+        cancellation_count = current_task.cancelling() if current_task is not None else 0
+        cancelled = False
+        while not cleanup.complete:
+            waiter = cleanup.waiter_task
+            if waiter is None or waiter.done():
+                if waiter is not None and not waiter.cancelled():
+                    try:
+                        waiter.result()
+                    except Exception:
+                        cleanup.complete = True
+                        break
+                if cleanup.complete:
+                    break
+                waiter = asyncio.create_task(self._finalize_cleanup(cleanup))
+                cleanup.waiter_task = waiter
+            try:
+                await asyncio.shield(waiter)
+            except asyncio.CancelledError:
+                current_count = current_task.cancelling() if current_task is not None else 0
+                if current_count > cancellation_count:
+                    cancelled = True
+                    cancellation_count = current_count
+                continue
+            except Exception:
+                cleanup.complete = True
+        self._cleanup_operations.discard(cleanup)
+        cleanup.submission_task = None
+        cleanup.ref = None
+        cleanup.waiter_task = None
+        cleanup.stop_task = None
+        cleanup.stop_request_task = None
+        cleanup.stop_invoked = False
+        return cancelled
 
-        finalizer.add_done_callback(complete)
+    async def _finalize_cleanup(self, cleanup: _CleanupOperation) -> None:
+        if cleanup.ref is None:
+            submission_task = cleanup.submission_task
+            if submission_task is None:
+                cleanup.complete = True
+                return
+            try:
+                cleanup.ref = await _await_task_through_cancellation(submission_task)
+            except asyncio.CancelledError:
+                cleanup.complete = True
+                return
+            except Exception:
+                cleanup.complete = True
+                return
+            finally:
+                cleanup.submission_task = None
 
-    async def _drain_submission_finalizers(self) -> None:
-        while self._submission_finalizers:
-            finalizers = tuple(self._submission_finalizers)
-            for finalizer in finalizers:
-                try:
-                    await asyncio.shield(finalizer)
-                except asyncio.CancelledError:
+        while not cleanup.complete:
+            stop_task = cleanup.stop_task
+            if stop_task is None:
+                stop_task = asyncio.create_task(self._best_effort_stop(cleanup))
+                cleanup.stop_task = stop_task
+            try:
+                await _await_task_through_cancellation(stop_task)
+            except asyncio.CancelledError:
+                if cleanup.stop_request_task is None:
+                    cleanup.stop_task = None
                     continue
-            await asyncio.sleep(0)
+            cleanup.complete = True
 
-    async def _best_effort_stop(self, ref: QueryExecutionRef) -> None:
-        try:
-            await self.stop(ref)
-        except Exception:
+    async def _best_effort_stop(self, cleanup: _CleanupOperation) -> None:
+        ref = cleanup.ref
+        if ref is None:
             return
+        while True:
+            request_task = cleanup.stop_request_task
+            if request_task is None:
+                request_task = asyncio.create_task(self._invoke_stop(cleanup, ref))
+                cleanup.stop_request_task = request_task
+            try:
+                await _await_task_through_cancellation(request_task)
+            except asyncio.CancelledError:
+                if not cleanup.stop_invoked:
+                    cleanup.stop_request_task = None
+                    continue
+                return
+            except Exception:
+                return
+            return
+
+    async def _invoke_stop(
+        self,
+        cleanup: _CleanupOperation,
+        ref: QueryExecutionRef,
+    ) -> None:
+        # The bit is set in the same task step that begins the provider call.
+        cleanup.stop_invoked = True
+        await self.stop(ref)
 
 
 def _validated_result_page(value: object) -> ResultPage:

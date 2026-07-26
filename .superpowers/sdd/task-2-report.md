@@ -771,3 +771,127 @@ No pytest or `uv run pytest` process remained after final verification.
   no in-process design can prove remote stop completion; the runner still
   preserves ownership and does not return while an in-process cleanup path
   remains viable.
+
+---
+
+## Third Corrective Wave
+
+### Status
+
+The remaining two Iceberg Task 2 lifecycle findings were corrected in one
+strict-TDD wave. This report section and the implementation are contained in
+the same corrective commit. `.superpowers/sdd/progress.md` was not modified.
+
+### Root Cause
+
+The poll-cancellation path shielded a newly created stop coroutine without
+retaining its task. A second caller cancellation therefore interrupted the
+shielding waiter and allowed the caller to finish while the stop continued as
+an unowned task.
+
+Submission cleanup had the inverse problem: its done callback recreated the
+entire finalizer whenever the finalizer was cancelled. If cancellation reached
+the stop task, the replacement finalizer recovered the already-completed
+submission again and invoked stop a second time. The callback had no durable
+record of which phase had already started.
+
+### Implementation
+
+- Replaced callback-driven finalizer recreation with a runner-owned
+  `_CleanupOperation` record. It retains the original submission task or known
+  execution ref, current waiter, one stop wrapper, one provider-stop task, and
+  explicit invocation/completion state.
+- Routed cancelled submission recovery, initial execution-ref mismatch,
+  polled-detail mismatch, provider poll failure, and poll cancellation through
+  the same retained cleanup path.
+- Made waiter replacement phase-aware. A waiter cancelled before its first
+  step is replaced against the same cleanup record; a waiter cancelled after
+  starting continues to drain its already-owned phase.
+- Separated the stop wrapper from the provider request. Cancelling the wrapper
+  cannot cancel or duplicate the provider request. A provider request
+  cancelled before its coroutine first runs is safely replaced because no
+  invocation occurred; an invoked request is never replayed.
+- Preserved caller cancellation through cleanup. The caller remains pending
+  until cleanup ownership is complete, then receives `CancelledError`.
+- Removed completed operations and all task references from the runner
+  registry, including error and direct-cancellation paths.
+
+### TDD Evidence
+
+The first RED run reproduced the two review findings and the missing ownership
+model:
+
+```text
+poll-stop repeated cancellation:
+expected caller to remain pending; caller task was already cancelled/done
+
+waiter ownership probes:
+AttributeError: AthenaQueryRunner has no _retain_cleanup
+
+4 failed, 55 deselected
+```
+
+After the phase-aware owner reached green, a second RED test cancelled the
+provider-stop task before its first execution step. The stop event timed out,
+proving that the first implementation could record zero stop invocations. The
+invocation bit and same-phase request replacement fixed that boundary without
+replaying a started request.
+
+The final adversarial set covers repeated cancellation during submission and
+poll cleanup, cancellation during ref mismatch, detail mismatch, and provider
+poll failure cleanup, finalizer waiter cancellation before and after start,
+stop-wrapper cancellation, and provider-stop cancellation before first
+execution. Every probe uses one-second event deadlines plus an external hard
+timeout and asserts one start, one stop, a pending caller until stop release,
+an empty cleanup registry, and no new live asyncio tasks.
+
+### Final Verification
+
+```text
+PYTHONASYNCIODEBUG=1 timeout 30s pytest -W error lifecycle probes
+9 passed, 55 deselected in 0.26s
+
+timeout 45s pytest tests/unit/domain/test_athena_runner.py
+64 passed in 0.38s
+
+timeout 90s pytest runner + Iceberg + Athena VM + Athena service
+209 passed in 0.82s
+
+timeout 90s pytest privacy suites
+339 passed in 1.33s
+
+timeout 240s pytest tests/unit/domain tests/unit/vm
+1379 passed in 45.40s
+
+uv run mypy
+Success: no issues found in 152 source files
+
+uv run ruff check .
+All checks passed
+
+uv run ruff format --check .
+385 files already formatted
+
+./scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+clean
+```
+
+No pytest, `uv run pytest`, or lifecycle probe process remained after final
+verification.
+
+### Changed Files
+
+- `src/aws_tui/domain/athena_runner.py`
+- `tests/unit/domain/test_athena_runner.py`
+- `.superpowers/sdd/task-2-report.md`
+
+### Concerns
+
+- A provider request that has begun is never retried, because replaying it
+  would violate the exactly-once stop invariant. If an external actor directly
+  destroys that provider task or the process itself, completion cannot be
+  proven in-process. Caller, waiter, wrapper, and ordinary shutdown
+  cancellation remain fully drained and do not reach that boundary.
