@@ -26,6 +26,8 @@ class AthenaClientProtocol(Protocol):
         start_token: str | None = None,
     ) -> tuple[list[Any], str | None]: ...
 
+    async def get_workgroup(self, name: str) -> Any: ...
+
     async def list_catalogs_page(
         self,
         *,

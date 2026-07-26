@@ -49,6 +49,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("4", "dispatch('athena.saved')", False, False),
     ("ctrl+enter", "dispatch('athena.execute')", False, True),
     ("escape", "dispatch('athena.cancel')", False, False),
+    ("l", "dispatch('athena.load_more')", False, False),
     ("shift+up", "dispatch('pane.mark_up')", False, True),
     ("shift+down", "dispatch('pane.mark_down')", False, True),
     ("space", "dispatch('pane.quick_look')", False, False),

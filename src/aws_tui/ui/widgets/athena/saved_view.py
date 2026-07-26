@@ -8,6 +8,7 @@ from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import Button, OptionList
 
+from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
     DetailValue,
@@ -32,6 +33,13 @@ class AthenaSavedView(Widget):
         height: 1fr;
         layout: vertical;
     }
+    AthenaSavedView > .athena-saved-list {
+        height: 1fr;
+        layout: vertical;
+    }
+    AthenaSavedView > .athena-saved-list > ResourceListPane {
+        height: 1fr;
+    }
     AthenaSavedView > .athena-saved-detail > DetailRows {
         height: 1fr;
     }
@@ -50,16 +58,26 @@ class AthenaSavedView(Widget):
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
-        yield ResourceListPane(
-            "named queries",
-            id="athena-named-pane",
-            empty_text="No named queries",
-        )
-        yield ResourceListPane(
-            "prepared",
-            id="athena-prepared-pane",
-            empty_text="No prepared statements",
-        )
+        with Vertical(classes="athena-saved-list"):
+            yield ResourceListPane(
+                "named queries",
+                id="athena-named-pane",
+                empty_text="No named queries",
+            )
+            yield AthenaLoadMoreButton(
+                id="athena-more-named",
+                tooltip="Load more named queries",
+            )
+        with Vertical(classes="athena-saved-list"):
+            yield ResourceListPane(
+                "prepared",
+                id="athena-prepared-pane",
+                empty_text="No prepared statements",
+            )
+            yield AthenaLoadMoreButton(
+                id="athena-more-prepared",
+                tooltip="Load more prepared statements",
+            )
         with Vertical(classes="athena-saved-detail"):
             yield DetailRows("saved query detail", id="athena-saved-detail")
             yield Button(
@@ -113,6 +131,18 @@ class AthenaSavedView(Widget):
                 exclusive=True,
                 group="athena-open-saved",
             )
+        elif event.button.id == "athena-more-named":
+            self.run_worker(
+                self._vm.load_more_named_queries(),
+                exclusive=True,
+                group="athena-more-named",
+            )
+        elif event.button.id == "athena-more-prepared":
+            self.run_worker(
+                self._vm.load_more_prepared_statements(),
+                exclusive=True,
+                group="athena-more-prepared",
+            )
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh)
@@ -123,6 +153,14 @@ class AthenaSavedView(Widget):
             prepared = self.query_one("#athena-prepared-pane", ResourceListPane)
             detail = self.query_one("#athena-saved-detail", DetailRows)
             open_editor = self.query_one("#athena-open-editor", Button)
+            load_more_named = self.query_one(
+                "#athena-more-named",
+                AthenaLoadMoreButton,
+            )
+            load_more_prepared = self.query_one(
+                "#athena-more-prepared",
+                AthenaLoadMoreButton,
+            )
         except Exception:
             return
         named.replace(
@@ -166,6 +204,18 @@ class AthenaSavedView(Widget):
             empty_text="Select a saved query",
         )
         open_editor.disabled = self._vm.selected_sql() is None
+        load_more_named.sync(
+            has_more=self._vm.has_more_named_queries,
+            busy=self._vm.is_loading_more_named_queries,
+            state=self._vm.named_state,
+            error_text=self._vm.named_error_text,
+        )
+        load_more_prepared.sync(
+            has_more=self._vm.has_more_prepared_statements,
+            busy=self._vm.is_loading_more_prepared_statements,
+            state=self._vm.prepared_state,
+            error_text=self._vm.prepared_error_text,
+        )
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         named = self._vm.selected_named_query

@@ -63,6 +63,7 @@ class AthenaHistoryVM:
         self._detail: QueryExecutionDetail | None = None
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
+        self._is_loading_more = False
         self._on_property_changed: Subject[str] = Subject()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -105,6 +106,10 @@ class AthenaHistoryVM:
         return self._error_text
 
     @property
+    def is_loading_more(self) -> bool:
+        return self._is_loading_more
+
+    @property
     def load_more_command(self) -> AsyncRelayCommand:
         return self._worker.load_more_command
 
@@ -139,7 +144,11 @@ class AthenaHistoryVM:
         worker = self._worker
         if not self._can_load_more(worker):
             return
-        await self._run_pager(worker, refresh=False)
+        self._set_loading_more(True)
+        try:
+            await self._run_pager(worker, refresh=False)
+        finally:
+            self._set_loading_more(False)
 
     async def select_execution(self, execution_id: str) -> None:
         if self._disposed or self._shutdown_started:
@@ -386,6 +395,12 @@ class AthenaHistoryVM:
             return
         self._state = state
         self._notify("state")
+
+    def _set_loading_more(self, value: bool) -> None:
+        if self._is_loading_more == value:
+            return
+        self._is_loading_more = value
+        self._notify("is_loading_more")
 
     def _notify(self, property_name: str) -> None:
         if self._disposed:

@@ -72,6 +72,7 @@ class KeymapStore:
         "athena.saved": ("4",),
         "athena.execute": ("ctrl+enter",),
         "athena.cancel": ("escape",),
+        "athena.load_more": ("l",),
     }
 
     def __init__(self, *, overlay: dict[str, str | list[str]] | None = None) -> None:

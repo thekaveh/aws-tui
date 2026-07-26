@@ -163,7 +163,11 @@ class AthenaQueryView(Widget):
         cancel.disabled = not self._vm.cancel_command.can_execute()
         status.update(self._status_text())
         detail.update(self._detail_text())
-        detail.set_class(self._vm.error_text is not None, "-error")
+        detail.set_class(
+            self._vm.error_text is not None
+            or self._page_vm.workgroup_detail_error_text is not None,
+            "-error",
+        )
 
     def _status_text(self) -> str:
         ref = self._vm.execution_ref
@@ -183,7 +187,20 @@ class AthenaQueryView(Widget):
 
     def _detail_text(self) -> str:
         rows: list[str] = []
+        workgroup = self._page_vm.workgroup_detail
+        if workgroup is not None:
+            managed = workgroup.managed_query_results_enabled
+            rows.extend(
+                (
+                    f"{'Workgroup mode':<15} {'managed results' if managed else 'S3 output'}",
+                    f"{'Configuration':<15} "
+                    f"{'enforced' if workgroup.enforce_workgroup_configuration else 'caller configurable'}",
+                    f"{'Workgroup output':<15} "
+                    f"{'Athena managed' if managed else display_value(workgroup.output_location)}",
+                )
+            )
         for label, error_text in (
+            ("Workgroup", self._page_vm.workgroup_detail_error_text),
             ("Workgroups", self._page_vm.workgroups_error_text),
             ("Catalogs", self._page_vm.catalogs_error_text),
             ("Databases", self._page_vm.databases_error_text),

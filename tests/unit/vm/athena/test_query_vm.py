@@ -1070,8 +1070,41 @@ def test_commands_follow_vmx_gating_and_disposal() -> None:
     vm.set_sql("SELECT 1")
     assert vm.execute_command.can_execute()
 
+    vm.set_sql("DELETE FROM sales")
+    assert not vm.execute_command.can_execute()
+
     vm.dispose()
     assert not vm.execute_command.can_execute()
+    assert not vm.cancel_command.can_execute()
+
+
+@pytest.mark.asyncio
+async def test_execute_command_requires_a_complete_context() -> None:
+    vm = make_query_vm(InMemoryAthena())
+    vm.set_sql("SELECT 1")
+
+    await vm.set_context(QueryContext("prod-west", "us-west-2", "analysts", "", ""))
+
+    assert not vm.execute_command.can_execute()
+
+
+def test_cancel_command_requires_an_owned_active_query() -> None:
+    vm = make_query_vm(InMemoryAthena())
+    ref = QueryExecutionRef(
+        "q-owned",
+        _CONTEXT.connection_name,
+        _CONTEXT.region,
+        _CONTEXT.workgroup,
+    )
+    vm._busy = True  # type: ignore[attr-defined]
+    vm._execution_ref = ref  # type: ignore[attr-defined]
+
+    assert not vm.cancel_command.can_execute()
+
+    vm._owns_active_query = True  # type: ignore[attr-defined]
+    assert vm.cancel_command.can_execute()
+
+    vm._execution_ref = None  # type: ignore[attr-defined]
     assert not vm.cancel_command.can_execute()
 
 

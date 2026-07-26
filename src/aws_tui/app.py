@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 from reactivex.abc import DisposableBase
 from rich.markup import escape
+from textual import events
 
 if TYPE_CHECKING:
     from aws_tui.domain.filesystem import FileEntry, FileSystemProvider, PathRef
@@ -90,6 +91,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("athena.saved", "Athena saved queries"),
     ("athena.execute", "Execute Athena query"),
     ("athena.cancel", "Cancel Athena query"),
+    ("athena.load_more", "Load more Athena rows"),
     ("app.open_settings", "Settings"),
     ("app.help", "Help"),
     ("app.quit", "Quit"),
@@ -389,6 +391,7 @@ class AwsTuiApp(App[None]):
         )
         self._actions.register("athena.execute", self.action_execute_athena)
         self._actions.register("athena.cancel", self.action_cancel_athena)
+        self._actions.register("athena.load_more", self.action_load_more_athena)
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
@@ -1147,6 +1150,7 @@ class AwsTuiApp(App[None]):
                         _svc_id or "unknown",
                         current_vm,
                         hub=ctx.hub,
+                        keymap=getattr(ctx, "keymap_store", None),
                         focus_coordinator=ctx.focus_coordinator,
                         dual_pane_class=DualPane,
                         emr_page_class=EmrServerlessPage,
@@ -1154,6 +1158,8 @@ class AwsTuiApp(App[None]):
                         athena_page_class=AthenaPage,
                     )
                 )
+                if _svc_id == "athena":
+                    self._recompute_hint_disables()
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.failed",
@@ -2248,6 +2254,12 @@ class AwsTuiApp(App[None]):
         if page is not None:
             await page.action_cancel()
 
+    async def action_load_more_athena(self) -> None:
+        self.record_action("athena.load_more")
+        page = self._athena_page()
+        if page is not None:
+            await page.action_load_more()
+
     def _bindings_overlap(self, first: str, second: str) -> bool:
         keymap = self._app_ctx.keymap_store
         return bool(set(keymap.resolve(first)) & set(keymap.resolve(second)))
@@ -2872,6 +2884,16 @@ class AwsTuiApp(App[None]):
 
         if not isinstance(msg, PropertyChangedMessage):
             return
+        athena_page = self._athena_page()
+        if athena_page is not None and msg.sender_object in {
+            athena_page.vm,
+            athena_page.vm.query,
+            athena_page.vm.history,
+            athena_page.vm.results,
+            athena_page.vm.saved,
+        }:
+            self._recompute_hint_disables()
+            return
         if msg.property_name not in {"cursor_index", "viewmodel", "entries"}:
             return
         if not isinstance(msg.sender_object, PaneVM):
@@ -2883,6 +2905,18 @@ class AwsTuiApp(App[None]):
         on the focused pane's current cursor target. Safe to call at
         any time — no-ops on EMR / Settings (no DualPaneVM mounted).
         """
+        athena_page = self._athena_page()
+        if athena_page is not None:
+            disabled: set[str] = set()
+            query = athena_page.vm.query
+            if not query.execute_command.can_execute():
+                disabled.add("athena.execute")
+            if not query.cancel_command.can_execute():
+                disabled.add("athena.cancel")
+            if not athena_page.can_load_more():
+                disabled.add("athena.load_more")
+            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset(disabled))
+            return
         dual = self._dual_pane()
         if dual is None:
             # No file-pane context — leave whatever the EMR / Settings
@@ -2903,6 +2937,10 @@ class AwsTuiApp(App[None]):
             )
         else:
             self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset())
+
+    def on_descendant_focus(self, _event: events.DescendantFocus) -> None:
+        if self._athena_page() is not None:
+            self._recompute_hint_disables()
 
     def _on_nav_selection_changed(self, msg: object) -> None:
         """Hub subscriber: route NavMenuVM selected_id changes to the content host.
@@ -3132,6 +3170,7 @@ class AwsTuiApp(App[None]):
                     service_id,
                     current_vm,
                     hub=ctx.hub,
+                    keymap=ctx.keymap_store,
                     focus_coordinator=ctx.focus_coordinator,
                     dual_pane_class=DualPane,
                     emr_page_class=EmrServerlessPage,
@@ -3139,6 +3178,8 @@ class AwsTuiApp(App[None]):
                     athena_page_class=AthenaPage,
                 )
             )
+            if service_id == "athena":
+                self._recompute_hint_disables()
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.mount_failed",
@@ -3285,6 +3326,16 @@ class AwsTuiApp(App[None]):
         ctx = self._app_ctx
         with contextlib.suppress(Exception):
             ctx.transfers_vm.cancel_all_command.execute()
+        # Keep the hosted VM's graceful shutdown alive through caller
+        # cancellation. Remote cleanup must complete while its AWS client is open.
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            host_shutdown = asyncio.create_task(ctx.root_vm.content_host.shutdown())
+            while not host_shutdown.done():
+                try:
+                    await asyncio.shield(host_shutdown)
+                except asyncio.CancelledError:
+                    continue
+            await host_shutdown
         # Include asyncio.CancelledError in the suppress — without it
         # an in-flight CancelledError (a BaseException, not an
         # Exception) on the aclose_all_clients await would cascade
@@ -3333,16 +3384,6 @@ class AwsTuiApp(App[None]):
             ctx.confirm_vm.dispose()
         with contextlib.suppress(Exception):
             ctx.transfers_vm.dispose()
-        # Keep the hosted VM's graceful shutdown alive through caller
-        # cancellation. Root disposal must not race its hook.
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            host_shutdown = asyncio.create_task(ctx.root_vm.content_host.shutdown())
-            while not host_shutdown.done():
-                try:
-                    await asyncio.shield(host_shutdown)
-                except asyncio.CancelledError:
-                    continue
-            await host_shutdown
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
         with contextlib.suppress(Exception):

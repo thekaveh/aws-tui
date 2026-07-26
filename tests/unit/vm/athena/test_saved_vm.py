@@ -161,6 +161,55 @@ async def test_saved_lists_use_independent_token_pagers_without_fetch_all() -> N
 
 
 @pytest.mark.asyncio
+async def test_saved_load_more_exposes_independent_busy_states() -> None:
+    client = _seeded_client()
+    second_prepared = PreparedStatementSummary(
+        "prepared-2",
+        datetime(2026, 7, 26, tzinfo=UTC),
+    )
+    client.prepared_pages[("analysts", None)] = (
+        client.prepared_pages[("analysts", None)][0],
+        "prepared-next",
+    )
+    client.prepared_pages[("analysts", "prepared-next")] = ([second_prepared], None)
+    vm = make_saved_vm(client)
+    await vm.setup()
+
+    named_loading = asyncio.create_task(vm.load_more_named_queries())
+    await named_loading
+    assert not vm.is_loading_more_named_queries
+    assert client.named_list_calls[-1] == ("analysts", "named-next")
+
+    release = asyncio.Event()
+    started = asyncio.Event()
+    original = client.list_prepared_statements_page
+
+    async def blocked_prepared(
+        workgroup: str,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[PreparedStatementSummary], str | None]:
+        if start_token == "prepared-next":
+            started.set()
+            await release.wait()
+        return await original(workgroup, start_token=start_token)
+
+    client.list_prepared_statements_page = blocked_prepared  # type: ignore[method-assign]
+    prepared_loading = asyncio.create_task(vm.load_more_prepared_statements())
+    await started.wait()
+
+    assert vm.is_loading_more_prepared_statements
+    assert not vm.is_loading_more_named_queries
+    assert client.prepared_list_calls[-1] == ("analysts", None)
+
+    release.set()
+    await prepared_loading
+
+    assert not vm.is_loading_more_prepared_statements
+    assert client.prepared_list_calls[-1] == ("analysts", "prepared-next")
+
+
+@pytest.mark.asyncio
 async def test_named_query_list_exposes_sql_free_summaries_before_selection() -> None:
     from aws_tui.domain.query import NamedQuerySummary
 

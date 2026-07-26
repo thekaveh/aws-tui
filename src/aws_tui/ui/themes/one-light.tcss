@@ -839,7 +839,7 @@ AthenaPage .athena-view-tab.-active {
     background: $bg-sel; color: $accent; text-style: bold;
 }
 AthenaPage .athena-view-tab:focus {
-    background: $bg-sel; color: $accent-soft;
+    background: $bg-sel; color: $text;
 }
 AthenaPage ResourceListPane,
 AthenaPage DetailRows {

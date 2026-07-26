@@ -233,10 +233,26 @@ class AthenaQueryVM:
             self._lifecycle_transition = False
 
     async def execute(self) -> None:
+        if (
+            not self._execute_command.can_execute()
+            and not self._disposed
+            and not self._shutdown_started
+            and not self._busy
+            and bool(self._sql.strip())
+        ):
+            try:
+                self._validate()
+            except QueryRejectedError as exc:
+                self._validation_error = str(exc)
+                self._notify("validation_error")
+            return
         await self._execute_command.execute_async()
 
     async def cancel(self) -> None:
-        await self._cancel_command.execute_async()
+        if self._cancel_command.can_execute():
+            await self._cancel_command.execute_async()
+        elif self._can_interrupt():
+            await self._cancel_active()
 
     async def shutdown(self) -> None:
         async with self._lifecycle_lock:
@@ -388,7 +404,7 @@ class AthenaQueryVM:
 
     async def _cancel_active(self) -> None:
         async with self._lifecycle_lock:
-            if not self._can_cancel():
+            if not self._can_interrupt():
                 return
             ref = self._execution_ref
             if self._owns_active_query and ref is not None and not await self._try_stop(ref):
@@ -572,15 +588,32 @@ class AthenaQueryVM:
         self._notify("is_executing")
 
     def _can_execute(self) -> bool:
+        if self._disposed or self._shutdown_started or not self._sql.strip() or self._busy:
+            return False
+        try:
+            self._validate()
+        except QueryRejectedError:
+            return False
+        return True
+
+    def _can_cancel(self) -> bool:
         return (
             not self._disposed
             and not self._shutdown_started
-            and bool(self._sql.strip())
-            and not self._busy
+            and self._busy
+            and self._owns_active_query
+            and self._execution_ref is not None
         )
 
-    def _can_cancel(self) -> bool:
-        return not self._disposed and not self._shutdown_started and self._busy
+    def _can_interrupt(self) -> bool:
+        return (
+            not self._disposed
+            and not self._shutdown_started
+            and self._busy
+            and (
+                self._is_submitting or (self._owns_active_query and self._execution_ref is not None)
+            )
+        )
 
     @staticmethod
     def _ref_matches_context(

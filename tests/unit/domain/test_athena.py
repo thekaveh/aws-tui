@@ -216,6 +216,7 @@ async def test_get_workgroup_maps_enforced_result_configuration() -> None:
                     "ResultConfiguration": {
                         "OutputLocation": "s3://athena-results/analysts/",
                     },
+                    "ManagedQueryResultsConfiguration": {"Enabled": True},
                     "EnforceWorkGroupConfiguration": True,
                     "PublishCloudWatchMetricsEnabled": True,
                     "BytesScannedCutoffPerQuery": 1_000_000,
@@ -236,6 +237,7 @@ async def test_get_workgroup_maps_enforced_result_configuration() -> None:
         True,
         1_000_000,
         "Athena engine version 3",
+        True,
     )
     boto.get_work_group.assert_awaited_once_with(WorkGroup="analysts")
 

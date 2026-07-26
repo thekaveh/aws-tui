@@ -9,6 +9,7 @@ from textual.widget import Widget
 from textual.widgets import Button, OptionList
 
 from aws_tui.domain.query import QueryState
+from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
     DetailValue,
@@ -32,6 +33,13 @@ class AthenaHistoryView(Widget):
         height: 1fr;
         layout: vertical;
     }
+    AthenaHistoryView > .athena-history-list {
+        height: 1fr;
+        layout: vertical;
+    }
+    AthenaHistoryView > .athena-history-list > ResourceListPane {
+        height: 1fr;
+    }
     AthenaHistoryView > .athena-history-detail > DetailRows {
         height: 1fr;
     }
@@ -50,11 +58,16 @@ class AthenaHistoryView(Widget):
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
-        yield ResourceListPane(
-            "query history",
-            id="athena-history-pane",
-            empty_text="No query history",
-        )
+        with Vertical(classes="athena-history-list"):
+            yield ResourceListPane(
+                "query history",
+                id="athena-history-pane",
+                empty_text="No query history",
+            )
+            yield AthenaLoadMoreButton(
+                id="athena-more-history",
+                tooltip="Load more query history",
+            )
         with Vertical(classes="athena-history-detail"):
             yield DetailRows("execution detail", id="athena-history-detail")
             yield Button(
@@ -95,6 +108,12 @@ class AthenaHistoryView(Widget):
                 exclusive=True,
                 group="athena-open-history-results",
             )
+        elif event.button.id == "athena-more-history":
+            self.run_worker(
+                self._vm.load_more(),
+                exclusive=True,
+                group="athena-more-history",
+            )
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh)
@@ -104,6 +123,10 @@ class AthenaHistoryView(Widget):
             listing = self.query_one("#athena-history-pane", ResourceListPane)
             detail = self.query_one("#athena-history-detail", DetailRows)
             results = self.query_one("#athena-history-results", Button)
+            load_more = self.query_one(
+                "#athena-more-history",
+                AthenaLoadMoreButton,
+            )
         except Exception:
             return
         listing.replace(
@@ -127,6 +150,12 @@ class AthenaHistoryView(Widget):
         )
         selected = self._vm.detail
         results.disabled = selected is None or selected.summary.state is not QueryState.SUCCEEDED
+        load_more.sync(
+            has_more=self._vm.has_more,
+            busy=self._vm.is_loading_more,
+            state=self._vm.state,
+            error_text=self._vm.error_text,
+        )
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         detail = self._vm.detail

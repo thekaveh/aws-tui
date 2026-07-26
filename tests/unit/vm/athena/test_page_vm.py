@@ -8,7 +8,11 @@ from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.athena import AthenaCatalogSummary, AthenaWorkgroupSummary
+from aws_tui.domain.athena import (
+    AthenaCatalogSummary,
+    AthenaWorkgroupDetail,
+    AthenaWorkgroupSummary,
+)
 from aws_tui.domain.data_catalog import DatabaseRef, DatabaseSummary
 from aws_tui.domain.filesystem import (
     PermissionDeniedError,
@@ -65,6 +69,7 @@ class PageClient:
             ("analysts", "AwsDataCatalog"): ["events"],
         }
         self.workgroup_calls: list[str | None] = []
+        self.workgroup_detail_calls: list[str] = []
         self.catalog_calls: list[tuple[str, str | None]] = []
         self.database_calls: list[tuple[str, str, str | None]] = []
         self.history_calls: list[tuple[str, str | None]] = []
@@ -74,10 +79,14 @@ class PageClient:
         self.stop_calls: list[str] = []
         self.block_catalog_for: str | None = None
         self.workgroup_error: ProviderError | None = None
+        self.workgroup_detail_error: ProviderError | None = None
         self.catalog_error: ProviderError | None = None
         self.database_error: ProviderError | None = None
         self.catalog_started = asyncio.Event()
         self.release_catalog = asyncio.Event()
+        self.block_workgroup_detail_for: str | None = None
+        self.workgroup_detail_started = asyncio.Event()
+        self.release_workgroup_detail = asyncio.Event()
         self.block_results = False
         self.ignore_results_cancellation = False
         self.results_started = asyncio.Event()
@@ -103,6 +112,26 @@ class PageClient:
             "One event",
             datetime(2026, 7, 25, tzinfo=UTC),
         )
+        self.workgroup_details = {
+            "primary": AthenaWorkgroupDetail(
+                self.workgroups[0],
+                "s3://athena-results/primary/",
+                True,
+                True,
+                None,
+                "Athena engine version 3",
+                False,
+            ),
+            "analysts": AthenaWorkgroupDetail(
+                self.workgroups[1],
+                None,
+                True,
+                False,
+                1_000_000,
+                "Athena engine version 3",
+                True,
+            ),
+        }
 
     async def list_workgroups_page(
         self,
@@ -113,6 +142,15 @@ class PageClient:
         if self.workgroup_error is not None:
             raise self.workgroup_error
         return list(self.workgroups), None
+
+    async def get_workgroup(self, name: str) -> AthenaWorkgroupDetail:
+        self.workgroup_detail_calls.append(name)
+        if self.workgroup_detail_error is not None:
+            raise self.workgroup_detail_error
+        if name == self.block_workgroup_detail_for:
+            self.workgroup_detail_started.set()
+            await self.release_workgroup_detail.wait()
+        return self.workgroup_details[name]
 
     async def list_catalogs_page(
         self,
@@ -343,11 +381,73 @@ async def test_setup_loads_context_lists_in_order_and_keeps_other_views_lazy() -
         "default",
     )
     assert client.workgroup_calls == [None]
+    assert client.workgroup_detail_calls == ["primary"]
+    assert page.workgroup_detail == client.workgroup_details["primary"]
+    assert page.workgroup_detail_state is PaneState.IDLE
     assert client.catalog_calls == [("primary", None)]
     assert client.database_calls == [("primary", "AwsDataCatalog", None)]
     assert client.history_calls == []
     assert client.named_calls == []
     assert client.prepared_calls == []
+
+
+@pytest.mark.asyncio
+async def test_workgroup_detail_error_is_stable_and_blocks_executable_context() -> None:
+    client = PageClient()
+    client.workgroup_detail_error = ProviderError(
+        "failed for s3://private-bucket/sensitive-prefix/"
+    )
+    page = make_page_vm(client)
+
+    await page.setup()
+
+    assert page.workgroup_detail is None
+    assert page.workgroup_detail_state is PaneState.ERROR
+    assert page.workgroup_detail_error_text == "Athena workgroup request failed"
+    assert "private-bucket" not in repr(page)
+    assert page.context.catalog == ""
+    assert page.context.database == ""
+    assert client.catalog_calls == []
+
+
+@pytest.mark.asyncio
+async def test_late_workgroup_detail_cannot_replace_the_current_selection() -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    await page.setup()
+    client.block_workgroup_detail_for = "analysts"
+
+    stale = asyncio.create_task(page.select_workgroup("analysts"))
+    await client.workgroup_detail_started.wait()
+    client.block_workgroup_detail_for = None
+    await page.select_workgroup("primary")
+    client.release_workgroup_detail.set()
+    await stale
+
+    assert page.context.workgroup == "primary"
+    assert page.workgroup_detail == client.workgroup_details["primary"]
+    assert page.workgroup_detail_state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drains_workgroup_detail_without_late_publication() -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    await page.setup()
+    client.block_workgroup_detail_for = "analysts"
+
+    selection = asyncio.create_task(page.select_workgroup("analysts"))
+    await client.workgroup_detail_started.wait()
+    shutdown = asyncio.create_task(page.shutdown())
+    await asyncio.sleep(0)
+
+    assert not shutdown.done()
+    client.release_workgroup_detail.set()
+    await asyncio.gather(selection, shutdown)
+
+    assert page.context.workgroup == ""
+    assert page.workgroup_detail is None
+    assert page.workgroup_detail_state is PaneState.EMPTY
 
 
 @pytest.mark.asyncio
@@ -529,6 +629,27 @@ async def test_workgroup_change_cannot_publish_a_late_catalog_page() -> None:
         "federated",
     )
     assert page.context.database == "default"
+
+
+@pytest.mark.asyncio
+async def test_context_load_more_exposes_busy_state_without_reloading_page_one() -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    await page.setup()
+    page._catalog_pager._current_token = "catalog-next"  # type: ignore[attr-defined]
+    client.block_catalog_for = "primary"
+
+    loading = asyncio.create_task(page.load_more_catalogs())
+    await client.catalog_started.wait()
+
+    assert page.is_loading_more_catalogs
+    assert client.catalog_calls[-1] == ("primary", "catalog-next")
+    assert client.catalog_calls.count(("primary", None)) == 1
+
+    client.release_catalog.set()
+    await loading
+
+    assert not page.is_loading_more_catalogs
 
 
 @pytest.mark.asyncio

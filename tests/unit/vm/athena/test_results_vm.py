@@ -91,6 +91,30 @@ async def test_results_use_token_paging_without_eager_materialization() -> None:
 
 
 @pytest.mark.asyncio
+async def test_results_load_more_exposes_busy_state_for_the_continuation_page() -> None:
+    client = ResultClient(
+        {
+            ("q-1", None): ResultPage((_ID,), (("one",),), "next"),
+            ("q-1", "next"): ResultPage((_ID,), (("two",),), None),
+        }
+    )
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+    client.blocked_request = ("q-1", "next")
+
+    loading = asyncio.create_task(vm.load_more())
+    await client.fetch_started.wait()
+
+    assert vm.is_loading_more
+    assert client.calls[-1] == ("q-1", "next")
+
+    client.release_fetch.set()
+    await loading
+
+    assert not vm.is_loading_more
+
+
+@pytest.mark.asyncio
 async def test_results_preserve_null_empty_and_literal_null_values() -> None:
     client = ResultClient(
         {

@@ -169,6 +169,25 @@ async def test_history_hydrates_only_the_current_token_page() -> None:
 
 
 @pytest.mark.asyncio
+async def test_history_load_more_exposes_busy_state_for_the_continuation_page() -> None:
+    client = _seeded_client()
+    vm = make_history_vm(client)
+    await vm.setup()
+    client.block_request = ("analysts", "next")
+
+    loading = asyncio.create_task(vm.load_more())
+    await client.fetch_started.wait()
+
+    assert vm.is_loading_more
+    assert client.list_calls[-1] == ("analysts", "next")
+
+    client.release_fetch.set()
+    await loading
+
+    assert not vm.is_loading_more
+
+
+@pytest.mark.asyncio
 async def test_history_selection_reads_detail_without_granting_stop_authority() -> None:
     client = _seeded_client()
     vm = make_history_vm(client)

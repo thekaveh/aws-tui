@@ -12,8 +12,10 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, OptionList, Select, Static, TextArea
 from vmx import Message, MessageHub
 
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
+from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.athena.saved_view import AthenaSavedView
@@ -35,9 +37,9 @@ class _ViewTab(Static, can_focus=True):
             super().__init__()
             self.view = view
 
-    def __init__(self, view: AthenaView, number: int) -> None:
+    def __init__(self, view: AthenaView, key_label: str) -> None:
         super().__init__(
-            f"{number} {view}",
+            f"{key_label} {view}".strip(),
             id=f"athena-tab-{view}",
             classes="athena-view-tab",
             markup=False,
@@ -72,6 +74,10 @@ class AthenaPage(HubSubscriberMixin, Widget):
         width: 2fr;
         min-width: 14;
         height: 3;
+    }
+    AthenaPage #athena-context-header > AthenaLoadMoreButton {
+        width: 3;
+        min-width: 3;
     }
     AthenaPage > #athena-view-tabs {
         width: 1fr;
@@ -108,6 +114,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         vm: AthenaPageVM,
         *,
         hub: MessageHub[Message],
+        keymap: KeymapStore | None = None,
         focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
@@ -115,6 +122,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         super().__init__(id=id, classes=classes)
         self._vm = vm
         self._hub = hub
+        self._keymap = keymap or KeymapStore()
         self._focus_coordinator = focus_coordinator
         self._syncing_context = False
         self._context_options: dict[str, tuple[str, ...]] = {}
@@ -134,6 +142,10 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 id="athena-workgroup",
                 tooltip="Athena workgroup",
             )
+            yield AthenaLoadMoreButton(
+                id="athena-more-workgroups",
+                tooltip="Load more workgroups",
+            )
             yield Select(
                 (),
                 prompt="catalog",
@@ -141,6 +153,10 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 compact=True,
                 id="athena-catalog",
                 tooltip="Data catalog",
+            )
+            yield AthenaLoadMoreButton(
+                id="athena-more-catalogs",
+                tooltip="Load more data catalogs",
             )
             yield Select(
                 (),
@@ -150,9 +166,14 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 id="athena-database",
                 tooltip="Database",
             )
+            yield AthenaLoadMoreButton(
+                id="athena-more-databases",
+                tooltip="Load more databases",
+            )
         with Horizontal(id="athena-view-tabs"):
-            for number, view in enumerate(_VIEW_ORDER, start=1):
-                tab = _ViewTab(view, number)
+            for view in _VIEW_ORDER:
+                keys = self._keymap.resolve(f"athena.{view}")
+                tab = _ViewTab(view, keys[0] if keys else "")
                 tab.set_class(view == self._vm.active_view, "-active")
                 yield tab
         with Container(id="athena-view-host"):
@@ -182,6 +203,12 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 "workgroups_error_text",
                 "catalogs_error_text",
                 "databases_error_text",
+                "workgroup_detail",
+                "workgroup_detail_state",
+                "workgroup_detail_error_text",
+                "is_loading_more_workgroups",
+                "is_loading_more_catalogs",
+                "is_loading_more_databases",
             ),
             on_property_changed=self._on_page_changed,
         )
@@ -217,6 +244,20 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 group="athena-context",
             )
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        loaders = {
+            "athena-more-workgroups": self._vm.load_more_workgroups,
+            "athena-more-catalogs": self._vm.load_more_catalogs,
+            "athena-more-databases": self._vm.load_more_databases,
+        }
+        loader = loaders.get(event.button.id or "")
+        if loader is not None:
+            self.run_worker(
+                loader(),
+                exclusive=True,
+                group=f"{event.button.id}-load",
+            )
+
     async def action_select_view(self, view: str) -> None:
         selected = cast(AthenaView, view)
         if selected not in _VIEW_ORDER:
@@ -230,6 +271,67 @@ class AthenaPage(HubSubscriberMixin, Widget):
 
     async def action_cancel(self) -> None:
         await self.query_one(AthenaQueryView).cancel()
+
+    async def action_load_more(self) -> None:
+        focused_ids = self._focused_ids()
+        if focused_ids & {"athena-workgroup", "athena-more-workgroups"}:
+            await self._vm.load_more_workgroups()
+        elif focused_ids & {"athena-catalog", "athena-more-catalogs"}:
+            await self._vm.load_more_catalogs()
+        elif focused_ids & {"athena-database", "athena-more-databases"}:
+            await self._vm.load_more_databases()
+        elif self._vm.active_view == "history":
+            await self._vm.history.load_more()
+        elif self._vm.active_view == "results":
+            await self._vm.results.load_more()
+        elif self._vm.active_view == "saved":
+            if focused_ids & {
+                "athena-prepared-pane-options",
+                "athena-more-prepared",
+            }:
+                await self._vm.saved.load_more_prepared_statements()
+            else:
+                await self._vm.saved.load_more_named_queries()
+        elif self._vm.active_view == "query":
+            if self._vm.has_more_databases:
+                await self._vm.load_more_databases()
+            elif self._vm.has_more_catalogs:
+                await self._vm.load_more_catalogs()
+            elif self._vm.has_more_workgroups:
+                await self._vm.load_more_workgroups()
+
+    def can_load_more(self) -> bool:
+        focused_ids = self._focused_ids()
+        if focused_ids & {"athena-workgroup", "athena-more-workgroups"}:
+            return self._vm.has_more_workgroups and not self._vm.is_loading_more_workgroups
+        if focused_ids & {"athena-catalog", "athena-more-catalogs"}:
+            return self._vm.has_more_catalogs and not self._vm.is_loading_more_catalogs
+        if focused_ids & {"athena-database", "athena-more-databases"}:
+            return self._vm.has_more_databases and not self._vm.is_loading_more_databases
+        if self._vm.active_view == "history":
+            return self._vm.history.has_more and not self._vm.history.is_loading_more
+        if self._vm.active_view == "results":
+            return self._vm.results.has_more and not self._vm.results.is_loading_more
+        if self._vm.active_view == "saved":
+            if focused_ids & {
+                "athena-prepared-pane-options",
+                "athena-more-prepared",
+            }:
+                return (
+                    self._vm.saved.has_more_prepared_statements
+                    and not self._vm.saved.is_loading_more_prepared_statements
+                )
+            return (
+                self._vm.saved.has_more_named_queries
+                and not self._vm.saved.is_loading_more_named_queries
+            )
+        return any(
+            (
+                self._vm.has_more_databases and not self._vm.is_loading_more_databases,
+                self._vm.has_more_catalogs and not self._vm.is_loading_more_catalogs,
+                self._vm.has_more_workgroups and not self._vm.is_loading_more_workgroups,
+            )
+        )
 
     async def action_refresh_active(self) -> None:
         active = self._vm.active_view
@@ -291,6 +393,12 @@ class AthenaPage(HubSubscriberMixin, Widget):
     def _contains_focus(self, focused: Widget | None) -> bool:
         return focused is not None and (focused is self or self in focused.ancestors_with_self)
 
+    def _focused_ids(self) -> set[str]:
+        focused = self.app.focused
+        if focused is None:
+            return set()
+        return {widget.id for widget in focused.ancestors_with_self if widget.id}
+
     def _on_page_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh_page)
 
@@ -326,8 +434,43 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 self._vm.context.database,
                 self._vm.databases_state,
             )
+            self._sync_context_load_more()
         finally:
             self._syncing_context = False
+
+    def _sync_context_load_more(self) -> None:
+        for kind, has_more, busy, state, error_text in (
+            (
+                "workgroups",
+                self._vm.has_more_workgroups,
+                self._vm.is_loading_more_workgroups,
+                self._vm.workgroups_state,
+                self._vm.workgroups_error_text,
+            ),
+            (
+                "catalogs",
+                self._vm.has_more_catalogs,
+                self._vm.is_loading_more_catalogs,
+                self._vm.catalogs_state,
+                self._vm.catalogs_error_text,
+            ),
+            (
+                "databases",
+                self._vm.has_more_databases,
+                self._vm.is_loading_more_databases,
+                self._vm.databases_state,
+                self._vm.databases_error_text,
+            ),
+        ):
+            self.query_one(
+                f"#athena-more-{kind}",
+                AthenaLoadMoreButton,
+            ).sync(
+                has_more=has_more,
+                busy=busy,
+                state=state,
+                error_text=error_text,
+            )
 
     def _replace_select(
         self,

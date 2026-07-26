@@ -72,6 +72,7 @@ class AthenaWorkgroupDetail:
     publish_cloudwatch_metrics: bool
     bytes_scanned_cutoff: int | None
     engine_version: str | None
+    managed_query_results_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +277,10 @@ class AthenaClient:
                 "ResultConfiguration",
             )
             engine_version = _optional_mapping(configuration, "EngineVersion")
+            managed_results = _optional_mapping(
+                configuration,
+                "ManagedQueryResultsConfiguration",
+            )
             return AthenaWorkgroupDetail(
                 summary=_map_workgroup_summary(workgroup),
                 output_location=_optional_string(
@@ -297,6 +302,11 @@ class AthenaClient:
                     "BytesScannedCutoffPerQuery",
                 ),
                 engine_version=_engine_version(engine_version),
+                managed_query_results_enabled=_optional_bool(
+                    managed_results,
+                    "Enabled",
+                    default=False,
+                ),
             )
         except Exception as exc:
             _raise_mapped_athena_error(exc, sensitive_values=(name,))

@@ -68,6 +68,7 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "athena.saved",
         "athena.execute",
         "athena.cancel",
+        "athena.load_more",
         "pane.refresh",
         "app.swap_source",
     ),
@@ -131,6 +132,7 @@ _ACTION_LABELS: dict[str, str] = {
     "athena.saved": "saved",
     "athena.execute": "execute",
     "athena.cancel": "cancel",
+    "athena.load_more": "load more",
 }
 
 

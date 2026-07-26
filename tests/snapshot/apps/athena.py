@@ -13,6 +13,7 @@ from aws_tui.domain.query import (
     ResultColumn,
     ResultPage,
 )
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.vm.athena.page_vm import AthenaPageVM
@@ -28,6 +29,7 @@ AthenaFixture = Literal[
     "saved",
     "forbidden",
     "missing-result-config",
+    "focused-rebound-tabs",
 ]
 
 
@@ -42,14 +44,15 @@ class _SnapshotAthena(PageClient):
         return ResultPage(
             (
                 ResultColumn("event[id]", "bigint", "NOT_NULL"),
+                ResultColumn("event[id]", "varchar", "NULLABLE"),
                 ResultColumn("active", "boolean", "NULLABLE"),
                 ResultColumn("payload", "array(varchar)", "NULLABLE"),
                 ResultColumn("note", "varchar", "NULLABLE"),
             ),
             (
-                ("184467", "true", '["alpha","beta"]', ""),
-                ("184468", "false", "[]", None),
-                ("184469", "true", "[literal][/bold]", "AWS result"),
+                ("184467", "source-a", "true", '["alpha","beta"]', ""),
+                ("184468", "source-b", "false", "[]", None),
+                ("184469", "source-c", "true", "[literal][/bold]", "AWS result"),
             ),
             None,
         )
@@ -74,6 +77,18 @@ class AthenaPageApp(App[None]):
         self._fixture = fixture
         self._client = _client(fixture)
         self._vm: AthenaPageVM = make_page_vm(self._client)
+        self._keymap = (
+            KeymapStore(
+                overlay={
+                    "athena.query": "7",
+                    "athena.history": "8",
+                    "athena.results": "9",
+                    "athena.saved": "0",
+                }
+            )
+            if fixture == "focused-rebound-tabs"
+            else KeymapStore()
+        )
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -85,9 +100,12 @@ class AthenaPageApp(App[None]):
             AthenaPage(
                 self._vm,
                 hub=self._vm._hub,  # type: ignore[attr-defined]
+                keymap=self._keymap,
                 id="athena-page",
             )
         )
+        if self._fixture == "focused-rebound-tabs":
+            self.query_one("#athena-tab-query").focus()
 
     async def _seed_fixture(self) -> None:
         fixture = self._fixture

@@ -7,6 +7,7 @@ from typing import Any
 from textual.widget import Widget
 from vmx import Message, MessageHub
 
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
@@ -20,6 +21,7 @@ def build_service_view(
     *,
     hub: MessageHub[Message],
     focus_coordinator: FocusCoordinatorVM,
+    keymap: KeymapStore | None = None,
     dual_pane_class: type[DualPane] = DualPane,
     emr_page_class: type[EmrServerlessPage] = EmrServerlessPage,
     glue_page_class: type[GluePage] = GluePage,
@@ -50,6 +52,7 @@ def build_service_view(
         return athena_page_class(
             vm,
             hub=hub,
+            keymap=keymap,
             focus_coordinator=focus_coordinator,
             id="content-athena-page",
         )

@@ -172,6 +172,24 @@ def test_selected_state_blocks_use_readable_text_token(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
+def test_focused_athena_tab_uses_contrast_safe_tokens(name: str) -> None:
+    content = ThemeStore().load(name)
+    tokens = _theme_tokens(content)
+    focused = re.search(
+        r"AthenaPage\s+\.athena-view-tab:focus\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+
+    assert focused is not None
+    body = focused.group(1)
+    assert "background: $bg-sel;" in body
+    assert "color: $text;" in body
+    ratio = _contrast_ratio(tokens["$text"], tokens["$bg-sel"])
+    assert ratio >= 4.5, f"theme {name}: focused Athena tab contrast is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
 def test_command_palette_selectors_match_nested_widget_tree(name: str) -> None:
     content = ThemeStore().load(name)
 

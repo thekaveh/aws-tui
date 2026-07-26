@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from textual.widgets import Button, DataTable, TextArea
+from textual.widgets import Button, DataTable, Static, TextArea
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
@@ -157,6 +157,64 @@ async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_athena_command_hints_follow_live_command_and_pager_state(
+    tmp_path: Path,
+) -> None:
+    async with _mounted_athena_app(tmp_path) as (app, ctx, vm, _client, pilot):
+
+        def hint_enabled(action_id: str) -> bool:
+            return next(
+                hint.enabled
+                for hint in ctx.root_vm.chrome.hint_legend.actions
+                if hint.action_id == action_id
+            )
+
+        assert not hint_enabled("athena.execute")
+        assert not hint_enabled("athena.cancel")
+        assert not hint_enabled("athena.load_more")
+
+        editor = app.query_one("#athena-editor", TextArea)
+        editor.text = "SELECT 1"
+        await pilot.pause()
+        assert hint_enabled("athena.execute")
+
+        editor.text = "DELETE FROM events"
+        await pilot.pause()
+        assert not hint_enabled("athena.execute")
+
+        vm.query._execution_ref = QueryExecutionRef(  # type: ignore[attr-defined]
+            "owned-running",
+            "demo-dev",
+            "us-east-1",
+            "primary",
+        )
+        vm.query._busy = True  # type: ignore[attr-defined]
+        vm.query._owns_active_query = True  # type: ignore[attr-defined]
+        vm.query._notify("is_executing")  # type: ignore[attr-defined]
+        vm.query._notify("owns_active_query")  # type: ignore[attr-defined]
+        await pilot.pause()
+        assert not hint_enabled("athena.execute")
+        assert hint_enabled("athena.cancel")
+
+        vm.query._busy = False  # type: ignore[attr-defined]
+        vm.query._owns_active_query = False  # type: ignore[attr-defined]
+        vm.query._execution_ref = None  # type: ignore[attr-defined]
+        vm.query._notify("is_executing")  # type: ignore[attr-defined]
+        await pilot.pause()
+        assert not hint_enabled("athena.cancel")
+
+        vm._workgroup_pager._current_token = "workgroups-next"  # type: ignore[attr-defined]
+        vm._notify_context_lists()  # type: ignore[attr-defined]
+        app.query_one("#athena-more-workgroups").focus()
+        await pilot.pause()
+        assert hint_enabled("athena.load_more")
+
+        vm._set_loading_more("workgroups", True)  # type: ignore[attr-defined]
+        await pilot.pause()
+        assert not hint_enabled("athena.load_more")
+
+
+@pytest.mark.asyncio
 async def test_configured_athena_rebindings_replace_defaults(tmp_path: Path) -> None:
     keymap = KeymapStore(
         overlay={
@@ -166,12 +224,18 @@ async def test_configured_athena_rebindings_replace_defaults(tmp_path: Path) -> 
             "athena.saved": "0",
             "athena.execute": "ctrl+x",
             "athena.cancel": "ctrl+g",
+            "athena.load_more": "ctrl+l",
         }
     )
     async with _mounted_athena_app(
         tmp_path,
         keymap=keymap,
     ) as (app, _ctx, vm, client, pilot):
+        assert tuple(
+            str(app.query_one(f"#athena-tab-{view}", Static).render())
+            for view in ("query", "history", "results", "saved")
+        ) == ("7 query", "8 history", "9 results", "0 saved")
+
         app.query_one("#athena-tab-query").focus()
         await pilot.press("8")
         await pilot.pause()
@@ -186,6 +250,22 @@ async def test_configured_athena_rebindings_replace_defaults(tmp_path: Path) -> 
         await pilot.press("ctrl+x")
         await pilot.pause()
         assert client.start_calls[-1][0] == "SELECT 7"
+
+        load_calls = 0
+
+        async def load_more() -> None:
+            nonlocal load_calls
+            load_calls += 1
+
+        vm.history.load_more = load_more  # type: ignore[method-assign]
+        await app.query_one(AthenaPage).action_select_view("history")
+        app.query_one("#athena-more-history").focus()
+        await pilot.press("ctrl+l")
+        await pilot.pause()
+        assert load_calls == 1
+        await pilot.press("l")
+        await pilot.pause()
+        assert load_calls == 1
 
 
 @pytest.mark.asyncio

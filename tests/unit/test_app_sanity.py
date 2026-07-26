@@ -243,6 +243,9 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
         def dispose(self) -> None:
             pass
 
+    async def close_clients() -> None:
+        events.append("clients.close")
+
     app = object.__new__(app_module.AwsTuiApp)
     app._pane_state_sub = None  # type: ignore[attr-defined]
     app._connection_list_sub = None  # type: ignore[attr-defined]
@@ -252,8 +255,11 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
         transfers_vm=SimpleNamespace(
             cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
         ),
-        aws_session=SimpleNamespace(aclose_all_clients=lambda: _complete()),
-        log_sink=SimpleNamespace(flush=lambda: None, close=lambda: None),
+        aws_session=SimpleNamespace(aclose_all_clients=close_clients),
+        log_sink=SimpleNamespace(
+            flush=lambda: events.append("logs.flush"),
+            close=lambda: events.append("logs.close"),
+        ),
         s3_connections_vm=_Disposable(),
         command_palette_vm=_Disposable(),
         quick_look_vm=_Disposable(),
@@ -265,7 +271,13 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
 
     await app._aws_tui_shutdown()
 
-    assert events == ["content.shutdown", "root.dispose"]
+    assert events == [
+        "content.shutdown",
+        "clients.close",
+        "logs.flush",
+        "logs.close",
+        "root.dispose",
+    ]
 
 
 @pytest.mark.asyncio

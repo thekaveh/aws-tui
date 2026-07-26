@@ -210,6 +210,8 @@ def test_athena_service_chips_include_views_execution_and_source() -> None:
     assert chips["athena.saved"].action_label == "saved"
     assert chips["athena.execute"].key_label == "ctrl+enter"
     assert chips["athena.cancel"].key_label == "escape"
+    assert chips["athena.load_more"].key_label == "l"
+    assert chips["athena.load_more"].action_label == "load more"
     assert "pane.refresh" in chips
     assert "app.swap_source" in chips
     legend.dispose()

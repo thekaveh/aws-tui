@@ -78,6 +78,7 @@ class AthenaResultsVM:
         self._columns: tuple[ResultColumn, ...] = ()
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
+        self._is_loading_more = False
         self._workers: set[_PagerGeneration] = set()
         self._worker = self._make_worker(None, self._generation)
         self._pager = self._worker.pager
@@ -118,6 +119,10 @@ class AthenaResultsVM:
     @property
     def error_text(self) -> str | None:
         return self._error_text
+
+    @property
+    def is_loading_more(self) -> bool:
+        return self._is_loading_more
 
     @property
     def load_more_command(self) -> AsyncRelayCommand:
@@ -233,6 +238,8 @@ class AthenaResultsVM:
     async def _load_more(self, worker: _PagerGeneration) -> None:
         if not self._can_load_more(worker):
             return
+        self._is_loading_more = True
+        self._notify("is_loading_more")
         task = self._track_current_task(worker)
         self._error_text = None
         self._notify("error_text")
@@ -266,6 +273,8 @@ class AthenaResultsVM:
             return
         finally:
             self._untrack_task(worker, task)
+            self._is_loading_more = False
+            self._notify("is_loading_more")
         if not self._is_current(worker):
             return
         self._notify("rows")
