@@ -58,6 +58,19 @@ pytestmark = pytest.mark.unit
 NOW = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
 _PROVIDER_MESSAGE_SECRET = "GLUE_PROVIDER_MESSAGE_SECRET_7F4C2A9D"
 _PROVIDER_RESPONSE_SECRET = "GLUE_PROVIDER_RESPONSE_SECRET_7F4C2A9D"
+_PROVIDER_VALUE_SECRET = "GLUE_PROVIDER_VALUE_SECRET_7F4C2A9D"
+_CRAWLER_CORE_SECRET = "GLUE_CRAWLER_CORE_SECRET_7F4C2A9D"
+_CRAWLER_TAG_SECRET = "GLUE_CRAWLER_TAG_SECRET_7F4C2A9D"
+_CRAWLER_METRICS_SECRET = "GLUE_CRAWLER_METRICS_SECRET_7F4C2A9D"
+_CALLER_IDENTITY_SECRET = "GLUE_CALLER_IDENTITY_SECRET_7F4C2A9D"
+
+
+class _SecretValue:
+    def __str__(self) -> str:
+        return _PROVIDER_VALUE_SECRET
+
+    def __repr__(self) -> str:
+        return _PROVIDER_VALUE_SECRET
 
 
 def _connection(*, region: str = "us-east-1") -> Connection:
@@ -1146,6 +1159,16 @@ async def _invoke_glue_client_method(client: GlueClient, method: str) -> None:
         await client.get_crawler_metrics("events-crawler")
 
 
+async def _capture_glue_provider_error(client: GlueClient, method: str) -> ProviderError:
+    caught: ProviderError | None = None
+    try:
+        await _invoke_glue_client_method(client, method)
+    except ProviderError as error:
+        caught = error
+    assert caught is not None
+    return caught
+
+
 def _privacy_client_error(operation: str) -> botocore.exceptions.ClientError:
     return botocore.exceptions.ClientError(
         {
@@ -1167,6 +1190,11 @@ def _assert_mapped_error_has_no_raw_provider_references(
     error: ProviderError,
     *,
     crash_dir: Path,
+    secrets: tuple[str, ...] = (
+        _PROVIDER_MESSAGE_SECRET,
+        _PROVIDER_RESPONSE_SECRET,
+    ),
+    raw_objects: tuple[object, ...] = (),
 ) -> None:
     pending: list[BaseException] = [error]
     seen: set[int] = set()
@@ -1186,8 +1214,10 @@ def _assert_mapped_error_has_no_raw_provider_references(
     assert error.__context__ is None
     assert error.__cause__ is None
 
+    traceback_locals: list[object] = []
     tb = error.__traceback__
     while tb is not None:
+        traceback_locals.extend(tb.tb_frame.f_locals.values())
         for value in tb.tb_frame.f_locals.values():
             if isinstance(value, BaseException):
                 assert not isinstance(value, botocore.exceptions.ClientError)
@@ -1199,6 +1229,8 @@ def _assert_mapped_error_has_no_raw_provider_references(
             elif isinstance(value, list | tuple | set | frozenset):
                 assert not any(isinstance(item, botocore.exceptions.ClientError) for item in value)
         tb = tb.tb_next
+    for raw_object in raw_objects:
+        assert all(value is not raw_object for value in traceback_locals)
 
     rendered_with_locals = "".join(
         TracebackException.from_exception(error, capture_locals=True).format()
@@ -1211,13 +1243,17 @@ def _assert_mapped_error_has_no_raw_provider_references(
             str(error),
             repr(error),
             repr(error.args),
+            "\n".join(
+                f"{type(item).__name__}: {item!s} {item!r} {item.args!r}"
+                for item in exception_graph
+            ),
             rendered_with_locals,
             crash_compatible,
             crash_text,
         )
     )
-    assert _PROVIDER_MESSAGE_SECRET not in visible
-    assert _PROVIDER_RESPONSE_SECRET not in visible
+    for secret in secrets:
+        assert secret not in visible
 
 
 def test_raise_mapped_glue_error_severs_active_exception_scope(tmp_path: Path) -> None:
@@ -1254,14 +1290,16 @@ async def test_every_glue_client_method_severs_raw_client_error_references(
     tmp_path: Path,
 ) -> None:
     client, glue, _, _ = _client()
-    getattr(glue, boto_method).side_effect = _privacy_client_error(boto_method)
+    raw_error = _privacy_client_error(boto_method)
+    getattr(glue, boto_method).side_effect = raw_error
 
-    with pytest.raises(PermissionDeniedError) as raised:
-        await _invoke_glue_client_method(client, client_method)
+    raised = await _capture_glue_provider_error(client, client_method)
 
+    assert isinstance(raised, PermissionDeniedError)
     _assert_mapped_error_has_no_raw_provider_references(
-        raised.value,
+        raised,
         crash_dir=tmp_path / client_method,
+        raw_objects=(raw_error, raw_error.response),
     )
 
 
@@ -1279,16 +1317,248 @@ async def test_get_crawler_supplement_failures_sever_raw_client_error_references
     glue.get_tags.return_value = {"Tags": {}}
     glue.get_crawler_metrics.return_value = {"CrawlerMetricsList": []}
     boto_method = "get_tags" if supplement == "tags" else "get_crawler_metrics"
-    getattr(glue, boto_method).side_effect = _privacy_client_error(boto_method)
-    getattr(glue, boto_method).side_effect.response["Error"]["Code"] = "InternalServiceException"
+    raw_error = _privacy_client_error(boto_method)
+    raw_error.response["Error"]["Code"] = "InternalServiceException"
+    getattr(glue, boto_method).side_effect = raw_error
 
-    with pytest.raises(ProviderError) as raised:
-        await client.get_crawler("events-crawler")
+    raised = await _capture_glue_provider_error(client, "get_crawler")
 
     _assert_mapped_error_has_no_raw_provider_references(
-        raised.value,
+        raised,
         crash_dir=tmp_path / supplement,
+        raw_objects=(raw_error, raw_error.response),
     )
+
+
+def _response_with_secret(**fields: object) -> dict[str, object]:
+    return {
+        **fields,
+        "ResponseMetadata": {"ProviderSecret": _PROVIDER_RESPONSE_SECRET},
+    }
+
+
+def _configure_malformed_public_response(
+    client_method: str,
+    glue: FakeAwsClient,
+    sts: FakeAwsClient,
+) -> tuple[str, tuple[object, ...]]:
+    secret_value = _SecretValue()
+    if client_method == "list_databases_page":
+        row: dict[str, object] = {"ProviderSecret": _PROVIDER_VALUE_SECRET}
+        rows: list[object] = [row]
+        response = _response_with_secret(DatabaseList=rows)
+        glue.get_databases.return_value = response
+        return "Name", (response, rows, row)
+    if client_method == "list_tables_page":
+        rows = [secret_value]
+        response = _response_with_secret(TableList=rows)
+        glue.get_tables.return_value = response
+        return "TableList", (response, rows, secret_value)
+    if client_method == "get_table":
+        response = _response_with_secret(Table=secret_value)
+        glue.get_table.return_value = response
+        return "Table", (response, secret_value)
+    if client_method == "list_partitions_page":
+        row = {"Values": [secret_value]}
+        rows = [row]
+        response = _response_with_secret(Partitions=rows)
+        glue.get_partitions.return_value = response
+        return "Values", (response, rows, row, secret_value)
+    if client_method == "get_column_statistics":
+        statistics_data = {"Type": _PROVIDER_VALUE_SECRET}
+        row = {"ColumnName": "event_id", "StatisticsData": statistics_data}
+        rows = [row]
+        response = _response_with_secret(ColumnStatisticsList=rows)
+        glue.get_column_statistics_for_table.return_value = response
+        return "StatisticsData.Type", (response, rows, row, statistics_data)
+    if client_method == "list_jobs_page":
+        row = {
+            "Name": "daily-etl",
+            "Role": "role",
+            "Command": {"Name": "glueetl"},
+            "Timeout": secret_value,
+        }
+        rows = [row]
+        response = _response_with_secret(Jobs=rows)
+        glue.get_jobs.return_value = response
+        return "Timeout", (response, rows, row, secret_value)
+    if client_method == "list_job_runs_page":
+        row = {
+            "Id": "jr_1",
+            "JobRunState": "RUNNING",
+            "StartedOn": secret_value,
+        }
+        rows = [row]
+        response = _response_with_secret(JobRuns=rows)
+        glue.get_job_runs.return_value = response
+        return "StartedOn", (response, rows, row, secret_value)
+    if client_method == "list_crawlers_page":
+        row = {
+            "Name": secret_value,
+            "State": "READY",
+            "Role": "role",
+        }
+        rows = [row]
+        response = _response_with_secret(Crawlers=rows)
+        glue.get_crawlers.return_value = response
+        return "Name", (response, rows, row, secret_value)
+    if client_method == "get_crawler":
+        crawler = {
+            **_crawler(),
+            "RecrawlPolicy": secret_value,
+            "ProviderSecret": _CRAWLER_CORE_SECRET,
+        }
+        response = _response_with_secret(Crawler=crawler)
+        caller_identity = {
+            "Account": "123456789012",
+            "Arn": "arn:aws:iam::123456789012:user/dev",
+        }
+        tags = {"Tags": {}}
+        metrics = {"CrawlerMetricsList": []}
+        glue.get_crawler.return_value = response
+        sts.get_caller_identity.return_value = caller_identity
+        glue.get_tags.return_value = tags
+        glue.get_crawler_metrics.return_value = metrics
+        return "RecrawlPolicy", (
+            response,
+            crawler,
+            caller_identity,
+            tags,
+            metrics,
+            secret_value,
+        )
+    row = {"CrawlerName": "events-crawler", "TimeLeftSeconds": secret_value}
+    rows = [row]
+    response = _response_with_secret(CrawlerMetricsList=rows)
+    glue.get_crawler_metrics.return_value = response
+    return "TimeLeftSeconds", (response, rows, row, secret_value)
+
+
+@pytest.mark.parametrize(
+    "client_method",
+    [
+        "list_databases_page",
+        "list_tables_page",
+        "get_table",
+        "list_partitions_page",
+        "get_column_statistics",
+        "list_jobs_page",
+        "list_job_runs_page",
+        "list_crawlers_page",
+        "get_crawler",
+        "get_crawler_metrics",
+    ],
+)
+async def test_every_public_method_isolates_malformed_provider_responses(
+    client_method: str,
+    tmp_path: Path,
+) -> None:
+    client, glue, sts, _ = _client()
+    field, raw_objects = _configure_malformed_public_response(client_method, glue, sts)
+
+    raised = await _capture_glue_provider_error(client, client_method)
+
+    assert isinstance(raised, ValidationError)
+    assert field in str(raised)
+    _assert_mapped_error_has_no_raw_provider_references(
+        raised,
+        crash_dir=tmp_path / f"malformed-{client_method}",
+        secrets=(
+            _PROVIDER_RESPONSE_SECRET,
+            _PROVIDER_VALUE_SECRET,
+            _CRAWLER_CORE_SECRET,
+        ),
+        raw_objects=raw_objects,
+    )
+
+
+@pytest.mark.parametrize(
+    ("supplement", "expected_field"),
+    [
+        ("tags", "string map"),
+        ("metrics", "TimeLeftSeconds"),
+        ("caller_identity", "Arn"),
+    ],
+)
+async def test_crawler_supplement_mapping_isolates_all_provider_objects(
+    supplement: str,
+    expected_field: str,
+    tmp_path: Path,
+) -> None:
+    client, glue, sts, _ = _client()
+    crawler = {**_crawler(), "ProviderSecret": _CRAWLER_CORE_SECRET}
+    crawler_response = _response_with_secret(Crawler=crawler)
+    caller_identity = {
+        "Account": "123456789012",
+        "Arn": "arn:aws:iam::123456789012:user/dev",
+        "ProviderSecret": _CALLER_IDENTITY_SECRET,
+    }
+    tags = {"Tags": {"team": _CRAWLER_TAG_SECRET}}
+    metric = {
+        "CrawlerName": "events-crawler",
+        "ProviderSecret": _CRAWLER_METRICS_SECRET,
+    }
+    metrics_rows = [metric]
+    metrics = {"CrawlerMetricsList": metrics_rows}
+    glue.get_crawler.return_value = crawler_response
+    sts.get_caller_identity.return_value = caller_identity
+    glue.get_tags.return_value = tags
+    glue.get_crawler_metrics.return_value = metrics
+
+    secret_value = _SecretValue()
+    if supplement == "tags":
+        tags["Tags"] = {"team": secret_value}
+    elif supplement == "metrics":
+        metric["TimeLeftSeconds"] = secret_value
+    else:
+        caller_identity["Arn"] = _CALLER_IDENTITY_SECRET
+
+    raised = await _capture_glue_provider_error(client, "get_crawler")
+
+    assert isinstance(raised, ValidationError)
+    assert expected_field in str(raised)
+    _assert_mapped_error_has_no_raw_provider_references(
+        raised,
+        crash_dir=tmp_path / f"crawler-{supplement}",
+        secrets=(
+            _PROVIDER_VALUE_SECRET,
+            _PROVIDER_RESPONSE_SECRET,
+            _CRAWLER_CORE_SECRET,
+            _CRAWLER_TAG_SECRET,
+            _CRAWLER_METRICS_SECRET,
+            _CALLER_IDENTITY_SECRET,
+        ),
+        raw_objects=(
+            crawler_response,
+            crawler,
+            caller_identity,
+            tags,
+            metrics,
+            metrics_rows,
+            metric,
+            secret_value,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (KeyError(_SecretValue()), "malformed Glue response: required field is missing"),
+        (TypeError(_PROVIDER_VALUE_SECRET), "malformed Glue response: field has invalid type"),
+        (ValueError(_PROVIDER_VALUE_SECRET), "malformed Glue response: field has invalid value"),
+    ],
+)
+def test_map_glue_error_never_copies_builtin_exception_values(
+    error: BaseException,
+    message: str,
+) -> None:
+    mapped = map_glue_error(error)
+
+    assert isinstance(mapped, ValidationError)
+    assert str(mapped) == message
+    assert _PROVIDER_VALUE_SECRET not in repr(mapped)
+    assert _PROVIDER_VALUE_SECRET not in repr(mapped.args)
 
 
 @pytest.mark.parametrize(
@@ -1337,9 +1607,35 @@ async def test_missing_required_wire_field_maps_to_validation_error() -> None:
         await client.list_jobs_page()
 
 
-async def test_unrelated_programming_error_is_not_rewritten() -> None:
+@pytest.mark.parametrize("error_type", [RuntimeError, TypeError])
+async def test_unrelated_programming_error_is_not_rewritten(
+    error_type: type[Exception],
+) -> None:
     client, glue, _, _ = _client()
-    glue.get_jobs.side_effect = RuntimeError("test sentinel")
+    sentinel = error_type("test sentinel")
+    original_traceback: list[object] = []
 
-    with pytest.raises(RuntimeError, match="test sentinel"):
+    async def _raise_unknown(**_kwargs: object) -> None:
+        try:
+            raise sentinel
+        except Exception as exc:
+            original_traceback.append(exc.__traceback__)
+            raise
+
+    glue.get_jobs.side_effect = _raise_unknown
+
+    with pytest.raises(error_type, match="test sentinel") as raised:
         await client.list_jobs_page()
+
+    assert raised.value is sentinel
+    assert raised.value.__context__ is None
+    assert raised.value.__cause__ is None
+    traceback_nodes: list[object] = []
+    frame_names: list[str] = []
+    tb = raised.value.__traceback__
+    while tb is not None:
+        traceback_nodes.append(tb)
+        frame_names.append(tb.tb_frame.f_code.co_name)
+        tb = tb.tb_next
+    assert original_traceback[0] in traceback_nodes
+    assert "_raise_unknown" in frame_names

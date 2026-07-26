@@ -268,3 +268,118 @@ also reran the focused tests and static checks and reported no findings.
   established compatibility contract. Once a mapping or sequence is
   structurally recognized, malformed nested entries are rejected rather than
   discarded.
+
+## Remaining Glue Privacy Findings Follow-up (2026-07-26)
+
+### Status
+
+Closed the remaining Task 1 Glue privacy findings without changing detector
+precedence, nested-container validation, normal Glue mappings, or public method
+signatures.
+
+- Every public `GlueClient` method now enters a shared sanitizing boundary and
+  performs its AWS call plus response mapping in a private operation frame.
+  Known provider and response-shape exceptions are mapped inside the boundary,
+  the raw operation traceback is discarded, and the mapped error is raised only
+  after the caught exception scope has ended.
+- Crawler core, tag, metric, and STS caller-identity work remains inside the
+  private operation graph. Non-permission supplement failures cross the same
+  sanitizing boundary; permission failures still become redacted supplemental
+  warnings.
+- Internal response-shape errors carry only app-owned field and category text.
+  Unknown statistics types and malformed STS ARNs now report
+  `StatisticsData.Type has unsupported value` and `Arn has invalid format`
+  without copying the rejected provider value.
+- Generic `KeyError`, `TypeError`, and `ValueError` mapping uses fixed missing
+  field, invalid type, and invalid value categories. No mapped
+  `ValidationError` formats the caught exception.
+
+### TDD Evidence
+
+The first expanded oracle exposed both the production leaks and test-frame
+fixture retention. The test-only false positive was removed before any
+production edit by capturing mapped errors in a fixture-free invocation frame.
+The corrected RED run was:
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q
+15 failed, 77 passed in 0.94s
+```
+
+The failures covered all ten public methods with malformed response objects,
+enum/date/numeric/string/list/map failures, crawler tags, crawler metrics, STS
+caller identity, and direct built-in exception mapping. The GREEN run was:
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q
+92 passed in 0.66s
+```
+
+The privacy oracle checks `str`, `repr`, `args`, the complete exception graph,
+every mapped traceback frame and its locals,
+`TracebackException(capture_locals=True)`, `traceback.format_exception`, and a
+real `CrashDump`. It also compares traceback locals by identity with the raw
+response, row, table, supplement, metric, and caller-identity objects.
+
+The boundary then received a separate over-catch regression. An arbitrary
+`TypeError` raised by the AWS client was initially rewritten as
+`ValidationError`; after narrowing runtime mapping to app-owned response errors
+and recognized botocore/provider exceptions, both sentinel cases passed:
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q -k unrelated_programming_error
+1 failed, 1 passed, 91 deselected in 0.34s
+
+$ uv run pytest tests/unit/domain/test_glue.py -q -k unrelated_programming_error
+2 passed, 91 deselected in 0.24s
+```
+
+The unrelated `RuntimeError` and `TypeError` regressions prove each error
+instance is unchanged, its original raising traceback node remains present, and
+no cause or context is added.
+
+### Final Verification
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q
+93 passed in 0.67s
+
+$ uv run pytest tests/unit/domain/test_data_catalog.py tests/unit/domain/test_iceberg.py tests/unit/domain/test_glue.py -q
+148 passed in 0.70s
+
+$ uv run pytest tests/unit/domain -q
+654 passed in 15.52s
+
+$ uv run pytest tests/unit/services/glue tests/unit/vm/glue tests/unit/ui/glue -q
+60 passed in 4.15s
+
+$ uv run pytest tests/unit/vm -q
+617 passed in 29.83s
+
+$ uv run mypy
+Success: no issues found in 151 source files
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+383 files already formatted
+
+$ ./scripts/check-layers.sh
+layer rules clean
+
+$ git diff --check
+```
+
+All listed final verification commands exited zero. `progress.md` was not
+edited.
+
+### Concerns
+
+- The sanitizing boundary applies only to recognized provider and
+  response-shape failures. Unrelated exceptions intentionally retain their
+  identity and full private-operation traceback, including diagnostic locals,
+  rather than being over-caught as `ValidationError`.
+- `_GlueResponseError` field and category values must remain app-owned literals.
+  Current call sites satisfy that rule; future mappers must not pass provider
+  values into either field.

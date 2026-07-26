@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn, TypeVar, cast
 
 import botocore.exceptions
 
@@ -39,6 +39,7 @@ from aws_tui.infra.redaction import redact_text
 
 _CATALOG_NAME = "AwsDataCatalog"
 _COLUMN_STATISTICS_BATCH_SIZE = 100
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +126,15 @@ class LakeFormationPermissionError(PermissionDeniedError):
     """Access was denied by Lake Formation rather than Glue IAM."""
 
 
+class _GlueResponseError(ValueError):
+    """A response-shape failure containing only app-owned diagnostic text."""
+
+    def __init__(self, field: str, category: str) -> None:
+        self.field = field
+        self.category = category
+        super().__init__(f"{field} {category}")
+
+
 _ACCESS_DENIED_CODES = frozenset({"AccessDenied", "AccessDeniedException"})
 _AUTH_CODES = frozenset(
     {
@@ -181,8 +191,14 @@ def map_glue_error(exc: BaseException) -> ProviderError | None:
         )
     if isinstance(exc, botocore.exceptions.ParamValidationError):
         return ValidationError("invalid Glue request")
-    if isinstance(exc, KeyError | TypeError | ValueError):
-        return ValidationError(f"malformed Glue response: {redact_text(str(exc))}")
+    if isinstance(exc, _GlueResponseError):
+        return ValidationError(f"malformed Glue response: {exc.field} {exc.category}")
+    if isinstance(exc, KeyError):
+        return ValidationError("malformed Glue response: required field is missing")
+    if isinstance(exc, TypeError):
+        return ValidationError("malformed Glue response: field has invalid type")
+    if isinstance(exc, ValueError):
+        return ValidationError("malformed Glue response: field has invalid value")
     return None
 
 
@@ -202,6 +218,17 @@ def _map_caught_glue_error(exc: Exception) -> ProviderError | None:
     return map_glue_error(exc)
 
 
+def _map_operation_error(exc: Exception) -> ProviderError | None:
+    if isinstance(exc, ProviderError):
+        return exc
+    if isinstance(
+        exc,
+        _GlueResponseError | botocore.exceptions.BotoCoreError | botocore.exceptions.ClientError,
+    ):
+        return map_glue_error(exc)
+    return None
+
+
 def _raise_prepared_glue_error(error: ProviderError) -> NoReturn:
     error.__traceback__ = None
     error.__context__ = None
@@ -213,6 +240,17 @@ def _raise_prepared_glue_error(error: ProviderError) -> NoReturn:
         raised.__context__ = None
         raised.__cause__ = None
         raise
+
+
+async def _run_glue_operation(operation: Callable[[], Awaitable[_T]]) -> _T:
+    mapped_error: ProviderError | None = None
+    try:
+        return await operation()
+    except Exception as exc:
+        mapped_error = _map_operation_error(exc)
+        if mapped_error is None:
+            raise
+    _raise_prepared_glue_error(mapped_error)
 
 
 def _glue_error_message(code: str) -> str:
@@ -280,23 +318,9 @@ class GlueClient:
         *,
         start_token: str | None = None,
     ) -> tuple[list[DatabaseSummary], str | None]:
-        kwargs: dict[str, object] = {"MaxResults": 100}
-        mapped_error: ProviderError | None = None
-        if start_token is not None:
-            kwargs["NextToken"] = start_token
-        try:
-            async with await self._aws_session.client(self._connection, "glue") as client:
-                response = await client.get_databases(**kwargs)
-            rows = [
-                self._map_database(item)
-                for item in _required_response_items(response, "DatabaseList")
-            ]
-            return rows, _response_token(response)
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
+        return await _run_glue_operation(
+            lambda: self._list_databases_page_operation(start_token=start_token)
+        )
 
     async def list_tables_page(
         self,
@@ -304,42 +328,12 @@ class GlueClient:
         *,
         start_token: str | None = None,
     ) -> tuple[list[TableSummary], str | None]:
-        kwargs: dict[str, object] = {
-            "DatabaseName": database,
-            "MaxResults": 100,
-        }
-        mapped_error: ProviderError | None = None
-        if start_token is not None:
-            kwargs["NextToken"] = start_token
-        try:
-            async with await self._aws_session.client(self._connection, "glue") as client:
-                response = await client.get_tables(**kwargs)
-            rows = [
-                self._map_table_summary(item, database_name=database)
-                for item in _response_items(response, "TableList")
-            ]
-            return rows, _response_token(response)
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
+        return await _run_glue_operation(
+            lambda: self._list_tables_page_operation(database, start_token=start_token)
+        )
 
     async def get_table(self, ref: TableRef) -> TableDetail:
-        mapped_error: ProviderError | None = None
-        try:
-            async with await self._aws_session.client(self._connection, "glue") as client:
-                response = await client.get_table(
-                    DatabaseName=ref.database_name,
-                    Name=ref.table_name,
-                )
-            table = _required_mapping(_response_mapping(response), "Table")
-            return self._map_table_detail(table, ref=ref)
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
+        return await _run_glue_operation(lambda: self._get_table_operation(ref))
 
     async def list_partitions_page(
         self,
@@ -347,23 +341,9 @@ class GlueClient:
         *,
         start_token: str | None = None,
     ) -> tuple[list[PartitionSummary], str | None]:
-        kwargs: dict[str, object] = {
-            "DatabaseName": ref.database_name,
-            "TableName": ref.table_name,
-        }
-        mapped_error: ProviderError | None = None
-        if start_token is not None:
-            kwargs["NextToken"] = start_token
-        try:
-            async with await self._aws_session.client(self._connection, "glue") as client:
-                response = await client.get_partitions(**kwargs)
-            rows = [self._map_partition(item) for item in _response_items(response, "Partitions")]
-            return rows, _response_token(response)
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
+        return await _run_glue_operation(
+            lambda: self._list_partitions_page_operation(ref, start_token=start_token)
+        )
 
     async def get_column_statistics(
         self,
@@ -372,48 +352,18 @@ class GlueClient:
     ) -> tuple[ColumnStatistics, ...]:
         if not columns:
             return ()
-        mapped_error: ProviderError | None = None
-        try:
-            rows: list[ColumnStatistics] = []
-            async with await self._aws_session.client(self._connection, "glue") as client:
-                for offset in range(0, len(columns), _COLUMN_STATISTICS_BATCH_SIZE):
-                    batch = list(columns[offset : offset + _COLUMN_STATISTICS_BATCH_SIZE])
-                    response = await client.get_column_statistics_for_table(
-                        DatabaseName=ref.database_name,
-                        TableName=ref.table_name,
-                        ColumnNames=batch,
-                    )
-                    _raise_column_statistics_errors(response)
-                    rows.extend(
-                        self._map_column_statistics(item)
-                        for item in _response_items(response, "ColumnStatisticsList")
-                    )
-            return tuple(rows)
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
+        return await _run_glue_operation(
+            lambda: self._get_column_statistics_operation(ref, columns)
+        )
 
     async def list_jobs_page(
         self,
         *,
         start_token: str | None = None,
     ) -> tuple[list[GlueJobSummary], str | None]:
-        kwargs: dict[str, object] = {"MaxResults": 100}
-        mapped_error: ProviderError | None = None
-        if start_token is not None:
-            kwargs["NextToken"] = start_token
-        try:
-            async with await self._aws_session.client(self._connection, "glue") as client:
-                response = await client.get_jobs(**kwargs)
-            rows = [self._map_job(item) for item in _response_items(response, "Jobs")]
-            return rows, _response_token(response)
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
+        return await _run_glue_operation(
+            lambda: self._list_jobs_page_operation(start_token=start_token)
+        )
 
     async def list_job_runs_page(
         self,
@@ -422,36 +372,13 @@ class GlueClient:
         start_token: str | None = None,
         states: Sequence[str] = (),
     ) -> tuple[list[GlueJobRunSummary], str | None]:
-        kwargs: dict[str, object] = {
-            "JobName": job_name,
-            "MaxResults": 200,
-        }
-        mapped_error: ProviderError | None = None
-        if start_token is not None:
-            kwargs["NextToken"] = start_token
-        try:
-            async with await self._aws_session.client(self._connection, "glue") as client:
-                remote_state_filter = bool(states) and _supports_request_parameter(
-                    client,
-                    operation_name="GetJobRuns",
-                    parameter_name="States",
-                )
-                if remote_state_filter:
-                    kwargs["States"] = list(states)
-                response = await client.get_job_runs(**kwargs)
-            rows = [
-                self._map_job_run(item, job_name=job_name)
-                for item in _response_items(response, "JobRuns")
-            ]
-            if states and not remote_state_filter:
-                state_filter = frozenset(states)
-                rows = [row for row in rows if row.state in state_filter]
-            return rows, _response_token(response)
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
+        return await _run_glue_operation(
+            lambda: self._list_job_runs_page_operation(
+                job_name,
+                start_token=start_token,
+                states=states,
+            )
+        )
 
     async def list_crawlers_page(
         self,
@@ -459,90 +386,195 @@ class GlueClient:
         start_token: str | None = None,
         state: str | None = None,
     ) -> tuple[list[GlueCrawlerSummary], str | None]:
-        kwargs: dict[str, object] = {"MaxResults": 100}
-        mapped_error: ProviderError | None = None
-        if start_token is not None:
-            kwargs["NextToken"] = start_token
-        try:
-            async with await self._aws_session.client(self._connection, "glue") as client:
-                response = await client.get_crawlers(**kwargs)
-            rows = [
-                self._map_crawler_summary(item) for item in _response_items(response, "Crawlers")
-            ]
-            if state is not None:
-                rows = [row for row in rows if row.state == state]
-            return rows, _response_token(response)
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
+        return await _run_glue_operation(
+            lambda: self._list_crawlers_page_operation(
+                start_token=start_token,
+                state=state,
+            )
+        )
 
     async def get_crawler(self, name: str) -> GlueCrawlerDetail:
-        mapped_error: ProviderError | None = None
-        try:
-            async with await self._aws_session.client(self._connection, "glue") as client:
-                response = await client.get_crawler(Name=name)
-            crawler = _required_mapping(_response_mapping(response), "Crawler")
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        if mapped_error is not None:
-            _raise_prepared_glue_error(mapped_error)
+        return await _run_glue_operation(lambda: self._get_crawler_operation(name))
 
+    async def get_crawler_metrics(self, name: str) -> GlueCrawlerMetrics | None:
+        return await _run_glue_operation(lambda: self._get_crawler_metrics_operation(name))
+
+    async def _list_databases_page_operation(
+        self,
+        *,
+        start_token: str | None,
+    ) -> tuple[list[DatabaseSummary], str | None]:
+        kwargs: dict[str, object] = {"MaxResults": 100}
+        if start_token is not None:
+            kwargs["NextToken"] = start_token
+        async with await self._aws_session.client(self._connection, "glue") as client:
+            response = await client.get_databases(**kwargs)
+        rows = [
+            self._map_database(item) for item in _required_response_items(response, "DatabaseList")
+        ]
+        return rows, _response_token(response)
+
+    async def _list_tables_page_operation(
+        self,
+        database: str,
+        *,
+        start_token: str | None,
+    ) -> tuple[list[TableSummary], str | None]:
+        kwargs: dict[str, object] = {
+            "DatabaseName": database,
+            "MaxResults": 100,
+        }
+        if start_token is not None:
+            kwargs["NextToken"] = start_token
+        async with await self._aws_session.client(self._connection, "glue") as client:
+            response = await client.get_tables(**kwargs)
+        rows = [
+            self._map_table_summary(item, database_name=database)
+            for item in _response_items(response, "TableList")
+        ]
+        return rows, _response_token(response)
+
+    async def _get_table_operation(self, ref: TableRef) -> TableDetail:
+        async with await self._aws_session.client(self._connection, "glue") as client:
+            response = await client.get_table(
+                DatabaseName=ref.database_name,
+                Name=ref.table_name,
+            )
+        table = _required_mapping(_response_mapping(response), "Table")
+        return self._map_table_detail(table, ref=ref)
+
+    async def _list_partitions_page_operation(
+        self,
+        ref: TableRef,
+        *,
+        start_token: str | None,
+    ) -> tuple[list[PartitionSummary], str | None]:
+        kwargs: dict[str, object] = {
+            "DatabaseName": ref.database_name,
+            "TableName": ref.table_name,
+        }
+        if start_token is not None:
+            kwargs["NextToken"] = start_token
+        async with await self._aws_session.client(self._connection, "glue") as client:
+            response = await client.get_partitions(**kwargs)
+        rows = [self._map_partition(item) for item in _response_items(response, "Partitions")]
+        return rows, _response_token(response)
+
+    async def _get_column_statistics_operation(
+        self,
+        ref: TableRef,
+        columns: Sequence[str],
+    ) -> tuple[ColumnStatistics, ...]:
+        rows: list[ColumnStatistics] = []
+        async with await self._aws_session.client(self._connection, "glue") as client:
+            for offset in range(0, len(columns), _COLUMN_STATISTICS_BATCH_SIZE):
+                batch = list(columns[offset : offset + _COLUMN_STATISTICS_BATCH_SIZE])
+                response = await client.get_column_statistics_for_table(
+                    DatabaseName=ref.database_name,
+                    TableName=ref.table_name,
+                    ColumnNames=batch,
+                )
+                _raise_column_statistics_errors(response)
+                rows.extend(
+                    self._map_column_statistics(item)
+                    for item in _response_items(response, "ColumnStatisticsList")
+                )
+        return tuple(rows)
+
+    async def _list_jobs_page_operation(
+        self,
+        *,
+        start_token: str | None,
+    ) -> tuple[list[GlueJobSummary], str | None]:
+        kwargs: dict[str, object] = {"MaxResults": 100}
+        if start_token is not None:
+            kwargs["NextToken"] = start_token
+        async with await self._aws_session.client(self._connection, "glue") as client:
+            response = await client.get_jobs(**kwargs)
+        rows = [self._map_job(item) for item in _response_items(response, "Jobs")]
+        return rows, _response_token(response)
+
+    async def _list_job_runs_page_operation(
+        self,
+        job_name: str,
+        *,
+        start_token: str | None,
+        states: Sequence[str],
+    ) -> tuple[list[GlueJobRunSummary], str | None]:
+        kwargs: dict[str, object] = {
+            "JobName": job_name,
+            "MaxResults": 200,
+        }
+        if start_token is not None:
+            kwargs["NextToken"] = start_token
+        async with await self._aws_session.client(self._connection, "glue") as client:
+            remote_state_filter = bool(states) and _supports_request_parameter(
+                client,
+                operation_name="GetJobRuns",
+                parameter_name="States",
+            )
+            if remote_state_filter:
+                kwargs["States"] = list(states)
+            response = await client.get_job_runs(**kwargs)
+        rows = [
+            self._map_job_run(item, job_name=job_name)
+            for item in _response_items(response, "JobRuns")
+        ]
+        if states and not remote_state_filter:
+            state_filter = frozenset(states)
+            rows = [row for row in rows if row.state in state_filter]
+        return rows, _response_token(response)
+
+    async def _list_crawlers_page_operation(
+        self,
+        *,
+        start_token: str | None,
+        state: str | None,
+    ) -> tuple[list[GlueCrawlerSummary], str | None]:
+        kwargs: dict[str, object] = {"MaxResults": 100}
+        if start_token is not None:
+            kwargs["NextToken"] = start_token
+        async with await self._aws_session.client(self._connection, "glue") as client:
+            response = await client.get_crawlers(**kwargs)
+        rows = [self._map_crawler_summary(item) for item in _response_items(response, "Crawlers")]
+        if state is not None:
+            rows = [row for row in rows if row.state == state]
+        return rows, _response_token(response)
+
+    async def _get_crawler_operation(self, name: str) -> GlueCrawlerDetail:
+        async with await self._aws_session.client(self._connection, "glue") as client:
+            response = await client.get_crawler(Name=name)
+        crawler = _required_mapping(_response_mapping(response), "Crawler")
         warnings: list[str] = []
         tags: tuple[tuple[str, str], ...] = ()
         metrics_result = _CrawlerMetricsResult(None, None)
-
         try:
             tags = await self._get_crawler_tags(name)
         except Exception as exc:
-            mapped = _map_caught_glue_error(exc)
+            mapped = _map_operation_error(exc)
             if mapped is None:
                 raise
             if not isinstance(mapped, PermissionDeniedError):
-                mapped_error = mapped
-            else:
-                warnings.append(_supplemental_warning("Tags", mapped))
-        if mapped_error is not None:
-            _raise_prepared_glue_error(mapped_error)
-
+                raise mapped from None
+            warnings.append(_supplemental_warning("Tags", mapped))
         try:
             metrics_result = await self._get_crawler_metrics_result(name)
         except Exception as exc:
-            mapped = _map_caught_glue_error(exc)
+            mapped = _map_operation_error(exc)
             if mapped is None:
                 raise
             if not isinstance(mapped, PermissionDeniedError):
-                mapped_error = mapped
-            else:
-                warnings.append(_supplemental_warning("Crawler metrics", mapped))
-        if mapped_error is not None:
-            _raise_prepared_glue_error(mapped_error)
+                raise mapped from None
+            warnings.append(_supplemental_warning("Crawler metrics", mapped))
+        return self._map_crawler_detail(
+            crawler,
+            tags=tags,
+            metrics_result=metrics_result,
+            warnings=tuple(warnings),
+        )
 
-        try:
-            return self._map_crawler_detail(
-                crawler,
-                tags=tags,
-                metrics_result=metrics_result,
-                warnings=tuple(warnings),
-            )
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
-
-    async def get_crawler_metrics(self, name: str) -> GlueCrawlerMetrics | None:
-        mapped_error: ProviderError | None = None
-        try:
-            return (await self._get_crawler_metrics_result(name)).metrics
-        except Exception as exc:
-            mapped_error = _map_caught_glue_error(exc)
-            if mapped_error is None:
-                raise
-        _raise_prepared_glue_error(mapped_error)
+    async def _get_crawler_metrics_operation(self, name: str) -> GlueCrawlerMetrics | None:
+        return (await self._get_crawler_metrics_result(name)).metrics
 
     def _map_database(self, item: Mapping[str, Any]) -> DatabaseSummary:
         name = _required_string(item, "Name")
@@ -655,7 +687,7 @@ class GlueClient:
             "STRING": "StringColumnStatisticsData",
         }.get(statistics_type)
         if payload_key is None:
-            raise ValueError(f"unknown column statistics type: {statistics_type}")
+            raise _GlueResponseError("StatisticsData.Type", "has unsupported value")
         payload = _required_mapping(statistics_data, payload_key)
         return ColumnStatistics(
             column_name=_required_string(item, "ColumnName"),
@@ -782,7 +814,7 @@ class GlueClient:
             arn = _required_string(response, "Arn")
             arn_parts = arn.split(":")
             if len(arn_parts) < 2 or arn_parts[0] != "arn" or not arn_parts[1]:
-                raise ValueError(f"invalid caller identity ARN: {arn}")
+                raise _GlueResponseError("Arn", "has invalid format")
             self._caller_identity = (account_id, arn_parts[1])
             return self._caller_identity
 
@@ -812,7 +844,7 @@ class GlueClient:
 
 def _response_mapping(response: object) -> Mapping[str, Any]:
     if not isinstance(response, Mapping):
-        raise TypeError("response is not a mapping")
+        raise _GlueResponseError("response", "is not a mapping")
     return cast(Mapping[str, Any], response)
 
 
@@ -876,9 +908,11 @@ def _required_mapping(
     mapping: Mapping[str, Any],
     field: str,
 ) -> Mapping[str, Any]:
+    if field not in mapping:
+        raise _GlueResponseError(field, "is missing")
     value = mapping[field]
     if not isinstance(value, Mapping):
-        raise TypeError(f"{field} is not a mapping")
+        raise _GlueResponseError(field, "is not a mapping")
     return cast(Mapping[str, Any], value)
 
 
@@ -890,7 +924,7 @@ def _optional_mapping(
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        raise TypeError(f"{field} is not a mapping")
+        raise _GlueResponseError(field, "is not a mapping")
     return cast(Mapping[str, Any], value)
 
 
@@ -959,7 +993,7 @@ def _mapping_items(
     items: list[Mapping[str, Any]] = []
     for value in values:
         if not isinstance(value, Mapping):
-            raise TypeError(f"{field} contains a non-mapping item")
+            raise _GlueResponseError(field, "contains a non-mapping item")
         items.append(cast(Mapping[str, Any], value))
     return items
 
@@ -978,19 +1012,23 @@ def _required_sequence(
     mapping: Mapping[str, Any],
     field: str,
 ) -> Sequence[object]:
+    if field not in mapping:
+        raise _GlueResponseError(field, "is missing")
     return _validated_sequence(mapping[field], field=field)
 
 
 def _validated_sequence(value: object, *, field: str) -> Sequence[object]:
     if isinstance(value, str | bytes | bytearray) or not isinstance(value, Sequence):
-        raise TypeError(f"{field} is not a sequence")
+        raise _GlueResponseError(field, "is not a sequence")
     return cast(Sequence[object], value)
 
 
 def _required_string(mapping: Mapping[str, Any], field: str) -> str:
+    if field not in mapping:
+        raise _GlueResponseError(field, "is missing")
     value = mapping[field]
     if not isinstance(value, str) or not value:
-        raise ValueError(f"{field} is not a non-empty string")
+        raise _GlueResponseError(field, "is not a non-empty string")
     return value
 
 
@@ -999,14 +1037,14 @@ def _optional_string(mapping: Mapping[str, Any], field: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise TypeError(f"{field} is not a string")
+        raise _GlueResponseError(field, "is not a string")
     return value
 
 
 def _string_sequence(mapping: Mapping[str, Any], field: str) -> tuple[str, ...]:
     values = _optional_sequence(mapping, field)
     if not all(isinstance(value, str) for value in values):
-        raise TypeError(f"{field} contains a non-string item")
+        raise _GlueResponseError(field, "contains a non-string item")
     return tuple(cast(str, value) for value in values)
 
 
@@ -1014,15 +1052,17 @@ def _string_pairs(mapping: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
     pairs: list[tuple[str, str]] = []
     for key, value in mapping.items():
         if not isinstance(key, str) or not isinstance(value, str):
-            raise TypeError("string map contains a non-string key or value")
+            raise _GlueResponseError("string map", "contains a non-string key or value")
         pairs.append((key, value))
     return tuple(sorted(pairs, key=lambda item: item[0]))
 
 
 def _required_datetime(mapping: Mapping[str, Any], field: str) -> datetime:
+    if field not in mapping:
+        raise _GlueResponseError(field, "is missing")
     value = mapping[field]
     if not isinstance(value, datetime):
-        raise TypeError(f"{field} is not a datetime")
+        raise _GlueResponseError(field, "is not a datetime")
     return value
 
 
@@ -1034,7 +1074,7 @@ def _optional_datetime(
     if value is None:
         return None
     if not isinstance(value, datetime):
-        raise TypeError(f"{field} is not a datetime")
+        raise _GlueResponseError(field, "is not a datetime")
     return value
 
 
@@ -1043,7 +1083,7 @@ def _optional_int(mapping: Mapping[str, Any], field: str) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field} is not an integer")
+        raise _GlueResponseError(field, "is not an integer")
     return value
 
 
@@ -1052,7 +1092,7 @@ def _optional_float(mapping: Mapping[str, Any], field: str) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise TypeError(f"{field} is not numeric")
+        raise _GlueResponseError(field, "is not numeric")
     return float(value)
 
 
@@ -1066,7 +1106,7 @@ def _optional_bool(
     if value is None:
         return default
     if not isinstance(value, bool):
-        raise TypeError(f"{field} is not a boolean")
+        raise _GlueResponseError(field, "is not a boolean")
     return value
 
 
