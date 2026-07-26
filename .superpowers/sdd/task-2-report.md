@@ -530,3 +530,126 @@ also omitted from the evidence.
 - `$partitions` necessarily uses `SELECT *` because its leading partition
   columns are table-dependent. All fixed metrics are validated and the query is
   still hard-bounded to 500 rows.
+
+---
+
+## Important Review Findings Remediation (2026-07-26)
+
+### Status
+
+All five Iceberg Task 2 review findings were corrected in one TDD fix wave.
+The corrective commit is the single commit containing this report update; its
+final hash is reported from Git after the commit is written.
+
+### Iceberg Partition Contract
+
+- Corrected `$partitions` handling to match the actual Iceberg metadata-table
+  contract: partitioned tables expose a `partition` row/struct and `spec_id`
+  before the fixed metrics; unpartitioned tables omit both.
+- `sqlglot`, already a runtime dependency, parses Athena's `row(...)` result
+  type into ordered partition field names.
+- The bounded value parser accepts both Athena's named row rendering
+  (`{event_date=..., region_bucket=...}`) and the positional rendering shown in
+  Apache Iceberg's official example (`{20211001, 11}`). Mixed, malformed,
+  mismatched, duplicate, missing, and unexpected shapes fail closed with
+  value-free `IcebergMetadataShapeError` messages.
+- `spec_id` is validated as an integer but is intentionally excluded from
+  `IcebergPartitionSpec.field_names` and `IcebergPartition.values`.
+- Sources checked:
+  - https://iceberg.apache.org/docs/latest/spark-queries/#partitions
+  - https://docs.aws.amazon.com/athena/latest/ug/querying-iceberg.html
+
+### Query Lifecycle And Privacy
+
+- Submission now runs in a shielded task. Cancellation after remote acceptance
+  waits for a finalizer that recovers the execution reference and performs a
+  best-effort stop without resubmitting.
+- Poll cancellation, provider failures, unexpected failures, and context
+  mismatches best-effort stop every known nonterminal execution.
+- SQL, request tokens, terminal detail values, result pages, rows, tokens, and
+  raw provider exceptions are discarded before a value-free error is raised.
+- The privacy oracle checks exception graphs, traceback locals through
+  `TracebackException(capture_locals=True)`, ordinary formatted tracebacks, and
+  real `CrashDump` output for start, poll, terminal, result-fetch, and
+  pagination-shape failures.
+- Result pages, columns, rows, cell values, and continuation tokens are
+  type-checked before use. Empty continuation pages, repeated tokens, malformed
+  tokens, and request counts beyond the row bound raise
+  `AthenaResultShapeError`.
+- Glue/Athena table identity now requires exact connection, region, catalog,
+  and database matches before any query is submitted.
+
+### TDD Evidence
+
+The first review-regression run failed for the requested reasons:
+
+```text
+uv run pytest tests/unit/domain/test_athena_runner.py \
+  tests/unit/domain/test_iceberg.py -q
+22 failed, 30 passed
+```
+
+The additional `spec_id` validation test also failed before its implementation:
+
+```text
+uv run pytest \
+  tests/unit/domain/test_iceberg.py::test_partitions_validate_spec_id_without_exposing_it_as_a_partition_field \
+  -q
+1 failed
+```
+
+### Final Verification
+
+```text
+uv run pytest tests/unit/domain/test_athena_runner.py \
+  tests/unit/domain/test_iceberg.py \
+  tests/unit/vm/athena \
+  tests/unit/services/athena/test_service.py -q
+170 passed
+
+uv run pytest tests/unit/domain/test_athena_runner.py \
+  tests/unit/domain/test_iceberg.py \
+  tests/unit/domain/test_athena.py \
+  tests/unit/domain/test_glue.py \
+  tests/unit/infra/test_redaction.py \
+  tests/unit/infra/test_crash_dump.py \
+  tests/unit/infra/test_log_sink.py \
+  tests/unit/test_app_sanity.py -q
+300 passed
+
+uv run pytest tests/unit/domain tests/unit/vm -q
+1340 passed
+
+uv run mypy
+Success: no issues found in 152 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+385 files already formatted
+
+./scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+```
+
+### Changed Files
+
+- `src/aws_tui/domain/athena_runner.py`
+- `src/aws_tui/domain/iceberg.py`
+- `tests/unit/domain/test_athena_runner.py`
+- `tests/unit/domain/test_iceberg.py`
+- `.superpowers/sdd/task-2-report.md`
+
+### Concerns
+
+- Athena's user guide documents Iceberg metadata-table availability but does
+  not publish the complete `$partitions` result schema. Apache Iceberg's
+  official metadata-table contract is therefore the schema authority, with
+  realistic Athena `ResultColumn.type_name` fixtures covering engine-v3 row
+  metadata. Unknown future renderings fail closed rather than guessing.
+- The maximum number of result-page requests is `max_rows`. A continuation page
+  must add at least one row, so this request bound cannot truncate a valid
+  result before the existing row bound.

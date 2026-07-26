@@ -8,6 +8,10 @@ from datetime import datetime
 from typing import TypeVar
 from uuid import uuid4
 
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import SqlglotError
+
 from aws_tui.domain.athena_runner import AthenaQueryRunner, BoundedQueryResult
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import ValidationError
@@ -250,6 +254,7 @@ class IcebergInspector:
             table_ref.connection_name != self._context.connection_name
             or table_ref.region != self._context.region
             or table_ref.catalog_name != self._context.catalog
+            or table_ref.database_name != self._context.database
         ):
             raise ValidationError("Iceberg table does not match the active query context")
 
@@ -512,9 +517,19 @@ def _map_files(
 
 def _map_partition_spec(result: BoundedQueryResult) -> IcebergPartitionSpec:
     _column_indexes(result, _PARTITION_METRIC_COLUMNS)
-    metric_names = frozenset(_PARTITION_METRIC_COLUMNS)
     names = tuple(column.name for column in result.columns)
-    return IcebergPartitionSpec(tuple(name for name in names if name not in metric_names))
+    expected = frozenset((*_PARTITION_METRIC_COLUMNS, "partition", "spec_id"))
+    unexpected = tuple(name for name in names if name not in expected)
+    if unexpected:
+        raise IcebergMetadataShapeError("unexpected Iceberg partition metadata column")
+    has_partition = "partition" in names
+    has_spec_id = "spec_id" in names
+    if has_partition != has_spec_id:
+        raise IcebergMetadataShapeError("incomplete Iceberg partition metadata columns")
+    if not has_partition:
+        return IcebergPartitionSpec(())
+    partition_column = result.columns[names.index("partition")]
+    return IcebergPartitionSpec(_partition_field_names(partition_column.type_name))
 
 
 def _map_partitions(
@@ -522,33 +537,145 @@ def _map_partitions(
 ) -> tuple[IcebergPartition, ...]:
     indexes = _column_indexes(result, _PARTITION_METRIC_COLUMNS)
     spec = _map_partition_spec(result)
-    return tuple(
-        IcebergPartition(
-            values=tuple((name, _value(row, indexes, name)) for name in spec.field_names),
-            record_count=_required_int(_value(row, indexes, "record_count")),
-            file_count=_required_int(_value(row, indexes, "file_count")),
-            total_data_file_size_in_bytes=_required_int(
-                _value(row, indexes, "total_data_file_size_in_bytes")
-            ),
-            position_delete_record_count=_optional_int(
-                _value(row, indexes, "position_delete_record_count")
-            ),
-            position_delete_file_count=_optional_int(
-                _value(row, indexes, "position_delete_file_count")
-            ),
-            equality_delete_record_count=_optional_int(
-                _value(row, indexes, "equality_delete_record_count")
-            ),
-            equality_delete_file_count=_optional_int(
-                _value(row, indexes, "equality_delete_file_count")
-            ),
-            last_updated_at=_optional_datetime(_value(row, indexes, "last_updated_at")),
-            last_updated_snapshot_id=_optional_int(
-                _value(row, indexes, "last_updated_snapshot_id")
-            ),
+    return tuple(_map_partition(row, indexes, spec) for row in result.rows)
+
+
+def _map_partition(
+    row: tuple[str | None, ...],
+    indexes: dict[str, int],
+    spec: IcebergPartitionSpec,
+) -> IcebergPartition:
+    if spec.field_names:
+        _required_int(_value(row, indexes, "spec_id"))
+    return IcebergPartition(
+        values=_partition_values(
+            _value(row, indexes, "partition"),
+            spec.field_names,
         )
-        for row in result.rows
+        if spec.field_names
+        else (),
+        record_count=_required_int(_value(row, indexes, "record_count")),
+        file_count=_required_int(_value(row, indexes, "file_count")),
+        total_data_file_size_in_bytes=_required_int(
+            _value(row, indexes, "total_data_file_size_in_bytes")
+        ),
+        position_delete_record_count=_optional_int(
+            _value(row, indexes, "position_delete_record_count")
+        ),
+        position_delete_file_count=_optional_int(
+            _value(row, indexes, "position_delete_file_count")
+        ),
+        equality_delete_record_count=_optional_int(
+            _value(row, indexes, "equality_delete_record_count")
+        ),
+        equality_delete_file_count=_optional_int(
+            _value(row, indexes, "equality_delete_file_count")
+        ),
+        last_updated_at=_optional_datetime(_value(row, indexes, "last_updated_at")),
+        last_updated_snapshot_id=_optional_int(_value(row, indexes, "last_updated_snapshot_id")),
     )
+
+
+def _partition_field_names(type_name: str) -> tuple[str, ...]:
+    try:
+        data_type = sqlglot.parse_one(
+            type_name,
+            into=exp.DataType,
+            read="athena",
+            error_message_context=0,
+        )
+    except (SqlglotError, TypeError, ValueError):
+        raise IcebergMetadataShapeError("invalid Iceberg partition struct type") from None
+    if not isinstance(data_type, exp.DataType) or data_type.this is not exp.DataType.Type.STRUCT:
+        raise IcebergMetadataShapeError("invalid Iceberg partition struct type")
+    field_names: list[str] = []
+    for definition in data_type.expressions:
+        if not isinstance(definition, exp.ColumnDef):
+            raise IcebergMetadataShapeError("invalid Iceberg partition struct field")
+        identifier = definition.this
+        if not isinstance(identifier, exp.Identifier) or not identifier.name:
+            raise IcebergMetadataShapeError("invalid Iceberg partition struct field")
+        field_names.append(identifier.name)
+    if not field_names or len(set(field_names)) != len(field_names):
+        raise IcebergMetadataShapeError("invalid Iceberg partition struct fields")
+    return tuple(field_names)
+
+
+def _partition_values(
+    value: str | None,
+    field_names: tuple[str, ...],
+) -> tuple[tuple[str, str | None], ...]:
+    raw = _required_string(value).strip()
+    if not raw.startswith("{") or not raw.endswith("}"):
+        raise ValueError
+    items = _split_collection(raw[1:-1])
+    if len(items) != len(field_names):
+        raise ValueError
+    assignments = tuple(_split_assignment(item) for item in items)
+    named = tuple(assignment is not None for assignment in assignments)
+    if any(named) and not all(named):
+        raise ValueError
+    values: list[tuple[str, str | None]] = []
+    for field_name, item, assignment in zip(field_names, items, assignments, strict=True):
+        item_value = item
+        if assignment is not None:
+            item_name, item_value = assignment
+            if _unquote_field_name(item_name) != field_name:
+                raise ValueError
+        normalized = item_value.strip()
+        if not normalized:
+            raise ValueError
+        values.append(
+            (
+                field_name,
+                None if normalized.casefold() == "null" else normalized,
+            )
+        )
+    return tuple(values)
+
+
+def _split_assignment(value: str) -> tuple[str, str] | None:
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index, character in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if quote is not None:
+            if character == quote:
+                quote = None
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            continue
+        if character in "([{":
+            depth += 1
+            continue
+        if character in ")]}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError
+            continue
+        if character == "=" and depth == 0:
+            name = value[:index].strip()
+            item_value = value[index + 1 :].strip()
+            if not name or not item_value:
+                raise ValueError
+            return name, item_value
+    if quote is not None or depth != 0 or escaped:
+        raise ValueError
+    return None
+
+
+def _unquote_field_name(value: str) -> str:
+    stripped = value.strip()
+    if stripped.startswith('"') and stripped.endswith('"') and len(stripped) >= 2:
+        return stripped[1:-1].replace('""', '"')
+    return stripped
 
 
 def _map_refs(

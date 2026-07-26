@@ -544,8 +544,8 @@ async def test_inspector_maps_history_manifests_files_and_refs_strictly() -> Non
 
 
 _PARTITION_COLUMNS = (
-    "event_date",
-    "region_bucket",
+    "partition",
+    "spec_id",
     "record_count",
     "file_count",
     "total_data_file_size_in_bytes",
@@ -564,8 +564,8 @@ async def test_partitions_derive_dynamic_spec_and_validate_fixed_metrics() -> No
         _PARTITION_COLUMNS,
         (
             (
-                "2026-07-26",
-                "7",
+                "{event_date=2026-07-26, region_bucket=7}",
+                "3",
                 "10",
                 "2",
                 "1024",
@@ -577,6 +577,18 @@ async def test_partitions_derive_dynamic_spec_and_validate_fixed_metrics() -> No
                 "42",
             ),
         ),
+    )
+    result = BoundedQueryResult(
+        result.detail,
+        (
+            ResultColumn(
+                "partition",
+                "row(event_date date, region_bucket integer)",
+                "NULLABLE",
+            ),
+            *result.columns[1:],
+        ),
+        result.rows,
     )
     runner = RecordingRunner(result)
     inspector = IcebergInspector(runner=runner, context=CONTEXT)
@@ -603,6 +615,177 @@ async def test_partitions_derive_dynamic_spec_and_validate_fixed_metrics() -> No
         'FROM "AwsDataCatalog"."analytics"."order-events$partitions" LIMIT 500'
     )
     assert all(call[3] == 500 for call in runner.calls)
+
+
+@pytest.mark.asyncio
+async def test_partitions_accept_official_iceberg_positional_struct_rendering() -> None:
+    result = _query_result(
+        _PARTITION_COLUMNS,
+        (
+            (
+                "{2026-07-26, 7}",
+                "3",
+                "10",
+                "2",
+                "1024",
+                None,
+                "0",
+                None,
+                "0",
+                "2026-07-26T00:00:00Z",
+                "42",
+            ),
+        ),
+    )
+    result = BoundedQueryResult(
+        result.detail,
+        (
+            ResultColumn(
+                "partition",
+                "row(event_date date, region_bucket integer)",
+                "NULLABLE",
+            ),
+            *result.columns[1:],
+        ),
+        result.rows,
+    )
+
+    rows = await IcebergInspector(
+        runner=RecordingRunner(result),
+        context=CONTEXT,
+    ).list_partitions(TABLE)
+
+    assert rows[0].values == (
+        ("event_date", "2026-07-26"),
+        ("region_bucket", "7"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_unpartitioned_table_omits_partition_and_spec_id() -> None:
+    columns = tuple(
+        column for column in _PARTITION_COLUMNS if column not in {"partition", "spec_id"}
+    )
+    result = _query_result(
+        columns,
+        (
+            (
+                "10",
+                "2",
+                "1024",
+                None,
+                "0",
+                None,
+                "0",
+                "2026-07-26T00:00:00Z",
+                "42",
+            ),
+        ),
+    )
+    inspector = IcebergInspector(runner=RecordingRunner(result), context=CONTEXT)
+
+    assert await inspector.partition_spec(TABLE) == IcebergPartitionSpec(())
+    assert await inspector.list_partitions(TABLE) == (
+        IcebergPartition(
+            values=(),
+            record_count=10,
+            file_count=2,
+            total_data_file_size_in_bytes=1024,
+            position_delete_record_count=None,
+            position_delete_file_count=0,
+            equality_delete_record_count=None,
+            equality_delete_file_count=0,
+            last_updated_at=NOW,
+            last_updated_snapshot_id=42,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("partition_type", "partition_value"),
+    [
+        ("varchar", "{event_date=2026-07-26}"),
+        ("row(event_date date, region_bucket integer)", "{event_date=2026-07-26}"),
+        (
+            "row(event_date date, region_bucket integer)",
+            "{wrong_name=2026-07-26, region_bucket=7}",
+        ),
+        ("row(event_date date)", "RESULT_VALUE_SECRET"),
+    ],
+)
+async def test_partitions_fail_closed_on_malformed_struct_metadata(
+    partition_type: str,
+    partition_value: str,
+) -> None:
+    result = _query_result(
+        _PARTITION_COLUMNS,
+        (
+            (
+                partition_value,
+                "3",
+                "10",
+                "2",
+                "1024",
+                None,
+                "0",
+                None,
+                "0",
+                "2026-07-26T00:00:00Z",
+                "42",
+            ),
+        ),
+    )
+    result = BoundedQueryResult(
+        result.detail,
+        (
+            ResultColumn("partition", partition_type, "NULLABLE"),
+            *result.columns[1:],
+        ),
+        result.rows,
+    )
+
+    with pytest.raises(IcebergMetadataShapeError):
+        await IcebergInspector(
+            runner=RecordingRunner(result),
+            context=CONTEXT,
+        ).list_partitions(TABLE)
+
+
+@pytest.mark.asyncio
+async def test_partitions_validate_spec_id_without_exposing_it_as_a_partition_field() -> None:
+    result = _query_result(
+        _PARTITION_COLUMNS,
+        (
+            (
+                "{event_date=2026-07-26}",
+                "not-an-integer",
+                "10",
+                "2",
+                "1024",
+                None,
+                "0",
+                None,
+                "0",
+                "2026-07-26T00:00:00Z",
+                "42",
+            ),
+        ),
+    )
+    result = BoundedQueryResult(
+        result.detail,
+        (
+            ResultColumn("partition", "row(event_date date)", "NULLABLE"),
+            *result.columns[1:],
+        ),
+        result.rows,
+    )
+
+    with pytest.raises(IcebergMetadataShapeError):
+        await IcebergInspector(
+            runner=RecordingRunner(result),
+            context=CONTEXT,
+        ).list_partitions(TABLE)
 
 
 @pytest.mark.asyncio
@@ -687,16 +870,24 @@ async def test_metadata_shape_failure_excludes_result_values_from_crash_surfaces
 
 
 @pytest.mark.asyncio
-async def test_inspector_rejects_cross_context_table_without_query() -> None:
+@pytest.mark.parametrize(
+    "field",
+    ["connection_name", "region", "catalog_name", "database_name"],
+)
+async def test_inspector_rejects_each_cross_context_table_identity_without_query(
+    field: str,
+) -> None:
     runner = RecordingRunner()
     inspector = IcebergInspector(runner=runner, context=CONTEXT)
-    other = TableRef(
-        TABLE.catalog_name,
-        TABLE.database_name,
-        TABLE.table_name,
-        "prod",
-        "us-west-2",
-    )
+    values = {
+        "catalog_name": TABLE.catalog_name,
+        "database_name": TABLE.database_name,
+        "table_name": TABLE.table_name,
+        "connection_name": TABLE.connection_name,
+        "region": TABLE.region,
+    }
+    values[field] = f"other-{field}"
+    other = TableRef(**values)
 
     with pytest.raises(ValidationError, match="active query context"):
         await inspector.list_snapshots(other)

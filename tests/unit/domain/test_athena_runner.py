@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from datetime import UTC, datetime
+from pathlib import Path
+from traceback import TracebackException
+from typing import Any
 
 import pytest
 
@@ -13,7 +17,7 @@ from aws_tui.domain.athena_runner import (
     AthenaQueryRunner,
     AthenaResultShapeError,
 )
-from aws_tui.domain.filesystem import ValidationError
+from aws_tui.domain.filesystem import ProviderError, ValidationError
 from aws_tui.domain.query import (
     QueryContext,
     QueryExecutionDetail,
@@ -25,6 +29,7 @@ from aws_tui.domain.query import (
     ResultPage,
 )
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
+from aws_tui.infra.crash_dump import CrashDump
 
 pytestmark = pytest.mark.unit
 
@@ -330,3 +335,264 @@ async def test_bounded_result_repr_excludes_rows() -> None:
     )
 
     assert "RESULT_ROW_SECRET_7F4C2A9D" not in repr(result)
+
+
+class DelayedSubmissionClient(RunnerClient):
+    def __init__(self) -> None:
+        super().__init__(states=(_detail(QueryState.RUNNING),))
+        self.accepted = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def start_query(
+        self,
+        sql: str,
+        context: QueryContext,
+        *,
+        request_token: str,
+    ) -> QueryExecutionRef:
+        self.start_calls.append((sql, context, request_token))
+        self.accepted.set()
+        await self.release.wait()
+        return QueryExecutionRef(
+            "query-1",
+            context.connection_name,
+            context.region,
+            context.workgroup,
+        )
+
+
+@pytest.mark.asyncio
+async def test_runner_cancellation_finalizes_accepted_submission_and_stops_query() -> None:
+    client = DelayedSubmissionClient()
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+    task = asyncio.create_task(
+        runner.run(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-delayed",
+            max_rows=1,
+        )
+    )
+    await client.accepted.wait()
+
+    task.cancel()
+    await asyncio.sleep(0)
+    client.release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert client.stop_calls == ["query-1"]
+    assert len(client.start_calls) == 1
+
+
+class PollFailureClient(RunnerClient):
+    def __init__(self, error: Exception) -> None:
+        super().__init__(states=(_detail(QueryState.RUNNING),))
+        self.error = error
+
+    async def get_query_execution(self, execution_id: str) -> QueryExecutionDetail:
+        self.poll_calls.append(execution_id)
+        raise self.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        ProviderError("provider poll secret"),
+        RuntimeError("unexpected poll secret"),
+    ],
+)
+async def test_runner_best_effort_stops_nonterminal_query_after_poll_failure(
+    error: Exception,
+) -> None:
+    client = PollFailureClient(error)
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+
+    with pytest.raises(ProviderError, match="status request failed"):
+        await runner.run(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-poll-failure",
+            max_rows=1,
+        )
+
+    assert client.stop_calls == ["query-1"]
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_nonprogressing_continuation_page() -> None:
+    client = RunnerClient(
+        states=(_detail(QueryState.SUCCEEDED),),
+        pages={
+            None: ResultPage((COLUMN,), (), "unique-page-2"),
+        },
+    )
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+
+    with pytest.raises(AthenaResultShapeError, match="did not advance"):
+        await runner.run(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-empty-page",
+            max_rows=2,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "page",
+    [
+        object(),
+        ResultPage([], (), None),  # type: ignore[arg-type]
+        ResultPage((object(),), (), None),  # type: ignore[arg-type]
+        ResultPage((COLUMN,), [], None),  # type: ignore[arg-type]
+        ResultPage((COLUMN,), ([None],), None),  # type: ignore[arg-type,list-item]
+        ResultPage((COLUMN,), ((7,),), None),  # type: ignore[arg-type,list-item]
+        ResultPage((COLUMN,), (), 7),  # type: ignore[arg-type]
+    ],
+)
+async def test_runner_rejects_malformed_result_pages_without_incidental_errors(
+    page: Any,
+) -> None:
+    client = RunnerClient(
+        states=(_detail(QueryState.SUCCEEDED),),
+        pages={None: page},
+    )
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+
+    with pytest.raises(AthenaResultShapeError):
+        await runner.run(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-malformed-page",
+            max_rows=2,
+        )
+
+
+class FailurePhaseClient(RunnerClient):
+    def __init__(self, phase: str, marker: str) -> None:
+        state = QueryState.FAILED if phase == "terminal" else QueryState.SUCCEEDED
+        super().__init__(
+            states=(_detail(state),),
+            pages={
+                None: ResultPage(
+                    (COLUMN,),
+                    ((marker,),),
+                    marker,
+                )
+            },
+        )
+        self.phase = phase
+        self.marker = marker
+
+    async def start_query(
+        self,
+        sql: str,
+        context: QueryContext,
+        *,
+        request_token: str,
+    ) -> QueryExecutionRef:
+        if self.phase == "start":
+            raise ProviderError(self.marker)
+        return await super().start_query(sql, context, request_token=request_token)
+
+    async def get_query_execution(self, execution_id: str) -> QueryExecutionDetail:
+        if self.phase == "poll":
+            raise ProviderError(self.marker)
+        if self.phase == "terminal":
+            detail = _detail(QueryState.FAILED)
+            object.__setattr__(detail, "state_reason", self.marker)
+            object.__setattr__(detail, "output_location", f"s3://private/{self.marker}")
+            return detail
+        return await super().get_query_execution(execution_id)
+
+    async def get_results_page(
+        self,
+        execution_id: str,
+        *,
+        start_token: str | None = None,
+    ) -> ResultPage:
+        if self.phase == "fetch":
+            raise ProviderError(self.marker)
+        if self.phase == "shape":
+            return ResultPage(
+                (COLUMN,),
+                ((self.marker, "wrong-width"),),
+                self.marker,
+            )
+        return await super().get_results_page(execution_id, start_token=start_token)
+
+
+def _assert_runner_failure_is_private(
+    error: BaseException,
+    *,
+    crash_dir: Path,
+    secrets: tuple[str, ...],
+) -> None:
+    production_traceback = error.__traceback__
+    while (
+        production_traceback is not None
+        and "/src/aws_tui/" not in production_traceback.tb_frame.f_code.co_filename
+    ):
+        production_traceback = production_traceback.tb_next
+    error = error.with_traceback(production_traceback)
+
+    exception_graph: list[BaseException] = []
+    pending = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        exception_graph.append(current)
+        pending.extend(
+            linked for linked in (current.__context__, current.__cause__) if linked is not None
+        )
+        pending.extend(item for item in current.args if isinstance(item, BaseException))
+
+    rendered_with_locals = "".join(
+        TracebackException.from_exception(error, capture_locals=True).format()
+    )
+    rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    crash_path = CrashDump(base_dir=crash_dir).write(exc=error)
+    visible = "\n".join(
+        (
+            str(error),
+            repr(error),
+            repr(error.args),
+            repr(exception_graph),
+            rendered_with_locals,
+            rendered,
+            crash_path.read_text(encoding="utf-8"),
+        )
+    )
+    for secret in secrets:
+        assert secret not in visible
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["start", "poll", "terminal", "fetch", "shape"])
+async def test_runner_failure_boundaries_exclude_sql_results_and_provider_values(
+    phase: str,
+    tmp_path: Path,
+) -> None:
+    sql_secret = "private_fixture_value"
+    provider_secret = "provider_fixture_value"
+    client = FailurePhaseClient(phase, provider_secret)
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+
+    with pytest.raises((ProviderError, AthenaResultShapeError)) as raised:
+        await runner.run(
+            f"SELECT '{sql_secret}'",
+            CONTEXT,
+            request_token="metadata-private-failure",
+            max_rows=2,
+        )
+
+    _assert_runner_failure_is_private(
+        raised.value,
+        crash_dir=tmp_path / phase,
+        secrets=(sql_secret, provider_secret),
+    )
