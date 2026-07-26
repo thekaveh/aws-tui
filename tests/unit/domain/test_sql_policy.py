@@ -45,6 +45,52 @@ def test_policy_accepts_athena_table_describe_grammar(sql: str) -> None:
 @pytest.mark.parametrize(
     "sql",
     [
+        "DESCRIBE orders columnA",
+        "DESCRIBE `orders table` `column name`",
+        "DESCRIBE analytics.orders PARTITION "
+        "(`event date` = '2026-07-25', shard = 7) `column name`",
+        "EXPLAIN DESCRIBE orders columnA",
+        "EXPLAIN (TYPE IO, FORMAT TEXT) DESCRIBE analytics.orders "
+        "PARTITION (`event date` = '2026-07-25', shard = 7) `column name`",
+    ],
+)
+def test_policy_accepts_bounded_athena_describe_column_grammar(sql: str) -> None:
+    assert ReadOnlySqlPolicy().validate(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DESCRIBE orders PARTITION (p > 1)",
+        "DESCRIBE orders PARTITION (p <> 1)",
+        "DESCRIBE orders PARTITION (p = other_column)",
+        "DESCRIBE orders PARTITION (p = lower('value'))",
+        "DESCRIBE orders PARTITION (p = (SELECT 1))",
+        "DESCRIBE orders PARTITION (p = TRUE)",
+        "DESCRIBE orders PARTITION (p 1)",
+        "DESCRIBE orders PARTITION (p = 'value',)",
+        "DESCRIBE orders PARTITION ()",
+        "DESCRIBE orders PARTITION (p = 'value') columnA trailing",
+        "DESCRIBE orders columnA trailing",
+        "DESCRIBE orders PARTITION (p = 'value') PARTITION (q = 'next')",
+        "DESCRIBE AwsDataCatalog.analytics.orders",
+        "DESCRIBE orders; DELETE FROM orders",
+        "EXPLAIN DESCRIBE orders PARTITION (p > 1)",
+        "EXPLAIN DESCRIBE orders PARTITION (p = other_column)",
+        "EXPLAIN DESCRIBE orders PARTITION (p = lower('value'))",
+        "EXPLAIN DESCRIBE orders PARTITION (p = (SELECT 1))",
+        "EXPLAIN DESCRIBE orders PARTITION (p = 'value') columnA trailing",
+        "EXPLAIN DESCRIBE orders columnA trailing",
+    ],
+)
+def test_policy_rejects_unbounded_athena_describe_grammar(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
         "DESCRIBE SELECT 1",
         "DESCRIBE TABLE events",
         "DESCRIBE DELETE FROM events",

@@ -101,6 +101,12 @@ class ReadOnlySqlPolicy:
         if not normalized:
             raise QueryRejectedError("query is empty")
 
+        cursor = _TokenCursor(self._tokenize(normalized))
+        statement = cursor.peek()
+        if statement is not None and statement.token_type is TokenType.DESCRIBE:
+            self._validate_describe_tokens(cursor)
+            return normalized
+
         statements = self._parse(normalized)
         if len(statements) != 1 or statements[0] is None:
             raise QueryRejectedError("exactly one read-only statement is required")
@@ -141,6 +147,42 @@ class ReadOnlySqlPolicy:
         partition = describe.args.get("partition")
         if partition is not None and not isinstance(partition, exp.Partition):
             raise QueryRejectedError("DESCRIBE must use Athena table grammar")
+
+    def _validate_describe_tokens(self, cursor: _TokenCursor) -> None:
+        if not cursor.consume_type(TokenType.DESCRIBE):
+            raise QueryRejectedError("DESCRIBE must use Athena table grammar")
+
+        cursor.consume_one_of(frozenset({"EXTENDED", "FORMATTED"}))
+        if cursor.consume_qualified_name(max_parts=2) == 0:
+            raise QueryRejectedError("DESCRIBE must use Athena table grammar")
+
+        if cursor.consume_word("PARTITION") and not self._consume_describe_partition(cursor):
+            raise QueryRejectedError("DESCRIBE must use Athena table grammar")
+
+        cursor._consume_identifier()
+        if cursor.consume_type(TokenType.SEMICOLON):
+            if cursor.at_end:
+                return
+        elif cursor.at_end:
+            return
+
+        raise QueryRejectedError("DESCRIBE must use Athena table grammar")
+
+    def _consume_describe_partition(self, cursor: _TokenCursor) -> bool:
+        if not cursor.consume_type(TokenType.L_PAREN):
+            return False
+
+        while True:
+            if (
+                not cursor._consume_identifier()
+                or not cursor.consume_type(TokenType.EQ)
+                or not cursor.consume_type(TokenType.STRING, TokenType.NUMBER)
+            ):
+                return False
+            if cursor.consume_type(TokenType.R_PAREN):
+                return True
+            if not cursor.consume_type(TokenType.COMMA):
+                return False
 
     def _validate_command(self, command: exp.Command) -> None:
         verb = str(command.this).upper()
@@ -237,6 +279,10 @@ class ReadOnlySqlPolicy:
         if statement is None or statement.token_type is TokenType.ANALYZE:
             raise QueryRejectedError("EXPLAIN form is not read-only")
 
+        if statement.token_type is TokenType.DESCRIBE:
+            self._validate_describe_tokens(cursor)
+            return
+
         explained = self._parse(body[statement.start :])
         if len(explained) != 1 or explained[0] is None:
             raise QueryRejectedError("EXPLAIN form is not read-only")
@@ -265,7 +311,11 @@ class ReadOnlySqlPolicy:
 
     def _tokenize(self, sql: str) -> list[sqlglot.Token]:
         try:
-            return Dialect.get_or_raise("athena").tokenizer().tokenize(sql)
+            return [
+                token
+                for token in Dialect.get_or_raise("athena").tokenizer().tokenize(sql)
+                if token.token_type is not TokenType.HIVE_TOKEN_STREAM
+            ]
         except SqlglotError:
             raise QueryRejectedError("query could not be parsed as Athena SQL") from None
 

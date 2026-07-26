@@ -418,3 +418,90 @@ query models or SQL policy, and the run created no tracked changes.
 - The unrelated repository-wide E2E/snapshot failures above remain outside Task 1;
   the requested focused, domain, crash-dump, type, lint, format, layer, lock, audit,
   and diff gates are green.
+
+## Final DESCRIBE Grammar Blocker Follow-up (2026-07-25)
+
+### Status
+
+Resolved the remaining Athena `DESCRIBE` grammar blocker on
+`codex/aws-service-expansion-study`.
+
+- Direct `DESCRIBE` and `EXPLAIN DESCRIBE` now use one bounded token grammar.
+- The target is one identifier or documented `database.table`; the unsupported
+  three-part catalog target is rejected.
+- An optional partition is one or more exact `identifier = string-or-number`
+  entries. Operators, identifiers, functions, subqueries, booleans, malformed
+  entries, duplicate partition clauses, and every extra token are rejected.
+- One optional column identifier follows the table or partition; no arbitrary
+  trailing tokens are opened.
+- Existing `SHOW`, set-operation, `EXPLAIN` option, privacy, and repr behavior is
+  unchanged.
+
+The Athena DESCRIBE reference used for the qualification decision is
+https://docs.aws.amazon.com/athena/latest/ug/describe-table.html. Its synopsis is
+`[db_name.]table_name`; it also documents `PARTITION (column = value, ...)` and
+the optional column form.
+
+### TDD Evidence
+
+The initial focused matrix was written before the token grammar. It demonstrated
+both halves of the blocker: sqlglot rejected documented column forms and accepted
+unsafe partition ASTs.
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_bounded_athena_describe_column_grammar tests/unit/domain/test_sql_policy.py::test_policy_rejects_unbounded_athena_describe_grammar -q
+16 failed, 9 passed in 0.36s
+```
+
+After confirming the Athena qualification limit from the official reference, the
+three-part target test was added before reducing the DESCRIBE target from three
+parts to two:
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_bounded_athena_describe_column_grammar tests/unit/domain/test_sql_policy.py::test_policy_rejects_unbounded_athena_describe_grammar -q
+1 failed, 24 passed in 0.30s
+```
+
+The final focused grammar matrix was green:
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_bounded_athena_describe_column_grammar tests/unit/domain/test_sql_policy.py::test_policy_rejects_unbounded_athena_describe_grammar -q
+25 passed in 0.25s
+```
+
+### Final Verification
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py -q
+125 passed in 0.35s
+
+$ uv run pytest tests/unit/domain/test_query.py tests/unit/domain/test_sql_policy.py tests/unit/infra/test_crash_dump.py -q
+148 passed in 0.38s
+
+$ uv run pytest tests/unit/domain -q
+373 passed in 15.96s
+
+$ uv run pytest tests/unit/infra/test_crash_dump.py -q
+8 passed in 0.33s
+
+$ uv run mypy
+Success: no issues found in 131 source files
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+346 files already formatted
+
+$ ./scripts/check-layers.sh
+layer rules clean
+
+$ uv lock --check
+Resolved 176 packages in 6ms
+
+$ git diff --check
+```
+
+All listed commands exited 0. The recurring local `.zshenv` warning was unrelated
+and omitted from the transcript. No new Task 1 concern remains; this policy stays
+defense in depth behind IAM, Lake Formation, Athena workgroup, and S3 controls.
