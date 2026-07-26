@@ -26,9 +26,9 @@ from aws_tui.domain.sql_policy import ReadOnlySqlPolicy, select_starter_sql
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.athena.history_vm import AthenaHistoryVM
-from aws_tui.vm.athena.query_vm import AthenaQueryVM
+from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
-from aws_tui.vm.athena.saved_vm import AthenaSavedVM
+from aws_tui.vm.athena.saved_vm import AthenaSavedVM, SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenGlueTableRequest
 from aws_tui.vm.service_source_vm import (
@@ -46,6 +46,16 @@ _CONTEXT_ERROR = "Athena context request failed"
 _WORKGROUP_DETAIL_ERROR = "Athena workgroup request failed"
 _DISCOVERY_PAGE_LIMIT = 64
 _DISCOVERY_EMPTY_PAGE_LIMIT = 3
+
+
+@dataclass(frozen=True, slots=True)
+class AthenaPageSnapshot:
+    context: QueryContext = field(repr=False)
+    active_view: AthenaView
+    query: AthenaQuerySnapshot = field(repr=False)
+    history_execution_id: str | None = field(repr=False)
+    saved_kind: SavedQueryKind | None
+    saved_query_id: str | None = field(repr=False)
 
 
 @dataclass(eq=False)
@@ -321,6 +331,86 @@ class AthenaPageVM:
         if changed:
             self._notify("active_view")
         await self._setup_view(view, self._context_generation)
+
+    def export_snapshot(self) -> AthenaPageSnapshot:
+        return AthenaPageSnapshot(
+            context=self._context,
+            active_view=self._active_view,
+            query=self.query.export_snapshot(),
+            history_execution_id=self.history.selected_execution_id,
+            saved_kind=self.saved.selected_kind,
+            saved_query_id=self.saved.selected_query_id,
+        )
+
+    async def restore_snapshot(self, snapshot: AthenaPageSnapshot) -> None:
+        if not self._is_alive():
+            raise ValueError("Athena page is unavailable")
+        if (
+            not isinstance(snapshot, AthenaPageSnapshot)
+            or snapshot.context.connection_name != self._connection.name
+            or snapshot.context.region != self._connection.region
+            or snapshot.query.context != snapshot.context
+        ):
+            raise ValueError("Athena snapshot does not match the active source")
+
+        for key, value in (
+            ("workgroup", snapshot.context.workgroup),
+            ("catalog", snapshot.context.catalog),
+            ("database", snapshot.context.database),
+        ):
+            if value:
+                self._selection_store.set(self._selection_scope, key, value)
+            else:
+                self._selection_store.discard(self._selection_scope, key)
+        self._restore_snapshot_selection_keys(snapshot)
+
+        await self._restore_snapshot_context(snapshot)
+        if self._context != snapshot.context:
+            raise ValueError("Athena snapshot context is unavailable")
+
+        await self.query.restore_snapshot(snapshot.query)
+        await self._restore_snapshot_history_selection(snapshot)
+        await self._restore_snapshot_saved_selection(snapshot)
+        await self.select_view(snapshot.active_view)
+
+    async def _restore_snapshot_context(self, snapshot: AthenaPageSnapshot) -> None:
+        if self._context.workgroup != snapshot.context.workgroup:
+            discovered = await self._load_until_discovered(
+                lambda: any(row.name == snapshot.context.workgroup for row in self.workgroups),
+                has_more=lambda: self.has_more_workgroups,
+                current_token=lambda: self._workgroup_pager.current_token,
+                item_count=lambda: len(self.workgroups),
+                load_more=self.load_more_workgroups,
+            )
+            if not discovered:
+                raise ValueError("Athena snapshot context is unavailable")
+            await self.select_workgroup(snapshot.context.workgroup)
+
+        if self._context.catalog != snapshot.context.catalog:
+            discovered = await self._load_until_discovered(
+                lambda: any(row.name == snapshot.context.catalog for row in self.catalogs),
+                has_more=lambda: self.has_more_catalogs,
+                current_token=lambda: self._catalog_pager.current_token,
+                item_count=lambda: len(self.catalogs),
+                load_more=self.load_more_catalogs,
+            )
+            if not discovered:
+                raise ValueError("Athena snapshot context is unavailable")
+            await self.select_catalog(snapshot.context.catalog)
+
+        if self._context.database != snapshot.context.database:
+            discovered = await self._load_until_discovered(
+                lambda: any(
+                    row.ref.database_name == snapshot.context.database for row in self.databases
+                ),
+                has_more=lambda: self.has_more_databases,
+                current_token=lambda: self._database_pager.current_token,
+                item_count=lambda: len(self.databases),
+                load_more=self.load_more_databases,
+            )
+            if not discovered:
+                raise ValueError("Athena snapshot context is unavailable")
+            await self.select_database(snapshot.context.database)
 
     async def select_workgroup(self, workgroup: str) -> None:
         if not self._is_alive():
@@ -961,6 +1051,45 @@ class AthenaPageVM:
                 selected_id,
             )
 
+    def _restore_snapshot_selection_keys(self, snapshot: AthenaPageSnapshot) -> None:
+        for key, value in (
+            ("history_execution_id", snapshot.history_execution_id),
+            ("saved_query_id", snapshot.saved_query_id),
+        ):
+            if value is None:
+                self._selection_store.discard(self._selection_scope, key)
+            else:
+                self._selection_store.set(self._selection_scope, key, value)
+
+    async def _restore_snapshot_history_selection(
+        self,
+        snapshot: AthenaPageSnapshot,
+    ) -> None:
+        if snapshot.history_execution_id is None:
+            return
+        if "history" not in self._loaded_views:
+            await self.history.setup()
+            if not self._is_alive():
+                return
+            self._loaded_views.add("history")
+        await self.history.select_execution(snapshot.history_execution_id)
+
+    async def _restore_snapshot_saved_selection(
+        self,
+        snapshot: AthenaPageSnapshot,
+    ) -> None:
+        if snapshot.saved_query_id is None or snapshot.saved_kind is None:
+            return
+        if "saved" not in self._loaded_views:
+            await self.saved.setup()
+            if not self._is_alive():
+                return
+            self._loaded_views.add("saved")
+        if snapshot.saved_kind is SavedQueryKind.NAMED:
+            await self.saved.select_named_query(snapshot.saved_query_id)
+        else:
+            await self.saved.select_prepared_statement(snapshot.saved_query_id)
+
     async def _run_page_command(
         self,
         command: Callable[[], Awaitable[None]],
@@ -1246,4 +1375,4 @@ class AthenaPageVM:
         self._on_property_changed.on_next(property_name)
 
 
-__all__ = ["AthenaPageVM", "AthenaView"]
+__all__ = ["AthenaPageSnapshot", "AthenaPageVM", "AthenaView"]

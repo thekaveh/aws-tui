@@ -9,7 +9,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext, ResultColumn, ResultPage
-from aws_tui.vm.athena.results_vm import AthenaResultsVM
+from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 _ID = ResultColumn("id", "varchar", "NULLABLE")
@@ -96,6 +96,69 @@ async def test_results_use_token_paging_without_eager_materialization() -> None:
     assert vm.rows == (("one",), ("two",))
     assert not vm.has_more
     assert client.calls == [("q-1", None), ("q-1", "next")]
+
+
+@pytest.mark.asyncio
+async def test_results_snapshot_restores_loaded_page_without_provider_fetch() -> None:
+    source_client = ResultClient(
+        {
+            ("RESULT_EXECUTION_SECRET", None): ResultPage(
+                (_ID,),
+                (("RESULT_ROW_SECRET",),),
+                "RESULT_TOKEN_SECRET",
+            ),
+        }
+    )
+    source = make_results_vm(source_client)
+    await source.load("RESULT_EXECUTION_SECRET")
+    snapshot = source.export_snapshot()
+
+    destination_client = ResultClient({})
+    destination = make_results_vm(destination_client)
+    await destination.restore_snapshot(snapshot)
+
+    assert destination.execution_id == "RESULT_EXECUTION_SECRET"
+    assert destination.columns == (_ID,)
+    assert destination.rows == (("RESULT_ROW_SECRET",),)
+    assert destination.has_more
+    assert destination.state is PaneState.IDLE
+    assert destination.error_text is None
+    assert not destination.is_loading_more
+    assert destination_client.calls == []
+    rendered = repr(snapshot)
+    assert "RESULT_EXECUTION_SECRET" not in rendered
+    assert "RESULT_ROW_SECRET" not in rendered
+    assert "RESULT_TOKEN_SECRET" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_results_snapshot_preserves_visible_loading_and_error_state() -> None:
+    snapshot = AthenaResultsSnapshot(
+        execution_id="RESULT_EXECUTION_SECRET",
+        columns=(_VALUE,),
+        rows=(("RESULT_ROW_SECRET",),),
+        next_token="RESULT_TOKEN_SECRET",
+        state=PaneState.ERROR,
+        error_text="RESULT_ERROR_SECRET",
+        is_loading_more=True,
+    )
+    destination_client = ResultClient({})
+    destination = make_results_vm(destination_client)
+
+    await destination.restore_snapshot(snapshot)
+
+    assert destination.state is PaneState.ERROR
+    assert destination.error_text == "RESULT_ERROR_SECRET"
+    assert destination.is_loading_more
+    assert destination_client.calls == []
+    rendered = repr(snapshot)
+    for marker in (
+        "RESULT_EXECUTION_SECRET",
+        "RESULT_ROW_SECRET",
+        "RESULT_TOKEN_SECRET",
+        "RESULT_ERROR_SECRET",
+    ):
+        assert marker not in rendered
 
 
 @pytest.mark.asyncio

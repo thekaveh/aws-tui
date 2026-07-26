@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import traceback
+from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
@@ -36,6 +38,7 @@ from aws_tui.domain.query import (
 )
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenGlueTableRequest
@@ -79,6 +82,7 @@ class PageClient:
         self.prepared_calls: list[tuple[str, str | None]] = []
         self.start_calls: list[tuple[str, QueryContext, str]] = []
         self.stop_calls: list[str] = []
+        self.result_calls: list[tuple[str, str | None]] = []
         self.block_catalog_for: str | None = None
         self.workgroup_error: ProviderError | None = None
         self.workgroup_detail_error: ProviderError | None = None
@@ -309,6 +313,7 @@ class PageClient:
         *,
         start_token: str | None = None,
     ) -> ResultPage:
+        self.result_calls.append((execution_id, start_token))
         if self.block_results:
             self.results_started.set()
             try:
@@ -355,6 +360,25 @@ def make_page_vm(
     )
     page.construct()
     return page
+
+
+async def _snapshot_failure_artifacts(
+    page: AthenaPageVM,
+    snapshot: object,
+    crash_dir: Path,
+) -> tuple[str, str, str]:
+    try:
+        await page.restore_snapshot(snapshot)  # type: ignore[arg-type]
+    except ValueError as error:
+        trace = "".join(
+            traceback.TracebackException.from_exception(
+                error,
+                capture_locals=True,
+            ).format()
+        )
+        crash_path = CrashDump(base_dir=crash_dir).write(exc=error)
+        return str(error), trace, crash_path.read_text(encoding="utf-8")
+    raise AssertionError("mismatched snapshot should fail closed")
 
 
 @pytest.mark.asyncio
@@ -767,6 +791,164 @@ async def test_catalog_change_invalidates_results_before_new_context_load_finish
     await change
     assert page.context.catalog == "federated"
     assert page.context.database == "remote"
+
+
+@pytest.mark.asyncio
+async def test_page_snapshot_round_trip_restores_query_results_and_selections_without_execution(
+    tmp_path: Path,
+) -> None:
+    client = PageClient()
+    store = ServiceSelectionStore()
+    source = make_page_vm(client, selection_store=store)
+    await source.setup()
+    await source.select_view("history")
+    await source.select_history_execution("history-primary")
+    await source.select_view("query")
+    source.query.set_sql("SELECT 'PAGE_SNAPSHOT_SQL_SECRET'")
+    await source.query.execute()
+    await source.select_view("results")
+    snapshot = source.export_snapshot()
+    assert source.query.execution_ref is not None
+    execution_id = source.query.execution_ref.execution_id
+    start_count = len(client.start_calls)
+    result_call_count = len(client.result_calls)
+
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    await destination.restore_snapshot(snapshot)
+
+    assert destination.context == source.context
+    assert destination.active_view == "results"
+    assert destination.query.sql == "SELECT 'PAGE_SNAPSHOT_SQL_SECRET'"
+    assert destination.query.execution_ref is not None
+    assert destination.query.execution_ref.execution_id == execution_id
+    assert destination.query.state is QueryState.SUCCEEDED
+    assert destination.query.statistics == _STATS
+    assert destination.results.execution_id == execution_id
+    assert destination.results.columns == (_COLUMN,)
+    assert destination.results.rows == (("1",),)
+    assert destination.history.selected_execution_id == "history-primary"
+    assert len(client.start_calls) == start_count
+    assert len(client.result_calls) == result_call_count
+
+    rendered = repr(snapshot)
+    assert "PAGE_SNAPSHOT_SQL_SECRET" not in rendered
+    assert execution_id not in rendered
+
+    hostile = replace(
+        snapshot,
+        context=replace(snapshot.context, connection_name="other-profile"),
+    )
+    error_text, trace, crash = await _snapshot_failure_artifacts(
+        destination,
+        hostile,
+        tmp_path / "crash",
+    )
+    assert error_text == "Athena snapshot does not match the active source"
+    assert "PAGE_SNAPSHOT_SQL_SECRET" not in trace
+    assert "PAGE_SNAPSHOT_SQL_SECRET" not in crash
+    assert execution_id not in trace
+    assert execution_id not in crash
+
+
+@pytest.mark.asyncio
+async def test_page_snapshot_restores_context_from_later_discovery_pages() -> None:
+    class PagedContextClient(PageClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.catalogs["analysts"] = [
+                AthenaCatalogSummary("federated", "LAMBDA", None),
+                AthenaCatalogSummary("AwsDataCatalog", "LAMBDA", None),
+            ]
+            self.databases[("analysts", "federated")] = ["remote"]
+            self.databases[("analysts", "AwsDataCatalog")] = ["staging", "events"]
+
+        async def list_workgroups_page(
+            self,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
+            self.workgroup_calls.append(start_token)
+            if start_token is None:
+                return [self.workgroups[0]], "workgroups-next"
+            return [self.workgroups[1]], None
+
+        async def list_catalogs_page(
+            self,
+            *,
+            workgroup: str | None = None,
+            start_token: str | None = None,
+        ) -> tuple[list[AthenaCatalogSummary], str | None]:
+            assert workgroup is not None
+            self.catalog_calls.append((workgroup, start_token))
+            rows = self.catalogs[workgroup]
+            if workgroup != "analysts":
+                return list(rows), None
+            if start_token is None:
+                return [rows[0]], "catalogs-next"
+            return [rows[1]], None
+
+        async def list_databases_page(
+            self,
+            catalog: str,
+            *,
+            workgroup: str | None = None,
+            start_token: str | None = None,
+        ) -> tuple[list[DatabaseSummary], str | None]:
+            assert workgroup is not None
+            self.database_calls.append((workgroup, catalog, start_token))
+            names = self.databases[(workgroup, catalog)]
+            if (workgroup, catalog) != ("analysts", "AwsDataCatalog"):
+                selected_names = names
+                token = None
+            elif start_token is None:
+                selected_names = names[:1]
+                token = "databases-next"
+            else:
+                selected_names = names[1:]
+                token = None
+            return [
+                DatabaseSummary(
+                    DatabaseRef(
+                        catalog,
+                        name,
+                        self.connection_name,
+                        self.region,
+                    ),
+                    None,
+                    None,
+                    None,
+                )
+                for name in selected_names
+            ], token
+
+    client = PagedContextClient()
+    store = ServiceSelectionStore()
+    source = make_page_vm(client, selection_store=store)
+    await source.setup()
+    await source.load_more_workgroups()
+    await source.select_workgroup("analysts")
+    await source.load_more_catalogs()
+    await source.select_catalog("AwsDataCatalog")
+    await source.load_more_databases()
+    await source.select_database("events")
+    snapshot = source.export_snapshot()
+    assert source.context == QueryContext(
+        "analytics",
+        "us-west-2",
+        "analysts",
+        "AwsDataCatalog",
+        "events",
+    )
+
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    assert destination.context.workgroup == "primary"
+
+    await destination.restore_snapshot(snapshot)
+
+    assert destination.context == source.context
+    assert destination.query.context == source.context
 
 
 @pytest.mark.asyncio

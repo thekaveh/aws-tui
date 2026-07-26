@@ -18,7 +18,13 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
-from aws_tui.domain.query import QueryContext, QueryExecutionDetail, QueryState, ResultColumn
+from aws_tui.domain.query import (
+    QueryContext,
+    QueryExecutionDetail,
+    QueryState,
+    ResultColumn,
+    ResultPage,
+)
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -28,6 +34,17 @@ _RESULTS_ERROR = "Athena results request failed"
 _COLUMN_ERROR = "Athena returned inconsistent result columns"
 
 ResultRow = tuple[str | None, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AthenaResultsSnapshot:
+    execution_id: str | None = field(repr=False)
+    columns: tuple[ResultColumn, ...] = field(repr=False)
+    rows: tuple[ResultRow, ...] = field(repr=False)
+    next_token: str | None = field(repr=False)
+    state: PaneState
+    error_text: str | None = field(repr=False)
+    is_loading_more: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +209,45 @@ class AthenaResultsVM:
     async def load_more(self) -> None:
         await self._worker.load_more_command.execute_async()
 
+    def export_snapshot(self) -> AthenaResultsSnapshot:
+        return AthenaResultsSnapshot(
+            execution_id=self._execution_id,
+            columns=self._columns,
+            rows=self.rows,
+            next_token=self._pager.current_token,
+            state=self._state,
+            error_text=self._error_text,
+            is_loading_more=self._is_loading_more,
+        )
+
+    async def restore_snapshot(self, snapshot: AthenaResultsSnapshot) -> None:
+        if self._disposed or self._shutdown_started:
+            raise ValueError("Athena results are unavailable")
+        if not isinstance(snapshot, AthenaResultsSnapshot):
+            raise ValueError("Athena results snapshot is invalid")
+        self._generation += 1
+        generation = self._generation
+        self._execution_id = snapshot.execution_id
+        self._columns = snapshot.columns
+        worker = self._replace_worker(
+            snapshot.execution_id,
+            generation,
+            restored_page=ResultPage(
+                snapshot.columns,
+                snapshot.rows,
+                snapshot.next_token,
+            ),
+        )
+        await worker.pager.refresh_command.execute_async()
+        if not self._is_current(worker):
+            raise ValueError("Athena results snapshot is stale")
+        self._columns = snapshot.columns
+        self._state = snapshot.state
+        self._error_text = snapshot.error_text
+        self._is_loading_more = snapshot.is_loading_more
+        self._notify_all()
+        self._notify("is_loading_more")
+
     async def open_s3_location(
         self,
         *,
@@ -340,16 +396,23 @@ class AthenaResultsVM:
         self,
         execution_id: str | None,
         generation: int,
+        *,
+        restored_page: ResultPage | None = None,
     ) -> _PagerGeneration:
         worker = _PagerGeneration(generation, execution_id)
 
         async def fetch(token: str | None) -> tuple[list[ResultRow], str | None]:
-            if execution_id is None:
+            nonlocal restored_page
+            if token is None and restored_page is not None:
+                page = restored_page
+                restored_page = None
+            elif execution_id is None:
                 return [], None
-            page = await self._client.get_results_page(
-                execution_id,
-                start_token=token,
-            )
+            else:
+                page = await self._client.get_results_page(
+                    execution_id,
+                    start_token=token,
+                )
             if not self._is_current(worker):
                 return [], None
             if token is None:
@@ -374,9 +437,15 @@ class AthenaResultsVM:
         self,
         execution_id: str | None,
         generation: int,
+        *,
+        restored_page: ResultPage | None = None,
     ) -> _PagerGeneration:
         old_worker = self._worker
-        worker = self._make_worker(execution_id, generation)
+        worker = self._make_worker(
+            execution_id,
+            generation,
+            restored_page=restored_page,
+        )
         self._worker = worker
         self._pager = worker.pager
         self._retire_worker(old_worker)
@@ -463,7 +532,7 @@ class AthenaResultsVM:
         self._on_property_changed.on_next(property_name)
 
 
-__all__ = ["AthenaResultsVM", "RenderedResultCell"]
+__all__ = ["AthenaResultsSnapshot", "AthenaResultsVM", "RenderedResultCell"]
 
 
 def _execution_identity_belongs_to(

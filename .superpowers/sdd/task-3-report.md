@@ -740,3 +740,134 @@ or `uv run pytest` process.
 - SQL table visibility remains fail-closed: foreign catalogs, malformed
   special statements, and unresolved context defaults produce no table
   references.
+
+## Remaining Task 3 P1 Lifecycle Corrections: 2026-07-26
+
+### Root Cause
+
+Three ownership boundaries were still incomplete after the first review
+correction:
+
+1. Table requests had a generation and transaction lock, but ordinary nav-menu
+   selections did not participate in that ownership. Cancelling a table
+   worker therefore launched its durable rollback after a newer user selection
+   and restored the stale pre-handoff service over the user's destination.
+2. Shutdown drained table tasks before disposing the service-navigation
+   subscription. A message delivered after the drain snapshot could create a
+   new unowned task that survived `_aws_tui_shutdown()`.
+3. The table rollback snapshot retained only Athena view and SQL. Rebuilding
+   Athena disposed the old query/results VMs, so execution identity, detail,
+   loaded rows, continuation token, result state, and prior history/saved
+   selections were irretrievably cleared.
+
+### Implementation
+
+- One shared navigation epoch now records either `table` or `external`
+  ownership. Table-to-table supersession still restores the stable base before
+  the newer request validates. User navigation, settings, other services,
+  source switching, and S3 handoffs claim external ownership first, cancel
+  retained table tasks, and prevent every later table rollback/remount stage
+  from overwriting that selection.
+- Application shutdown now synchronously closes and disposes the
+  service-navigation intake before its first await. It then repeatedly drains
+  both retained navigation and rollback sets until neither can publish more
+  work. Late hub delivery and direct callback delivery are ignored.
+- `AthenaPageVM`, `AthenaQueryVM`, and `AthenaResultsVM` expose frozen,
+  slot-backed export/restore snapshots. SQL, execution IDs, provider detail,
+  output locations, result columns/rows/tokens, errors, and selected IDs are
+  excluded from every snapshot repr.
+- A fresh Athena page restores exact connection/region/workgroup/catalog/
+  database context, including selections found on bounded continuation pages.
+  It then restores active view, SQL, execution reference/detail, loaded result
+  state, and history/saved selection. Results are seeded through the existing
+  `TokenPagedComposition` command path without an Athena fetch, and SQL is
+  never auto-executed.
+- Lightweight shutdown harnesses that intentionally construct `AwsTuiApp`
+  without `__init__` retain their established behavior through guarded empty
+  navigation owners.
+
+### TDD Evidence
+
+The RED phase reproduced each defect independently:
+
+```text
+Athena results snapshot import: collection failed (missing API)
+Athena page snapshot: AttributeError (missing export API)
+user selects S3 during paused switch: final selection was Glue
+late shutdown message: navigation task started after first drain
+failed handoff rollback: restored execution_ref was None
+later-page context rollback: "Athena snapshot context is unavailable"
+```
+
+The new adversarial matrix covers switch, mount, and open pauses crossed with
+S3, Settings, and EMR Serverless user navigation. Failed, repeatedly
+cancelled, and newer-request-superseded handoffs each assert exact Athena
+execution ID, query detail, columns, rows, result state, context, and
+history/saved selection with no additional `start_query` call.
+
+Final Task 3 contract with runtime/unraisable warnings promoted to errors:
+
+```text
+516 passed in 41.01s
+```
+
+This includes all new lifecycle tests, message validation, SQL extraction,
+Glue/Athena VMs, affected Glue/Athena widgets, and cross-service integration.
+
+### Verification
+
+Broad domain and VM regression:
+
+```text
+1498 passed in 45.16s
+```
+
+Privacy and crash-dump regression with warnings promoted to errors:
+
+```text
+282 passed in 1.28s
+```
+
+Full UI regression:
+
+```text
+357 passed in 18.53s
+```
+
+Full in-process integration regression:
+
+```text
+208 passed, 9 deselected in 291.40s
+```
+
+No pytest or `uv run pytest` process remained after the integration run.
+
+Static, formatting, architecture, diff, and build gates:
+
+```text
+uv run mypy src/aws_tui
+Success: no issues found in 152 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+386 files already formatted
+
+scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+clean
+
+uv build --no-build-isolation
+Successfully built aws_tui-0.8.0.tar.gz and
+aws_tui-0.8.0-py3-none-any.whl
+```
+
+An additional diagnostic run of the entire unrelated UI suite with every
+warning promoted to an error exposed its existing suite-order resource warning
+(two sockets and an event loop are collected during the brand-banner test).
+The brand-banner test passes in isolation, the affected Glue/Athena UI tests
+pass under warnings-as-errors in the 516-test contract above, and the full UI
+suite passes under its normal configured warning policy.

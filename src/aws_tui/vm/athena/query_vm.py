@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -32,7 +33,7 @@ from aws_tui.domain.query import (
 )
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena.results_vm import AthenaResultsVM
+from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 _QUERY_ERROR = "Athena query request failed"
@@ -51,6 +52,23 @@ Sleep = Callable[[float], Awaitable[None]]
 
 class _QueryContextMismatchError(Exception):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class AthenaQuerySnapshot:
+    context: QueryContext = field(repr=False)
+    sql: str = field(repr=False)
+    validation_error: str | None = field(repr=False)
+    execution_ref: QueryExecutionRef | None = field(repr=False)
+    state: QueryState | None
+    statistics: QueryStatistics = field(repr=False)
+    query_error: AthenaQueryError | None = field(repr=False)
+    state_reason: str | None = field(repr=False)
+    output_location: str | None = field(repr=False)
+    engine_version: str | None = field(repr=False)
+    pane_state: PaneState
+    error_text: str | None = field(repr=False)
+    results: AthenaResultsSnapshot = field(repr=False)
 
 
 class AthenaQueryVM:
@@ -222,6 +240,65 @@ class AthenaQueryVM:
         self._validation_error = None
         self._notify("sql")
         self._notify("validation_error")
+
+    def export_snapshot(self) -> AthenaQuerySnapshot:
+        return AthenaQuerySnapshot(
+            context=self._context,
+            sql=self._sql,
+            validation_error=self._validation_error,
+            execution_ref=self._execution_ref,
+            state=self._state,
+            statistics=self._statistics,
+            query_error=self._query_error,
+            state_reason=self._state_reason,
+            output_location=self._output_location,
+            engine_version=self._engine_version,
+            pane_state=self._pane_state,
+            error_text=self._error_text,
+            results=self._results.export_snapshot(),
+        )
+
+    async def restore_snapshot(self, snapshot: AthenaQuerySnapshot) -> None:
+        if self._disposed or self._shutdown_started:
+            raise ValueError("Athena query is unavailable")
+        if not isinstance(snapshot, AthenaQuerySnapshot):
+            raise ValueError("Athena query snapshot is invalid")
+        if snapshot.context != self._context:
+            raise ValueError("Athena query snapshot does not match the active context")
+        if snapshot.execution_ref is not None and not self._ref_matches_context(
+            snapshot.execution_ref,
+            self._context,
+        ):
+            raise ValueError("Athena query snapshot does not match the active context")
+        if (
+            self._execution_task is not None
+            or self._submission_task is not None
+            or self._busy
+            or self._is_submitting
+            or self._owns_active_query
+        ):
+            raise ValueError("Athena query is busy")
+
+        await self._results.restore_snapshot(snapshot.results)
+        self._generation += 1
+        self._sql = snapshot.sql
+        self._validation_error = snapshot.validation_error
+        self._execution_ref = snapshot.execution_ref
+        self._state = snapshot.state
+        self._statistics = snapshot.statistics
+        self._query_error = snapshot.query_error
+        self._state_reason = snapshot.state_reason
+        self._output_location = snapshot.output_location
+        self._engine_version = snapshot.engine_version
+        self._pane_state = snapshot.pane_state
+        self._error_text = snapshot.error_text
+        self._owns_active_query = False
+        self._busy = False
+        self._is_submitting = False
+        self._notify("sql")
+        self._notify("validation_error")
+        self._notify_execution()
+        self._notify("is_executing")
 
     async def set_context(self, context: QueryContext) -> None:
         if self._disposed or context == self._context:
@@ -663,4 +740,4 @@ def _request_token(context: QueryContext) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
-__all__ = ["AthenaQueryVM"]
+__all__ = ["AthenaQuerySnapshot", "AthenaQueryVM"]

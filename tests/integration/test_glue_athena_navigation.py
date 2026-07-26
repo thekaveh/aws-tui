@@ -11,12 +11,14 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.domain.data_catalog import TableRef
+from aws_tui.domain.query import QueryState
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.messages import OpenAthenaTableRequest, OpenGlueTableRequest
+from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 
 async def _wait_for_service_setup(
@@ -532,6 +534,322 @@ async def test_superseded_table_handoff_is_one_serialized_transaction(
                 assert current.catalog.selected_table_name == "dev_events"
     finally:
         release_pause.set()
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pause_stage", ["switch", "mount", "open"])
+@pytest.mark.parametrize("selected_service", ["s3", SETTINGS_NAV_ID, "emr-serverless"])
+async def test_user_navigation_supersedes_inflight_table_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pause_stage: str,
+    selected_service: str,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    _add_cross_service_catalog(
+        ctx,
+        profile="demo-dev",
+        workgroup="dev-analytics",
+        database="dev_analytics",
+        table="dev_events",
+    )
+    app = AwsTuiApp(ctx)
+    release_pause = asyncio.Event()
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            initial = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(initial, GluePageVM)
+            pause_started = asyncio.Event()
+            original_switch = ctx.root_vm.switch_connection_and_service
+            original_mount = app._mount_service_view
+            original_open = AthenaPageVM.open_table
+
+            async def pause_switch(
+                connection: Connection,
+                auth_state: TokenState,
+                service_id: str,
+            ) -> None:
+                if pause_stage == "switch" and service_id == "athena":
+                    pause_started.set()
+                    await release_pause.wait()
+                await original_switch(connection, auth_state, service_id)
+
+            async def pause_mount(
+                service_id: str,
+                *,
+                required_connection: Connection | None = None,
+            ) -> bool:
+                if pause_stage == "mount" and service_id == "athena":
+                    pause_started.set()
+                    await release_pause.wait()
+                return await original_mount(
+                    service_id,
+                    required_connection=required_connection,
+                )
+
+            async def pause_open(
+                page: AthenaPageVM,
+                table_ref: TableRef,
+                snapshot_id: int | None = None,
+            ) -> None:
+                if pause_stage == "open":
+                    pause_started.set()
+                    await release_pause.wait()
+                await original_open(page, table_ref, snapshot_id)
+
+            monkeypatch.setattr(
+                ctx.root_vm,
+                "switch_connection_and_service",
+                pause_switch,
+            )
+            monkeypatch.setattr(app, "_mount_service_view", pause_mount)
+            monkeypatch.setattr(AthenaPageVM, "open_table", pause_open)
+
+            ctx.hub.send(
+                OpenAthenaTableRequest(
+                    TableRef(
+                        "AwsDataCatalog",
+                        "dev_analytics",
+                        "dev_events",
+                        "demo-dev",
+                        "us-east-1",
+                    )
+                )
+            )
+            await asyncio.wait_for(pause_started.wait(), timeout=2)
+
+            ctx.root_vm.services_menu.switch_service_command.execute(selected_service)
+            release_pause.set()
+            await asyncio.wait_for(
+                _wait_for_service_setup(ctx, app, pilot),
+                timeout=15,
+            )
+            await pilot.pause()  # type: ignore[attr-defined]
+
+            assert ctx.root_vm.services_menu.selected_id == selected_service
+            assert ctx.root_vm.content_host.current_id == selected_service
+            assert app._table_navigation_tasks == set()
+            assert app._table_handoff_rollbacks == set()
+    finally:
+        release_pause.set()
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_navigation_intake_before_first_drain_returns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    release_drain = asyncio.Event()
+    release_late_navigation = asyncio.Event()
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _wait_for_service_setup(ctx, app, pilot)
+            first_drain_complete = asyncio.Event()
+            late_navigation_started = asyncio.Event()
+            original_drain = app._drain_table_navigation
+
+            async def pause_after_first_drain() -> None:
+                await original_drain()
+                first_drain_complete.set()
+                await release_drain.wait()
+
+            async def block_late_navigation(
+                request: OpenAthenaTableRequest | OpenGlueTableRequest,
+                generation: int,
+            ) -> None:
+                del request, generation
+                late_navigation_started.set()
+                await release_late_navigation.wait()
+
+            monkeypatch.setattr(app, "_drain_table_navigation", pause_after_first_drain)
+            monkeypatch.setattr(app, "_open_table_request", block_late_navigation)
+            request = OpenGlueTableRequest(
+                TableRef(
+                    "AwsDataCatalog",
+                    "dev_analytics",
+                    "dev_events",
+                    "demo-dev",
+                    "us-east-1",
+                )
+            )
+
+            shutdown = asyncio.create_task(app._aws_tui_shutdown())
+            await asyncio.wait_for(first_drain_complete.wait(), timeout=2)
+            ctx.hub.send(request)
+            app._on_service_navigation_message(request)
+            await asyncio.sleep(0)
+            release_drain.set()
+            await asyncio.wait_for(shutdown, timeout=10)
+
+            assert not late_navigation_started.is_set()
+            assert app._table_navigation_tasks == set()
+            assert app._table_handoff_rollbacks == set()
+            assert app._service_navigation_sub is None
+    finally:
+        release_drain.set()
+        release_late_navigation.set()
+        tasks = tuple(app._table_navigation_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["failed", "cancelled", "superseded"])
+async def test_table_handoff_rollback_restores_complete_athena_result_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    release_open = asyncio.Event()
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            page = await _open_service(ctx, app, pilot, "athena")
+            assert isinstance(page, AthenaPageVM)
+            await page.select_view("saved")
+            await page.select_named_query("nq-dev-events")
+            await page.select_view("history")
+            await page.select_history_execution("q-dev-succeeded")
+            page.query.set_sql("SELECT 'TABLE_HANDOFF_SQL_SECRET'")
+            await page.select_view("query")
+            await page.query.execute()
+            await page.select_view("results")
+            assert page.query.execution_ref is not None
+            assert page.query.state is QueryState.SUCCEEDED
+            assert page.results.rows == (("1",),)
+
+            execution_id = page.query.execution_ref.execution_id
+            before_context = page.context
+            before_query_detail = (
+                page.query.state,
+                page.query.statistics,
+                page.query.query_error,
+                page.query.state_reason,
+                page.query.output_location,
+                page.query.engine_version,
+                page.query.pane_state,
+                page.query.error_text,
+                page.query.validation_error,
+            )
+            before_columns = page.results.columns
+            before_rows = page.results.rows
+            before_result_state = page.results.state
+            before_result_error = page.results.error_text
+            before_result_loading = page.results.is_loading_more
+            before_history_selection = page.history.selected_execution_id
+            before_saved_kind = page.saved.selected_kind
+            before_saved_selection = page.saved.selected_query_id
+            client = _athena_client(ctx, "demo-dev")
+            start_count = sum(call.method == "start_query" for call in client.calls)
+            history_before = tuple(client.history["dev-analytics"])
+            open_started = asyncio.Event()
+
+            if outcome == "failed":
+
+                async def fail_open(target: GluePageVM, table_ref: TableRef) -> None:
+                    del target, table_ref
+                    raise RuntimeError("safe table open failure")
+
+                monkeypatch.setattr(GluePageVM, "open_table", fail_open)
+            else:
+                original_open = GluePageVM.open_table
+
+                async def pause_open(target: GluePageVM, table_ref: TableRef) -> None:
+                    open_started.set()
+                    await release_open.wait()
+                    await original_open(target, table_ref)
+
+                monkeypatch.setattr(GluePageVM, "open_table", pause_open)
+
+            ctx.hub.send(
+                OpenGlueTableRequest(
+                    TableRef(
+                        "AwsDataCatalog",
+                        "dev_analytics",
+                        "dev_events",
+                        "demo-dev",
+                        "us-east-1",
+                    )
+                )
+            )
+            if outcome != "failed":
+                await asyncio.wait_for(open_started.wait(), timeout=2)
+                if outcome == "cancelled":
+                    navigation = next(iter(app._table_navigation_tasks))
+                    navigation.cancel()
+                else:
+                    ctx.hub.send(
+                        OpenAthenaTableRequest(
+                            TableRef(
+                                "AwsDataCatalog",
+                                "dev_analytics",
+                                "dev_events",
+                                "missing-profile",
+                                "us-east-1",
+                            )
+                        )
+                    )
+                release_open.set()
+
+            await asyncio.wait_for(
+                _wait_for_service_setup(ctx, app, pilot),
+                timeout=15,
+            )
+
+            restored = ctx.root_vm.content_host.current
+            assert isinstance(restored, AthenaPageVM)
+            assert restored.context == before_context
+            assert restored.active_view == "results"
+            assert restored.query.sql == "SELECT 'TABLE_HANDOFF_SQL_SECRET'"
+            assert restored.query.execution_ref is not None
+            assert restored.query.execution_ref.execution_id == execution_id
+            assert (
+                restored.query.state,
+                restored.query.statistics,
+                restored.query.query_error,
+                restored.query.state_reason,
+                restored.query.output_location,
+                restored.query.engine_version,
+                restored.query.pane_state,
+                restored.query.error_text,
+                restored.query.validation_error,
+            ) == before_query_detail
+            assert restored.results.execution_id == execution_id
+            assert restored.results.columns == before_columns
+            assert restored.results.rows == before_rows
+            assert restored.results.state is before_result_state
+            assert restored.results.error_text == before_result_error
+            assert restored.results.is_loading_more is before_result_loading
+            assert restored.history.selected_execution_id == before_history_selection
+            assert restored.saved.selected_kind is before_saved_kind
+            assert restored.saved.selected_query_id == before_saved_selection
+            assert tuple(client.history["dev-analytics"]) == history_before
+            assert sum(call.method == "start_query" for call in client.calls) == start_count
+    finally:
+        release_open.set()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
 
