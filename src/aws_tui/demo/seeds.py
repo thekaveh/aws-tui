@@ -13,11 +13,12 @@ from datetime import UTC, datetime, timedelta
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr
 from aws_tui.demo.in_memory_fs import InMemoryFS
+from aws_tui.demo.in_memory_glue import InMemoryGlue
 from aws_tui.domain.emr_serverless import (
     ApplicationState,
     JobRunState,
 )
-from aws_tui.domain.filesystem import PathRef
+from aws_tui.domain.filesystem import PathRef, PermissionDeniedError
 
 # Fixed "now" for deterministic timestamps. Anchored at the spec's
 # write date so the seed reads as "recently active" forever — bumping
@@ -201,9 +202,39 @@ def seeded_demo_emr() -> InMemoryEmr:
     return emr
 
 
+def seeded_demo_glue() -> dict[str, InMemoryGlue]:
+    """Build disjoint Glue catalogs for each AWS demo connection."""
+    dev = InMemoryGlue(connection_name="demo-dev", region="us-east-1")
+    dev_events = dev.add_table("dev_analytics", "dev_events")
+    dev.add_partition(dev_events.ref, "event_date=2026-07-24")
+    dev.add_partition(dev_events.ref, "event_date=2026-07-25")
+    dev.add_run("dev_daily_etl", "jr-dev-running", "RUNNING")
+    dev.add_run("dev_daily_etl", "jr-dev-succeeded", "SUCCEEDED")
+    dev.add_crawler("dev-ready", "READY", database_name="dev_analytics")
+    dev.add_crawler("dev-running", "RUNNING", database_name="dev_analytics")
+
+    prod = InMemoryGlue(connection_name="demo-prod", region="us-east-1")
+    prod_sales = prod.add_table("prod_warehouse", "prod_sales")
+    prod.add_partition(prod_sales.ref, "event_date=2026-07-25")
+    prod.add_run("prod_sales_etl", "jr-prod-succeeded", "SUCCEEDED")
+    prod.add_run("prod_sales_etl", "jr-prod-failed", "FAILED")
+    prod.add_crawler("prod-ready", "READY", database_name="prod_warehouse")
+    prod.add_crawler("prod-failed", "FAILED", database_name="prod_warehouse")
+
+    shared = InMemoryGlue(connection_name="demo-shared", region="us-west-2")
+    shared.crawlers_error = PermissionDeniedError("glue:GetCrawlers denied in demo-shared")
+
+    return {
+        "demo-dev": dev,
+        "demo-prod": prod,
+        "demo-shared": shared,
+    }
+
+
 __all__ = [
     "seed_emr_data",
     "seed_s3_data",
     "seeded_demo_emr",
     "seeded_demo_fs",
+    "seeded_demo_glue",
 ]

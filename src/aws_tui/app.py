@@ -1098,6 +1098,7 @@ class AwsTuiApp(App[None]):
                         focus_coordinator=ctx.focus_coordinator,
                         dual_pane_class=DualPane,
                         emr_page_class=EmrServerlessPage,
+                        glue_page_class=GluePage,
                     )
                 )
         except Exception as exc:
@@ -1397,6 +1398,11 @@ class AwsTuiApp(App[None]):
                 left = emr_page.left_pane
                 if left is not None:
                     left.focus()
+            return
+        if current_id == "glue":
+            with contextlib.suppress(Exception):
+                page = self.query_one("#content-glue-page", GluePage)
+                page.query_one("#glue-databases-pane").query_one(OptionList).focus()
             return
         if current_id == SETTINGS_NAV_ID:
             with contextlib.suppress(Exception):
@@ -2731,6 +2737,7 @@ class AwsTuiApp(App[None]):
                         focus_coordinator=ctx.focus_coordinator,
                         dual_pane_class=DualPane,
                         emr_page_class=EmrServerlessPage,
+                        glue_page_class=GluePage,
                     )
                 )
         except Exception as exc:

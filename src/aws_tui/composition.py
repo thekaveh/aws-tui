@@ -39,6 +39,7 @@ from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.services.emr_serverless.service import EmrServerlessService
+from aws_tui.services.glue.service import GlueService
 from aws_tui.services.s3.service import S3Service
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
@@ -213,12 +214,13 @@ def build_app_context(
     )
     if demo:
         from aws_tui.demo.connections import DemoConnectionResolver
-        from aws_tui.demo.seeds import seeded_demo_emr, seeded_demo_fs
+        from aws_tui.demo.seeds import seeded_demo_emr, seeded_demo_fs, seeded_demo_glue
 
         # DemoConnectionResolver is a structural subtype — typed as the
         # production class so all downstream call sites remain compatible.
         connection_resolver: ConnectionResolver = DemoConnectionResolver()  # type: ignore[assignment]
         _demo_emr: InMemoryEmr = seeded_demo_emr()
+        demo_glue_clients = seeded_demo_glue()
         demo_emr_ref: InMemoryEmr | None = _demo_emr
         s3_fs_factory = lambda c: seeded_demo_fs(c.profile or "demo-default")  # noqa: E731
         # Captured by the lambda so every emr_client_factory(connection)
@@ -227,11 +229,13 @@ def build_app_context(
         # state.  A second build_app_context() call (rare; mostly in tests)
         # gets its own _demo_emr; we don't share at module scope.
         emr_client_factory = lambda c: _demo_emr  # noqa: E731
+        glue_client_factory = lambda c: demo_glue_clients[c.name]  # noqa: E731
     else:
         connection_resolver = ConnectionResolver(config_store=config_store)
         demo_emr_ref = None
         s3_fs_factory = None
         emr_client_factory = None
+        glue_client_factory = None
     aws_session = AwsSession()
     transfer_journal = TransferJournal(base_dir=cache_dir / "transfers")
 
@@ -257,6 +261,14 @@ def build_app_context(
         emr_client_factory=emr_client_factory,
     )
     registry.register(cast("Service", emr_service))
+
+    glue_service = GlueService(
+        hub=hub,
+        dispatcher=dispatcher,
+        aws_session=aws_session,
+        glue_client_factory=glue_client_factory,
+    )
+    registry.register(cast("Service", glue_service))
 
     # ── Root VM ───────────────────────────────────────────────────────────
     root_vm = RootVM(

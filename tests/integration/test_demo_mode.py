@@ -10,11 +10,12 @@ the file-pane level.
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 
 import pytest
 
 from aws_tui.app import AwsTuiApp
-from aws_tui.composition import build_app_context
+from aws_tui.composition import AppContext, build_app_context
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.nav_row import NavRow
@@ -22,6 +23,30 @@ from aws_tui.ui.widgets.pane import Pane
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _wait_for_service_setup(
+    ctx: AppContext,
+    pilot: object,
+) -> None:
+    app = pilot.app  # type: ignore[attr-defined]
+    await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+    setup_task = ctx.root_vm.content_host._setup_task  # type: ignore[attr-defined]
+    if setup_task is not None and not setup_task.done():
+        await setup_task
+    await pilot.pause()  # type: ignore[attr-defined]
+
+
+async def _open_service(
+    ctx: AppContext,
+    pilot: object,
+    service_id: str,
+) -> None:
+    app = pilot.app  # type: ignore[attr-defined]
+    await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+    await pilot.pause()  # type: ignore[attr-defined]
+    ctx.root_vm.services_menu.switch_service_command.execute(service_id)
+    await _wait_for_service_setup(ctx, pilot)
 
 
 async def test_demo_mode_boots_with_four_demo_connections(tmp_path) -> None:
@@ -151,6 +176,29 @@ async def test_demo_mode_launch_selects_menu_not_s3_panes(tmp_path) -> None:
             assert "-rail-active" in app.screen.classes
             assert [row.descriptor_id for row in selected_nav] == ["s3"]
             assert focused_panes == []
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+async def test_glue_demo_profiles_have_disjoint_catalogs(tmp_path: Path) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _open_service(ctx, pilot, "glue")
+            assert "dev_events" in app.export_screenshot()
+
+            await app.action_swap_source()
+            await _wait_for_service_setup(ctx, pilot)
+
+            rendered = app.export_screenshot()
+            assert "prod_sales" in rendered
+            assert "dev_events" not in rendered
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
