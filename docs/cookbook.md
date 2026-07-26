@@ -526,18 +526,13 @@ app-owned active query do not cross profiles or regions. Selections may be
 remembered only within the same connection name and region and are revalidated
 when the page returns.
 
-### 1.6.1. Minimum permissions and result destination
+### 1.6.1. Minimum Athena and data permissions
 
-Start with the least privilege required for the views you use. The client calls
-these Athena APIs: `athena:ListWorkGroups`, `athena:GetWorkGroup`,
-`athena:ListDataCatalogs`, `athena:ListDatabases`,
-`athena:ListTableMetadata`, `athena:ListQueryExecutions`,
-`athena:GetQueryExecution`, `athena:GetQueryRuntimeStatistics`,
-`athena:StartQueryExecution`, `athena:StopQueryExecution`,
-`athena:GetQueryResults`, `athena:ListNamedQueries`,
-`athena:BatchGetNamedQuery`, and `athena:ListPreparedStatements`.
-Scope resource ARNs where your account policy permits; the following is a
-readable starting point rather than a universal production policy:
+Start with the least privilege required for the views in use. The
+[AWS Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_athena.html)
+defines each Athena action and its resource types. This is the minimum Athena
+API policy used by aws-tui; scope workgroup and data-catalog resources where
+the action supports resource-level permissions:
 
 ```json
 {
@@ -545,82 +540,149 @@ readable starting point rather than a universal production policy:
   "Statement": [{
     "Effect": "Allow",
     "Action": [
-      "athena:ListWorkGroups", "athena:GetWorkGroup",
-      "athena:ListDataCatalogs", "athena:ListDatabases",
-      "athena:ListTableMetadata", "athena:ListQueryExecutions",
-      "athena:GetQueryExecution", "athena:GetQueryRuntimeStatistics",
-      "athena:StartQueryExecution", "athena:StopQueryExecution",
-      "athena:GetQueryResults", "athena:ListNamedQueries",
-      "athena:BatchGetNamedQuery", "athena:ListPreparedStatements"
+      "athena:ListWorkGroups",
+      "athena:GetWorkGroup",
+      "athena:ListDataCatalogs",
+      "athena:ListDatabases",
+      "athena:ListTableMetadata",
+      "athena:ListQueryExecutions",
+      "athena:GetQueryExecution",
+      "athena:GetQueryRuntimeStatistics",
+      "athena:StartQueryExecution",
+      "athena:StopQueryExecution",
+      "athena:GetQueryResults",
+      "athena:ListNamedQueries",
+      "athena:BatchGetNamedQuery",
+      "athena:ListPreparedStatements",
+      "athena:GetPreparedStatement"
     ],
     "Resource": "*"
   }]
 }
 ```
 
-The app sends the selected workgroup and query execution context; it does not
-supply a caller-side `ResultConfiguration`. Configure an output location in
-the workgroup, or enable Athena managed query results, before submitting. If
-Athena reports that no output location is available, aws-tui shows the typed
-result-configuration error instead of choosing a bucket. When
-`EnforceWorkGroupConfiguration` is enabled, the workgroup remains the source
-of truth for output behavior and other enforced settings.
+The query principal also needs access to catalog metadata and source data.
+For ordinary IAM-controlled S3 tables, grant `s3:ListBucket` on the source
+bucket/prefix and `s3:GetObject` on every underlying source-data object.
+Cross-account source buckets also need a permitting bucket policy. AWS
+documents this pass-through model in
+[Control access to Amazon S3 from Athena](https://docs.aws.amazon.com/athena/latest/ug/s3-permissions.html).
 
-For a normal S3 result location, grant the query principal only the needed
-result-bucket/prefix access: `s3:GetBucketLocation`, `s3:ListBucket`, and
-`s3:PutObject`; add `s3:GetObject` when the user must retrieve results or open
-the artifact in the S3 page. The handoff itself browses and reveals the object
-through the existing S3 service. If the catalog data is governed by Lake
-Formation, grant the same principal the required Lake Formation `DESCRIBE` and
-`SELECT` permissions, plus data-location access where the governed layout
-requires it. IAM, Lake Formation, workgroup configuration, and bucket policy
-are the authorization boundary; the app's SQL policy does not replace them.
+For Lake Formation-governed data, grant the required Lake Formation
+`DESCRIBE` and `SELECT` permissions and IAM
+`lakeformation:GetDataAccess`. Lake Formation uses that IAM action to vend
+temporary credentials to Athena. `DATA_LOCATION_ACCESS` permits creating or
+altering Data Catalog resources that point at a registered location; it is not
+a query permission and is not required merely to read an existing table. See
+[Manage Lake Formation and Athena user permissions](https://docs.aws.amazon.com/athena/latest/ug/lf-athena-user-permissions.html)
+and
+[Underlying data access control](https://docs.aws.amazon.com/lake-formation/latest/dg/access-control-underlying-data.html).
 
-### 1.6.2. Read-only SQL, execution, and cost signals
+Source data encrypted with a customer managed KMS key requires `kms:Decrypt`
+for the source key in IAM and in the key policy. For customer-managed S3
+results, require `kms:GenerateDataKey` and `kms:Decrypt` for the result key. An
+encrypted Glue Data Catalog additionally requires `kms:GenerateDataKey`,
+`kms:Decrypt`, and `kms:Encrypt`. AWS lists these separate source, result, and
+catalog requirements in
+[Encryption at rest](https://docs.aws.amazon.com/athena/latest/ug/encryption.html).
+
+### 1.6.2. Customer S3 output versus managed results
+
+aws-tui sends the selected workgroup and query execution context; it does not
+supply a caller-side `ResultConfiguration`. The workgroup must therefore use
+one of two distinct output modes:
+
+- **Customer S3 output.** A workgroup-enforced customer S3 output location is
+  authoritative when `EnforceWorkGroupConfiguration` is enabled. Grant
+  `s3:GetBucketLocation`, `s3:ListBucket`, and
+  `s3:ListBucketMultipartUploads` on the result bucket, plus `s3:PutObject`,
+  `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts`, and
+  `s3:GetObject` on the result prefix. Athena uses multipart uploads for query
+  results, including partial failed or cancelled output. `s3:GetObject` is
+  also required to retrieve output and to browse the artifact through S3.
+  See
+  [Work with query results and recent queries](https://docs.aws.amazon.com/athena/latest/ug/querying.html)
+  and the AWS
+  [S3 API permission mapping](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html).
+- **Athena managed results.** Managed results do not create a customer S3
+  result artifact. They remain available through Athena for 24 hours and
+  managed results do not support result reuse. aws-tui continues to page rows
+  with `GetQueryResults`; no S3 output location is required. If the workgroup
+  uses a customer managed KMS key, both the query principal and the managed
+  results key policy need the documented KMS access, including
+  `kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey`. See
+  [Managed query results](https://docs.aws.amazon.com/athena/latest/ug/managed-results.html).
+
+The Query view labels the workgroup mode as managed results or S3 output. If
+neither mode is configured, aws-tui shows the typed result-configuration error
+instead of choosing a bucket. With managed results, **Open Athena result in
+S3** remains on Athena and shows an advisory because there is no customer S3
+artifact. Workgroup-enforced customer S3 and managed output are never treated
+as interchangeable.
+
+### 1.6.3. Exact read-only SQL grammar
 
 Press `Ctrl+Enter` only after setting workgroup, catalog, and database. The
-local `sqlglot` Athena-dialect parser fails closed and accepts exactly one
-statement rooted in **SELECT, SHOW, DESCRIBE, and EXPLAIN** (where `EXPLAIN`
-wraps an allowed read-only statement). It rejects empty or unparsable input,
-multiple statements, DDL, DML, CTAS, `UNLOAD`, stored-procedure calls, and
-unknown commands before any `start_query_execution` call. The editor preserves
-the rejection as validation feedback; it does not send the rejected SQL.
+local `sqlglot` Athena-dialect parser fails closed and permits one statement
+from this implemented grammar:
 
-After submission, the Query view records an app-owned execution identity and
-polls its detail through queued/running/terminal states. On `SUCCEEDED` it
-loads the first results page; `FAILED` and `CANCELLED` retain their terminal
-status. `Esc` can call `stop_query_execution` only for a still-active query
-started by this page. Switching context or source also requests cancellation
-for such an owned query so it cannot continue under a disposed page; history
-rows are never assumed safe to stop.
+- SELECT roots and set operations (including `VALUES` operands) using `UNION`,
+  `INTERSECT`, or `EXCEPT`, including read-only common table expressions and
+  subqueries. A standalone `VALUES` statement is not an accepted root.
+- `SHOW DATABASES`, `SHOW SCHEMAS`, `SHOW TABLES`, `SHOW COLUMNS`,
+  `SHOW PARTITIONS`, `SHOW TBLPROPERTIES`, and `SHOW VIEWS`, with only the
+  scopes, patterns, and property selectors covered by the policy tests.
+- `DESCRIBE [EXTENDED|FORMATTED]` for a one- or two-part table name, with an
+  optional literal-equality `PARTITION` selector and bounded column/complex
+  field selectors.
+- non-`ANALYZE` `EXPLAIN` of another allowed statement, with the implemented
+  `TYPE` and `FORMAT` options.
 
-Results are fetched one page at a time, never fully materialized. `l` loads a
-next page only when Athena returns a continuation token; the domain request
-asks for at most 1,000 rows per page. The page reports Athena's `bytes scanned`
-and whether Athena reused a previous result. Treat bytes scanned as the cost
-signal before broad queries: aws-tui does not calculate or promise a currency
-price, and a workgroup bytes-scanned cutoff can still reject or limit work.
+It explicitly rejects `SHOW CREATE TABLE`, `SHOW CREATE VIEW`,
+`EXPLAIN ANALYZE`, empty or unparsable input, multiple statements, DDL, DML,
+CTAS, `UNLOAD`, procedure calls, and unknown or unbounded forms before any
+`start_query_execution` call. The editor retains the rejection as validation
+feedback and does not dispatch the SQL. IAM, Lake Formation, workgroup, S3,
+bucket, and KMS policies remain the authorization boundary.
 
-### 1.6.3. History, saved SQL, and result artifacts
+### 1.6.4. Execution, History, Results, and result artifacts
 
-History lists execution IDs for the selected workgroup and loads each selected
-execution's detail. Choose a successful execution and open Results to fetch its
-rows. The Saved view separately pages Athena named queries and prepared
-statements; selecting one shows its metadata and SQL, and the **Open in query
-editor** control copies that SQL into the Query view. Opening it does not bypass
-the same read-only parser at execution time.
+After submission, Query records an app-owned execution identity and polls its
+detail through queued, running, and terminal states. On `SUCCEEDED`, it loads
+the first Results page; `FAILED` and `CANCELLED` retain terminal detail. `Esc`
+can call `stop_query_execution` only for a still-active query started by this
+page. Switching context or source requests cancellation and awaits Athena
+shutdown before disposal; History rows are never assumed safe to stop.
 
-Use `:` or `Ctrl+K` and choose **Open Athena result in S3** to hand off a
-selected successful execution's concrete S3 result artifact. Before emitting
-the handoff, aws-tui reloads the execution and requires that its execution ID,
-connection, region, and active query context match and that its authoritative
-output location is a valid `s3://` URI. It then rebuilds S3 for that exact
-connection and region, navigates to the object, and selects it. Missing,
-malformed, non-S3, foreign-context, or unsucceeded locations leave the user on
-Athena with an advisory; no fallback profile is substituted and full result
-URIs are not echoed in the advisory.
+Results are fetched one page at a time and never fully materialized. `l` loads
+the next page only when Athena returns a continuation token; each domain
+request asks for at most 1,000 rows. Query execution detail reports bytes
+scanned. History hydrated detail reports bytes scanned and whether Athena
+reused a previous result. Results is the authoritative paged row surface, not
+the cost-statistics surface.
 
-### 1.6.4. Exercise Athena in demo mode and troubleshoot
+History lists execution IDs for the selected workgroup and hydrates the
+selected execution's detail. Choose a successful execution and open Results to
+fetch its rows. The Saved view separately pages named queries and prepared
+statements; selecting a prepared statement calls `GetPreparedStatement` for
+its SQL. **Open in query editor** copies SQL without executing or bypassing the
+read-only policy.
+
+For customer S3 output, choose **Open Athena result in S3** from the command
+palette. The Results VM does not trust History hydrated detail for navigation:
+it performs an authoritative reload with `GetQueryExecution`, requires a
+succeeded execution, exact execution ID, active connection, region and query
+context, and a valid `s3://` output location. It then rebuilds S3 under the
+exact connection and region, reveals that result artifact, and selects it.
+Missing, managed, malformed, non-S3, foreign-context, or unsucceeded output
+leaves the user on Athena with a redacted advisory; no fallback profile is
+substituted.
+
+Treat bytes scanned as the cost signal before broad queries. aws-tui does not
+calculate a currency price, and a workgroup bytes-scanned cutoff can reject or
+limit work.
+
+### 1.6.5. Exercise Athena in demo mode and troubleshoot
 
 Launch `aws-tui --demo`, select **Athena**, and begin on `demo-dev`. Its
 `dev-analytics` workgroup has succeeded, running, failed, empty, missing-output,

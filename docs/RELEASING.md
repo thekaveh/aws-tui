@@ -44,7 +44,31 @@ Review the PR like any other change. Merge when CI is green.
 
 ### 1.1.1. Pre-tag checklist
 
-- **Demo-mode smoke.** Run `AWS_TUI_DEMO=1 uv run aws-tui` from the release-PR branch. Verify the **DEMO MODE** chip appears in the banner, the four demo connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle through Shift+S, the S3 pane shows demo objects, the EMR pane shows two applications + ~10 job runs across states, and the clone-from-detail flow visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within ~5 seconds. Then open **Athena**: `demo-dev` must show its workgroups, history (including a succeeded result), named/prepared queries, and a result artifact that opens in the matching demo S3 path; `demo-prod` must show different Athena data; `demo-shared` must show a scoped access-denied state. If any of these break, fix forward; do NOT tag the release.
+- **Release classification.** Athena is minor-version feature work targeting
+  v0.9.0. It must remain in **Unreleased** until that cut and must not be
+  presented as a v0.8.0 headline or included in a v0.8.1 patch. Do not change
+  `src/aws_tui/version.py` while verifying Unreleased work.
+- **Demo-mode smoke.** Run `AWS_TUI_DEMO=1 uv run aws-tui` from the release-PR
+  branch. Verify the **DEMO MODE** chip appears in the banner, the four demo
+  connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle
+  through Shift+S, the S3 pane shows demo objects, the EMR pane shows two
+  applications plus about 10 job runs across states, and clone-from-detail
+  visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within about 5 seconds.
+- **Athena release smoke.** On `demo-dev`, execute a valid bounded query and
+  observe QUEUED/RUNNING/SUCCEEDED lifecycle state. Enter `DELETE FROM events`
+  and verify that aws-tui will reject an unsafe statement before dispatch.
+  Start the demo running query, confirm `Esc` can cancel only the active query
+  started by this page, and confirm a History-only execution is not
+  cancellable. Open Results, page results when a continuation is available,
+  and verify null/empty rendering. Inspect bytes scanned and reuse in the
+  actual Query and History surfaces: Query shows bytes scanned, while History
+  shows both bytes scanned and reused-result state. From the successful
+  execution, hand off the exact S3 artifact and verify S3 opens under the same
+  connection and region at `s3://athena-results/dev/q-dev-succeeded.csv`.
+  Confirm named and prepared query detail load, `demo-prod` is disjoint, and
+  `demo-shared` remains a scoped access-denied state.
+
+If any smoke step breaks, fix forward; do **not** tag the release.
 
 Then tag the merge commit and push:
 

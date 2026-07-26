@@ -1,4 +1,6 @@
 import textwrap
+import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import pytest
 from scripts.docs.manifest import parse_manifest
@@ -71,3 +73,30 @@ def test_copy_assets_copies_pngs(tmp_path):
     wiki_img = tmp_path / "generated" / "wiki" / "img"
     copy_assets(tmp_path, wiki_img)
     assert (wiki_img / "system.png").read_bytes().startswith(b"\x89PNG")
+
+
+def test_architecture_diagram_is_landscape_and_current():
+    repo_root = Path(__file__).parents[2]
+    master = (repo_root / "docs/diagrams/architecture.html").read_text(encoding="utf-8")
+    svg = extract_svg(master)
+    root = ET.fromstring(svg)
+    view_box = tuple(float(value) for value in root.attrib["viewBox"].split())
+
+    assert view_box[2] > view_box[3]
+    for label in (
+        "TEXTUAL VIEW",
+        "VIEWMODEL / VMX",
+        "SERVICE",
+        "DOMAIN",
+        "INFRA",
+        "S3",
+        "EMR Serverless",
+        "AWS Glue",
+        "Amazon Athena",
+        "await Athena shutdown",
+        "then dispose outgoing VM",
+        "exact connection + region",
+    ):
+        assert label in svg
+    assert "Iceberg" not in svg
+    assert "Glue-to-Athena" not in svg

@@ -11,11 +11,10 @@ These changes have landed on ``main`` since the v0.8.0 cut commit
 (``cd2c9e8``) but have not yet been packaged as a release. The v0.8.0
 PyPI publish is gated on
 [pypi/support#11264](https://github.com/pypi/support/issues/11264)
-(name-similarity exception for ``aws-tui`` vs ``awstui``). All work
-below will either ship as v0.8.1 (patch — UI polish + bug fixes) or
-roll into v0.9.0 if the maintainer chooses to recategorise the new
-nav-focus + demo-mode behaviour as feature work; the version label
-will be set at cut time.
+(name-similarity exception for ``aws-tui`` vs ``awstui``). Athena targets
+v0.9.0: it is new minor-version feature work under SemVer, not a v0.8.0
+headline or a v0.8.1 patch candidate. The package version remains ``0.8.0``
+until the release cut.
 
 ### 1.1.1. Added
 

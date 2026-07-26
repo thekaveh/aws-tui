@@ -25,8 +25,28 @@ durable map of the real upstream surfaces that mocks and adapters must track.
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
-| Amazon Athena client | `botocore==1.40.61` service model, Athena API `2017-05-18` | The `AthenaClient` uses boto operation methods `list_work_groups`, `get_work_group`, `list_data_catalogs`, `list_databases`, `list_table_metadata`, `list_query_executions`, `get_query_execution`, `get_query_runtime_statistics`, `start_query_execution`, `stop_query_execution`, `get_query_results`, `list_named_queries`, `batch_get_named_query`, and `list_prepared_statements`. It supplies `WorkGroup`, `QueryExecutionContext` (catalog/database), and a client request token to `start_query_execution`; it never supplies `ResultConfiguration`. List/result continuations are opaque `NextToken` values. | Source trace through `src/aws_tui/domain/athena.py`, `src/aws_tui/domain/query.py`, and `src/aws_tui/domain/sql_policy.py`; unit tests cover request shape, response mapping, pagination, output-configuration failures, error normalization, and result-header handling. |
+| Amazon Athena client | `botocore==1.40.61` service model, Athena API `2017-05-18` | The `AthenaClient` uses exactly the 15 boto operation methods listed below, including `get_prepared_statement` for prepared-query detail. It supplies `WorkGroup`, `QueryExecutionContext` (catalog/database), and a client request token to `start_query_execution`; it never supplies `ResultConfiguration`. List/result continuations are opaque `NextToken` values. | Source trace through `src/aws_tui/domain/athena.py`, `src/aws_tui/domain/query.py`, and `src/aws_tui/domain/sql_policy.py`; unit tests cover every operation, request shape, response mapping, pagination, output-configuration failures, error normalization, and result-header handling. Documentation tests compare this exact ledger with the minimum IAM action set. |
 | Athena page and result handoff | Internal `AthenaPageVM` / `OpenS3LocationRequest` contract | Query, History, Results, and Saved are connection- and region-scoped. The client accepts one read-only parsed statement, tracks only app-started active executions for stopping, and loads results a page at a time. A result handoff reloads the selected execution and requires a succeeded execution, matching active connection/region/context, and a valid `s3://` output location before handing the exact identity to S3. Full SQL, raw boto responses, and result values do not enter logs or crash dumps. | `tests/unit/domain/test_athena.py`, `tests/unit/domain/test_sql_policy.py`, Athena VM tests, `tests/integration/test_athena_page.py`, `tests/integration/test_athena_s3_handoff.py`, demo tests, and Athena snapshots. |
+
+Exact boto operation ledger (15):
+
+```text
+list_work_groups
+get_work_group
+list_data_catalogs
+list_databases
+list_table_metadata
+list_query_executions
+get_query_execution
+get_query_runtime_statistics
+start_query_execution
+stop_query_execution
+get_query_results
+list_named_queries
+batch_get_named_query
+list_prepared_statements
+get_prepared_statement
+```
 
 ## 1.3. Deferred contract checks
 

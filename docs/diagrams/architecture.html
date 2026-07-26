@@ -7,385 +7,307 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     * {
+      box-sizing: border-box;
       margin: 0;
       padding: 0;
-      box-sizing: border-box;
     }
 
     body {
-      font-family: 'JetBrains Mono', monospace;
-      background: #020617;
       min-height: 100vh;
-      padding: 2rem;
-      color: white;
+      padding: 32px;
+      background: #020617;
+      color: #f8fafc;
+      font-family: "JetBrains Mono", monospace;
     }
 
     .container {
-      max-width: 1200px;
+      width: min(1440px, 100%);
       margin: 0 auto;
     }
 
     .header {
-      margin-bottom: 2rem;
+      margin-bottom: 24px;
     }
 
     .header-row {
       display: flex;
       align-items: center;
-      gap: 1rem;
-      margin-bottom: 0.5rem;
+      gap: 12px;
+      margin-bottom: 8px;
     }
 
     .pulse-dot {
-      width: 12px;
-      height: 12px;
-      background: #22d3ee;
+      width: 10px;
+      height: 10px;
       border-radius: 50%;
+      background: #22d3ee;
       animation: pulse 2s infinite;
     }
 
     @keyframes pulse {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
+      50% { opacity: 0.45; }
     }
 
     h1 {
-      font-size: 1.5rem;
+      font-size: 24px;
       font-weight: 700;
-      letter-spacing: -0.025em;
+      letter-spacing: 0;
     }
 
     .subtitle {
+      margin-left: 22px;
       color: #94a3b8;
-      font-size: 0.875rem;
-      margin-left: 1.75rem;
+      font-size: 14px;
     }
 
     .diagram-container {
-      background: rgba(15, 23, 42, 0.5);
-      border-radius: 1rem;
-      border: 1px solid #1e293b;
-      padding: 1.5rem;
       overflow-x: auto;
+      padding: 16px;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      background: #07101f;
     }
 
     svg {
-      width: 100%;
-      min-width: 900px;
       display: block;
+      width: 100%;
+      min-width: 980px;
+      height: auto;
     }
 
     .cards {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 1rem;
-      margin-top: 2rem;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 20px;
     }
 
     .card {
-      background: rgba(15, 23, 42, 0.5);
-      border-radius: 0.75rem;
+      padding: 16px;
       border: 1px solid #1e293b;
-      padding: 1.25rem;
+      border-radius: 8px;
+      background: #0f172a;
     }
 
-    .card-header {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      margin-bottom: 0.75rem;
+    .card h2 {
+      margin-bottom: 8px;
+      font-size: 14px;
+      letter-spacing: 0;
     }
 
-    .card-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-    }
-
-    .card-dot.cyan { background: #22d3ee; }
-    .card-dot.emerald { background: #34d399; }
-    .card-dot.violet { background: #a78bfa; }
-    .card-dot.amber { background: #fbbf24; }
-    .card-dot.rose { background: #fb7185; }
-
-    .card h3 {
-      font-size: 0.875rem;
-      font-weight: 600;
-    }
-
-    .card ul {
-      list-style: none;
+    .card p {
       color: #94a3b8;
-      font-size: 0.75rem;
-    }
-
-    .card li {
-      margin-bottom: 0.375rem;
+      font-size: 12px;
+      line-height: 1.6;
     }
 
     .footer {
+      margin-top: 18px;
+      color: #64748b;
+      font-size: 12px;
       text-align: center;
-      margin-top: 1.5rem;
-      color: #475569;
-      font-size: 0.75rem;
+    }
+
+    @media (max-width: 760px) {
+      body {
+        padding: 16px;
+      }
+
+      .cards {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <!-- Header -->
-    <div class="header">
+  <main class="container">
+    <header class="header">
       <div class="header-row">
-        <div class="pulse-dot"></div>
+        <span class="pulse-dot"></span>
         <h1>aws-tui Architecture</h1>
       </div>
-      <p class="subtitle">Layered MVVM: View &middot; ViewModel &middot; Domain, wired by a composition root</p>
-    </div>
+      <p class="subtitle">Five enforced layers, four AWS services, one exact-identity handoff path</p>
+    </header>
 
-    <!-- Main Diagram -->
-    <div class="diagram-container">
-      <svg viewBox="0 0 1240 700" xmlns="http://www.w3.org/2000/svg">
-        <!-- Definitions -->
+    <section class="diagram-container">
+      <svg viewBox="0 0 1440 820" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diagram-title diagram-desc">
+        <title id="diagram-title">aws-tui current five-layer architecture</title>
+        <desc id="diagram-desc">Textual View, VMx ViewModel, Service, Domain, and Infrastructure layers with S3, EMR Serverless, AWS Glue, and Amazon Athena services. Athena shutdown is awaited before disposal, and Athena result handoff preserves exact connection and region identity.</desc>
         <defs>
-          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
-          </marker>
-          <marker id="arrowhead-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee" />
-          </marker>
           <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
             <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
           </pattern>
+          <marker id="arrow-slate" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/>
+          </marker>
+          <marker id="arrow-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+          </marker>
+          <marker id="arrow-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+          </marker>
         </defs>
 
-        <!-- Opaque canvas background (matches page body) so the diagram is
-             self-contained when rasterized standalone (PNG export); text on
-             low-opacity bands otherwise loses contrast against a
-             transparent/white canvas instead of the intended dark page. -->
-        <rect width="100%" height="100%" fill="#020617" />
+        <rect width="1440" height="820" fill="#020617"/>
+        <rect width="1440" height="820" fill="url(#grid)"/>
 
-        <!-- Background Grid -->
-        <rect width="100%" height="100%" fill="url(#grid)" />
+        <!-- Connections render before opaque component boxes. -->
+        <path d="M 520 142 L 520 168" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+        <path d="M 520 282 L 520 308" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-slate)"/>
+        <path d="M 520 418 L 520 444" fill="none" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow-slate)"/>
+        <path d="M 520 550 L 520 576" fill="none" stroke="#fbbf24" stroke-width="2" marker-end="url(#arrow-amber)"/>
 
-        <!-- =================================================================
-             LAYER BOUNDARIES (top -> bottom: View, ViewModel, Domain)
-             ================================================================= -->
-        <rect x="40" y="40" width="820" height="130" rx="12" fill="rgba(8, 51, 68, 0.12)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="8,4"/>
-        <text x="56" y="60" fill="#22d3ee" font-size="11" font-weight="600">LAYER 1 &middot; VIEW</text>
+        <path d="M 1050 106 L 1014 106" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-amber)"/>
+        <path d="M 1050 194 L 1014 194" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-amber)"/>
+        <path d="M 1050 350 L 1014 350" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-amber)"/>
+        <path d="M 1050 490 L 1014 490" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-amber)"/>
+        <path d="M 1050 620 L 1014 620" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-amber)"/>
 
-        <rect x="40" y="210" width="820" height="150" rx="12" fill="rgba(6, 78, 59, 0.12)" stroke="#34d399" stroke-width="1" stroke-dasharray="8,4"/>
-        <text x="56" y="230" fill="#34d399" font-size="11" font-weight="600">LAYER 2 &middot; VIEWMODEL</text>
+        <path d="M 1220 385 L 1220 405" fill="none" stroke="#fb7185" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+        <path d="M 1220 437 L 1220 457" fill="none" stroke="#fb7185" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+        <path d="M 1220 489 L 1220 509" fill="none" stroke="#fb7185" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
 
-        <rect x="40" y="400" width="820" height="130" rx="12" fill="rgba(76, 29, 149, 0.12)" stroke="#a78bfa" stroke-width="1" stroke-dasharray="8,4"/>
-        <text x="56" y="420" fill="#a78bfa" font-size="11" font-weight="600">LAYER 3 &middot; DOMAIN</text>
+        <path d="M 1138 688 L 1160 688" fill="none" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)"/>
+        <path d="M 1280 688 L 1302 688" fill="none" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)"/>
 
-        <!-- =================================================================
-             VIEW LAYER components
-             ================================================================= -->
-        <rect x="72" y="76" width="180" height="76" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
-        <text x="162" y="98" fill="white" font-size="11" font-weight="600" text-anchor="middle">Textual App</text>
-        <text x="162" y="114" fill="#e2e8f0" font-size="8" text-anchor="middle">panes &middot; widgets</text>
-        <text x="162" y="127" fill="#e2e8f0" font-size="8" text-anchor="middle">NavMenu &middot; DualPane</text>
-        <text x="162" y="140" fill="#e2e8f0" font-size="8" text-anchor="middle">JobRunDetailPane</text>
+        <!-- TEXTUAL VIEW -->
+        <rect x="34" y="34" width="980" height="108" rx="8" fill="#071a26" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="8,4"/>
+        <text x="52" y="56" fill="#22d3ee" font-size="12" font-weight="700">TEXTUAL VIEW</text>
+        <rect x="70" y="72" width="260" height="50" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="200" y="93" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">AwsTuiApp + page widgets</text>
+        <text x="200" y="109" fill="#94a3b8" font-size="8" text-anchor="middle">nav, panes, modals, .tcss themes</text>
+        <rect x="370" y="72" width="260" height="50" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="500" y="93" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">BindingResolver + actions</text>
+        <text x="500" y="109" fill="#94a3b8" font-size="8" text-anchor="middle">commands call VM relay operations</text>
+        <rect x="670" y="72" width="308" height="50" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="824" y="93" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">HubSubscriberMixin</text>
+        <text x="824" y="109" fill="#94a3b8" font-size="8" text-anchor="middle">view subscriptions; no boto imports</text>
 
-        <rect x="290" y="76" width="180" height="76" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
-        <text x="380" y="98" fill="white" font-size="11" font-weight="600" text-anchor="middle">.tcss themes</text>
-        <text x="380" y="114" fill="#e2e8f0" font-size="8" text-anchor="middle">property reads</text>
-        <text x="380" y="127" fill="#e2e8f0" font-size="8" text-anchor="middle">relay-command</text>
-        <text x="380" y="140" fill="#e2e8f0" font-size="8" text-anchor="middle">execute(...)</text>
+        <!-- VIEWMODEL -->
+        <rect x="34" y="168" width="980" height="114" rx="8" fill="#07251e" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4"/>
+        <text x="52" y="190" fill="#34d399" font-size="12" font-weight="700">VIEWMODEL / VMX</text>
+        <rect x="70" y="206" width="210" height="56" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
+        <text x="175" y="228" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">RootVM + ContentHostVM</text>
+        <text x="175" y="245" fill="#94a3b8" font-size="8" text-anchor="middle">selection, lifecycle, active service</text>
+        <rect x="310" y="206" width="210" height="56" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
+        <text x="415" y="228" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">File manager VMs</text>
+        <text x="415" y="245" fill="#94a3b8" font-size="8" text-anchor="middle">DualPaneVM, PaneVM, TransferVM</text>
+        <rect x="550" y="206" width="210" height="56" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
+        <text x="655" y="228" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Service page VMs</text>
+        <text x="655" y="245" fill="#94a3b8" font-size="8" text-anchor="middle">EMR, Glue, Athena child trees</text>
+        <rect x="790" y="206" width="188" height="56" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
+        <text x="884" y="228" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">MessageHub</text>
+        <text x="884" y="245" fill="#94a3b8" font-size="8" text-anchor="middle">service-neutral envelopes</text>
 
-        <rect x="508" y="76" width="330" height="76" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
-        <text x="673" y="98" fill="white" font-size="11" font-weight="600" text-anchor="middle">HubSubscriberMixin</text>
-        <text x="673" y="114" fill="#e2e8f0" font-size="8" text-anchor="middle">per-widget MessageHub subscription</text>
-        <text x="673" y="127" fill="#e2e8f0" font-size="8" text-anchor="middle">dispose-on-unmount</text>
-        <text x="673" y="140" fill="#f0fdff" font-size="8" font-weight="600" text-anchor="middle">never touches boto3 / aioboto3 / botocore</text>
+        <!-- SERVICE -->
+        <rect x="34" y="308" width="980" height="110" rx="8" fill="#1c1335" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="8,4"/>
+        <text x="52" y="330" fill="#a78bfa" font-size="12" font-weight="700">SERVICE</text>
+        <rect x="70" y="344" width="200" height="54" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="170" y="366" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">S3</text>
+        <text x="170" y="383" fill="#94a3b8" font-size="8" text-anchor="middle">dual-pane provider composition</text>
+        <rect x="300" y="344" width="200" height="54" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="400" y="366" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">EMR Serverless</text>
+        <text x="400" y="383" fill="#94a3b8" font-size="8" text-anchor="middle">applications, runs, logs</text>
+        <rect x="530" y="344" width="200" height="54" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="630" y="366" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">AWS Glue</text>
+        <text x="630" y="383" fill="#94a3b8" font-size="8" text-anchor="middle">Catalog, Jobs, Crawlers</text>
+        <rect x="760" y="344" width="218" height="54" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="869" y="366" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Amazon Athena</text>
+        <text x="869" y="383" fill="#94a3b8" font-size="8" text-anchor="middle">Query, History, Results, Saved</text>
 
-        <!-- =================================================================
-             VIEWMODEL LAYER components
-             ================================================================= -->
-        <rect x="72" y="246" width="180" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
-        <text x="162" y="268" fill="white" font-size="11" font-weight="600" text-anchor="middle">RootVM</text>
-        <text x="162" y="284" fill="#e2e8f0" font-size="8" text-anchor="middle">chrome VMs</text>
-        <text x="162" y="297" fill="#e2e8f0" font-size="8" text-anchor="middle">NavMenuVM</text>
-        <text x="162" y="310" fill="#e2e8f0" font-size="8" text-anchor="middle">ContentHostVM</text>
-        <text x="162" y="323" fill="#e2e8f0" font-size="8" text-anchor="middle">SettingsVM</text>
-        <text x="162" y="336" fill="#e2e8f0" font-size="8" text-anchor="middle">construct -&gt; run -&gt; destruct -&gt; dispose</text>
+        <!-- DOMAIN -->
+        <rect x="34" y="444" width="980" height="106" rx="8" fill="#2b1c08" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
+        <text x="52" y="466" fill="#fbbf24" font-size="12" font-weight="700">DOMAIN</text>
+        <rect x="70" y="480" width="260" height="50" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="200" y="501" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">FileSystemProvider</text>
+        <text x="200" y="517" fill="#94a3b8" font-size="8" text-anchor="middle">LocalFS, S3FS, cross-FS operations</text>
+        <rect x="370" y="480" width="260" height="50" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="500" y="501" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">AWS domain clients</text>
+        <text x="500" y="517" fill="#94a3b8" font-size="8" text-anchor="middle">typed mapping + one-page pagination</text>
+        <rect x="670" y="480" width="308" height="50" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="824" y="501" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">ReadOnlySqlPolicy + query models</text>
+        <text x="824" y="517" fill="#94a3b8" font-size="8" text-anchor="middle">fail closed before Athena dispatch</text>
 
-        <rect x="290" y="246" width="180" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
-        <text x="380" y="268" fill="white" font-size="11" font-weight="600" text-anchor="middle">file_manager VMs</text>
-        <text x="380" y="284" fill="#e2e8f0" font-size="8" text-anchor="middle">DualPaneVM</text>
-        <text x="380" y="297" fill="#e2e8f0" font-size="8" text-anchor="middle">PaneVM &middot; EntryVM</text>
-        <text x="380" y="310" fill="#e2e8f0" font-size="8" text-anchor="middle">TransferVM</text>
-        <text x="380" y="336" fill="#f0fdff" font-size="8" font-weight="600" text-anchor="middle">VMx: reactive commands</text>
+        <!-- INFRA -->
+        <rect x="34" y="576" width="980" height="100" rx="8" fill="#30101b" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="8,4"/>
+        <text x="52" y="598" fill="#fb7185" font-size="12" font-weight="700">INFRA</text>
+        <rect x="70" y="612" width="260" height="44" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="200" y="632" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">AwsSession + botocore config</text>
+        <text x="200" y="647" fill="#94a3b8" font-size="8" text-anchor="middle">profile, region, retries, clients</text>
+        <rect x="370" y="612" width="260" height="44" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="500" y="632" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Connection + config stores</text>
+        <text x="500" y="647" fill="#94a3b8" font-size="8" text-anchor="middle">resolver, keymap, theme, keychain</text>
+        <rect x="670" y="612" width="308" height="44" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="824" y="632" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">OS + AWS SDK boundary</text>
+        <text x="824" y="647" fill="#94a3b8" font-size="8" text-anchor="middle">only layer touching external systems</text>
 
-        <rect x="508" y="246" width="180" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
-        <text x="598" y="268" fill="white" font-size="11" font-weight="600" text-anchor="middle">emr_serverless VMs</text>
-        <text x="598" y="284" fill="#e2e8f0" font-size="8" text-anchor="middle">EmrServerlessPageVM</text>
-        <text x="598" y="297" fill="#e2e8f0" font-size="8" text-anchor="middle">ApplicationsVM</text>
-        <text x="598" y="310" fill="#e2e8f0" font-size="8" text-anchor="middle">JobRunsVM &middot; JobRunDetailVM</text>
-        <text x="598" y="323" fill="#e2e8f0" font-size="8" text-anchor="middle">JobRunLogsVM</text>
-        <text x="598" y="336" fill="#f0fdff" font-size="8" font-weight="600" text-anchor="middle">property-changed messages</text>
+        <!-- COMPOSITION ROOT -->
+        <rect x="1050" y="34" width="356" height="270" rx="8" fill="#1b1608" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="1228" y="58" fill="#fbbf24" font-size="12" font-weight="700" text-anchor="middle">COMPOSITION ROOT</text>
+        <rect x="1080" y="78" width="296" height="58" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="1228" y="101" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">composition.py</text>
+        <text x="1228" y="119" fill="#94a3b8" font-size="8" text-anchor="middle">registry, factories, dependency graph</text>
+        <rect x="1080" y="154" width="296" height="58" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="1228" y="177" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">app.py</text>
+        <text x="1228" y="195" fill="#94a3b8" font-size="8" text-anchor="middle">mounts views, wires actions + handoffs</text>
+        <text x="1228" y="242" fill="#e2e8f0" font-size="9" text-anchor="middle">Trusted roots may import every layer.</text>
+        <text x="1228" y="260" fill="#94a3b8" font-size="8" text-anchor="middle">Layer checks enforce all other edges.</text>
 
-        <rect x="726" y="246" width="112" height="100" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
-        <text x="782" y="268" fill="white" font-size="10" font-weight="600" text-anchor="middle">MessageHub</text>
-        <text x="782" y="284" fill="#e2e8f0" font-size="8" text-anchor="middle">session-wide</text>
-        <text x="782" y="297" fill="#e2e8f0" font-size="8" text-anchor="middle">reactivex</text>
-        <text x="782" y="310" fill="#e2e8f0" font-size="8" text-anchor="middle">Observable</text>
-        <text x="782" y="323" fill="#e2e8f0" font-size="8" text-anchor="middle">bus</text>
+        <!-- AWAITED LIFECYCLE -->
+        <rect x="1050" y="326" width="356" height="230" rx="8" fill="#1b0d14" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="1228" y="350" fill="#fb7185" font-size="12" font-weight="700" text-anchor="middle">SERVICE SWAP LIFECYCLE</text>
+        <rect x="1092" y="359" width="256" height="26" rx="6" fill="#0f172a" stroke="#94a3b8"/>
+        <text x="1220" y="377" fill="#e2e8f0" font-size="9" text-anchor="middle">cancel pending setup</text>
+        <rect x="1092" y="411" width="256" height="26" rx="6" fill="#0f172a" stroke="#fb7185"/>
+        <text x="1220" y="429" fill="#fda4af" font-size="9" font-weight="600" text-anchor="middle">await Athena shutdown</text>
+        <rect x="1092" y="463" width="256" height="26" rx="6" fill="#0f172a" stroke="#a78bfa"/>
+        <text x="1220" y="481" fill="#ddd6fe" font-size="9" font-weight="600" text-anchor="middle">then dispose outgoing VM</text>
+        <rect x="1092" y="515" width="256" height="26" rx="6" fill="#0f172a" stroke="#34d399"/>
+        <text x="1220" y="533" fill="#a7f3d0" font-size="9" text-anchor="middle">construct + mount next service</text>
 
-        <rect x="508" y="356" width="330" height="34" rx="6" fill="rgba(6, 78, 59, 0.25)" stroke="#34d399" stroke-width="1" stroke-dasharray="3,3"/>
-        <text x="673" y="377" fill="#e2e8f0" font-size="8" text-anchor="middle">never imports Textual &middot; tests run headless</text>
+        <!-- EXACT-PROFILE S3 HANDOFF -->
+        <rect x="1050" y="578" width="356" height="166" rx="8" fill="#071a26" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="1228" y="602" fill="#22d3ee" font-size="12" font-weight="700" text-anchor="middle">EXACT-PROFILE S3 HANDOFF</text>
+        <text x="1228" y="621" fill="#94a3b8" font-size="8" text-anchor="middle">valid succeeded customer-S3 result only</text>
+        <rect x="1068" y="654" width="70" height="68" rx="6" fill="#0f172a" stroke="#34d399"/>
+        <text x="1103" y="681" fill="#f8fafc" font-size="9" font-weight="600" text-anchor="middle">ResultsVM</text>
+        <text x="1103" y="699" fill="#94a3b8" font-size="7" text-anchor="middle">reload detail</text>
+        <rect x="1160" y="654" width="120" height="68" rx="6" fill="#0f172a" stroke="#a78bfa"/>
+        <text x="1220" y="677" fill="#f8fafc" font-size="8" font-weight="600" text-anchor="middle">OpenS3Location</text>
+        <text x="1220" y="692" fill="#f8fafc" font-size="8" font-weight="600" text-anchor="middle">Request</text>
+        <text x="1220" y="708" fill="#94a3b8" font-size="7" text-anchor="middle">exact connection + region</text>
+        <rect x="1302" y="654" width="86" height="68" rx="6" fill="#0f172a" stroke="#22d3ee"/>
+        <text x="1345" y="681" fill="#f8fafc" font-size="9" font-weight="600" text-anchor="middle">RootVM</text>
+        <text x="1345" y="699" fill="#94a3b8" font-size="7" text-anchor="middle">mount S3</text>
 
-        <!-- =================================================================
-             DOMAIN LAYER components
-             ================================================================= -->
-        <rect x="72" y="436" width="180" height="76" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
-        <text x="162" y="458" fill="white" font-size="11" font-weight="600" text-anchor="middle">Service protocol</text>
-        <text x="162" y="474" fill="#e2e8f0" font-size="8" text-anchor="middle">s3 &middot; emr-serverless</text>
-        <text x="162" y="487" fill="#e2e8f0" font-size="8" text-anchor="middle">one folder per service</text>
-        <text x="162" y="500" fill="#e2e8f0" font-size="8" text-anchor="middle">plugin boundary</text>
-
-        <rect x="290" y="436" width="180" height="76" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
-        <text x="380" y="458" fill="white" font-size="11" font-weight="600" text-anchor="middle">FileSystemProvider</text>
-        <text x="380" y="474" fill="#e2e8f0" font-size="8" text-anchor="middle">LocalFS &middot; S3FS</text>
-        <text x="380" y="487" fill="#e2e8f0" font-size="8" text-anchor="middle">cross-FS copy/move</text>
-        <text x="380" y="500" fill="#e2e8f0" font-size="8" text-anchor="middle">transfer journal</text>
-
-        <rect x="508" y="436" width="330" height="76" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
-        <text x="673" y="458" fill="white" font-size="11" font-weight="600" text-anchor="middle">AWS / S3 clients</text>
-        <text x="673" y="474" fill="#e2e8f0" font-size="8" text-anchor="middle">AwsSession &middot; ConnectionResolver &middot; ConfigStore</text>
-        <text x="673" y="487" fill="#e2e8f0" font-size="8" text-anchor="middle">ThemeStore &middot; KeymapStore &middot; LogSink &middot; KeychainBackend</text>
-        <text x="673" y="500" fill="#f5f3ff" font-size="8" font-weight="600" text-anchor="middle">only layer touching OS / AWS APIs / filesystem</text>
-
-        <!-- =================================================================
-             COMPOSITION ROOT (wires all layers)
-             ================================================================= -->
-        <rect x="900" y="76" width="300" height="454" rx="10" fill="rgba(251, 191, 36, 0.08)" stroke="#fbbf24" stroke-width="1.5"/>
-        <text x="1050" y="100" fill="#fbbf24" font-size="11" font-weight="600" text-anchor="middle">COMPOSITION ROOT</text>
-        <text x="1050" y="116" fill="#e2e8f0" font-size="8" text-anchor="middle">composition.py &middot; app.py</text>
-
-        <rect x="924" y="134" width="252" height="60" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
-        <text x="1050" y="156" fill="white" font-size="10" font-weight="600" text-anchor="middle">composition.py</text>
-        <text x="1050" y="171" fill="#e2e8f0" font-size="8" text-anchor="middle">builds dependency graph</text>
-        <text x="1050" y="184" fill="#e2e8f0" font-size="8" text-anchor="middle">needs_first_run &middot; add_s3_compat_connection</text>
-
-        <rect x="924" y="206" width="252" height="60" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
-        <text x="1050" y="228" fill="white" font-size="10" font-weight="600" text-anchor="middle">app.py</text>
-        <text x="1050" y="243" fill="#e2e8f0" font-size="8" text-anchor="middle">Textual App subclass</text>
-        <text x="1050" y="256" fill="#e2e8f0" font-size="8" text-anchor="middle">mounts widgets &middot; wires actions</text>
-
-        <text x="1050" y="292" fill="#fffbeb" font-size="8" font-weight="600" text-anchor="middle">only modules permitted to import</text>
-        <text x="1050" y="304" fill="#fffbeb" font-size="8" font-weight="600" text-anchor="middle">from every layer</text>
-
-        <!-- Composition root fan-out arrows into each layer -->
-        <path d="M 924 164 L 838 110" fill="none" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
-        <path d="M 924 164 L 838 296" fill="none" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
-        <path d="M 924 164 L 838 474" fill="none" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
-
-        <!-- =================================================================
-             INTER-LAYER FLOW ARROWS (View -> ViewModel -> Domain)
-             ================================================================= -->
-        <line x1="380" y1="152" x2="380" y2="244" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrowhead-cyan)"/>
-        <text x="398" y="200" fill="#e2e8f0" font-size="8">reads / execute()</text>
-
-        <line x1="380" y1="346" x2="380" y2="434" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrowhead)"/>
-        <text x="398" y="392" fill="#e2e8f0" font-size="8">Service protocol</text>
-
-        <!-- =================================================================
-             LIFECYCLE STRIP (left -> right: startup -> mount -> dispose)
-             ================================================================= -->
-        <rect x="40" y="548" width="820" height="70" rx="10" fill="rgba(15, 23, 42, 0.6)" stroke="#22d3ee" stroke-width="1"/>
-        <text x="56" y="566" fill="#22d3ee" font-size="10" font-weight="600">LIFECYCLE</text>
-
-        <rect x="60" y="576" width="150" height="30" rx="15" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1.5"/>
-        <text x="135" y="595" fill="white" font-size="9" font-weight="600" text-anchor="middle">startup</text>
-
-        <line x1="210" y1="591" x2="268" y2="591" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrowhead-cyan)"/>
-
-        <rect x="270" y="576" width="150" height="30" rx="15" fill="rgba(6, 78, 59, 0.5)" stroke="#34d399" stroke-width="1.5"/>
-        <text x="345" y="595" fill="white" font-size="9" font-weight="600" text-anchor="middle">mount (construct -&gt; run)</text>
-
-        <line x1="420" y1="591" x2="478" y2="591" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrowhead-cyan)"/>
-
-        <rect x="480" y="576" width="150" height="30" rx="15" fill="rgba(76, 29, 149, 0.5)" stroke="#a78bfa" stroke-width="1.5"/>
-        <text x="555" y="595" fill="white" font-size="9" font-weight="600" text-anchor="middle">swap (set_content)</text>
-
-        <line x1="630" y1="591" x2="688" y2="591" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrowhead-cyan)"/>
-
-        <rect x="690" y="576" width="150" height="30" rx="15" fill="rgba(136, 19, 55, 0.5)" stroke="#fb7185" stroke-width="1.5"/>
-        <text x="765" y="595" fill="white" font-size="9" font-weight="600" text-anchor="middle">destruct -&gt; dispose</text>
-
-        <!-- =================================================================
-             LEGEND (horizontal strip below all boundary boxes)
-             ================================================================= -->
-        <text x="40" y="650" fill="white" font-size="10" font-weight="600">Legend</text>
-
-        <rect x="40" y="662" width="16" height="10" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
-        <text x="62" y="671" fill="#e2e8f0" font-size="8">View</text>
-
-        <rect x="140" y="662" width="16" height="10" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
-        <text x="162" y="671" fill="#e2e8f0" font-size="8">ViewModel</text>
-
-        <rect x="260" y="662" width="16" height="10" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
-        <text x="282" y="671" fill="#e2e8f0" font-size="8">Domain</text>
-
-        <rect x="360" y="662" width="16" height="10" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
-        <text x="382" y="671" fill="#e2e8f0" font-size="8">Composition root</text>
-
-        <line x1="530" y1="667" x2="550" y2="667" stroke="#22d3ee" stroke-width="1.8"/>
-        <text x="556" y="671" fill="#e2e8f0" font-size="8">runtime data flow</text>
-
-        <line x1="690" y1="667" x2="710" y2="667" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="3,3"/>
-        <text x="716" y="671" fill="#e2e8f0" font-size="8">wires / constructs</text>
+        <!-- LEGEND -->
+        <text x="36" y="722" fill="#f8fafc" font-size="10" font-weight="600">FLOW</text>
+        <line x1="84" y1="718" x2="118" y2="718" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+        <text x="130" y="722" fill="#94a3b8" font-size="8">runtime dependency direction</text>
+        <line x1="330" y1="718" x2="364" y2="718" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrow-amber)"/>
+        <text x="376" y="722" fill="#94a3b8" font-size="8">composition wiring</text>
+        <text x="36" y="770" fill="#64748b" font-size="8">Current scope: standalone S3, EMR Serverless, AWS Glue, and Amazon Athena services.</text>
+        <text x="36" y="787" fill="#64748b" font-size="8">Cross-service navigation uses immutable messages; services do not import one another.</text>
       </svg>
-    </div>
+    </section>
 
-    <!-- Info Cards -->
-    <div class="cards">
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot cyan"></div>
-          <h3>View</h3>
-        </div>
-        <ul>
-          <li>&bull; Textual widgets, panes, `.tcss` themes</li>
-          <li>&bull; Never touches boto3 / aioboto3 / botocore</li>
-          <li>&bull; Reads VM properties, calls relay-command execute(...)</li>
-          <li>&bull; Subscribes to MessageHub via HubSubscriberMixin</li>
-        </ul>
-      </div>
+    <section class="cards">
+      <article class="card">
+        <h2>Layer Contract</h2>
+        <p>Textual reads VMs. VMs call service-owned domain clients. Infrastructure owns external I/O. The composition roots wire concrete dependencies.</p>
+      </article>
+      <article class="card">
+        <h2>Athena Lifecycle</h2>
+        <p>ContentHostVM awaits Athena shutdown before disposal, allowing owned-query cancellation and worker draining to finish before replacement.</p>
+      </article>
+      <article class="card">
+        <h2>S3 Handoff</h2>
+        <p>Glue locations and Athena customer-S3 results travel as immutable requests carrying the exact configured connection name and region.</p>
+      </article>
+    </section>
 
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot emerald"></div>
-          <h3>ViewModel</h3>
-        </div>
-        <ul>
-          <li>&bull; VMx VMs with reactive commands</li>
-          <li>&bull; RootVM, file_manager VMs, emr_serverless VMs</li>
-          <li>&bull; Never imports Textual; tests run headless</li>
-          <li>&bull; construct -&gt; run -&gt; destruct -&gt; dispose</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot violet"></div>
-          <h3>Domain</h3>
-        </div>
-        <ul>
-          <li>&bull; Service protocol: s3, emr-serverless plugins</li>
-          <li>&bull; FileSystemProvider: LocalFS, S3FS, cross-FS engine</li>
-          <li>&bull; AwsSession, ConfigStore, ThemeStore, KeychainBackend</li>
-          <li>&bull; Only layer touching OS / AWS APIs / filesystem</li>
-        </ul>
-      </div>
-    </div>
-
-    <!-- Footer -->
-    <p class="footer">
-      aws-tui &bull; layered MVVM &bull; composition.py + app.py are the only trusted composition roots
-    </p>
-  </div>
+    <p class="footer">aws-tui current architecture &middot; composition.py and app.py are trusted roots</p>
+  </main>
 </body>
 </html>

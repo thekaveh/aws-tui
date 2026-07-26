@@ -256,8 +256,10 @@ query-service reference:
   the `start_query_execution` / `stop_query_execution` boundary; views and
   VMs never receive raw boto responses.
 - `domain/sql_policy.py` parses one Athena-dialect statement before dispatch.
-  It accepts only `SELECT`, `SHOW`, `DESCRIBE`, and `EXPLAIN` of an allowed
-  statement. The parser is defense in depth, not an authorization system.
+  It accepts `SELECT` roots and set operations (including `VALUES` operands),
+  the implemented bounded `SHOW` and `DESCRIBE` forms, and non-`ANALYZE`
+  `EXPLAIN` of an allowed statement. Standalone `VALUES` is rejected. The
+  parser is defense in depth, not an authorization system.
 - `vm/athena/` separates Query, History, Results, and Saved behavior; the
   Textual widget tree lives in `ui/widgets/athena/`. A result-to-S3 handoff is
   an `OpenS3LocationRequest` carrying the execution's exact connection and

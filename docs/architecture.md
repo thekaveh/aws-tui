@@ -1,6 +1,6 @@
 # 1. Architecture
 
-![aws-tui layered MVVM architecture — View over ViewModel over Domain, wired by a composition root, with a startup→mount→dispose lifecycle.](diagrams/img/architecture.png)
+![aws-tui five-layer architecture: Textual View, VMx ViewModel, Service, Domain, and Infrastructure; S3, EMR Serverless, AWS Glue, and Amazon Athena services; awaited Athena shutdown before disposal; and exact-profile S3 handoff.](diagrams/img/architecture.png)
 
 > Human-readable mirror of §2 of [the design spec](superpowers/specs/2026-06-13-aws-tui-design.md).
 > For the deep dive (VM tree, lifecycle invariants, capability matrix,
@@ -103,7 +103,10 @@ handlers.
 VMs implement `construct → run → destruct → dispose` (VMx convention).
 The `RootVM` constructs the chrome and content-host children
 depth-first; `ContentHostVM.set_content(new)` disposes the previous
-content via the same cascade. App shutdown awaits the in-flight
+content via the same cascade. When outgoing content exposes `shutdown`,
+`ContentHostVM.set_content(...)` awaits it before calling `dispose`; Athena
+shutdown is awaited before disposal so its app-owned query cancellation and
+worker drains complete in order. App shutdown awaits the in-flight
 transfers cancel + closes every aioboto3 client before disposing the
 VM tree (spec §5.4).
 

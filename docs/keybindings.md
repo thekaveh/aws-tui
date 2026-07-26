@@ -135,7 +135,7 @@ and region for the whole page; S3-compatible connections are excluded.
 | Cycle focus | `Tab` / `Shift+Tab` | Walks Glue tabs, lists, filters, and detail controls. |
 | Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
 | Switch AWS source | `Shift+S` | Rebuilds Glue under the next supported AWS profile and region. |
-| Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | Palette-only command. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
+| Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
 
 ### 1.1.10. Amazon Athena
 
@@ -149,7 +149,7 @@ S3-compatible connections.
 | Cancel active query | `Esc` | Runs `athena.cancel`; it can stop only an app-owned active execution. |
 | Load more result rows | `l` | Runs `athena.load_more` when the selected result has another page. |
 | Switch AWS source | `Shift+S` | Rebuilds Athena under the next supported AWS profile and region. |
-| Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
+| Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
 
 ## 1.2. Customizing
 
@@ -240,8 +240,10 @@ unbound until a handler ships.
 
 Rows with a default key are registered by
 `KeymapStore.DEFAULT_BINDINGS` and may be overlaid in
-`[keybindings]`. The palette-only Glue S3 command is registered only
-in `ActionRegistry`; assigning it a key is not currently supported.
+`[keybindings]`. Both `glue.open_s3_location` and
+`athena.open_result_location` are palette-only, registered in
+`ActionRegistry`, and absent from `KeymapStore.DEFAULT_BINDINGS`; assigning
+either a key is not currently supported.
 Any unknown overlay id is logged and causes the app to fall back to
 the default keymap.
 
@@ -281,4 +283,5 @@ Views route through action IDs and `BindingResolver`; service-neutral
 VM messages handle cross-service requests. Keep new keyed actions in
 `KeymapStore` and `ActionRegistry` together. Palette-only commands such
 as `glue.open_s3_location` belong in `ActionRegistry` and the curated
-palette, but do not need a default key.
+palette, but do not need a default key. The same rule applies to
+`athena.open_result_location`.

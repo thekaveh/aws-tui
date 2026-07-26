@@ -1,6 +1,50 @@
 """Smoke tests and public-documentation contract checks."""
 
+import json
+import re
 from pathlib import Path
+
+import yaml
+
+REPO_ROOT = Path(__file__).parents[2]
+
+ATHENA_BOTO_OPERATIONS = (
+    "list_work_groups",
+    "get_work_group",
+    "list_data_catalogs",
+    "list_databases",
+    "list_table_metadata",
+    "list_query_executions",
+    "get_query_execution",
+    "get_query_runtime_statistics",
+    "start_query_execution",
+    "stop_query_execution",
+    "get_query_results",
+    "list_named_queries",
+    "batch_get_named_query",
+    "list_prepared_statements",
+    "get_prepared_statement",
+)
+
+ATHENA_IAM_ACTIONS = {
+    "".join(part.title() for part in operation.split("_")) for operation in ATHENA_BOTO_OPERATIONS
+}
+
+
+def _read(path: str) -> str:
+    return (REPO_ROOT / path).read_text(encoding="utf-8")
+
+
+def _squash(text: str) -> str:
+    return " ".join(line.removeprefix("> ").strip() for line in text.splitlines() if line.strip())
+
+
+def _fenced_block_after(text: str, marker: str, language: str) -> str:
+    marker_pattern = r"\s+".join(re.escape(part) for part in marker.split())
+    pattern = rf"{marker_pattern}.*?```{language}\n(.*?)\n```"
+    match = re.search(pattern, text, flags=re.DOTALL)
+    assert match is not None, f"missing {language} block after {marker!r}"
+    return match.group(1)
 
 
 def test_scripts_docs_package_imports():
@@ -15,32 +59,200 @@ def test_pyyaml_available():
 
 def test_public_docs_cover_athena_read_only_contract() -> None:
     """Keep standalone Athena behavior discoverable on every public surface."""
-    repo_root = Path(__file__).parents[2]
-    readme = (repo_root / "README.md").read_text(encoding="utf-8")
-    architecture = (repo_root / "docs/architecture.md").read_text(encoding="utf-8")
-    services = (repo_root / "docs/adding-a-service.md").read_text(encoding="utf-8")
-    connections = (repo_root / "docs/connections.md").read_text(encoding="utf-8")
-    cookbook = (repo_root / "docs/cookbook.md").read_text(encoding="utf-8")
-    ledger = (repo_root / "docs/contract-ledger.md").read_text(encoding="utf-8")
-    keybindings = (repo_root / "docs/keybindings.md").read_text(encoding="utf-8")
-    releasing = (repo_root / "docs/RELEASING.md").read_text(encoding="utf-8")
-    changelog = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
+    readme = _read("README.md")
+    index = _read("docs/index.md")
+    architecture = _read("docs/architecture.md")
+    services = _read("docs/adding-a-service.md")
+    connections = _read("docs/connections.md")
+    cookbook = _read("docs/cookbook.md")
+    ledger = _read("docs/contract-ledger.md")
+    keybindings = _read("docs/keybindings.md")
+    releasing = _read("docs/RELEASING.md")
+    changelog = _read("CHANGELOG.md")
 
     assert "Athena" in readme
     assert "standalone" in readme
+    assert "Amazon Athena read-only query console" in index
     assert "AthenaPageVM" in architecture
     assert "AthenaService" in services
     assert "Athena is AWS-only" in connections
-    assert "SELECT, SHOW, DESCRIBE, and EXPLAIN" in cookbook
+    assert "SELECT roots and set operations (including `VALUES` operands)" in cookbook
+    assert "SHOW CREATE TABLE" in cookbook
+    assert "EXPLAIN ANALYZE" in cookbook
     assert "result artifacts" in cookbook
     assert "bytes scanned" in cookbook
-    assert "Lake Formation" in cookbook
-    assert "s3:GetObject" in cookbook
+    assert "lakeformation:GetDataAccess" in cookbook
+    assert "DATA_LOCATION_ACCESS" in cookbook
     assert "EnforceWorkGroupConfiguration" in cookbook
-    assert "list_work_groups" in ledger
-    assert "start_query_execution" in ledger
-    assert "get_query_results" in ledger
+    assert "get_prepared_statement" in ledger
     assert "athena.execute" in keybindings
     assert "athena.open_result_location" in keybindings
     assert "Athena" in releasing
     assert "Athena" in changelog
+
+
+def test_athena_operation_ledger_and_minimum_iam_are_exact() -> None:
+    ledger = _read("docs/contract-ledger.md")
+    cookbook = _read("docs/cookbook.md")
+    client_source = _read("src/aws_tui/domain/athena.py")
+
+    operation_block = _fenced_block_after(
+        ledger,
+        "Exact boto operation ledger (15)",
+        "text",
+    )
+    assert tuple(operation_block.splitlines()) == ATHENA_BOTO_OPERATIONS
+    assert set(re.findall(r"await client\.([a-z_]+)", client_source)) == set(ATHENA_BOTO_OPERATIONS)
+
+    policy = json.loads(
+        _fenced_block_after(
+            cookbook,
+            "minimum Athena API policy used by aws-tui",
+            "json",
+        )
+    )
+    actions = {
+        action.removeprefix("athena:")
+        for statement in policy["Statement"]
+        for action in statement["Action"]
+    }
+    assert actions == ATHENA_IAM_ACTIONS
+
+
+def test_athena_permissions_and_output_modes_are_pinned_to_aws_contracts() -> None:
+    cookbook = _read("docs/cookbook.md")
+    normalized = _squash(cookbook)
+
+    required_facts = (
+        "`lakeformation:GetDataAccess`",
+        "`DATA_LOCATION_ACCESS` permits creating or altering Data Catalog resources",
+        "`s3:GetObject` on every underlying source-data object",
+        "`s3:ListBucketMultipartUploads`",
+        "`s3:AbortMultipartUpload`",
+        "`s3:ListMultipartUploadParts`",
+        "Source data encrypted with a customer managed KMS key requires `kms:Decrypt`",
+        "customer-managed S3 results, require `kms:GenerateDataKey` and `kms:Decrypt`",
+        "Managed results do not create a customer S3 result artifact",
+        "available through Athena for 24 hours",
+        "managed results do not support result reuse",
+        "aws-tui continues to page rows with `GetQueryResults`",
+        "**Open Athena result in S3** remains on Athena",
+        "workgroup-enforced customer S3 output",
+    )
+    for fact in required_facts:
+        assert fact in normalized
+
+
+def test_athena_sql_grammar_matches_policy_tests() -> None:
+    cookbook = _read("docs/cookbook.md")
+
+    allowed = (
+        "SELECT",
+        "`VALUES` operands",
+        "`UNION`",
+        "`INTERSECT`",
+        "`EXCEPT`",
+        "`SHOW DATABASES`",
+        "`SHOW SCHEMAS`",
+        "`SHOW TABLES`",
+        "`SHOW COLUMNS`",
+        "`SHOW PARTITIONS`",
+        "`SHOW TBLPROPERTIES`",
+        "`SHOW VIEWS`",
+        "`DESCRIBE [EXTENDED|FORMATTED]`",
+        "non-`ANALYZE` `EXPLAIN`",
+    )
+    rejected = (
+        "`SHOW CREATE TABLE`",
+        "`EXPLAIN ANALYZE`",
+        "standalone `VALUES`",
+        "multiple statements",
+        "DDL",
+        "DML",
+        "CTAS",
+        "`UNLOAD`",
+    )
+    for form in (*allowed, *rejected):
+        assert form in cookbook
+
+
+def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
+    readme = _read("README.md")
+    changelog = _read("CHANGELOG.md")
+    releasing = _read("docs/RELEASING.md")
+    normalized_releasing = _squash(releasing)
+    version = _read("src/aws_tui/version.py")
+
+    assert "Athena is Unreleased feature work for the next v0.9.0 minor release" in _squash(readme)
+    assert "Athena targets v0.9.0" in _squash(changelog)
+    assert "not a v0.8.0 headline or a v0.8.1 patch candidate" in _squash(changelog)
+    assert "will either ship as v0.8.1" not in changelog
+    assert "Athena is minor-version feature work" in normalized_releasing
+    for step in (
+        "execute a valid bounded query",
+        "reject an unsafe statement before dispatch",
+        "cancel only the active query started by this page",
+        "page results when a continuation is available",
+        "Query and History surfaces",
+        "exact S3 artifact",
+    ):
+        assert step in normalized_releasing
+    assert '__version__ = "0.8.0"' in version
+
+
+def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
+    manifest = yaml.safe_load(_read("docs/manifest.yaml"))
+    index = _read("docs/index.md")
+    architecture = _read("docs/architecture.md")
+    diagram = _read("docs/diagrams/architecture.html")
+    public_docs = "\n".join(
+        _read(path)
+        for path in (
+            "README.md",
+            "docs/index.md",
+            "docs/architecture.md",
+            "docs/adding-a-service.md",
+            "docs/cookbook.md",
+        )
+    )
+
+    assert manifest["sections"][0]["source"] == "docs/index.md"
+    assert manifest["diagrams"] == [
+        {"id": "architecture", "master": "docs/diagrams/architecture.html"}
+    ]
+    for service in ("S3", "EMR Serverless", "AWS Glue", "Amazon Athena"):
+        assert service in index
+        assert service in diagram
+    for layer in ("TEXTUAL VIEW", "VIEWMODEL / VMX", "SERVICE", "DOMAIN", "INFRA"):
+        assert layer in diagram
+    assert "await Athena shutdown" in diagram
+    assert "then dispose outgoing VM" in diagram
+    assert "exact connection + region" in diagram
+    alt_match = re.search(r"!\[([^\]]+)\]\(diagrams/img/architecture\.png\)", architecture)
+    assert alt_match is not None
+    alt_text = alt_match.group(1)
+    for phrase in (
+        "five-layer architecture",
+        "S3, EMR Serverless, AWS Glue, and Amazon Athena",
+        "awaited Athena shutdown before disposal",
+        "exact-profile S3 handoff",
+    ):
+        assert phrase in alt_text
+    assert "Athena shutdown is awaited before disposal" in _squash(architecture)
+    assert "Iceberg" not in diagram
+    assert "Glue-to-Athena" not in diagram
+    for premature_claim in (
+        "Glue-to-Athena navigation inserts",
+        "Iceberg metadata views show",
+        "Query in Athena command opens",
+    ):
+        assert premature_claim not in public_docs
+
+
+def test_glue_and_athena_palette_only_actions_are_not_default_bindings() -> None:
+    keybindings = _read("docs/keybindings.md")
+    keymap = _read("src/aws_tui/infra/keymap_store.py")
+
+    for action in ("glue.open_s3_location", "athena.open_result_location"):
+        assert f"`{action}` is palette-only" in keybindings
+        assert f'"{action}"' not in keymap.partition("DEFAULT_BINDINGS")[2].partition("}")[0]

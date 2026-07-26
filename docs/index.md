@@ -2,8 +2,9 @@
 
 Cross-platform TUI for AWS and S3-compatible services — a
 Norton-Commander–style dual-pane file manager for S3 plus an EMR
-Serverless console, built on [Textual](https://textual.textualize.io/)
-and the VMx MVVM framework.
+Serverless console and Unreleased AWS Glue and Amazon Athena service pages,
+built on [Textual](https://textual.textualize.io/) and the VMx MVVM
+framework.
 
 ## 1.1. What it does
 
@@ -13,8 +14,17 @@ and the VMx MVVM framework.
   S3-compatible connection.
 - **EMR Serverless console** — application picker, job-runs master-detail
   with state-filter chips, and on-demand log streaming with a grep filter.
+- **AWS Glue read-only operations console** — Catalog, Jobs, and Crawlers
+  views with exact-profile S3 location handoff.
+- **Amazon Athena read-only query console** — Query, History, Results, and
+  Saved views with fail-closed SQL validation, app-owned cancellation,
+  paginated rows, and exact-profile customer-S3 result handoff.
 - **Themable, keyboard-driven** — built-in themes and fully customizable
   keybindings.
+
+Glue and Athena are Unreleased minor-version feature work targeting v0.9.0.
+The current standalone Athena page does not include Iceberg metadata or
+Glue-to-Athena navigation.
 
 ## 1.2. Where to start
 

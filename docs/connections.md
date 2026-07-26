@@ -183,10 +183,11 @@ next profile as a substitute.
 
 Athena is AWS-only: it never participates in an S3-compatible source ring.
 Its workgroup, catalog, database, history row, and saved-query selections are
-scoped to the active connection name and region. Switching source disposes the
-old Athena page, cancels local loaders and result fetches, requests
-cancellation for any app-owned active Athena query, then mounts a fresh page;
-no old-profile rows are retained while the new source loads. Resolver order is
+scoped to the active connection name and region. Switching source cancels
+local loaders and result fetches, requests cancellation for any app-owned
+active Athena query, awaits the page shutdown, and only then disposes the old
+Athena page and mounts a fresh page. No old-profile rows are retained while
+the new source loads. Resolver order is
 unchanged: explicit `[connections.*]` entries first, then non-colliding
 auto-discovered AWS profiles, and `Shift+S` follows that order.
 

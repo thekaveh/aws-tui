@@ -10,15 +10,10 @@ Linux, and Windows. Powered by
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
 > **Status: v0.8.0 cut; PyPI publish pending** — install from Git
-> until the `aws-tui` project name is available on PyPI. Headline
-> change from v0.7.0: **EMR Serverless, AWS Glue, and standalone Amazon
-> Athena as first-class services** alongside S3 — EMR application picker,
-> job-runs master-detail with state-filter chips, columnized run
-> rows with colored state indicators, on-demand log streaming with
-> a grep filter + LRU cache, clone-and-edit modal for re-running
-> a finished job, plus Glue Catalog, Jobs, and Crawlers read-only
-> views with same-profile S3 handoff. The nav rail is now a regular focusable pane
-> with text labels (no collapse mode, no icon emojis). See
+> until the `aws-tui` project name is available on PyPI. Athena is Unreleased
+> feature work for the next v0.9.0 minor release; the package version remains
+> `0.8.0` until a release is cut. The v0.8.0 headline remains EMR Serverless,
+> cross-platform packaging, and the public release pipeline. See
 > [`CHANGELOG.md`](CHANGELOG.md) for the full per-PR delta.
 
 ## 1.1. Features
@@ -45,15 +40,17 @@ Linux, and Windows. Powered by
   never substitutes another profile. Glue is AWS-only and does not
   appear for S3-compatible connections.
 - **Amazon Athena read-only query console.** Pick **Athena** in the nav rail
-  to choose a workgroup, catalog, and database; submit one `SELECT`, `SHOW`,
-  `DESCRIBE`, or `EXPLAIN` statement; follow its lifecycle; page through
-  results; inspect history; and open named or prepared queries in the editor.
+  to choose a workgroup, catalog, and database; submit one allowed read-only
+  statement; follow its lifecycle; page through Results; inspect History; and
+  open named or prepared queries in the editor.
   Athena is AWS-only. The local parser fails closed before dispatch, while AWS
-  IAM, Lake Formation, workgroup, and S3 policies remain authoritative. Result
-  pages show bytes scanned and result reuse, and a successful execution can
-  hand off its concrete S3 result artifact to the matching S3 connection. This
-  is standalone Athena support: it does not include Iceberg metadata views or
-  Glue-to-Athena navigation.
+  IAM, Lake Formation, workgroup, and S3 policies remain authoritative. The
+  Query execution detail shows bytes scanned; History detail shows bytes
+  scanned and result reuse. Results contains paged result rows. A successful
+  customer-S3 execution can hand off its concrete result artifact to the
+  matching S3 connection; Athena-managed results have no customer S3 artifact
+  to hand off. This is standalone Athena support: it does not include Iceberg
+  metadata views or Glue-to-Athena navigation.
 - **One-key source switcher.** `Shift+S` cycles the focused pane
   through **every available source** in order: `local` → each AWS
   profile (`aws s3 · {profile} · {region}`) → each `s3-compatible`
