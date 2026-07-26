@@ -35,6 +35,10 @@ Implemented Athena plan Task 4 on `codex/aws-service-expansion-study`.
   and synchronously clears result, history, saved, selection, and incompatible
   pager state before awaiting the next API request. Late completions cannot
   publish rows, selection, state, notifications, or store changes.
+- Page saved-query selectors capture both page lifecycle and context
+  generations before awaiting a child selection. They revalidate both after
+  the await and before writing `saved_query_id`, so a detail request that
+  survives cancellation cannot repopulate the store after page termination.
 - Page, History, and Saved track current and retired asynchronous pager work.
   Awaited, idempotent `shutdown()` drains cancellation-resistant work and
   delegates query shutdown; synchronous, idempotent `dispose()` cascades through
@@ -318,7 +322,7 @@ reactivex.internal.exceptions.DisposedException: Object has been disposed
 
 ```text
 uv run pytest tests/unit/vm/athena -q
-90 passed in 0.58s
+92 passed in 0.56s
 
 uv run pytest tests/unit/domain/test_query.py -q
 16 passed in 0.20s
@@ -328,16 +332,16 @@ uv run pytest tests/unit/domain/test_query.py -q
 
 ```text
 uv run pytest tests/unit/vm -q
-589 passed in 29.58s
+exit 0; fresh collection count: 591 tests
 
 uv run pytest tests/unit/domain -q
-490 passed in 15.80s
+490 passed in 15.64s
 
 uv run pytest tests/unit/infra/test_redaction.py \
   tests/unit/infra/test_log_sink.py \
   tests/unit/infra/test_crash_dump.py \
   tests/unit/infra/test_config_store.py -q
-60 passed in 0.37s
+60 passed in 0.42s
 
 uv run ruff check src tests
 All checks passed!
@@ -352,7 +356,60 @@ bash scripts/check-layers.sh
 layer rules clean
 ```
 
-The non-overlapping VM, domain, and privacy runs total **1,139 passing tests**.
-The separate normal-color snapshot tier adds **624 passing tests**, for **1,763
+The non-overlapping VM, domain, and privacy runs total **1,141 passing tests**.
+The separate normal-color snapshot tier adds **624 passing tests**, for **1,765
 non-overlapping passing tests** across the recorded final suites. Every command
 exited 0.
+
+## Final Prepared-Selection Repair: 2026-07-26
+
+### Correction
+
+The prior review remediation covered ownership and draining of the prepared
+detail request, but did not protect `AthenaPageVM`'s continuation after
+`await saved.select_prepared_statement(...)`. On synchronous page disposal,
+the saved child correctly rejected its late result but retained the
+pre-await selected ID; the parent then wrote that stale ID to the
+service-owned selection store.
+
+`select_named_query()` and `select_prepared_statement()` now both capture
+page lifecycle and context generations before awaiting their saved-child
+operation, then require both to remain current before any store mutation.
+`open_saved_in_editor()` was audited: its selection-store and query writes
+occur before its only await, so it has no post-await store mutation.
+
+### RED Evidence
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_page_vm.py::test_late_prepared_selection_after_page_termination_preserves_page_and_saved_state \
+  -q
+
+F.
+1 failed, 1 passed in 0.37s
+```
+
+The `dispose` parameter failed because the late continuation replaced
+`saved_query_id="before-termination"` with `"prepared-1"`; the `shutdown`
+parameter already avoided that write because shutdown clears the child
+selection before draining it.
+
+### GREEN And Fresh Verification
+
+```text
+Focused lifecycle regression: 2 passed in 0.30s
+Saved + page VM focused regression: 43 passed in 0.47s
+Full Athena VM focus: 92 passed in 0.56s
+Full VM regression: exit 0; 591 tests collected in 0.37s
+Full domain regression: 490 passed in 15.64s
+Privacy regression: 60 passed in 0.42s
+ruff check src tests: all checks passed
+ruff format --check src tests: 351 files already formatted
+mypy src: success; 139 source files
+bash scripts/check-layers.sh: layer rules clean
+```
+
+The fresh non-overlapping VM, domain, and privacy total is **1,141 passing
+tests**. The only recurring environmental noise is the local shell startup
+warning for a missing `/tmp/vmx-cargo-182/env`; it did not affect any command
+exit status.

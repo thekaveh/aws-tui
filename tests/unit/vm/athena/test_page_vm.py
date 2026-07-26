@@ -18,6 +18,7 @@ from aws_tui.domain.filesystem import (
 )
 from aws_tui.domain.query import (
     NamedQuery,
+    PreparedStatement,
     PreparedStatementSummary,
     QueryContext,
     QueryExecutionDetail,
@@ -82,6 +83,11 @@ class PageClient:
         self.results_started = asyncio.Event()
         self.results_cancelled = asyncio.Event()
         self.release_results = asyncio.Event()
+        self.block_prepared_detail = False
+        self.ignore_prepared_detail_cancellation = False
+        self.prepared_detail_started = asyncio.Event()
+        self.prepared_detail_cancelled = asyncio.Event()
+        self.release_prepared_detail = asyncio.Event()
         self.named = NamedQuery(
             "named-1",
             "Event count",
@@ -89,6 +95,13 @@ class PageClient:
             "events",
             "SELECT count(*) FROM events",
             "analysts",
+        )
+        self.prepared = PreparedStatement(
+            "prepared-1",
+            "SELECT * FROM events WHERE id = ?",
+            "analysts",
+            "One event",
+            datetime(2026, 7, 25, tzinfo=UTC),
         )
 
     async def list_workgroups_page(
@@ -211,7 +224,26 @@ class PageClient:
         start_token: str | None = None,
     ) -> tuple[list[PreparedStatementSummary], str | None]:
         self.prepared_calls.append((workgroup, start_token))
-        return [], None
+        if workgroup != "analysts":
+            return [], None
+        return [PreparedStatementSummary(self.prepared.name, self.prepared.last_modified_at)], None
+
+    async def get_prepared_statement(
+        self,
+        name: str,
+        workgroup: str,
+    ) -> PreparedStatement:
+        assert (name, workgroup) == (self.prepared.name, self.prepared.workgroup)
+        self.prepared_detail_started.set()
+        if self.block_prepared_detail:
+            try:
+                await self.release_prepared_detail.wait()
+            except asyncio.CancelledError:
+                self.prepared_detail_cancelled.set()
+                if not self.ignore_prepared_detail_cancellation:
+                    raise
+                await self.release_prepared_detail.wait()
+        return self.prepared
 
     async def start_query(
         self,
@@ -548,6 +580,62 @@ async def test_cancelled_history_result_load_cannot_switch_to_results() -> None:
 
     assert page.active_view == "history"
     assert store.get(scope, "active_view") == "history"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_state", ["dispose", "shutdown"])
+async def test_late_prepared_selection_after_page_termination_preserves_page_and_saved_state(
+    terminal_state: str,
+) -> None:
+    client = PageClient()
+    client.block_prepared_detail = True
+    client.ignore_prepared_detail_cancellation = True
+    store = ServiceSelectionStore()
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    await page.select_workgroup("analysts")
+    await page.select_view("saved")
+    store.set(scope, "saved_query_id", "before-termination")
+
+    selection = asyncio.create_task(page.select_prepared_statement("prepared-1"))
+    await client.prepared_detail_started.wait()
+    if terminal_state == "dispose":
+        page.dispose()
+        terminal = None
+    else:
+        terminal = asyncio.create_task(page.shutdown())
+    try:
+        await asyncio.wait_for(client.prepared_detail_cancelled.wait(), timeout=1)
+        snapshot = (
+            page.context,
+            page.active_view,
+            page.query.context,
+            page.saved.selected_query_id,
+            page.saved.selected_prepared_statement,
+            page.saved.detail_state,
+            page.saved.detail_error_text,
+            store.get(scope, "saved_query_id"),
+        )
+    finally:
+        client.release_prepared_detail.set()
+        await asyncio.gather(
+            selection,
+            *(task for task in (terminal,) if task is not None),
+        )
+
+    assert client.prepared_detail_cancelled.is_set()
+    assert (
+        page.context,
+        page.active_view,
+        page.query.context,
+        page.saved.selected_query_id,
+        page.saved.selected_prepared_statement,
+        page.saved.detail_state,
+        page.saved.detail_error_text,
+        store.get(scope, "saved_query_id"),
+    ) == snapshot
+    assert store.get(scope, "saved_query_id") == "before-termination"
 
 
 @pytest.mark.asyncio

@@ -376,7 +376,13 @@ class AthenaPageVM:
     async def select_named_query(self, query_id: str) -> None:
         if not self._is_alive():
             return
+        lifecycle_generation = self._lifecycle_generation
+        context_generation = self._context_generation
         await self.saved.select_named_query(query_id)
+        if lifecycle_generation != self._lifecycle_generation or not self._is_current_context(
+            context_generation
+        ):
+            return
         if self.saved.selected_query_id == query_id:
             self._selection_store.set(
                 self._selection_scope,
@@ -387,7 +393,13 @@ class AthenaPageVM:
     async def select_prepared_statement(self, name: str) -> None:
         if not self._is_alive():
             return
+        lifecycle_generation = self._lifecycle_generation
+        context_generation = self._context_generation
         await self.saved.select_prepared_statement(name)
+        if lifecycle_generation != self._lifecycle_generation or not self._is_current_context(
+            context_generation
+        ):
+            return
         if self.saved.selected_query_id == name:
             self._selection_store.set(
                 self._selection_scope,
