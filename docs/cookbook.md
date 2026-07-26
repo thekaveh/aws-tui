@@ -588,9 +588,14 @@ catalog requirements in
 
 ### 1.6.2. Customer S3 output versus managed results
 
-aws-tui sends the selected workgroup and query execution context; it does not
-supply a caller-side `ResultConfiguration`. The workgroup must therefore use
-one of two distinct output modes:
+The shipped Query view sends the selected workgroup and query execution
+context without a caller-side `ResultConfiguration`; its
+`AthenaQueryVM` runner does not pass `output_location` to the domain client.
+The lower-level `AthenaClient.start_query(...)` contract is broader: callers
+may pass an optional `output_location`, in which case the client sends exactly
+`ResultConfiguration.OutputLocation`. The shipped query path intentionally
+omits it and therefore requires the workgroup to use one of two distinct output
+modes:
 
 - **Customer S3 output.** A workgroup-enforced customer S3 output location is
   authoritative when `EnforceWorkGroupConfiguration` is enabled. Grant
@@ -623,24 +628,109 @@ as interchangeable.
 ### 1.6.3. Exact read-only SQL grammar
 
 Press `Ctrl+Enter` only after setting workgroup, catalog, and database. The
-local `sqlglot` Athena-dialect parser fails closed and permits one statement
-from this implemented grammar:
+local `sqlglot` Athena-dialect parser fails closed and permits exactly one
+statement from the following implemented grammar.
 
-- SELECT roots and set operations (including `VALUES` operands) using `UNION`,
-  `INTERSECT`, or `EXCEPT`, including read-only common table expressions and
-  subqueries. A standalone `VALUES` statement is not an accepted root.
-- `SHOW DATABASES`, `SHOW SCHEMAS`, `SHOW TABLES`, `SHOW COLUMNS`,
-  `SHOW PARTITIONS`, `SHOW TBLPROPERTIES`, and `SHOW VIEWS`, with only the
-  scopes, patterns, and property selectors covered by the policy tests.
-- `DESCRIBE [EXTENDED|FORMATTED]` for a one- or two-part table name, with an
-  optional literal-equality `PARTITION` selector and bounded column/complex
-  field selectors.
-- non-`ANALYZE` `EXPLAIN` of another allowed statement, with the implemented
-  `TYPE` and `FORMAT` options.
+**SELECT, set operations, and VALUES**
 
-It explicitly rejects `SHOW CREATE TABLE`, `SHOW CREATE VIEW`,
-`EXPLAIN ANALYZE`, empty or unparsable input, multiple statements, DDL, DML,
-CTAS, `UNLOAD`, procedure calls, and unknown or unbounded forms before any
+A root `SELECT` may contain a `VALUES` relation, read-only common table
+expressions, and read-only subqueries. A root set operation may use `SELECT` or
+`VALUES` operands with `UNION`, `INTERSECT`, or `EXCEPT`, including the
+parser-supported `ALL` or `DISTINCT` qualifier. A standalone `VALUES` root is
+rejected; it becomes allowed only below a `SELECT` or a root set operation.
+Nested DDL, DML, commands, `INTO`, locks, analysis, execution, or transaction
+nodes are rejected.
+
+**SHOW**
+
+These are the complete accepted forms. A `catalog`, `database`, `table`, and
+property name may be a regular or backtick-quoted identifier; patterns and
+property selectors are string literals.
+
+- `SHOW DATABASES|SCHEMAS [IN catalog] [LIKE 'pattern']`
+- `SHOW TABLES [IN [catalog.]database] ['pattern']`
+- `SHOW COLUMNS FROM|IN table`, where `table` may have one, two, or three
+  parts. A one-part table may additionally use `FROM|IN [catalog.]database`;
+  that second scope is rejected after a multi-part table.
+- `SHOW PARTITIONS table`, where `table` has one, two, or three parts.
+- `SHOW TBLPROPERTIES table [('property')]`, where `table` has one, two, or
+  three parts.
+- `SHOW VIEWS [IN [catalog.]database] [LIKE 'pattern']`
+
+`SHOW CREATE TABLE`, `SHOW CREATE VIEW`, unknown verbs, missing required
+targets, extra clauses, and write text appended to an otherwise allowed form
+are rejected. `SHOW TABLES` uses its optional bare string pattern; `LIKE` in
+that position is not accepted by this policy.
+
+**DESCRIBE**
+
+`DESCRIBE [EXTENDED|FORMATTED] [database.]table` accepts a one- or two-part
+table name, not a three-part catalog/database/table name. It may then contain,
+in this order:
+
+1. `PARTITION (key = value [, ...])`, with one or more identifier keys and
+   each value restricted to literal string or number equality; and
+2. one root column identifier followed only by dotted identifier fields or
+   the exact complex selectors `'$elem$'`, `'$key$'`, or `'$value$'`.
+
+The partition and column selector are independently optional. Operators other
+than `=`, booleans, column references, calls, subqueries, empty or trailing
+partition entries, unknown dollar selectors, array indexing, expressions, and
+trailing identifiers are rejected.
+
+**EXPLAIN**
+
+`EXPLAIN` accepts another statement that independently satisfies this
+allowlist. Its optional parenthesized choices are
+`FORMAT GRAPHVIZ|JSON|TEXT` and `TYPE DISTRIBUTED|IO|LOGICAL|VALIDATE`, at most
+once each, in either order when comma-separated. `EXPLAIN ANALYZE`, unknown or
+quoted option names, unknown option values, duplicate options, and an unsafe
+or missing body are rejected.
+
+Accepted examples (one statement per line):
+
+```sql
+SELECT orderkey FROM analytics.orders LIMIT 10
+SELECT * FROM (VALUES (1), (2)) AS samples(value)
+SELECT 1 UNION ALL VALUES (2)
+VALUES (1) INTERSECT SELECT 1
+VALUES (1) EXCEPT VALUES (2)
+SHOW DATABASES IN AwsDataCatalog LIKE 'analytics*'
+SHOW SCHEMAS
+SHOW TABLES IN AwsDataCatalog.analytics '*logs'
+SHOW COLUMNS FROM AwsDataCatalog.analytics.orders
+SHOW COLUMNS FROM orders FROM AwsDataCatalog.analytics
+SHOW PARTITIONS AwsDataCatalog.analytics.orders
+SHOW TBLPROPERTIES analytics.orders('comment')
+SHOW VIEWS IN AwsDataCatalog.analytics LIKE 'orders*'
+DESCRIBE FORMATTED analytics.orders
+DESCRIBE analytics.orders PARTITION (`event date` = '2026-07-25', shard = 7) payload.'$elem$'.field
+EXPLAIN (TYPE VALIDATE, FORMAT GRAPHVIZ) SELECT 1
+EXPLAIN (TYPE IO, FORMAT TEXT) DESCRIBE analytics.orders payload.'$key$'.'$value$'
+```
+
+Rejected examples (one statement per line):
+
+```sql
+VALUES (1), (2)
+SELECT 1; SELECT 2
+SHOW CREATE TABLE analytics.orders
+SHOW COLUMNS
+SHOW TABLES IN analytics LIKE 'orders*'
+DESCRIBE AwsDataCatalog.analytics.orders
+DESCRIBE orders PARTITION (shard > 1)
+DESCRIBE orders payload.'$unknown$'
+EXPLAIN ANALYZE SELECT 1
+EXPLAIN (FORMAT YAML) SELECT 1
+EXPLAIN (TYPE IO, TYPE LOGICAL) SELECT 1
+CREATE TABLE copy AS SELECT * FROM analytics.orders
+INSERT INTO archive SELECT * FROM analytics.orders
+UNLOAD (SELECT 1) TO 's3://example/results/'
+CALL system.runtime.kill_query()
+```
+
+Empty or unparsable input, multiple statements, all other DDL and DML, CTAS,
+and every form outside the grammar above are also rejected before any
 `start_query_execution` call. The editor retains the rejection as validation
 feedback and does not dispatch the SQL. IAM, Lake Formation, workgroup, S3,
 bucket, and KMS policies remain the authorization boundary.

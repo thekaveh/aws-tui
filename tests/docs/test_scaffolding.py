@@ -1,10 +1,14 @@
 """Smoke tests and public-documentation contract checks."""
 
+import ast
 import json
 import re
 from pathlib import Path
 
+import pytest
 import yaml
+
+from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 
 REPO_ROOT = Path(__file__).parents[2]
 
@@ -47,6 +51,14 @@ def _fenced_block_after(text: str, marker: str, language: str) -> str:
     return match.group(1)
 
 
+def _sql_examples_after(text: str, marker: str) -> tuple[str, ...]:
+    return tuple(
+        line.strip()
+        for line in _fenced_block_after(text, marker, "sql").splitlines()
+        if line.strip() and not line.lstrip().startswith("--")
+    )
+
+
 def test_scripts_docs_package_imports():
     import scripts.docs  # noqa: F401
 
@@ -76,7 +88,7 @@ def test_public_docs_cover_athena_read_only_contract() -> None:
     assert "AthenaPageVM" in architecture
     assert "AthenaService" in services
     assert "Athena is AWS-only" in connections
-    assert "SELECT roots and set operations (including `VALUES` operands)" in cookbook
+    assert "A root set operation may use `SELECT` or `VALUES` operands" in _squash(cookbook)
     assert "SHOW CREATE TABLE" in cookbook
     assert "EXPLAIN ANALYZE" in cookbook
     assert "result artifacts" in cookbook
@@ -89,6 +101,25 @@ def test_public_docs_cover_athena_read_only_contract() -> None:
     assert "athena.open_result_location" in keybindings
     assert "Athena" in releasing
     assert "Athena" in changelog
+    assert (
+        "read read"
+        not in _squash(
+            "\n".join(
+                (
+                    readme,
+                    index,
+                    architecture,
+                    services,
+                    connections,
+                    cookbook,
+                    ledger,
+                    keybindings,
+                    releasing,
+                    changelog,
+                )
+            )
+        ).lower()
+    )
 
 
 def test_athena_operation_ledger_and_minimum_iam_are_exact() -> None:
@@ -121,6 +152,9 @@ def test_athena_operation_ledger_and_minimum_iam_are_exact() -> None:
 
 def test_athena_permissions_and_output_modes_are_pinned_to_aws_contracts() -> None:
     cookbook = _read("docs/cookbook.md")
+    ledger = _read("docs/contract-ledger.md")
+    client_source = _read("src/aws_tui/domain/athena.py")
+    query_vm_source = _read("src/aws_tui/vm/athena/query_vm.py")
     normalized = _squash(cookbook)
 
     required_facts = (
@@ -142,38 +176,99 @@ def test_athena_permissions_and_output_modes_are_pinned_to_aws_contracts() -> No
     for fact in required_facts:
         assert fact in normalized
 
+    for fact in (
+        "`AthenaClient.start_query(...)` accepts an optional `output_location`",
+        "adds `ResultConfiguration.OutputLocation` only when its caller supplies that value",
+        "The shipped `AthenaQueryVM` query runner does not supply `output_location`",
+        "relies on the selected workgroup's enforced customer S3 or Athena managed-results configuration",
+    ):
+        assert fact in _squash(ledger)
+
+    assert "if output_location is not None:" in client_source
+    assert 'kwargs["ResultConfiguration"]' in client_source
+    query_vm_tree = ast.parse(query_vm_source)
+    start_calls = [
+        node
+        for node in ast.walk(query_vm_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "start_query"
+    ]
+    assert len(start_calls) == 1
+    assert {keyword.arg for keyword in start_calls[0].keywords} == {"request_token"}
+
 
 def test_athena_sql_grammar_matches_policy_tests() -> None:
     cookbook = _read("docs/cookbook.md")
+    normalized = _squash(cookbook)
+    policy = ReadOnlySqlPolicy()
 
-    allowed = (
-        "SELECT",
-        "`VALUES` operands",
-        "`UNION`",
-        "`INTERSECT`",
-        "`EXCEPT`",
-        "`SHOW DATABASES`",
-        "`SHOW SCHEMAS`",
-        "`SHOW TABLES`",
-        "`SHOW COLUMNS`",
-        "`SHOW PARTITIONS`",
-        "`SHOW TBLPROPERTIES`",
-        "`SHOW VIEWS`",
-        "`DESCRIBE [EXTENDED|FORMATTED]`",
-        "non-`ANALYZE` `EXPLAIN`",
+    required_contracts = (
+        "`SHOW DATABASES|SCHEMAS [IN catalog] [LIKE 'pattern']`",
+        "`SHOW TABLES [IN [catalog.]database] ['pattern']`",
+        "`SHOW COLUMNS FROM|IN table`",
+        "`SHOW PARTITIONS table`",
+        "`SHOW TBLPROPERTIES table [('property')]`",
+        "`SHOW VIEWS [IN [catalog.]database] [LIKE 'pattern']`",
+        "one- or two-part table name",
+        "literal string or number equality",
+        "`'$elem$'`, `'$key$'`, or `'$value$'`",
+        "`FORMAT GRAPHVIZ|JSON|TEXT`",
+        "`TYPE DISTRIBUTED|IO|LOGICAL|VALIDATE`",
+        "at most once each",
+        "A root `SELECT` may contain a `VALUES` relation",
+        "A root set operation may use `SELECT` or `VALUES` operands",
+        "A standalone `VALUES` root is rejected",
     )
-    rejected = (
-        "`SHOW CREATE TABLE`",
-        "`EXPLAIN ANALYZE`",
-        "standalone `VALUES`",
-        "multiple statements",
-        "DDL",
-        "DML",
-        "CTAS",
-        "`UNLOAD`",
+    for contract in required_contracts:
+        assert contract in normalized
+
+    expected_accepted = (
+        "SELECT orderkey FROM analytics.orders LIMIT 10",
+        "SELECT * FROM (VALUES (1), (2)) AS samples(value)",
+        "SELECT 1 UNION ALL VALUES (2)",
+        "VALUES (1) INTERSECT SELECT 1",
+        "VALUES (1) EXCEPT VALUES (2)",
+        "SHOW DATABASES IN AwsDataCatalog LIKE 'analytics*'",
+        "SHOW SCHEMAS",
+        "SHOW TABLES IN AwsDataCatalog.analytics '*logs'",
+        "SHOW COLUMNS FROM AwsDataCatalog.analytics.orders",
+        "SHOW COLUMNS FROM orders FROM AwsDataCatalog.analytics",
+        "SHOW PARTITIONS AwsDataCatalog.analytics.orders",
+        "SHOW TBLPROPERTIES analytics.orders('comment')",
+        "SHOW VIEWS IN AwsDataCatalog.analytics LIKE 'orders*'",
+        "DESCRIBE FORMATTED analytics.orders",
+        "DESCRIBE analytics.orders PARTITION (`event date` = '2026-07-25', shard = 7) payload.'$elem$'.field",
+        "EXPLAIN (TYPE VALIDATE, FORMAT GRAPHVIZ) SELECT 1",
+        "EXPLAIN (TYPE IO, FORMAT TEXT) DESCRIBE analytics.orders payload.'$key$'.'$value$'",
     )
-    for form in (*allowed, *rejected):
-        assert form in cookbook
+    expected_rejected = (
+        "VALUES (1), (2)",
+        "SELECT 1; SELECT 2",
+        "SHOW CREATE TABLE analytics.orders",
+        "SHOW COLUMNS",
+        "SHOW TABLES IN analytics LIKE 'orders*'",
+        "DESCRIBE AwsDataCatalog.analytics.orders",
+        "DESCRIBE orders PARTITION (shard > 1)",
+        "DESCRIBE orders payload.'$unknown$'",
+        "EXPLAIN ANALYZE SELECT 1",
+        "EXPLAIN (FORMAT YAML) SELECT 1",
+        "EXPLAIN (TYPE IO, TYPE LOGICAL) SELECT 1",
+        "CREATE TABLE copy AS SELECT * FROM analytics.orders",
+        "INSERT INTO archive SELECT * FROM analytics.orders",
+        "UNLOAD (SELECT 1) TO 's3://example/results/'",
+        "CALL system.runtime.kill_query()",
+    )
+    accepted = _sql_examples_after(cookbook, "Accepted examples (one statement per line)")
+    rejected = _sql_examples_after(cookbook, "Rejected examples (one statement per line)")
+    assert accepted == expected_accepted
+    assert rejected == expected_rejected
+
+    for sql in accepted:
+        assert policy.validate(sql) == sql
+    for sql in rejected:
+        with pytest.raises(QueryRejectedError):
+            policy.validate(sql)
 
 
 def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
@@ -239,6 +334,17 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
     ):
         assert phrase in alt_text
     assert "Athena shutdown is awaited before disposal" in _squash(architecture)
+    assert "Domain adapters perform the runtime AWS and filesystem I/O" in _squash(architecture)
+    assert (
+        "Infrastructure owns sessions, credentials, configuration, SDK client construction, and OS-backed stores"
+        in _squash(architecture)
+    )
+    for inaccurate_claim in (
+        "The only layer that touches the OS, AWS APIs, the file system, or the macOS keychain",
+        "only layer touching external systems",
+        "Infrastructure owns external I/O",
+    ):
+        assert inaccurate_claim not in f"{architecture}\n{diagram}"
     assert "Iceberg" not in diagram
     assert "Glue-to-Athena" not in diagram
     for premature_claim in (

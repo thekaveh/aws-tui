@@ -222,6 +222,32 @@ def test_policy_accepts_safe_select_set_operations(sql: str) -> None:
     assert ReadOnlySqlPolicy().validate(sql) == sql
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM (VALUES (1), (2)) AS samples(value)",
+        "SELECT 1 UNION ALL VALUES (2)",
+        "VALUES (1) UNION VALUES (2)",
+        "VALUES (1) INTERSECT SELECT 1",
+        "VALUES (1) EXCEPT VALUES (2)",
+    ],
+)
+def test_policy_accepts_values_below_select_or_set_operation_roots(sql: str) -> None:
+    assert ReadOnlySqlPolicy().validate(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "VALUES (1)",
+        "VALUES (1), (2)",
+    ],
+)
+def test_policy_rejects_standalone_values_roots(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
 def test_policy_rejects_write_nested_in_set_operation() -> None:
     sql = (
         "WITH changed AS (DELETE FROM events RETURNING *) "

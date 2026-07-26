@@ -7,7 +7,7 @@
 > next ones (EC2, IAM, Lambda, ...). For richer references than S3
 > (dedicated domain client + per-service VM subtree + per-service
 > UI widget tree + service-specific modal), read
-> read `src/aws_tui/services/emr_serverless/`,
+> `src/aws_tui/services/emr_serverless/`,
 > `src/aws_tui/services/glue/`, and `src/aws_tui/services/athena/` alongside
 > `s3/`.
 

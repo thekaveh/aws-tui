@@ -74,12 +74,18 @@ VMs to build service pages, but it cannot import Textual widgets.
 - **Domain** — `FileSystemProvider` protocol with `LocalFS` and `S3FS`
   implementations + the cross-FS copy/move engine + the transfer
   journal (`src/aws_tui/domain/`). The Norton-Commander unifier; the
-  pane VMs treat both sides as the same protocol. `domain/athena.py` is the
-  separate paginated Athena facade; raw AWS responses remain below VMs.
-- **Infrastructure** — `AwsSession`, `ConnectionResolver`,
-  `ConfigStore`, `ThemeStore`, `KeymapStore`, `LogSink`, `CrashDump`,
-  `KeychainBackend`. The only layer that touches the OS, AWS APIs,
-  the file system, or the macOS keychain.
+  pane VMs treat both sides as the same protocol. Domain adapters perform the
+  runtime AWS and filesystem I/O: `LocalFS` and `TransferJournal` access host
+  storage, while `S3FS`, `EmrServerlessClient`, `GlueClient`, and
+  `AthenaClient` issue service operations and map external responses/errors
+  into domain values. Raw AWS responses remain below VMs.
+- **Infrastructure** — Infrastructure owns sessions, credentials,
+  configuration, SDK client construction, and OS-backed stores.
+  `AwsSession` and `ConnectionResolver` provide configured AWS identities and
+  client contexts to the domain adapters; `ConfigStore`, `ThemeStore`,
+  `KeymapStore`, `LogSink`, `CrashDump`, and `KeychainBackend` persist
+  application and platform state. Infrastructure prepares those boundaries;
+  domain adapters perform the provider operations.
 
 ## 1.2. Composition root
 The two top-level files `src/aws_tui/composition.py` and

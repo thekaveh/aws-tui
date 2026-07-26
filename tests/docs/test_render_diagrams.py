@@ -93,10 +93,18 @@ def test_architecture_diagram_is_landscape_and_current():
         "EMR Serverless",
         "AWS Glue",
         "Amazon Athena",
+        "runtime AWS + filesystem I/O",
+        "sessions + SDK client construction",
+        "credentials, config, OS-backed stores",
         "await Athena shutdown",
         "then dispose outgoing VM",
         "exact connection + region",
     ):
         assert label in svg
+    for inaccurate_claim in (
+        "only layer touching external systems",
+        "Infrastructure owns external I/O",
+    ):
+        assert inaccurate_claim not in master
     assert "Iceberg" not in svg
     assert "Glue-to-Athena" not in svg

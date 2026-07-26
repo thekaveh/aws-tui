@@ -130,3 +130,79 @@ both render tests successfully.
   `tests/unit/domain/test_sql_policy.py`, and
   `.superpowers/sdd/progress.md` have no diff. No unrelated implementation
   changes remain.
+
+## Remaining Review Findings Remediation
+
+### Contract Corrections
+
+- The consumed-contract ledger now distinguishes the lower-level
+  `AthenaClient.start_query(...)` facade from the shipped query path. The
+  facade accepts optional `output_location` and sends
+  `ResultConfiguration.OutputLocation` only when supplied; `AthenaQueryVM`
+  omits that argument and relies on the selected workgroup's enforced
+  customer-S3 or managed-results configuration.
+- The cookbook now states every accepted `SHOW` form and scope, the bounded
+  `DESCRIBE` partition and complex-selector grammar, all concrete `EXPLAIN`
+  option values, and the `SELECT` / set-operation / `VALUES` root behavior.
+  It also includes explicit accepted and rejected SQL blocks.
+- Documentation tests extract every SQL example and pass it through the real
+  `ReadOnlySqlPolicy`. Retained policy tests now pin `VALUES` below `SELECT`
+  and set-operation roots and rejection of standalone `VALUES`; policy source
+  and behavior remain unchanged.
+- Architecture prose and the landscape diagram now assign runtime AWS and
+  filesystem I/O to domain adapters. Infrastructure owns sessions,
+  credentials, configuration, SDK client construction, and OS-backed stores.
+  Claims that Infrastructure alone touches external systems were removed.
+- The split-line duplicate `read read` in `docs/adding-a-service.md` was fixed.
+  The regression assertion normalizes blockquote whitespace so that form is
+  detected in future.
+
+### RED / GREEN Evidence
+
+- Initial focused RED:
+  `pytest` over the new output-mode, SQL, architecture-prose, and diagram
+  contracts reported **4 failed, 7 passed**. The failures were the intended
+  missing ledger distinction, exact grammar, architecture ownership, and
+  diagram labels. The seven new `VALUES` characterization cases passed against
+  unchanged policy behavior.
+- Final focused SQL/docs/diagram run:
+  `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib
+  ./.venv/bin/python -m pytest tests/docs/test_scaffolding.py
+  tests/docs/test_render_diagrams.py tests/unit/domain/test_sql_policy.py -q`
+  reported **175 passed**.
+- After the split-line typo correction, the five directly affected
+  docs/diagram assertions reported **5 passed**; focused Ruff lint and format
+  checks passed.
+
+### Diagram Inspection
+
+- `make docs-diagrams` regenerated
+  `docs/diagrams/img/architecture.png` from the self-contained landscape HTML.
+- Desktop inspection at 1440x1100 showed the full diagram with no page-level
+  horizontal overflow; the SVG rendered at 1342x764 inside its frame.
+- Narrow inspection at 720x1000 showed no page-level horizontal overflow. The
+  980px SVG scrolls inside its 686px diagram frame, and the three summary cards
+  collapse to one 688px column.
+- Desktop, narrow, and the committed 1600px PNG were visually inspected.
+  Labels fit, connectors remain orthogonal and unobstructed, and no component
+  or text overlaps were found.
+
+### Final Gates
+
+| Command | Result |
+|---|---|
+| `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib ./.venv/bin/python -m pytest tests/docs -q` | 65 passed. |
+| `make docs-check` | Diagram regenerated; `check_docs: clean`; strict MkDocs build passed. |
+| Normal-color `uv run pytest tests/unit tests/integration tests/e2e -q` | 2,002 passed, 9 deselected in 291.46s. |
+| Normal-color `uv run pytest tests/snapshot -q` | 744 passed; 437 snapshots passed in 124.13s. |
+| `uv run ruff check .` | Passed. |
+| `uv run ruff format --check .` | Passed: 381 files formatted. |
+| `uv run mypy src` | Passed: no issues in 150 source files. |
+| `./scripts/check-layers.sh` | Passed: layer rules clean. |
+| `uv lock --check` | Passed. |
+| `uv run pip-audit` | No known vulnerabilities; expected unpublished local-package skip only. |
+| `uv build` and `uv run twine check dist/*` | Both 0.8.0 artifacts built and passed metadata checks. |
+
+`.superpowers/sdd/progress.md`, Athena implementation sources, and
+`src/aws_tui/domain/sql_policy.py` remain untouched. The retained
+`tests/unit/domain/test_sql_policy.py` change is test-only.

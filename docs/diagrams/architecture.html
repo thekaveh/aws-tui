@@ -220,11 +220,11 @@
         <rect x="34" y="444" width="980" height="106" rx="8" fill="#2b1c08" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
         <text x="52" y="466" fill="#fbbf24" font-size="12" font-weight="700">DOMAIN</text>
         <rect x="70" y="480" width="260" height="50" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
-        <text x="200" y="501" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">FileSystemProvider</text>
-        <text x="200" y="517" fill="#94a3b8" font-size="8" text-anchor="middle">LocalFS, S3FS, cross-FS operations</text>
+        <text x="200" y="501" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Provider + AWS adapters</text>
+        <text x="200" y="517" fill="#94a3b8" font-size="8" text-anchor="middle">runtime AWS + filesystem I/O</text>
         <rect x="370" y="480" width="260" height="50" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
-        <text x="500" y="501" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">AWS domain clients</text>
-        <text x="500" y="517" fill="#94a3b8" font-size="8" text-anchor="middle">typed mapping + one-page pagination</text>
+        <text x="500" y="501" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Typed domain mapping</text>
+        <text x="500" y="517" fill="#94a3b8" font-size="8" text-anchor="middle">responses, errors, pagination, transfers</text>
         <rect x="670" y="480" width="308" height="50" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
         <text x="824" y="501" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">ReadOnlySqlPolicy + query models</text>
         <text x="824" y="517" fill="#94a3b8" font-size="8" text-anchor="middle">fail closed before Athena dispatch</text>
@@ -233,14 +233,14 @@
         <rect x="34" y="576" width="980" height="100" rx="8" fill="#30101b" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="8,4"/>
         <text x="52" y="598" fill="#fb7185" font-size="12" font-weight="700">INFRA</text>
         <rect x="70" y="612" width="260" height="44" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="1.5"/>
-        <text x="200" y="632" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">AwsSession + botocore config</text>
-        <text x="200" y="647" fill="#94a3b8" font-size="8" text-anchor="middle">profile, region, retries, clients</text>
+        <text x="200" y="632" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">AwsSession + client factory</text>
+        <text x="200" y="647" fill="#94a3b8" font-size="8" text-anchor="middle">sessions + SDK client construction</text>
         <rect x="370" y="612" width="260" height="44" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="1.5"/>
-        <text x="500" y="632" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Connection + config stores</text>
-        <text x="500" y="647" fill="#94a3b8" font-size="8" text-anchor="middle">resolver, keymap, theme, keychain</text>
+        <text x="500" y="632" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Connection + credentials</text>
+        <text x="500" y="647" fill="#94a3b8" font-size="8" text-anchor="middle">profile, region, endpoint, secret refs</text>
         <rect x="670" y="612" width="308" height="44" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="1.5"/>
-        <text x="824" y="632" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">OS + AWS SDK boundary</text>
-        <text x="824" y="647" fill="#94a3b8" font-size="8" text-anchor="middle">only layer touching external systems</text>
+        <text x="824" y="632" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Configuration + platform state</text>
+        <text x="824" y="647" fill="#94a3b8" font-size="8" text-anchor="middle">credentials, config, OS-backed stores</text>
 
         <!-- COMPOSITION ROOT -->
         <rect x="1050" y="34" width="356" height="270" rx="8" fill="#1b1608" stroke="#fbbf24" stroke-width="1.5"/>
@@ -295,7 +295,7 @@
     <section class="cards">
       <article class="card">
         <h2>Layer Contract</h2>
-        <p>Textual reads VMs. VMs call service-owned domain clients. Infrastructure owns external I/O. The composition roots wire concrete dependencies.</p>
+        <p>Textual reads VMs. VMs call service-owned domain adapters, which perform AWS and filesystem I/O. Infrastructure supplies sessions, client construction, configuration, credentials, and OS-backed stores.</p>
       </article>
       <article class="card">
         <h2>Athena Lifecycle</h2>
