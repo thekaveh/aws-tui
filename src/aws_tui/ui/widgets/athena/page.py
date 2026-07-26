@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import ClassVar, cast
 
 from rich.text import Text
@@ -11,6 +13,7 @@ from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, OptionList, Select, Static, TextArea
+from textual.worker import Worker
 from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
@@ -231,21 +234,18 @@ class AthenaPage(HubSubscriberMixin, Widget):
             return
         value = str(event.value)
         if event.select.id == "athena-workgroup" and value != self._vm.context.workgroup:
-            self.run_worker(
-                self._vm.select_workgroup(value),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._vm.select_workgroup, value),
                 group="athena-context",
             )
         elif event.select.id == "athena-catalog" and value != self._vm.context.catalog:
-            self.run_worker(
-                self._vm.select_catalog(value),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._vm.select_catalog, value),
                 group="athena-context",
             )
         elif event.select.id == "athena-database" and value != self._vm.context.database:
-            self.run_worker(
-                self._vm.select_database(value),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._vm.select_database, value),
                 group="athena-context",
             )
 
@@ -257,11 +257,21 @@ class AthenaPage(HubSubscriberMixin, Widget):
         }
         loader = loaders.get(event.button.id or "")
         if loader is not None:
-            self.run_worker(
-                loader(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                loader,
                 group=f"{event.button.id}-load",
             )
+
+    def _run_lifecycle_worker(
+        self,
+        work: Callable[[], Awaitable[None]],
+        *,
+        group: str,
+    ) -> Worker[None]:
+        async def deferred() -> None:
+            await work()
+
+        return self.run_worker(deferred, exclusive=True, group=group)
 
     async def action_select_view(self, view: str) -> None:
         selected = cast(AthenaView, view)
@@ -449,24 +459,25 @@ class AthenaPage(HubSubscriberMixin, Widget):
         workgroup, catalog, database = selects
         self._syncing_context = True
         try:
-            self._replace_select(
-                workgroup,
-                tuple(row.name for row in self._vm.workgroups),
-                self._vm.context.workgroup,
-                self._vm.workgroups_state,
-            )
-            self._replace_select(
-                catalog,
-                tuple(row.name for row in self._vm.catalogs),
-                self._vm.context.catalog,
-                self._vm.catalogs_state,
-            )
-            self._replace_select(
-                database,
-                tuple(row.ref.database_name for row in self._vm.databases),
-                self._vm.context.database,
-                self._vm.databases_state,
-            )
+            with self.prevent(Select.Changed):
+                self._replace_select(
+                    workgroup,
+                    tuple(row.name for row in self._vm.workgroups),
+                    self._vm.context.workgroup,
+                    self._vm.workgroups_state,
+                )
+                self._replace_select(
+                    catalog,
+                    tuple(row.name for row in self._vm.catalogs),
+                    self._vm.context.catalog,
+                    self._vm.catalogs_state,
+                )
+                self._replace_select(
+                    database,
+                    tuple(row.ref.database_name for row in self._vm.databases),
+                    self._vm.context.database,
+                    self._vm.databases_state,
+                )
             self._sync_context_load_more(load_more)
         finally:
             self._syncing_context = False

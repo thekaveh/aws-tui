@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from dataclasses import replace
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.filesystem import PermissionDeniedError
+from aws_tui.domain.data_catalog import TableRef
+from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
 from aws_tui.vm.messages import OpenS3LocationRequest
@@ -117,6 +119,170 @@ async def test_catalog_select_table_discards_stale_detail_and_partitions() -> No
     assert vm.table_detail is not None
     assert vm.table_detail.summary.ref.table_name == "sessions"
     assert vm.partitions == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_mode", ["repeated", "unique"])
+async def test_open_table_bounds_empty_database_discovery_pages(token_mode: str) -> None:
+    class EndlessDatabasePages(InMemoryGlue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.visible = self.add_database("visible")
+            self.page_number = 0
+
+        async def list_databases_page(  # type: ignore[override]
+            self,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            self.database_tokens.append(start_token)
+            if start_token is None:
+                return [self.visible], "TOKEN_SECRET-1"
+            self.page_number += 1
+            next_token = (
+                "TOKEN_SECRET-1"
+                if token_mode == "repeated"
+                else f"TOKEN_SECRET-{self.page_number + 1}"
+            )
+            return [], next_token
+
+    fake = EndlessDatabasePages()
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    missing = TableRef(
+        "AwsDataCatalog",
+        "missing",
+        "events",
+        "dev",
+        "us-east-1",
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match=r"^Glue catalog discovery did not complete$",
+    ) as caught:
+        await asyncio.wait_for(vm.open_table(missing), timeout=1)
+
+    assert len(fake.database_tokens) <= 8
+    rendered = "".join(
+        traceback.TracebackException.from_exception(
+            caught.value,
+            capture_locals=True,
+        ).format()
+    )
+    assert "TOKEN_SECRET" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_open_table_allows_finite_empty_database_pages_before_match() -> None:
+    class SparseDatabasePages(InMemoryGlue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.visible = self.add_database("visible")
+            self.target = self.add_table("target", "events")
+            self.target_database = next(
+                row for row in self.databases if row.ref.database_name == "target"
+            )
+
+        async def list_databases_page(  # type: ignore[override]
+            self,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            self.database_tokens.append(start_token)
+            pages = {
+                None: ([self.visible], "page-1"),
+                "page-1": ([], "page-2"),
+                "page-2": ([], "page-3"),
+                "page-3": ([self.target_database], None),
+            }
+            return pages[start_token]
+
+    fake = SparseDatabasePages()
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+
+    await asyncio.wait_for(vm.open_table(fake.target.ref), timeout=1)
+
+    assert vm.selected_database_name == "target"
+    assert vm.selected_table_name == "events"
+    assert fake.database_tokens == [None, "page-1", "page-2", "page-3"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_mode", ["repeated", "unique"])
+async def test_open_table_bounds_empty_table_discovery_pages(token_mode: str) -> None:
+    class EndlessTablePages(InMemoryGlue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.visible = self.add_table("analytics", "visible")
+            self.page_number = 0
+
+        async def list_tables_page(  # type: ignore[override]
+            self,
+            database: str,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            self.table_requests.append((database, start_token))
+            if start_token is None:
+                return [self.visible], "page-1"
+            self.page_number += 1
+            next_token = "page-1" if token_mode == "repeated" else f"page-{self.page_number + 1}"
+            return [], next_token
+
+    fake = EndlessTablePages()
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    missing = TableRef(
+        "AwsDataCatalog",
+        "analytics",
+        "missing",
+        "dev",
+        "us-east-1",
+    )
+
+    with pytest.raises(ProviderError, match=r"^Glue catalog discovery did not complete$"):
+        await asyncio.wait_for(vm.open_table(missing), timeout=1)
+
+    assert len(fake.table_requests) <= 8
+
+
+@pytest.mark.asyncio
+async def test_open_table_enforces_absolute_discovery_page_cap() -> None:
+    class EndlessProgressPages(InMemoryGlue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.visible = self.add_database("visible")
+            self.page_number = 0
+
+        async def list_databases_page(  # type: ignore[override]
+            self,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            self.database_tokens.append(start_token)
+            if start_token is None:
+                return [self.visible], "page-1"
+            self.page_number += 1
+            row = self.add_database(f"unrelated-{self.page_number}")
+            return [row], f"page-{self.page_number + 1}"
+
+    fake = EndlessProgressPages()
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    missing = TableRef(
+        "AwsDataCatalog",
+        "missing",
+        "events",
+        "dev",
+        "us-east-1",
+    )
+
+    with pytest.raises(ProviderError, match=r"^Glue catalog discovery did not complete$"):
+        await asyncio.wait_for(vm.open_table(missing), timeout=1)
+
+    assert len(fake.database_tokens) == 65
 
 
 @pytest.mark.asyncio

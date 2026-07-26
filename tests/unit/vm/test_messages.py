@@ -202,6 +202,82 @@ def test_cross_service_messages_are_frozen_and_slot_backed(message: object) -> N
         message.unplanned_field = "value"  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda value: OpenAthenaTableRequest(value),
+        lambda value: OpenGlueTableRequest(value),
+    ],
+)
+@pytest.mark.parametrize(
+    "invalid_ref",
+    [
+        None,
+        object(),
+        {
+            "catalog_name": "AwsDataCatalog",
+            "database_name": "analytics",
+            "table_name": "events",
+            "connection_name": "prod-west",
+            "region": "us-west-2",
+        },
+    ],
+)
+def test_cross_service_messages_require_exact_table_ref_type(
+    factory: object,
+    invalid_ref: object,
+) -> None:
+    with pytest.raises(ValueError, match=r"^table reference is invalid$"):
+        factory(invalid_ref)  # type: ignore[operator]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "catalog_name",
+        "database_name",
+        "table_name",
+        "connection_name",
+        "region",
+    ],
+)
+@pytest.mark.parametrize("value", ["", "   ", None, 7, True])
+@pytest.mark.parametrize("message_type", [OpenAthenaTableRequest, OpenGlueTableRequest])
+def test_cross_service_messages_require_nonempty_plain_string_identity_fields(
+    field: str,
+    value: object,
+    message_type: object,
+) -> None:
+    values: dict[str, object] = {
+        "catalog_name": "AwsDataCatalog",
+        "database_name": "analytics",
+        "table_name": "events",
+        "connection_name": "prod-west",
+        "region": "us-west-2",
+    }
+    values[field] = value
+    ref = TableRef(**values)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match=r"^table reference is invalid$"):
+        message_type(ref)  # type: ignore[operator]
+
+
+@pytest.mark.parametrize("snapshot_id", [-1, True, 1.5, "42", object()])
+def test_open_athena_table_request_requires_exact_non_negative_snapshot_id(
+    snapshot_id: object,
+) -> None:
+    ref = TableRef(
+        "AwsDataCatalog",
+        "analytics",
+        "events",
+        "prod-west",
+        "us-west-2",
+    )
+
+    with pytest.raises(ValueError, match=r"^snapshot ID is invalid$"):
+        OpenAthenaTableRequest(ref, snapshot_id=snapshot_id)  # type: ignore[arg-type]
+
+
 def test_messages_are_immutable() -> None:
     msg = ThemeChangedMessage(name="carbon")
     with pytest.raises(AttributeError):

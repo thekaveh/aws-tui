@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from reactivex.abc import DisposableBase
 from rich.markup import escape
@@ -35,6 +35,7 @@ from textual.containers import Container, Horizontal
 from textual.widgets import OptionList, Static
 
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import EntryKind
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
@@ -71,7 +72,7 @@ from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.glue.page_vm import GluePageVM
+from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
     ConnectionListChangedMessage,
     OpenAthenaTableRequest,
@@ -100,6 +101,9 @@ class _TableHandoffSnapshot:
     service_id: str | None
     athena_view: str | None
     athena_sql: str | None = field(repr=False)
+    glue_view: str | None
+    glue_database_name: str | None
+    glue_table_ref: TableRef | None = field(repr=False)
 
 
 class _S3HandoffStageError(Exception):
@@ -459,6 +463,9 @@ class AwsTuiApp(App[None]):
         self._cursor_sub: DisposableBase | None = None
         self._service_navigation_sub: DisposableBase | None = None
         self._table_navigation_generation = 0
+        self._table_navigation_lock = asyncio.Lock()
+        self._table_navigation_tasks: set[asyncio.Task[None]] = set()
+        self._table_handoff_rollbacks: set[asyncio.Task[bool]] = set()
         self._service_navigation_suppressed_selection: (
             tuple[asyncio.Task[object] | None, str] | None
         ) = None
@@ -2714,6 +2721,8 @@ class AwsTuiApp(App[None]):
                 self._open_table_request(msg, generation),
                 name=f"table-navigation-{generation}",
             )
+            self._table_navigation_tasks.add(navigation)
+            navigation.add_done_callback(self._table_navigation_tasks.discard)
             self.run_worker(
                 navigation,
                 exclusive=True,
@@ -2726,6 +2735,16 @@ class AwsTuiApp(App[None]):
         generation: int,
     ) -> None:
         """Switch, mount, and select one exact Glue/Athena table."""
+        async with self._table_navigation_lock:
+            if generation != self._table_navigation_generation:
+                return
+            await self._open_table_request_transaction(request, generation)
+
+    async def _open_table_request_transaction(
+        self,
+        request: OpenAthenaTableRequest | OpenGlueTableRequest,
+        generation: int,
+    ) -> None:
         ctx = self._app_ctx
         ref = request.table_ref
         try:
@@ -2758,15 +2777,9 @@ class AwsTuiApp(App[None]):
             )
             return
 
-        current = ctx.root_vm.content_host.current
-        snapshot = _TableHandoffSnapshot(
-            connection=ctx.root_vm.active_connection,
-            auth_state=ctx.root_vm.active_auth_state,
-            service_id=ctx.root_vm.content_host.current_id,
-            athena_view=current.active_view if isinstance(current, AthenaPageVM) else None,
-            athena_sql=current.query.sql if isinstance(current, AthenaPageVM) else None,
-        )
+        snapshot = self._capture_table_handoff_snapshot()
         destination = "athena" if isinstance(request, OpenAthenaTableRequest) else "glue"
+        mutation_started = False
         try:
             try:
                 auth_state = ctx.aws_session.probe_token(connection).state
@@ -2777,10 +2790,13 @@ class AwsTuiApp(App[None]):
                     error_type=type(exc).__name__,
                 )
                 auth_state = TokenState.MISSING
+            if generation != self._table_navigation_generation:
+                return
 
             suppression = (asyncio.current_task(), destination)
             self._service_navigation_suppressed_selection = suppression
             try:
+                mutation_started = True
                 await ctx.root_vm.switch_connection_and_service(
                     connection,
                     auth_state,
@@ -2789,7 +2805,7 @@ class AwsTuiApp(App[None]):
             finally:
                 if self._service_navigation_suppressed_selection is suppression:
                     self._service_navigation_suppressed_selection = None
-            if generation != self._table_navigation_generation:
+            if await self._restore_superseded_table_handoff(generation, snapshot):
                 return
             if not await self._mount_service_view(
                 destination,
@@ -2797,7 +2813,7 @@ class AwsTuiApp(App[None]):
             ):
                 raise RuntimeError("destination mount failed")
             await self._wait_for_current_service_setup()
-            if generation != self._table_navigation_generation:
+            if await self._restore_superseded_table_handoff(generation, snapshot):
                 return
 
             target = ctx.root_vm.content_host.current
@@ -2809,14 +2825,20 @@ class AwsTuiApp(App[None]):
                 if not isinstance(target, GluePageVM):
                     raise RuntimeError("Glue destination is unavailable")
                 await target.open_table(ref)
+            await self.wait_for_refresh()
+            await self._restore_superseded_table_handoff(generation, snapshot)
         except asyncio.CancelledError:
-            if generation == self._table_navigation_generation:
-                await self._restore_table_handoff(snapshot)
+            if mutation_started:
+                await self._restore_table_handoff_durably(snapshot)
             raise
         except Exception as exc:
+            rollback_cancelled = False
+            if mutation_started:
+                _, rollback_cancelled = await self._restore_table_handoff_durably(snapshot)
+            if rollback_cancelled:
+                raise asyncio.CancelledError from None
             if generation != self._table_navigation_generation:
                 return
-            await self._restore_table_handoff(snapshot)
             ctx.log_sink.error(
                 "service_navigation.table_handoff_failed",
                 connection=connection.name,
@@ -2830,10 +2852,85 @@ class AwsTuiApp(App[None]):
                 toast_id="table-handoff-destination-failed",
             )
 
+    def _capture_table_handoff_snapshot(self) -> _TableHandoffSnapshot:
+        ctx = self._app_ctx
+        current = ctx.root_vm.content_host.current
+        glue_table_ref: TableRef | None = None
+        if isinstance(current, GluePageVM):
+            selected_table_name = current.catalog.selected_table_name
+            selected = next(
+                (
+                    row
+                    for row in current.catalog.tables
+                    if row.ref.table_name == selected_table_name
+                ),
+                None,
+            )
+            glue_table_ref = selected.ref if selected is not None else None
+        return _TableHandoffSnapshot(
+            connection=ctx.root_vm.active_connection,
+            auth_state=ctx.root_vm.active_auth_state,
+            service_id=ctx.root_vm.content_host.current_id,
+            athena_view=current.active_view if isinstance(current, AthenaPageVM) else None,
+            athena_sql=current.query.sql if isinstance(current, AthenaPageVM) else None,
+            glue_view=current.active_view if isinstance(current, GluePageVM) else None,
+            glue_database_name=(
+                current.catalog.selected_database_name if isinstance(current, GluePageVM) else None
+            ),
+            glue_table_ref=glue_table_ref,
+        )
+
+    async def _restore_superseded_table_handoff(
+        self,
+        generation: int,
+        snapshot: _TableHandoffSnapshot,
+    ) -> bool:
+        if generation == self._table_navigation_generation:
+            return False
+        _, cancelled = await self._restore_table_handoff_durably(snapshot)
+        if cancelled:
+            raise asyncio.CancelledError
+        return True
+
+    async def _restore_table_handoff_durably(
+        self,
+        snapshot: _TableHandoffSnapshot,
+    ) -> tuple[bool, bool]:
+        rollback = asyncio.create_task(
+            self._restore_table_handoff(snapshot),
+            name="table-handoff-rollback",
+        )
+        self._table_handoff_rollbacks.add(rollback)
+        current = asyncio.current_task()
+        cancellation_count = current.cancelling() if current is not None else 0
+        cancelled = False
+        try:
+            while not rollback.done():
+                try:
+                    await asyncio.shield(rollback)
+                except asyncio.CancelledError:
+                    next_count = current.cancelling() if current is not None else 0
+                    if next_count > cancellation_count:
+                        cancelled = True
+                        cancellation_count = next_count
+                    continue
+            try:
+                return rollback.result(), cancelled
+            except Exception as exc:
+                self._app_ctx.log_sink.error(
+                    "service_navigation.table_rollback_failed",
+                    stage="restore",
+                    error_type=type(exc).__name__,
+                )
+                return False, cancelled
+        finally:
+            self._table_handoff_rollbacks.discard(rollback)
+
     async def _wait_for_current_service_setup(self) -> None:
         task = self._app_ctx.root_vm.content_host._setup_task
         if task is not None and not task.done():
             await task
+        await self.wait_for_refresh()
 
     async def _restore_table_handoff(
         self,
@@ -2881,6 +2978,14 @@ class AwsTuiApp(App[None]):
                 await current.select_view(cast("AthenaView", snapshot.athena_view))
             if snapshot.athena_sql is not None:
                 current.query.set_sql(snapshot.athena_sql)
+        elif isinstance(current, GluePageVM):
+            if snapshot.glue_table_ref is not None:
+                await current.open_table(snapshot.glue_table_ref)
+            elif snapshot.glue_database_name is not None:
+                await current.select_database(snapshot.glue_database_name)
+            if snapshot.glue_view is not None:
+                await current.select_view(cast("GlueView", snapshot.glue_view))
+        await self.wait_for_refresh()
         return True
 
     async def _open_s3_location_request(self, request: OpenS3LocationRequest) -> None:
@@ -3656,6 +3761,32 @@ class AwsTuiApp(App[None]):
         """The last crash report captured via ``_handle_exception``."""
         return self._crash_report
 
+    async def _drain_table_navigation(self) -> None:
+        while self._table_navigation_tasks:
+            tasks = tuple(self._table_navigation_tasks)
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await self._await_tasks_through_cancellation(tasks)
+            self._table_navigation_tasks.difference_update(tasks)
+        while self._table_handoff_rollbacks:
+            rollbacks = tuple(self._table_handoff_rollbacks)
+            await self._await_tasks_through_cancellation(rollbacks)
+            self._table_handoff_rollbacks.difference_update(rollbacks)
+
+    async def _await_tasks_through_cancellation(
+        self,
+        tasks: tuple[asyncio.Task[Any], ...],
+    ) -> None:
+        for task in tasks:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                task.result()
+
     async def _aws_tui_shutdown(self) -> None:
         """Graceful shutdown per spec sec 5.4.
 
@@ -3663,6 +3794,7 @@ class AwsTuiApp(App[None]):
         internal ``App._shutdown`` lifecycle hook on Textual.
         """
         ctx = self._app_ctx
+        await self._drain_table_navigation()
         with contextlib.suppress(Exception):
             ctx.transfers_vm.cancel_all_command.execute()
         # Keep the hosted VM's graceful shutdown alive through caller

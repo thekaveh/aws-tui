@@ -236,6 +236,13 @@ class OpenAthenaTableRequest:
     snapshot_id: int | None = None
     sender_name: str = "service_navigation"
 
+    def __post_init__(self) -> None:
+        _validate_table_ref(self.table_ref)
+        if self.snapshot_id is not None and (
+            type(self.snapshot_id) is not int or self.snapshot_id < 0
+        ):
+            raise ValueError("snapshot ID is invalid")
+
     @property
     def sender_object(self) -> object:
         return self
@@ -248,9 +255,28 @@ class OpenGlueTableRequest:
     table_ref: TableRef
     sender_name: str = "service_navigation"
 
+    def __post_init__(self) -> None:
+        _validate_table_ref(self.table_ref)
+
     @property
     def sender_object(self) -> object:
         return self
+
+
+def _validate_table_ref(value: object) -> None:
+    if not isinstance(value, TableRef) or type(value) is not TableRef:
+        raise ValueError("table reference is invalid")
+    if not all(
+        type(part) is str and bool(part.strip())
+        for part in (
+            value.catalog_name,
+            value.database_name,
+            value.table_name,
+            value.connection_name,
+            value.region,
+        )
+    ):
+        raise ValueError("table reference is invalid")
 
 
 __all__ = [

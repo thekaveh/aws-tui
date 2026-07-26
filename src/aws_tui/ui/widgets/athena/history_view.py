@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -7,6 +9,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import Button, OptionList
+from textual.worker import Worker
 
 from aws_tui.domain.query import QueryState
 from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
@@ -95,25 +98,33 @@ class AthenaHistoryView(Widget):
         if option_id is None or option_id == "__placeholder__":
             return
         if option_id != self._vm.selected_execution_id:
-            self.run_worker(
-                self._page_vm.select_history_execution(option_id),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._page_vm.select_history_execution, option_id),
                 group="athena-select-history",
             )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-history-results":
-            self.run_worker(
-                self._page_vm.open_history_results(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._page_vm.open_history_results,
                 group="athena-open-history-results",
             )
         elif event.button.id == "athena-more-history":
-            self.run_worker(
-                self._vm.load_more(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.load_more,
                 group="athena-more-history",
             )
+
+    def _run_lifecycle_worker(
+        self,
+        work: Callable[[], Awaitable[None]],
+        *,
+        group: str,
+    ) -> Worker[None]:
+        async def deferred() -> None:
+            await work()
+
+        return self.run_worker(deferred, exclusive=True, group=group)
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh)

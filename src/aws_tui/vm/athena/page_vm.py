@@ -44,6 +44,8 @@ T = TypeVar("T")
 _VIEWS = frozenset({"query", "history", "results", "saved"})
 _CONTEXT_ERROR = "Athena context request failed"
 _WORKGROUP_DETAIL_ERROR = "Athena workgroup request failed"
+_DISCOVERY_PAGE_LIMIT = 64
+_DISCOVERY_EMPTY_PAGE_LIMIT = 3
 
 
 @dataclass(eq=False)
@@ -715,12 +717,16 @@ class AthenaPageVM:
         def matches() -> bool:
             return any(row.name == table_ref.catalog_name for row in self.catalogs)
 
-        while not matches() and self.has_more_catalogs:
-            before = (len(self.catalogs), self._catalog_pager.current_token)
-            await self.load_more_catalogs()
-            if before == (len(self.catalogs), self._catalog_pager.current_token):
-                break
-        return matches()
+        discovery = await self._load_until_discovered(
+            matches,
+            has_more=lambda: self.has_more_catalogs,
+            current_token=lambda: self._catalog_pager.current_token,
+            item_count=lambda: len(self.catalogs),
+            load_more=self.load_more_catalogs,
+        )
+        if discovery is None:
+            raise ProviderError("Athena catalog discovery did not complete")
+        return discovery
 
     async def _ensure_database_loaded(self, table_ref: TableRef) -> bool:
         def matches() -> bool:
@@ -732,12 +738,50 @@ class AthenaPageVM:
                 for row in self.databases
             )
 
-        while not matches() and self.has_more_databases:
-            before = (len(self.databases), self._database_pager.current_token)
-            await self.load_more_databases()
-            if before == (len(self.databases), self._database_pager.current_token):
-                break
-        return matches()
+        discovery = await self._load_until_discovered(
+            matches,
+            has_more=lambda: self.has_more_databases,
+            current_token=lambda: self._database_pager.current_token,
+            item_count=lambda: len(self.databases),
+            load_more=self.load_more_databases,
+        )
+        if discovery is None:
+            raise ProviderError("Athena catalog discovery did not complete")
+        return discovery
+
+    async def _load_until_discovered(
+        self,
+        available: Callable[[], bool],
+        *,
+        has_more: Callable[[], bool],
+        current_token: Callable[[], str | None],
+        item_count: Callable[[], int],
+        load_more: Callable[[], Awaitable[None]],
+    ) -> bool | None:
+        seen_tokens: set[str] = set()
+        empty_pages = 0
+        request_count = 0
+        while not available() and has_more():
+            token = current_token()
+            if token is None or token in seen_tokens or request_count >= _DISCOVERY_PAGE_LIMIT:
+                return None
+            seen_tokens.add(token)
+            count_before = item_count()
+            await load_more()
+            request_count += 1
+            if available():
+                return True
+            count_after = item_count()
+            if count_after == count_before:
+                empty_pages += 1
+                if empty_pages > _DISCOVERY_EMPTY_PAGE_LIMIT:
+                    return None
+            else:
+                empty_pages = 0
+            next_token = current_token()
+            if next_token is not None and next_token in seen_tokens:
+                return None
+        return available()
 
     def _begin_context_change(
         self,

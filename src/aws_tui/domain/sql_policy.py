@@ -22,8 +22,9 @@ class QueryRejectedError(ValidationError):
 
 
 class _TokenCursor:
-    def __init__(self, tokens: list[sqlglot.Token]) -> None:
+    def __init__(self, tokens: list[sqlglot.Token], source: str) -> None:
         self.tokens = tokens
+        self.source = source
         self.index = 0
 
     @property
@@ -65,37 +66,49 @@ class _TokenCursor:
         return True
 
     def consume_qualified_name(self, *, max_parts: int) -> int:
-        if not self._consume_identifier():
-            return 0
+        return len(self.consume_qualified_name_parts(max_parts=max_parts))
 
-        parts = 1
+    def consume_qualified_name_parts(self, *, max_parts: int) -> tuple[str, ...]:
+        first = self._consume_identifier_value()
+        if first is None:
+            return ()
+
+        parts = [first]
         while self.consume_type(TokenType.DOT):
-            if parts == max_parts or not self._consume_identifier():
-                return 0
-            parts += 1
-        return parts
+            if len(parts) == max_parts:
+                return ()
+            part = self._consume_identifier_value()
+            if part is None:
+                return ()
+            parts.append(part)
+        return tuple(parts)
 
     def _consume_identifier(self) -> bool:
+        return self._consume_identifier_value() is not None
+
+    def _consume_identifier_value(self) -> str | None:
         token = self.peek()
         if token is None:
-            return False
+            return None
         if token.token_type in {TokenType.IDENTIFIER, TokenType.VAR}:
             self.index += 1
-            return True
+            return token.text
         if token.token_type is not TokenType.UNKNOWN or token.text != "`":
-            return False
+            return None
 
+        opening = token
         self.index += 1
         content_start = self.index
         while True:
             token = self.peek()
             if token is None:
-                return False
+                return None
             if token.token_type is TokenType.UNKNOWN and token.text == "`":
                 if self.index == content_start:
-                    return False
+                    return None
+                value = self.source[opening.end + 1 : token.start].replace("``", "`")
                 self.index += 1
-                return True
+                return value
             self.index += 1
 
 
@@ -105,7 +118,7 @@ class ReadOnlySqlPolicy:
         if not normalized:
             raise QueryRejectedError("query is empty")
 
-        cursor = _TokenCursor(self._tokenize(normalized))
+        cursor = _TokenCursor(self._tokenize(normalized), normalized)
         statement = cursor.peek()
         if statement is not None and statement.token_type is TokenType.DESCRIBE:
             self._validate_describe_tokens(cursor)
@@ -126,36 +139,147 @@ class ReadOnlySqlPolicy:
         """Return physical table sources or fail closed on ambiguity."""
         try:
             normalized = self.validate(sql)
+            describe_cursor = _TokenCursor(self._tokenize(normalized), normalized)
+            first_token = describe_cursor.peek()
+            if first_token is not None and first_token.token_type is TokenType.DESCRIBE:
+                describe_parts = self._describe_table_parts(describe_cursor)
+                if describe_parts is None:
+                    return ()
+                return self._resolved_table_refs((describe_parts,), context)
+
             statements = self._parse(normalized)
             if len(statements) != 1 or statements[0] is None:
                 return ()
-            refs: list[TableRef] = []
-            seen: set[tuple[str, str, str]] = set()
-            for scope in traverse_scope(statements[0]):
-                for _, source in scope.selected_sources.values():
-                    if not isinstance(source, exp.Table):
-                        continue
-                    catalog = source.catalog or context.catalog
-                    database = source.db or context.database
-                    table = source.name
-                    if not catalog or not database or not table or catalog != context.catalog:
-                        return ()
-                    key = (catalog, database, table)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    refs.append(
-                        TableRef(
-                            catalog,
-                            database,
-                            table,
-                            context.connection_name,
-                            context.region,
-                        )
-                    )
-            return tuple(refs)
+            expression_parts = self._table_parts_for_expression(statements[0])
+            return self._resolved_table_refs(expression_parts, context)
         except Exception:
             return ()
+
+    def _table_parts_for_expression(
+        self,
+        expression: exp.Expr,
+    ) -> tuple[tuple[str | None, str | None, str], ...]:
+        if isinstance(expression, exp.Describe):
+            table = expression.this
+            if not isinstance(table, exp.Table):
+                return ()
+            return ((table.catalog or None, table.db or None, table.name),)
+
+        if isinstance(expression, exp.Command):
+            body = expression.expression
+            if not isinstance(body, exp.Literal) or not body.is_string:
+                return ()
+            verb = str(expression.this).upper()
+            if verb == "SHOW":
+                parts = self._show_columns_table_parts(body.this)
+                return (parts,) if parts else ()
+            if verb == "EXPLAIN":
+                return self._explained_table_parts(body.this)
+            return ()
+
+        tables: list[tuple[str | None, str | None, str]] = []
+        for scope in traverse_scope(expression):
+            for _, source in scope.selected_sources.values():
+                if isinstance(source, exp.Table):
+                    tables.append(
+                        (
+                            source.catalog or None,
+                            source.db or None,
+                            source.name,
+                        )
+                    )
+        return tuple(tables)
+
+    def _resolved_table_refs(
+        self,
+        parts: tuple[tuple[str | None, str | None, str], ...],
+        context: QueryContext,
+    ) -> tuple[TableRef, ...]:
+        refs: list[TableRef] = []
+        seen: set[tuple[str, str, str]] = set()
+        for raw_catalog, raw_database, table in parts:
+            catalog = raw_catalog or context.catalog
+            database = raw_database or context.database
+            if not catalog or not database or not table or catalog != context.catalog:
+                return ()
+            key = (catalog, database, table)
+            if key in seen:
+                continue
+            seen.add(key)
+            refs.append(
+                TableRef(
+                    catalog,
+                    database,
+                    table,
+                    context.connection_name,
+                    context.region,
+                )
+            )
+        return tuple(refs)
+
+    def _explained_table_parts(
+        self,
+        body: str,
+    ) -> tuple[tuple[str | None, str | None, str], ...]:
+        cursor = _TokenCursor(self._tokenize(body), body)
+        if cursor.consume_type(TokenType.ANALYZE):
+            return ()
+        if cursor.consume_type(TokenType.L_PAREN):
+            self._consume_explain_options(cursor)
+        statement = cursor.peek()
+        if statement is None:
+            return ()
+        if statement.token_type is TokenType.DESCRIBE:
+            parts = self._describe_table_parts(cursor)
+            return (parts,) if parts else ()
+        explained = self._parse(body[statement.start :])
+        if len(explained) != 1 or explained[0] is None:
+            return ()
+        return self._table_parts_for_expression(explained[0])
+
+    def _describe_table_parts(
+        self,
+        cursor: _TokenCursor,
+    ) -> tuple[str | None, str | None, str] | None:
+        if not cursor.consume_type(TokenType.DESCRIBE):
+            return None
+        cursor.consume_one_of(frozenset({"EXTENDED", "FORMATTED"}))
+        parts = cursor.consume_qualified_name_parts(max_parts=2)
+        if len(parts) == 1:
+            return None, None, parts[0]
+        if len(parts) == 2:
+            return None, parts[0], parts[1]
+        return None
+
+    def _show_columns_table_parts(
+        self,
+        body: str,
+    ) -> tuple[str | None, str | None, str] | None:
+        cursor = _TokenCursor(self._tokenize(body), body)
+        if not cursor.consume_word("COLUMNS") or not cursor.consume_type(*_SHOW_SCOPE_TOKENS):
+            return None
+        target = cursor.consume_qualified_name_parts(max_parts=3)
+        if not target:
+            return None
+        scope: tuple[str, ...] = ()
+        if cursor.consume_type(*_SHOW_SCOPE_TOKENS):
+            if len(target) != 1:
+                return None
+            scope = cursor.consume_qualified_name_parts(max_parts=2)
+            if not scope:
+                return None
+        if not cursor.at_end:
+            return None
+
+        if scope:
+            if len(scope) == 1:
+                return None, scope[0], target[0]
+            return scope[0], scope[1], target[0]
+        if len(target) == 1:
+            return None, None, target[0]
+        if len(target) == 2:
+            return None, target[0], target[1]
+        return target[0], target[1], target[2]
 
     def _parse(self, sql: str) -> list[exp.Expr | None]:
         try:
@@ -256,7 +380,7 @@ class ReadOnlySqlPolicy:
         raise QueryRejectedError(f"statement type {command.key!r} is not read-only")
 
     def _validate_show(self, body: str) -> None:
-        cursor = _TokenCursor(self._tokenize(body))
+        cursor = _TokenCursor(self._tokenize(body), body)
         token = cursor.peek()
         if token is None or token.token_type is not TokenType.VAR:
             raise QueryRejectedError("SHOW form is not read-only")
@@ -323,7 +447,7 @@ class ReadOnlySqlPolicy:
 
     def _validate_explain(self, body: str) -> None:
         tokens = self._tokenize(body)
-        cursor = _TokenCursor(tokens)
+        cursor = _TokenCursor(tokens, body)
         if cursor.consume_type(TokenType.ANALYZE):
             raise QueryRejectedError("EXPLAIN ANALYZE executes its statement")
 

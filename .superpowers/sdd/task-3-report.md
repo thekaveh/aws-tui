@@ -598,3 +598,145 @@ seconds for the full domain suite; and 60 seconds for the full VM suite.
 - Synchronous disposal cannot await network completion. It preserves the
   finalizer on the running event loop, while deterministic process teardown
   continues to require awaited `shutdown()` before the loop is closed.
+
+## Task 3 Review Corrections: 2026-07-26
+
+### Status
+
+All five Task 3 review findings are closed on
+`codex/aws-service-expansion-study`. The corrective commit range is
+`da9cc3b..HEAD`; the final commit hash is reported after the one coherent
+commit is created.
+
+### Implementation
+
+- Glue/Athena table handoffs now run as serialized transactions. A request
+  captures one pre-mutation snapshot, retains rollback ownership under the
+  transaction lock, and fully restores the old source before a newer request
+  may prevalidate or commit. Tests cover supersession during switch, mount,
+  and open by a missing connection, a region mismatch, and a successful newer
+  request.
+- Rollback is an explicitly tracked, shielded task. Repeated cancellation and
+  application shutdown drain that owner instead of detaching it. Restoration
+  includes connection, authentication state, service, Athena context/view/SQL,
+  and established Glue database/table/view selection.
+- Glue database/table discovery and Athena catalog/database discovery reject
+  repeated tokens, stop after four consecutive no-progress pages, and enforce
+  an absolute 64-request cap. A small finite run of empty continuation pages
+  remains valid. Bounds fail with stable `ProviderError` messages outside the
+  token-owning stack frame, so provider tokens are absent even from tracebacks
+  rendered with captured locals.
+- `OpenAthenaTableRequest` and `OpenGlueTableRequest` now validate exact
+  `TableRef` identity and exact nonblank string fields before mutation.
+  Athena snapshot IDs accept only `None` or exact non-negative integers;
+  booleans and integer-like values are rejected. Both messages remain frozen
+  and slot-backed.
+- Read-only SQL reference extraction now covers EXPLAIN's inner query,
+  DESCRIBE targets, and SHOW COLUMNS targets. Context defaults, quoted names,
+  CTE visibility, deduplication, and exact-catalog fail-closed behavior are
+  preserved through sqlglot AST/token traversal.
+- Textual selection workers now defer coroutine creation until the widget
+  worker owns execution. Programmatic Athena context synchronization suppresses
+  its own stale Select events, while Glue catalog refresh remains safe during
+  partial teardown without skipping its initial mount render.
+
+### TDD And Hang Evidence
+
+The initial focused RED run failed only on the newly specified contracts:
+
+```text
+79 failed, 305 passed
+```
+
+The initial navigation RED run exposed partial destination state,
+cancellation loss, and missing rollback ownership:
+
+```text
+10 failed, 9 passed
+```
+
+The interrupted success-mount probe was terminated by its external process
+watchdog. Faulthandler showed the newer navigation blocked on
+`_table_navigation_lock` while the older transaction was still draining a
+Textual refresh. Teardown then exposed eagerly created Athena selection
+coroutines and a stale Glue refresh callback. Coroutine creation is now lazy,
+programmatic selection messages are suppressed at their source, and every
+adversarial wait is bounded in-test: two seconds for stage events, ten seconds
+for service setup, and fifteen seconds for aggregate overlap completion.
+
+The exact success-mount probe subsequently completed under a 30-second
+faulthandler watchdog:
+
+```text
+1 passed in 1.08s
+```
+
+The final changed-file suite ran with reruns disabled and runtime/unraisable
+warnings promoted to errors:
+
+```text
+404 passed in 18.37s
+```
+
+All nine switch/mount/open supersession combinations remain present. No
+overlap case was removed or weakened.
+
+### Verification
+
+Broad domain and VM regression:
+
+```text
+1494 passed in 45.21s
+```
+
+Full in-process integration regression:
+
+```text
+195 passed, 9 deselected in 286.23s
+```
+
+Affected UI and privacy/crash regressions:
+
+```text
+357 passed in 18.45s
+38 passed in 0.41s
+```
+
+Static, formatting, architecture, diff, and build gates:
+
+```text
+uv run mypy src/aws_tui
+Success: no issues found in 152 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+386 files already formatted
+
+scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+clean
+
+uv build --no-build-isolation
+Successfully built aws_tui-0.8.0.tar.gz and aws_tui-0.8.0-py3-none-any.whl
+```
+
+Focused runs used external 30-180 second watchdogs; the broad integration run
+used a 420-second watchdog, above its observed clean runtime. Process sweeps
+after the interrupted probe and after final integration found no stale pytest
+or `uv run pytest` process.
+
+### Updated Concerns
+
+- Automatic cross-service discovery intentionally stops after 64 continuation
+  requests or four consecutive no-progress pages. A target beyond that bound
+  fails visibly instead of issuing an unbounded provider request loop.
+- Durable rollback waits for the repository's normal service setup and
+  provider transport completion. It does not detach work or impose a second
+  production timeout over the configured transport timeout.
+- SQL table visibility remains fail-closed: foreign catalogs, malformed
+  special statements, and unresolved context defaults produce no table
+  references.

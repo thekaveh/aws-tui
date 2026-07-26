@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList
 
@@ -89,34 +90,37 @@ class GlueCatalogView(Widget):
             databases = self.query_one("#glue-databases-pane", ResourceListPane)
             tables = self.query_one("#glue-tables-pane", ResourceListPane)
             detail = self.query_one("#glue-table-detail-pane", DetailRows)
-        except Exception:
+        except NoMatches:
             return
-        databases.replace(
-            tuple((row.ref.database_name, row.ref.database_name) for row in self._vm.databases),
-            selected_id=self._vm.selected_database_name,
-            state=self._vm.databases_state,
-            error_text=self._vm.databases_error_text,
-            has_more=self._vm.has_more_databases,
-        )
-        tables.replace(
-            tuple(
-                (
-                    row.ref.table_name,
-                    f"{row.ref.table_name}  {display_value(row.table_type)}",
-                )
-                for row in self._vm.tables
-            ),
-            selected_id=self._vm.selected_table_name,
-            state=self._vm.tables_state,
-            error_text=self._vm.tables_error_text,
-            has_more=self._vm.has_more_tables,
-        )
-        detail.replace(
-            self._detail_values(),
-            state=self._vm.detail_state,
-            error_text=self._vm.detail_error_text,
-            empty_text="select a table",
-        )
+        try:
+            databases.replace(
+                tuple((row.ref.database_name, row.ref.database_name) for row in self._vm.databases),
+                selected_id=self._vm.selected_database_name,
+                state=self._vm.databases_state,
+                error_text=self._vm.databases_error_text,
+                has_more=self._vm.has_more_databases,
+            )
+            tables.replace(
+                tuple(
+                    (
+                        row.ref.table_name,
+                        f"{row.ref.table_name}  {display_value(row.table_type)}",
+                    )
+                    for row in self._vm.tables
+                ),
+                selected_id=self._vm.selected_table_name,
+                state=self._vm.tables_state,
+                error_text=self._vm.tables_error_text,
+                has_more=self._vm.has_more_tables,
+            )
+            detail.replace(
+                self._detail_values(),
+                state=self._vm.detail_state,
+                error_text=self._vm.detail_error_text,
+                empty_text="select a table",
+            )
+        except NoMatches:
+            return
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         detail = self._vm.table_detail

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal, cast
 
 import reactivex as rx
@@ -22,6 +23,9 @@ from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.messages import OpenAthenaTableRequest, OpenS3LocationRequest
+
+_DISCOVERY_PAGE_LIMIT = 64
+_DISCOVERY_EMPTY_PAGE_LIMIT = 3
 
 
 class GlueCatalogVM:
@@ -367,25 +371,71 @@ class GlueCatalogVM:
                 and row.ref.region == ref.region
             )
 
-        while not database_available() and self.has_more_databases:
-            before = (len(self.databases), self._database_pager.current_token)
-            await self.load_more_databases()
-            if before == (len(self.databases), self._database_pager.current_token):
-                break
-        if not database_available():
+        database_discovery = await self._load_until_discovered(
+            database_available,
+            has_more=lambda: self.has_more_databases,
+            current_token=lambda: self._database_pager.current_token,
+            item_count=lambda: len(self.databases),
+            load_more=self.load_more_databases,
+        )
+        if database_discovery is None:
+            raise ProviderError("Glue catalog discovery did not complete")
+        if not database_discovery:
             raise ValueError("table is unavailable in the active Glue source")
         if self._selected_database_name != ref.database_name:
             await self.select_database(ref.database_name)
-        while not any(row.ref == ref for row in self.tables) and self.has_more_tables:
-            before = (len(self.tables), self._table_pager.current_token)
-            await self.load_more_tables()
-            if before == (len(self.tables), self._table_pager.current_token):
-                break
-        if not any(row.ref == ref for row in self.tables):
+
+        def table_available() -> bool:
+            return any(row.ref == ref for row in self.tables)
+
+        table_discovery = await self._load_until_discovered(
+            table_available,
+            has_more=lambda: self.has_more_tables,
+            current_token=lambda: self._table_pager.current_token,
+            item_count=lambda: len(self.tables),
+            load_more=self.load_more_tables,
+        )
+        if table_discovery is None:
+            raise ProviderError("Glue catalog discovery did not complete")
+        if not table_discovery:
             raise ValueError("table is unavailable in the active Glue source")
         await self.select_table(ref.table_name)
         if self._selected_table_name != ref.table_name:
             raise ValueError("table is unavailable in the active Glue source")
+
+    async def _load_until_discovered(
+        self,
+        available: Callable[[], bool],
+        *,
+        has_more: Callable[[], bool],
+        current_token: Callable[[], str | None],
+        item_count: Callable[[], int],
+        load_more: Callable[[], Awaitable[None]],
+    ) -> bool | None:
+        seen_tokens: set[str] = set()
+        empty_pages = 0
+        request_count = 0
+        while not available() and has_more():
+            token = current_token()
+            if token is None or token in seen_tokens or request_count >= _DISCOVERY_PAGE_LIMIT:
+                return None
+            seen_tokens.add(token)
+            count_before = item_count()
+            await load_more()
+            request_count += 1
+            if available():
+                return True
+            count_after = item_count()
+            if count_after == count_before:
+                empty_pages += 1
+                if empty_pages > _DISCOVERY_EMPTY_PAGE_LIMIT:
+                    return None
+            else:
+                empty_pages = 0
+            next_token = current_token()
+            if next_token is not None and next_token in seen_tokens:
+                return None
+        return available()
 
     def query_in_athena(self, snapshot_id: int | None = None) -> bool:
         """Publish the selected table identity for Athena composition."""

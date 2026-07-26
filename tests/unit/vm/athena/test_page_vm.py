@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from datetime import UTC, datetime
 
 import pytest
@@ -407,6 +408,164 @@ async def test_open_table_rejects_mismatched_or_unavailable_identity(
         await page.open_table(ref)
 
     assert (page.context, page.active_view, page.query.sql) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_mode", ["repeated", "unique"])
+async def test_open_table_bounds_empty_catalog_discovery_pages(token_mode: str) -> None:
+    class EndlessCatalogClient(PageClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.initial = AthenaCatalogSummary("initial", "LAMBDA", None)
+            self.catalogs["primary"] = [self.initial]
+            self.databases[("primary", "initial")] = ["default"]
+            self.page_number = 0
+
+        async def list_catalogs_page(  # type: ignore[override]
+            self,
+            *,
+            workgroup: str | None = None,
+            start_token: str | None = None,
+        ) -> tuple[list[AthenaCatalogSummary], str | None]:
+            assert workgroup is not None
+            self.catalog_calls.append((workgroup, start_token))
+            if start_token is None:
+                return [self.initial], "TOKEN_SECRET-1"
+            self.page_number += 1
+            next_token = (
+                "TOKEN_SECRET-1"
+                if token_mode == "repeated"
+                else f"TOKEN_SECRET-{self.page_number + 1}"
+            )
+            return [], next_token
+
+    client = EndlessCatalogClient()
+    page = make_page_vm(client)
+    await page.setup()
+    missing = TableRef(
+        "missing",
+        "default",
+        "events",
+        "analytics",
+        "us-west-2",
+    )
+
+    with pytest.raises(
+        ProviderError,
+        match=r"^Athena catalog discovery did not complete$",
+    ) as caught:
+        await asyncio.wait_for(page.open_table(missing), timeout=1)
+
+    assert len(client.catalog_calls) <= 8
+    rendered = "".join(
+        traceback.TracebackException.from_exception(
+            caught.value,
+            capture_locals=True,
+        ).format()
+    )
+    assert "TOKEN_SECRET" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_open_table_allows_finite_empty_catalog_pages_before_match() -> None:
+    class SparseCatalogClient(PageClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.initial = AthenaCatalogSummary("initial", "LAMBDA", None)
+            self.target = AthenaCatalogSummary("target", "LAMBDA", None)
+            self.catalogs["primary"] = [self.initial]
+            self.databases[("primary", "initial")] = ["default"]
+            self.databases[("primary", "target")] = ["warehouse"]
+
+        async def list_catalogs_page(  # type: ignore[override]
+            self,
+            *,
+            workgroup: str | None = None,
+            start_token: str | None = None,
+        ) -> tuple[list[AthenaCatalogSummary], str | None]:
+            assert workgroup is not None
+            self.catalog_calls.append((workgroup, start_token))
+            pages = {
+                None: ([self.initial], "page-1"),
+                "page-1": ([], "page-2"),
+                "page-2": ([], "page-3"),
+                "page-3": ([self.target], None),
+            }
+            return pages[start_token]
+
+    client = SparseCatalogClient()
+    page = make_page_vm(client)
+    await page.setup()
+    target = TableRef(
+        "target",
+        "warehouse",
+        "events",
+        "analytics",
+        "us-west-2",
+    )
+
+    await asyncio.wait_for(page.open_table(target), timeout=1)
+
+    assert page.context.catalog == "target"
+    assert page.context.database == "warehouse"
+    assert client.catalog_calls == [
+        ("primary", None),
+        ("primary", "page-1"),
+        ("primary", "page-2"),
+        ("primary", "page-3"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_mode", ["repeated", "unique"])
+async def test_open_table_bounds_empty_database_discovery_pages(token_mode: str) -> None:
+    class EndlessDatabaseClient(PageClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.page_number = 0
+
+        async def list_databases_page(  # type: ignore[override]
+            self,
+            catalog: str,
+            *,
+            workgroup: str | None = None,
+            start_token: str | None = None,
+        ) -> tuple[list[DatabaseSummary], str | None]:
+            assert workgroup is not None
+            self.database_calls.append((workgroup, catalog, start_token))
+            if start_token is None:
+                return [
+                    DatabaseSummary(
+                        DatabaseRef(
+                            catalog,
+                            "default",
+                            self.connection_name,
+                            self.region,
+                        ),
+                        None,
+                        None,
+                        None,
+                    )
+                ], "page-1"
+            self.page_number += 1
+            next_token = "page-1" if token_mode == "repeated" else f"page-{self.page_number + 1}"
+            return [], next_token
+
+    client = EndlessDatabaseClient()
+    page = make_page_vm(client)
+    await page.setup()
+    missing = TableRef(
+        "AwsDataCatalog",
+        "missing",
+        "events",
+        "analytics",
+        "us-west-2",
+    )
+
+    with pytest.raises(ProviderError, match=r"^Athena catalog discovery did not complete$"):
+        await asyncio.wait_for(page.open_table(missing), timeout=1)
+
+    assert len(client.database_calls) <= 8
 
 
 @pytest.mark.asyncio

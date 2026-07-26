@@ -448,6 +448,56 @@ def test_table_refs_resolves_catalog_and_database_defaults(
     assert ReadOnlySqlPolicy().table_refs(sql, CONTEXT) == expected
 
 
+@pytest.mark.parametrize(
+    ("sql", "expected_database", "expected_table"),
+    [
+        ("EXPLAIN SELECT * FROM events", "analytics", "events"),
+        (
+            "EXPLAIN (TYPE IO, FORMAT TEXT) "
+            "WITH recent AS (SELECT * FROM reporting.events) SELECT * FROM recent",
+            "reporting",
+            "events",
+        ),
+        ("DESCRIBE events", "analytics", "events"),
+        ("DESCRIBE `reporting`.`event archive`", "reporting", "event archive"),
+        ("EXPLAIN DESCRIBE events", "analytics", "events"),
+        ("SHOW COLUMNS FROM events", "analytics", "events"),
+        ('SHOW COLUMNS IN "reporting"."event archive"', "reporting", "event archive"),
+        ("SHOW COLUMNS FROM events FROM reporting", "reporting", "events"),
+        (
+            'SHOW COLUMNS FROM "event archive" FROM "AwsDataCatalog"."reporting"',
+            "reporting",
+            "event archive",
+        ),
+    ],
+)
+def test_table_refs_extracts_every_accepted_table_target_statement(
+    sql: str,
+    expected_database: str,
+    expected_table: str,
+) -> None:
+    assert ReadOnlySqlPolicy().table_refs(sql, CONTEXT) == (
+        TableRef(
+            "AwsDataCatalog",
+            expected_database,
+            expected_table,
+            "prod-west",
+            "us-west-2",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'EXPLAIN SELECT * FROM "ForeignCatalog"."analytics"."events"',
+        'SHOW COLUMNS FROM events FROM "ForeignCatalog"."analytics"',
+    ],
+)
+def test_table_refs_special_statements_fail_closed_for_foreign_catalog(sql: str) -> None:
+    assert ReadOnlySqlPolicy().table_refs(sql, CONTEXT) == ()
+
+
 def test_table_refs_excludes_cte_aliases_and_preserves_nested_physical_tables() -> None:
     sql = """
         WITH recent AS (
