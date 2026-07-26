@@ -435,3 +435,85 @@ The planned `continue` button is enabled only when the last user action was
 **read-only** (navigation, refresh, filter, palette open). Writes
 (delete, copy, move, rename) disable it — you can't safely continue a
 write that may have partially executed.
+
+## 1.5. Browse AWS Glue safely
+
+Glue is an AWS-only, read-only service in aws-tui. Select **Glue** in
+the nav rail, then use:
+
+- `1` for Catalog databases, tables, schema/storage detail,
+  partitions, and column statistics;
+- `2` for job definitions and recent runs;
+- `3` for crawler status, configuration, metrics, and latest crawl;
+- `r` to refresh the active view;
+- `Shift+S` to rebuild Glue under the next configured AWS connection.
+
+The source header shows the configured connection name, distinct
+profile name when present, and region. Switching profiles clears the
+old page before the replacement VM loads, and remembered selections
+are isolated by connection name and region.
+
+### 1.5.1. Least-privilege Glue permissions
+
+Grant only the read operations needed by the views you use. A complete
+policy for the shipped Glue page may include:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabases",
+        "glue:GetTables",
+        "glue:GetTable",
+        "glue:GetPartitions",
+        "glue:GetColumnStatisticsForTable",
+        "glue:GetJobs",
+        "glue:GetJobRuns",
+        "glue:GetCrawlers",
+        "glue:GetCrawler",
+        "glue:GetCrawlerMetrics",
+        "glue:GetTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+AWS IAM and Lake Formation policies remain authoritative. An
+`AccessDenied` response is shown only in the affected Glue pane; it
+does not mark the connection unreachable or remove that profile from
+other services.
+
+### 1.5.2. Open a table location in S3
+
+1. In Catalog, select the database and table.
+2. Open the command palette with `:` or `Ctrl+K`.
+3. Choose **Open table location in S3**.
+
+aws-tui validates that the selected table has an `s3://` location,
+resolves the exact Glue connection name, verifies its region still
+matches, rebuilds S3 through the normal service factory, and navigates
+the left pane to `/<bucket>/<prefix>`. Missing/malformed locations,
+removed connections, and region mismatches produce an advisory and do
+not navigate. The advisory and logs omit the full URI.
+
+Browsing the destination normally needs `s3:ListAllMyBuckets` for the
+initial S3 root load and `s3:ListBucket` for the target bucket/prefix;
+reading an object also needs `s3:GetObject`.
+
+### 1.5.3. Exercise Glue in demo mode
+
+Launch `aws-tui --demo`. `demo-dev` and `demo-prod` expose disjoint
+catalog, job/run, and crawler names, so `Shift+S` visibly proves
+profile isolation. `demo-shared` demonstrates a Glue access-denied
+state. The Catalog-to-S3 command uses the matching synthetic profile
+and never makes a real AWS call.

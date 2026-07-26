@@ -1,143 +1,243 @@
-# Foundation Task 6 Report
+# Glue Task 6 Report
 
 ## Status
 
-Complete. The EMR page now renders the active single-context AWS source in a
-shared compact header, and the source-switch journey verifies that `Shift+S`
-changes the visible identity without changing the selected EMR nav service.
+Implemented the immutable Glue-to-S3 navigation request, exact-connection
+handoff, advisory failure behavior, command-palette entry, integration/E2E
+coverage, and all documentation surfaces named by the Task 6 brief.
+
+The functional, lint, formatting, typing, layer, docs, and build gates pass.
+The color-enabled snapshot gate has 75 pre-existing EMR/Glue baseline
+mismatches; the untouched parent commit `46c1076` reproduces the identical
+result.
+
+## Changed Files
+
+- `.superpowers/sdd/task-6-report.md`
+- `CHANGELOG.md`
+- `README.md`
+- `docs/adding-a-service.md`
+- `docs/architecture.md`
+- `docs/connections.md`
+- `docs/contract-ledger.md`
+- `docs/cookbook.md`
+- `docs/keybindings.md`
+- `src/aws_tui/app.py`
+- `src/aws_tui/vm/glue/catalog_vm.py`
+- `src/aws_tui/vm/messages.py`
+- `tests/docs/test_connections.py`
+- `tests/e2e/test_journeys.py`
+- `tests/integration/test_command_palette_wiring.py`
+- `tests/integration/test_glue_s3_handoff.py`
+- `tests/unit/vm/test_messages.py`
 
 ## Implementation
 
-- Added `ServiceSourceHeader`, a one-row `Static` widget that renders
-  `ServiceSourceContext.label` without interpreting connection data as markup.
-- Mounted the header above EMR's existing application picker.
-- Added one token-only theme rule to every shipped theme using `$bg-elev`,
-  `$rule-dim`, and `$text-muted`.
-- Updated EMR snapshot data to render the required
-  `demo-prod · us-east-1` source identity and regenerated only the 20 EMR
-  snapshots.
-- Documented the S3-per-pane and single-context-service source scopes,
-  `Shift+A` versus `Shift+S`, connection/region identity, selection scoping,
-  and service-scoped `AccessDenied` behavior.
-- Stabilized the existing multi-profile EMR integration setup after the S3
-  bootstrap fallback can legitimately select another available profile in an
-  environment without usable AWS credentials.
+- Added frozen, slotted `OpenS3LocationRequest` with explicit
+  `connection_name`, `region`, `uri`, requested pane, and the service-neutral
+  `service_navigation` sender.
+- Added `GlueCatalogVM.open_s3_location()`. It validates the selected table's
+  location and publishes plain immutable data without importing UI, S3
+  services, or infrastructure.
+- Registered `glue.open_s3_location` and exposed it as the palette-only
+  **Open table location in S3** command.
+- Added one app-owned message subscription. The handler resolves the exact
+  connection name, rejects region drift, probes that connection, performs the
+  existing `RootVM.switch_connection_and_service()` lifecycle, mounts through
+  `build_service_view`, binds and navigates the requested pane, and focuses it.
+- Suppressed the ordinary nav-selection mount while that atomic handoff owns
+  the mount. This prevents two `DualPane` trees from racing into the same
+  Textual host.
+- Missing, blank, malformed, missing-connection, region-mismatch, and mount
+  failures remain advisory. Toasts and structured logs do not include the
+  requested URI.
 
-## TDD And Snapshot Evidence
+## TDD Evidence
 
-1. Added the header unit test, snapshot source assertion, and E2E journey
-   before implementation.
-2. Captured RED with `ModuleNotFoundError` for
-   `aws_tui.ui.widgets.service_source_header`.
-3. Implemented the header and regenerated the 20 intended EMR snapshots.
-4. Inspected the Carbon populated SVG and raster output: the source label is
-   on the first left-column row at `y=20`; the application frame begins on
-   the next row at `y=44.4`, with no overlap or extra card framing.
+### Initial message and integration RED
 
-## Verification
-
-Completed:
-
-- `uv run pytest tests/unit tests/integration tests/e2e -q`
-  - `1301 passed, 9 deselected` in 237.51 seconds.
-- `uv run pytest tests/unit/ui/test_service_source_header.py tests/snapshot/test_emr.py tests/e2e/test_journeys.py tests/integration/test_emr_page.py::test_emr_shift_s_switches_profile_and_shift_a_cycles_application -q`
-  - `48 passed`; the focused EMR snapshot set reports 20 snapshots passed.
-- `uv run mypy src`
-  - Success, no issues in 112 source files.
-- `uv run ruff check` on all touched Python files
-  - All checks passed.
-- `uv run ruff format --check` on all touched Python files
-  - All 7 files formatted.
-- Earlier foundation checks completed before the user-requested interruption:
-  - `./scripts/check-layers.sh`: `layer rules clean`.
-  - `uv run pytest tests/docs -q`: `50 passed, 2 skipped`.
-    The two skips are the documented optional Cairo renderer skips
-    (`cairosvg/libcairo unavailable`).
-
-## Interrupted Check
-
-The final sequential all-snapshots command, `uv run pytest tests/snapshot -q`,
-was interrupted at the user's request before it completed. The process started
-by this task was PID `73694` (child pytest PID `73726`); it was terminated with
-`SIGTERM`, and a follow-up process check confirmed both were gone. No result is
-claimed for that interrupted all-snapshots run. The command sequence had not
-advanced to the later all-project Ruff, format, layer, or docs commands.
-
-The task-specific snapshot suite completed after the interruption and passed;
-the earlier pre-interruption EMR snapshot suite also completed with `40 passed`.
-
-## Concern
-
-The final all-snapshots matrix remains explicitly incomplete by user-requested
-interruption. All Task 6-focused requirements and the full
-unit/integration/E2E tier are green.
-
-## Follow-up: Reachability Scope Documentation
-
-### RED Evidence
-
-Added `tests/docs/test_connections.py` before changing the documentation. The
-focused assertion was run with:
+Command:
 
 ```text
-uv run pytest tests/docs/test_connections.py -q
+uv run pytest tests/unit/vm/test_messages.py tests/integration/test_glue_s3_handoff.py -q
 ```
 
-It failed as expected with exit code 1:
+Captured result:
 
 ```text
-F                                                                        [100%]
-AssertionError: assert '`Shift+S` filters out connections that have been observed unreachable during the session in S3 panes' in text
-1 failed in 0.02s
+ERROR tests/unit/vm/test_messages.py
+ERROR tests/integration/test_glue_s3_handoff.py
+Interrupted: 2 errors during collection
+ImportError: cannot import name 'OpenS3LocationRequest' from 'aws_tui.vm.messages'
 ```
 
-The failure demonstrated that the existing documentation made the
-unreachable-filter claim without the required S3-pane scope.
-
-### GREEN Evidence
-
-Scoped the unreachable-filter statement to S3 panes and documented that
-single-context EMR, future Glue/Athena pages, and their source rings do not
-consult or mutate the S3 pane reachability set; authentication and service API
-failures remain visible in the mounted service.
-
-The focused regression then passed:
+The E2E regression independently failed before action registration:
 
 ```text
-uv run pytest tests/docs/test_connections.py -q
-.                                                                        [100%]
-1 passed in 0.01s
+uv run pytest tests/e2e/test_journeys.py::test_journey_7_glue_table_opens_s3_under_same_profile -q
+UnknownAction: glue.open_s3_location
+1 failed in 0.66s
 ```
 
-The complete docs test suite passed with the repository's two documented
-optional Cairo skips (the direct `uv run` test command does not apply the
-macOS library fallback):
+After adding only the request envelope, the same unit/integration command
+reached the expected subscriber/action RED:
 
 ```text
+5 failed, 19 passed, 10 rerun in 16.96s
+```
+
+### Mount-race diagnosis
+
+The first implementation run exposed a real lifecycle race:
+
+```text
+2 failed, 23 passed, 2 rerun in 126.30s
+```
+
+Both failures were Textual `WaitForScreenTimeout`. The captured app log showed
+`app.mount_service_view.mount_failed` with duplicate id
+`content-dual-pane`. `RootVM` correctly changed the selected service, but that
+selection message scheduled the ordinary nav mount while the handoff worker
+was also mounting S3. Gating that subscriber only during the app-owned
+handoff removed the duplicate mount.
+
+### Focused GREEN
+
+```text
+uv run pytest tests/unit/vm/test_messages.py tests/integration/test_glue_s3_handoff.py tests/e2e/test_journeys.py::test_journey_7_glue_table_opens_s3_under_same_profile -q
+25 passed in 3.40s
+```
+
+The palette regression was also written before its registry entry:
+
+```text
+uv run pytest tests/integration/test_command_palette_wiring.py::test_populate_registers_curated_commands -q
+1 failed, 2 rerun in 2.73s
+```
+
+After registration:
+
+```text
+1 passed in 0.24s
+```
+
+## Full Verification
+
+### Functional suite
+
+```text
+uv run pytest tests/unit tests/integration tests/e2e -q
+1462 passed, 9 deselected in 225.34s (0:03:45)
+```
+
+### Color-enabled snapshots
+
+The required variables were explicitly unset:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR uv run pytest tests/snapshot -q
+75 failed, 549 passed, 1 warning in 87.96s (0:01:27)
+```
+
+Failures are exactly 20 EMR and 55 Glue snapshot cases. No Task 6 snapshot
+test, app, theme, stylesheet, EMR widget, or Glue widget was modified.
+
+To isolate the baseline, a detached worktree at the untouched Task 6 parent
+`46c1076` was tested with the current locked test environment:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR PYTHONPATH=/tmp/aws-tui-task6-baseline-46c1076/src /Users/kaveh/repos/aws-tui/.venv/bin/pytest tests/snapshot -q
+75 failed, 549 passed, 1 warning in 90.24s (0:01:30)
+```
+
+The test names and failure sequence were identical. Task 5's report records
+that earlier EMR/Glue baselines were generated under `NO_COLOR=1`; its
+follow-up commit repaired only demo snapshots. Task 6 does not rewrite those
+unrelated visual baselines.
+
+### Static and package gates
+
+```text
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+341 files already formatted
+
+uv run mypy src
+Success: no issues found in 129 source files
+
+./scripts/check-layers.sh
+layer rules clean
+
 uv run pytest tests/docs -q
-51 passed, 2 skipped in 0.41s
+51 passed, 2 skipped in 0.29s
+
+uv build
+Successfully built dist/aws_tui-0.8.0.tar.gz
+Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
+
+git diff --check
+(no output; exit 0)
 ```
 
-The repository docs gate also passed:
+The two docs skips are the existing optional Cairo-renderer skips
+(`cairosvg/libcairo unavailable`).
+
+The first docs run found task-caused wording drift:
 
 ```text
-make docs-check
-check_docs: clean
-INFO    -  Documentation built in 0.37 seconds
+1 failed, 50 passed, 2 skipped in 0.29s
 ```
 
-`git diff --check` passed. The configured pre-commit checks for the touched
-docs, test, and report files passed, including end-of-file, merge-conflict,
-Ruff, and architecture checks. The Material for MkDocs command emitted its
-upstream MkDocs 2.0 warning, but the strict build exited successfully.
+Restoring the established S3-pane reachability phrase exposed a stale test
+assertion requiring future `Glue/Athena` wording. The assertion was updated to
+the shipped `EMR Serverless and Glue` wording required by this task; the final
+docs run above is green and no Athena link was added.
 
-### Self-review
+## Documentation
 
-- The docs assertion reads the canonical `docs/connections.md` source and
-  normalizes Markdown line wrapping, so prose reflow does not create a false
-  failure.
-- The wording now distinguishes S3-pane reachability from single-context
-  service source cycling and explicitly names EMR plus future Glue/Athena.
-- Only `docs/connections.md`, `tests/docs/test_connections.py`, and this report
-  are intended for the commit; no runtime source or generated binary changes
-  remain.
+- `README.md` and `CHANGELOG.md` now identify Glue as a first-class read-only
+  service, describe its three views, exact-profile S3 handoff, profile
+  switching, and demo behavior.
+- `docs/architecture.md` and `docs/adding-a-service.md` document the Glue
+  service/VM/view factory shape, the service-neutral request, app-owned
+  cross-service orchestration, and layer direction.
+- `docs/connections.md` documents explicit-config-then-discovered resolver
+  order, whole-service profile switching, scoped selection memory,
+  service-local access failures, exact handoff resolution, and region
+  mismatch rejection.
+- `docs/cookbook.md` lists the shipped Glue and STS API permissions and S3
+  browsing permissions, read-only workflows, profile isolation, handoff,
+  advisories, and offline demo states.
+- `docs/contract-ledger.md` records locked botocore `1.40.61`, Glue API model
+  `2017-03-31`, every consumed operation, and the exact identity contract.
+- `docs/keybindings.md` records `1`/`2`/`3`, `r`, `Shift+S`, focus/navigation
+  controls, and the palette-only S3 command.
+- No Iceberg metadata or Athena cross-link behavior is documented.
+
+## Self-Review
+
+- Confirmed resolver iteration remains explicit configuration followed by
+  non-colliding discovered profiles; the handoff calls `resolve()` for the
+  carried name rather than iterating for a substitute.
+- Confirmed region equality is checked before root/service mutation.
+- Confirmed the selected Glue connection survives through the S3 provider
+  binding and active `RootVM` identity.
+- Confirmed successful navigation uses
+  `PathRef.from_posix(parsed.netloc + parsed.path)` and focuses the requested
+  pane.
+- Confirmed malformed/missing locations leave Glue mounted and advisories do
+  not contain credentials, query tokens, hosts, buckets, or full URIs.
+- Confirmed the VM layer emits a plain message and keeps the required
+  View -> VM -> Service -> Domain -> Infrastructure direction.
+- Confirmed the feature remains read-only and introduces no Athena or Iceberg
+  behavior.
+- Confirmed all requested documentation surfaces were changed and checked.
+
+## Concerns
+
+- The color-enabled snapshot suite has the 75 proven pre-existing EMR/Glue
+  baseline mismatches described above. All 549 other cases pass.
+- Every shell command prints a pre-existing `.zshenv` warning for missing
+  `/tmp/vmx-cargo-182/env`; it does not affect command exit status.

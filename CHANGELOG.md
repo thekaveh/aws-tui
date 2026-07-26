@@ -19,9 +19,25 @@ will be set at cut time.
 
 ### 1.1.1. Added
 
+- **AWS Glue read-only service.** A third first-class nav service with
+  Catalog, Jobs, and Crawlers views; database/table pagination,
+  schema/storage detail, partitions and column statistics; job/run
+  inspection; crawler detail/metrics; profile- and region-scoped
+  selection memory; `1` / `2` / `3` view keys; `r` refresh; and
+  `Shift+S` whole-service profile switching. Demo mode supplies
+  disjoint `demo-dev` / `demo-prod` Glue resources plus a
+  `demo-shared` access-denied state.
+- **Connection-preserving Glue-to-S3 handoff.** The command palette's
+  **Open table location in S3** action publishes immutable
+  `OpenS3LocationRequest` identity, resolves the exact connection
+  name, rejects region drift instead of substituting a profile,
+  rebuilds S3 through the existing RootVM/service factory lifecycle,
+  and navigates/focuses the requested pane. Missing or malformed
+  locations remain on Glue with a redacted advisory.
 - **Command palette** (`:` / `Ctrl+K`). Opens a fuzzy-filterable palette of
-  app commands — Theme picker, Cycle theme, Swap pane source, Settings, Help,
-  Quit — each dispatching through the same `ActionRegistry` path as its key
+  app commands — Theme picker, Cycle theme, Swap pane source, Open table
+  location in S3, Settings, Help, Quit — each dispatching through the same
+  `ActionRegistry` path as its key
   binding. `:` moves back from help to the palette (help keeps `?`), per the
   keystone plan. Deferred: dynamic commands (`switch connection/theme <name>`)
   and consolidating with Textual's built-in `Ctrl+P` palette. Spec:

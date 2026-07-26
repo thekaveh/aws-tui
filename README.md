@@ -11,13 +11,13 @@ Linux, and Windows. Powered by
 
 > **Status: v0.8.0 cut; PyPI publish pending** — install from Git
 > until the `aws-tui` project name is available on PyPI. Headline
-> change from v0.7.0: **EMR Serverless as a
-> second first-class service** alongside S3 — application picker,
+> change from v0.7.0: **EMR Serverless and AWS Glue as
+> first-class services** alongside S3 — EMR application picker,
 > job-runs master-detail with state-filter chips, columnized run
 > rows with colored state indicators, on-demand log streaming with
 > a grep filter + LRU cache, clone-and-edit modal for re-running
-> a finished job, and a 4-slot Tab cycle through NavMenu → LEFT →
-> DETAIL → LOGS. The nav rail is now a regular focusable pane
+> a finished job, plus Glue Catalog, Jobs, and Crawlers read-only
+> views with same-profile S3 handoff. The nav rail is now a regular focusable pane
 > with text labels (no collapse mode, no icon emojis). See
 > [`CHANGELOG.md`](CHANGELOG.md) for the full per-PR delta.
 
@@ -34,14 +34,26 @@ Linux, and Windows. Powered by
   and [action IDs](docs/keybindings.md#13-action-ids), plus the
   `Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
   `CHANGELOG.md`.
+- **AWS Glue read-only operations console.** Pick **Glue** in the nav
+  rail to browse databases, tables, schema/storage detail, partitions,
+  column statistics, jobs and recent runs, and crawler status/detail.
+  `1` / `2` / `3` select Catalog / Jobs / Crawlers, `r` refreshes the
+  active view, and `Shift+S` rebuilds Glue under the next AWS profile.
+  From a selected Catalog table, open `:` and choose **Open table
+  location in S3** to mount the existing S3 page at that location.
+  The handoff resolves the exact Glue connection name and region; it
+  never substitutes another profile. Glue is AWS-only and does not
+  appear for S3-compatible connections.
 - **One-key source switcher.** `Shift+S` cycles the focused pane
   through **every available source** in order: `local` → each AWS
   profile (`aws s3 · {profile} · {region}`) → each `s3-compatible`
   connection (`s3-compatible · {name} · {endpoint}`) → wrap. With
   multiple AWS profiles configured locally, this is the fastest way
   to jump between accounts: one keystroke per profile, the pane
-  re-mounts in place — no `:` command palette, no modal. The
-  s3-compatible side is open-ended: add as many MinIO / R2 / B2 /
+  re-mounts in place — no `:` command palette, no modal. On EMR
+  Serverless and Glue, the same key switches the whole single-context
+  service to the next supported AWS connection. The s3-compatible side
+  is open-ended: add as many MinIO / R2 / B2 /
   Wasabi / Ceph endpoints as you like via the in-app **Settings**
   nav page (or by hand in `<config-dir>/config.toml`) and they
   join the cycle automatically. The four combos `{S3, local} ×
@@ -157,7 +169,7 @@ AWS_TUI_DEMO=1 aws-tui
 aws-tui --demo
 ```
 
-You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs across multiple states, and working clone / copy / delete operations. AWS/S3/EMR demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
+You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs, and profile-isolated Glue catalogs, jobs, runs, and crawlers. `demo-shared` demonstrates a Glue access-denied state. The same-profile Glue-to-S3 handoff works without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
 
 To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 

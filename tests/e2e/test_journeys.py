@@ -12,6 +12,7 @@ tiers already cover widget-level rendering.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -339,3 +340,37 @@ async def _await_service_mount(pilot: object, app: AwsTuiApp) -> None:
     if setup_task is not None and not setup_task.done():
         await setup_task
     await pilot.pause()  # type: ignore[attr-defined]
+
+
+# ── Journey 7: Glue table -> S3 under the same profile ──────────────────────
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_journey_7_glue_table_opens_s3_under_same_profile(tmp_path: Path) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_service_mount(pilot, app)
+            ctx.root_vm.services_menu.switch_service_command.execute("glue")
+            await _await_service_mount(pilot, app)
+
+            result = app.action_dispatch("glue.open_s3_location")
+            if inspect.isawaitable(result):
+                await result
+            await _await_service_mount(pilot, app)
+
+            assert ctx.root_vm.content_host.current_id == "s3"
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            pane = ctx.root_vm.content_host.current.left
+            assert pane.current_connection_key == ("aws", "demo-dev")
+            assert pane.path.as_posix() == "/demo-dev/dev_analytics/dev_events"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()

@@ -44,6 +44,12 @@ VMs to build service pages, but it cannot import Textual widgets.
     `JobRunCloneVM` (PR #83) backs the clone-job-run modal — a
     sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
     per modal-mount with the focused run as the source.
+  - `vm/glue/` — `GluePageVM` with independent Catalog, Jobs, and
+    Crawlers child VMs. The page shares `ServiceSourceContext` and
+    connection/region-scoped selection memory with the other
+    single-context AWS services. `GlueCatalogVM` emits the immutable
+    service-neutral `OpenS3LocationRequest`; it never mounts a Textual
+    view or constructs an S3 provider itself.
   - `vm/settings/` — `SettingsVM` (built per-mount when the user
     selects the Settings nav peer) and `S3ConnectionsVM` (singleton
     on `AppContext`, drives the in-app Connections CRUD).
@@ -51,11 +57,11 @@ VMs to build service pages, but it cannot import Textual widgets.
     `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias),
     `vm/content_host_vm.py`, `vm/root_vm.py`.
 - **Service plugins** — One folder per top-level service
-  (`src/aws_tui/services/`). v0.8.0 ships `s3` and
+  (`src/aws_tui/services/`). The current tree ships `s3`,
   `emr-serverless` (read-only browser + clone-job-run plus job-run
   logs — applications listing, job-runs master-detail, state-filter
   chips, clone-and-edit modal via `c`; cancel / vanilla submit are
-  still deferred).
+  still deferred), and `glue` (read-only Catalog, Jobs, and Crawlers).
   Each service implements the `Service` protocol (declared in
   `vm/services_protocol.py`, re-exported from `services/__init__.py`).
 - **Domain** — `FileSystemProvider` protocol with `LocalFS` and `S3FS`
@@ -101,7 +107,16 @@ All cross-VM communication goes through the session's single
 - `ConnectionChangedMessage`, `ThemeChangedMessage`,
   `AuthExpiredMessage`, `TransferProgressMessage`,
   `KeymapChangedMessage`, `FocusChangedMessage`,
-  `TransferCancelRequestedMessage`, `ConnectionListChangedMessage`.
+  `TransferCancelRequestedMessage`, `ConnectionListChangedMessage`,
+  `OpenS3LocationRequest`.
+
+Cross-service navigation stays service-neutral. A Glue table handoff
+carries only `connection_name`, `region`, the S3 URI, and the preferred
+pane. `app.py` resolves that exact name, rejects a region mismatch,
+uses `RootVM.switch_connection_and_service(...)` to dispose and rebuild
+through the registered S3 factory, mounts the S3 view, binds and
+navigates the requested pane, and focuses it. Missing or malformed
+locations stop at an advisory toast; the VM never imports UI code.
 
 VMs subscribe via `hub.messages.subscribe(on_next=callback)` (an
 `reactivex.Observable` under the hood); filtering happens inside the
@@ -141,16 +156,18 @@ at `src/aws_tui/` top-level so the check never inspects them.
 3. `src/aws_tui/vm/file_manager/dual_pane_vm.py` — the first concrete
    page VM (S3 service hosts it).
    `src/aws_tui/vm/emr_serverless/page_vm.py::EmrServerlessPageVM` —
-   the second concrete page VM (post-tag, PR #76); a richer pattern
+   another concrete page VM; a richer pattern
    that orchestrates three child VMs (`ApplicationsVM`,
    `JobRunsVM`, `JobRunDetailVM`) and runs three independent
    pollers.
 4. `src/aws_tui/services/s3/service.py` — the first concrete service
    in v0.7.0; pattern for future ones.
-   `src/aws_tui/services/emr_serverless/service.py` — the second
-   shipped service (post-tag), using the richer per-service
+   `src/aws_tui/services/emr_serverless/service.py` uses the richer per-service
    subtree pattern (dedicated domain client + VM subtree + UI
    widget tree).
+   `src/aws_tui/services/glue/service.py` follows the same factory
+   lifecycle for an AWS-only, read-only three-view page and retains
+   validated selection identifiers per connection name and region.
    S3 owns independent sources for each pane, while single-context AWS services
    use `RootVM`'s active connection and are rebuilt as a whole when their source
    changes.

@@ -7,7 +7,15 @@ import pytest
 from aws_tui.app import AwsTuiApp
 from aws_tui.ui.widgets.command_palette import CommandPalette
 
-_CURATED = {"Theme picker", "Cycle theme", "Switch source", "Settings", "Help", "Quit"}
+_CURATED = {
+    "Theme picker",
+    "Cycle theme",
+    "Switch source",
+    "Open table location in S3",
+    "Settings",
+    "Help",
+    "Quit",
+}
 
 
 @pytest.mark.asyncio

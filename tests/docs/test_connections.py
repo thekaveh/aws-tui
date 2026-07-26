@@ -11,8 +11,8 @@ def test_connections_docs_scope_reachability_to_s3_panes() -> None:
         " during the session in S3 panes"
     ) in text
     assert (
-        "Single-context AWS services, including EMR Serverless and future"
-        " Glue/Athena pages, intentionally do not consult or mutate the S3"
+        "Single-context AWS services, including EMR Serverless and Glue,"
+        " intentionally do not consult or mutate the S3"
         " pane reachability set"
     ) in text
     assert "Authentication and service API failures remain visible in the mounted service" in text

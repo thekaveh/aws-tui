@@ -207,6 +207,25 @@ class FocusChangedMessage:
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class OpenS3LocationRequest:
+    """Request composition-root navigation to one S3 location.
+
+    The source connection identity is explicit so cross-service navigation
+    cannot silently fall back to another profile or region.
+    """
+
+    connection_name: str
+    region: str
+    uri: str
+    preferred_pane: Literal["left", "right"] = "left"
+    sender_name: str = "service_navigation"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
 __all__ = [
     "AuthExpiredMessage",
     "AuthExpiredReason",
@@ -214,6 +233,7 @@ __all__ = [
     "ConnectionListChangedMessage",
     "FocusChangedMessage",
     "KeymapChangedMessage",
+    "OpenS3LocationRequest",
     "ThemeChangedMessage",
     "TransferCancelRequestedMessage",
     "TransferProgressMessage",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, cast
+from urllib.parse import urlparse
 
 import reactivex as rx
 from reactivex.subject import Subject
@@ -20,6 +21,7 @@ from aws_tui.domain.data_catalog import (
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.messages import OpenS3LocationRequest
 
 
 class GlueCatalogVM:
@@ -371,6 +373,37 @@ class GlueCatalogVM:
         if generation == self._detail_generation:
             self._notify("partitions")
             self._notify("has_more_partitions")
+
+    def open_s3_location(
+        self,
+        *,
+        preferred_pane: Literal["left", "right"] = "left",
+    ) -> bool:
+        """Publish a same-identity S3 request for the selected table."""
+        detail = self._table_detail
+        if self._disposed or detail is None:
+            return False
+        location = detail.storage.location
+        if not location:
+            return False
+        parsed = urlparse(location)
+        if (
+            parsed.scheme.casefold() != "s3"
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return False
+        ref = detail.summary.ref
+        self._hub.send(
+            OpenS3LocationRequest(
+                connection_name=ref.connection_name,
+                region=ref.region,
+                uri=location,
+                preferred_pane=preferred_pane,
+            )
+        )
+        return True
 
     async def _load_detail(self, ref: TableRef, generation: int) -> TableDetail | None:
         try:

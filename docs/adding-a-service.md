@@ -1,12 +1,13 @@
 # 1. Adding a new service
 
-> v0.8.0 ships the `s3` and `emr-serverless` services; EMR includes
+> The current tree ships `s3`, `emr-serverless`, and `glue`; EMR includes
 > the read-only browser, job-run logs, and clone-job-run modal. This
 > doc is the pattern for the
-> next ones (EC2, IAM, Lambda, ...). For a richer reference than S3
+> next ones (EC2, IAM, Lambda, ...). For richer references than S3
 > (dedicated domain client + per-service VM subtree + per-service
 > UI widget tree + service-specific modal), read
-> `src/aws_tui/services/emr_serverless/` alongside `s3/`.
+> read `src/aws_tui/services/emr_serverless/` and
+> `src/aws_tui/services/glue/` alongside `s3/`.
 
 aws-tui's service-plugin spine keeps service construction additive: a
 new folder under `src/aws_tui/services/<name>/` and one registration
@@ -84,9 +85,10 @@ needs a `construct → destruct → dispose` surface.
     ```
 
 4. **Add app-shell view routing** if the service does not return a
-   `DualPaneVM`. `AwsTuiApp` currently maps `emr-serverless` to
-   `EmrServerlessPage` and wraps every other service VM in `DualPane`.
-   Add the matching widget factory branch alongside that EMR route.
+   `DualPaneVM`. `build_service_view(...)` currently maps
+   `emr-serverless` to `EmrServerlessPage`, `glue` to `GluePage`, and
+   `s3` to `DualPane`. Add the matching widget factory branch and pass
+   it from both app mount paths.
 
 5. **Reuse existing VM families** where possible:
     - For storage-like services (lists with hierarchy): the file-
@@ -112,7 +114,15 @@ needs a `construct → destruct → dispose` surface.
     container.
 
 8. **Update docs.** Add any vendor / API quirks to
-    `docs/connections.md`. Update the README's features list.
+   `docs/connections.md`. Update the README's features list.
+
+For cross-service links, publish an immutable VM message carrying plain
+identifiers and source identity. The app composition root resolves the
+destination connection and owns `RootVM` switching plus Textual mounting.
+The Glue-to-S3 flow is the reference: `GlueCatalogVM` publishes
+`OpenS3LocationRequest`, while `app.py` rejects missing connections or
+region mismatches and reuses the registered S3 service factory. Do not
+pass clients, VMs, or widgets in cross-service messages.
 
 ## 1.3. Layer rules cheat-sheet for services
 A service module **may** import from:
@@ -208,3 +218,24 @@ shipped service and demonstrates the richer per-service pattern:
   a human label in the Commands strip. Future services with
   their own actions follow the same three-touch-point pattern:
   default binding + service-actions tuple + action label.
+
+### 1.5.3. AWS Glue
+`src/aws_tui/services/glue/service.py` is the third shipped service and
+the compact read-only page reference:
+
+- `descriptor` declares `id = "glue"` and `supports()` accepts only
+  AWS connections.
+- Every `build_vm(connection)` returns a fresh `GluePageVM`; the
+  long-lived service retains only `ServiceSelectionStore`, keyed by
+  service id, connection name, and region.
+- `domain/glue.py` owns boto response mapping and pagination for
+  databases/tables/partitions/statistics, jobs/runs, and crawlers.
+  Raw boto responses never enter the VM or view layers.
+- `vm/glue/` separates Catalog, Jobs, and Crawlers behavior; the
+  Textual tree lives under `ui/widgets/glue/`.
+- `glue_client_factory` injects profile-keyed in-memory clients for
+  tests and demo mode without changing production composition.
+- The selected table's S3 handoff is an immutable message, not a
+  service-to-service import. Its app subscriber resolves the exact
+  connection name, verifies the region, rebuilds S3 through `RootVM`,
+  navigates the requested pane, and focuses it.

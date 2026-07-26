@@ -12,6 +12,7 @@ from aws_tui.vm.messages import (
     ConnectionChangedMessage,
     FocusChangedMessage,
     KeymapChangedMessage,
+    OpenS3LocationRequest,
     ThemeChangedMessage,
     TransferProgressMessage,
 )
@@ -47,6 +48,11 @@ def _connection() -> Connection:
         ),
         lambda: KeymapChangedMessage(action="pane.copy", new_keys=("c",)),
         lambda: FocusChangedMessage(focused_vm_id="pane.left"),
+        lambda: OpenS3LocationRequest(
+            connection_name="prod-west",
+            region="us-west-2",
+            uri="s3://lake/events/",
+        ),
     ],
 )
 def test_message_satisfies_vmx_message_protocol(factory: object) -> None:
@@ -105,6 +111,22 @@ def test_keymap_changed_round_trip() -> None:
 def test_focus_changed_round_trip() -> None:
     msg = FocusChangedMessage(focused_vm_id="pane.left")
     assert msg.focused_vm_id == "pane.left"
+
+
+def test_open_s3_request_carries_source_identity() -> None:
+    request = OpenS3LocationRequest(
+        connection_name="prod-west",
+        region="us-west-2",
+        uri="s3://lake/events/",
+        preferred_pane="left",
+    )
+
+    assert request.connection_name == "prod-west"
+    assert request.region == "us-west-2"
+    assert request.uri == "s3://lake/events/"
+    assert request.preferred_pane == "left"
+    assert request.sender_name == "service_navigation"
+    assert request.sender_object is request
 
 
 def test_messages_are_immutable() -> None:

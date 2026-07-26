@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
+from urllib.parse import urlparse
 
 from reactivex.abc import DisposableBase
 from rich.markup import escape
@@ -65,7 +66,11 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
-from aws_tui.vm.messages import ConnectionListChangedMessage, ThemeChangedMessage
+from aws_tui.vm.messages import (
+    ConnectionListChangedMessage,
+    OpenS3LocationRequest,
+    ThemeChangedMessage,
+)
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 _ACTION_RING_SIZE = 100
@@ -77,6 +82,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("app.themes", "Theme picker"),
     ("app.cycle_theme", "Cycle theme"),
     ("app.swap_source", "Switch source"),
+    ("glue.open_s3_location", "Open table location in S3"),
     ("app.open_settings", "Settings"),
     ("app.help", "Help"),
     ("app.quit", "Quit"),
@@ -357,6 +363,7 @@ class AwsTuiApp(App[None]):
             "glue.crawlers",
             partial(self.action_select_glue_view, "crawlers"),
         )
+        self._actions.register("glue.open_s3_location", self.action_open_glue_s3_location)
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
@@ -382,6 +389,8 @@ class AwsTuiApp(App[None]):
         self._connection_list_sub: DisposableBase | None = None
         self._nav_selection_sub: DisposableBase | None = None
         self._cursor_sub: DisposableBase | None = None
+        self._service_navigation_sub: DisposableBase | None = None
+        self._service_navigation_switching: bool = False
         # True while ``on_mount`` is driving the initial service mount —
         # gates ``_on_nav_selection_changed`` so the seed selected_id
         # change doesn't spawn a duplicate mount worker that races the
@@ -481,6 +490,9 @@ class AwsTuiApp(App[None]):
         # the '..' representing the parent folder, I shouldn't be able to
         # invoke copy or delete commands and I expect them greyed out".
         self._cursor_sub = ctx.hub.messages.subscribe(on_next=self._on_hub_message_cursor)
+        self._service_navigation_sub = ctx.hub.messages.subscribe(
+            on_next=self._on_service_navigation_message
+        )
 
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
@@ -2122,6 +2134,20 @@ class AwsTuiApp(App[None]):
         if page is not None:
             await page.action_select_view(view)
 
+    async def action_open_glue_s3_location(self) -> None:
+        self.record_action("glue.open_s3_location")
+        page = self._glue_page()
+        if page is None:
+            return
+        if page.vm.catalog.open_s3_location():
+            return
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="selected table has no valid S3 location",
+            toast_id="glue-s3-location-invalid",
+        )
+
     async def _swap_single_context_source(self, service_id: str) -> None:
         """Rebuild a non-S3 service under its next supported AWS profile."""
         ctx = self._app_ctx
@@ -2459,6 +2485,123 @@ class AwsTuiApp(App[None]):
                 else:
                     await self._rebind_pane_to_connection(pane, conn)
 
+    def _on_service_navigation_message(self, msg: object) -> None:
+        if not isinstance(msg, OpenS3LocationRequest):
+            return
+        self.run_worker(
+            self._open_s3_location_request(msg),
+            exclusive=True,
+            group="service-navigation",
+        )
+
+    async def _open_s3_location_request(self, request: OpenS3LocationRequest) -> None:
+        """Resolve and mount an S3 request without changing source identity."""
+        ctx = self._app_ctx
+        try:
+            connection = ctx.connection_resolver.resolve(request.connection_name)
+        except Exception as exc:
+            ctx.log_sink.warning(
+                "service_navigation.connection_missing",
+                connection=request.connection_name,
+                error_type=type(exc).__name__,
+            )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message=f"connection {request.connection_name!r} is unavailable",
+                toast_id="s3-handoff-connection-missing",
+            )
+            return
+
+        if connection.region != request.region:
+            ctx.log_sink.warning(
+                "service_navigation.region_mismatch",
+                connection=request.connection_name,
+                expected_region=request.region,
+                resolved_region=connection.region,
+            )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="S3 location region does not match the source connection",
+                toast_id="s3-handoff-region-mismatch",
+            )
+            return
+
+        parsed = urlparse(request.uri)
+        if (
+            parsed.scheme.casefold() != "s3"
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="requested location is not a valid S3 URI",
+                toast_id="s3-handoff-invalid-location",
+            )
+            return
+
+        try:
+            auth_state = ctx.aws_session.probe_token(connection).state
+        except Exception as exc:
+            ctx.log_sink.warning(
+                "service_navigation.probe_failed",
+                connection=connection.name,
+                error_type=type(exc).__name__,
+            )
+            auth_state = TokenState.MISSING
+
+        try:
+            self._service_navigation_switching = True
+            try:
+                await ctx.root_vm.switch_connection_and_service(
+                    connection,
+                    auth_state,
+                    "s3",
+                )
+            finally:
+                self._service_navigation_switching = False
+            await self._mount_service_view("s3")
+        except Exception as exc:
+            ctx.log_sink.error(
+                "service_navigation.s3_mount_failed",
+                connection=connection.name,
+                error_type=type(exc).__name__,
+            )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="could not open the S3 location",
+                toast_id="s3-handoff-mount-failed",
+            )
+            return
+
+        dual = self._dual_pane()
+        if dual is None:
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="could not open the S3 location",
+                toast_id="s3-handoff-mount-failed",
+            )
+            return
+
+        pane = dual.left if request.preferred_pane == "left" else dual.right
+        connection_key = (connection.kind, connection.name)
+        if pane.current_connection_key != connection_key:
+            await self._rebind_pane_to_connection(pane, connection)
+
+        from aws_tui.domain.filesystem import PathRef
+
+        await pane.navigate_to(PathRef.from_posix(parsed.netloc + parsed.path))
+        focused = FocusedPane.LEFT if request.preferred_pane == "left" else FocusedPane.RIGHT
+        slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
+        dual.set_focused(focused)
+        ctx.focus_coordinator.set_focused_slot(slot)
+        self._project_focus_slot(slot)
+
     def _on_hub_message_pane_state(self, msg: object) -> None:
         """Hub subscriber: route PaneVM state changes to the reachability set.
 
@@ -2559,6 +2702,8 @@ class AwsTuiApp(App[None]):
         # The legend's right-hand globals (themes/help/quit) are
         # independent of this.
         ctx.root_vm.chrome.hint_legend.set_current_service(selected)
+        if self._service_navigation_switching:
+            return
         # Skip the seed selected_id change that on_mount fires while
         # priming the initial service. on_mount drives that mount
         # synchronously via _mount_initial_service_view; if we ALSO
@@ -2913,6 +3058,10 @@ class AwsTuiApp(App[None]):
             if self._cursor_sub is not None:
                 self._cursor_sub.dispose()
                 self._cursor_sub = None
+        with contextlib.suppress(Exception):
+            if self._service_navigation_sub is not None:
+                self._service_navigation_sub.dispose()
+                self._service_navigation_sub = None
         with contextlib.suppress(Exception):
             # Currently-hosted SettingsVM (if any) is disposed by the
             # ContentHostVM tree teardown via ``root_vm.shutdown()``.
