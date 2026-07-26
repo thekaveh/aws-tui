@@ -28,6 +28,12 @@ class SavedClient:
         self.block_named_request: tuple[str, str | None] | None = None
         self.named_fetch_started = asyncio.Event()
         self.release_named_fetch = asyncio.Event()
+        self.block_prepared_detail = False
+        self.ignore_prepared_detail_cancellation = False
+        self.prepared_detail_started = asyncio.Event()
+        self.prepared_detail_cancelled = asyncio.Event()
+        self.release_prepared_detail = asyncio.Event()
+        self.active_prepared_details: set[tuple[str, str]] = set()
 
     async def list_named_queries_page(
         self,
@@ -61,8 +67,22 @@ class SavedClient:
         name: str,
         workgroup: str,
     ) -> PreparedStatement:
-        self.prepared_detail_calls.append((name, workgroup))
-        return self.prepared[(name, workgroup)]
+        request = (name, workgroup)
+        self.prepared_detail_calls.append(request)
+        self.active_prepared_details.add(request)
+        self.prepared_detail_started.set()
+        try:
+            if self.block_prepared_detail:
+                try:
+                    await self.release_prepared_detail.wait()
+                except asyncio.CancelledError:
+                    self.prepared_detail_cancelled.set()
+                    if not self.ignore_prepared_detail_cancellation:
+                        raise
+                    await self.release_prepared_detail.wait()
+            return self.prepared[request]
+        finally:
+            self.active_prepared_details.discard(request)
 
 
 def _seeded_client() -> SavedClient:
@@ -138,6 +158,23 @@ async def test_saved_lists_use_independent_token_pagers_without_fetch_all() -> N
     assert tuple(query.query_id for query in vm.named_queries) == ("named-1", "named-2")
     assert client.named_list_calls[-1] == ("analysts", "named-next")
     assert client.named_detail_calls[-1] == ("named-2",)
+
+
+@pytest.mark.asyncio
+async def test_named_query_list_exposes_sql_free_summaries_before_selection() -> None:
+    from aws_tui.domain.query import NamedQuerySummary
+
+    client = _seeded_client()
+    vm = make_saved_vm(client)
+
+    await vm.setup()
+
+    summary = vm.named_queries[0]
+    assert isinstance(summary, NamedQuerySummary)
+    assert not hasattr(summary, "query_string")
+    assert vm.selected_named_query is None
+    assert vm.selected_sql() is None
+    assert client.named_detail_calls == [("named-1",)]
 
 
 @pytest.mark.asyncio
@@ -231,3 +268,58 @@ async def test_saved_shutdown_drains_blocked_load_and_disables_both_pagers() -> 
     assert vm.prepared_state is PaneState.EMPTY
     assert not vm.load_more_named_command.can_execute()
     assert not vm.load_more_prepared_command.can_execute()
+
+
+@pytest.mark.asyncio
+async def test_workgroup_replacement_cancels_and_retains_prepared_detail_until_drained() -> None:
+    client = _seeded_client()
+    client.block_prepared_detail = True
+    client.ignore_prepared_detail_cancellation = True
+    vm = make_saved_vm(client)
+    await vm.setup()
+    selection = asyncio.create_task(vm.select_prepared_statement("prepared-1"))
+    await client.prepared_detail_started.wait()
+
+    vm.replace_workgroup("engineering")
+    try:
+        await asyncio.wait_for(client.prepared_detail_cancelled.wait(), timeout=1)
+
+        assert client.prepared_detail_cancelled.is_set()
+        assert not selection.done()
+        assert client.active_prepared_details == {("prepared-1", "analysts")}
+        assert vm.selected_prepared_statement is None
+    finally:
+        client.release_prepared_detail.set()
+        await selection
+
+    assert client.active_prepared_details == set()
+    assert vm._detail_tasks == set()  # type: ignore[attr-defined]
+    assert vm.selected_query_id is None
+    assert vm.selected_prepared_statement is None
+
+
+@pytest.mark.asyncio
+async def test_saved_shutdown_cancels_and_drains_prepared_detail_request() -> None:
+    client = _seeded_client()
+    client.block_prepared_detail = True
+    client.ignore_prepared_detail_cancellation = True
+    vm = make_saved_vm(client)
+    await vm.setup()
+    selection = asyncio.create_task(vm.select_prepared_statement("prepared-1"))
+    await client.prepared_detail_started.wait()
+
+    shutdown = asyncio.create_task(vm.shutdown())
+    try:
+        await asyncio.wait_for(client.prepared_detail_cancelled.wait(), timeout=1)
+
+        assert client.prepared_detail_cancelled.is_set()
+        assert not shutdown.done()
+        assert client.active_prepared_details == {("prepared-1", "analysts")}
+    finally:
+        client.release_prepared_detail.set()
+        await asyncio.gather(shutdown, selection)
+
+    assert client.active_prepared_details == set()
+    assert vm._detail_tasks == set()  # type: ignore[attr-defined]
+    assert vm.selected_prepared_statement is None
+    assert vm.detail_state is PaneState.EMPTY

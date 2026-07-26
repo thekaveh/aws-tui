@@ -64,6 +64,14 @@ class HistoryClient:
         self.block_request: tuple[str, str | None] | None = None
         self.fetch_started = asyncio.Event()
         self.release_fetch = asyncio.Event()
+        self.block_detail_ids: set[str] = set()
+        self.fail_detail_ids: set[str] = set()
+        self.fail_detail_after: str | None = None
+        self.ignore_detail_cancellation = False
+        self.detail_started: dict[str, asyncio.Event] = {}
+        self.detail_cancelled: set[str] = set()
+        self.active_detail_ids: set[str] = set()
+        self.release_details = asyncio.Event()
 
     async def list_query_executions_page(
         self,
@@ -80,7 +88,27 @@ class HistoryClient:
 
     async def get_query_execution(self, execution_id: str) -> QueryExecutionDetail:
         self.detail_calls.append(execution_id)
-        return self.details[execution_id]
+        self.active_detail_ids.add(execution_id)
+        self.detail_started.setdefault(execution_id, asyncio.Event()).set()
+        try:
+            if execution_id in self.fail_detail_ids:
+                if self.fail_detail_after is not None:
+                    await self.detail_started.setdefault(
+                        self.fail_detail_after,
+                        asyncio.Event(),
+                    ).wait()
+                raise RuntimeError("detail hydration failed")
+            if execution_id in self.block_detail_ids:
+                try:
+                    await self.release_details.wait()
+                except asyncio.CancelledError:
+                    self.detail_cancelled.add(execution_id)
+                    if not self.ignore_detail_cancellation:
+                        raise
+                    await self.release_details.wait()
+            return self.details[execution_id]
+        finally:
+            self.active_detail_ids.discard(execution_id)
 
     async def stop_query(self, execution_id: str) -> None:
         self.stop_calls.append(execution_id)
@@ -196,6 +224,95 @@ async def test_history_shutdown_drains_blocked_page_and_publishes_nothing_late()
     assert vm.items == ()
     assert vm.state is PaneState.EMPTY
     assert not vm.load_more_command.can_execute()
+
+
+@pytest.mark.asyncio
+async def test_history_detail_failure_cancels_and_drains_every_sibling() -> None:
+    client = _seeded_client()
+    failed = _detail("q-failed", "analysts")
+    first_sibling = _detail("q-sibling-1", "analysts")
+    second_sibling = _detail("q-sibling-2", "analysts")
+    client.details.update(
+        {
+            "q-failed": failed,
+            "q-sibling-1": first_sibling,
+            "q-sibling-2": second_sibling,
+        }
+    )
+    client.pages[("analysts", None)] = (
+        [
+            failed.summary.ref,
+            first_sibling.summary.ref,
+            second_sibling.summary.ref,
+        ],
+        None,
+    )
+    client.fail_detail_ids = {"q-failed"}
+    client.fail_detail_after = "q-sibling-2"
+    client.block_detail_ids = {"q-sibling-1", "q-sibling-2"}
+    client.ignore_detail_cancellation = True
+    vm = make_history_vm(client)
+
+    setup = asyncio.create_task(vm.setup())
+    try:
+        await client.detail_started.setdefault(
+            "q-sibling-2",
+            asyncio.Event(),
+        ).wait()
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert client.detail_cancelled == {"q-sibling-1", "q-sibling-2"}
+        assert not setup.done()
+        assert client.active_detail_ids == {"q-sibling-1", "q-sibling-2"}
+    finally:
+        client.release_details.set()
+        await setup
+
+    assert client.active_detail_ids == set()
+    assert vm.items == ()
+    assert vm.state is PaneState.ERROR
+
+
+@pytest.mark.asyncio
+async def test_history_shutdown_cancels_and_drains_all_detail_siblings() -> None:
+    client = _seeded_client()
+    first = _detail("q-sibling-1", "analysts")
+    second = _detail("q-sibling-2", "analysts")
+    client.details = {
+        "q-sibling-1": first,
+        "q-sibling-2": second,
+    }
+    client.pages[("analysts", None)] = (
+        [first.summary.ref, second.summary.ref],
+        None,
+    )
+    client.block_detail_ids = {"q-sibling-1", "q-sibling-2"}
+    client.ignore_detail_cancellation = True
+    vm = make_history_vm(client)
+    setup = asyncio.create_task(vm.setup())
+    await asyncio.gather(
+        *(
+            client.detail_started.setdefault(execution_id, asyncio.Event()).wait()
+            for execution_id in client.block_detail_ids
+        )
+    )
+
+    shutdown = asyncio.create_task(vm.shutdown())
+    try:
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert client.detail_cancelled == client.block_detail_ids
+        assert not shutdown.done()
+        assert client.active_detail_ids == client.block_detail_ids
+    finally:
+        client.release_details.set()
+        await asyncio.gather(shutdown, setup)
+
+    assert client.active_detail_ids == set()
+    assert vm.items == ()
+    assert vm.state is PaneState.EMPTY
 
 
 @pytest.mark.asyncio

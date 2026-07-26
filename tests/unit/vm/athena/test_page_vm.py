@@ -10,6 +10,12 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.athena import AthenaCatalogSummary, AthenaWorkgroupSummary
 from aws_tui.domain.data_catalog import DatabaseRef, DatabaseSummary
+from aws_tui.domain.filesystem import (
+    PermissionDeniedError,
+    ProviderError,
+    ProviderUnreachableError,
+    ThrottledError,
+)
 from aws_tui.domain.query import (
     NamedQuery,
     PreparedStatementSummary,
@@ -25,6 +31,7 @@ from aws_tui.domain.query import (
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.athena.page_vm import AthenaPageVM
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 
 _STATS = QueryStatistics(1, 1, 1, 1, 0, False)
@@ -65,8 +72,16 @@ class PageClient:
         self.start_calls: list[tuple[str, QueryContext, str]] = []
         self.stop_calls: list[str] = []
         self.block_catalog_for: str | None = None
+        self.workgroup_error: ProviderError | None = None
+        self.catalog_error: ProviderError | None = None
+        self.database_error: ProviderError | None = None
         self.catalog_started = asyncio.Event()
         self.release_catalog = asyncio.Event()
+        self.block_results = False
+        self.ignore_results_cancellation = False
+        self.results_started = asyncio.Event()
+        self.results_cancelled = asyncio.Event()
+        self.release_results = asyncio.Event()
         self.named = NamedQuery(
             "named-1",
             "Event count",
@@ -82,6 +97,8 @@ class PageClient:
         start_token: str | None = None,
     ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
         self.workgroup_calls.append(start_token)
+        if self.workgroup_error is not None:
+            raise self.workgroup_error
         return list(self.workgroups), None
 
     async def list_catalogs_page(
@@ -92,6 +109,8 @@ class PageClient:
     ) -> tuple[list[AthenaCatalogSummary], str | None]:
         assert workgroup is not None
         self.catalog_calls.append((workgroup, start_token))
+        if self.catalog_error is not None:
+            raise self.catalog_error
         if workgroup == self.block_catalog_for:
             self.catalog_started.set()
             await self.release_catalog.wait()
@@ -106,6 +125,8 @@ class PageClient:
     ) -> tuple[list[DatabaseSummary], str | None]:
         assert workgroup is not None
         self.database_calls.append((workgroup, catalog, start_token))
+        if self.database_error is not None:
+            raise self.database_error
         rows = [
             DatabaseSummary(
                 DatabaseRef(
@@ -216,6 +237,15 @@ class PageClient:
         *,
         start_token: str | None = None,
     ) -> ResultPage:
+        if self.block_results:
+            self.results_started.set()
+            try:
+                await self.release_results.wait()
+            except asyncio.CancelledError:
+                self.results_cancelled.set()
+                if not self.ignore_results_cancellation:
+                    raise
+                await self.release_results.wait()
         return ResultPage((_COLUMN,), (("1",),), None)
 
 
@@ -367,6 +397,87 @@ async def test_selection_restore_is_validated_and_scoped_by_connection_region() 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "state_attribute"),
+    [
+        ("workgroup", "workgroups_state"),
+        ("catalog", "catalogs_state"),
+        ("database", "databases_state"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("error", "expected_state"),
+    [
+        (PermissionDeniedError("denied"), PaneState.FORBIDDEN),
+        (ThrottledError("throttled"), PaneState.ERROR),
+        (ProviderUnreachableError("transport"), PaneState.UNREACHABLE),
+        (ProviderError("request failed"), PaneState.ERROR),
+    ],
+)
+async def test_transient_context_errors_preserve_all_persisted_selections(
+    level: str,
+    state_attribute: str,
+    error: ProviderError,
+    expected_state: PaneState,
+) -> None:
+    client = PageClient()
+    setattr(client, f"{level}_error", error)
+    store = ServiceSelectionStore()
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    expected = {
+        "workgroup": "analysts",
+        "catalog": "AwsDataCatalog",
+        "database": "events",
+    }
+    for key, value in expected.items():
+        store.set(scope, key, value)
+    page = make_page_vm(client, selection_store=store)
+
+    await page.setup()
+
+    assert getattr(page, state_attribute) is expected_state
+    assert {key: store.get(scope, key) for key in expected} == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty_level", ["workgroup", "catalog", "database"])
+async def test_successful_empty_context_page_clears_only_confirmed_absence(
+    empty_level: str,
+) -> None:
+    client = PageClient()
+    if empty_level == "workgroup":
+        client.workgroups = []
+    elif empty_level == "catalog":
+        client.catalogs["analysts"] = []
+    else:
+        client.databases[("analysts", "AwsDataCatalog")] = []
+    store = ServiceSelectionStore()
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    for key, value in (
+        ("workgroup", "analysts"),
+        ("catalog", "AwsDataCatalog"),
+        ("database", "events"),
+    ):
+        store.set(scope, key, value)
+    page = make_page_vm(client, selection_store=store)
+
+    await page.setup()
+
+    if empty_level == "workgroup":
+        assert store.get(scope, "workgroup") is None
+        assert store.get(scope, "catalog") is None
+        assert store.get(scope, "database") is None
+    elif empty_level == "catalog":
+        assert store.get(scope, "workgroup") == "analysts"
+        assert store.get(scope, "catalog") is None
+        assert store.get(scope, "database") is None
+    else:
+        assert store.get(scope, "workgroup") == "analysts"
+        assert store.get(scope, "catalog") == "AwsDataCatalog"
+        assert store.get(scope, "database") is None
+
+
+@pytest.mark.asyncio
 async def test_workgroup_change_cannot_publish_a_late_catalog_page() -> None:
     client = PageClient()
     page = make_page_vm(client)
@@ -386,6 +497,172 @@ async def test_workgroup_change_cannot_publish_a_late_catalog_page() -> None:
         "federated",
     )
     assert page.context.database == "default"
+
+
+@pytest.mark.asyncio
+async def test_context_change_during_history_result_load_cannot_switch_to_results() -> None:
+    client = PageClient()
+    client.block_results = True
+    client.ignore_results_cancellation = True
+    store = ServiceSelectionStore()
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    await page.select_view("history")
+    assert page.history.selected_execution_id == "history-primary"
+
+    opening = asyncio.create_task(page.open_history_results())
+    await client.results_started.wait()
+    await page.select_workgroup("analysts")
+    try:
+        await asyncio.wait_for(client.results_cancelled.wait(), timeout=1)
+    finally:
+        client.release_results.set()
+        await opening
+
+    assert page.context.workgroup == "analysts"
+    assert page.active_view == "history"
+    assert store.get(scope, "active_view") == "history"
+    assert page.results.rows == ()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_history_result_load_cannot_switch_to_results() -> None:
+    client = PageClient()
+    client.block_results = True
+    client.ignore_results_cancellation = True
+    store = ServiceSelectionStore()
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    await page.select_view("history")
+
+    opening = asyncio.create_task(page.open_history_results())
+    await client.results_started.wait()
+    opening.cancel()
+    try:
+        await asyncio.wait_for(client.results_cancelled.wait(), timeout=1)
+    finally:
+        client.release_results.set()
+        await asyncio.gather(opening, return_exceptions=True)
+
+    assert page.active_view == "history"
+    assert store.get(scope, "active_view") == "history"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_state", ["shutdown", "dispose"])
+@pytest.mark.parametrize(
+    ("selector", "value"),
+    [
+        ("select_workgroup", "analysts"),
+        ("select_catalog", "federated"),
+        ("select_database", "default"),
+    ],
+)
+async def test_context_selectors_are_noops_after_page_termination(
+    terminal_state: str,
+    selector: str,
+    value: str,
+) -> None:
+    client = PageClient()
+    store = ServiceSelectionStore()
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    context = page.context
+    child_context = page.query.context
+    stored = {
+        key: store.get(scope, key) for key in ("active_view", "workgroup", "catalog", "database")
+    }
+    if terminal_state == "shutdown":
+        await page.shutdown()
+        context = page.context
+        child_context = page.query.context
+    else:
+        page.dispose()
+
+    await getattr(page, selector)(value)
+
+    assert page.context == context
+    assert page.query.context == child_context
+    assert {
+        key: store.get(scope, key) for key in ("active_view", "workgroup", "catalog", "database")
+    } == stored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_state", ["shutdown", "dispose"])
+async def test_all_other_public_mutators_are_noops_after_page_termination(
+    terminal_state: str,
+) -> None:
+    client = PageClient()
+    store = ServiceSelectionStore()
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    await page.select_view("history")
+    if terminal_state == "shutdown":
+        await page.shutdown()
+    else:
+        page.dispose()
+    context = page.context
+    child_context = page.query.context
+    stored = {
+        key: store.get(scope, key)
+        for key in (
+            "active_view",
+            "workgroup",
+            "catalog",
+            "database",
+            "history_execution_id",
+            "saved_query_id",
+        )
+    }
+    call_counts = (
+        len(client.workgroup_calls),
+        len(client.catalog_calls),
+        len(client.database_calls),
+        len(client.history_calls),
+        len(client.named_calls),
+        len(client.prepared_calls),
+    )
+
+    page.construct()
+    await page.setup()
+    await page.select_view("results")
+    await page.load_more_workgroups()
+    await page.load_more_catalogs()
+    await page.load_more_databases()
+    await page.select_history_execution("history-primary")
+    await page.select_named_query("named-1")
+    await page.select_prepared_statement("missing")
+    await page.open_saved_in_editor()
+    await page.open_history_results()
+    await page.refresh_workgroups()
+    await page.shutdown()
+
+    assert page.context == context
+    assert page.query.context == child_context
+    assert {
+        key: store.get(scope, key)
+        for key in (
+            "active_view",
+            "workgroup",
+            "catalog",
+            "database",
+            "history_execution_id",
+            "saved_query_id",
+        )
+    } == stored
+    assert (
+        len(client.workgroup_calls),
+        len(client.catalog_calls),
+        len(client.database_calls),
+        len(client.history_calls),
+        len(client.named_calls),
+        len(client.prepared_calls),
+    ) == call_counts
 
 
 @pytest.mark.asyncio

@@ -95,6 +95,15 @@ class ResultPage:
 
 
 @dataclass(frozen=True, slots=True)
+class NamedQuerySummary:
+    query_id: str
+    name: str
+    description: str | None
+    database: str
+    workgroup: str
+
+
+@dataclass(frozen=True, slots=True)
 class NamedQuery:
     query_id: str
     name: str
@@ -122,6 +131,7 @@ class PreparedStatement:
 __all__ = [
     "AthenaQueryError",
     "NamedQuery",
+    "NamedQuerySummary",
     "PreparedStatement",
     "PreparedStatementSummary",
     "QueryContext",

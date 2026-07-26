@@ -159,34 +159,44 @@ layer rules clean
 Every listed verification command exited 0. The unrelated shell startup warning
 for missing `/tmp/vmx-cargo-182/env` appeared on commands and is omitted above.
 
-### Full-suite baseline diagnostic
+### Full-suite snapshot diagnostic correction
 
-The optional repository-wide completion run was not green:
+The earlier optional repository-wide run inherited `NO_COLOR=1` from the Codex
+process:
 
 ```text
-uv run pytest -q
-2142 passed, 329 failed, 2 skipped, 9 deselected in 352.74s
+NO_COLOR=1
 ```
 
-All 329 failures were existing Textual snapshot mismatches across demo, EMR,
-Glue, main-screen, modal, nav, pane-state, settings, theme-picker, toast, and
-transfer snapshots. A representative failure was reproduced against pristine
-pre-Task-4 `HEAD` (`5a4deb6`) in a temporary detached worktree:
+That environment flag disabled Textual color output and caused all 329 snapshot
+comparisons to render the default Carbon palette. The pristine-worktree
+reproduction inherited the same flag, so it confirmed environment
+contamination rather than a bad baseline.
+
+The representative snapshot passes with normal color output:
 
 ```text
-PYTHONPATH=<pristine-worktree>/src <current-venv>/bin/pytest \
+env -u NO_COLOR uv run pytest \
   'tests/snapshot/test_modals.py::test_command_palette[amber]' -q
 
-1 failed
+1 snapshot passed.
+1 passed in 0.49s
 ```
 
-The pristine and Task 4 trees both render the requested Amber snapshot with the
-default Carbon palette. Task 4 changes no UI, theme, snapshot, or Textual code.
-The temporary worktree was removed after the comparison.
+The complete normal-color snapshot tier also remains green:
+
+```text
+env -u NO_COLOR uv run pytest tests/snapshot -q
+329 snapshots passed.
+624 passed in 88.13s
+```
+
+No snapshot baseline changed.
 
 ## Changed Files
 
 - `.superpowers/sdd/task-4-report.md`
+- `src/aws_tui/domain/query.py`
 - `src/aws_tui/vm/athena/__init__.py`
 - `src/aws_tui/vm/athena/history_vm.py`
 - `src/aws_tui/vm/athena/page_vm.py`
@@ -208,6 +218,141 @@ The temporary worktree was removed after the comparison.
   `dispose()` invalidates and releases local resources, so the hosting lifecycle
   must continue to await shutdown before disposal as required by the Athena
   plan.
-- The branch's pre-existing all-theme snapshot baseline is not green under the
-  current environment. This is outside Task 4's VM-only scope and is documented
-  above with a pristine-HEAD reproduction.
+- Snapshot commands launched from this Codex process must unset inherited
+  `NO_COLOR=1`; the normal-color baseline itself is green.
+
+## Review Remediation: 2026-07-26
+
+### Status
+
+All Task 4 review findings are fixed on `codex/aws-service-expansion-study`.
+
+### Implementation
+
+- History detail hydration now creates and tracks every current-page detail
+  task. The first sibling failure cancels the remaining siblings and drains
+  cancellation-resistant calls before the pager operation can finish.
+- Prepared-statement detail retrieval now runs in a VM-owned task.
+  Workgroup replacement, shutdown, and disposal cancel it; awaited shutdown
+  retains ownership until the AWS call exits under the shared botocore
+  connect/read timeout and adaptive-retry configuration.
+- Historical result opening captures context generation, selected execution,
+  page liveness, and caller cancellation. A stale or cancelled load cannot
+  select Results or write `active_view`.
+- Every public page mutator, including selectors and `construct()`, is inert
+  after shutdown or disposal. Calling `shutdown()` after disposal is also
+  inert; normal shutdown followed by disposal still cascades resource cleanup.
+- Workgroup, catalog, and database restoration now distinguishes successful
+  `EMPTY`/`IDLE` pages from `FORBIDDEN`, `UNREACHABLE`, throttled, and generic
+  errors. Only successful responses can clear or replace persisted selection.
+- Added immutable `NamedQuerySummary`. Named-query batches still hydrate only
+  the current token page, but public `named_queries` contains SQL-free
+  summaries. Full `NamedQuery` detail and `selected_sql()` become public only
+  after explicit selection.
+
+### Focused RED Evidence
+
+History sibling ownership:
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_history_vm.py::test_history_detail_failure_cancels_and_drains_every_sibling \
+  tests/unit/vm/athena/test_history_vm.py::test_history_shutdown_cancels_and_drains_all_detail_siblings -q
+
+1 failed, 1 passed in 1.94s
+```
+
+Prepared-detail lifecycle:
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_saved_vm.py::test_workgroup_replacement_cancels_and_retains_prepared_detail_until_drained \
+  tests/unit/vm/athena/test_saved_vm.py::test_saved_shutdown_cancels_and_drains_prepared_detail_request -q
+
+2 failed in 6.74s
+```
+
+Historical result and terminated-page mutation:
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_page_vm.py::test_context_change_during_history_result_load_cannot_switch_to_results \
+  tests/unit/vm/athena/test_page_vm.py::test_cancelled_history_result_load_cannot_switch_to_results \
+  tests/unit/vm/athena/test_page_vm.py::test_context_selectors_are_noops_after_page_termination \
+  tests/unit/vm/athena/test_page_vm.py::test_all_other_public_mutators_are_noops_after_page_termination -q
+
+8 failed, 2 passed in 0.42s
+```
+
+Three-level restoration matrix:
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_page_vm.py::test_transient_context_errors_preserve_all_persisted_selections \
+  tests/unit/vm/athena/test_page_vm.py::test_successful_empty_context_page_clears_only_confirmed_absence -q
+
+12 failed, 3 passed in 9.93s
+```
+
+Named-query public interface:
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_saved_vm.py::test_named_query_list_exposes_sql_free_summaries_before_selection -q
+
+ImportError: cannot import name 'NamedQuerySummary'
+1 failed in 1.40s
+```
+
+Shutdown after disposal:
+
+```text
+uv run pytest \
+  'tests/unit/vm/athena/test_page_vm.py::test_all_other_public_mutators_are_noops_after_page_termination[dispose]' -q
+
+reactivex.internal.exceptions.DisposedException: Object has been disposed
+1 failed in 0.40s
+```
+
+### Focused GREEN Evidence
+
+```text
+uv run pytest tests/unit/vm/athena -q
+90 passed in 0.58s
+
+uv run pytest tests/unit/domain/test_query.py -q
+16 passed in 0.20s
+```
+
+### Final Verification
+
+```text
+uv run pytest tests/unit/vm -q
+589 passed in 29.58s
+
+uv run pytest tests/unit/domain -q
+490 passed in 15.80s
+
+uv run pytest tests/unit/infra/test_redaction.py \
+  tests/unit/infra/test_log_sink.py \
+  tests/unit/infra/test_crash_dump.py \
+  tests/unit/infra/test_config_store.py -q
+60 passed in 0.37s
+
+uv run ruff check src tests
+All checks passed!
+
+uv run ruff format --check src tests
+351 files already formatted
+
+uv run mypy src
+Success: no issues found in 139 source files
+
+bash scripts/check-layers.sh
+layer rules clean
+```
+
+The non-overlapping VM, domain, and privacy runs total **1,139 passing tests**.
+The separate normal-color snapshot tier adds **624 passing tests**, for **1,763
+non-overlapping passing tests** across the recorded final suites. Every command
+exited 0.

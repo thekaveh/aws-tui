@@ -210,6 +210,8 @@ class AthenaPageVM:
         return self._on_property_changed
 
     def construct(self) -> None:
+        if not self._is_alive():
+            return
         self._inner.construct()
         self.query.construct()
         self.history.construct()
@@ -231,7 +233,11 @@ class AthenaPageVM:
                     "active_view",
                 )
             await self.refresh_workgroups()
-            if not self._is_alive() or not self.workgroups:
+            if not self._is_alive():
+                return
+            if self._workgroups_state not in {PaneState.IDLE, PaneState.EMPTY}:
+                return
+            if self._workgroups_state is PaneState.EMPTY:
                 self._clear_context_store()
                 return
             stored_workgroup = self._selection_store.get(
@@ -263,10 +269,10 @@ class AthenaPageVM:
                 )
 
     async def select_view(self, view: AthenaView) -> None:
-        if view not in _VIEWS:
-            raise ValueError(f"unknown Athena view: {view}")
         if not self._is_alive():
             return
+        if view not in _VIEWS:
+            raise ValueError(f"unknown Athena view: {view}")
         changed = view != self._active_view
         self._active_view = view
         self._selection_store.set(self._selection_scope, "active_view", view)
@@ -275,6 +281,8 @@ class AthenaPageVM:
         await self._setup_view(view, self._context_generation)
 
     async def select_workgroup(self, workgroup: str) -> None:
+        if not self._is_alive():
+            return
         if not any(row.name == workgroup for row in self.workgroups):
             return
         await self._select_workgroup(
@@ -291,6 +299,8 @@ class AthenaPageVM:
         )
 
     async def select_catalog(self, catalog: str) -> None:
+        if not self._is_alive():
+            return
         if not any(row.name == catalog for row in self.catalogs):
             return
         await self._select_catalog(
@@ -303,6 +313,8 @@ class AthenaPageVM:
         )
 
     async def select_database(self, database: str) -> None:
+        if not self._is_alive():
+            return
         if not any(row.ref.database_name == database for row in self.databases):
             return
         generation = self._begin_context_change(
@@ -318,6 +330,8 @@ class AthenaPageVM:
             await self._setup_view(self._active_view, generation)
 
     async def load_more_workgroups(self) -> None:
+        if not self._is_alive():
+            return
         worker = self._workgroup_worker
         if self.has_more_workgroups and self._is_current_workgroup(worker):
             await self._run_page_command(
@@ -327,6 +341,8 @@ class AthenaPageVM:
             )
 
     async def load_more_catalogs(self) -> None:
+        if not self._is_alive():
+            return
         worker = self._catalog_worker
         if self.has_more_catalogs and self._is_current_catalog(worker):
             await self._run_page_command(
@@ -336,6 +352,8 @@ class AthenaPageVM:
             )
 
     async def load_more_databases(self) -> None:
+        if not self._is_alive():
+            return
         worker = self._database_worker
         if self.has_more_databases and self._is_current_database(worker):
             await self._run_page_command(
@@ -345,6 +363,8 @@ class AthenaPageVM:
             )
 
     async def select_history_execution(self, execution_id: str) -> None:
+        if not self._is_alive():
+            return
         await self.history.select_execution(execution_id)
         if self.history.selected_execution_id == execution_id:
             self._selection_store.set(
@@ -354,6 +374,8 @@ class AthenaPageVM:
             )
 
     async def select_named_query(self, query_id: str) -> None:
+        if not self._is_alive():
+            return
         await self.saved.select_named_query(query_id)
         if self.saved.selected_query_id == query_id:
             self._selection_store.set(
@@ -363,6 +385,8 @@ class AthenaPageVM:
             )
 
     async def select_prepared_statement(self, name: str) -> None:
+        if not self._is_alive():
+            return
         await self.saved.select_prepared_statement(name)
         if self.saved.selected_query_id == name:
             self._selection_store.set(
@@ -388,12 +412,21 @@ class AthenaPageVM:
         await self.select_view("query")
 
     async def open_history_results(self) -> None:
-        execution_id = self.history.selected_execution_id
-        if execution_id is None or not self._is_alive():
+        if not self._is_alive():
             return
+        execution_id = self.history.selected_execution_id
+        if execution_id is None:
+            return
+        context_generation = self._context_generation
+        task = asyncio.current_task()
         await self.results.load(execution_id)
-        if self._is_alive():
-            await self.select_view("results")
+        if (
+            (task is not None and task.cancelling())
+            or not self._is_current_context(context_generation)
+            or self.history.selected_execution_id != execution_id
+        ):
+            return
+        await self.select_view("results")
 
     async def refresh_workgroups(self) -> None:
         if not self._is_alive():
@@ -411,7 +444,7 @@ class AthenaPageVM:
 
     async def shutdown(self) -> None:
         async with self._shutdown_lock:
-            if self._shutdown_complete:
+            if self._disposed or self._shutdown_complete:
                 return
             self._shutdown_started = True
             self._lifecycle_generation += 1
@@ -480,6 +513,8 @@ class AthenaPageVM:
         await self._refresh_catalogs(generation)
         if not self._is_current_context(generation):
             return
+        if self._catalogs_state not in {PaneState.IDLE, PaneState.EMPTY}:
+            return
         catalog_names = tuple(row.name for row in self.catalogs)
         catalog = (
             preferred_catalog
@@ -516,6 +551,8 @@ class AthenaPageVM:
             return
         await self._refresh_databases(generation)
         if not self._is_current_context(generation):
+            return
+        if self._databases_state not in {PaneState.IDLE, PaneState.EMPTY}:
             return
         database_names = tuple(row.ref.database_name for row in self.databases)
         database = (

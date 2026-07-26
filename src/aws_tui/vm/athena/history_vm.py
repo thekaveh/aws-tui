@@ -18,7 +18,11 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
-from aws_tui.domain.query import QueryExecutionDetail, QueryExecutionSummary
+from aws_tui.domain.query import (
+    QueryExecutionDetail,
+    QueryExecutionRef,
+    QueryExecutionSummary,
+)
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -240,9 +244,7 @@ class AthenaHistoryVM:
             )
             if not self._is_current(worker):
                 return [], None
-            details = await asyncio.gather(
-                *(self._client.get_query_execution(ref.execution_id) for ref in refs)
-            )
+            details = await self._hydrate_details(worker, refs)
             if not self._is_current(worker):
                 return [], None
             for ref, detail in zip(refs, details, strict=True):
@@ -261,6 +263,45 @@ class AthenaHistoryVM:
         )
         self._workers.add(worker)
         return worker
+
+    async def _hydrate_details(
+        self,
+        worker: _HistoryWorker,
+        refs: list[QueryExecutionRef],
+    ) -> list[QueryExecutionDetail]:
+        tasks = [
+            asyncio.create_task(self._client.get_query_execution(ref.execution_id)) for ref in refs
+        ]
+        if not tasks:
+            return []
+        worker.tasks.update(tasks)
+        try:
+            done, _ = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_EXCEPTION,
+            )
+            failed = next(
+                (task for task in done if not task.cancelled() and task.exception() is not None),
+                None,
+            )
+            if failed is not None:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if failed is not None:
+                error = failed.exception()
+                assert error is not None
+                raise error
+            return [task.result() for task in tasks]
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        finally:
+            worker.tasks.difference_update(tasks)
 
     def _replace_worker(self, workgroup: str, generation: int) -> _HistoryWorker:
         old_worker = self._worker

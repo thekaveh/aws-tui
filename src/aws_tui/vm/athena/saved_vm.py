@@ -19,7 +19,12 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
-from aws_tui.domain.query import NamedQuery, PreparedStatement, PreparedStatementSummary
+from aws_tui.domain.query import (
+    NamedQuery,
+    NamedQuerySummary,
+    PreparedStatement,
+    PreparedStatementSummary,
+)
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -39,6 +44,10 @@ class _SavedWorker(Generic[T]):
     generation: int
     workgroup: str
     tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
+    named_query_details: dict[str, NamedQuery] = field(
+        default_factory=dict,
+        repr=False,
+    )
     retired: bool = False
     pager: TokenPagedComposition[T, str] = field(init=False, repr=False)
     load_more_command: AsyncRelayCommand = field(init=False, repr=False)
@@ -94,7 +103,7 @@ class AthenaSavedVM:
         return self._workgroup
 
     @property
-    def named_queries(self) -> tuple[NamedQuery, ...]:
+    def named_queries(self) -> tuple[NamedQuerySummary, ...]:
         return tuple(self._named_pager.items)
 
     @property
@@ -219,12 +228,18 @@ class AthenaSavedVM:
             (candidate for candidate in self.named_queries if candidate.query_id == query_id),
             None,
         )
-        if query is None or query.workgroup != self._workgroup:
+        detail = self._named_worker.named_query_details.get(query_id)
+        if (
+            query is None
+            or detail is None
+            or detail.workgroup != self._workgroup
+            or _named_query_summary(detail) != query
+        ):
             return
         self._detail_generation += 1
         self._selected_kind = SavedQueryKind.NAMED
         self._selected_query_id = query_id
-        self._selected_named_query = query
+        self._selected_named_query = detail
         self._selected_prepared_statement = None
         self._detail_error_text = None
         self._detail_state = PaneState.IDLE
@@ -246,11 +261,14 @@ class AthenaSavedVM:
         self._detail_error_text = None
         self._detail_state = PaneState.LOADING
         self._notify_selection()
-        task = asyncio.current_task()
-        if task is not None:
-            self._detail_tasks.add(task)
+        task = asyncio.create_task(self._client.get_prepared_statement(name, workgroup))
+        self._detail_tasks.add(task)
         try:
-            detail = await self._client.get_prepared_statement(name, workgroup)
+            detail = await task
+        except asyncio.CancelledError:
+            if not self._is_current_detail(generation, context_generation, name):
+                return
+            raise
         except ProviderError as exc:
             if self._is_current_detail(generation, context_generation, name):
                 self._detail_state, self._detail_error_text = map_provider_error(
@@ -269,8 +287,7 @@ class AthenaSavedVM:
                 self._notify("detail_error_text")
             return
         finally:
-            if task is not None:
-                self._detail_tasks.discard(task)
+            self._detail_tasks.discard(task)
         if not self._is_current_detail(generation, context_generation, name):
             return
         if detail.name != name or detail.workgroup != workgroup:
@@ -300,6 +317,7 @@ class AthenaSavedVM:
         self._named_generation += 1
         self._prepared_generation += 1
         self._detail_generation += 1
+        self._cancel_detail_tasks()
         self._workgroup = workgroup
         self._replace_named_worker()
         self._replace_prepared_worker()
@@ -320,6 +338,7 @@ class AthenaSavedVM:
         self._named_generation += 1
         self._prepared_generation += 1
         self._detail_generation += 1
+        self._cancel_detail_tasks()
         self._workgroup = ""
         named = self._replace_named_worker()
         prepared = self._replace_prepared_worker()
@@ -346,6 +365,7 @@ class AthenaSavedVM:
         self._disposed = True
         self._context_generation += 1
         self._detail_generation += 1
+        self._cancel_detail_tasks()
         for worker in tuple(self._workers):
             self._retire_worker(worker)
         self._on_property_changed.on_completed()
@@ -354,7 +374,7 @@ class AthenaSavedVM:
 
     async def _run_named_pager(
         self,
-        worker: _SavedWorker[NamedQuery],
+        worker: _SavedWorker[NamedQuerySummary],
         *,
         refresh: bool,
     ) -> None:
@@ -422,13 +442,13 @@ class AthenaSavedVM:
                 PaneState.IDLE if self.prepared_statements else PaneState.EMPTY
             )
 
-    def _make_named_worker(self) -> _SavedWorker[NamedQuery]:
+    def _make_named_worker(self) -> _SavedWorker[NamedQuerySummary]:
         generation = self._named_generation
         context_generation = self._context_generation
         workgroup = self._workgroup
-        worker: _SavedWorker[NamedQuery] = _SavedWorker(generation, workgroup)
+        worker: _SavedWorker[NamedQuerySummary] = _SavedWorker(generation, workgroup)
 
-        async def fetch(token: str | None) -> tuple[list[NamedQuery], str | None]:
+        async def fetch(token: str | None) -> tuple[list[NamedQuerySummary], str | None]:
             if not workgroup:
                 return [], None
             ids, next_token = await self._client.list_named_queries_page(
@@ -447,7 +467,8 @@ class AthenaSavedVM:
                 or any(query.workgroup != workgroup for query in details)
             ):
                 raise ValueError("Athena named query response identity mismatch")
-            return [by_id[query_id] for query_id in ids], next_token
+            worker.named_query_details.update(by_id)
+            return [_named_query_summary(by_id[query_id]) for query_id in ids], next_token
 
         worker.pager = TokenPagedComposition(fetch)
         worker.load_more_command = (
@@ -493,7 +514,7 @@ class AthenaSavedVM:
         self._workers.add(worker)
         return worker
 
-    def _replace_named_worker(self) -> _SavedWorker[NamedQuery]:
+    def _replace_named_worker(self) -> _SavedWorker[NamedQuerySummary]:
         old_worker = self._named_worker
         worker = self._make_named_worker()
         self._named_worker = worker
@@ -558,7 +579,12 @@ class AthenaSavedVM:
                 return
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _can_load_more_named(self, worker: _SavedWorker[NamedQuery]) -> bool:
+    def _cancel_detail_tasks(self) -> None:
+        for task in tuple(self._detail_tasks):
+            if not task.done():
+                task.cancel()
+
+    def _can_load_more_named(self, worker: _SavedWorker[NamedQuerySummary]) -> bool:
         return (
             self._is_current_named(worker)
             and bool(worker.workgroup)
@@ -577,7 +603,7 @@ class AthenaSavedVM:
 
     def _is_current_named(
         self,
-        worker: _SavedWorker[NamedQuery],
+        worker: _SavedWorker[NamedQuerySummary],
         context_generation: int | None = None,
     ) -> bool:
         return (
@@ -679,6 +705,16 @@ class AthenaSavedVM:
             )
         )
         self._on_property_changed.on_next(property_name)
+
+
+def _named_query_summary(query: NamedQuery) -> NamedQuerySummary:
+    return NamedQuerySummary(
+        query_id=query.query_id,
+        name=query.name,
+        description=query.description,
+        database=query.database,
+        workgroup=query.workgroup,
+    )
 
 
 __all__ = ["AthenaSavedVM", "SavedQueryKind"]
