@@ -229,3 +229,65 @@ Layer rules: clean
   baselines.
 - The pre-existing `.zshenv` warning for missing `/tmp/vmx-cargo-182/env`
   continues to appear before commands; command exit results are unaffected.
+
+## Final Results Pager Error Timing (2026-07-26)
+
+### Status
+
+`DONE`
+
+Continuation retries now retain the existing Athena results error text while a
+retry is in flight and when that retry fails again. The results load-more
+control consequently keeps its error class and error tooltip until a
+current-generation continuation succeeds. Initial-load clearing and generation
+guards are unchanged.
+
+### TDD Record
+
+New RED tests were added before the production edit:
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_results_vm.py::test_results_retry_keeps_error_until_a_continuation_succeeds \
+  tests/integration/test_athena_page.py::test_results_retry_keeps_button_error_visible_until_success -q
+2 failed, 2 rerun
+```
+
+Both failures showed the stale error becoming `None` as soon as the retry
+request started. After the writer change, the focused regressions and existing
+retry behavior passed:
+
+```text
+3 passed
+```
+
+### Implementation
+
+- Removed only the continuation pre-request `_error_text` clear from
+  `AthenaResultsVM._load_more()`.
+- Clear stale error text only after the pager continuation returns and the
+  worker is still current, immediately before the successful rows/state
+  notifications.
+- Added VM timing coverage for failed-then-failed and failed-then-successful
+  retries, including the busy interval.
+- Added real Athena app coverage for the results button error class and tooltip
+  during both retry intervals, after the failed retry, and after success.
+
+### Verification
+
+```text
+Athena domain results: 2 passed
+Athena VM: 110 passed
+Athena UI: 10 passed
+Athena integration: 10 passed
+All VM tests: 610 passed
+Ruff lint: all checks passed
+Ruff format: 15 files already formatted
+Mypy (Athena VM): no issues in 7 source files
+Layer rules: clean
+```
+
+### Concerns
+
+- Commands continue to print the pre-existing `.zshenv` warning for missing
+  `/tmp/vmx-cargo-182/env`; all verification commands exited successfully.

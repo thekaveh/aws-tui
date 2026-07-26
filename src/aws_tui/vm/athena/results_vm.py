@@ -241,8 +241,6 @@ class AthenaResultsVM:
         self._is_loading_more = True
         self._notify("is_loading_more")
         task = self._track_current_task(worker)
-        self._error_text = None
-        self._notify("error_text")
         try:
             await worker.pager.load_more_command.execute_async()
         except _ResultColumnsChangedError:
@@ -277,6 +275,8 @@ class AthenaResultsVM:
             self._notify("is_loading_more")
         if not self._is_current(worker):
             return
+        self._error_text = None
+        self._notify("error_text")
         self._notify("rows")
         self._notify("rendered_rows")
         self._notify("has_more")

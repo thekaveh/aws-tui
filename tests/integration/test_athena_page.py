@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -11,7 +12,7 @@ from textual.widgets import Button, DataTable, Static, TextArea
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.filesystem import ProviderError
-from aws_tui.domain.query import QueryExecutionRef, QueryState
+from aws_tui.domain.query import QueryExecutionRef, QueryState, ResultColumn, ResultPage
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.services.athena import AthenaService
 from aws_tui.ui.widgets.athena.page import AthenaPage
@@ -96,6 +97,93 @@ async def test_real_app_mounts_editor_results_and_explicit_entry_focuses_editor(
         await page.action_select_view("results")
         assert page.query_one(DataTable)
         assert vm.active_view == "results"
+
+
+@pytest.mark.asyncio
+async def test_results_retry_keeps_button_error_visible_until_success(
+    tmp_path: Path,
+) -> None:
+    async with _mounted_athena_app(tmp_path) as (app, _ctx, vm, client, pilot):
+        first_page = ResultPage(
+            (ResultColumn("value", "varchar", "NULLABLE"),),
+            (("one",),),
+            "results-next",
+        )
+        second_page = ResultPage(
+            (ResultColumn("value", "varchar", "NULLABLE"),),
+            (("two",),),
+            None,
+        )
+        should_fail = True
+        block_request = False
+        request_started = asyncio.Event()
+        release_request = asyncio.Event()
+
+        async def get_results_page(
+            _execution_id: str,
+            *,
+            start_token: str | None = None,
+        ) -> ResultPage:
+            if start_token is None:
+                return first_page
+            request_started.set()
+            if block_request:
+                await release_request.wait()
+            if should_fail:
+                raise ProviderError("temporary failure")
+            return second_page
+
+        client.get_results_page = get_results_page  # type: ignore[method-assign]
+        await vm.results.load("q-results")
+        await vm.select_view("results")
+        await pilot.pause()
+        button = app.query_one("#athena-more-results", Button)
+
+        await vm.results.load_more()
+        await pilot.pause()
+        assert vm.results.error_text == "Athena results request failed"
+        assert button.has_class("-error")
+        assert button.tooltip == "Athena results request failed"
+
+        block_request = True
+        request_started.clear()
+        retry = asyncio.create_task(vm.results.load_more())
+        await request_started.wait()
+        await pilot.pause()
+
+        assert vm.results.is_loading_more
+        assert vm.results.error_text == "Athena results request failed"
+        assert button.has_class("-error")
+        assert button.tooltip == "Athena results request failed"
+
+        release_request.set()
+        await retry
+        await pilot.pause()
+
+        assert not vm.results.is_loading_more
+        assert vm.results.error_text == "Athena results request failed"
+        assert button.has_class("-error")
+        assert button.tooltip == "Athena results request failed"
+
+        should_fail = False
+        release_request.clear()
+        request_started.clear()
+        retry = asyncio.create_task(vm.results.load_more())
+        await request_started.wait()
+        await pilot.pause()
+
+        assert vm.results.is_loading_more
+        assert vm.results.error_text == "Athena results request failed"
+        assert button.has_class("-error")
+        assert button.tooltip == "Athena results request failed"
+
+        release_request.set()
+        await retry
+        await pilot.pause()
+
+        assert vm.results.error_text is None
+        assert not button.has_class("-error")
+        assert button.tooltip == "Load more result rows"
 
 
 @pytest.mark.asyncio

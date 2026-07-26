@@ -139,6 +139,58 @@ async def test_results_load_more_retry_clears_stale_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_results_retry_keeps_error_until_a_continuation_succeeds() -> None:
+    client = ResultClient(
+        {
+            ("q-1", None): ResultPage((_ID,), (("one",),), "next"),
+            ("q-1", "next"): ResultPage((_ID,), (("two",),), None),
+        }
+    )
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+    client.failures[("q-1", "next")] = ProviderError("temporary failure")
+
+    await vm.load_more()
+
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text == "Athena results request failed"
+
+    client.blocked_request = ("q-1", "next")
+    client.fetch_started.clear()
+    retry = asyncio.create_task(vm.load_more())
+    await client.fetch_started.wait()
+
+    assert vm.is_loading_more
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text == "Athena results request failed"
+
+    client.release_fetch.set()
+    await retry
+
+    assert not vm.is_loading_more
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text == "Athena results request failed"
+
+    del client.failures[("q-1", "next")]
+    client.blocked_request = ("q-1", "next")
+    client.fetch_started.clear()
+    client.release_fetch.clear()
+    retry = asyncio.create_task(vm.load_more())
+    await client.fetch_started.wait()
+
+    assert vm.is_loading_more
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text == "Athena results request failed"
+
+    client.release_fetch.set()
+    await retry
+
+    assert not vm.is_loading_more
+    assert vm.state is PaneState.IDLE
+    assert vm.error_text is None
+
+
+@pytest.mark.asyncio
 async def test_results_preserve_null_empty_and_literal_null_values() -> None:
     client = ResultClient(
         {
