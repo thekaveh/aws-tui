@@ -8,14 +8,17 @@ from pathlib import Path
 
 import pytest
 from textual.containers import Container
+from textual.worker import WorkerCancelled
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets.dual_pane import DualPane
+from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.glue.page_vm import GluePageVM
@@ -28,6 +31,28 @@ async def _wait_for_service_setup(
     pilot: object,
 ) -> None:
     await app.workers.wait_for_complete(list(app.workers._workers))
+    setup_task = ctx.root_vm.content_host._setup_task  # type: ignore[attr-defined]
+    if setup_task is not None and not setup_task.done():
+        await setup_task
+    await pilot.pause()  # type: ignore[attr-defined]
+
+
+async def _wait_for_service_setup_after_supersession(
+    ctx: AppContext,
+    app: AwsTuiApp,
+    pilot: object,
+) -> None:
+    outcomes = await asyncio.gather(
+        *(worker.wait() for worker in list(app.workers._workers)),
+        return_exceptions=True,
+    )
+    assert any(isinstance(outcome, WorkerCancelled) for outcome in outcomes)
+    unexpected = [
+        outcome
+        for outcome in outcomes
+        if isinstance(outcome, BaseException) and not isinstance(outcome, WorkerCancelled)
+    ]
+    assert unexpected == []
     setup_task = ctx.root_vm.content_host._setup_task  # type: ignore[attr-defined]
     if setup_task is not None and not setup_task.done():
         await setup_task
@@ -102,6 +127,24 @@ def _assert_visible_s3(ctx: AppContext, app: AwsTuiApp) -> DualPaneVM:
     assert panes[0].vm is current
     assert current.left.current_connection_key == ("aws", "demo-dev")
     return current
+
+
+def _assert_visible_emr(ctx: AppContext, app: AwsTuiApp) -> None:
+    _assert_coherent_service(ctx, "emr-serverless")
+    current = ctx.root_vm.content_host.current
+    assert isinstance(current, EmrServerlessPageVM)
+    assert current.source.connection_name == "demo-dev"
+    assert current.source.profile == "demo-dev"
+    assert current.source.region == "us-east-1"
+    host = app.query_one("#content-host", Container)
+    assert len(host.children) > 0
+    child_ids = [child.id for child in host.children if child.id is not None]
+    assert len(child_ids) == len(set(child_ids))
+    pages = list(host.query(EmrServerlessPage))
+    assert len(pages) == 1
+    assert pages[0]._vm is current
+    assert len(host.query(GluePage)) == 0
+    assert len(host.query(DualPane)) == 0
 
 
 @pytest.mark.asyncio
@@ -355,6 +398,112 @@ async def test_overlapping_handoff_and_nav_mounts_are_serialized(
             assert len(child_ids) == len(set(child_ids))
             assert len(app.query(GluePage)) == 1
             assert len(app.query(DualPane)) == 0
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_user_emr_navigation_supersedes_handoff_paused_during_root_switch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_demo_glue(ctx, app, pilot)
+            switch_started = asyncio.Event()
+            release_switch = asyncio.Event()
+            original_switch = ctx.root_vm.switch_connection_and_service
+
+            async def pause_handoff_switch(
+                connection: Connection,
+                auth_state: TokenState,
+                service_id: str,
+            ) -> None:
+                if service_id == "s3":
+                    switch_started.set()
+                    await release_switch.wait()
+                await original_switch(connection, auth_state, service_id)
+
+            monkeypatch.setattr(
+                ctx.root_vm,
+                "switch_connection_and_service",
+                pause_handoff_switch,
+            )
+            ctx.hub.send(_handoff_request())
+            await asyncio.wait_for(switch_started.wait(), timeout=2)
+
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            release_switch.set()
+            await _wait_for_service_setup_after_supersession(ctx, app, pilot)
+
+            _assert_visible_emr(ctx, app)
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_user_emr_navigation_supersedes_handoff_paused_during_rollback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_demo_glue(ctx, app, pilot)
+            rollback_started = asyncio.Event()
+            release_rollback = asyncio.Event()
+            original_switch = ctx.root_vm.switch_connection_and_service
+            original_mount = app._mount_service_view
+
+            async def pause_rollback_switch(
+                connection: Connection,
+                auth_state: TokenState,
+                service_id: str,
+            ) -> None:
+                if service_id == "glue":
+                    rollback_started.set()
+                    await release_rollback.wait()
+                await original_switch(connection, auth_state, service_id)
+
+            async def fail_handoff_mount(
+                service_id: str,
+                *,
+                required_connection: Connection | None = None,
+            ) -> bool:
+                if service_id == "s3" and required_connection is not None:
+                    return False
+                return await original_mount(
+                    service_id,
+                    required_connection=required_connection,
+                )
+
+            monkeypatch.setattr(
+                ctx.root_vm,
+                "switch_connection_and_service",
+                pause_rollback_switch,
+            )
+            monkeypatch.setattr(app, "_mount_service_view", fail_handoff_mount)
+            ctx.hub.send(_handoff_request())
+            await asyncio.wait_for(rollback_started.wait(), timeout=2)
+
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            release_rollback.set()
+            await _wait_for_service_setup_after_supersession(ctx, app, pilot)
+
+            _assert_visible_emr(ctx, app)
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

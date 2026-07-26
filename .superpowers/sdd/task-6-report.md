@@ -596,3 +596,109 @@ exited zero.
 
 Every shell still emits the pre-existing `.zshenv` warning for missing
 `/tmp/vmx-cargo-182/env`; all commands above exited with the recorded status.
+
+## Final Concurrency Follow-up
+
+### Status and implementation
+
+Resolved the remaining selection-suppression race during the awaited RootVM
+handoff switch and rollback.
+
+- Replaced the blanket `_service_navigation_switching` boolean with a one-shot
+  suppression token containing the owning asyncio task and the exact service
+  selection expected from that RootVM operation.
+- The nav subscriber consumes the token only when both task identity and
+  selected service match. A later user selection runs outside that handoff
+  task, enters the shared exclusive `content-mount` group, and cancels and
+  supersedes the in-flight handoff.
+- Forward-switch and rollback cleanup clear only the token object they
+  installed. A canceled older handoff therefore cannot clear suppression state
+  installed by a newer operation.
+- Existing exact-profile mounting, transactional rollback, redacted failures,
+  and `asyncio.CancelledError` propagation remain unchanged.
+
+### RED evidence
+
+Both deterministic tests were added before the lifecycle change:
+
+```text
+uv run pytest \
+  tests/integration/test_glue_s3_handoff.py::test_user_emr_navigation_supersedes_handoff_paused_during_root_switch \
+  tests/integration/test_glue_s3_handoff.py::test_user_emr_navigation_supersedes_handoff_paused_during_rollback -q
+```
+
+Captured result:
+
+```text
+2 failed, 4 rerun in 8.17s
+```
+
+The forward pause finished with S3 content instead of EMR. The distinct
+rollback pause finished with Glue content instead of EMR. Both failures proved
+that the broad flag dropped the later user selection while the corresponding
+RootVM await was suspended.
+
+After the production change, the same command surfaced the expected
+`WorkerCancelled` from the superseded handoff through the generic test wait.
+The test wait was tightened to require at least one real Textual worker
+cancellation, reject every other worker exception, and then await the winning
+EMR setup.
+
+### Focused GREEN
+
+```text
+uv run pytest \
+  tests/integration/test_glue_s3_handoff.py::test_user_emr_navigation_supersedes_handoff_paused_during_root_switch \
+  tests/integration/test_glue_s3_handoff.py::test_user_emr_navigation_supersedes_handoff_paused_during_rollback -q
+2 passed in 1.39s
+
+uv run pytest tests/integration/test_glue_s3_handoff.py -q
+12 passed in 7.09s
+```
+
+Each regression proves the final RootVM content id, nav selection, active
+connection, EMR page VM source identity, mounted EMR widget, and exact
+`demo-dev` profile/`us-east-1` region agree. Top-level widget ids are unique,
+the mounted widget owns the current VM, and no stale `GluePage` or `DualPane`
+tree remains.
+
+### Final verification
+
+```text
+uv run pytest tests/unit tests/integration tests/e2e -q
+1474 passed, 9 deselected in 280.42s (0:04:40)
+
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  uv run pytest tests/snapshot -q
+329 snapshots passed.
+624 passed in 87.36s (0:01:27)
+
+uv run pytest tests/docs -q
+55 passed, 2 skipped in 0.29s
+
+make docs-check
+check_docs: clean
+Documentation built in 0.40 seconds
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+342 files already formatted
+
+uv run mypy src
+Success: no issues found in 129 source files
+
+./scripts/check-layers.sh
+layer rules clean
+
+uv build
+Successfully built dist/aws_tui-0.8.0.tar.gz
+Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
+```
+
+No snapshots or shipped documentation changed. The docs renderer's five-byte
+architecture PNG rewrite was restored because its source was untouched. The
+two direct docs-test skips, Material for MkDocs notice, and missing
+`/tmp/vmx-cargo-182/env` shell warning are the same pre-existing environmental
+messages recorded above.

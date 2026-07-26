@@ -390,7 +390,9 @@ class AwsTuiApp(App[None]):
         self._nav_selection_sub: DisposableBase | None = None
         self._cursor_sub: DisposableBase | None = None
         self._service_navigation_sub: DisposableBase | None = None
-        self._service_navigation_switching: bool = False
+        self._service_navigation_suppressed_selection: (
+            tuple[asyncio.Task[object] | None, str] | None
+        ) = None
         # True while ``on_mount`` is driving the initial service mount —
         # gates ``_on_nav_selection_changed`` so the seed selected_id
         # change doesn't spawn a duplicate mount worker that races the
@@ -2570,8 +2572,9 @@ class AwsTuiApp(App[None]):
             )
             auth_state = TokenState.MISSING
 
+        suppression = (asyncio.current_task(), "s3")
+        self._service_navigation_suppressed_selection = suppression
         try:
-            self._service_navigation_switching = True
             await ctx.root_vm.switch_connection_and_service(
                 connection,
                 auth_state,
@@ -2590,7 +2593,8 @@ class AwsTuiApp(App[None]):
             )
             return
         finally:
-            self._service_navigation_switching = False
+            if self._service_navigation_suppressed_selection is suppression:
+                self._service_navigation_suppressed_selection = None
 
         if not await self._mount_service_view(
             "s3",
@@ -2667,8 +2671,9 @@ class AwsTuiApp(App[None]):
             )
             return False
 
+        suppression = (asyncio.current_task(), service_id)
+        self._service_navigation_suppressed_selection = suppression
         try:
-            self._service_navigation_switching = True
             await self._app_ctx.root_vm.switch_connection_and_service(
                 connection,
                 auth_state,
@@ -2684,7 +2689,8 @@ class AwsTuiApp(App[None]):
             )
             return False
         finally:
-            self._service_navigation_switching = False
+            if self._service_navigation_suppressed_selection is suppression:
+                self._service_navigation_suppressed_selection = None
 
         restored = await self._mount_service_view(
             service_id,
@@ -2822,7 +2828,13 @@ class AwsTuiApp(App[None]):
         # The legend's right-hand globals (themes/help/quit) are
         # independent of this.
         ctx.root_vm.chrome.hint_legend.set_current_service(selected)
-        if self._service_navigation_switching:
+        suppression = self._service_navigation_suppressed_selection
+        if (
+            suppression is not None
+            and suppression[0] is asyncio.current_task()
+            and suppression[1] == selected
+        ):
+            self._service_navigation_suppressed_selection = None
             return
         # Skip the seed selected_id change that on_mount fires while
         # priming the initial service. on_mount drives that mount
