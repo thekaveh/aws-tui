@@ -177,6 +177,7 @@ def test_policy_rejects_non_table_or_write_describe_grammar(sql: str) -> None:
         "SHOW PARTITIONS flight_delays_csv",
         "SHOW TBLPROPERTIES orders",
         "SHOW TBLPROPERTIES orders('comment')",
+        "SHOW TBLPROPERTIES `orders table`('comment')",
         "SHOW VIEWS",
         "SHOW VIEWS IN marketing_analytics LIKE 'orders*'",
     ],
@@ -211,6 +212,18 @@ def test_policy_rejects_unknown_write_or_incomplete_show_grammar(sql: str) -> No
 @pytest.mark.parametrize(
     "sql",
     [
+        "SHOW TBLPROPERTIES orders(comment)",
+        "SHOW TBLPROPERTIES orders(`comment`)",
+    ],
+)
+def test_policy_rejects_identifier_tblproperties_selectors(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
         "SELECT 1 UNION SELECT 2",
         "SELECT 1 INTERSECT SELECT 1",
         "SELECT 1 EXCEPT SELECT 2",
@@ -220,6 +233,41 @@ def test_policy_rejects_unknown_write_or_incomplete_show_grammar(sql: str) -> No
 )
 def test_policy_accepts_safe_select_set_operations(sql: str) -> None:
     assert ReadOnlySqlPolicy().validate(sql) == sql
+
+
+@pytest.mark.parametrize("operator", ["UNION", "INTERSECT", "EXCEPT"])
+@pytest.mark.parametrize(
+    "modifier",
+    [
+        "",
+        "ALL",
+        "DISTINCT",
+        "BY NAME",
+        "ALL BY NAME ON (a, b)",
+        "DISTINCT BY NAME ON (a, b)",
+        "CORRESPONDING",
+        "ALL CORRESPONDING ON (a, b)",
+        "DISTINCT CORRESPONDING BY (a, b)",
+        "STRICT CORRESPONDING ON (a, b)",
+    ],
+)
+def test_policy_accepts_current_set_operation_matching_forms(operator: str, modifier: str) -> None:
+    sql = f"SELECT a, b FROM left_relation {operator} {modifier} SELECT a, b FROM right_relation"
+    assert ReadOnlySqlPolicy().validate(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT a FROM left_relation UNION BY NAME ALL SELECT a FROM right_relation",
+        "SELECT a FROM left_relation UNION CORRESPONDING DISTINCT SELECT a FROM right_relation",
+        "SELECT a FROM left_relation UNION CORRESPONDING BY NAME SELECT a FROM right_relation",
+        "SELECT a FROM left_relation UNION BY NAME ON SELECT a FROM right_relation",
+    ],
+)
+def test_policy_rejects_misordered_or_incomplete_set_operation_matching_forms(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
 
 
 @pytest.mark.parametrize(

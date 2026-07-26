@@ -636,16 +636,28 @@ statement from the following implemented grammar.
 A root `SELECT` may contain a `VALUES` relation, read-only common table
 expressions, and read-only subqueries. A root set operation may use `SELECT` or
 `VALUES` operands with `UNION`, `INTERSECT`, or `EXCEPT`, including the
-parser-supported `ALL` or `DISTINCT` qualifier. A standalone `VALUES` root is
+parser-supported `ALL` or `DISTINCT` qualifier (or the default `DISTINCT`).
+For each `operation` (`UNION`, `INTERSECT`, or `EXCEPT`), the matching forms
+accepted by the current parser are:
+
+- `operation [ALL|DISTINCT] BY NAME [ON (column-list)]`
+- `operation [ALL|DISTINCT] [STRICT] CORRESPONDING [(ON|BY) (column-list)]`
+
+`ALL` or `DISTINCT` must appear immediately after the operation and before the
+matching modifier; forms such as `UNION BY NAME ALL` and `UNION CORRESPONDING
+DISTINCT` are rejected. The local policy does not resolve or validate matching
+column names, compare them to either operand, or impose extra semantic rules on
+the parser-accepted parenthesized column list. A standalone `VALUES` root is
 rejected; it becomes allowed only below a `SELECT` or a root set operation.
 Nested DDL, DML, commands, `INTO`, locks, analysis, execution, or transaction
 nodes are rejected.
 
 **SHOW**
 
-These are the complete accepted forms. A `catalog`, `database`, `table`, and
-property name may be a regular or backtick-quoted identifier; patterns and
-property selectors are string literals.
+These are the complete accepted forms. A `catalog`, `database`, and `table` may
+be a regular or backtick-quoted identifier; patterns are string literals. A
+`SHOW TBLPROPERTIES` property selector is a string literal only, not a regular
+or backtick-quoted identifier.
 
 - `SHOW DATABASES|SCHEMAS [IN catalog] [LIKE 'pattern']`
 - `SHOW TABLES [IN [catalog.]database] ['pattern']`
@@ -693,6 +705,13 @@ Accepted examples (one statement per line):
 SELECT orderkey FROM analytics.orders LIMIT 10
 SELECT * FROM (VALUES (1), (2)) AS samples(value)
 SELECT 1 UNION ALL VALUES (2)
+SELECT a, b FROM left_relation UNION BY NAME SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION ALL BY NAME ON (a, b) SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION DISTINCT BY NAME ON (a, b) SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION CORRESPONDING SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION ALL CORRESPONDING ON (a, b) SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION DISTINCT CORRESPONDING BY (a, b) SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION STRICT CORRESPONDING ON (a, b) SELECT a, b FROM right_relation
 VALUES (1) INTERSECT SELECT 1
 VALUES (1) EXCEPT VALUES (2)
 SHOW DATABASES IN AwsDataCatalog LIKE 'analytics*'
@@ -702,6 +721,7 @@ SHOW COLUMNS FROM AwsDataCatalog.analytics.orders
 SHOW COLUMNS FROM orders FROM AwsDataCatalog.analytics
 SHOW PARTITIONS AwsDataCatalog.analytics.orders
 SHOW TBLPROPERTIES analytics.orders('comment')
+SHOW TBLPROPERTIES `orders table`('comment')
 SHOW VIEWS IN AwsDataCatalog.analytics LIKE 'orders*'
 DESCRIBE FORMATTED analytics.orders
 DESCRIBE analytics.orders PARTITION (`event date` = '2026-07-25', shard = 7) payload.'$elem$'.field
@@ -717,6 +737,10 @@ SELECT 1; SELECT 2
 SHOW CREATE TABLE analytics.orders
 SHOW COLUMNS
 SHOW TABLES IN analytics LIKE 'orders*'
+SHOW TBLPROPERTIES analytics.orders(comment)
+SHOW TBLPROPERTIES analytics.orders(`comment`)
+SELECT a FROM left_relation UNION BY NAME ALL SELECT a FROM right_relation
+SELECT a FROM left_relation UNION CORRESPONDING DISTINCT SELECT a FROM right_relation
 DESCRIBE AwsDataCatalog.analytics.orders
 DESCRIBE orders PARTITION (shard > 1)
 DESCRIBE orders payload.'$unknown$'

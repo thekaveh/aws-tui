@@ -206,3 +206,47 @@ both render tests successfully.
 `.superpowers/sdd/progress.md`, Athena implementation sources, and
 `src/aws_tui/domain/sql_policy.py` remain untouched. The retained
 `tests/unit/domain/test_sql_policy.py` change is test-only.
+
+## Final Grammar Findings Remediation
+
+### TDD Evidence
+
+- Added the executable policy characterization before updating the cookbook:
+  all 30 combinations of `UNION`, `INTERSECT`, and `EXCEPT` with the current
+  default/`ALL`/`DISTINCT`, `BY NAME`, `CORRESPONDING`, and `STRICT
+  CORRESPONDING` parser forms passed, as did four rejected malformed matching
+  forms and two rejected identifier/backtick `SHOW TBLPROPERTIES` selectors.
+  This confirms the existing policy behavior without changing its source.
+- The expanded cookbook contract test then ran red before the documentation
+  update: `uv run pytest
+  tests/docs/test_scaffolding.py::test_athena_sql_grammar_matches_policy_tests
+  -q` reported **1 failed** because the new string-literal-only property
+  selector contract was absent.
+- After the cookbook update, that focused documentation test passed. It now
+  extracts every accepted and rejected SQL example and validates it through
+  `ReadOnlySqlPolicy`.
+
+### Contract Corrections
+
+- The cookbook now documents every current set-operation family for `UNION`,
+  `INTERSECT`, and `EXCEPT`: default/`ALL`/`DISTINCT`, `BY NAME` with optional
+  `ON (...)`, and `CORRESPONDING` or `STRICT CORRESPONDING` with optional
+  `ON (...)` or `BY (...)`. It states the enforced ordering constraint that
+  the quantifier precedes the matching modifier and does not claim semantic
+  validation of the parser-accepted matching-column list.
+- Accepted and rejected cookbook examples cover the `UNION BY NAME`, `UNION
+  BY NAME ON (...)`, `UNION CORRESPONDING`, `UNION CORRESPONDING ON (...)`,
+  `UNION CORRESPONDING BY (...)`, and `UNION STRICT CORRESPONDING` forms.
+  The policy tests cover those forms across all three set-operation tokens so
+  parser drift cannot silently narrow the documented grammar.
+- `SHOW TBLPROPERTIES` now accurately specifies that its optional property
+  selector is a string literal only. The examples accept a backtick-quoted
+  table with a string selector and reject both regular and backtick-quoted
+  selector identifiers.
+
+### Scope Correction
+
+`src/aws_tui/domain/sql_policy.py` has no diff; there is no runtime or source
+behavior change. `tests/unit/domain/test_sql_policy.py` intentionally has a
+test-only diff that characterizes the existing grammar and selector boundary.
+This supersedes the earlier report wording that said both files had no diff.
