@@ -324,3 +324,127 @@ missing `/tmp/vmx-cargo-182/env` appeared on commands and is omitted above.
 - Results still accumulate only pages explicitly requested by the user. Retired
   cancellation-resistant pages are tracked until completion but can never
   publish or disable the current generation.
+
+## Remaining P1 Lifecycle Addendum: 2026-07-26
+
+### Status
+
+The final two Athena Task 3 P1 lifecycle findings are closed on
+`codex/aws-service-expansion-study`. The prior result-pager ownership fixes and
+all existing query contracts remain unchanged.
+
+### Implementation
+
+- A cancelled start submission now transfers to an independently owned finalizer
+  task before the cancelling query worker awaits again. Repeated cancellation of
+  that worker cannot sever cleanup ownership. The finalizer retrieves submission
+  failures silently and moves accepted execution references through the existing
+  retained-stop path.
+- `shutdown()` drains every live submission finalizer before retrying retained
+  execution stops. Synchronous `dispose()` still cancels and releases VMx
+  surfaces immediately, but no longer removes the async finalizer that owns the
+  remote submission outcome.
+- Out-of-context accepted references enter the cleanup registry before their
+  first stop await. A stop failure after context replacement is silent in the
+  replacement generation and remains retained for lifecycle retry. Successful
+  stops remove ownership, so later shutdown calls do not stop the same execution
+  again.
+
+### TDD Evidence
+
+The deterministic regressions cover cancel plus dispose for both accepted and
+failed submissions, and an out-of-context accepted stop that fails after a new
+context is installed and succeeds during shutdown retry.
+
+The final tests were mutation-checked by temporarily removing the production
+ownership changes:
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_query_vm.py::test_cancel_then_dispose_keeps_submission_finalizer_without_stale_publication \
+  tests/unit/vm/athena/test_query_vm.py::test_stale_accepted_stop_failure_in_new_context_is_retried_by_shutdown \
+  tests/unit/vm/athena/test_query_vm.py::test_mismatched_execution_identity_fails_closed_before_polling \
+  -q
+
+3 failed, 1 passed in 1.42s
+```
+
+After restoring the implementation:
+
+```text
+4 passed in 0.31s
+```
+
+Each lifecycle node was also run in its own subprocess with a hard five-second
+timeout. The new lifecycle waits are independently capped at one second inside
+the tests. All four nodes completed in `0.31-0.35s`; no pytest process remained
+after the runs.
+
+Complete Athena query/results VM coverage:
+
+```text
+uv run pytest tests/unit/vm/athena/test_query_vm.py \
+  tests/unit/vm/athena/test_results_vm.py -q
+
+42 passed in 0.38s
+```
+
+### Verification
+
+Full VM regression:
+
+```text
+uv run pytest tests/unit/vm -q
+541 passed in 29.55s
+```
+
+Full unit-domain regression:
+
+```text
+uv run pytest tests/unit/domain -q
+490 passed in 15.72s
+```
+
+Privacy and crash paths:
+
+```text
+uv run pytest tests/unit/infra/test_crash_dump.py \
+  tests/unit/infra/test_redaction.py \
+  tests/unit/infra/test_log_sink.py \
+  tests/unit/test_notifications.py -q
+
+38 passed in 0.34s
+```
+
+The non-overlapping VM, domain, and privacy runs total **1,069 passing tests**.
+
+Full static, formatting, and layer checks:
+
+```text
+uv run mypy src/aws_tui
+Success: no issues found in 136 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+354 files already formatted
+
+scripts/check-layers.sh
+layer rules clean
+```
+
+Every listed verification command exited 0. The unrelated shell startup warning
+for the missing `/tmp/vmx-cargo-182/env` appeared on commands and is omitted
+above. The final verification harness enforced hard subprocess timeouts of 10
+seconds for focused, privacy, static, formatting, layer, and diff checks; 45
+seconds for the full domain suite; and 60 seconds for the full VM suite.
+
+### Updated Concerns
+
+- Graceful shutdown still waits for the configured AWS submission transport
+  timeout so it can recover an accepted execution ID; the VM does not add a
+  second timeout.
+- Synchronous disposal cannot await network completion. It preserves the
+  finalizer on the running event loop, while deterministic process teardown
+  continues to require awaited `shutdown()` before the loop is closed.

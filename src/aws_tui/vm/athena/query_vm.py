@@ -90,6 +90,7 @@ class AthenaQueryVM:
         self._generation = 0
         self._execution_task: asyncio.Task[None] | None = None
         self._submission_task: asyncio.Task[QueryExecutionRef] | None = None
+        self._submission_finalizers: set[asyncio.Task[None]] = set()
         self._pending_cleanup_refs: dict[str, QueryExecutionRef] = {}
         self._owns_active_query = False
         self._busy = False
@@ -252,6 +253,7 @@ class AthenaQueryVM:
             self._notify("owns_active_query")
             self._execute_command.cancel()
             await self._drain_execution_task()
+            await self._drain_submission_finalizers()
             await self._stop_pending_cleanup(report_error=True)
             await self._results.shutdown()
             self._is_submitting = False
@@ -307,7 +309,12 @@ class AthenaQueryVM:
             try:
                 ref = await asyncio.shield(submission_task)
             except asyncio.CancelledError:
-                await self._drain_cancelled_submission(submission_task)
+                finalizer = asyncio.create_task(
+                    self._finalize_cancelled_submission(submission_task)
+                )
+                self._submission_finalizers.add(finalizer)
+                finalizer.add_done_callback(self._submission_finalizers.discard)
+                await asyncio.shield(finalizer)
                 raise
             except ProviderError as exc:
                 if generation == self._generation:
@@ -418,12 +425,12 @@ class AthenaQueryVM:
             return False
         return True
 
-    async def _drain_cancelled_submission(
+    async def _finalize_cancelled_submission(
         self,
         task: asyncio.Task[QueryExecutionRef],
     ) -> None:
         try:
-            ref = await asyncio.shield(task)
+            ref = await task
         except asyncio.CancelledError:
             return
         except Exception:
@@ -461,6 +468,13 @@ class AthenaQueryVM:
         with suppress(asyncio.CancelledError):
             await task
 
+    async def _drain_submission_finalizers(self) -> None:
+        while self._submission_finalizers:
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in tuple(self._submission_finalizers)),
+                return_exceptions=True,
+            )
+
     def _apply_detail(self, detail: QueryExecutionDetail) -> None:
         self._state = detail.summary.state
         self._statistics = detail.statistics
@@ -485,7 +499,8 @@ class AthenaQueryVM:
         ref: QueryExecutionRef,
         generation: int,
     ) -> None:
-        stopped = await self._try_stop(ref)
+        self._retain_cleanup(ref)
+        stopped = await self._stop_retained_ref(ref, report_error=False)
         if generation != self._generation or self._disposed:
             return
         self._apply_context_error(None if stopped else ref)

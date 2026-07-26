@@ -108,6 +108,10 @@ class InMemoryAthena:
         self.release_results = asyncio.Event()
         self.block_results_for: str | None = None
         self.ignore_results_cancellation = False
+        self.stop_started = asyncio.Event()
+        self.release_stop = asyncio.Event()
+        self.block_stop = False
+        self.ignore_stop_cancellation = False
         self.start_error: Exception | None = None
         self.stop_error: Exception | None = None
 
@@ -159,6 +163,14 @@ class InMemoryAthena:
     async def stop_query(self, execution_id: str) -> None:
         self.calls.append("stop")
         self.stop_calls.append(execution_id)
+        self.stop_started.set()
+        if self.block_stop:
+            try:
+                await self.release_stop.wait()
+            except asyncio.CancelledError:
+                if not self.ignore_stop_cancellation:
+                    raise
+                await self.release_stop.wait()
         if self.stop_error is not None:
             raise self.stop_error
 
@@ -261,6 +273,14 @@ def seeded_athena(
 
 async def _no_sleep(_: float) -> None:
     return None
+
+
+async def _wait_until(predicate: Callable[[], bool]) -> None:
+    async def wait() -> None:
+        while not predicate():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait(), timeout=1)
 
 
 def make_query_vm(
@@ -613,6 +633,67 @@ async def test_dispose_retains_detached_submission_until_silent_remote_stop() ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("start_error", "expected_stops"),
+    [
+        (None, ["q-app-1"]),
+        (ProviderError("delayed SQL_SECRET submission failure"), []),
+    ],
+)
+async def test_cancel_then_dispose_keeps_submission_finalizer_without_stale_publication(
+    start_error: Exception | None,
+    expected_stops: list[str],
+) -> None:
+    fake = DetachedStartAthena(
+        executions=((_detail("q-app-1", QueryState.RUNNING),),),
+        start_error=start_error,
+    )
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 'SQL_SECRET'")
+    visible_errors: list[str] = []
+    subscription = vm.on_property_changed.subscribe(
+        lambda name: (
+            visible_errors.append(vm.error_text)
+            if name == "error_text" and vm.error_text is not None
+            else None
+        )
+    )
+    execution = asyncio.create_task(vm.execute())
+    await asyncio.wait_for(fake.start_started.wait(), timeout=1)
+    submission_task = vm._submission_task
+    assert submission_task is not None
+
+    cancellation = asyncio.create_task(vm.cancel())
+    await _wait_until(
+        lambda: vm._execution_task is not None and bool(vm._execution_task.cancelling())
+    )
+    await asyncio.sleep(0)
+    vm.dispose()
+    await asyncio.wait_for(
+        asyncio.gather(cancellation, execution),
+        timeout=1,
+    )
+
+    fake.release_start.set()
+    await asyncio.wait_for(fake.drain_remote_tasks(), timeout=1)
+    if start_error is None:
+        await asyncio.wait_for(fake.stop_started.wait(), timeout=1)
+    else:
+        await _wait_until(lambda: submission_task.done() and not submission_task._log_traceback)
+    exception_retrieved = start_error is None or (
+        submission_task.done() and not submission_task._log_traceback
+    )
+    if start_error is not None and not exception_retrieved:
+        submission_task.exception()
+
+    assert fake.stop_calls == expected_stops
+    assert exception_retrieved
+    assert visible_errors == []
+    assert vm.error_text is None
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
 async def test_stale_submit_cleanup_failure_cannot_publish_into_new_context() -> None:
     fake = seeded_athena([QueryState.RUNNING])
     fake.block_start = True
@@ -679,6 +760,75 @@ async def test_mismatched_execution_identity_fails_closed_before_polling() -> No
     assert fake.stop_calls == ["q-app-1"]
     assert vm.execution_ref is None
     assert not vm.owns_active_query
+    await vm.shutdown()
+    assert fake.stop_calls == ["q-app-1"]
+
+
+@pytest.mark.asyncio
+async def test_stale_accepted_stop_failure_in_new_context_is_retried_by_shutdown() -> None:
+    class WrongIdentityAthena(InMemoryAthena):
+        async def start_query(
+            self,
+            sql: str,
+            context: QueryContext,
+            *,
+            request_token: str,
+        ) -> QueryExecutionRef:
+            await super().start_query(sql, context, request_token=request_token)
+            return QueryExecutionRef(
+                "q-app-1",
+                "unexpected-connection",
+                context.region,
+                context.workgroup,
+            )
+
+    replacement = QueryContext(
+        "prod-west",
+        "us-west-2",
+        "other-workgroup",
+        "AwsDataCatalog",
+        "other_database",
+    )
+    fake = WrongIdentityAthena(executions=((_detail("q-app-1", QueryState.RUNNING),),))
+    fake.block_stop = True
+    fake.ignore_stop_cancellation = True
+    fake.stop_error = ProviderError("stale SQL_SECRET stop failure")
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 'SQL_SECRET'")
+    visible_errors: list[str] = []
+    subscription = vm.on_property_changed.subscribe(
+        lambda name: (
+            visible_errors.append(vm.error_text)
+            if name == "error_text" and vm.error_text is not None
+            else None
+        )
+    )
+    execution = asyncio.create_task(vm.execute())
+    await asyncio.wait_for(fake.stop_started.wait(), timeout=1)
+
+    replacement_task = asyncio.create_task(vm.set_context(replacement))
+    await _wait_until(lambda: vm.context == replacement)
+    fake.release_stop.set()
+    await asyncio.wait_for(
+        asyncio.gather(replacement_task, execution),
+        timeout=1,
+    )
+
+    assert vm.context == replacement
+    assert vm.execution_ref is None
+    assert visible_errors == []
+    assert vm.error_text is None
+
+    fake.block_stop = False
+    fake.stop_error = None
+    attempts_before_shutdown = len(fake.stop_calls)
+    await asyncio.wait_for(vm.shutdown(), timeout=1)
+    await asyncio.wait_for(vm.shutdown(), timeout=1)
+
+    assert len(fake.stop_calls) == attempts_before_shutdown + 1
+    assert fake.stop_calls == ["q-app-1"] * len(fake.stop_calls)
+    subscription.dispose()
+    vm.dispose()
 
 
 @pytest.mark.asyncio
