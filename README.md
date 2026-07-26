@@ -11,8 +11,8 @@ Linux, and Windows. Powered by
 
 > **Status: v0.8.0 cut; PyPI publish pending** — install from Git
 > until the `aws-tui` project name is available on PyPI. Headline
-> change from v0.7.0: **EMR Serverless and AWS Glue as
-> first-class services** alongside S3 — EMR application picker,
+> change from v0.7.0: **EMR Serverless, AWS Glue, and standalone Amazon
+> Athena as first-class services** alongside S3 — EMR application picker,
 > job-runs master-detail with state-filter chips, columnized run
 > rows with colored state indicators, on-demand log streaming with
 > a grep filter + LRU cache, clone-and-edit modal for re-running
@@ -44,6 +44,16 @@ Linux, and Windows. Powered by
   The handoff resolves the exact Glue connection name and region; it
   never substitutes another profile. Glue is AWS-only and does not
   appear for S3-compatible connections.
+- **Amazon Athena read-only query console.** Pick **Athena** in the nav rail
+  to choose a workgroup, catalog, and database; submit one `SELECT`, `SHOW`,
+  `DESCRIBE`, or `EXPLAIN` statement; follow its lifecycle; page through
+  results; inspect history; and open named or prepared queries in the editor.
+  Athena is AWS-only. The local parser fails closed before dispatch, while AWS
+  IAM, Lake Formation, workgroup, and S3 policies remain authoritative. Result
+  pages show bytes scanned and result reuse, and a successful execution can
+  hand off its concrete S3 result artifact to the matching S3 connection. This
+  is standalone Athena support: it does not include Iceberg metadata views or
+  Glue-to-Athena navigation.
 - **One-key source switcher.** `Shift+S` cycles the focused pane
   through **every available source** in order: `local` → each AWS
   profile (`aws s3 · {profile} · {region}`) → each `s3-compatible`
@@ -51,7 +61,7 @@ Linux, and Windows. Powered by
   multiple AWS profiles configured locally, this is the fastest way
   to jump between accounts: one keystroke per profile, the pane
   re-mounts in place — no `:` command palette, no modal. On EMR
-  Serverless and Glue, the same key switches the whole single-context
+  Serverless, Glue, and Athena, the same key switches the whole single-context
   service to the next supported AWS connection. The s3-compatible side
   is open-ended: add as many MinIO / R2 / B2 /
   Wasabi / Ceph endpoints as you like via the in-app **Settings**
@@ -121,7 +131,8 @@ Linux, and Windows. Powered by
   deferred.
 - **Command palette.** Press `:` or `Ctrl+K` for the fuzzy-filterable
   curated command list, including **Open table location in S3** on
-  Glue. Dynamic `connection switch <name>` / `theme switch <name>`
+  Glue and **Open Athena result in S3** for a validated successful Athena
+  execution. Dynamic `connection switch <name>` / `theme switch <name>`
   entries and consolidation with Textual's `Ctrl+P` palette remain
   deferred.
 - **Layered architecture with enforced forbidden edges.** View ▸ ViewModel
@@ -167,7 +178,7 @@ AWS_TUI_DEMO=1 aws-tui
 aws-tui --demo
 ```
 
-You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs, and profile-isolated Glue catalogs, jobs, runs, and crawlers. `demo-shared` demonstrates a Glue access-denied state. The same-profile Glue-to-S3 handoff works without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
+You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs, profile-isolated Glue catalogs, jobs, runs, and crawlers, and standalone Athena workgroups, query histories, saved queries, and prepared statements. `demo-shared` demonstrates Glue and Athena access-denied states. The same-profile Glue-to-S3 and Athena-result-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
 
 To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 

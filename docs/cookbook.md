@@ -7,6 +7,7 @@
 2. [Switch the theme on the fly](#12-switch-the-theme-on-the-fly)
 3. [Customize a keybinding](#13-customize-a-keybinding)
 4. [Resume after a crash](#14-resume-after-a-crash)
+5. [Run standalone Athena queries safely](#16-run-standalone-athena-queries-safely)
 
 ---
 
@@ -513,3 +514,135 @@ catalog, job/run, and crawler names, so `Shift+S` visibly proves
 profile isolation. `demo-shared` demonstrates a Glue access-denied
 state. The Catalog-to-S3 command uses the matching synthetic profile
 and never makes a real AWS call.
+
+## 1.6. Run standalone Athena queries safely
+
+Athena is an AWS-only, standalone query service. Select **Athena** in the
+nav rail and choose a workgroup, catalog, and database in the page header.
+The four views are Query (`1`), History (`2`), Results (`3`), and Saved (`4`).
+`Shift+S` rebuilds the whole Athena page for the next supported AWS connection;
+the old page is disposed, so rows, selections, loaders, result fetches, and any
+app-owned active query do not cross profiles or regions. Selections may be
+remembered only within the same connection name and region and are revalidated
+when the page returns.
+
+### 1.6.1. Minimum permissions and result destination
+
+Start with the least privilege required for the views you use. The client calls
+these Athena APIs: `athena:ListWorkGroups`, `athena:GetWorkGroup`,
+`athena:ListDataCatalogs`, `athena:ListDatabases`,
+`athena:ListTableMetadata`, `athena:ListQueryExecutions`,
+`athena:GetQueryExecution`, `athena:GetQueryRuntimeStatistics`,
+`athena:StartQueryExecution`, `athena:StopQueryExecution`,
+`athena:GetQueryResults`, `athena:ListNamedQueries`,
+`athena:BatchGetNamedQuery`, and `athena:ListPreparedStatements`.
+Scope resource ARNs where your account policy permits; the following is a
+readable starting point rather than a universal production policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "athena:ListWorkGroups", "athena:GetWorkGroup",
+      "athena:ListDataCatalogs", "athena:ListDatabases",
+      "athena:ListTableMetadata", "athena:ListQueryExecutions",
+      "athena:GetQueryExecution", "athena:GetQueryRuntimeStatistics",
+      "athena:StartQueryExecution", "athena:StopQueryExecution",
+      "athena:GetQueryResults", "athena:ListNamedQueries",
+      "athena:BatchGetNamedQuery", "athena:ListPreparedStatements"
+    ],
+    "Resource": "*"
+  }]
+}
+```
+
+The app sends the selected workgroup and query execution context; it does not
+supply a caller-side `ResultConfiguration`. Configure an output location in
+the workgroup, or enable Athena managed query results, before submitting. If
+Athena reports that no output location is available, aws-tui shows the typed
+result-configuration error instead of choosing a bucket. When
+`EnforceWorkGroupConfiguration` is enabled, the workgroup remains the source
+of truth for output behavior and other enforced settings.
+
+For a normal S3 result location, grant the query principal only the needed
+result-bucket/prefix access: `s3:GetBucketLocation`, `s3:ListBucket`, and
+`s3:PutObject`; add `s3:GetObject` when the user must retrieve results or open
+the artifact in the S3 page. The handoff itself browses and reveals the object
+through the existing S3 service. If the catalog data is governed by Lake
+Formation, grant the same principal the required Lake Formation `DESCRIBE` and
+`SELECT` permissions, plus data-location access where the governed layout
+requires it. IAM, Lake Formation, workgroup configuration, and bucket policy
+are the authorization boundary; the app's SQL policy does not replace them.
+
+### 1.6.2. Read-only SQL, execution, and cost signals
+
+Press `Ctrl+Enter` only after setting workgroup, catalog, and database. The
+local `sqlglot` Athena-dialect parser fails closed and accepts exactly one
+statement rooted in **SELECT, SHOW, DESCRIBE, and EXPLAIN** (where `EXPLAIN`
+wraps an allowed read-only statement). It rejects empty or unparsable input,
+multiple statements, DDL, DML, CTAS, `UNLOAD`, stored-procedure calls, and
+unknown commands before any `start_query_execution` call. The editor preserves
+the rejection as validation feedback; it does not send the rejected SQL.
+
+After submission, the Query view records an app-owned execution identity and
+polls its detail through queued/running/terminal states. On `SUCCEEDED` it
+loads the first results page; `FAILED` and `CANCELLED` retain their terminal
+status. `Esc` can call `stop_query_execution` only for a still-active query
+started by this page. Switching context or source also requests cancellation
+for such an owned query so it cannot continue under a disposed page; history
+rows are never assumed safe to stop.
+
+Results are fetched one page at a time, never fully materialized. `l` loads a
+next page only when Athena returns a continuation token; the domain request
+asks for at most 1,000 rows per page. The page reports Athena's `bytes scanned`
+and whether Athena reused a previous result. Treat bytes scanned as the cost
+signal before broad queries: aws-tui does not calculate or promise a currency
+price, and a workgroup bytes-scanned cutoff can still reject or limit work.
+
+### 1.6.3. History, saved SQL, and result artifacts
+
+History lists execution IDs for the selected workgroup and loads each selected
+execution's detail. Choose a successful execution and open Results to fetch its
+rows. The Saved view separately pages Athena named queries and prepared
+statements; selecting one shows its metadata and SQL, and the **Open in query
+editor** control copies that SQL into the Query view. Opening it does not bypass
+the same read-only parser at execution time.
+
+Use `:` or `Ctrl+K` and choose **Open Athena result in S3** to hand off a
+selected successful execution's concrete S3 result artifact. Before emitting
+the handoff, aws-tui reloads the execution and requires that its execution ID,
+connection, region, and active query context match and that its authoritative
+output location is a valid `s3://` URI. It then rebuilds S3 for that exact
+connection and region, navigates to the object, and selects it. Missing,
+malformed, non-S3, foreign-context, or unsucceeded locations leave the user on
+Athena with an advisory; no fallback profile is substituted and full result
+URIs are not echoed in the advisory.
+
+### 1.6.4. Exercise Athena in demo mode and troubleshoot
+
+Launch `aws-tui --demo`, select **Athena**, and begin on `demo-dev`. Its
+`dev-analytics` workgroup has succeeded, running, failed, empty, missing-output,
+and result-access-denied history scenarios, plus one named query and one prepared
+statement. The successful `q-dev-succeeded` artifact opens at
+`s3://athena-results/dev/q-dev-succeeded.csv`. `demo-prod` has different
+workgroup, catalog, database, history, saved SQL, and a result artifact under
+`s3://athena-results/prod/`; `demo-shared` returns a scoped Athena access-denied
+state. All of this is in-memory and resets on launch.
+
+- **Athena access is forbidden.** Verify the selected AWS profile, the Athena
+  actions above, and the Lake Formation grants. The failure stays scoped to
+  Athena and does not remove the profile from the source ring.
+- **Result configuration is required.** Set an output location or managed
+  query-results configuration on the selected workgroup. aws-tui will not
+  silently send results to another bucket.
+- **No rows or cannot load more.** A successful query can return no rows; `l`
+  only works when Athena supplied another page token. Check the query state and
+  execution detail in History.
+- **Cannot open an artifact in S3.** The execution must be successful and its
+  output URI must be valid, match the active connection/region, and be readable
+  through S3. Check `s3:ListBucket` / `s3:GetObject` on the result prefix.
+
+The standalone page intentionally does not expose Iceberg metadata tables or
+Glue-to-Athena navigation. Do not treat those as available workflows.

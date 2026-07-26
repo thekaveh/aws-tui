@@ -1,13 +1,15 @@
 # 1. Adding a new service
 
-> The current tree ships `s3`, `emr-serverless`, and `glue`; EMR includes
+> The current tree ships `s3`, `emr-serverless`, `glue`, and standalone
+> `athena`; EMR includes
 > the read-only browser, job-run logs, and clone-job-run modal. This
 > doc is the pattern for the
 > next ones (EC2, IAM, Lambda, ...). For richer references than S3
 > (dedicated domain client + per-service VM subtree + per-service
 > UI widget tree + service-specific modal), read
-> read `src/aws_tui/services/emr_serverless/` and
-> `src/aws_tui/services/glue/` alongside `s3/`.
+> read `src/aws_tui/services/emr_serverless/`,
+> `src/aws_tui/services/glue/`, and `src/aws_tui/services/athena/` alongside
+> `s3/`.
 
 aws-tui's service-plugin spine keeps service construction additive: a
 new folder under `src/aws_tui/services/<name>/` and one registration
@@ -86,8 +88,8 @@ needs a `construct → destruct → dispose` surface.
 
 4. **Add app-shell view routing** if the service does not return a
    `DualPaneVM`. `build_service_view(...)` currently maps
-   `emr-serverless` to `EmrServerlessPage`, `glue` to `GluePage`, and
-   `s3` to `DualPane`. Add the matching widget factory branch and pass
+   `emr-serverless` to `EmrServerlessPage`, `glue` to `GluePage`, `athena` to
+   `AthenaPage`, and `s3` to `DualPane`. Add the matching widget factory branch and pass
    it from both app mount paths.
 
 5. **Reuse existing VM families** where possible:
@@ -239,3 +241,26 @@ the compact read-only page reference:
   service-to-service import. Its app subscriber resolves the exact
   connection name, verifies the region, rebuilds S3 through `RootVM`,
   navigates the requested pane, and focuses it.
+
+### 1.5.4. Amazon Athena
+`AthenaService` in `src/aws_tui/services/athena/service.py` is the standalone
+query-service reference:
+
+- `descriptor` declares `id = "athena"`; `supports()` accepts only AWS
+  connections. A `build_vm(connection)` call makes a fresh `AthenaPageVM`,
+  while `ServiceSelectionStore` retains only connection- and region-scoped
+  UI selections.
+- `domain/athena.py` performs one paginated AWS request at a time and maps
+  workgroups, catalogs, databases, tables, query history/detail, runtime
+  statistics, result pages, named queries, and prepared statements. It owns
+  the `start_query_execution` / `stop_query_execution` boundary; views and
+  VMs never receive raw boto responses.
+- `domain/sql_policy.py` parses one Athena-dialect statement before dispatch.
+  It accepts only `SELECT`, `SHOW`, `DESCRIBE`, and `EXPLAIN` of an allowed
+  statement. The parser is defense in depth, not an authorization system.
+- `vm/athena/` separates Query, History, Results, and Saved behavior; the
+  Textual widget tree lives in `ui/widgets/athena/`. A result-to-S3 handoff is
+  an `OpenS3LocationRequest` carrying the execution's exact connection and
+  region, not an Athena-to-S3 import.
+- Athena deliberately has no Iceberg metadata surface and no Glue-to-Athena
+  navigation in this standalone service.

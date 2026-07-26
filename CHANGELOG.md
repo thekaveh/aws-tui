@@ -19,6 +19,15 @@ will be set at cut time.
 
 ### 1.1.1. Added
 
+- **Standalone Amazon Athena service.** A fourth AWS-only nav service with
+  Query, History, Results, and Saved views; connection- and region-scoped
+  workgroup/catalog/database selections; fail-closed one-statement read-only
+  SQL validation; app-owned query cancellation; paginated results with bytes
+  scanned/reuse statistics; named and prepared query inspection; and exact
+  identity result-artifact handoff to S3. Demo mode supplies profile-isolated
+  dev/prod Athena state plus an access-denied shared profile. Iceberg metadata
+  views and Glue-to-Athena navigation are intentionally not part of this
+  standalone release.
 - **AWS Glue read-only service.** A third first-class nav service with
   Catalog, Jobs, and Crawlers views; database/table pagination,
   schema/storage detail, partitions and column statistics; job/run

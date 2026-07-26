@@ -50,6 +50,11 @@ VMs to build service pages, but it cannot import Textual widgets.
     single-context AWS services. `GlueCatalogVM` emits the immutable
     service-neutral `OpenS3LocationRequest`; it never mounts a Textual
     view or constructs an S3 provider itself.
+  - `vm/athena/` — `AthenaPageVM` with Query, History, Results, and Saved
+    child VMs. Its context and remembered selections are scoped by connection
+    name and region; changing workgroup, catalog, or database invalidates the
+    query context. Query work stays in the VM layer, while `domain/athena.py`
+    owns boto mapping and `domain/sql_policy.py` fails closed before dispatch.
   - `vm/settings/` — `SettingsVM` (built per-mount when the user
     selects the Settings nav peer) and `S3ConnectionsVM` (singleton
     on `AppContext`, drives the in-app Connections CRUD).
@@ -61,13 +66,16 @@ VMs to build service pages, but it cannot import Textual widgets.
   `emr-serverless` (read-only browser + clone-job-run plus job-run
   logs — applications listing, job-runs master-detail, state-filter
   chips, clone-and-edit modal via `c`; cancel / vanilla submit are
-  still deferred), and `glue` (read-only Catalog, Jobs, and Crawlers).
+  still deferred), `glue` (read-only Catalog, Jobs, and Crawlers), and
+  `athena` (standalone read-only query, history, results, and saved-query
+  views).
   Each service implements the `Service` protocol (declared in
   `vm/services_protocol.py`, re-exported from `services/__init__.py`).
 - **Domain** — `FileSystemProvider` protocol with `LocalFS` and `S3FS`
   implementations + the cross-FS copy/move engine + the transfer
   journal (`src/aws_tui/domain/`). The Norton-Commander unifier; the
-  pane VMs treat both sides as the same protocol.
+  pane VMs treat both sides as the same protocol. `domain/athena.py` is the
+  separate paginated Athena facade; raw AWS responses remain below VMs.
 - **Infrastructure** — `AwsSession`, `ConnectionResolver`,
   `ConfigStore`, `ThemeStore`, `KeymapStore`, `LogSink`, `CrashDump`,
   `KeychainBackend`. The only layer that touches the OS, AWS APIs,
@@ -110,13 +118,15 @@ All cross-VM communication goes through the session's single
   `TransferCancelRequestedMessage`, `ConnectionListChangedMessage`,
   `OpenS3LocationRequest`.
 
-Cross-service navigation stays service-neutral. A Glue table handoff
-carries only `connection_name`, `region`, the S3 URI, and the preferred
-pane. `app.py` resolves that exact name, rejects a region mismatch,
+Cross-service navigation stays service-neutral. Glue table and Athena result
+handoffs carry only `connection_name`, `region`, the S3 URI, and the preferred
+pane. For Athena, the Results VM reloads the selected execution and publishes
+only when it succeeded, belongs to the active context, and has a valid `s3://`
+output location. `app.py` resolves that exact name, rejects a region mismatch,
 uses `RootVM.switch_connection_and_service(...)` to dispose and rebuild
-through the registered S3 factory, mounts the S3 view, binds and
-navigates the requested pane, and focuses it. Missing or malformed
-locations stop at an advisory toast; the VM never imports UI code.
+through the registered S3 factory, mounts the S3 view, binds and navigates the
+requested pane, and focuses it. Missing or malformed locations stop at an
+advisory toast; the VM never imports UI code.
 
 VMs subscribe via `hub.messages.subscribe(on_next=callback)` (an
 `reactivex.Observable` under the hood); filtering happens inside the
@@ -171,6 +181,9 @@ at `src/aws_tui/` top-level so the check never inspects them.
    S3 owns independent sources for each pane, while single-context AWS services
    use `RootVM`'s active connection and are rebuilt as a whole when their source
    changes.
+   `src/aws_tui/services/athena/service.py` is the corresponding standalone
+   query-service reference: it composes an Athena client, read-only SQL policy,
+   and a fresh `AthenaPageVM` per AWS connection.
 5. `src/aws_tui/domain/cross_fs.py` — the engine that moves bytes
    between any pair of `FileSystemProvider`s.
 6. `src/aws_tui/ui/widgets/` — pure Textual widgets; per-VM smoke

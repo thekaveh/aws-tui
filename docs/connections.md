@@ -160,13 +160,14 @@ connections or local storage. Single-context AWS services use the one active
 AWS connection owned by `RootVM`; `Shift+S` rebuilds that service under the
 next supported AWS profile and region.
 Single-context AWS services, including EMR Serverless and Glue,
-intentionally do not consult or mutate the S3 pane reachability set.
+intentionally do not consult or mutate the S3 pane reachability set. Athena
+follows the same rule.
 Authentication and service API failures remain visible in the mounted service
 instead of filtering or removing the connection from that source ring.
 
-The compact source header on EMR and Glue pages identifies that rebuilt context as
+The compact source header on EMR, Glue, and Athena pages identifies that rebuilt context as
 `connection-name · profile · region`, omitting `profile` when it matches the
-connection name. EMR application selection and Glue view/resource selections
+connection name. EMR application selection plus Glue and Athena view/resource selections
 are scoped to service, connection name, and region, so switching back may
 restore a still-valid identifier without crossing account or regional
 boundaries. Use **`Shift+A`** to cycle EMR applications;
@@ -180,7 +181,16 @@ requires the resolved region to match. If that named connection is gone or its
 region changed, aws-tui shows an advisory and stays on Glue; it never picks the
 next profile as a substitute.
 
-An access failure from a service API, such as EMR Serverless or Glue
+Athena is AWS-only: it never participates in an S3-compatible source ring.
+Its workgroup, catalog, database, history row, and saved-query selections are
+scoped to the active connection name and region. Switching source disposes the
+old Athena page, cancels local loaders and result fetches, requests
+cancellation for any app-owned active Athena query, then mounts a fresh page;
+no old-profile rows are retained while the new source loads. Resolver order is
+unchanged: explicit `[connections.*]` entries first, then non-colliding
+auto-discovered AWS profiles, and `Shift+S` follows that order.
+
+An access failure from a service API, such as EMR Serverless, Glue, or Athena
 `AccessDenied`, is
 service-scoped: it remains visible in that service page and does not mark the
 connection unreachable or remove it from the source cycle. A connection is

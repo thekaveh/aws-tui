@@ -137,6 +137,20 @@ and region for the whole page; S3-compatible connections are excluded.
 | Switch AWS source | `Shift+S` | Rebuilds Glue under the next supported AWS profile and region. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | Palette-only command. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
 
+### 1.1.10. Amazon Athena
+
+Athena is a single-context AWS service; its controls do not appear for
+S3-compatible connections.
+
+| Action | Default | Notes |
+|---|---|---|
+| Query / History / Results / Saved | `1` / `2` / `3` / `4` | Selects the matching Athena view. |
+| Execute editor SQL | `Ctrl+Enter` | Runs `athena.execute` only after the local read-only SQL validation succeeds. |
+| Cancel active query | `Esc` | Runs `athena.cancel`; it can stop only an app-owned active execution. |
+| Load more result rows | `l` | Runs `athena.load_more` when the selected result has another page. |
+| Switch AWS source | `Shift+S` | Rebuilds Athena under the next supported AWS profile and region. |
+| Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
+
 ## 1.2. Customizing
 
 A binding can be a single keystroke or a list of fallback keystrokes:
@@ -154,6 +168,13 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "glue.catalog" = "1"
 "glue.jobs" = "2"
 "glue.crawlers" = "3"
+"athena.query" = "1"
+"athena.history" = "2"
+"athena.results" = "3"
+"athena.saved" = "4"
+"athena.execute" = "ctrl+enter"
+"athena.cancel" = "escape"
+"athena.load_more" = "l"
 ```
 
 The default map is declared in `infra/keymap_store.py`. At composition
@@ -164,7 +185,8 @@ continues with the default keymap so a typo does not crash startup.
 The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
 `Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
-`c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`,
+`c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
+`1` / `2` / `3` / `4`, `Ctrl+Enter`, `Esc`, `l`,
 `Shift+↑`, and `Shift+↓`.
 
 ## 1.3. Action IDs
@@ -206,6 +228,14 @@ unbound until a handler ships.
 | `glue.jobs` | `2` | ✓ | Select the Glue Jobs view |
 | `glue.crawlers` | `3` | ✓ | Select the Glue Crawlers view |
 | `glue.open_s3_location` | none (command palette) | ✓ | Open the selected Glue table's S3 location under the exact source connection and region |
+| `athena.query` | `1` | ✓ | Select the Athena Query view |
+| `athena.history` | `2` | ✓ | Select the Athena History view |
+| `athena.results` | `3` | ✓ | Select the Athena Results view |
+| `athena.saved` | `4` | ✓ | Select the Athena Saved view |
+| `athena.execute` | `ctrl+enter` | ✓ | Submit validated, read-only editor SQL |
+| `athena.cancel` | `escape` | ✓ | Stop an app-owned active Athena query |
+| `athena.load_more` | `l` | ✓ | Fetch the next available result page |
+| `athena.open_result_location` | none (command palette) | ✓ | Open a validated successful Athena result artifact in S3 under its exact source identity |
 | `modal.cancel` | `escape` | ✓ | Cancel / close current overlay (modal-owned) |
 
 Rows with a default key are registered by

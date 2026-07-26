@@ -44,7 +44,7 @@ Review the PR like any other change. Merge when CI is green.
 
 ### 1.1.1. Pre-tag checklist
 
-- **Demo-mode smoke.** Run `AWS_TUI_DEMO=1 uv run aws-tui` from the release-PR branch. Verify the **DEMO MODE** chip appears in the banner, the four demo connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle through Shift+S, the S3 pane shows demo objects, the EMR pane shows two applications + ~10 job runs across states, and the clone-from-detail flow visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within ~5 seconds. If any of these break, fix forward; do NOT tag the release.
+- **Demo-mode smoke.** Run `AWS_TUI_DEMO=1 uv run aws-tui` from the release-PR branch. Verify the **DEMO MODE** chip appears in the banner, the four demo connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle through Shift+S, the S3 pane shows demo objects, the EMR pane shows two applications + ~10 job runs across states, and the clone-from-detail flow visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within ~5 seconds. Then open **Athena**: `demo-dev` must show its workgroups, history (including a succeeded result), named/prepared queries, and a result artifact that opens in the matching demo S3 path; `demo-prod` must show different Athena data; `demo-shared` must show a scoped access-denied state. If any of these break, fix forward; do NOT tag the release.
 
 Then tag the merge commit and push:
 
