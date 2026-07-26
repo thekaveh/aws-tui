@@ -383,3 +383,99 @@ edited.
 - `_GlueResponseError` field and category values must remain app-owned literals.
   Current call sites satisfy that rule; future mappers must not pass provider
   values into either field.
+
+## Final Iceberg Task 1 Glue Privacy Follow-up (2026-07-26)
+
+### Status
+
+Closed the remaining Glue operation-boundary privacy gaps without changing
+normal Glue mappings, public method signatures, Iceberg format detection, or
+progress tracking.
+
+- Every `BotoCoreError` recognized by the operation boundary now maps to the
+  stable `ProviderError("Glue request failed")` fallback after the existing
+  credential, transport, and parameter special cases. This includes
+  `ResponseStreamingError` in ordinary calls and crawler STS/metrics
+  supplements.
+- `ClientError` parsing now validates response and `Error` mappings, accepts
+  only plain string code/service indicators, and never stringifies a
+  provider-controlled value. Missing or malformed shapes map to the stable
+  generic Glue failure; valid Lake Formation indicators retain their
+  specialized permission error.
+- Added adversarial ordinary-call and crawler STS/metrics tests. They use the
+  full existing privacy oracle: exception graph, traceback locals by identity,
+  `TracebackException(capture_locals=True)`, formatted traceback, and a real
+  `CrashDump`. The existing `RuntimeError` and `TypeError` identity/traceback
+  regression remains green.
+
+### Changed Files
+
+- `src/aws_tui/domain/glue.py`
+- `tests/unit/domain/test_glue.py`
+- `.superpowers/sdd/task-1-report.md`
+
+`progress.md` was not edited.
+
+### TDD Evidence
+
+The adversarial tests were written before the mapper change. After correcting a
+test-fixture syntax error, the RED command was:
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q -k 'malformed_client_error_shapes or residual_botocore_errors'
+12 failed, 93 deselected in 1.16s
+```
+
+Malformed `ClientError.response` and `Error` shapes raised sanitizer
+`AttributeError` failures; malformed indicator values invoked `str(...)` and
+raised the fixture assertion. `ResponseStreamingError` escaped unchanged from
+the ordinary public method and both crawler supplement paths.
+
+After the mapper change, the focused GREEN command passed all new cases plus
+the unrelated-exception preservation regression:
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q -k 'malformed_client_error_shapes or residual_botocore_errors or unrelated_programming_error'
+14 passed, 91 deselected in 0.34s
+```
+
+### Final Verification
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q
+105 passed in 0.78s
+
+$ uv run pytest tests/unit/domain/test_data_catalog.py tests/unit/domain/test_iceberg.py tests/unit/domain/test_glue.py -q
+160 passed in 0.80s
+
+$ uv run pytest tests/unit/domain -q
+666 passed in 15.36s
+
+$ uv run pytest tests/unit/vm/glue -q
+45 passed in 0.40s
+
+$ uv run mypy
+Success: no issues found in 151 source files
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+383 files already formatted
+
+$ ./scripts/check-layers.sh
+layer rules clean
+
+$ git diff --check
+```
+
+All listed final verification commands exited zero.
+
+### Concerns
+
+- The boundary intentionally continues to preserve unrelated non-botocore
+  `RuntimeError` and `TypeError` instances and their original tracebacks. Only
+  recognized provider and app-owned response-shape failures are sanitized.
+- `ClientError` code and Lake Formation detection intentionally require plain
+  string values. Malformed response values fall back to the generic safe Glue
+  failure rather than being coerced or formatted.

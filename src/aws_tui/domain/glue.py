@@ -182,15 +182,16 @@ def map_glue_error(exc: BaseException) -> ProviderError | None:
     if isinstance(exc, _TRANSPORT_EXCEPTIONS):
         return ProviderUnreachableError("Glue endpoint unavailable")
     if isinstance(exc, botocore.exceptions.ClientError):
-        error = exc.response.get("Error", {})
-        code = str(error.get("Code", ""))
+        code, lake_formation = _client_error_indicators(exc)
         return _provider_error_for_code(
             code,
             _glue_error_message(code),
-            lake_formation=_identifies_lake_formation(exc),
+            lake_formation=lake_formation,
         )
     if isinstance(exc, botocore.exceptions.ParamValidationError):
         return ValidationError("invalid Glue request")
+    if isinstance(exc, botocore.exceptions.BotoCoreError):
+        return ProviderError("Glue request failed")
     if isinstance(exc, _GlueResponseError):
         return ValidationError(f"malformed Glue response: {exc.field} {exc.category}")
     if isinstance(exc, KeyError):
@@ -269,15 +270,56 @@ def _glue_error_message(code: str) -> str:
     return "Glue request failed"
 
 
-def _identifies_lake_formation(exc: botocore.exceptions.ClientError) -> bool:
-    error = exc.response.get("Error", {})
+def _client_error_indicators(exc: botocore.exceptions.ClientError) -> tuple[str, bool]:
+    response = _safe_client_error_mapping(exc.response)
+    if response is None:
+        return "", False
+    error = _safe_client_error_mapping(_safe_mapping_value(response, "Error"))
+    if error is None:
+        return "", False
+    code = _safe_mapping_string(error, "Code")
     candidates = (
-        error.get("Message", ""),
-        error.get("Service", ""),
-        error.get("ServiceName", ""),
-        exc.operation_name,
+        _safe_mapping_string(error, "Message"),
+        _safe_mapping_string(error, "Service"),
+        _safe_mapping_string(error, "ServiceName"),
+        _safe_client_error_string_attribute(exc, "operation_name"),
     )
-    normalized = " ".join(str(candidate) for candidate in candidates).lower()
+    return code or "", any(_identifies_lake_formation(candidate) for candidate in candidates)
+
+
+def _safe_client_error_mapping(value: object) -> Mapping[object, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return cast(Mapping[object, object], value)
+
+
+def _safe_mapping_value(mapping: Mapping[object, object], key: str) -> object | None:
+    try:
+        return mapping.get(key)
+    except Exception:
+        return None
+
+
+def _safe_mapping_string(mapping: Mapping[object, object], key: str) -> str | None:
+    value = _safe_mapping_value(mapping, key)
+    return value if type(value) is str else None
+
+
+def _safe_client_error_string_attribute(
+    exc: botocore.exceptions.ClientError,
+    attribute: str,
+) -> str | None:
+    try:
+        value = getattr(exc, attribute)
+    except Exception:
+        return None
+    return value if type(value) is str else None
+
+
+def _identifies_lake_formation(value: str | None) -> bool:
+    if value is None:
+        return False
+    normalized = str.casefold(value)
     return "lake formation" in normalized or "lakeformation" in normalized
 
 

@@ -73,6 +73,14 @@ class _SecretValue:
         return _PROVIDER_VALUE_SECRET
 
 
+class _UnformattableSecretValue:
+    def __str__(self) -> str:
+        raise AssertionError("raw provider values must not be formatted")
+
+    def __repr__(self) -> str:
+        return _PROVIDER_VALUE_SECRET
+
+
 def _connection(*, region: str = "us-east-1") -> Connection:
     return Connection(
         name="dev",
@@ -1186,6 +1194,32 @@ def _privacy_client_error(operation: str) -> botocore.exceptions.ClientError:
     )
 
 
+def _malformed_client_error_response(shape: str) -> object:
+    value = _UnformattableSecretValue()
+    if shape == "response":
+        return value
+    if shape == "error":
+        return {"Error": value}
+    return {
+        "Error": {
+            "Code": value,
+            "Message": value,
+            "Service": value,
+            "ServiceName": value,
+        }
+    }
+
+
+def _malformed_client_error(operation: str, *, shape: str) -> botocore.exceptions.ClientError:
+    error = _privacy_client_error(operation)
+    error.response = cast(dict[str, object], _malformed_client_error_response(shape))
+    return error
+
+
+def _response_streaming_error() -> botocore.exceptions.ResponseStreamingError:
+    return botocore.exceptions.ResponseStreamingError(error=_PROVIDER_VALUE_SECRET)
+
+
 def _assert_mapped_error_has_no_raw_provider_references(
     error: ProviderError,
     *,
@@ -1327,6 +1361,110 @@ async def test_get_crawler_supplement_failures_sever_raw_client_error_references
         raised,
         crash_dir=tmp_path / supplement,
         raw_objects=(raw_error, raw_error.response),
+    )
+
+
+@pytest.mark.parametrize("shape", ["response", "error", "indicators"])
+async def test_public_method_sanitizes_malformed_client_error_shapes(
+    shape: str,
+    tmp_path: Path,
+) -> None:
+    client, glue, _, _ = _client()
+    raw_error = _malformed_client_error("GetJobs", shape=shape)
+    raw_response = raw_error.response
+    glue.get_jobs.side_effect = raw_error
+
+    raised = await _capture_glue_provider_error(client, "list_jobs_page")
+
+    assert type(raised) is ProviderError
+    assert str(raised) == "Glue request failed"
+    _assert_mapped_error_has_no_raw_provider_references(
+        raised,
+        crash_dir=tmp_path / f"malformed-client-error-{shape}",
+        secrets=(_PROVIDER_MESSAGE_SECRET, _PROVIDER_RESPONSE_SECRET, _PROVIDER_VALUE_SECRET),
+        raw_objects=(raw_error, raw_response),
+    )
+
+
+@pytest.mark.parametrize("shape", ["response", "error", "indicators"])
+@pytest.mark.parametrize(
+    ("supplement", "boto_method"),
+    [
+        ("caller_identity", "get_caller_identity"),
+        ("metrics", "get_crawler_metrics"),
+    ],
+)
+async def test_crawler_sts_and_metrics_sanitize_malformed_client_error_shapes(
+    supplement: str,
+    boto_method: str,
+    shape: str,
+    tmp_path: Path,
+) -> None:
+    client, glue, sts, _ = _client()
+    glue.get_crawler.return_value = {"Crawler": _crawler()}
+    sts.get_caller_identity.return_value = {
+        "Account": "123456789012",
+        "Arn": "arn:aws:iam::123456789012:user/dev",
+    }
+    glue.get_tags.return_value = {"Tags": {}}
+    glue.get_crawler_metrics.return_value = {"CrawlerMetricsList": []}
+    raw_error = _malformed_client_error(boto_method, shape=shape)
+    raw_response = raw_error.response
+    target = sts if supplement == "caller_identity" else glue
+    getattr(target, boto_method).side_effect = raw_error
+
+    raised = await _capture_glue_provider_error(client, "get_crawler")
+
+    assert type(raised) is ProviderError
+    assert str(raised) == "Glue request failed"
+    _assert_mapped_error_has_no_raw_provider_references(
+        raised,
+        crash_dir=tmp_path / f"malformed-{supplement}-client-error-{shape}",
+        secrets=(_PROVIDER_MESSAGE_SECRET, _PROVIDER_RESPONSE_SECRET, _PROVIDER_VALUE_SECRET),
+        raw_objects=(raw_error, raw_response),
+    )
+
+
+@pytest.mark.parametrize(
+    ("client_method", "supplement"),
+    [
+        ("list_jobs_page", None),
+        ("get_crawler", "caller_identity"),
+        ("get_crawler", "metrics"),
+    ],
+)
+async def test_residual_botocore_errors_are_sanitized_at_public_and_crawler_boundaries(
+    client_method: str,
+    supplement: str | None,
+    tmp_path: Path,
+) -> None:
+    client, glue, sts, _ = _client()
+    raw_error = _response_streaming_error()
+    if supplement is None:
+        glue.get_jobs.side_effect = raw_error
+    else:
+        glue.get_crawler.return_value = {"Crawler": _crawler()}
+        sts.get_caller_identity.return_value = {
+            "Account": "123456789012",
+            "Arn": "arn:aws:iam::123456789012:user/dev",
+        }
+        glue.get_tags.return_value = {"Tags": {}}
+        glue.get_crawler_metrics.return_value = {"CrawlerMetricsList": []}
+        target = sts if supplement == "caller_identity" else glue
+        boto_method = (
+            "get_caller_identity" if supplement == "caller_identity" else "get_crawler_metrics"
+        )
+        getattr(target, boto_method).side_effect = raw_error
+
+    raised = await _capture_glue_provider_error(client, client_method)
+
+    assert type(raised) is ProviderError
+    assert str(raised) == "Glue request failed"
+    _assert_mapped_error_has_no_raw_provider_references(
+        raised,
+        crash_dir=tmp_path / f"residual-botocore-{supplement or 'public'}",
+        secrets=(_PROVIDER_VALUE_SECRET,),
+        raw_objects=(raw_error,),
     )
 
 
