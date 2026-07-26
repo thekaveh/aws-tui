@@ -83,6 +83,7 @@ class AthenaQueryVM:
         )
         self._results = AthenaResultsVM(
             client=client,
+            context=context,
             hub=hub,
             dispatcher=dispatcher,
         )
@@ -225,6 +226,7 @@ class AthenaQueryVM:
                 self._retain_cleanup(self._execution_ref)
             self._owns_active_query = False
             self._context = context
+            self._results.set_context(context)
             self._reset_execution_state()
             self._notify("context")
             self._execute_command.cancel()

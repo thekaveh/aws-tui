@@ -117,14 +117,16 @@ def test_open_s3_request_carries_source_identity() -> None:
     request = OpenS3LocationRequest(
         connection_name="prod-west",
         region="us-west-2",
-        uri="s3://lake/events/",
+        uri="s3://lake/results/query.csv",
         preferred_pane="left",
+        reveal_object=True,
     )
 
     assert request.connection_name == "prod-west"
     assert request.region == "us-west-2"
-    assert request.uri == "s3://lake/events/"
+    assert request.uri == "s3://lake/results/query.csv"
     assert request.preferred_pane == "left"
+    assert request.reveal_object is True
     assert request.sender_name == "service_navigation"
     assert request.sender_object is request
 

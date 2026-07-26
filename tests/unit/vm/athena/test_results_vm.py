@@ -8,12 +8,19 @@ from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
-from aws_tui.domain.query import ResultColumn, ResultPage
+from aws_tui.domain.query import QueryContext, ResultColumn, ResultPage
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 _ID = ResultColumn("id", "varchar", "NULLABLE")
 _VALUE = ResultColumn("value", "varchar", "NULLABLE")
+_CONTEXT = QueryContext(
+    "dev",
+    "us-east-1",
+    "analytics",
+    "AwsDataCatalog",
+    "events",
+)
 
 
 class ResultClient:
@@ -58,6 +65,7 @@ def make_results_vm(client: ResultClient) -> AthenaResultsVM:
     hub: MessageHub[Message] = MessageHub()
     vm = AthenaResultsVM(
         client=client,
+        context=_CONTEXT,
         hub=hub,
         dispatcher=NULL_DISPATCHER,
     )

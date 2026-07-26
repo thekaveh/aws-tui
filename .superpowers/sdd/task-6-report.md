@@ -4,7 +4,11 @@
 
 Implemented multi-profile Athena demo data, deterministic in-memory query
 behavior, exact-profile S3 result handoff, stale-row protection during real
-profile switches, and the ten normal-color demo snapshot updates.
+profile switches, and the ten normal-color demo snapshot updates. The review
+follow-up now also gives the demo client production-equivalent read-only,
+idempotency, and workgroup-output behavior; reveals concrete Athena result
+objects in S3; binds Results handoff to its owning query context; and makes
+every handoff failure and internal cancellation transactional.
 
 ## TDD Evidence
 
@@ -42,6 +46,39 @@ baseline delta:
 10 failed, 10 passed
 ```
 
+### Review Follow-up RED
+
+The reviewer regressions failed for the intended missing behavior before the
+follow-up implementation:
+
+```text
+uv run pytest tests/unit/demo/test_in_memory_athena.py -q
+7 failed, 10 passed
+
+- changed request parameters reused the original execution
+- DROP TABLE was accepted
+- caller output overrode enforced workgroup output
+
+uv run pytest \
+  tests/unit/vm/test_messages.py::test_open_s3_request_carries_source_identity -q
+1 failed: unexpected keyword argument 'reveal_object'
+
+uv run pytest \
+  tests/integration/test_athena_s3_handoff.py::test_history_result_location_opens_same_profile_in_s3 \
+  tests/integration/test_athena_s3_handoff.py::test_result_handoff_rejects_execution_identity_mismatch \
+  'tests/integration/test_athena_s3_handoff.py::test_result_handoff_rolls_back_every_post_mount_failure[bind]' \
+  -q
+3 failed
+
+- the S3 cursor remained on ".." instead of the result object
+- a coherent foreign profile/context detail was accepted
+- bind failure left S3 active instead of restoring Athena
+
+uv run pytest \
+  tests/unit/demo/test_in_memory_athena.py::test_non_enforced_workgroup_accepts_caller_output_configuration -q
+1 failed: add_workgroup() did not expose enforcement configuration
+```
+
 ### Focused GREEN
 
 ```text
@@ -68,16 +105,47 @@ env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE TERM=xterm-256color \
 7 passed in 3.94s
 ```
 
+The reviewer follow-up matrix is green:
+
+```text
+uv run pytest tests/unit/demo/test_in_memory_athena.py -q
+18 passed
+
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color uv run pytest \
+  tests/integration/test_athena_s3_handoff.py \
+  tests/integration/test_glue_s3_handoff.py -q
+24 passed
+
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color uv run pytest \
+  tests/unit/demo/test_in_memory_athena.py \
+  tests/unit/vm/test_messages.py \
+  tests/unit/vm/athena/test_results_vm.py \
+  tests/unit/vm/athena/test_query_vm.py \
+  tests/unit/vm/athena/test_history_vm.py \
+  tests/unit/vm/athena/test_page_vm.py \
+  tests/integration/test_athena_s3_handoff.py \
+  tests/integration/test_glue_s3_handoff.py \
+  tests/integration/test_demo_mode.py \
+  tests/e2e/test_journeys.py -q
+175 passed
+```
+
 ## Implementation
 
 - Added a fresh, instance-owned `InMemoryAthena` per demo AWS profile. It
   implements the Task 2 client surface, records repr-safe calls, paginates
-  deterministically, keeps request-token idempotency local, and creates no
-  background tasks.
-- Seeded disjoint development, production, and shared profile workgroups,
-  catalogs, databases, tables, query history, saved queries, prepared
-  statements, outcomes, result pages, and S3 objects. Scenarios cover running,
-  succeeded, failed, cancelled, empty, access denied, and missing output.
+  deterministically, keeps only SHA-256 token/request fingerprints for
+  idempotency, rejects changed-parameter token reuse, validates every query
+  with `ReadOnlySqlPolicy`, honors enforced and non-enforced workgroup output
+  configuration, and creates no background tasks.
+- Seeded disjoint development and production profile workgroups, catalogs,
+  databases, tables, query history, saved queries, prepared statements,
+  outcomes, result pages, and S3 objects. `demo-shared` intentionally exposes
+  only a typed access-denied scenario and has no Athena resources. Scenarios
+  cover running, succeeded, failed, cancelled, empty, access denied, and
+  missing output.
 - Limited state progression to app-started queries:
   `QUEUED -> RUNNING -> SUCCEEDED`. Historical rows remain static, and stop
   only affects active app-started executions.
@@ -85,17 +153,26 @@ env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE TERM=xterm-256color \
   fake state.
 - Added `athena.open_result_location` to the command palette. History uses its
   hydrated execution detail; Results reloads authoritative execution metadata
-  before publishing the existing service-neutral `OpenS3LocationRequest`.
-- Reused the hardened app-owned S3 transaction unchanged. The request carries
-  exact connection, region, URI, and preferred pane; path and identity survive
-  the handoff, failures roll back, and malformed or missing locations remain
-  advisory without automatic navigation.
+  before publishing the service-neutral `OpenS3LocationRequest`. Results also
+  compares connection, region, workgroup, catalog, and database against its
+  owning context before publishing.
+- Extended the app-owned S3 transaction with explicit object-reveal intent.
+  Athena handoff navigates to the object's parent directory and moves the
+  requested pane cursor onto the exact result file, including a bucket-root
+  object. Glue locations retain directory semantics.
+- Unified rollback for switch, mount, bind, navigation exceptions, terminal
+  pane errors, missing result objects, focus failures, and internal
+  cancellation. Rollback unmounts failed S3 widgets before disposing their
+  VMs, restores the exact profile/service and persisted page context, restores
+  an active Athena Results execution, preserves query history, and still lets
+  explicit user navigation supersede the handoff.
 - Added teardown guards for queued Athena page refresh/focus callbacks after
   the service view is removed.
 - Added integration and E2E coverage for exact-profile handoff, authoritative
   metadata, malformed/missing locations, no automatic handoff, identity
-  mismatch rejection, disjoint profile data, and empty new rows while a real
-  profile switch is still loading.
+  mismatch rejection, coherent foreign-context rejection, concrete object
+  selection, every rollback phase, cancellation races, disjoint profile data,
+  and empty new rows while a real profile switch is still loading.
 - Updated all ten demo snapshot themes under normal color. They now include
   the Athena service row and `athena-results/` bucket.
 
@@ -107,7 +184,7 @@ env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE TERM=xterm-256color \
 env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE TERM=xterm-256color \
   uv run pytest tests/unit tests/integration tests/e2e -q
 
-1898 passed, 9 deselected in 275.46s (0:04:35)
+1912 passed, 9 deselected in 318.83s (0:05:18)
 ```
 
 That run reported two warnings caused by the test forcing a private view
@@ -121,7 +198,7 @@ the correction.
 env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE TERM=xterm-256color \
   uv run pytest tests/snapshot -q
 
-744 passed in 125.84s
+744 passed in 125.99s
 437 snapshots passed
 ```
 
@@ -148,11 +225,12 @@ git diff --check
 
 - No SQL, result rows, continuation tokens, output URIs, or provider exception
   text is logged. Recorded fake arguments are excluded from repr output.
-- Handoff requires a succeeded execution with coherent execution/context
-  identity and a valid S3 URI. Results metadata is fetched again at action time.
+- Handoff requires a succeeded execution whose complete context belongs to the
+  Results VM and a valid concrete S3 object URI. Results metadata is fetched
+  again at action time.
 - Existing app orchestration resolves the exact profile, rejects region drift,
-  preserves requested pane/path, contains mount/navigation failures, and
-  redacts advisories.
+  preserves requested pane/path/object selection, rolls back all failed or
+  internally cancelled phases, and redacts advisories.
 - Demo fake mutable state and app-started lifecycle state are instance-local;
   no fake, task, or query state is shared globally.
 
@@ -160,3 +238,30 @@ git diff --check
 
 - Every shell command prints a pre-existing `.zshenv` warning for missing
   `/tmp/vmx-cargo-182/env`; it does not affect command exit status.
+
+## Changed Files
+
+- `.superpowers/sdd/task-6-report.md`
+- `src/aws_tui/app.py`
+- `src/aws_tui/demo/in_memory_athena.py`
+- `src/aws_tui/demo/seeds.py`
+- `src/aws_tui/vm/athena/history_vm.py`
+- `src/aws_tui/vm/athena/query_vm.py`
+- `src/aws_tui/vm/athena/results_vm.py`
+- `src/aws_tui/vm/messages.py`
+- `tests/integration/test_athena_s3_handoff.py`
+- `tests/integration/test_glue_s3_handoff.py`
+- `tests/snapshot/test_demo_mode.py`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[amber].raw`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[carbon].raw`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[dracula].raw`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[github-light].raw`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[gruvbox-dark].raw`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[lattice].raw`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[nord].raw`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[one-light].raw`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[solarized-light].raw`
+- `tests/snapshot/__snapshots__/test_demo_mode/test_demo_mode_snapshot[voidline].raw`
+- `tests/unit/demo/test_in_memory_athena.py`
+- `tests/unit/vm/athena/test_results_vm.py`
+- `tests/unit/vm/test_messages.py`

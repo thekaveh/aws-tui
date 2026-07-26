@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -8,6 +9,7 @@ from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.demo.seeds import seeded_demo_athena
 from aws_tui.domain.filesystem import PermissionDeniedError, ValidationError
 from aws_tui.domain.query import QueryContext, QueryState
+from aws_tui.domain.sql_policy import QueryRejectedError
 
 DEV_CONTEXT = QueryContext(
     "demo-dev",
@@ -109,6 +111,110 @@ async def test_only_app_started_queries_advance_and_tokens_are_idempotent() -> N
     assert first == second
     history, _ = await fake.list_query_executions_page("dev-analytics")
     assert sum(row.execution_id == first.execution_id for row in history) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sql", "context", "output_location"),
+    [
+        ("SELECT 2", DEV_CONTEXT, None),
+        (
+            "SELECT 1",
+            replace(DEV_CONTEXT, catalog="OtherCatalog"),
+            None,
+        ),
+        (
+            "SELECT 1",
+            replace(DEV_CONTEXT, database="other_database"),
+            None,
+        ),
+        (
+            "SELECT 1",
+            replace(DEV_CONTEXT, workgroup="dev-empty"),
+            None,
+        ),
+        ("SELECT 1", DEV_CONTEXT, "s3://caller-results/OUTPUT_SECRET/"),
+    ],
+)
+async def test_request_token_reuse_rejects_any_changed_request_parameter_safely(
+    sql: str,
+    context: QueryContext,
+    output_location: str | None,
+) -> None:
+    fake = seeded_demo_athena("demo-dev")
+    token = "TOKEN_SECRET"
+    await fake.start_query(
+        "SELECT 1",
+        DEV_CONTEXT,
+        request_token=token,
+    )
+
+    with pytest.raises(ValidationError) as captured:
+        await fake.start_query(
+            sql,
+            context,
+            request_token=token,
+            output_location=output_location,
+        )
+
+    rendered = f"{captured.value!r}\n{fake!r}"
+    assert "TOKEN_SECRET" not in rendered
+    assert "OUTPUT_SECRET" not in rendered
+    assert "SELECT 1" not in rendered
+    assert "SELECT 2" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_start_query_rejects_unsafe_sql_before_creating_execution() -> None:
+    fake = seeded_demo_athena("demo-dev")
+    before = set(fake.query_executions)
+
+    with pytest.raises(QueryRejectedError):
+        await fake.start_query(
+            "DROP TABLE sensitive_events",
+            DEV_CONTEXT,
+            request_token="unsafe-token",
+        )
+
+    assert set(fake.query_executions) == before
+
+
+@pytest.mark.asyncio
+async def test_enforced_workgroup_output_cannot_be_overridden_by_caller() -> None:
+    fake = seeded_demo_athena("demo-dev")
+
+    ref = await fake.start_query(
+        "SELECT 1",
+        DEV_CONTEXT,
+        request_token="enforced-output",
+        output_location="s3://caller-results/OUTPUT_SECRET/",
+    )
+    detail = fake.query_executions[ref.execution_id]
+
+    assert detail.output_location == (f"s3://athena-results/dev/{ref.execution_id}.csv")
+    assert "OUTPUT_SECRET" not in repr(fake)
+
+
+@pytest.mark.asyncio
+async def test_non_enforced_workgroup_accepts_caller_output_configuration() -> None:
+    fake = InMemoryAthena(connection_name="demo-dev", region="us-east-1")
+    fake.add_workgroup(
+        "caller-configured",
+        output_location="s3://workgroup-results/default/",
+        enforce_workgroup_configuration=False,
+    )
+    context = replace(DEV_CONTEXT, workgroup="caller-configured")
+
+    ref = await fake.start_query(
+        "SELECT 1",
+        context,
+        request_token="caller-output",
+        output_location="s3://caller-results/explicit/",
+    )
+
+    assert fake.query_executions[ref.execution_id].output_location == (
+        f"s3://caller-results/explicit/{ref.execution_id}.csv"
+    )
 
 
 @pytest.mark.asyncio

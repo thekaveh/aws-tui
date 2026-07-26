@@ -19,7 +19,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
-from aws_tui.domain.query import QueryExecutionDetail, QueryState, ResultColumn
+from aws_tui.domain.query import QueryContext, QueryExecutionDetail, QueryState, ResultColumn
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
@@ -58,10 +58,12 @@ class AthenaResultsVM:
         self,
         *,
         client: Any,
+        context: QueryContext,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
         self._client = client
+        self._context = context
         self._hub = hub
         self._disposed = False
         self._shutdown_started = False
@@ -211,7 +213,7 @@ class AthenaResultsVM:
             or execution_id != self._execution_id
             or detail.summary.ref.execution_id != execution_id
             or detail.summary.state is not QueryState.SUCCEEDED
-            or not _execution_identity_is_coherent(detail)
+            or not _execution_identity_belongs_to(detail, self._context)
             or not _valid_s3_uri(detail.output_location)
         ):
             return False
@@ -223,9 +225,13 @@ class AthenaResultsVM:
                 region=ref.region,
                 uri=detail.output_location,
                 preferred_pane=preferred_pane,
+                reveal_object=True,
             )
         )
         return True
+
+    def set_context(self, context: QueryContext) -> None:
+        self._context = context
 
     def clear(self) -> None:
         if self._disposed or self._shutdown_started:
@@ -460,12 +466,16 @@ class AthenaResultsVM:
 __all__ = ["AthenaResultsVM", "RenderedResultCell"]
 
 
-def _execution_identity_is_coherent(detail: QueryExecutionDetail) -> bool:
+def _execution_identity_belongs_to(
+    detail: QueryExecutionDetail,
+    expected: QueryContext,
+) -> bool:
     ref = detail.summary.ref
     return (
         ref.connection_name == detail.context.connection_name
         and ref.region == detail.context.region
         and ref.workgroup == detail.context.workgroup
+        and detail.context == expected
     )
 
 

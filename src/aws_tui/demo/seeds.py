@@ -45,6 +45,9 @@ _NOW: datetime = datetime(2026, 6, 28, 12, 0, 0, tzinfo=UTC)
 
 _DEV_OBJECTS: tuple[tuple[str, int], ...] = (
     ("athena-results/dev/q-dev-succeeded.csv", 4_096),
+    ("athena-results/dev/q-dev-empty.csv", 0),
+    ("athena-results/dev/q-dev-access-denied.csv", 4_096),
+    ("demo-dev/dev_analytics/dev_events/part-0000.parquet", 2_048),
     ("etl-input/raw/events/2026-06-25.json.gz", 2_140_000),
     ("etl-input/raw/events/2026-06-26.json.gz", 2_280_000),
     ("etl-input/raw/events/2026-06-27.json.gz", 2_310_000),
@@ -60,6 +63,7 @@ _DEV_OBJECTS: tuple[tuple[str, int], ...] = (
 
 _PROD_OBJECTS: tuple[tuple[str, int], ...] = (
     ("athena-results/prod/q-prod-succeeded.csv", 8_192),
+    ("demo-prod/prod_warehouse/prod_sales/part-0000.parquet", 4_096),
     ("data-lake/silver/customers/year=2026/month=06/part-0000.parquet", 142_000_000),
     ("data-lake/silver/customers/year=2026/month=06/part-0001.parquet", 138_000_000),
     ("data-lake/silver/customers/year=2026/month=06/_SUCCESS", 0),
@@ -303,7 +307,7 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
         context,
         "q-dev-succeeded",
         QueryState.SUCCEEDED,
-        output_location="s3://athena-results/dev/",
+        output_location="s3://athena-results/dev/q-dev-succeeded.csv",
         rows=(("Ada", "42"), ("Lin", "")),
         reused=True,
     )
@@ -327,7 +331,7 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
         context,
         "q-dev-empty",
         QueryState.SUCCEEDED,
-        output_location="s3://athena-results/dev/empty/",
+        output_location="s3://athena-results/dev/q-dev-empty.csv",
         rows=(),
     )
     _add_demo_execution(
@@ -335,7 +339,7 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
         context,
         "q-dev-access-denied",
         QueryState.SUCCEEDED,
-        output_location="s3://athena-results/dev/restricted/",
+        output_location="s3://athena-results/dev/q-dev-access-denied.csv",
         result_error=PermissionDeniedError("result access denied"),
     )
     _add_demo_execution(
@@ -396,7 +400,7 @@ def _seed_prod_athena(athena: InMemoryAthena) -> None:
         context,
         "q-prod-succeeded",
         QueryState.SUCCEEDED,
-        output_location="s3://athena-results/prod/",
+        output_location="s3://athena-results/prod/q-prod-succeeded.csv",
         rows=(("2026-07-25", "1048576"),),
     )
     _add_demo_execution(

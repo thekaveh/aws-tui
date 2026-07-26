@@ -15,6 +15,7 @@ import os
 import sys
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -27,7 +28,7 @@ from textual import events
 
 if TYPE_CHECKING:
     from aws_tui.domain.filesystem import FileEntry, FileSystemProvider, PathRef
-    from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
+    from aws_tui.vm.file_manager.pane_vm import PaneVM
 
 from textual.app import App, ComposeResult
 from textual.binding import BindingsMap, BindingType
@@ -61,6 +62,7 @@ from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.version import __version__
+from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.command_palette_vm import PaletteEntry
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
@@ -68,6 +70,7 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import (
     ConnectionListChangedMessage,
     OpenS3LocationRequest,
@@ -77,6 +80,22 @@ from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 _ACTION_RING_SIZE = 100
 _QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class _S3HandoffSnapshot:
+    connection: Connection | None
+    auth_state: TokenState | None
+    service_id: str | None
+    athena_result_execution_id: str | None
+
+
+class _S3HandoffStageError(Exception):
+    def __init__(self, stage: str, error_type: str) -> None:
+        super().__init__(f"S3 handoff failed during {stage}")
+        self.stage = stage
+        self.error_type = error_type
+
 
 #: Curated app-level commands surfaced in the command palette (action_id, label).
 #: Each dispatches through the ActionRegistry — the same path as its key binding.
@@ -2697,9 +2716,27 @@ class AwsTuiApp(App[None]):
             )
             return
 
-        prior_connection = ctx.root_vm.active_connection
-        prior_auth_state = ctx.root_vm.active_auth_state
-        prior_service_id = ctx.root_vm.content_host.current_id
+        target = self._s3_handoff_target(request, parsed.netloc, parsed.path)
+        if target is None:
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="requested location is not a valid S3 URI",
+                toast_id="s3-handoff-invalid-location",
+            )
+            return
+        destination, object_name = target
+        current = ctx.root_vm.content_host.current
+        snapshot = _S3HandoffSnapshot(
+            connection=ctx.root_vm.active_connection,
+            auth_state=ctx.root_vm.active_auth_state,
+            service_id=ctx.root_vm.content_host.current_id,
+            athena_result_execution_id=(
+                current.results.execution_id
+                if isinstance(current, AthenaPageVM) and current.active_view == "results"
+                else None
+            ),
+        )
 
         try:
             auth_state = ctx.aws_session.probe_token(connection).state
@@ -2711,89 +2748,139 @@ class AwsTuiApp(App[None]):
             )
             auth_state = TokenState.MISSING
 
-        suppression = (asyncio.current_task(), "s3")
-        self._service_navigation_suppressed_selection = suppression
+        stage = "mount"
         try:
-            await ctx.root_vm.switch_connection_and_service(
-                connection,
-                auth_state,
-                "s3",
-            )
-        except Exception as exc:
-            await self._restore_service_after_s3_handoff_failure(
-                connection=prior_connection,
-                auth_state=prior_auth_state,
-                service_id=prior_service_id,
-            )
-            self._raise_s3_handoff_failure(
-                connection=connection,
-                stage="mount",
-                error=exc,
-            )
-            return
-        finally:
-            if self._service_navigation_suppressed_selection is suppression:
-                self._service_navigation_suppressed_selection = None
-
-        if not await self._mount_service_view(
-            "s3",
-            required_connection=connection,
-        ):
-            await self._restore_service_after_s3_handoff_failure(
-                connection=prior_connection,
-                auth_state=prior_auth_state,
-                service_id=prior_service_id,
-            )
-            self._raise_s3_handoff_failure(connection=connection, stage="mount")
-            return
-
-        dual = self._dual_pane()
-        if dual is None:
-            await self._restore_service_after_s3_handoff_failure(
-                connection=prior_connection,
-                auth_state=prior_auth_state,
-                service_id=prior_service_id,
-            )
-            self._raise_s3_handoff_failure(connection=connection, stage="mount")
-            return
-
-        pane = dual.left if request.preferred_pane == "left" else dual.right
-        connection_key = (connection.kind, connection.name)
-        if pane.current_connection_key != connection_key:
+            suppression = (asyncio.current_task(), "s3")
+            self._service_navigation_suppressed_selection = suppression
             try:
-                await self._rebind_pane_to_connection(pane, connection)
-            except Exception as exc:
-                self._raise_s3_handoff_failure(
-                    connection=connection,
-                    stage="bind",
-                    error=exc,
+                await ctx.root_vm.switch_connection_and_service(
+                    connection,
+                    auth_state,
+                    "s3",
                 )
-                return
+            finally:
+                if self._service_navigation_suppressed_selection is suppression:
+                    self._service_navigation_suppressed_selection = None
 
-        from aws_tui.domain.filesystem import PathRef
+            if not await self._mount_service_view(
+                "s3",
+                required_connection=connection,
+            ):
+                raise _S3HandoffStageError("mount", "MountFailed")
 
-        try:
-            await pane.navigate_to(PathRef.from_posix(parsed.netloc + parsed.path))
-        except Exception as exc:
-            self._raise_s3_handoff_failure(
-                connection=connection,
-                stage="navigation",
-                error=exc,
-            )
-            return
+            dual = self._dual_pane()
+            if dual is None:
+                raise _S3HandoffStageError("mount", "MissingDualPane")
 
-        focused = FocusedPane.LEFT if request.preferred_pane == "left" else FocusedPane.RIGHT
-        slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
-        try:
+            pane = dual.left if request.preferred_pane == "left" else dual.right
+            connection_key = (connection.kind, connection.name)
+            stage = "bind"
+            if pane.current_connection_key != connection_key:
+                await self._rebind_pane_to_connection(pane, connection)
+
+            stage = "navigation"
+            await pane.navigate_to(destination)
+            if pane.state not in {PaneState.IDLE, PaneState.EMPTY}:
+                raise _S3HandoffStageError(
+                    "navigation",
+                    f"Pane{pane.state.value.title()}",
+                )
+            if object_name is not None:
+                object_index = next(
+                    (
+                        index
+                        for index, entry in enumerate(pane.filtered_entries)
+                        if entry.entry.name == object_name and entry.kind is EntryKind.FILE
+                    ),
+                    None,
+                )
+                if object_index is None:
+                    raise _S3HandoffStageError(
+                        "navigation",
+                        "ResultObjectMissing",
+                    )
+                pane.move_cursor_to(object_index)
+
+            stage = "focus"
+            focused = FocusedPane.LEFT if request.preferred_pane == "left" else FocusedPane.RIGHT
+            slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
             dual.set_focused(focused)
             ctx.focus_coordinator.set_focused_slot(slot)
             self._project_focus_slot(slot)
-        except Exception as exc:
+        except asyncio.CancelledError:
+            if not self._s3_handoff_was_superseded(snapshot):
+                await self._restore_s3_handoff_snapshot(snapshot)
+            raise
+        except _S3HandoffStageError as exc:
+            await self._restore_s3_handoff_snapshot(snapshot)
             self._raise_s3_handoff_failure(
                 connection=connection,
-                stage="focus",
-                error=exc,
+                stage=exc.stage,
+                error_type=exc.error_type,
             )
+        except Exception as exc:
+            await self._restore_s3_handoff_snapshot(snapshot)
+            self._raise_s3_handoff_failure(
+                connection=connection,
+                stage=stage,
+                error_type=type(exc).__name__,
+            )
+
+    @staticmethod
+    def _s3_handoff_target(
+        request: OpenS3LocationRequest,
+        bucket: str,
+        raw_path: str,
+    ) -> tuple[PathRef, str | None] | None:
+        """Resolve a directory destination and optional object cursor target."""
+        from aws_tui.domain.filesystem import PathRef
+
+        if not request.reveal_object:
+            return PathRef.from_posix(bucket + raw_path), None
+        key = raw_path.removeprefix("/")
+        if (
+            not key
+            or key.endswith("/")
+            or raw_path.startswith("//")
+            or any(not segment for segment in key.split("/"))
+        ):
+            return None
+        object_path = PathRef((bucket, *key.split("/")))
+        return object_path.parent(), object_path.name
+
+    def _s3_handoff_was_superseded(
+        self,
+        snapshot: _S3HandoffSnapshot,
+    ) -> bool:
+        del snapshot
+        selected = self._app_ctx.root_vm.services_menu.selected_id
+        return selected != "s3"
+
+    async def _restore_s3_handoff_snapshot(
+        self,
+        snapshot: _S3HandoffSnapshot,
+    ) -> bool:
+        """Finish rollback even when the handoff task itself is cancelled."""
+        rollback = asyncio.create_task(
+            self._restore_service_after_s3_handoff_failure(
+                connection=snapshot.connection,
+                auth_state=snapshot.auth_state,
+                service_id=snapshot.service_id,
+                athena_result_execution_id=snapshot.athena_result_execution_id,
+            )
+        )
+        while True:
+            try:
+                return await asyncio.shield(rollback)
+            except asyncio.CancelledError:
+                if self._s3_handoff_was_superseded(snapshot):
+                    rollback.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await rollback
+                    raise
+                if rollback.done():
+                    return rollback.result()
+                continue
 
     async def _restore_service_after_s3_handoff_failure(
         self,
@@ -2801,6 +2888,7 @@ class AwsTuiApp(App[None]):
         connection: Connection | None,
         auth_state: TokenState | None,
         service_id: str | None,
+        athena_result_execution_id: str | None = None,
     ) -> bool:
         """Restore the coherent service snapshot captured before a handoff."""
         if connection is None or auth_state is None or service_id is None:
@@ -2813,6 +2901,9 @@ class AwsTuiApp(App[None]):
         suppression = (asyncio.current_task(), service_id)
         self._service_navigation_suppressed_selection = suppression
         try:
+            with contextlib.suppress(Exception):
+                host = self.query_one("#content-host", Container)
+                await host.remove_children()
             await self._app_ctx.root_vm.switch_connection_and_service(
                 connection,
                 auth_state,
@@ -2842,6 +2933,19 @@ class AwsTuiApp(App[None]):
                 service_id=service_id,
                 stage="mount",
             )
+            return False
+        setup_task = self._app_ctx.root_vm.content_host._setup_task
+        if setup_task is not None and not setup_task.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await setup_task
+        current = self._app_ctx.root_vm.content_host.current
+        if (
+            service_id == "athena"
+            and athena_result_execution_id is not None
+            and isinstance(current, AthenaPageVM)
+        ):
+            await current.results.load(athena_result_execution_id)
+            await current.select_view("results")
         return restored
 
     def _raise_s3_handoff_failure(
@@ -2849,7 +2953,7 @@ class AwsTuiApp(App[None]):
         *,
         connection: Connection,
         stage: str,
-        error: Exception | None = None,
+        error_type: str = "HandoffFailed",
     ) -> None:
         """Record a handoff failure without retaining exception or URI text."""
         ctx = self._app_ctx
@@ -2857,7 +2961,7 @@ class AwsTuiApp(App[None]):
             "service_navigation.s3_handoff_failed",
             connection=connection.name,
             stage=stage,
-            error_type=type(error).__name__ if error is not None else "MountFailed",
+            error_type=error_type,
         )
         with contextlib.suppress(Exception):
             notifications.advise(

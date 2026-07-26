@@ -83,7 +83,7 @@ def _handoff_request(*, preferred_pane: str = "left") -> OpenS3LocationRequest:
     return OpenS3LocationRequest(
         connection_name="demo-dev",
         region="us-east-1",
-        uri="s3://private-bucket/events/?token=HANDOFF_SECRET",
+        uri="s3://demo-dev/dev_analytics/dev_events/?token=HANDOFF_SECRET",
         preferred_pane=preferred_pane,  # type: ignore[arg-type]
     )
 
@@ -94,7 +94,7 @@ def _assert_redacted_failure(ctx: AppContext, *, toast_id: str) -> None:
     ctx.log_sink.flush()
     output = f"{toast.text}\n{ctx.log_sink.path.read_text(encoding='utf-8')}"
     assert "HANDOFF_SECRET" not in output
-    assert "s3://private-bucket" not in output
+    assert "s3://demo-dev" not in output
 
 
 def _assert_coherent_service(ctx: AppContext, service_id: str) -> None:
@@ -215,7 +215,7 @@ async def test_s3_handoff_ignores_stale_fallback_retry_and_keeps_exact_profile(
             mounted = app.query_one("#content-dual-pane", DualPane)
             assert mounted.vm is dual
             assert dual.left.current_connection_key == ("aws", "demo-dev")
-            assert dual.left.path.as_posix() == "/private-bucket/events"
+            assert dual.left.path.as_posix() == ("/demo-dev/dev_analytics/dev_events")
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
@@ -297,8 +297,7 @@ async def test_s3_handoff_bind_failure_is_contained_and_redacted(
             monkeypatch.setattr(app, "_rebind_pane_to_connection", fail_bind)
             await app._open_s3_location_request(_handoff_request(preferred_pane="right"))
 
-            dual = _assert_visible_s3(ctx, app)
-            assert dual.right.current_connection_key is None
+            _assert_visible_glue(ctx, app)
             _assert_redacted_failure(ctx, toast_id="s3-handoff-bind-failed")
     finally:
         with contextlib.suppress(Exception):
@@ -329,8 +328,7 @@ async def test_s3_handoff_navigation_failure_is_contained_and_redacted(
             monkeypatch.setattr(PaneVM, "navigate_to", fail_navigation)
             await app._open_s3_location_request(_handoff_request())
 
-            dual = _assert_visible_s3(ctx, app)
-            assert dual.left.path.is_root
+            _assert_visible_glue(ctx, app)
             _assert_redacted_failure(ctx, toast_id="s3-handoff-navigation-failed")
     finally:
         with contextlib.suppress(Exception):

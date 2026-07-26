@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import TypeVar
 
 from aws_tui.domain.athena import (
@@ -37,6 +38,7 @@ from aws_tui.domain.query import (
     ResultColumn,
     ResultPage,
 )
+from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 
 T = TypeVar("T")
 _STARTED_STATES = (QueryState.QUEUED, QueryState.RUNNING, QueryState.SUCCEEDED)
@@ -55,6 +57,12 @@ class AthenaCall:
 
     method: str
     arguments: tuple[object, ...] = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _IdempotentQuery:
+    request_fingerprint: bytes = field(repr=False)
+    execution_id: str = field(repr=False)
 
 
 class InMemoryAthena:
@@ -79,7 +87,8 @@ class InMemoryAthena:
         self.prepared_statements: dict[tuple[str, str], PreparedStatement] = {}
         self.prepared_names: dict[str, list[str]] = {}
         self.access_error: PermissionDeniedError | None = None
-        self._request_tokens: dict[str, str] = {}
+        self._sql_policy = ReadOnlySqlPolicy()
+        self._request_tokens: dict[bytes, _IdempotentQuery] = {}
         self._started_state_indexes: dict[str, int] = {}
         self._active_app_started: set[str] = set()
         self._next_execution_number = 1
@@ -90,6 +99,7 @@ class InMemoryAthena:
         *,
         output_location: str | None,
         managed_results: bool = False,
+        enforce_workgroup_configuration: bool = True,
     ) -> AthenaWorkgroupDetail:
         summary = AthenaWorkgroupSummary(
             name,
@@ -100,7 +110,7 @@ class InMemoryAthena:
         detail = AthenaWorkgroupDetail(
             summary,
             output_location,
-            True,
+            enforce_workgroup_configuration,
             True,
             100_000_000,
             "Athena engine version 3",
@@ -317,15 +327,30 @@ class InMemoryAthena:
     ) -> QueryExecutionRef:
         self._record("start_query", sql, context, request_token, output_location)
         self._raise_if_denied()
+        normalized_sql = self._sql_policy.validate(sql)
         if context.connection_name != self.connection_name or context.region != self.region:
             raise ValidationError("query context does not match Athena connection")
-        known_id = self._request_tokens.get(request_token)
-        if known_id is not None:
-            return self.query_executions[known_id].summary.ref
+        token_fingerprint = _fingerprint(request_token)
+        request_fingerprint = _fingerprint(
+            normalized_sql,
+            *context.cache_key,
+            output_location,
+        )
+        known = self._request_tokens.get(token_fingerprint)
+        if known is not None:
+            if known.request_fingerprint != request_fingerprint:
+                raise ValidationError(
+                    "Athena request token was reused with different query parameters"
+                )
+            return self.query_executions[known.execution_id].summary.ref
         workgroup = self.workgroup_details.get(context.workgroup)
         if workgroup is None:
             raise NotFoundError("Athena workgroup not found")
-        result_root = output_location or workgroup.output_location
+        result_root = (
+            workgroup.output_location
+            if workgroup.enforce_workgroup_configuration
+            else output_location or workgroup.output_location
+        )
         if result_root is None and not workgroup.managed_query_results_enabled:
             raise ResultConfigurationRequiredError("Athena result configuration is required")
         execution_id = f"{self.connection_name}-app-{self._next_execution_number:04d}"
@@ -358,7 +383,10 @@ class InMemoryAthena:
             (("1",),),
             None,
         )
-        self._request_tokens[request_token] = execution_id
+        self._request_tokens[token_fingerprint] = _IdempotentQuery(
+            request_fingerprint,
+            execution_id,
+        )
         self._started_state_indexes[execution_id] = 0
         self._active_app_started.add(execution_id)
         return ref
@@ -492,6 +520,16 @@ def _started_output_location(
     if result_root is None:
         return None
     return f"{result_root.rstrip('/')}/{execution_id}.csv"
+
+
+def _fingerprint(*values: str | None) -> bytes:
+    digest = sha256()
+    for value in values:
+        encoded = b"" if value is None else value.encode("utf-8")
+        digest.update(b"\x00" if value is None else b"\x01")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.digest()
 
 
 __all__ = ["AthenaCall", "InMemoryAthena"]

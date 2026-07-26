@@ -219,6 +219,7 @@ class OpenS3LocationRequest:
     region: str
     uri: str
     preferred_pane: Literal["left", "right"] = "left"
+    reveal_object: bool = False
     sender_name: str = "service_navigation"
 
     @property

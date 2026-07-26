@@ -196,6 +196,7 @@ class AthenaHistoryVM:
                 region=ref.region,
                 uri=detail.output_location,
                 preferred_pane=preferred_pane,
+                reveal_object=True,
             )
         )
         return True
