@@ -95,6 +95,9 @@ async def test_service_owns_selections_but_builds_disposable_page_dependencies()
 
     assert replacement.active_view == "saved"
     assert replacement.client is clients[1]
+    assert first.query.runner.client is clients[0]
+    assert replacement.query.runner.client is clients[1]
+    assert first.query.runner is not replacement.query.runner
     assert len(clients) == 2
     assert len(policies) == 2
     assert policies[0] is not policies[1]

@@ -18,6 +18,7 @@ from aws_tui.domain.athena import (
     AthenaWorkgroupDetail,
     AthenaWorkgroupSummary,
 )
+from aws_tui.domain.athena_runner import AthenaQueryRunner
 from aws_tui.domain.data_catalog import DatabaseSummary
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext
@@ -56,6 +57,7 @@ class AthenaPageVM:
         *,
         client: Any,
         policy: ReadOnlySqlPolicy,
+        runner: AthenaQueryRunner | None = None,
         connection: Connection,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
@@ -122,6 +124,7 @@ class AthenaPageVM:
         self.query = AthenaQueryVM(
             client=client,
             policy=policy,
+            runner=runner,
             context=self._context,
             hub=hub,
             dispatcher=dispatcher,

@@ -154,6 +154,7 @@ def test_athena_permissions_and_output_modes_are_pinned_to_aws_contracts() -> No
     cookbook = _read("docs/cookbook.md")
     ledger = _read("docs/contract-ledger.md")
     client_source = _read("src/aws_tui/domain/athena.py")
+    runner_source = _read("src/aws_tui/domain/athena_runner.py")
     query_vm_source = _read("src/aws_tui/vm/athena/query_vm.py")
     normalized = _squash(cookbook)
 
@@ -186,16 +187,26 @@ def test_athena_permissions_and_output_modes_are_pinned_to_aws_contracts() -> No
 
     assert "if output_location is not None:" in client_source
     assert 'kwargs["ResultConfiguration"]' in client_source
-    query_vm_tree = ast.parse(query_vm_source)
+    runner_tree = ast.parse(runner_source)
     start_calls = [
         node
-        for node in ast.walk(query_vm_tree)
+        for node in ast.walk(runner_tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "start_query"
     ]
     assert len(start_calls) == 1
     assert {keyword.arg for keyword in start_calls[0].keywords} == {"request_token"}
+    query_vm_tree = ast.parse(query_vm_source)
+    runner_calls = [
+        node
+        for node in ast.walk(query_vm_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "start"
+    ]
+    assert len(runner_calls) == 1
+    assert {keyword.arg for keyword in runner_calls[0].keywords} == {"request_token"}
 
 
 def test_athena_sql_grammar_matches_policy_tests() -> None:

@@ -20,6 +20,7 @@ from vmx import (
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.domain.athena_runner import AthenaQueryRunner
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import (
     AthenaQueryError,
@@ -58,13 +59,18 @@ class AthenaQueryVM:
         *,
         client: Any,
         policy: ReadOnlySqlPolicy,
+        runner: AthenaQueryRunner | None = None,
         context: QueryContext,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         sleep: Sleep = anyio.sleep,
     ) -> None:
         self._client = client
-        self._policy = policy
+        self._runner = runner or AthenaQueryRunner(
+            client,
+            policy,
+            sleep=sleep,
+        )
         self._context = context
         self._hub = hub
         self._disposed = False
@@ -87,7 +93,6 @@ class AthenaQueryVM:
             hub=hub,
             dispatcher=dispatcher,
         )
-        self._sleep = sleep
         self._generation = 0
         self._execution_task: asyncio.Task[None] | None = None
         self._submission_task: asyncio.Task[QueryExecutionRef] | None = None
@@ -125,6 +130,10 @@ class AthenaQueryVM:
     @property
     def context(self) -> QueryContext:
         return self._context
+
+    @property
+    def runner(self) -> AthenaQueryRunner:
+        return self._runner
 
     @property
     def sql(self) -> str:
@@ -317,7 +326,7 @@ class AthenaQueryVM:
             submission_context = self._context
             request_token = _request_token(submission_context)
             submission_task = asyncio.create_task(
-                self._client.start_query(
+                self._runner.start(
                     normalized_sql,
                     submission_context,
                     request_token=request_token,
@@ -378,14 +387,15 @@ class AthenaQueryVM:
             self._set_busy(False)
 
     def _validate(self) -> str:
-        if not all(value.strip() for value in self._context.cache_key):
-            raise QueryRejectedError("query context is incomplete")
-        return self._policy.validate(self._sql)
+        try:
+            return self._runner.validate(self._sql, self._context)
+        except ProviderError as exc:
+            raise QueryRejectedError(str(exc)) from None
 
     async def _poll(self, ref: QueryExecutionRef, generation: int) -> None:
         delay = 0.25
         while generation == self._generation and not self._disposed:
-            detail = await self._client.get_query_execution(ref.execution_id)
+            detail = await self._runner.detail(ref, self._context)
             if generation != self._generation or self._disposed:
                 return
             if not self._detail_matches_context(detail, ref):
@@ -399,7 +409,7 @@ class AthenaQueryVM:
                     if generation != self._generation or self._disposed:
                         return
                 return
-            await self._sleep(delay)
+            await self._runner.pause(delay)
             if generation != self._generation or self._disposed:
                 return
             delay = min(delay * 2, 5.0)
@@ -432,7 +442,7 @@ class AthenaQueryVM:
         report_error: bool = True,
     ) -> bool:
         try:
-            await self._client.stop_query(ref.execution_id)
+            await self._runner.stop(ref)
         except ProviderError as exc:
             if report_error:
                 self._apply_provider_error(exc)

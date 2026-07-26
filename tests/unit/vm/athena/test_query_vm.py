@@ -10,6 +10,7 @@ import pytest
 from vmx import NULL_DISPATCHER, AsyncRelayCommand, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.domain.athena_runner import AthenaQueryRunner
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import (
     AthenaQueryError,
@@ -300,6 +301,64 @@ def make_query_vm(
     )
     vm.construct()
     return vm
+
+
+def test_query_vm_owns_reusable_runner_when_not_injected() -> None:
+    fake = seeded_athena([QueryState.SUCCEEDED])
+    vm = make_query_vm(fake)
+
+    assert isinstance(vm.runner, AthenaQueryRunner)
+
+
+@pytest.mark.asyncio
+async def test_query_vm_delegates_execution_operations_to_injected_runner() -> None:
+    fake = seeded_athena([QueryState.SUCCEEDED])
+
+    class TrackingRunner(AthenaQueryRunner):
+        def __init__(self) -> None:
+            super().__init__(fake, ReadOnlySqlPolicy(), sleep=_no_sleep)
+            self.operations: list[str] = []
+
+        async def start(
+            self,
+            sql: str,
+            context: QueryContext,
+            *,
+            request_token: str,
+        ) -> QueryExecutionRef:
+            self.operations.append("start")
+            return await super().start(
+                sql,
+                context,
+                request_token=request_token,
+            )
+
+        async def detail(
+            self,
+            ref: QueryExecutionRef,
+            context: QueryContext,
+        ) -> QueryExecutionDetail:
+            self.operations.append("detail")
+            return await super().detail(ref, context)
+
+    runner = TrackingRunner()
+    hub: MessageHub[Message] = MessageHub()
+    vm = AthenaQueryVM(
+        client=fake,
+        policy=ReadOnlySqlPolicy(),
+        runner=runner,
+        context=_CONTEXT,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        sleep=_no_sleep,
+    )
+    vm.construct()
+    vm.set_sql("SELECT 1")
+
+    await vm.execute()
+
+    assert vm.runner is runner
+    assert runner.operations == ["start", "detail"]
 
 
 @pytest.mark.asyncio

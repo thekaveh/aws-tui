@@ -376,3 +376,157 @@ warning for `/tmp/vmx-cargo-182/env` is omitted from the evidence above.
 operation, while `GetQueryExecution` detail remains authoritative. No model
 change was made because that concern is Minor and the existing mapping is the
 lowest-risk plan-compatible behavior.
+
+---
+
+# Iceberg Task 2 Report: Bounded Athena Runner and Metadata Inspector
+
+## Status
+
+Implemented Iceberg plan Task 2 on `codex/aws-service-expansion-study`.
+`.superpowers/sdd/progress.md` was not modified.
+
+## Implementation
+
+- Added `AthenaQueryRunner` and immutable `BoundedQueryResult`. The runner
+  validates read-only SQL and complete query context, starts exactly one query,
+  polls with the existing bounded exponential backoff, validates execution
+  identity, maps failed/cancelled terminal states, and fetches only enough
+  result pages to satisfy the caller's positive row bound.
+- Added cancellation cleanup for active app-started queries. Identity failures
+  stop an active execution, while result-shape failures discovered after a
+  successful terminal state do not issue a stale stop request.
+- Refactored `AthenaQueryVM` to delegate validation, start, poll, sleep, and stop
+  operations through the runner while retaining its existing UI generation,
+  detached-submission finalizers, ownership, stale-context rejection, and
+  paged result-view behavior.
+- Updated `AthenaService` and `AthenaPageVM` composition so every page receives
+  a fresh runner bound to the same fresh client and policy.
+- Added `IcebergInspector` for `$snapshots`, `$history`, `$manifests`, `$files`,
+  `$partitions`, and `$refs`. Queries use three-part quote-escaped identifiers,
+  deterministic ordering where the metadata shape supports it, and hard limits
+  of 100 snapshots/history/refs, 500 manifests/partitions, and 1000 files.
+- Added strict typed mappings for timestamps, integers, booleans, nullable
+  metrics, summary maps, and all Task 1 Iceberg records. Timestamp mapping
+  accepts ISO-8601 `Z`/offset forms and Athena's trailing `UTC` representation.
+- Derived partition fields from result metadata in source order while requiring
+  every fixed partition metric column. Missing, duplicate, malformed, or
+  width-inconsistent metadata raises `IcebergMetadataShapeError`.
+- Updated the Athena output-mode source contract test to follow the extracted
+  runner while preserving its no-`output_location` invariant.
+
+## Privacy
+
+- `BoundedQueryResult.rows` and all path/partition-bearing Iceberg fields remain
+  excluded from reprs.
+- Mapping failures replace provider values with stable, value-free typed errors
+  and suppress the original conversion traceback.
+- A production-frame `TracebackException(capture_locals=True)` oracle and a real
+  `CrashDump` write verify malformed metadata row values do not survive into
+  crash surfaces.
+- Generated request tokens contain no catalog, database, table, SQL, or result
+  value. No Task 2 code logs SQL, result rows, or provider objects.
+
+## TDD Evidence
+
+Initial runner/inspector collection failed before production code existed:
+
+```text
+uv run pytest tests/unit/domain/test_athena_runner.py \
+  tests/unit/domain/test_iceberg.py \
+  tests/unit/vm/athena/test_query_vm.py -q
+ModuleNotFoundError: No module named 'aws_tui.domain.athena_runner'
+ImportError: cannot import name 'IcebergInspector'
+3 errors
+```
+
+The runner reached green independently:
+
+```text
+uv run pytest tests/unit/domain/test_athena_runner.py -q
+9 passed
+```
+
+The inspector reached green after exact projection, mapping, partition, context,
+cancellation, and privacy coverage:
+
+```text
+uv run pytest tests/unit/domain/test_iceberg.py \
+  tests/unit/domain/test_athena_runner.py -q
+28 passed
+```
+
+The VM/service RED run failed on the missing runner injection and delegation
+contracts, then passed with the extraction:
+
+```text
+uv run pytest tests/unit/domain/test_athena_runner.py \
+  tests/unit/domain/test_iceberg.py \
+  tests/unit/vm/athena/test_query_vm.py \
+  tests/unit/services/athena/test_service.py -q
+66 passed
+```
+
+## Verification
+
+Focused domain, Athena VM, service, and integration coverage passed. The final
+repository-wide evidence was:
+
+```text
+uv run pytest tests --ignore=tests/snapshot -q -n 8
+2225 passed, 2 skipped
+
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color \
+  uv run pytest tests/snapshot/test_athena.py -q -n 8
+120 passed
+
+uv run pytest tests/docs -q -n 4
+63 passed, 2 skipped
+
+uv run mypy
+Success: no issues found in 152 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+385 files already formatted
+
+./scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+
+uv build
+Successfully built dist/aws_tui-0.8.0.tar.gz
+Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
+```
+
+The two documentation skips are the known local Cairo shared-library
+unavailability. The unrelated `/tmp/vmx-cargo-182/env` shell startup warning is
+also omitted from the evidence.
+
+## Changed Files
+
+- `src/aws_tui/domain/athena_runner.py`
+- `src/aws_tui/domain/iceberg.py`
+- `src/aws_tui/vm/athena/query_vm.py`
+- `src/aws_tui/vm/athena/page_vm.py`
+- `src/aws_tui/services/athena/service.py`
+- `tests/unit/domain/test_athena_runner.py`
+- `tests/unit/domain/test_iceberg.py`
+- `tests/unit/vm/athena/test_query_vm.py`
+- `tests/unit/services/athena/test_service.py`
+- `tests/docs/test_scaffolding.py`
+- `.superpowers/sdd/task-2-report.md`
+
+## Concerns
+
+- Athena documents the six supported Iceberg metadata tables but does not pin
+  every returned column in the user guide. The accepted implementation plan is
+  therefore the exact column contract; strict shape failures remain scoped and
+  visible if a workgroup exposes an incompatible engine shape.
+- `$partitions` necessarily uses `SELECT *` because its leading partition
+  columns are table-dependent. All fixed metrics are validated and the query is
+  still hard-bounded to 500 rows.

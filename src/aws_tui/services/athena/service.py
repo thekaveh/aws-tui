@@ -9,6 +9,7 @@ from vmx import Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.athena import AthenaClient
+from aws_tui.domain.athena_runner import AthenaQueryRunner
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
@@ -127,9 +128,11 @@ class AthenaService:
                 connection=connection,
             )
         )
+        policy = self._policy_factory()
         return AthenaPageVM(
             client=client,
-            policy=self._policy_factory(),
+            policy=policy,
+            runner=AthenaQueryRunner(client, policy),
             connection=connection,
             selection_store=self._selections,
             hub=self._hub,
