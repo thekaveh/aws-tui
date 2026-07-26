@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import gc
 import traceback
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 from unittest.mock import call
 
@@ -36,6 +39,7 @@ from aws_tui.domain.query import (
     AthenaQueryError,
     NamedQuery,
     PreparedStatement,
+    PreparedStatementSummary,
     QueryContext,
     QueryExecutionRef,
     QueryExecutionSummary,
@@ -45,6 +49,7 @@ from aws_tui.domain.query import (
 )
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.crash_dump import CrashDump
 from tests.unit.domain._fake_aws_client import (
     FakeAwsClient,
     FakeAwsSession,
@@ -268,7 +273,10 @@ async def test_list_catalogs_maps_one_page_without_hidden_detail_calls() -> None
         },
     )
 
-    rows, token = await client.list_catalogs_page(start_token="catalogs-1")
+    rows, token = await client.list_catalogs_page(
+        workgroup="analysts",
+        start_token="catalogs-1",
+    )
 
     assert rows == [
         AthenaCatalogSummary("AwsDataCatalog", "GLUE", None),
@@ -276,6 +284,7 @@ async def test_list_catalogs_maps_one_page_without_hidden_detail_calls() -> None
     ]
     assert token == "catalogs-2"
     boto.list_data_catalogs.assert_awaited_once_with(
+        WorkGroup="analysts",
         MaxResults=50,
         NextToken="catalogs-1",
     )
@@ -295,6 +304,7 @@ async def test_list_databases_maps_connection_scoped_refs() -> None:
 
     rows, token = await client.list_databases_page(
         "AwsDataCatalog",
+        workgroup="analysts",
         start_token="databases-1",
     )
 
@@ -315,6 +325,7 @@ async def test_list_databases_maps_connection_scoped_refs() -> None:
     assert token == "databases-2"
     boto.list_databases.assert_awaited_once_with(
         CatalogName="AwsDataCatalog",
+        WorkGroup="analysts",
         MaxResults=50,
         NextToken="databases-1",
     )
@@ -341,6 +352,7 @@ async def test_list_tables_maps_only_available_athena_metadata() -> None:
     rows, token = await client.list_tables_page(
         "AwsDataCatalog",
         "analytics",
+        workgroup="analysts",
         start_token="tables-1",
     )
 
@@ -378,9 +390,41 @@ async def test_list_tables_maps_only_available_athena_metadata() -> None:
     boto.list_table_metadata.assert_awaited_once_with(
         CatalogName="AwsDataCatalog",
         DatabaseName="analytics",
+        WorkGroup="analysts",
         MaxResults=50,
         NextToken="tables-1",
     )
+
+
+@pytest.mark.parametrize(
+    ("method", "response"),
+    [
+        ("list_data_catalogs", {"DataCatalogsSummary": []}),
+        ("list_databases", {"DatabaseList": []}),
+        ("list_table_metadata", {"TableMetadataList": []}),
+    ],
+)
+async def test_metadata_calls_omit_unsupplied_workgroup(
+    method: str,
+    response: object,
+) -> None:
+    client, boto, _ = _athena_client(method, response)
+
+    if method == "list_data_catalogs":
+        await client.list_catalogs_page()
+        expected = call(MaxResults=50)
+    elif method == "list_databases":
+        await client.list_databases_page("AwsDataCatalog")
+        expected = call(CatalogName="AwsDataCatalog", MaxResults=50)
+    else:
+        await client.list_tables_page("AwsDataCatalog", "analytics")
+        expected = call(
+            CatalogName="AwsDataCatalog",
+            DatabaseName="analytics",
+            MaxResults=50,
+        )
+
+    assert getattr(boto, method).await_args == expected
 
 
 async def test_list_query_executions_scopes_refs_and_fetches_no_details() -> None:
@@ -589,7 +633,10 @@ async def test_missing_result_configuration_maps_to_typed_error() -> None:
     client, boto, _ = _athena_client()
     boto.start_query_execution.side_effect = _client_error(
         "InvalidRequestException",
-        f"No output location provided for {sql}",
+        (
+            "No output location provided. An output location is required either "
+            f"through the WorkGroup result configuration or as API input for {sql}"
+        ),
         operation="StartQueryExecution",
     )
 
@@ -601,6 +648,59 @@ async def test_missing_result_configuration_maps_to_typed_error() -> None:
 
     assert sql not in str(raised.value)
     assert raised.value.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    ("error", "output_location"),
+    [
+        (
+            _client_error(
+                "InvalidRequestException",
+                "The S3 output location is malformed: LOCATION_SECRET_7F4C2A9D",
+                operation="StartQueryExecution",
+            ),
+            "s3://LOCATION_SECRET_7F4C2A9D",
+        ),
+        (
+            botocore.exceptions.ParamValidationError(
+                report="invalid output location LOCATION_SECRET_7F4C2A9D"
+            ),
+            "LOCATION_SECRET_7F4C2A9D",
+        ),
+    ],
+)
+async def test_malformed_supplied_result_location_is_ordinary_validation(
+    error: Exception,
+    output_location: str,
+) -> None:
+    client, boto, _ = _athena_client()
+    boto.start_query_execution.side_effect = error
+
+    with pytest.raises(ValidationError) as raised:
+        await client.start_query(
+            "SELECT 1",
+            CONTEXT,
+            request_token="token-123",
+            output_location=output_location,
+        )
+
+    assert type(raised.value) is ValidationError
+    assert "LOCATION_SECRET_7F4C2A9D" not in str(raised.value)
+    assert raised.value.__cause__ is None
+
+
+async def test_non_start_missing_output_message_is_ordinary_validation() -> None:
+    client, boto, _ = _athena_client()
+    boto.list_data_catalogs.side_effect = _client_error(
+        "InvalidRequestException",
+        "No output location provided",
+        operation="ListDataCatalogs",
+    )
+
+    with pytest.raises(ValidationError) as raised:
+        await client.list_catalogs_page()
+
+    assert type(raised.value) is ValidationError
 
 
 async def test_stop_query_allows_only_app_started_active_execution() -> None:
@@ -616,6 +716,96 @@ async def test_stop_query_allows_only_app_started_active_execution() -> None:
     boto.stop_query_execution.assert_awaited_once_with(
         QueryExecutionId="q-started",
     )
+
+
+async def test_concurrent_stop_awaits_share_one_dispatch() -> None:
+    client, boto, _ = _athena_client(
+        "start_query_execution",
+        {"QueryExecutionId": "q-started"},
+    )
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-123")
+    dispatched = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stop_once(**_: object) -> dict[str, object]:
+        dispatched.set()
+        await release.wait()
+        return {}
+
+    boto.stop_query_execution.side_effect = stop_once
+    first = asyncio.create_task(client.stop_query("q-started"))
+    await dispatched.wait()
+    second = asyncio.create_task(client.stop_query("q-started"))
+    await asyncio.sleep(0)
+    dispatch_count = boto.stop_query_execution.await_count
+    release.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert dispatch_count == 1
+    assert results == [None, None]
+
+
+async def test_cancelled_stop_waiter_retrieves_late_dispatch_failure() -> None:
+    client, boto, _ = _athena_client(
+        "start_query_execution",
+        {"QueryExecutionId": "q-started"},
+    )
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-123")
+    dispatched = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail_after_cancellation(**_: object) -> None:
+        dispatched.set()
+        await release.wait()
+        raise _client_error("TooManyRequestsException", "retry later")
+
+    boto.stop_query_execution.side_effect = fail_after_cancellation
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    unhandled: list[dict[str, object]] = []
+    loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+    try:
+        waiter = asyncio.create_task(client.stop_query("q-started"))
+        await dispatched.wait()
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        release.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+            if not client._stop_tasks:
+                break
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert not [
+        context
+        for context in unhandled
+        if context.get("message") == "Task exception was never retrieved"
+    ]
+
+
+async def test_failed_stop_restores_authority_for_retry() -> None:
+    client, boto, _ = _athena_client(
+        "start_query_execution",
+        {"QueryExecutionId": "q-started"},
+    )
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-123")
+    boto.stop_query_execution.side_effect = [
+        _client_error("TooManyRequestsException", "retry later"),
+        {},
+    ]
+
+    with pytest.raises(ThrottledError, match="retry later"):
+        await client.stop_query("q-started")
+    await client.stop_query("q-started")
+
+    assert boto.stop_query_execution.await_args_list == [
+        call(QueryExecutionId="q-started"),
+        call(QueryExecutionId="q-started"),
+    ]
 
 
 async def test_stop_query_rejects_history_execution_without_sdk_call() -> None:
@@ -644,6 +834,69 @@ async def test_terminal_observation_revokes_stop_authority() -> None:
         await client.stop_query("q-started")
 
     boto.stop_query_execution.assert_not_awaited()
+
+
+async def test_terminal_observation_wins_over_failed_stop_race() -> None:
+    client, boto, _ = _athena_client(
+        "start_query_execution",
+        {"QueryExecutionId": "q-started"},
+    )
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-123")
+    dispatched = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail_stop(**_: object) -> None:
+        dispatched.set()
+        await release.wait()
+        raise _client_error("TooManyRequestsException", "retry later")
+
+    boto.stop_query_execution.side_effect = fail_stop
+    stopping = asyncio.create_task(client.stop_query("q-started"))
+    await dispatched.wait()
+    response = _query_execution("SUCCEEDED")
+    execution = cast(dict[str, object], response["QueryExecution"])
+    execution["QueryExecutionId"] = "q-started"
+    boto.get_query_execution.return_value = response
+    await client.get_query_execution("q-started")
+    release.set()
+
+    with pytest.raises(ThrottledError, match="retry later"):
+        await stopping
+    with pytest.raises(ValidationError, match="not an active app-started query"):
+        await client.stop_query("q-started")
+
+    boto.stop_query_execution.assert_awaited_once_with(
+        QueryExecutionId="q-started",
+    )
+
+
+async def test_terminal_execution_cannot_be_reauthorized_by_token_or_id_reuse() -> None:
+    client, boto, _ = _athena_client()
+    boto.start_query_execution.side_effect = [
+        {"QueryExecutionId": "q-old"},
+        {"QueryExecutionId": "q-old"},
+        {"QueryExecutionId": "q-old"},
+        {"QueryExecutionId": "q-new"},
+    ]
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-old")
+    response = _query_execution("SUCCEEDED")
+    execution = cast(dict[str, object], response["QueryExecution"])
+    execution["QueryExecutionId"] = "q-old"
+    boto.get_query_execution.return_value = response
+    await client.get_query_execution("q-old")
+
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-old")
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-other")
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-new")
+
+    assert client._app_started_query_ids_by_token == {"token-new": "q-new"}
+    with pytest.raises(ValidationError, match="not an active app-started query"):
+        await client.stop_query("q-old")
+    await client.stop_query("q-new")
+
+    boto.stop_query_execution.assert_awaited_once_with(
+        QueryExecutionId="q-new",
+    )
 
 
 async def test_results_page_removes_header_only_on_first_page() -> None:
@@ -803,6 +1056,69 @@ async def test_get_named_queries_empty_input_makes_no_sdk_call() -> None:
     assert session.requests == []
 
 
+@pytest.mark.parametrize(
+    ("failed_batch", "error_code", "expected_type"),
+    [
+        (0, "TooManyRequestsException", ThrottledError),
+        (1, "InternalServerException", ProviderError),
+    ],
+)
+async def test_get_named_queries_rejects_unprocessed_ids_per_batch_without_leak(
+    failed_batch: int,
+    error_code: str,
+    expected_type: type[ProviderError],
+) -> None:
+    client, boto, _ = _athena_client()
+    ids = [f"sensitive-named-{index}-7f4c2a9d" for index in range(51)]
+    successful_response = {
+        "NamedQueries": [
+            {
+                "NamedQueryId": ids[0],
+                "Name": "Loaded",
+                "Database": "analytics",
+                "QueryString": "SELECT 1",
+                "WorkGroup": "analysts",
+            }
+        ]
+    }
+    failed_id = ids[0] if failed_batch == 0 else ids[50]
+    failed_response = {
+        "NamedQueries": [
+            {
+                "NamedQueryId": failed_id,
+                "Name": "Partial result must not escape",
+                "Database": "analytics",
+                "QueryString": "SELECT 1",
+                "WorkGroup": "analysts",
+            }
+        ],
+        "UnprocessedNamedQueryIds": [
+            {
+                "NamedQueryId": failed_id,
+                "ErrorCode": error_code,
+                "ErrorMessage": f"could not process {failed_id}",
+            }
+        ],
+    }
+    boto.batch_get_named_query.side_effect = (
+        [failed_response] if failed_batch == 0 else [successful_response, failed_response]
+    )
+
+    with pytest.raises(expected_type) as raised:
+        await client.get_named_queries(ids)
+
+    rendered = "".join(
+        traceback.format_exception(
+            type(raised.value),
+            raised.value,
+            raised.value.__traceback__,
+        )
+    )
+    assert "sensitive-named-" not in rendered
+    assert raised.value.__cause__ is None
+    assert boto.batch_get_named_query.await_count == failed_batch + 1
+
+
 async def test_list_prepared_statements_maps_one_page() -> None:
     client, boto, _ = _athena_client(
         "list_prepared_statements",
@@ -810,15 +1126,10 @@ async def test_list_prepared_statements_maps_one_page() -> None:
             "PreparedStatements": [
                 {
                     "StatementName": "event_by_id",
-                    "QueryStatement": "SELECT * FROM events WHERE event_id = ?",
-                    "WorkGroupName": "analysts",
-                    "Description": "Lookup",
                     "LastModifiedTime": NOW,
                 },
                 {
                     "StatementName": "recent",
-                    "QueryStatement": "SELECT * FROM events LIMIT 10",
-                    "WorkGroupName": "analysts",
                 },
             ],
             "NextToken": "prepared-2",
@@ -831,26 +1142,43 @@ async def test_list_prepared_statements_maps_one_page() -> None:
     )
 
     assert rows == [
-        PreparedStatement(
-            "event_by_id",
-            "SELECT * FROM events WHERE event_id = ?",
-            "analysts",
-            "Lookup",
-            NOW,
-        ),
-        PreparedStatement(
-            "recent",
-            "SELECT * FROM events LIMIT 10",
-            "analysts",
-            None,
-            None,
-        ),
+        PreparedStatementSummary("event_by_id", NOW),
+        PreparedStatementSummary("recent", None),
     ]
     assert token == "prepared-2"
     boto.list_prepared_statements.assert_awaited_once_with(
         WorkGroup="analysts",
         MaxResults=50,
         NextToken="prepared-1",
+    )
+
+
+async def test_get_prepared_statement_maps_detail() -> None:
+    client, boto, _ = _athena_client(
+        "get_prepared_statement",
+        {
+            "PreparedStatement": {
+                "StatementName": "event_by_id",
+                "QueryStatement": "SELECT * FROM events WHERE event_id = ?",
+                "WorkGroupName": "analysts",
+                "Description": "Lookup",
+                "LastModifiedTime": NOW,
+            }
+        },
+    )
+
+    detail = await client.get_prepared_statement("event_by_id", "analysts")
+
+    assert detail == PreparedStatement(
+        "event_by_id",
+        "SELECT * FROM events WHERE event_id = ?",
+        "analysts",
+        "Lookup",
+        NOW,
+    )
+    boto.get_prepared_statement.assert_awaited_once_with(
+        StatementName="event_by_id",
+        WorkGroup="analysts",
     )
 
 
@@ -960,6 +1288,137 @@ async def test_access_denied_maps_without_exposing_query_or_raw_response() -> No
     assert raised.value.__cause__ is None
 
 
+async def test_unknown_start_exception_is_stable_and_crash_safe(tmp_path: Path) -> None:
+    sql = "SELECT private_fixture_value FROM restricted_table"
+    request_token = "REQUEST_TOKEN_SECRET_7F4C2A9D"
+    output_location = "s3://private-results/LOCATION_SECRET_7F4C2A9D/"
+    client, boto, _ = _athena_client()
+    boto.start_query_execution.side_effect = RuntimeError(
+        f"unknown failure for {sql} {request_token} {output_location}"
+    )
+
+    with pytest.raises(ProviderError, match="Athena request failed") as raised:
+        await client.start_query(
+            sql,
+            CONTEXT,
+            request_token=request_token,
+            output_location=output_location,
+        )
+
+    rendered = "".join(
+        traceback.format_exception(
+            type(raised.value),
+            raised.value,
+            raised.value.__traceback__,
+        )
+    )
+    crash_path = CrashDump(base_dir=tmp_path / "crash").write(exc=raised.value)
+    crash_text = crash_path.read_text(encoding="utf-8")
+    for secret in (
+        "private_fixture_value",
+        request_token,
+        "LOCATION_SECRET_7F4C2A9D",
+    ):
+        assert secret not in rendered
+        assert secret not in crash_text
+    assert raised.value.__cause__ is None
+    assert type(raised.value) is ProviderError
+
+
+async def _invoke_sensitive_operation(
+    client: AthenaClient,
+    boto: FakeAwsClient,
+    method: str,
+    sensitive: str,
+) -> None:
+    if method == "list_work_groups":
+        await client.list_workgroups_page(start_token=sensitive)
+    elif method == "get_work_group":
+        await client.get_workgroup(sensitive)
+    elif method == "list_data_catalogs":
+        await client.list_catalogs_page(workgroup=sensitive, start_token=sensitive)
+    elif method == "list_databases":
+        await client.list_databases_page(
+            sensitive,
+            workgroup=sensitive,
+            start_token=sensitive,
+        )
+    elif method == "list_table_metadata":
+        await client.list_tables_page(
+            sensitive,
+            sensitive,
+            workgroup=sensitive,
+            start_token=sensitive,
+        )
+    elif method == "list_query_executions":
+        await client.list_query_executions_page(sensitive, start_token=sensitive)
+    elif method == "get_query_execution":
+        await client.get_query_execution(sensitive)
+    elif method == "get_query_runtime_statistics":
+        await client.get_query_runtime_statistics(sensitive)
+    elif method == "stop_query_execution":
+        boto.start_query_execution.return_value = {"QueryExecutionId": sensitive}
+        await client.start_query("SELECT 1", CONTEXT, request_token="setup-token")
+        await client.stop_query(sensitive)
+    elif method == "get_query_results":
+        await client.get_results_page(sensitive, start_token=sensitive)
+    elif method == "list_named_queries":
+        await client.list_named_queries_page(sensitive, start_token=sensitive)
+    elif method == "batch_get_named_query":
+        await client.get_named_queries([sensitive])
+    elif method == "list_prepared_statements":
+        await client.list_prepared_statements_page(sensitive, start_token=sensitive)
+    else:
+        await client.get_prepared_statement(sensitive, sensitive)
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "list_work_groups",
+        "get_work_group",
+        "list_data_catalogs",
+        "list_databases",
+        "list_table_metadata",
+        "list_query_executions",
+        "get_query_execution",
+        "get_query_runtime_statistics",
+        "stop_query_execution",
+        "get_query_results",
+        "list_named_queries",
+        "batch_get_named_query",
+        "list_prepared_statements",
+        "get_prepared_statement",
+    ],
+)
+async def test_operation_identifiers_and_tokens_are_scrubbed_from_tracebacks(
+    method: str,
+) -> None:
+    sensitive = "OPERATION_SECRET_7F4C2A9D"
+    raw_secret = "RAW_RESPONSE_SECRET_7F4C2A9D"
+    client, boto, _ = _athena_client()
+    getattr(boto, method).side_effect = _client_error(
+        "InternalServerException",
+        f"failed for {sensitive}",
+        operation=method,
+        response_metadata={"RawSecret": raw_secret},
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await _invoke_sensitive_operation(client, boto, method, sensitive)
+
+    rendered = "".join(
+        traceback.format_exception(
+            type(raised.value),
+            raised.value,
+            raised.value.__traceback__,
+        )
+    )
+    assert sensitive not in rendered
+    assert raw_secret not in rendered
+    assert raised.value.__cause__ is None
+
+
 async def _invoke_malformed_case(client: AthenaClient, method: str) -> None:
     if method == "list_work_groups":
         await client.list_workgroups_page()
@@ -983,6 +1442,8 @@ async def _invoke_malformed_case(client: AthenaClient, method: str) -> None:
         await client.list_named_queries_page("analysts")
     elif method == "batch_get_named_query":
         await client.get_named_queries(["named-1"])
+    elif method == "get_prepared_statement":
+        await client.get_prepared_statement("prepared-1", "analysts")
     else:
         await client.list_prepared_statements_page("analysts")
 
@@ -1008,8 +1469,12 @@ async def _invoke_malformed_case(client: AthenaClient, method: str) -> None:
         ("list_named_queries", {"NamedQueryIds": ["named-1", None]}),
         ("batch_get_named_query", {"NamedQueries": [{"Name": "missing fields"}]}),
         (
+            "get_prepared_statement",
+            {"PreparedStatement": {"StatementName": "missing fields"}},
+        ),
+        (
             "list_prepared_statements",
-            {"PreparedStatements": [{"StatementName": "missing fields"}]},
+            {"PreparedStatements": [{"LastModifiedTime": NOW}]},
         ),
     ],
 )

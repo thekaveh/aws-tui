@@ -13,6 +13,7 @@ class FakeAwsClient:
 
     def __init__(self) -> None:
         self.batch_get_named_query = AsyncMock()
+        self.get_prepared_statement = AsyncMock()
         self.get_query_execution = AsyncMock()
         self.get_query_results = AsyncMock()
         self.get_query_runtime_statistics = AsyncMock()

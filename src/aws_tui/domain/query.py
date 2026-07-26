@@ -91,7 +91,7 @@ class ResultColumn:
 class ResultPage:
     columns: tuple[ResultColumn, ...]
     rows: tuple[tuple[str | None, ...], ...] = field(repr=False)
-    next_token: str | None
+    next_token: str | None = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,11 +105,17 @@ class NamedQuery:
 
 
 @dataclass(frozen=True, slots=True)
+class PreparedStatementSummary:
+    name: str
+    last_modified_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedStatement:
     name: str
     query_statement: str = field(repr=False)
     workgroup: str
-    description: str | None
+    description: str | None = field(repr=False)
     last_modified_at: datetime | None
 
 
@@ -117,6 +123,7 @@ __all__ = [
     "AthenaQueryError",
     "NamedQuery",
     "PreparedStatement",
+    "PreparedStatementSummary",
     "QueryContext",
     "QueryExecutionDetail",
     "QueryExecutionRef",

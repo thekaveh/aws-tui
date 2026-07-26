@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,6 +29,7 @@ from aws_tui.domain.query import (
     AthenaQueryError,
     NamedQuery,
     PreparedStatement,
+    PreparedStatementSummary,
     QueryContext,
     QueryExecutionDetail,
     QueryExecutionRef,
@@ -80,7 +82,7 @@ class AthenaCatalogSummary:
 
 
 class ResultConfigurationRequiredError(ValidationError):
-    """Athena has no workgroup or caller-provided result destination."""
+    """Athena reported no workgroup or caller-provided result destination."""
 
 
 _ACCESS_DENIED_CODES = frozenset({"AccessDenied", "AccessDeniedException"})
@@ -158,8 +160,6 @@ def _map_athena_error(
             str(error.get("Message", "Athena request failed")),
             sensitive_values,
         )
-        if _is_result_configuration_error(code, message):
-            return ResultConfigurationRequiredError("Athena result configuration is required")
         return _provider_error_for_code(code, message)
     if isinstance(exc, botocore.exceptions.ParamValidationError):
         return ValidationError(_sanitize_message(str(exc), sensitive_values))
@@ -172,10 +172,13 @@ def _raise_mapped_athena_error(
     exc: Exception,
     *,
     sensitive_values: Sequence[str] = (),
+    unknown_message: str | None = None,
 ) -> NoReturn:
     mapped = _map_athena_error(exc, sensitive_values=sensitive_values)
     if mapped is None:
-        raise exc
+        if unknown_message is None:
+            raise exc
+        mapped = ProviderError(unknown_message)
     raise mapped from None
 
 
@@ -195,21 +198,29 @@ def _provider_error_for_code(code: str, message: str) -> ProviderError:
     return ProviderError(message)
 
 
-def _is_result_configuration_error(code: str, message: str) -> bool:
-    if code not in _VALIDATION_CODES:
+def _is_missing_result_configuration_error(exc: Exception) -> bool:
+    if not isinstance(exc, botocore.exceptions.ClientError):
         return False
-    normalized = message.lower()
-    return (
-        "output location" in normalized
-        or "result configuration" in normalized
-        or "query result location" in normalized
-    )
+    error = exc.response.get("Error", {})
+    if str(error.get("Code", "")) != "InvalidRequestException":
+        return False
+    return "no output location provided" in str(error.get("Message", "")).lower()
 
 
 def _sanitize_message(message: str, sensitive_values: Sequence[str]) -> str:
     sanitized = redact_text(message)
+    fragments = {
+        fragment
+        for value in sensitive_values
+        if value
+        for fragment in (
+            value,
+            value.partition("://")[2] if "://" in value else "",
+        )
+        if fragment
+    }
     for value in sorted(
-        (value for value in sensitive_values if value),
+        fragments,
         key=len,
         reverse=True,
     ):
@@ -225,6 +236,9 @@ class AthenaClient:
         self._connection = connection
         self._sql_policy = ReadOnlySqlPolicy()
         self._app_started_active_queries: set[str] = set()
+        self._app_started_query_ids_by_token: dict[str, str] = {}
+        self._retired_app_started_queries: set[str] = set()
+        self._stop_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def list_workgroups_page(
         self,
@@ -243,7 +257,10 @@ class AthenaClient:
             ]
             return rows, _response_token(response)
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(start_token or "",),
+            )
 
     async def get_workgroup(self, name: str) -> AthenaWorkgroupDetail:
         try:
@@ -282,14 +299,17 @@ class AthenaClient:
                 engine_version=_engine_version(engine_version),
             )
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(exc, sensitive_values=(name,))
 
     async def list_catalogs_page(
         self,
         *,
+        workgroup: str | None = None,
         start_token: str | None = None,
     ) -> tuple[list[AthenaCatalogSummary], str | None]:
         kwargs = _page_kwargs(start_token)
+        if workgroup is not None:
+            kwargs["WorkGroup"] = workgroup
         try:
             async with await self._aws_session.client(
                 self._connection,
@@ -306,18 +326,24 @@ class AthenaClient:
             ]
             return rows, _response_token(response)
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(workgroup or "", start_token or ""),
+            )
 
     async def list_databases_page(
         self,
         catalog: str,
         *,
+        workgroup: str | None = None,
         start_token: str | None = None,
     ) -> tuple[list[DatabaseSummary], str | None]:
         kwargs: dict[str, object] = {
             "CatalogName": catalog,
             **_page_kwargs(start_token),
         }
+        if workgroup is not None:
+            kwargs["WorkGroup"] = workgroup
         try:
             async with await self._aws_session.client(
                 self._connection,
@@ -340,13 +366,21 @@ class AthenaClient:
             ]
             return rows, _response_token(response)
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(
+                    catalog,
+                    workgroup or "",
+                    start_token or "",
+                ),
+            )
 
     async def list_tables_page(
         self,
         catalog: str,
         database: str,
         *,
+        workgroup: str | None = None,
         start_token: str | None = None,
     ) -> tuple[list[TableSummary], str | None]:
         kwargs: dict[str, object] = {
@@ -354,6 +388,8 @@ class AthenaClient:
             "DatabaseName": database,
             **_page_kwargs(start_token),
         }
+        if workgroup is not None:
+            kwargs["WorkGroup"] = workgroup
         try:
             async with await self._aws_session.client(
                 self._connection,
@@ -379,7 +415,15 @@ class AthenaClient:
             ]
             return rows, _response_token(response)
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(
+                    catalog,
+                    database,
+                    workgroup or "",
+                    start_token or "",
+                ),
+            )
 
     async def list_query_executions_page(
         self,
@@ -411,7 +455,10 @@ class AthenaClient:
             ]
             return rows, _response_token(response)
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(workgroup, start_token or ""),
+            )
 
     async def get_query_execution(
         self,
@@ -433,10 +480,13 @@ class AthenaClient:
             if detail.summary.ref.execution_id != execution_id:
                 raise ValueError("query execution id mismatch")
             if detail.summary.state in _TERMINAL_QUERY_STATES:
-                self._app_started_active_queries.discard(execution_id)
+                self._retire_app_started_query(execution_id)
             return detail
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(execution_id,),
+            )
 
     async def get_query_runtime_statistics(
         self,
@@ -477,7 +527,10 @@ class AthenaClient:
                 reused_previous_result=False,
             )
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(execution_id,),
+            )
 
     async def start_query(
         self,
@@ -518,7 +571,13 @@ class AthenaClient:
                 _response_mapping(response),
                 "QueryExecutionId",
             )
-            self._app_started_active_queries.add(execution_id)
+            if execution_id not in self._retired_app_started_queries:
+                known_execution_id = self._app_started_query_ids_by_token.get(request_token)
+                if known_execution_id is None:
+                    self._app_started_query_ids_by_token[request_token] = execution_id
+                    self._app_started_active_queries.add(execution_id)
+                elif known_execution_id == execution_id:
+                    self._app_started_active_queries.add(execution_id)
             return QueryExecutionRef(
                 execution_id,
                 self._connection.name,
@@ -526,6 +585,10 @@ class AthenaClient:
                 context.workgroup,
             )
         except Exception as exc:
+            if _is_missing_result_configuration_error(exc):
+                raise ResultConfigurationRequiredError(
+                    "Athena result configuration is required"
+                ) from None
             _raise_mapped_athena_error(
                 exc,
                 sensitive_values=(
@@ -534,11 +597,26 @@ class AthenaClient:
                     request_token,
                     output_location or "",
                 ),
+                unknown_message="Athena request failed",
             )
 
     async def stop_query(self, execution_id: str) -> None:
-        if execution_id not in self._app_started_active_queries:
-            raise ValidationError("query is not an active app-started query")
+        task = self._stop_tasks.get(execution_id)
+        if task is None:
+            if execution_id not in self._app_started_active_queries:
+                raise ValidationError("query is not an active app-started query")
+            self._app_started_active_queries.remove(execution_id)
+            task = asyncio.create_task(self._dispatch_stop_query(execution_id))
+            self._stop_tasks[execution_id] = task
+            task.add_done_callback(
+                lambda completed: self._forget_stop_task(
+                    execution_id,
+                    completed,
+                )
+            )
+        await asyncio.shield(task)
+
+    async def _dispatch_stop_query(self, execution_id: str) -> None:
         try:
             async with await self._aws_session.client(
                 self._connection,
@@ -547,9 +625,39 @@ class AthenaClient:
                 await client.stop_query_execution(
                     QueryExecutionId=execution_id,
                 )
-            self._app_started_active_queries.discard(execution_id)
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            if execution_id not in self._retired_app_started_queries:
+                self._app_started_active_queries.add(execution_id)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(execution_id,),
+            )
+        except BaseException:
+            if execution_id not in self._retired_app_started_queries:
+                self._app_started_active_queries.add(execution_id)
+            raise
+        self._retire_app_started_query(execution_id)
+
+    def _forget_stop_task(
+        self,
+        execution_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        if not task.cancelled():
+            task.exception()
+        if self._stop_tasks.get(execution_id) is task:
+            del self._stop_tasks[execution_id]
+
+    def _retire_app_started_query(self, execution_id: str) -> None:
+        self._app_started_active_queries.discard(execution_id)
+        self._retired_app_started_queries.add(execution_id)
+        retired_tokens = [
+            token
+            for token, token_execution_id in self._app_started_query_ids_by_token.items()
+            if token_execution_id == execution_id
+        ]
+        for token in retired_tokens:
+            del self._app_started_query_ids_by_token[token]
 
     async def get_results_page(
         self,
@@ -574,7 +682,10 @@ class AthenaClient:
                 first_page=start_token is None,
             )
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(execution_id, start_token or ""),
+            )
 
     async def list_named_queries_page(
         self,
@@ -597,7 +708,10 @@ class AthenaClient:
                 _response_token(response),
             )
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(workgroup, start_token or ""),
+            )
 
     async def get_named_queries(
         self,
@@ -612,22 +726,32 @@ class AthenaClient:
                 "athena",
             ) as client:
                 for offset in range(0, len(ids), _NAMED_QUERY_BATCH_SIZE):
+                    batch_ids = list(ids[offset : offset + _NAMED_QUERY_BATCH_SIZE])
                     response = await client.batch_get_named_query(
-                        NamedQueryIds=list(ids[offset : offset + _NAMED_QUERY_BATCH_SIZE]),
+                        NamedQueryIds=batch_ids,
                     )
+                    unprocessed_error = _unprocessed_named_query_error(
+                        response,
+                        sensitive_values=batch_ids,
+                    )
+                    if unprocessed_error is not None:
+                        raise unprocessed_error
                     rows.extend(
                         _map_named_query(item) for item in _response_items(response, "NamedQueries")
                     )
             return tuple(rows)
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=tuple(ids),
+            )
 
     async def list_prepared_statements_page(
         self,
         workgroup: str,
         *,
         start_token: str | None = None,
-    ) -> tuple[list[PreparedStatement], str | None]:
+    ) -> tuple[list[PreparedStatementSummary], str | None]:
         kwargs: dict[str, object] = {
             "WorkGroup": workgroup,
             **_page_kwargs(start_token),
@@ -639,12 +763,40 @@ class AthenaClient:
             ) as client:
                 response = await client.list_prepared_statements(**kwargs)
             rows = [
-                _map_prepared_statement(item)
+                _map_prepared_statement_summary(item)
                 for item in _response_items(response, "PreparedStatements")
             ]
             return rows, _response_token(response)
         except Exception as exc:
-            _raise_mapped_athena_error(exc)
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(workgroup, start_token or ""),
+            )
+
+    async def get_prepared_statement(
+        self,
+        name: str,
+        workgroup: str,
+    ) -> PreparedStatement:
+        try:
+            async with await self._aws_session.client(
+                self._connection,
+                "athena",
+            ) as client:
+                response = await client.get_prepared_statement(
+                    StatementName=name,
+                    WorkGroup=workgroup,
+                )
+            statement = _required_mapping(
+                _response_mapping(response),
+                "PreparedStatement",
+            )
+            return _map_prepared_statement(statement)
+        except Exception as exc:
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=(name, workgroup),
+            )
 
     def _map_query_execution(
         self,
@@ -821,6 +973,24 @@ def _map_named_query(item: Mapping[str, Any]) -> NamedQuery:
     )
 
 
+def _unprocessed_named_query_error(
+    response: object,
+    *,
+    sensitive_values: Sequence[str],
+) -> ProviderError | None:
+    unprocessed = _response_items(response, "UnprocessedNamedQueryIds")
+    if not unprocessed:
+        return None
+    first = unprocessed[0]
+    code = _optional_string(first, "ErrorCode") or ""
+    message = _sanitize_message(
+        _optional_string(first, "ErrorMessage")
+        or "Athena could not process one or more named queries",
+        sensitive_values,
+    )
+    return _provider_error_for_code(code, message)
+
+
 def _map_prepared_statement(
     item: Mapping[str, Any],
 ) -> PreparedStatement:
@@ -829,6 +999,15 @@ def _map_prepared_statement(
         query_statement=_required_string(item, "QueryStatement"),
         workgroup=_required_string(item, "WorkGroupName"),
         description=_optional_string(item, "Description"),
+        last_modified_at=_optional_datetime(item, "LastModifiedTime"),
+    )
+
+
+def _map_prepared_statement_summary(
+    item: Mapping[str, Any],
+) -> PreparedStatementSummary:
+    return PreparedStatementSummary(
+        name=_required_string(item, "StatementName"),
         last_modified_at=_optional_datetime(item, "LastModifiedTime"),
     )
 

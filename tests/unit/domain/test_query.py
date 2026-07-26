@@ -9,6 +9,7 @@ from aws_tui.domain.query import (
     AthenaQueryError,
     NamedQuery,
     PreparedStatement,
+    PreparedStatementSummary,
     QueryContext,
     QueryExecutionDetail,
     QueryExecutionRef,
@@ -95,9 +96,12 @@ def test_saved_query_models_preserve_ui_fields() -> None:
         "Lookup by event ID",
         NOW,
     )
+    prepared_summary = PreparedStatementSummary("event_by_id", NOW)
 
     assert named.database == "sales"
     assert named.workgroup == "analysts"
+    assert prepared_summary.name == "event_by_id"
+    assert prepared_summary.last_modified_at == NOW
     assert prepared.description == "Lookup by event ID"
     assert prepared.last_modified_at == NOW
 
@@ -112,6 +116,7 @@ def test_saved_query_models_preserve_ui_fields() -> None:
         ResultColumn("value", "varchar", "UNKNOWN"),
         ResultPage((), (), None),
         NamedQuery("id", "name", None, "sales", "SELECT 1", "analysts"),
+        PreparedStatementSummary("name", None),
         PreparedStatement("name", "SELECT 1", "analysts", None, None),
     ],
 )
@@ -133,14 +138,20 @@ def test_sensitive_query_values_are_excluded_from_repr() -> None:
         "sensitive_statement",
         "SELECT api_token FROM credentials",
         "analysts",
-        None,
+        "prepared-description-secret-7f4c2a9d",
         None,
     )
-    page = ResultPage((ResultColumn("token", "varchar", "UNKNOWN"),), (("secret-value",),), None)
+    page = ResultPage(
+        (ResultColumn("token", "varchar", "UNKNOWN"),),
+        (("secret-value",),),
+        "result-page-token-secret-7f4c2a9d",
+    )
 
     assert "secret_column" not in repr(named)
     assert "api_token" not in repr(prepared)
+    assert "prepared-description-secret-7f4c2a9d" not in repr(prepared)
     assert "secret-value" not in repr(page)
+    assert "result-page-token-secret-7f4c2a9d" not in repr(page)
 
 
 def test_query_execution_detail_sensitive_aws_fields_are_excluded_from_repr() -> None:
