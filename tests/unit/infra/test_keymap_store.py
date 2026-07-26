@@ -27,6 +27,15 @@ class TestDefaults:
         assert store.resolve("glue.jobs") == ("2",)
         assert store.resolve("glue.crawlers") == ("3",)
 
+    def test_athena_controls_have_dedicated_bindings(self) -> None:
+        store = KeymapStore()
+        assert store.resolve("athena.query") == ("1",)
+        assert store.resolve("athena.history") == ("2",)
+        assert store.resolve("athena.results") == ("3",)
+        assert store.resolve("athena.saved") == ("4",)
+        assert store.resolve("athena.execute") == ("ctrl+enter",)
+        assert store.resolve("athena.cancel") == ("escape",)
+
     def test_vi_navigation_defaults_match_live_app_bindings(self) -> None:
         store = KeymapStore()
         assert store.resolve("pane.move_up") == ("up", "k")

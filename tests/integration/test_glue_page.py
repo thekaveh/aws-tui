@@ -28,7 +28,7 @@ async def open_service(ctx: AppContext, pilot: object, service_id: str) -> None:
     await wait_for_service_setup(ctx, pilot)
 
 
-def test_glue_service_is_registered_after_emr(tmp_path: Path) -> None:
+def test_glue_and_athena_are_registered_after_emr(tmp_path: Path) -> None:
     ctx = build_app_context(
         config_dir=tmp_path / "config",
         cache_dir=tmp_path / "cache",
@@ -36,7 +36,7 @@ def test_glue_service_is_registered_after_emr(tmp_path: Path) -> None:
     )
     try:
         ids = [service.descriptor.id for service in ctx.registry.all()]
-        assert ids == ["s3", "emr-serverless", "glue"]
+        assert ids == ["s3", "emr-serverless", "glue", "athena"]
     finally:
         ctx.root_vm.dispose()
 

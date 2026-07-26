@@ -42,6 +42,7 @@ from aws_tui.infra.redaction import redact_text
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
+from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
@@ -83,6 +84,12 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("app.cycle_theme", "Cycle theme"),
     ("app.swap_source", "Switch source"),
     ("glue.open_s3_location", "Open table location in S3"),
+    ("athena.query", "Athena query"),
+    ("athena.history", "Athena history"),
+    ("athena.results", "Athena results"),
+    ("athena.saved", "Athena saved queries"),
+    ("athena.execute", "Execute Athena query"),
+    ("athena.cancel", "Cancel Athena query"),
     ("app.open_settings", "Settings"),
     ("app.help", "Help"),
     ("app.quit", "Quit"),
@@ -364,6 +371,24 @@ class AwsTuiApp(App[None]):
             partial(self.action_select_glue_view, "crawlers"),
         )
         self._actions.register("glue.open_s3_location", self.action_open_glue_s3_location)
+        self._actions.register(
+            "athena.query",
+            partial(self.action_select_athena_view, "query"),
+        )
+        self._actions.register(
+            "athena.history",
+            partial(self.action_select_athena_view, "history"),
+        )
+        self._actions.register(
+            "athena.results",
+            partial(self.action_select_athena_view, "results"),
+        )
+        self._actions.register(
+            "athena.saved",
+            partial(self.action_select_athena_view, "saved"),
+        )
+        self._actions.register("athena.execute", self.action_execute_athena)
+        self._actions.register("athena.cancel", self.action_cancel_athena)
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
@@ -1126,6 +1151,7 @@ class AwsTuiApp(App[None]):
                         dual_pane_class=DualPane,
                         emr_page_class=EmrServerlessPage,
                         glue_page_class=GluePage,
+                        athena_page_class=AthenaPage,
                     )
                 )
         except Exception as exc:
@@ -1313,6 +1339,12 @@ class AwsTuiApp(App[None]):
             return self.query_one("#content-glue-page", GluePage)
         return None
 
+    def _athena_page(self) -> AthenaPage | None:
+        """Return the mounted Athena page, or None for another service."""
+        with contextlib.suppress(Exception):
+            return self.query_one("#content-athena-page", AthenaPage)
+        return None
+
     def _emr_active_pane(self, emr_page: EmrServerlessPage) -> object | None:
         """Return whichever EMR pane should receive
         the next cursor/refresh action.
@@ -1354,6 +1386,10 @@ class AwsTuiApp(App[None]):
         glue_page = self._glue_page()
         if glue_page is not None:
             glue_page.cycle_focus(reverse=reverse)
+            return
+        athena_page = self._athena_page()
+        if athena_page is not None:
+            athena_page.cycle_focus(reverse=reverse)
             return
 
         coordinator = self._app_ctx.focus_coordinator
@@ -1430,6 +1466,11 @@ class AwsTuiApp(App[None]):
             with contextlib.suppress(Exception):
                 page = self.query_one("#content-glue-page", GluePage)
                 page.query_one("#glue-databases-pane").query_one(OptionList).focus()
+            return
+        if current_id == "athena":
+            with contextlib.suppress(Exception):
+                athena_page = self.query_one("#content-athena-page", AthenaPage)
+                athena_page.query_one("#athena-editor").focus()
             return
         if current_id == SETTINGS_NAV_ID:
             with contextlib.suppress(Exception):
@@ -1517,6 +1558,10 @@ class AwsTuiApp(App[None]):
         glue_page = self._glue_page()
         if glue_page is not None:
             glue_page.move_focused(delta)
+            return
+        athena_page = self._athena_page()
+        if athena_page is not None:
+            athena_page.move_focused(delta)
             return
         # EMR page: forward Up/Down to the active EMR pane's cursor
         # or scroll action. Mirrors the S3 path's ``dual.focused_pane``
@@ -1645,6 +1690,9 @@ class AwsTuiApp(App[None]):
         glue_page = self._glue_page()
         if glue_page is not None and glue_page.activate_focused(space=False):
             return
+        athena_page = self._athena_page()
+        if athena_page is not None and athena_page.activate_focused():
+            return
         # EMR page: Enter on the LEFT pane commits the focused row
         # (posts ``JobRunsPane.RunSelected`` → page VM forwards to
         # ``select_job_run``). Enter on the RIGHT-bottom pane (logs)
@@ -1698,6 +1746,9 @@ class AwsTuiApp(App[None]):
         # not by navigating up out of it).
         if self._emr_page() is not None:
             return
+        athena_page = self._athena_page()
+        if athena_page is not None and athena_page.delete_focused():
+            return
         dual = self._dual_pane()
         if dual is None:
             return
@@ -1730,6 +1781,10 @@ class AwsTuiApp(App[None]):
         glue_page = self._glue_page()
         if glue_page is not None:
             await glue_page.action_refresh_active()
+            return
+        athena_page = self._athena_page()
+        if athena_page is not None:
+            await athena_page.action_refresh_active()
             return
         # EMR page: ``r`` forwards to whichever pane currently holds
         # Textual focus. Runs/detail panes post ``RefreshRequested``;
@@ -2148,6 +2203,54 @@ class AwsTuiApp(App[None]):
         page = self._glue_page()
         if page is not None:
             await page.action_select_view(view)
+            return
+        athena_view = {
+            "catalog": "query",
+            "jobs": "history",
+            "crawlers": "results",
+        }.get(view)
+        athena_page = self._athena_page()
+        if (
+            athena_page is not None
+            and athena_view is not None
+            and self._bindings_overlap(f"glue.{view}", f"athena.{athena_view}")
+        ):
+            await athena_page.action_select_view(athena_view)
+
+    async def action_select_athena_view(self, view: str) -> None:
+        self.record_action(f"athena.{view}")
+        page = self._athena_page()
+        if page is not None:
+            await page.action_select_view(view)
+            return
+        glue_view = {
+            "query": "catalog",
+            "history": "jobs",
+            "results": "crawlers",
+        }.get(view)
+        glue_page = self._glue_page()
+        if (
+            glue_page is not None
+            and glue_view is not None
+            and self._bindings_overlap(f"athena.{view}", f"glue.{glue_view}")
+        ):
+            await glue_page.action_select_view(glue_view)
+
+    async def action_execute_athena(self) -> None:
+        self.record_action("athena.execute")
+        page = self._athena_page()
+        if page is not None:
+            await page.action_execute()
+
+    async def action_cancel_athena(self) -> None:
+        self.record_action("athena.cancel")
+        page = self._athena_page()
+        if page is not None:
+            await page.action_cancel()
+
+    def _bindings_overlap(self, first: str, second: str) -> bool:
+        keymap = self._app_ctx.keymap_store
+        return bool(set(keymap.resolve(first)) & set(keymap.resolve(second)))
 
     async def action_open_glue_s3_location(self) -> None:
         self.record_action("glue.open_s3_location")
@@ -3033,6 +3136,7 @@ class AwsTuiApp(App[None]):
                     dual_pane_class=DualPane,
                     emr_page_class=EmrServerlessPage,
                     glue_page_class=GluePage,
+                    athena_page_class=AthenaPage,
                 )
             )
         except Exception as exc:

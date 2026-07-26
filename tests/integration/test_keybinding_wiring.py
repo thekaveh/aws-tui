@@ -1,9 +1,9 @@
 """Keystone wiring: the App installs BindingResolver-materialized bindings.
 
 Guards that routing bindings through KeymapStore + BindingResolver +
-ActionRegistry keeps default behavior byte-identical to the previous
-hard-coded ``BINDINGS`` (same keys, same dispatch target, same priority),
-while ``[keybindings]`` overlays now take effect.
+ActionRegistry preserves dispatch targets while ``[keybindings]`` overlays
+take effect. Bare printable keys yield to editors; modified and named keys
+retain priority routing.
 """
 
 from __future__ import annotations
@@ -22,30 +22,36 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("tab", "dispatch('pane.switch_focus')", True, True),
     ("shift+tab", "dispatch('pane.switch_focus_back')", False, True),
     ("up", "dispatch('pane.move_up')", True, True),
-    ("k", "dispatch('pane.move_up')", False, True),
+    ("k", "dispatch('pane.move_up')", False, False),
     ("down", "dispatch('pane.move_down')", True, True),
-    ("j", "dispatch('pane.move_down')", False, True),
+    ("j", "dispatch('pane.move_down')", False, False),
     ("enter", "dispatch('pane.descend')", True, True),
     ("backspace", "dispatch('pane.ascend')", True, True),
     ("left", "dispatch('pane.modal_left')", False, True),
     ("right", "dispatch('pane.modal_right')", False, True),
-    ("r", "dispatch('pane.refresh')", True, True),
-    ("question_mark", "dispatch('app.help')", True, True),
-    ("colon", "dispatch('app.command_palette')", True, True),
+    ("r", "dispatch('pane.refresh')", True, False),
+    ("question_mark", "dispatch('app.help')", True, False),
+    ("colon", "dispatch('app.command_palette')", True, False),
     ("ctrl+k", "dispatch('app.command_palette')", False, True),
-    ("t", "dispatch('app.themes')", True, True),
-    ("T", "dispatch('app.cycle_theme')", True, True),
-    ("comma", "dispatch('app.open_settings')", True, True),
-    ("c", "dispatch('pane.copy')", True, True),
-    ("d", "dispatch('pane.delete')", True, True),
-    ("S", "dispatch('app.swap_source')", True, True),
-    ("A", "dispatch('emr.next_application')", True, True),
-    ("1", "dispatch('glue.catalog')", False, True),
-    ("2", "dispatch('glue.jobs')", False, True),
-    ("3", "dispatch('glue.crawlers')", False, True),
+    ("t", "dispatch('app.themes')", True, False),
+    ("T", "dispatch('app.cycle_theme')", True, False),
+    ("comma", "dispatch('app.open_settings')", True, False),
+    ("c", "dispatch('pane.copy')", True, False),
+    ("d", "dispatch('pane.delete')", True, False),
+    ("S", "dispatch('app.swap_source')", True, False),
+    ("A", "dispatch('emr.next_application')", True, False),
+    ("1", "dispatch('glue.catalog')", False, False),
+    ("2", "dispatch('glue.jobs')", False, False),
+    ("3", "dispatch('glue.crawlers')", False, False),
+    ("1", "dispatch('athena.query')", False, False),
+    ("2", "dispatch('athena.history')", False, False),
+    ("3", "dispatch('athena.results')", False, False),
+    ("4", "dispatch('athena.saved')", False, False),
+    ("ctrl+enter", "dispatch('athena.execute')", False, True),
+    ("escape", "dispatch('athena.cancel')", False, False),
     ("shift+up", "dispatch('pane.mark_up')", False, True),
     ("shift+down", "dispatch('pane.mark_down')", False, True),
-    ("space", "dispatch('pane.quick_look')", False, True),
+    ("space", "dispatch('pane.quick_look')", False, False),
     ("ctrl+q", "quit", False, True),
     ("ctrl+p", "command_palette", False, True),
 }
@@ -59,7 +65,7 @@ def _installed(app: AwsTuiApp) -> set[tuple[str, str, bool, bool]]:
     return out
 
 
-def test_default_bindings_are_byte_identical(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+def test_default_bindings_match_runtime_contract(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     app = AwsTuiApp(app_context_factory())
     assert _installed(app) == _EXPECTED
 

@@ -198,3 +198,18 @@ def test_glue_service_chips_include_views_refresh_and_source() -> None:
     assert "pane.refresh" in chips
     assert "app.swap_source" in chips
     legend.dispose()
+
+
+def test_athena_service_chips_include_views_execution_and_source() -> None:
+    legend, _hub = _build()
+    legend.set_current_service("athena")
+    chips = {action.action_id: action for action in legend.actions}
+    assert chips["athena.query"].key_label == "1"
+    assert chips["athena.history"].action_label == "history"
+    assert chips["athena.results"].action_label == "results"
+    assert chips["athena.saved"].action_label == "saved"
+    assert chips["athena.execute"].key_label == "ctrl+enter"
+    assert chips["athena.cancel"].key_label == "escape"
+    assert "pane.refresh" in chips
+    assert "app.swap_source" in chips
+    legend.dispose()

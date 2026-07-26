@@ -38,6 +38,7 @@ from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
 from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
+from aws_tui.services.athena.service import AthenaService
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.services.glue.service import GlueService
 from aws_tui.services.s3.service import S3Service
@@ -269,6 +270,13 @@ def build_app_context(
         glue_client_factory=glue_client_factory,
     )
     registry.register(cast("Service", glue_service))
+
+    athena_service = AthenaService(
+        hub=hub,
+        dispatcher=dispatcher,
+        aws_session=aws_session,
+    )
+    registry.register(cast("Service", athena_service))
 
     # ── Root VM ───────────────────────────────────────────────────────────
     root_vm = RootVM(

@@ -84,10 +84,17 @@ _VISIBLE_ACTIONS: frozenset[str] = frozenset(
     }
 )
 
-#: Every handled action binds with ``priority=True`` (so the App handler wins
-#: over Textual's Screen-level focus traversal) EXCEPT quit. Listing only the
-#: exception keeps this in step with Textual's ``priority=False`` default.
-_NON_PRIORITY_ACTIONS: frozenset[str] = frozenset({"app.quit"})
+#: Actions that must yield to a focused widget even when their configured key
+#: is non-printable.
+_NON_PRIORITY_ACTIONS: frozenset[str] = frozenset({"app.quit", "athena.cancel"})
+
+
+def _binding_priority(action_id: str, key: str) -> bool:
+    """Let editable widgets consume printable keys before app shortcuts."""
+    return action_id not in _NON_PRIORITY_ACTIONS and not (
+        key == "space" or (len(key) == 1 and key.isprintable())
+    )
+
 
 #: The keymap stores user-facing key literals, but Textual delivers punctuation
 #: under key *names* (a ``:`` press arrives as ``"colon"``) and treats ``","``
@@ -141,16 +148,15 @@ class BindingResolver:
         ``action`` is the parameterized ``dispatch('<action_id>')`` form;
         ``AwsTuiApp.action_dispatch`` forwards it to the
         :class:`ActionRegistry`, which holds the real handler. Only the first
-        keystroke of a chip-worthy action is shown in Textual's footer;
-        every handled action binds ``priority=True`` except quit (see
-        :data:`_VISIBLE_ACTIONS` / :data:`_NON_PRIORITY_ACTIONS`).
+        keystroke of a chip-worthy action is shown in Textual's footer.
+        Modified and named keys bind with priority, while bare printable keys
+        yield to editable widgets. See :func:`_binding_priority`.
         """
         bindings: list[Binding] = []
         for action_id, keys in self._keymap.all().items():
             if not self._actions.has(action_id):
                 continue  # handlerless (deferred) action stays unbound
             description = _describe(action_id)
-            priority = action_id not in _NON_PRIORITY_ACTIONS
             visible = action_id in _VISIBLE_ACTIONS
             for index, key in enumerate(keys):
                 bindings.append(
@@ -159,7 +165,7 @@ class BindingResolver:
                         action=f"dispatch({action_id!r})",
                         description=description,
                         show=index == 0 and visible,
-                        priority=priority,
+                        priority=_binding_priority(action_id, key),
                     )
                 )
         return bindings

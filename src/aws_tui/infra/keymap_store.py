@@ -66,6 +66,12 @@ class KeymapStore:
         "glue.catalog": ("1",),
         "glue.jobs": ("2",),
         "glue.crawlers": ("3",),
+        "athena.query": ("1",),
+        "athena.history": ("2",),
+        "athena.results": ("3",),
+        "athena.saved": ("4",),
+        "athena.execute": ("ctrl+enter",),
+        "athena.cancel": ("escape",),
     }
 
     def __init__(self, *, overlay: dict[str, str | list[str]] | None = None) -> None:
