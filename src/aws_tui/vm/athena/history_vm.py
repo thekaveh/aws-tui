@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Literal
-from urllib.parse import urlparse
 
 import reactivex as rx
 from reactivex.subject import Subject
@@ -20,11 +19,13 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import (
+    QueryContext,
     QueryExecutionDetail,
     QueryExecutionRef,
     QueryExecutionSummary,
     QueryState,
 )
+from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
@@ -51,13 +52,14 @@ class AthenaHistoryVM:
         self,
         *,
         client: Any,
-        workgroup: str,
+        context: QueryContext,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
         self._client = client
         self._hub = hub
-        self._workgroup = workgroup
+        self._context = context
+        self._workgroup = context.workgroup
         self._disposed = False
         self._shutdown_started = False
         self._shutdown_complete = False
@@ -77,7 +79,7 @@ class AthenaHistoryVM:
             .build()
         )
         self._workers: set[_HistoryWorker] = set()
-        self._worker = self._make_worker(workgroup, self._generation)
+        self._worker = self._make_worker(context.workgroup, self._generation)
         self._pager = self._worker.pager
 
     @property
@@ -184,8 +186,9 @@ class AthenaHistoryVM:
             or self._shutdown_started
             or detail is None
             or detail.summary.state is not QueryState.SUCCEEDED
-            or not _execution_identity_is_coherent(detail)
-            or not _valid_s3_uri(detail.output_location)
+            or detail.summary.ref.execution_id != self._selected_execution_id
+            or not _execution_identity_belongs_to(detail, self._context)
+            or parse_s3_uri(detail.output_location) is None
         ):
             return False
         ref = detail.summary.ref
@@ -201,12 +204,13 @@ class AthenaHistoryVM:
         )
         return True
 
-    def replace_workgroup(self, workgroup: str) -> None:
+    def replace_context(self, context: QueryContext) -> None:
         if self._disposed or self._shutdown_started:
             return
         self._generation += 1
-        self._workgroup = workgroup
-        self._replace_worker(workgroup, self._generation)
+        self._context = context
+        self._workgroup = context.workgroup
+        self._replace_worker(context.workgroup, self._generation)
         self._clear_selection()
         self._error_text = None
         self._state = PaneState.EMPTY
@@ -452,22 +456,14 @@ class AthenaHistoryVM:
 __all__ = ["AthenaHistoryVM"]
 
 
-def _execution_identity_is_coherent(detail: QueryExecutionDetail) -> bool:
+def _execution_identity_belongs_to(
+    detail: QueryExecutionDetail,
+    expected: QueryContext,
+) -> bool:
     ref = detail.summary.ref
     return (
         ref.connection_name == detail.context.connection_name
         and ref.region == detail.context.region
         and ref.workgroup == detail.context.workgroup
-    )
-
-
-def _valid_s3_uri(uri: str | None) -> bool:
-    if not uri:
-        return False
-    parsed = urlparse(uri)
-    return (
-        parsed.scheme.casefold() == "s3"
-        and bool(parsed.netloc)
-        and parsed.username is None
-        and parsed.password is None
+        and detail.context == expected
     )

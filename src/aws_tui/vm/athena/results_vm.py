@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Literal
-from urllib.parse import urlparse
 
 import reactivex as rx
 from reactivex.subject import Subject
@@ -20,6 +19,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext, QueryExecutionDetail, QueryState, ResultColumn
+from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
@@ -214,7 +214,7 @@ class AthenaResultsVM:
             or detail.summary.ref.execution_id != execution_id
             or detail.summary.state is not QueryState.SUCCEEDED
             or not _execution_identity_belongs_to(detail, self._context)
-            or not _valid_s3_uri(detail.output_location)
+            or parse_s3_uri(detail.output_location) is None
         ):
             return False
         ref = detail.summary.ref
@@ -476,16 +476,4 @@ def _execution_identity_belongs_to(
         and ref.region == detail.context.region
         and ref.workgroup == detail.context.workgroup
         and detail.context == expected
-    )
-
-
-def _valid_s3_uri(uri: str | None) -> bool:
-    if not uri:
-        return False
-    parsed = urlparse(uri)
-    return (
-        parsed.scheme.casefold() == "s3"
-        and bool(parsed.netloc)
-        and parsed.username is None
-        and parsed.password is None
     )

@@ -265,3 +265,141 @@ git diff --check
 - `tests/unit/demo/test_in_memory_athena.py`
 - `tests/unit/vm/athena/test_results_vm.py`
 - `tests/unit/vm/test_messages.py`
+
+## Remaining Review Findings Follow-up
+
+### RED
+
+The seven focused regressions failed for the intended missing behavior:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color uv run pytest \
+  tests/unit/vm/athena/test_history_vm.py::test_history_rejects_coherent_detail_owned_by_another_profile \
+  'tests/integration/test_athena_s3_handoff.py::test_missing_or_malformed_result_location_stays_in_athena_and_advises[q-dev-hostile-output-s3://[RESULT_URI_SECRET]' \
+  tests/integration/test_athena_s3_handoff.py::test_history_handoff_rejects_coherent_foreign_profile_detail \
+  tests/integration/test_athena_s3_handoff.py::test_results_hostile_s3_uri_stays_in_athena_and_advises_redacted \
+  tests/integration/test_athena_s3_handoff.py::test_app_validation_rejects_hostile_s3_uri_without_navigation \
+  tests/integration/test_athena_s3_handoff.py::test_demo_query_artifacts_are_profile_local_replay_safe_and_distinct \
+  tests/integration/test_athena_s3_handoff.py::test_app_started_demo_query_opens_its_exact_result_object -q
+
+7 failed, 12 rerun in 24.58s
+```
+
+- History published a coherent detail owned by another profile.
+- History, Results, and app validation raised `ValueError: Invalid IPv6 URL`
+  for hostile `s3://[` locations.
+- Successful app-started queries had no object in the profile's S3 fake, so
+  both direct profile-isolation checks and the explicit handoff failed.
+
+The first full functional run also exposed a compatibility regression in the
+initial eager demo S3 map:
+
+```text
+1 failed, 1918 passed, 9 deselected, 4 rerun in 302.06s
+
+tests/integration/test_service_source_swap.py::
+  test_shift_s_rebuilds_emr_under_next_profile
+```
+
+That existing test replaces the demo resolver after composition. The eager
+map narrowed the prior factory contract, so it was replaced with a lazy,
+context-local cache and the isolated regression returned to green.
+
+### GREEN
+
+The exact seven reviewer regressions passed after the ownership, parser, and
+demo-store changes:
+
+```text
+7 passed in 4.58s
+```
+
+The focused Athena/demo/lifecycle matrix passed:
+
+```text
+181 passed in 35.70s
+```
+
+The final full functional run was clean:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color uv run pytest tests/unit tests/integration tests/e2e -q
+
+1919 passed, 9 deselected in 313.43s (0:05:13)
+```
+
+Normal-color snapshots were unchanged:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color uv run pytest tests/snapshot -q
+
+744 passed in 126.67s (0:02:06)
+437 snapshots passed
+```
+
+Static and architecture gates passed:
+
+```text
+uv run ruff check src tests
+All checks passed!
+
+uv run ruff format --check src tests
+371 files already formatted
+
+uv run mypy src
+Success: no issues found in 150 source files
+
+bash scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+(no output; exit 0)
+```
+
+### Design Evidence
+
+- `AthenaHistoryVM` now receives and privately retains its owning
+  `QueryContext`. Before publishing, it compares the selected execution ID
+  and the complete connection, region, workgroup, catalog, and database
+  context. `AthenaPageVM` replaces that context on every existing context
+  transition; no client or ownership state was made public.
+- Added one domain-owned `S3Uri` parser whose bucket and path are excluded
+  from repr. It catches parser/netloc `ValueError` and returns advisory
+  invalidity. History, Results, and app transaction validation use the same
+  parser, so hostile locations cannot start navigation or escape into raw
+  errors.
+- Demo composition now owns a lazy `connection.name -> InMemoryFS` cache per
+  `build_app_context()` call. The S3 and Athena factories receive the same
+  exact profile instance, while separate profiles and app contexts remain
+  disjoint. There are no module globals or background tasks.
+- `InMemoryAthena` writes deterministic `_col0\n1\n` content to the
+  execution-specific output path before the first `SUCCEEDED` detail becomes
+  authoritative. Distinct execution IDs produce distinct objects, and
+  idempotent request-token replay reuses the existing execution and object.
+- New tests cover direct and integrated coherent foreign History ownership,
+  hostile URI handling at all three required boundaries with redacted
+  advisories, exact app-started result reveal, repeated-query separation,
+  idempotent replay, and cross-profile S3 isolation.
+
+### Follow-up Changed Files
+
+- `.superpowers/sdd/task-6-report.md`
+- `src/aws_tui/app.py`
+- `src/aws_tui/composition.py`
+- `src/aws_tui/demo/in_memory_athena.py`
+- `src/aws_tui/demo/seeds.py`
+- `src/aws_tui/domain/s3_uri.py`
+- `src/aws_tui/vm/athena/history_vm.py`
+- `src/aws_tui/vm/athena/page_vm.py`
+- `src/aws_tui/vm/athena/results_vm.py`
+- `tests/integration/test_athena_s3_handoff.py`
+- `tests/unit/vm/athena/test_history_vm.py`
+
+### Residual Concerns
+
+- No code or test concern remains. Commands continue to print the pre-existing
+  `.zshenv` warning for missing `/tmp/vmx-cargo-182/env`; exit status and
+  verification results are unaffected.

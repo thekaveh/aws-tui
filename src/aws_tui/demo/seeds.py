@@ -19,7 +19,11 @@ from aws_tui.domain.emr_serverless import (
     ApplicationState,
     JobRunState,
 )
-from aws_tui.domain.filesystem import PathRef, PermissionDeniedError
+from aws_tui.domain.filesystem import (
+    FileSystemProvider,
+    PathRef,
+    PermissionDeniedError,
+)
 from aws_tui.domain.query import (
     AthenaQueryError,
     NamedQuery,
@@ -254,7 +258,11 @@ def seeded_demo_glue() -> dict[str, InMemoryGlue]:
 # ── Athena seed data ────────────────────────────────────────────────────────
 
 
-def seeded_demo_athena(profile: str) -> InMemoryAthena:
+def seeded_demo_athena(
+    profile: str,
+    *,
+    result_store: FileSystemProvider | None = None,
+) -> InMemoryAthena:
     """Build one fresh, profile-local Athena demo client."""
     regions = {
         "demo-dev": "us-east-1",
@@ -264,6 +272,7 @@ def seeded_demo_athena(profile: str) -> InMemoryAthena:
     athena = InMemoryAthena(
         connection_name=profile,
         region=regions.get(profile, "us-east-1"),
+        result_store=result_store,
     )
     if profile == "demo-dev":
         _seed_dev_athena(athena)

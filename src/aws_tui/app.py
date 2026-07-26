@@ -20,7 +20,6 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
-from urllib.parse import urlparse
 
 from reactivex.abc import DisposableBase
 from rich.markup import escape
@@ -37,6 +36,7 @@ from textual.widgets import OptionList, Static
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.filesystem import EntryKind
+from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
@@ -2701,13 +2701,8 @@ class AwsTuiApp(App[None]):
             )
             return
 
-        parsed = urlparse(request.uri)
-        if (
-            parsed.scheme.casefold() != "s3"
-            or not parsed.netloc
-            or parsed.username is not None
-            or parsed.password is not None
-        ):
+        location = parse_s3_uri(request.uri)
+        if location is None:
             notifications.advise(
                 ctx.root_vm.chrome.toast_stack,
                 subject="Source",
@@ -2716,7 +2711,7 @@ class AwsTuiApp(App[None]):
             )
             return
 
-        target = self._s3_handoff_target(request, parsed.netloc, parsed.path)
+        target = self._s3_handoff_target(request, location.bucket, location.path)
         if target is None:
             notifications.advise(
                 ctx.root_vm.chrome.toast_stack,

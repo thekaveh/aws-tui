@@ -215,6 +215,7 @@ def build_app_context(
     )
     if demo:
         from aws_tui.demo.connections import DemoConnectionResolver
+        from aws_tui.demo.in_memory_fs import InMemoryFS
         from aws_tui.demo.seeds import (
             seeded_demo_athena,
             seeded_demo_emr,
@@ -227,13 +228,25 @@ def build_app_context(
         connection_resolver: ConnectionResolver = DemoConnectionResolver()  # type: ignore[assignment]
         _demo_emr: InMemoryEmr = seeded_demo_emr()
         demo_glue_clients = seeded_demo_glue()
+        demo_s3_filesystems: dict[str, InMemoryFS] = {}
+
+        def demo_s3_fs(connection: Connection) -> InMemoryFS:
+            filesystem = demo_s3_filesystems.get(connection.name)
+            if filesystem is None:
+                filesystem = seeded_demo_fs(connection.profile or "demo-default")
+                demo_s3_filesystems[connection.name] = filesystem
+            return filesystem
+
         demo_athena_clients = {
-            connection.name: seeded_demo_athena(connection.name)
+            connection.name: seeded_demo_athena(
+                connection.name,
+                result_store=demo_s3_fs(connection),
+            )
             for connection in connection_resolver.list()
             if connection.kind == "aws"
         }
         demo_emr_ref: InMemoryEmr | None = _demo_emr
-        s3_fs_factory = lambda c: seeded_demo_fs(c.profile or "demo-default")  # noqa: E731
+        s3_fs_factory = demo_s3_fs
         # Captured by the lambda so every emr_client_factory(connection)
         # call within this AppContext returns the SAME InMemoryEmr —
         # switching demo profiles in the picker preserves in-flight clone

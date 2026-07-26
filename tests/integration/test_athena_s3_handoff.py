@@ -12,9 +12,12 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.demo import seeds
 from aws_tui.demo.in_memory_athena import InMemoryAthena
-from aws_tui.domain.filesystem import EntryKind
+from aws_tui.demo.in_memory_fs import InMemoryFS
+from aws_tui.domain.filesystem import EntryKind, NotFoundError, PathRef
+from aws_tui.domain.query import QueryContext, QueryState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
+from aws_tui.services.s3.service import S3Service
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
@@ -47,6 +50,16 @@ def _athena_client(ctx: AppContext, profile: str) -> InMemoryAthena:
     client = factory(connection)
     assert isinstance(client, InMemoryAthena)
     return client
+
+
+def _s3_provider(ctx: AppContext, profile: str) -> InMemoryFS:
+    service = ctx.registry.get("s3")
+    assert isinstance(service, S3Service)
+    factory = service._s3_fs_factory
+    assert factory is not None
+    provider = factory(ctx.connection_resolver.resolve(profile))
+    assert isinstance(provider, InMemoryFS)
+    return provider
 
 
 async def _open_athena(
@@ -154,6 +167,7 @@ async def test_results_handoff_reloads_authoritative_execution_output(
     [
         ("q-dev-missing-output", None),
         ("q-dev-malformed-output", "https://example.test/RESULT_URI_SECRET"),
+        ("q-dev-hostile-output", "s3://[RESULT_URI_SECRET"),
     ],
 )
 async def test_missing_or_malformed_result_location_stays_in_athena_and_advises(
@@ -276,6 +290,244 @@ async def test_result_handoff_rejects_execution_identity_mismatch(
             assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
                 "athena-result-location-invalid"
             )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_history_handoff_rejects_coherent_foreign_profile_detail(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        client = _athena_client(ctx, "demo-dev")
+        detail = client.query_executions["q-dev-succeeded"]
+        foreign_context = QueryContext(
+            "demo-prod",
+            "us-east-1",
+            "dev-analytics",
+            "ProdDataCatalog",
+            "prod_sales",
+        )
+        foreign_ref = replace(
+            detail.summary.ref,
+            connection_name=foreign_context.connection_name,
+            region=foreign_context.region,
+        )
+        client.query_executions["q-dev-succeeded"] = replace(
+            detail,
+            summary=replace(detail.summary, ref=foreign_ref),
+            context=foreign_context,
+            output_location="s3://athena-results/prod/q-prod-succeeded.csv",
+        )
+
+        async with app.run_test(size=(120, 40)) as pilot:
+            page = await _open_athena(ctx, app, pilot)
+            await page.select_view("history")
+            await page.select_history_execution("q-dev-succeeded")
+
+            await _invoke_result_handoff(app)
+
+            assert ctx.root_vm.content_host.current_id == "athena"
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
+                "athena-result-location-invalid"
+            )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_results_hostile_s3_uri_stays_in_athena_and_advises_redacted(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        client = _athena_client(ctx, "demo-dev")
+        detail = client.query_executions["q-dev-succeeded"]
+        client.query_executions["q-dev-succeeded"] = replace(
+            detail,
+            output_location="s3://[RESULTS_HOSTILE_SECRET",
+        )
+
+        async with app.run_test(size=(120, 40)) as pilot:
+            page = await _open_athena(ctx, app, pilot)
+            await page.results.load("q-dev-succeeded")
+            await page.select_view("results")
+
+            await _invoke_result_handoff(app)
+
+            assert ctx.root_vm.content_host.current_id == "athena"
+            toast = ctx.root_vm.chrome.toast_stack.toasts[-1].model
+            assert toast.id == "athena-result-location-invalid"
+            ctx.log_sink.flush()
+            diagnostic = f"{toast.text}\n{ctx.log_sink.path.read_text(encoding='utf-8')}"
+            assert "RESULTS_HOSTILE_SECRET" not in diagnostic
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_app_validation_rejects_hostile_s3_uri_without_navigation(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_athena(ctx, app, pilot)
+
+            await app._open_s3_location_request(
+                replace(
+                    _result_request(),
+                    uri="s3://[APP_HOSTILE_SECRET",
+                )
+            )
+
+            assert ctx.root_vm.content_host.current_id == "athena"
+            toast = ctx.root_vm.chrome.toast_stack.toasts[-1].model
+            assert toast.id == "s3-handoff-invalid-location"
+            ctx.log_sink.flush()
+            diagnostic = f"{toast.text}\n{ctx.log_sink.path.read_text(encoding='utf-8')}"
+            assert "APP_HOSTILE_SECRET" not in diagnostic
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+async def _read_bytes(fs: InMemoryFS, path: PathRef) -> bytes:
+    chunks = await fs.read_stream(path)
+    return b"".join([chunk async for chunk in chunks])
+
+
+async def _advance_to_success(
+    client: InMemoryAthena,
+    execution_id: str,
+) -> None:
+    states = [(await client.get_query_execution(execution_id)).summary.state for _ in range(3)]
+    assert states == [QueryState.QUEUED, QueryState.RUNNING, QueryState.SUCCEEDED]
+
+
+@pytest.mark.asyncio
+async def test_demo_query_artifacts_are_profile_local_replay_safe_and_distinct(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    try:
+        dev = _athena_client(ctx, "demo-dev")
+        prod = _athena_client(ctx, "demo-prod")
+        dev_s3 = _s3_provider(ctx, "demo-dev")
+        prod_s3 = _s3_provider(ctx, "demo-prod")
+        dev_context = QueryContext(
+            "demo-dev",
+            "us-east-1",
+            "dev-analytics",
+            "DevDataCatalog",
+            "dev_events",
+        )
+        prod_context = QueryContext(
+            "demo-prod",
+            "us-east-1",
+            "prod-reporting",
+            "ProdDataCatalog",
+            "prod_sales",
+        )
+
+        first = await dev.start_query(
+            "SELECT 1",
+            dev_context,
+            request_token="dev-first",
+        )
+        replay = await dev.start_query(
+            "SELECT 1",
+            dev_context,
+            request_token="dev-first",
+        )
+        second = await dev.start_query(
+            "SELECT 1",
+            dev_context,
+            request_token="dev-second",
+        )
+        prod_ref = await prod.start_query(
+            "SELECT 1",
+            prod_context,
+            request_token="prod-first",
+        )
+        for ref, client in ((first, dev), (second, dev), (prod_ref, prod)):
+            await _advance_to_success(client, ref.execution_id)
+
+        first_path = PathRef.from_posix(f"/athena-results/dev/{first.execution_id}.csv")
+        second_path = PathRef.from_posix(f"/athena-results/dev/{second.execution_id}.csv")
+        prod_path = PathRef.from_posix(f"/athena-results/prod/{prod_ref.execution_id}.csv")
+        assert replay == first
+        assert first_path != second_path
+        assert await _read_bytes(dev_s3, first_path) == b"_col0\n1\n"
+        assert await _read_bytes(dev_s3, second_path) == b"_col0\n1\n"
+        assert await _read_bytes(prod_s3, prod_path) == b"_col0\n1\n"
+        with pytest.raises(NotFoundError):
+            await prod_s3.stat(first_path)
+        with pytest.raises(NotFoundError):
+            await dev_s3.stat(prod_path)
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_app_started_demo_query_opens_its_exact_result_object(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            page = await _open_athena(ctx, app, pilot)
+            page.query.set_sql("SELECT 1")
+
+            await page.query.execute()
+            assert page.query.state is QueryState.SUCCEEDED
+            assert page.query.execution_ref is not None
+            execution_id = page.query.execution_ref.execution_id
+            await page.select_view("results")
+
+            await _invoke_result_handoff(app)
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            assert ctx.root_vm.content_host.current_id == "s3"
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            dual = ctx.root_vm.content_host.current
+            assert isinstance(dual, DualPaneVM)
+            assert dual.left.path.as_posix() == "/athena-results/dev"
+            assert dual.left.selected_entry is not None
+            assert dual.left.selected_entry.entry.name == f"{execution_id}.csv"
+            assert dual.left.selected_entry.kind is EntryKind.FILE
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

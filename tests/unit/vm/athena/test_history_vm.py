@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -18,6 +19,7 @@ from aws_tui.domain.query import (
 )
 from aws_tui.vm.athena.history_vm import AthenaHistoryVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.messages import OpenS3LocationRequest
 
 _STATS = QueryStatistics(10, 2, 3, 1, 128, False)
 
@@ -140,7 +142,13 @@ def make_history_vm(client: HistoryClient, workgroup: str = "analysts") -> Athen
     hub: MessageHub[Message] = MessageHub()
     vm = AthenaHistoryVM(
         client=client,
-        workgroup=workgroup,
+        context=QueryContext(
+            "analytics",
+            "us-west-2",
+            workgroup,
+            "AwsDataCatalog",
+            "events",
+        ),
         hub=hub,
         dispatcher=NULL_DISPATCHER,
     )
@@ -246,7 +254,15 @@ async def test_replacing_workgroup_discards_a_late_old_page() -> None:
 
     old_setup = asyncio.create_task(vm.setup())
     await client.fetch_started.wait()
-    vm.replace_workgroup("engineering")
+    vm.replace_context(
+        QueryContext(
+            "analytics",
+            "us-west-2",
+            "engineering",
+            "AwsDataCatalog",
+            "events",
+        )
+    )
     await vm.setup()
     client.release_fetch.set()
     await old_setup
@@ -379,3 +395,40 @@ async def test_history_error_and_repr_do_not_expose_sensitive_detail_text() -> N
 
     assert secret not in repr(vm)
     assert vm.error_text is None
+
+
+@pytest.mark.asyncio
+async def test_history_rejects_coherent_detail_owned_by_another_profile() -> None:
+    client = _seeded_client()
+    detail = client.details["q-2"]
+    foreign_context = QueryContext(
+        "foreign-profile",
+        "eu-west-1",
+        "analysts",
+        "ForeignCatalog",
+        "foreign_database",
+    )
+    foreign_ref = replace(
+        detail.summary.ref,
+        connection_name=foreign_context.connection_name,
+        region=foreign_context.region,
+    )
+    client.details["q-2"] = replace(
+        detail,
+        summary=replace(detail.summary, ref=foreign_ref),
+        context=foreign_context,
+        output_location="s3://foreign-results/PROFILE_SECRET.csv",
+    )
+    client.pages[("analysts", None)] = ([foreign_ref], None)
+    vm = make_history_vm(client)
+    published: list[object] = []
+    subscription = vm._hub.messages.subscribe(published.append)  # type: ignore[attr-defined]
+    try:
+        await vm.setup()
+        await vm.select_execution("q-2")
+
+        assert vm.open_s3_location() is False
+        assert not any(isinstance(message, OpenS3LocationRequest) for message in published)
+        assert "PROFILE_SECRET" not in repr(vm)
+    finally:
+        subscription.dispose()

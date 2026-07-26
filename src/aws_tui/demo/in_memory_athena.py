@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -21,7 +21,9 @@ from aws_tui.domain.data_catalog import (
     TableSummary,
 )
 from aws_tui.domain.filesystem import (
+    FileSystemProvider,
     NotFoundError,
+    PathRef,
     PermissionDeniedError,
     ValidationError,
 )
@@ -38,6 +40,7 @@ from aws_tui.domain.query import (
     ResultColumn,
     ResultPage,
 )
+from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 
 T = TypeVar("T")
@@ -68,9 +71,16 @@ class _IdempotentQuery:
 class InMemoryAthena:
     """In-memory implementation of the paginated Athena client surface."""
 
-    def __init__(self, *, connection_name: str, region: str) -> None:
+    def __init__(
+        self,
+        *,
+        connection_name: str,
+        region: str,
+        result_store: FileSystemProvider | None = None,
+    ) -> None:
         self.connection_name = connection_name
         self.region = region
+        self._result_store = result_store
         self.page_size = 100
         self.calls: list[AthenaCall] = []
         self.workgroups: list[AthenaWorkgroupSummary] = []
@@ -91,6 +101,7 @@ class InMemoryAthena:
         self._request_tokens: dict[bytes, _IdempotentQuery] = {}
         self._started_state_indexes: dict[str, int] = {}
         self._active_app_started: set[str] = set()
+        self._published_result_ids: set[str] = set()
         self._next_execution_number = 1
 
     def add_workgroup(
@@ -302,11 +313,14 @@ class InMemoryAthena:
                 completed_at=now if state in _TERMINAL_STATES else None,
             ),
         )
+        if state is QueryState.SUCCEEDED:
+            await self._publish_result_object(updated)
         self.query_executions[execution_id] = updated
         if state_index + 1 < len(_STARTED_STATES):
             self._started_state_indexes[execution_id] = state_index + 1
         else:
             self._active_app_started.discard(execution_id)
+            self._started_state_indexes.pop(execution_id, None)
         return updated
 
     async def get_query_runtime_statistics(
@@ -488,6 +502,30 @@ class InMemoryAthena:
             return self.query_executions[execution_id]
         except KeyError:
             raise NotFoundError("Athena query execution not found") from None
+
+    async def _publish_result_object(self, detail: QueryExecutionDetail) -> None:
+        execution_id = detail.summary.ref.execution_id
+        if self._result_store is None or execution_id in self._published_result_ids:
+            return
+        location = parse_s3_uri(detail.output_location)
+        if location is None:
+            return
+        key = location.path.removeprefix("/")
+        if not key or key.endswith("/"):
+            return
+        path = PathRef((location.bucket, *key.split("/")))
+        await self._result_store.mkdir(path.parent())
+        body = b"_col0\n1\n"
+
+        async def chunks() -> AsyncIterator[bytes]:
+            yield body
+
+        await self._result_store.write_stream(
+            path,
+            chunks(),
+            total_size=len(body),
+        )
+        self._published_result_ids.add(execution_id)
 
     def _raise_if_denied(self) -> None:
         if self.access_error is not None:

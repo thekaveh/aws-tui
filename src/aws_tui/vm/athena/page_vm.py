@@ -129,7 +129,7 @@ class AthenaPageVM:
         )
         self.history = AthenaHistoryVM(
             client=client,
-            workgroup="",
+            context=self._context,
             hub=hub,
             dispatcher=dispatcher,
         )
@@ -684,7 +684,7 @@ class AthenaPageVM:
             database,
         )
         self.results.clear()
-        self.history.replace_workgroup(workgroup)
+        self.history.replace_context(self._context)
         self.saved.replace_workgroup(workgroup)
         self._loaded_views.discard("history")
         self._loaded_views.discard("saved")
