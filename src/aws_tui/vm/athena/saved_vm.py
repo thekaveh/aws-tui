@@ -420,8 +420,10 @@ class AthenaSavedVM:
         finally:
             self._untrack_task(worker, task)
         if self._is_current_named(worker):
+            self._named_error_text = None
             self._notify("named_queries")
             self._notify("has_more_named_queries")
+            self._notify("named_error_text")
             self._set_named_state(PaneState.IDLE if self.named_queries else PaneState.EMPTY)
 
     async def _run_prepared_pager(
@@ -454,8 +456,10 @@ class AthenaSavedVM:
         finally:
             self._untrack_task(worker, task)
         if self._is_current_prepared(worker):
+            self._prepared_error_text = None
             self._notify("prepared_statements")
             self._notify("has_more_prepared_statements")
+            self._notify("prepared_error_text")
             self._set_prepared_state(
                 PaneState.IDLE if self.prepared_statements else PaneState.EMPTY
             )

@@ -501,6 +501,31 @@ class AthenaPageVM:
             "workgroups",
         )
 
+    async def refresh_query_context(self) -> None:
+        if not self._is_alive():
+            return
+        workgroup = self._context.workgroup
+        await self.refresh_workgroups()
+        if (
+            not self._is_alive()
+            or self._workgroups_state not in {PaneState.IDLE, PaneState.EMPTY}
+            or self._workgroup_detail_state is PaneState.IDLE
+            or workgroup not in {row.name for row in self.workgroups}
+        ):
+            return
+        await self._select_workgroup(
+            workgroup,
+            preferred_catalog=self._selection_store.get(
+                self._selection_scope,
+                "catalog",
+            ),
+            preferred_database=self._selection_store.get(
+                self._selection_scope,
+                "database",
+            ),
+            setup_active=True,
+        )
+
     async def shutdown(self) -> None:
         async with self._shutdown_lock:
             if self._disposed or self._shutdown_complete:
@@ -1039,10 +1064,16 @@ class AthenaPageVM:
     ) -> None:
         if kind == "workgroups":
             self._workgroups_state = state
+            if state in {PaneState.IDLE, PaneState.EMPTY}:
+                self._workgroups_error_text = None
         elif kind == "catalogs":
             self._catalogs_state = state
+            if state in {PaneState.IDLE, PaneState.EMPTY}:
+                self._catalogs_error_text = None
         else:
             self._databases_state = state
+            if state in {PaneState.IDLE, PaneState.EMPTY}:
+                self._databases_error_text = None
 
     def _set_loading_more(
         self,

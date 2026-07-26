@@ -411,6 +411,41 @@ async def test_workgroup_detail_error_is_stable_and_blocks_executable_context() 
 
 
 @pytest.mark.asyncio
+async def test_query_refresh_recovers_failed_current_workgroup_detail_context() -> None:
+    client = PageClient()
+    client.workgroup_detail_error = ProviderError("temporarily unavailable")
+    page = make_page_vm(client)
+
+    await page.setup()
+
+    assert page.context.workgroup == "primary"
+    assert page.context.catalog == ""
+    assert page.context.database == ""
+    assert page.workgroup_detail_state is PaneState.ERROR
+
+    client.workgroup_detail_error = None
+    await page.refresh_query_context()
+
+    assert client.workgroup_detail_calls == ["primary", "primary"]
+    assert page.context == QueryContext(
+        "analytics",
+        "us-west-2",
+        "primary",
+        "AwsDataCatalog",
+        "default",
+    )
+    assert page.workgroup_detail_state is PaneState.IDLE
+    assert page.workgroup_detail_error_text is None
+    assert page.catalogs_state is PaneState.IDLE
+    assert page.catalogs_error_text is None
+    assert page.databases_state is PaneState.IDLE
+    assert page.databases_error_text is None
+    page.query.set_sql("SELECT 1")
+    await page.query.execute()
+    assert client.start_calls[-1][1] == page.context
+
+
+@pytest.mark.asyncio
 async def test_late_workgroup_detail_cannot_replace_the_current_selection() -> None:
     client = PageClient()
     page = make_page_vm(client)
@@ -650,6 +685,58 @@ async def test_context_load_more_exposes_busy_state_without_reloading_page_one()
     await loading
 
     assert not page.is_loading_more_catalogs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_attribute", "loader_name", "pager_attribute", "state_attribute", "text_attribute"),
+    [
+        (
+            "workgroup_error",
+            "load_more_workgroups",
+            "_workgroup_pager",
+            "workgroups_state",
+            "workgroups_error_text",
+        ),
+        (
+            "catalog_error",
+            "load_more_catalogs",
+            "_catalog_pager",
+            "catalogs_state",
+            "catalogs_error_text",
+        ),
+        (
+            "database_error",
+            "load_more_databases",
+            "_database_pager",
+            "databases_state",
+            "databases_error_text",
+        ),
+    ],
+)
+async def test_context_load_more_retry_clears_stale_error(
+    error_attribute: str,
+    loader_name: str,
+    pager_attribute: str,
+    state_attribute: str,
+    text_attribute: str,
+) -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    await page.setup()
+    getattr(page, pager_attribute)._current_token = "retry-token"  # type: ignore[attr-defined]
+    setattr(client, error_attribute, ProviderError("temporary failure"))
+
+    await getattr(page, loader_name)()
+
+    assert getattr(page, state_attribute) is PaneState.ERROR
+    assert getattr(page, text_attribute) == "Athena context request failed"
+
+    setattr(client, error_attribute, None)
+    await getattr(page, loader_name)()
+
+    assert getattr(page, state_attribute) is PaneState.IDLE
+    assert getattr(page, text_attribute) is None
 
 
 @pytest.mark.asyncio

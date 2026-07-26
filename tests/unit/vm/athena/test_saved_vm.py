@@ -7,6 +7,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
 from vmx.messages.protocols import Message
 
+from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import NamedQuery, PreparedStatement, PreparedStatementSummary
 from aws_tui.vm.athena.saved_vm import AthenaSavedVM, SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -207,6 +208,73 @@ async def test_saved_load_more_exposes_independent_busy_states() -> None:
 
     assert not vm.is_loading_more_prepared_statements
     assert client.prepared_list_calls[-1] == ("analysts", "prepared-next")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "loader_name", "state_attribute", "text_attribute", "request_attribute"),
+    [
+        (
+            "named",
+            "load_more_named_queries",
+            "named_state",
+            "named_error_text",
+            "list_named_queries_page",
+        ),
+        (
+            "prepared",
+            "load_more_prepared_statements",
+            "prepared_state",
+            "prepared_error_text",
+            "list_prepared_statements_page",
+        ),
+    ],
+)
+async def test_saved_load_more_retry_clears_stale_error(
+    kind: str,
+    loader_name: str,
+    state_attribute: str,
+    text_attribute: str,
+    request_attribute: str,
+) -> None:
+    client = _seeded_client()
+    if kind == "prepared":
+        client.prepared_pages[("analysts", None)] = (
+            client.prepared_pages[("analysts", None)][0],
+            "prepared-next",
+        )
+        client.prepared_pages[("analysts", "prepared-next")] = ([], None)
+    vm = make_saved_vm(client)
+    await vm.setup()
+    original = getattr(client, request_attribute)
+    failed = True
+
+    async def fail_once(
+        workgroup: str,
+        *,
+        start_token: str | None = None,
+    ) -> object:
+        nonlocal failed
+        if start_token is not None and failed:
+            failed = False
+            raise ProviderError("temporary failure")
+        return await original(workgroup, start_token=start_token)
+
+    setattr(client, request_attribute, fail_once)
+
+    await getattr(vm, loader_name)()
+
+    assert getattr(vm, state_attribute) is PaneState.ERROR
+    assert (
+        getattr(vm, text_attribute) == "Athena saved query request failed"
+        if kind == "named"
+        else "Athena prepared statement request failed"
+    )
+
+    await getattr(vm, loader_name)()
+
+    assert getattr(vm, state_attribute) is PaneState.IDLE
+    assert getattr(vm, text_attribute) is None
 
 
 @pytest.mark.asyncio

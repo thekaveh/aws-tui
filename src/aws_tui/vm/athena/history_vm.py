@@ -235,8 +235,10 @@ class AthenaHistoryVM:
             self._untrack_task(worker, task)
         if not self._is_current(worker):
             return
+        self._error_text = None
         self._notify("items")
         self._notify("has_more")
+        self._notify("error_text")
         self._set_state(PaneState.IDLE if self.items else PaneState.EMPTY)
 
     def _make_worker(self, workgroup: str, generation: int) -> _HistoryWorker:

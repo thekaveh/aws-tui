@@ -10,6 +10,7 @@ from textual.widgets import Button, DataTable, Static, TextArea
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryExecutionRef, QueryState
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.services.athena import AthenaService
@@ -212,6 +213,79 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         vm._set_loading_more("workgroups", True)  # type: ignore[attr-defined]
         await pilot.pause()
         assert not hint_enabled("athena.load_more")
+
+
+@pytest.mark.asyncio
+async def test_query_refresh_recovers_detail_without_remounting_athena_page(
+    tmp_path: Path,
+) -> None:
+    async with _mounted_athena_app(tmp_path) as (app, ctx, vm, client, pilot):
+        page = app.query_one("#content-athena-page", AthenaPage)
+        source_header = page.query_one("#athena-source-header")
+        client.workgroup_detail_error = ProviderError("temporary failure")
+
+        await vm.select_workgroup("analysts")
+
+        assert vm.context.workgroup == "analysts"
+        assert vm.context.catalog == ""
+        assert vm.workgroup_detail_state.name == "ERROR"
+
+        client.workgroup_detail_error = None
+        await app.action_refresh()
+        await pilot.pause()
+
+        assert ctx.root_vm.content_host.current is vm
+        assert app.query_one("#content-athena-page", AthenaPage) is page
+        assert page.query_one("#athena-source-header") is source_header
+        assert vm.context.workgroup == "analysts"
+        assert vm.context.catalog == "AwsDataCatalog"
+        assert vm.context.database == "events"
+        assert client.workgroup_detail_calls[-2:] == ["analysts", "analysts"]
+
+
+@pytest.mark.asyncio
+async def test_recovered_context_pager_clears_error_styling_tooltip_and_hint(
+    tmp_path: Path,
+) -> None:
+    async with _mounted_athena_app(tmp_path) as (app, ctx, vm, client, pilot):
+        page = app.query_one("#content-athena-page", AthenaPage)
+        button = app.query_one("#athena-more-workgroups", Button)
+
+        def hint_enabled(action_id: str) -> bool:
+            return next(
+                hint.enabled
+                for hint in ctx.root_vm.chrome.hint_legend.actions
+                if hint.action_id == action_id
+            )
+
+        vm._workgroup_pager._current_token = "workgroups-next"  # type: ignore[attr-defined]
+        vm._notify_context_lists()  # type: ignore[attr-defined]
+        client.workgroup_error = ProviderError("temporary failure")
+        button.focus()
+        await page.action_load_more()
+        await pilot.pause()
+
+        assert button.has_class("-error")
+        assert button.tooltip == "Athena context request failed"
+
+        client.workgroup_error = None
+
+        async def retry_page(
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list[object], str | None]:
+            assert start_token == "workgroups-next"
+            return list(client.workgroups), "workgroups-next"
+
+        client.list_workgroups_page = retry_page  # type: ignore[method-assign]
+        await page.action_load_more()
+        await pilot.pause()
+
+        assert vm.workgroups_state.name == "IDLE"
+        assert vm.workgroups_error_text is None
+        assert not button.has_class("-error")
+        assert button.tooltip == "Load more workgroups"
+        assert hint_enabled("athena.load_more")
 
 
 @pytest.mark.asyncio

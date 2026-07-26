@@ -336,7 +336,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
     async def action_refresh_active(self) -> None:
         active = self._vm.active_view
         if active == "query":
-            await self._vm.refresh_workgroups()
+            await self._vm.refresh_query_context()
         elif active == "history":
             await self._vm.history.refresh()
         elif active == "results":

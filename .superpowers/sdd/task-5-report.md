@@ -169,3 +169,63 @@ overlap, clipping, blank content, or unreadable focus state.
   Athena snapshots; all other full-suite snapshot comparisons pass.
 - The shell still emits the pre-existing `.zshenv` warning for missing
   `/tmp/vmx-cargo-182/env`; command results are unaffected.
+
+## Final Recovery Findings (2026-07-26)
+
+### Status
+
+`DONE`
+
+Query-view Refresh now repairs a transient selected-workgroup detail failure
+without remounting Athena or switching its service source. Successful
+continuation retries clear stale pager errors across context, History, Results,
+and both Saved-query pagers.
+
+### TDD Record
+
+Focused RED coverage failed before production edits for the absent
+`refresh_query_context()` API and stale error text after successful retry in
+the workgroup, catalog, database, History, named-query, and prepared-statement
+pagers. Results already cleared its error at retry start; its fail-then-retry
+regression was green against the existing implementation.
+
+The focused green run passed `8` VM regressions. The broader Athena VM/UI/app
+run then passed `128` tests, including real-app checks that Refresh retains the
+mounted page/source header and that a recovered continuation control restores
+its IDLE styling, default tooltip, and enabled hint.
+
+### Implementation
+
+- Added `AthenaPageVM.refresh_query_context()`: it refreshes workgroups and,
+  only when the retained workgroup detail is not healthy, reuses the guarded
+  selection pipeline with stored catalog/database preferences. Existing
+  generation, cancellation, privacy, and lifecycle boundaries therefore remain
+  in force.
+- Routed Query-view Refresh through that VM path; healthy contexts retain the
+  previous refresh-only behavior.
+- Cleared VM-level error text on successful context, History, and Saved pager
+  continuations. Results already performed this recovery action.
+- Added parameterized context/Saved continuation recovery regressions plus
+  History, Results, page lifecycle, UI tooltip/class, and hint coverage.
+
+### Verification
+
+```text
+Focused recovery regressions: 8 passed
+Athena VM/UI/integration: 128 passed
+Unit + in-process integration: 1,869 passed, 9 deselected
+Athena snapshots: 120 passed; 108 snapshots passed
+Ruff lint: all checks passed
+Ruff format: 376 files already formatted
+Mypy: no issues in 148 source files
+Layer rules: clean
+```
+
+### Concerns
+
+- The full snapshot command still reports ten pre-existing
+  `test_demo_mode_snapshot` mismatches, one per theme. Athena snapshot coverage
+  is green, and this recovery-only change did not regenerate unrelated demo
+  baselines.
+- The pre-existing `.zshenv` warning for missing `/tmp/vmx-cargo-182/env`
+  continues to appear before commands; command exit results are unaffected.

@@ -7,6 +7,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
 from vmx.messages.protocols import Message
 
+from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import (
     QueryContext,
     QueryExecutionDetail,
@@ -185,6 +186,38 @@ async def test_history_load_more_exposes_busy_state_for_the_continuation_page() 
     await loading
 
     assert not vm.is_loading_more
+
+
+@pytest.mark.asyncio
+async def test_history_load_more_retry_clears_stale_error() -> None:
+    client = _seeded_client()
+    vm = make_history_vm(client)
+    await vm.setup()
+    original = client.list_query_executions_page
+    failed = True
+
+    async def fail_once(
+        workgroup: str,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[QueryExecutionRef], str | None]:
+        nonlocal failed
+        if start_token == "next" and failed:
+            failed = False
+            raise ProviderError("temporary failure")
+        return await original(workgroup, start_token=start_token)
+
+    client.list_query_executions_page = fail_once  # type: ignore[method-assign]
+
+    await vm.load_more()
+
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text == "Athena history request failed"
+
+    await vm.load_more()
+
+    assert vm.state is PaneState.IDLE
+    assert vm.error_text is None
 
 
 @pytest.mark.asyncio
