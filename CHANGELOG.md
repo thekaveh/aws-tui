@@ -62,12 +62,12 @@ will be set at cut time.
   fidelity test over every installed binding (key/action/show/priority)
   and a pilot test that the priority `tab` binding still fires (no "Tab
   does nothing" regression). Clears the `[0.8.0]` *"BindingResolver is
-  constructed but unwired"* deferred item; the features that ride on it
-  (Quick Look, command palette) still need their own handlers before
-  their keys bind. Spec:
+  constructed but unwired"* deferred item. Quick Look and the command
+  palette now register their handlers; the resolver still leaves other
+  handlerless deferred actions unbound. Spec:
   `docs/superpowers/specs/2026-07-21-binding-resolver-keystone-design.md`.
 - **Demo mode** (PR #97 + #104 polish). ``AWS_TUI_DEMO=1`` or
-  ``--demo`` boots the full UI against seeded in-memory S3 + EMR
+  ``--demo`` boots the full UI against seeded in-memory S3, EMR, and Glue
   fakes — no AWS credentials, no real network calls. Persistent
   ``DEMO MODE — no real AWS calls`` chip prepended to the
   BrandBanner subtitle (PR #104 keeps the credit pedigree visible

@@ -134,10 +134,9 @@ class BindingResolver:
 
         For each ``(action_id, keys)`` in the keymap we emit one Binding
         per keystroke — but **only when the action has a registered handler**
-        (``ActionRegistry.has``). Deferred/unwired actions (e.g.
-        ``pane.quick_look``, ``app.command_palette``) stay in the keymap for
-        documentation but produce no runtime binding, so no keystroke maps to
-        a handler that does not exist.
+        (``ActionRegistry.has``). Deferred/unwired actions stay in the keymap
+        for documentation but produce no runtime binding, so no keystroke maps
+        to a handler that does not exist.
 
         ``action`` is the parameterized ``dispatch('<action_id>')`` form;
         ``AwsTuiApp.action_dispatch`` forwards it to the

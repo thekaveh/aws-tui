@@ -109,23 +109,21 @@ Linux, and Windows. Powered by
   affected panes immediately; Delete prompts for confirmation).
   Keyboard: `,` selects Settings. No more hand-editing
   `<config-dir>/config.toml` for routine endpoint changes.
-- **Keymap schema ready; runtime rebinding deferred.** Action ↔
-  keystroke IDs are defined and validated, but `AwsTuiApp` still routes
-  the wired v0.8.x bindings directly. See
+- **Runtime-configurable keymap.** `BindingResolver` installs handled
+  `[keybindings]` overrides at runtime, so remapping an action changes
+  the live Textual keymap on the next launch. Handlerless deferred
+  action IDs remain unbound. See
   [`docs/keybindings.md` customizing](docs/keybindings.md#12-customizing)
-  and [action IDs](docs/keybindings.md#13-action-ids) for the current
-  wired list and the v0.9 input-router plan.
-- **Streaming Quick Look (deferred).** Spec'd on `Space` to stream the
-  first 64 KB with a syntax tint, plus a full-file `$PAGER` shell-out.
-  The `pane.quick_look` action handler isn't wired in v0.8.x — tracked
-  under `[Unreleased] Deferred` in `CHANGELOG.md` and
-  [`docs/keybindings.md` overlays](docs/keybindings.md#114-overlays).
-- **Command palette (deferred).** Spec'd on `:` or `Ctrl+K` as a
-  fuzzy-filterable list of every action — including dynamic ones like
-  `connection switch <name>` and `theme switch <name>`. In v0.8.x `:`
-  opens the help overlay as a placeholder and `Ctrl+K` is unbound; the
-  full palette ships post-v0.8. See `[Unreleased] Deferred` in
-  `CHANGELOG.md` and [`keybindings.md` overlays](docs/keybindings.md#114-overlays).
+  and [action IDs](docs/keybindings.md#13-action-ids).
+- **Streaming Quick Look.** Press `Space` on a file to open the built-in
+  preview modal and stream its first 64 KB. Directories, the `..` row,
+  and empty panes are ignored. The full-file `$PAGER` shell-out remains
+  deferred.
+- **Command palette.** Press `:` or `Ctrl+K` for the fuzzy-filterable
+  curated command list, including **Open table location in S3** on
+  Glue. Dynamic `connection switch <name>` / `theme switch <name>`
+  entries and consolidation with Textual's `Ctrl+P` palette remain
+  deferred.
 - **Layered architecture with enforced forbidden edges.** View ▸ ViewModel
   ▸ Service ▸ Domain ▸ Infra, with `app.py` / `composition.py` as trusted
   composition roots and services allowed to compose concrete VMs; enforced

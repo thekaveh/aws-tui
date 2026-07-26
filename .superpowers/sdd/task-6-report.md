@@ -6,10 +6,11 @@ Implemented the immutable Glue-to-S3 navigation request, exact-connection
 handoff, advisory failure behavior, command-palette entry, integration/E2E
 coverage, and all documentation surfaces named by the Task 6 brief.
 
-The functional, lint, formatting, typing, layer, docs, and build gates pass.
-The color-enabled snapshot gate has 75 pre-existing EMR/Glue baseline
-mismatches; the untouched parent commit `46c1076` reproduces the identical
-result.
+The Important review follow-up documented at the end of this report resolves
+the 75 color-enabled baseline mismatches, contains handoff failures and mount
+concurrency, and corrects the stale shipped-behavior docs. All requested gates
+now pass. The original investigation and failing snapshot evidence remain
+below as historical RED evidence.
 
 ## Changed Files
 
@@ -237,7 +238,188 @@ docs run above is green and no Athena link was added.
 
 ## Concerns
 
-- The color-enabled snapshot suite has the 75 proven pre-existing EMR/Glue
-  baseline mismatches described above. All 549 other cases pass.
 - Every shell command prints a pre-existing `.zshenv` warning for missing
   `/tmp/vmx-cargo-182/env`; it does not affect command exit status.
+
+## Important Review Follow-up
+
+### Scope and root causes
+
+- Regenerated only the 20 EMR and 55 Glue goldens that had been captured under
+  `NO_COLOR=1`; CI and the normal local command leave all color-control
+  variables unset.
+- Changed `_mount_service_view()` from an ambiguous `None` result to a reliable
+  `bool`: `True` only after a view is mounted, `False` after contained
+  switch/missing-VM/mount failures. Existing callers may continue to ignore the
+  return value.
+- Contained S3 mount, bind, navigation, and focus failures behind one
+  stage-specific advisory/log helper. It records connection name, stage, and
+  exception type only; it never retains the request URI or exception text.
+- Moved handoff workers from `service-navigation` to the same exclusive
+  `content-mount` group used by ordinary service navigation. The internal
+  RootVM selection message remains suppressed during the atomic connection
+  switch, while a later user navigation cancels and supersedes the in-flight
+  handoff through the existing Textual worker semantics.
+- Corrected current-behavior claims in `README.md`, `docs/cookbook.md`,
+  `docs/keybindings.md`, and the Unreleased `CHANGELOG.md` section. Historical
+  specs/changelog entries were not rewritten, and no Athena or Iceberg behavior
+  was added.
+
+### RED evidence
+
+Tests were added before production or documentation edits:
+
+```text
+uv run pytest \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_mount_failure_is_reported_and_redacted \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_bind_failure_is_contained_and_redacted \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_navigation_failure_is_contained_and_redacted \
+  tests/integration/test_glue_s3_handoff.py::test_overlapping_handoff_and_nav_mounts_are_serialized \
+  tests/docs/test_shipped_behavior.py -q
+```
+
+Captured result:
+
+```text
+8 failed, 8 rerun in 15.16s
+```
+
+The failures proved each reported defect:
+
+- mount returned `[None]` instead of `[False]`;
+- bind and navigation raised the injected `RuntimeError` out of the handoff;
+- overlapping handoff/nav work produced a cancelled/racing
+  `content-mount` worker;
+- all four docs tests found the cited stale runtime/palette/demo claims.
+
+Each injected exception included
+`s3://private-bucket/events/?token=HANDOFF_SECRET` so the GREEN assertions
+prove neither the URI nor token reaches the advisory or durable log.
+
+### Focused GREEN evidence
+
+```text
+uv run pytest \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_mount_failure_is_reported_and_redacted \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_bind_failure_is_contained_and_redacted \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_navigation_failure_is_contained_and_redacted \
+  tests/integration/test_glue_s3_handoff.py::test_overlapping_handoff_and_nav_mounts_are_serialized -q
+4 passed in 1.96s
+
+uv run pytest tests/docs/test_shipped_behavior.py -q
+4 passed in 0.01s
+
+uv run pytest tests/unit/vm/test_messages.py \
+  tests/integration/test_glue_s3_handoff.py \
+  tests/integration/test_command_palette_wiring.py \
+  tests/docs/test_shipped_behavior.py -q
+36 passed in 6.15s
+```
+
+The overlap regression gates the first S3 mount, selects Glue while it is in
+flight, and proves the latest ordinary navigation wins with one active mount,
+one `GluePage`, zero `DualPane` widgets, unique top-level IDs, and matching
+nav/content/root connection state.
+
+### Snapshot regeneration and inspection
+
+The update command explicitly removed every supported color-control variable:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  uv run pytest tests/snapshot/test_emr.py tests/snapshot/test_glue.py \
+  --snapshot-update -q
+75 snapshots updated.
+105 passed in 24.28s
+```
+
+Post-update inventory:
+
+```text
+changed snapshot files: 75
+tests/snapshot/__snapshots__/test_emr: 20
+tests/snapshot/__snapshots__/test_glue: 55
+unrelated snapshot paths: 0
+```
+
+A programmatic old/new SVG text-node comparison reported:
+
+```text
+checked=75 semantic_text_mismatches=0
+```
+
+Rendered PNG inspection covered EMR populated Carbon, Glue Catalog populated
+Carbon, Glue Jobs populated GitHub Light, Glue forbidden Dracula, and compact
+Glue Crawlers. Layout, source labels, data, empty/forbidden semantics, and
+compact framing were unchanged. The intended differences restore each theme's
+backgrounds, selections, accents, and semantic status/error colors instead of
+the prior grayscale `NO_COLOR` output.
+
+The complete normal-color tier then passed:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  uv run pytest tests/snapshot -q
+329 snapshots passed.
+624 passed in 89.78s (0:01:29)
+```
+
+### Final verification
+
+```text
+uv run pytest tests/unit tests/integration tests/e2e -q
+1466 passed, 9 deselected in 257.00s (0:04:16)
+
+uv run pytest tests/docs -q
+55 passed, 2 skipped in 0.29s
+
+make docs-check
+check_docs: clean
+Documentation built in 0.40 seconds
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+342 files already formatted
+
+uv run mypy src
+Success: no issues found in 129 source files
+
+./scripts/check-layers.sh
+layer rules clean
+
+uv build
+Successfully built dist/aws_tui-0.8.0.tar.gz
+Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
+
+git diff --check
+(no output; exit 0)
+```
+
+The two docs skips are the existing optional direct-`uv run` Cairo renderer
+skips. `make docs-check` supplies Homebrew's Cairo path and completed the
+renderer/check/strict-build path. Its Material for MkDocs 2.0 notice is an
+upstream warning; the command exited 0. The generated
+`docs/diagrams/img/architecture.png` was restored after the check because no
+architecture source changed.
+
+### Follow-up self-review
+
+- Mount failure leaves RootVM content, selected nav service, and active
+  connection mutually consistent at S3 even if the Textual host cannot mount
+  the widget. Bind/navigation failures leave one mounted S3 tree with matching
+  root identity.
+- `asyncio.CancelledError` is not caught by the advisory `Exception` handlers,
+  so Textual cancellation and app disposal continue to propagate normally.
+- No exception text, request URI, query token, bucket, or credential is logged
+  by the new handoff failure path.
+- Current docs consistently describe runtime `BindingResolver` overlays,
+  shipped Quick Look and command palette handlers, dynamic palette items that
+  remain deferred, and Glue-backed demo mode.
+- No unrelated snapshots or generated docs artifacts remain in the diff.
+
+### Remaining concern
+
+Every shell still emits the pre-existing `.zshenv` warning for missing
+`/tmp/vmx-cargo-182/env`; all commands above exited with the recorded status.

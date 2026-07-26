@@ -331,8 +331,8 @@ class AwsTuiApp(App[None]):
         )
         # Register handlers for the action ids the BindingResolver advertises.
         # The resolver materializes a Textual binding only for registered ids,
-        # so deferred/unwired actions (quick_look, command_palette, …) stay
-        # unbound. Each id maps to its existing ``action_*`` handler.
+        # so deferred/unwired actions stay unbound. Each id maps to its existing
+        # ``action_*`` handler.
         self._actions.register("app.quit", self._handle_quit)
         self._actions.register("pane.switch_focus", self.action_switch_focus)
         self._actions.register("pane.switch_focus_back", self.action_switch_focus_reverse)
@@ -2491,7 +2491,7 @@ class AwsTuiApp(App[None]):
         self.run_worker(
             self._open_s3_location_request(msg),
             exclusive=True,
-            group="service-navigation",
+            group="content-mount",
         )
 
     async def _open_s3_location_request(self, request: OpenS3LocationRequest) -> None:
@@ -2563,44 +2563,82 @@ class AwsTuiApp(App[None]):
                 )
             finally:
                 self._service_navigation_switching = False
-            await self._mount_service_view("s3")
+
+            if not await self._mount_service_view("s3"):
+                self._raise_s3_handoff_failure(connection=connection, stage="mount")
+                return
+
+            dual = self._dual_pane()
+            if dual is None:
+                self._raise_s3_handoff_failure(connection=connection, stage="mount")
+                return
+
+            pane = dual.left if request.preferred_pane == "left" else dual.right
+            connection_key = (connection.kind, connection.name)
+            if pane.current_connection_key != connection_key:
+                try:
+                    await self._rebind_pane_to_connection(pane, connection)
+                except Exception as exc:
+                    self._raise_s3_handoff_failure(
+                        connection=connection,
+                        stage="bind",
+                        error=exc,
+                    )
+                    return
+
+            from aws_tui.domain.filesystem import PathRef
+
+            try:
+                await pane.navigate_to(PathRef.from_posix(parsed.netloc + parsed.path))
+            except Exception as exc:
+                self._raise_s3_handoff_failure(
+                    connection=connection,
+                    stage="navigation",
+                    error=exc,
+                )
+                return
+
+            focused = FocusedPane.LEFT if request.preferred_pane == "left" else FocusedPane.RIGHT
+            slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
+            try:
+                dual.set_focused(focused)
+                ctx.focus_coordinator.set_focused_slot(slot)
+                self._project_focus_slot(slot)
+            except Exception as exc:
+                self._raise_s3_handoff_failure(
+                    connection=connection,
+                    stage="focus",
+                    error=exc,
+                )
         except Exception as exc:
-            ctx.log_sink.error(
-                "service_navigation.s3_mount_failed",
-                connection=connection.name,
-                error_type=type(exc).__name__,
+            self._raise_s3_handoff_failure(
+                connection=connection,
+                stage="mount",
+                error=exc,
             )
+
+    def _raise_s3_handoff_failure(
+        self,
+        *,
+        connection: Connection,
+        stage: str,
+        error: Exception | None = None,
+    ) -> None:
+        """Record a handoff failure without retaining exception or URI text."""
+        ctx = self._app_ctx
+        ctx.log_sink.error(
+            "service_navigation.s3_handoff_failed",
+            connection=connection.name,
+            stage=stage,
+            error_type=type(error).__name__ if error is not None else "MountFailed",
+        )
+        with contextlib.suppress(Exception):
             notifications.advise(
                 ctx.root_vm.chrome.toast_stack,
                 subject="Source",
                 message="could not open the S3 location",
-                toast_id="s3-handoff-mount-failed",
+                toast_id=f"s3-handoff-{stage}-failed",
             )
-            return
-
-        dual = self._dual_pane()
-        if dual is None:
-            notifications.advise(
-                ctx.root_vm.chrome.toast_stack,
-                subject="Source",
-                message="could not open the S3 location",
-                toast_id="s3-handoff-mount-failed",
-            )
-            return
-
-        pane = dual.left if request.preferred_pane == "left" else dual.right
-        connection_key = (connection.kind, connection.name)
-        if pane.current_connection_key != connection_key:
-            await self._rebind_pane_to_connection(pane, connection)
-
-        from aws_tui.domain.filesystem import PathRef
-
-        await pane.navigate_to(PathRef.from_posix(parsed.netloc + parsed.path))
-        focused = FocusedPane.LEFT if request.preferred_pane == "left" else FocusedPane.RIGHT
-        slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
-        dual.set_focused(focused)
-        ctx.focus_coordinator.set_focused_slot(slot)
-        self._project_focus_slot(slot)
 
     def _on_hub_message_pane_state(self, msg: object) -> None:
         """Hub subscriber: route PaneVM state changes to the reachability set.
@@ -2804,7 +2842,7 @@ class AwsTuiApp(App[None]):
                 error_type=type(exc).__name__,
             )
 
-    async def _mount_service_view(self, service_id: str) -> None:
+    async def _mount_service_view(self, service_id: str) -> bool:
         """Swap the content host to show the DualPane for ``service_id``.
 
         Always runs the full ``switch_service`` + ``remove_children``
@@ -2848,7 +2886,7 @@ class AwsTuiApp(App[None]):
             outcome = await self._try_connection(retry_conn)
             if outcome == "ok":
                 self._chain_initial_conn = None
-                return
+                return True
             self._mark_connection_unreachable(retry_conn.kind, retry_conn.name)
             self._raise_failure_toast(retry_conn, outcome)
             self._raise_local_fallback_toast()
@@ -2858,40 +2896,45 @@ class AwsTuiApp(App[None]):
                 initial_conn=retry_conn,
                 reason="chain-exhausted",
             )
-            return
+            return True
         try:
             await ctx.root_vm.switch_service(service_id)
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.switch_service_failed",
                 service_id=service_id,
-                error=str(exc),
                 error_type=type(exc).__name__,
             )
-            return
+            return False
         try:
             host = self.query_one("#content-host", Container)
             current_vm = ctx.root_vm.content_host.current
-            if current_vm is not None:
-                await host.remove_children()
-                await host.mount(
-                    build_service_view(
-                        service_id,
-                        current_vm,
-                        hub=ctx.hub,
-                        focus_coordinator=ctx.focus_coordinator,
-                        dual_pane_class=DualPane,
-                        emr_page_class=EmrServerlessPage,
-                        glue_page_class=GluePage,
-                    )
+            if current_vm is None:
+                ctx.log_sink.error(
+                    "app.mount_service_view.missing_view_model",
+                    service_id=service_id,
                 )
+                return False
+            await host.remove_children()
+            await host.mount(
+                build_service_view(
+                    service_id,
+                    current_vm,
+                    hub=ctx.hub,
+                    focus_coordinator=ctx.focus_coordinator,
+                    dual_pane_class=DualPane,
+                    emr_page_class=EmrServerlessPage,
+                    glue_page_class=GluePage,
+                )
+            )
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.mount_failed",
                 service_id=service_id,
-                error=str(exc),
                 error_type=type(exc).__name__,
             )
+            return False
+        return True
 
     # ── Crash handling ─────────────────────────────────────────────────────
 

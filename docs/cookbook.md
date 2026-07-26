@@ -301,14 +301,12 @@ Footer { background: #050505; }
 
 ## 1.3. Customize a keybinding
 
-> **v0.8.x status:** the composition root reads `[keybindings]`,
-> validates action ids through `KeymapStore`, and logs/falls back to
-> defaults when an overlay is invalid. Runtime dispatch still uses
-> `AwsTuiApp.BINDINGS`, so user overrides are future-ready config and
-> do not change command chips or live keys until the post-v0.8
-> input-router work lands.
+> **Runtime status:** The composition root installs handled overrides
+> on the live Textual keymap through `BindingResolver`. It validates
+> action ids through `KeymapStore` and logs/falls back to defaults when
+> an overlay is invalid. Handlerless deferred actions remain unbound.
 
-Future-ready example: rebind copy (`pane.copy`) from `c` to `y` (vim yank).
+Rebind copy (`pane.copy`) from `c` to `y` (vim yank):
 
 ```toml
 # <config-dir>/config.toml
@@ -331,10 +329,8 @@ Set the action to an empty list:
 "pane.delete" = []   # nope, no quick delete
 ```
 
-When the input router lands, an empty `[keybindings]` value will remove
-the keybinding until you edit the config back. In v0.8.x the table is
-validated but does not change live dispatch, so `d` still follows
-`AwsTuiApp.BINDINGS`.
+On the next launch, an empty `[keybindings]` value removes the live
+keybinding until you edit the config back.
 
 ### 1.3.2. See the active map
 The full list of action IDs lives in

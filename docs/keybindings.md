@@ -73,16 +73,18 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 > fixed width and shows TEXT labels (Settings docked at the bottom as
 > the ⚙ glyph). The pre-PR-#94 `m`-key collapse/expand toggle was
 > dropped because there is no longer a collapsed mode to toggle into;
-> live `AwsTuiApp.BINDINGS` does not bind `m` in v0.8.x, while the
-> keymap default reserves `m` for the deferred `pane.move` action
-> (§1.3) when its router wiring lands.
+> `BindingResolver` does not emit `m` because the deferred `pane.move`
+> action has no registered handler (§1.3).
 
 ### 1.1.6. Connection / auth
 
 | Action | Default | Notes |
 |---|---|---|
 | Authenticate (when auth toast active) | `auth.authenticate` action — *(deferred)* | Spec'd on `a`; handler not wired in v0.8.x |
-| Connection switcher | `app.command_palette` action — *(deferred)* | Spec'd as `:` then `connection switch <name>`; the palette open binding is deferred |
+| Connection switcher | no shipped command — *(deferred)* | Dynamic `connection switch <name>` palette entries are not registered. |
+
+The command palette opens today with `:` or `Ctrl+K`; only the dynamic
+connection-switch entries in the row above remain deferred.
 
 ### 1.1.7. App
 
@@ -167,10 +169,10 @@ The bindings that are wired today include `q`,
 
 ## 1.3. Action IDs
 
-The `wired?` column marks whether `AwsTuiApp` currently has a matching
-`action_*` handler. `(deferred)` rows are valid action IDs you can
-overlay ahead of time; the binding takes effect once the input-router wiring
-lands (see the §1 status note).
+The `wired?` column marks whether `AwsTuiApp` currently registers a
+matching `ActionRegistry` handler. `(deferred)` rows are valid action
+IDs you can overlay ahead of time; `BindingResolver` leaves them
+unbound until a handler ships.
 
 | Action ID | Default key | Wired? | What it does |
 |---|---|---|---|
@@ -213,9 +215,9 @@ in `ActionRegistry`; assigning it a key is not currently supported.
 Any unknown overlay id is logged and causes the app to fall back to
 the default keymap.
 
-`Shift+↑` / `Shift+↓` (extend-selection) are wired directly in
-`AwsTuiApp.BINDINGS` rather than the keymap store, because they're
-modifier combinations. They are not currently rebindable through
+All live App-level bindings are installed through `BindingResolver`,
+including `Shift+↑` / `Shift+↓` for extend-selection. Their
+`pane.mark_up` / `pane.mark_down` entries may be rebound through
 `[keybindings]`.
 
 > **Commands strip layout (PR #83)** — the bottom legend is now ONE
