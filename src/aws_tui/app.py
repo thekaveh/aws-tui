@@ -92,6 +92,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("athena.execute", "Execute Athena query"),
     ("athena.cancel", "Cancel Athena query"),
     ("athena.load_more", "Load more Athena rows"),
+    ("athena.open_result_location", "Open Athena result in S3"),
     ("app.open_settings", "Settings"),
     ("app.help", "Help"),
     ("app.quit", "Quit"),
@@ -392,6 +393,10 @@ class AwsTuiApp(App[None]):
         self._actions.register("athena.execute", self.action_execute_athena)
         self._actions.register("athena.cancel", self.action_cancel_athena)
         self._actions.register("athena.load_more", self.action_load_more_athena)
+        self._actions.register(
+            "athena.open_result_location",
+            self.action_open_athena_result_location,
+        )
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
@@ -2259,6 +2264,25 @@ class AwsTuiApp(App[None]):
         page = self._athena_page()
         if page is not None:
             await page.action_load_more()
+
+    async def action_open_athena_result_location(self) -> None:
+        self.record_action("athena.open_result_location")
+        page = self._athena_page()
+        if page is None:
+            return
+        opened = False
+        if page.vm.active_view == "history":
+            opened = page.vm.history.open_s3_location()
+        elif page.vm.active_view == "results":
+            opened = await page.vm.results.open_s3_location()
+        if opened:
+            return
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="selected execution has no valid S3 result location",
+            toast_id="athena-result-location-invalid",
+        )
 
     def _bindings_overlap(self, first: str, second: str) -> bool:
         keymap = self._app_ctx.keymap_store

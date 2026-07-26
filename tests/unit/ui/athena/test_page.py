@@ -60,6 +60,20 @@ async def test_page_composes_context_tabs_and_all_operational_views() -> None:
 
 
 @pytest.mark.asyncio
+async def test_queued_page_refresh_is_safe_after_descendants_are_removed() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        page = app.query_one(AthenaPage)
+        await page.remove_children()
+        await pilot.pause()
+
+        page._refresh_page()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
 async def test_load_more_routes_by_focused_context_or_active_surface() -> None:
     vm, _client = _build_vm()
     await vm.setup()

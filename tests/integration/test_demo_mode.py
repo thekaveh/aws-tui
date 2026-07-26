@@ -9,6 +9,7 @@ the file-pane level.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from pathlib import Path
 
@@ -16,10 +17,13 @@ import pytest
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.services.athena.service import AthenaService
+from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.nav_row import NavRow
 from aws_tui.ui.widgets.pane import Pane
+from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 
 pytestmark = pytest.mark.asyncio
@@ -200,5 +204,100 @@ async def test_glue_demo_profiles_have_disjoint_catalogs(tmp_path: Path) -> None
             assert "prod_sales" in rendered
             assert "dev_events" not in rendered
     finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+async def test_athena_demo_profiles_have_disjoint_context_and_history(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_service(ctx, pilot, "athena")
+            page = ctx.root_vm.content_host.current
+            assert isinstance(page, AthenaPageVM)
+            await page.select_view("history")
+            await pilot.pause()
+            app.query_one(AthenaHistoryView)._refresh()  # type: ignore[attr-defined]
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            rendered = app.export_screenshot()
+            assert "dev-analytics" in rendered
+            assert "q-dev-succeeded" in rendered
+
+            await app.action_swap_source()
+            await _wait_for_service_setup(ctx, pilot)
+            page = ctx.root_vm.content_host.current
+            assert isinstance(page, AthenaPageVM)
+            await page.select_view("history")
+            await pilot.pause()
+            app.query_one(AthenaHistoryView)._refresh()  # type: ignore[attr-defined]
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+
+            rendered = app.export_screenshot()
+            assert "prod-reporting" in rendered
+            assert "q-prod-succeeded" in rendered
+            assert "dev-analytics" not in rendered
+            assert "q-dev-succeeded" not in rendered
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+async def test_athena_profile_switch_mounts_empty_rows_before_new_load(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    service = ctx.registry.get("athena")
+    assert isinstance(service, AthenaService)
+    factory = service._client_factory
+    assert factory is not None
+    prod = factory(ctx.connection_resolver.resolve("demo-prod"))
+    original_list_workgroups = prod.list_workgroups_page
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_list_workgroups(*, start_token: str | None = None):
+        started.set()
+        await release.wait()
+        return await original_list_workgroups(start_token=start_token)
+
+    prod.list_workgroups_page = blocked_list_workgroups  # type: ignore[method-assign]
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_service(ctx, pilot, "athena")
+            old_page = ctx.root_vm.content_host.current
+            assert isinstance(old_page, AthenaPageVM)
+            assert {row.name for row in old_page.workgroups} == {
+                "dev-analytics",
+                "dev-empty",
+            }
+
+            switching = asyncio.create_task(app.action_swap_source())
+            await started.wait()
+            new_page = ctx.root_vm.content_host.current
+
+            assert isinstance(new_page, AthenaPageVM)
+            assert new_page is not old_page
+            assert new_page.workgroups == ()
+            assert new_page.history.items == ()
+            assert "dev-analytics" not in app.export_screenshot()
+
+            release.set()
+            await switching
+            await _wait_for_service_setup(ctx, pilot)
+            assert {row.name for row in new_page.workgroups} == {"prod-reporting"}
+    finally:
+        release.set()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

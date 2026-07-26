@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlparse
 
 import reactivex as rx
 from reactivex.subject import Subject
@@ -22,9 +23,11 @@ from aws_tui.domain.query import (
     QueryExecutionDetail,
     QueryExecutionRef,
     QueryExecutionSummary,
+    QueryState,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.messages import OpenS3LocationRequest
 
 _HISTORY_ERROR = "Athena history request failed"
 
@@ -168,6 +171,34 @@ class AthenaHistoryVM:
         self._detail = detail
         self._notify("selected_execution_id")
         self._notify("detail")
+
+    def open_s3_location(
+        self,
+        *,
+        preferred_pane: Literal["left", "right"] = "left",
+    ) -> bool:
+        """Publish the selected execution's authoritative result location."""
+        detail = self._detail
+        if (
+            self._disposed
+            or self._shutdown_started
+            or detail is None
+            or detail.summary.state is not QueryState.SUCCEEDED
+            or not _execution_identity_is_coherent(detail)
+            or not _valid_s3_uri(detail.output_location)
+        ):
+            return False
+        ref = detail.summary.ref
+        assert detail.output_location is not None
+        self._hub.send(
+            OpenS3LocationRequest(
+                connection_name=ref.connection_name,
+                region=ref.region,
+                uri=detail.output_location,
+                preferred_pane=preferred_pane,
+            )
+        )
+        return True
 
     def replace_workgroup(self, workgroup: str) -> None:
         if self._disposed or self._shutdown_started:
@@ -418,3 +449,24 @@ class AthenaHistoryVM:
 
 
 __all__ = ["AthenaHistoryVM"]
+
+
+def _execution_identity_is_coherent(detail: QueryExecutionDetail) -> bool:
+    ref = detail.summary.ref
+    return (
+        ref.connection_name == detail.context.connection_name
+        and ref.region == detail.context.region
+        and ref.workgroup == detail.context.workgroup
+    )
+
+
+def _valid_s3_uri(uri: str | None) -> bool:
+    if not uri:
+        return False
+    parsed = urlparse(uri)
+    return (
+        parsed.scheme.casefold() == "s3"
+        and bool(parsed.netloc)
+        and parsed.username is None
+        and parsed.password is None
+    )

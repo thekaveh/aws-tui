@@ -6,6 +6,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Container, Horizontal
+from textual.css.query import NoMatches
 from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
@@ -405,7 +406,11 @@ class AthenaPage(HubSubscriberMixin, Widget):
     def _refresh_page(self) -> None:
         self._sync_context()
         self._sync_view()
-        self.query_one(AthenaQueryView).refresh_from_vm()
+        try:
+            query = self.query_one(AthenaQueryView)
+        except NoMatches:
+            return
+        query.refresh_from_vm()
 
     def _sync_context(self) -> None:
         try:
@@ -519,7 +524,10 @@ class AthenaPage(HubSubscriberMixin, Widget):
             return
         if focused is not None and not self.has_focus_within:
             return
-        active = self.query_one(f"#athena-{self._vm.active_view}-view")
+        try:
+            active = self.query_one(f"#athena-{self._vm.active_view}-view")
+        except NoMatches:
+            return
         focusable = next(
             iter(active.query("TextArea, DataTable, OptionList, Button, Select")),
             None,

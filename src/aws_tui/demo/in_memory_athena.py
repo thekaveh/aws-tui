@@ -1,0 +1,497 @@
+"""Deterministic, profile-local Amazon Athena client for demo mode."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from typing import TypeVar
+
+from aws_tui.domain.athena import (
+    AthenaCatalogSummary,
+    AthenaWorkgroupDetail,
+    AthenaWorkgroupSummary,
+    ResultConfigurationRequiredError,
+)
+from aws_tui.domain.data_catalog import (
+    DatabaseRef,
+    DatabaseSummary,
+    TableRef,
+    TableSummary,
+)
+from aws_tui.domain.filesystem import (
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
+from aws_tui.domain.query import (
+    NamedQuery,
+    PreparedStatement,
+    PreparedStatementSummary,
+    QueryContext,
+    QueryExecutionDetail,
+    QueryExecutionRef,
+    QueryExecutionSummary,
+    QueryState,
+    QueryStatistics,
+    ResultColumn,
+    ResultPage,
+)
+
+T = TypeVar("T")
+_STARTED_STATES = (QueryState.QUEUED, QueryState.RUNNING, QueryState.SUCCEEDED)
+_TERMINAL_STATES = frozenset(
+    {
+        QueryState.SUCCEEDED,
+        QueryState.FAILED,
+        QueryState.CANCELLED,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AthenaCall:
+    """Recorded fake invocation whose sensitive arguments stay out of reprs."""
+
+    method: str
+    arguments: tuple[object, ...] = field(repr=False)
+
+
+class InMemoryAthena:
+    """In-memory implementation of the paginated Athena client surface."""
+
+    def __init__(self, *, connection_name: str, region: str) -> None:
+        self.connection_name = connection_name
+        self.region = region
+        self.page_size = 100
+        self.calls: list[AthenaCall] = []
+        self.workgroups: list[AthenaWorkgroupSummary] = []
+        self.workgroup_details: dict[str, AthenaWorkgroupDetail] = {}
+        self.catalogs: dict[str, list[AthenaCatalogSummary]] = {}
+        self.databases: dict[tuple[str, str], list[DatabaseSummary]] = {}
+        self.tables: dict[tuple[str, str, str], list[TableSummary]] = {}
+        self.history: dict[str, list[str]] = {}
+        self.query_executions: dict[str, QueryExecutionDetail] = {}
+        self.result_pages: dict[tuple[str, str | None], ResultPage] = {}
+        self.result_errors: dict[str, Exception] = {}
+        self.named_queries: dict[str, NamedQuery] = {}
+        self.named_query_ids: dict[str, list[str]] = {}
+        self.prepared_statements: dict[tuple[str, str], PreparedStatement] = {}
+        self.prepared_names: dict[str, list[str]] = {}
+        self.access_error: PermissionDeniedError | None = None
+        self._request_tokens: dict[str, str] = {}
+        self._started_state_indexes: dict[str, int] = {}
+        self._active_app_started: set[str] = set()
+        self._next_execution_number = 1
+
+    def add_workgroup(
+        self,
+        name: str,
+        *,
+        output_location: str | None,
+        managed_results: bool = False,
+    ) -> AthenaWorkgroupDetail:
+        summary = AthenaWorkgroupSummary(
+            name,
+            "ENABLED",
+            f"{name} demo workgroup",
+            None,
+        )
+        detail = AthenaWorkgroupDetail(
+            summary,
+            output_location,
+            True,
+            True,
+            100_000_000,
+            "Athena engine version 3",
+            managed_results,
+        )
+        self.workgroups.append(summary)
+        self.workgroup_details[name] = detail
+        self.catalogs.setdefault(name, [])
+        self.history.setdefault(name, [])
+        self.named_query_ids.setdefault(name, [])
+        self.prepared_names.setdefault(name, [])
+        return detail
+
+    def add_catalog(self, workgroup: str, name: str) -> AthenaCatalogSummary:
+        catalog = AthenaCatalogSummary(
+            name,
+            "GLUE",
+            f"{name} demo catalog",
+        )
+        self.catalogs.setdefault(workgroup, []).append(catalog)
+        return catalog
+
+    def add_database(
+        self,
+        workgroup: str,
+        catalog: str,
+        name: str,
+    ) -> DatabaseSummary:
+        database = DatabaseSummary(
+            DatabaseRef(catalog, name, self.connection_name, self.region),
+            f"{name} demo database",
+            f"s3://{self.connection_name}/{name}/",
+            None,
+        )
+        self.databases.setdefault((workgroup, catalog), []).append(database)
+        return database
+
+    def add_table(
+        self,
+        workgroup: str,
+        catalog: str,
+        database: str,
+        name: str,
+    ) -> TableSummary:
+        table = TableSummary(
+            TableRef(
+                catalog,
+                database,
+                name,
+                self.connection_name,
+                self.region,
+            ),
+            f"{name} demo table",
+            "data-platform",
+            "EXTERNAL_TABLE",
+            None,
+            None,
+        )
+        self.tables.setdefault((workgroup, catalog, database), []).append(table)
+        return table
+
+    def add_query_execution(
+        self,
+        detail: QueryExecutionDetail,
+        *,
+        result_pages: Sequence[ResultPage] = (),
+        result_error: Exception | None = None,
+    ) -> None:
+        ref = detail.summary.ref
+        if (
+            ref.connection_name != self.connection_name
+            or ref.region != self.region
+            or detail.context.connection_name != self.connection_name
+            or detail.context.region != self.region
+            or detail.context.workgroup != ref.workgroup
+        ):
+            raise ValueError("query execution identity does not match fake")
+        self.query_executions[ref.execution_id] = detail
+        self.history.setdefault(ref.workgroup, []).append(ref.execution_id)
+        if result_error is not None:
+            self.result_errors[ref.execution_id] = result_error
+        for index, page in enumerate(result_pages):
+            token = None if index == 0 else str(index)
+            next_token = str(index + 1) if index + 1 < len(result_pages) else None
+            self.result_pages[(ref.execution_id, token)] = replace(
+                page,
+                next_token=next_token,
+            )
+
+    def add_named_query(self, query: NamedQuery) -> None:
+        self.named_queries[query.query_id] = query
+        self.named_query_ids.setdefault(query.workgroup, []).append(query.query_id)
+
+    def add_prepared_statement(self, statement: PreparedStatement) -> None:
+        key = (statement.workgroup, statement.name)
+        self.prepared_statements[key] = statement
+        self.prepared_names.setdefault(statement.workgroup, []).append(statement.name)
+
+    async def list_workgroups_page(
+        self,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
+        self._record("list_workgroups_page", start_token)
+        self._raise_if_denied()
+        return _page(self.workgroups, start_token, self.page_size)
+
+    async def get_workgroup(self, name: str) -> AthenaWorkgroupDetail:
+        self._record("get_workgroup", name)
+        self._raise_if_denied()
+        try:
+            return self.workgroup_details[name]
+        except KeyError:
+            raise NotFoundError("Athena workgroup not found") from None
+
+    async def list_catalogs_page(
+        self,
+        *,
+        workgroup: str | None = None,
+        start_token: str | None = None,
+    ) -> tuple[list[AthenaCatalogSummary], str | None]:
+        self._record("list_catalogs_page", workgroup, start_token)
+        self._raise_if_denied()
+        rows = self.catalogs.get(workgroup or "", [])
+        return _page(rows, start_token, self.page_size)
+
+    async def list_databases_page(
+        self,
+        catalog: str,
+        *,
+        workgroup: str | None = None,
+        start_token: str | None = None,
+    ) -> tuple[list[DatabaseSummary], str | None]:
+        self._record("list_databases_page", catalog, workgroup, start_token)
+        self._raise_if_denied()
+        rows = self.databases.get((workgroup or "", catalog), [])
+        return _page(rows, start_token, self.page_size)
+
+    async def list_tables_page(
+        self,
+        catalog: str,
+        database: str,
+        *,
+        workgroup: str | None = None,
+        start_token: str | None = None,
+    ) -> tuple[list[TableSummary], str | None]:
+        self._record(
+            "list_tables_page",
+            catalog,
+            database,
+            workgroup,
+            start_token,
+        )
+        self._raise_if_denied()
+        rows = self.tables.get((workgroup or "", catalog, database), [])
+        return _page(rows, start_token, self.page_size)
+
+    async def list_query_executions_page(
+        self,
+        workgroup: str,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[QueryExecutionRef], str | None]:
+        self._record("list_query_executions_page", workgroup, start_token)
+        self._raise_if_denied()
+        ids, token = _page(self.history.get(workgroup, []), start_token, self.page_size)
+        return [self.query_executions[execution_id].summary.ref for execution_id in ids], token
+
+    async def get_query_execution(
+        self,
+        execution_id: str,
+    ) -> QueryExecutionDetail:
+        self._record("get_query_execution", execution_id)
+        self._raise_if_denied()
+        try:
+            detail = self.query_executions[execution_id]
+        except KeyError:
+            raise NotFoundError("Athena query execution not found") from None
+        state_index = self._started_state_indexes.get(execution_id)
+        if state_index is None:
+            return detail
+        state = _STARTED_STATES[state_index]
+        now = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+        updated = replace(
+            detail,
+            summary=replace(
+                detail.summary,
+                state=state,
+                completed_at=now if state in _TERMINAL_STATES else None,
+            ),
+        )
+        self.query_executions[execution_id] = updated
+        if state_index + 1 < len(_STARTED_STATES):
+            self._started_state_indexes[execution_id] = state_index + 1
+        else:
+            self._active_app_started.discard(execution_id)
+        return updated
+
+    async def get_query_runtime_statistics(
+        self,
+        execution_id: str,
+    ) -> QueryStatistics:
+        self._record("get_query_runtime_statistics", execution_id)
+        detail = await self._query_execution_without_record(execution_id)
+        return detail.statistics
+
+    async def start_query(
+        self,
+        sql: str,
+        context: QueryContext,
+        *,
+        request_token: str,
+        output_location: str | None = None,
+    ) -> QueryExecutionRef:
+        self._record("start_query", sql, context, request_token, output_location)
+        self._raise_if_denied()
+        if context.connection_name != self.connection_name or context.region != self.region:
+            raise ValidationError("query context does not match Athena connection")
+        known_id = self._request_tokens.get(request_token)
+        if known_id is not None:
+            return self.query_executions[known_id].summary.ref
+        workgroup = self.workgroup_details.get(context.workgroup)
+        if workgroup is None:
+            raise NotFoundError("Athena workgroup not found")
+        result_root = output_location or workgroup.output_location
+        if result_root is None and not workgroup.managed_query_results_enabled:
+            raise ResultConfigurationRequiredError("Athena result configuration is required")
+        execution_id = f"{self.connection_name}-app-{self._next_execution_number:04d}"
+        self._next_execution_number += 1
+        ref = QueryExecutionRef(
+            execution_id,
+            self.connection_name,
+            self.region,
+            context.workgroup,
+        )
+        detail = QueryExecutionDetail(
+            QueryExecutionSummary(
+                ref,
+                QueryState.QUEUED,
+                datetime(2026, 7, 26, 12, 0, tzinfo=UTC),
+                None,
+                "DML",
+            ),
+            None,
+            context,
+            QueryStatistics(18, 2, 3, 1, 128, False),
+            _started_output_location(result_root, execution_id),
+            "Athena engine version 3",
+            None,
+        )
+        self.query_executions[execution_id] = detail
+        self.history.setdefault(context.workgroup, []).insert(0, execution_id)
+        self.result_pages[(execution_id, None)] = ResultPage(
+            (ResultColumn("_col0", "integer", "NULLABLE"),),
+            (("1",),),
+            None,
+        )
+        self._request_tokens[request_token] = execution_id
+        self._started_state_indexes[execution_id] = 0
+        self._active_app_started.add(execution_id)
+        return ref
+
+    async def stop_query(self, execution_id: str) -> None:
+        self._record("stop_query", execution_id)
+        self._raise_if_denied()
+        if execution_id not in self._active_app_started:
+            raise ValidationError("query is not an active app-started query")
+        detail = self.query_executions[execution_id]
+        self.query_executions[execution_id] = replace(
+            detail,
+            summary=replace(
+                detail.summary,
+                state=QueryState.CANCELLED,
+                completed_at=datetime(2026, 7, 26, 12, 0, tzinfo=UTC),
+            ),
+            state_reason="Cancelled from the demo query page",
+        )
+        self._active_app_started.remove(execution_id)
+        self._started_state_indexes.pop(execution_id, None)
+
+    async def get_results_page(
+        self,
+        execution_id: str,
+        *,
+        start_token: str | None = None,
+    ) -> ResultPage:
+        self._record("get_results_page", execution_id, start_token)
+        self._raise_if_denied()
+        error = self.result_errors.get(execution_id)
+        if error is not None:
+            raise error
+        try:
+            return self.result_pages[(execution_id, start_token)]
+        except KeyError:
+            raise NotFoundError("Athena query results not found") from None
+
+    async def list_named_queries_page(
+        self,
+        workgroup: str,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[str], str | None]:
+        self._record("list_named_queries_page", workgroup, start_token)
+        self._raise_if_denied()
+        return _page(
+            self.named_query_ids.get(workgroup, []),
+            start_token,
+            self.page_size,
+        )
+
+    async def get_named_queries(self, ids: list[str]) -> tuple[NamedQuery, ...]:
+        self._record("get_named_queries", tuple(ids))
+        self._raise_if_denied()
+        return tuple(
+            self.named_queries[query_id] for query_id in ids if query_id in self.named_queries
+        )
+
+    async def list_prepared_statements_page(
+        self,
+        workgroup: str,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[PreparedStatementSummary], str | None]:
+        self._record("list_prepared_statements_page", workgroup, start_token)
+        self._raise_if_denied()
+        names, token = _page(
+            self.prepared_names.get(workgroup, []),
+            start_token,
+            self.page_size,
+        )
+        return [
+            PreparedStatementSummary(
+                name,
+                self.prepared_statements[(workgroup, name)].last_modified_at,
+            )
+            for name in names
+        ], token
+
+    async def get_prepared_statement(
+        self,
+        name: str,
+        workgroup: str,
+    ) -> PreparedStatement:
+        self._record("get_prepared_statement", name, workgroup)
+        self._raise_if_denied()
+        try:
+            return self.prepared_statements[(workgroup, name)]
+        except KeyError:
+            raise NotFoundError("Athena prepared statement not found") from None
+
+    async def _query_execution_without_record(
+        self,
+        execution_id: str,
+    ) -> QueryExecutionDetail:
+        self._raise_if_denied()
+        try:
+            return self.query_executions[execution_id]
+        except KeyError:
+            raise NotFoundError("Athena query execution not found") from None
+
+    def _raise_if_denied(self) -> None:
+        if self.access_error is not None:
+            raise self.access_error
+
+    def _record(self, method: str, *arguments: object) -> None:
+        self.calls.append(AthenaCall(method, arguments))
+
+
+def _page(
+    rows: Sequence[T],
+    start_token: str | None,
+    page_size: int,
+) -> tuple[list[T], str | None]:
+    try:
+        offset = int(start_token or "0")
+    except ValueError:
+        raise ValidationError("invalid Athena pagination token") from None
+    if offset < 0:
+        raise ValidationError("invalid Athena pagination token")
+    page = list(rows[offset : offset + page_size])
+    next_offset = offset + page_size
+    return page, str(next_offset) if next_offset < len(rows) else None
+
+
+def _started_output_location(
+    result_root: str | None,
+    execution_id: str,
+) -> str | None:
+    if result_root is None:
+        return None
+    return f"{result_root.rstrip('/')}/{execution_id}.csv"
+
+
+__all__ = ["AthenaCall", "InMemoryAthena"]

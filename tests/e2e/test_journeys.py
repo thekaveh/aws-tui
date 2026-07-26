@@ -374,3 +374,45 @@ async def test_journey_7_glue_table_opens_s3_under_same_profile(tmp_path: Path) 
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+
+
+# ── Journey 8: Athena result -> S3 under the same profile ───────────────────
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_journey_8_athena_result_opens_s3_under_same_profile(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_service_mount(pilot, app)
+            ctx.root_vm.services_menu.switch_service_command.execute("athena")
+            await _await_service_mount(pilot, app)
+            page = ctx.root_vm.content_host.current
+            from aws_tui.vm.athena.page_vm import AthenaPageVM
+
+            assert isinstance(page, AthenaPageVM)
+            await page.select_view("history")
+            await page.select_history_execution("q-dev-succeeded")
+
+            result = app.action_dispatch("athena.open_result_location")
+            if inspect.isawaitable(result):
+                await result
+            await _await_service_mount(pilot, app)
+
+            assert ctx.root_vm.content_host.current_id == "s3"
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            pane = ctx.root_vm.content_host.current.left
+            assert pane.current_connection_key == ("aws", "demo-dev")
+            assert pane.path.as_posix() == "/athena-results/dev"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()

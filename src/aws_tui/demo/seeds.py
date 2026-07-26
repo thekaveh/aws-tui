@@ -11,6 +11,7 @@ from __future__ import annotations
 import zlib
 from datetime import UTC, datetime, timedelta
 
+from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.demo.in_memory_emr import InMemoryEmr
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.demo.in_memory_glue import InMemoryGlue
@@ -19,6 +20,19 @@ from aws_tui.domain.emr_serverless import (
     JobRunState,
 )
 from aws_tui.domain.filesystem import PathRef, PermissionDeniedError
+from aws_tui.domain.query import (
+    AthenaQueryError,
+    NamedQuery,
+    PreparedStatement,
+    QueryContext,
+    QueryExecutionDetail,
+    QueryExecutionRef,
+    QueryExecutionSummary,
+    QueryState,
+    QueryStatistics,
+    ResultColumn,
+    ResultPage,
+)
 
 # Fixed "now" for deterministic timestamps. Anchored at the spec's
 # write date so the seed reads as "recently active" forever — bumping
@@ -30,6 +44,7 @@ _NOW: datetime = datetime(2026, 6, 28, 12, 0, 0, tzinfo=UTC)
 
 
 _DEV_OBJECTS: tuple[tuple[str, int], ...] = (
+    ("athena-results/dev/q-dev-succeeded.csv", 4_096),
     ("etl-input/raw/events/2026-06-25.json.gz", 2_140_000),
     ("etl-input/raw/events/2026-06-26.json.gz", 2_280_000),
     ("etl-input/raw/events/2026-06-27.json.gz", 2_310_000),
@@ -44,6 +59,7 @@ _DEV_OBJECTS: tuple[tuple[str, int], ...] = (
 
 
 _PROD_OBJECTS: tuple[tuple[str, int], ...] = (
+    ("athena-results/prod/q-prod-succeeded.csv", 8_192),
     ("data-lake/silver/customers/year=2026/month=06/part-0000.parquet", 142_000_000),
     ("data-lake/silver/customers/year=2026/month=06/part-0001.parquet", 138_000_000),
     ("data-lake/silver/customers/year=2026/month=06/_SUCCESS", 0),
@@ -231,9 +247,240 @@ def seeded_demo_glue() -> dict[str, InMemoryGlue]:
     }
 
 
+# ── Athena seed data ────────────────────────────────────────────────────────
+
+
+def seeded_demo_athena(profile: str) -> InMemoryAthena:
+    """Build one fresh, profile-local Athena demo client."""
+    regions = {
+        "demo-dev": "us-east-1",
+        "demo-prod": "us-east-1",
+        "demo-shared": "us-west-2",
+    }
+    athena = InMemoryAthena(
+        connection_name=profile,
+        region=regions.get(profile, "us-east-1"),
+    )
+    if profile == "demo-dev":
+        _seed_dev_athena(athena)
+    elif profile == "demo-prod":
+        _seed_prod_athena(athena)
+    elif profile == "demo-shared":
+        athena.access_error = PermissionDeniedError("Athena access denied in demo-shared")
+    return athena
+
+
+def _seed_dev_athena(athena: InMemoryAthena) -> None:
+    athena.add_workgroup(
+        "dev-analytics",
+        output_location="s3://athena-results/dev/",
+    )
+    athena.add_workgroup(
+        "dev-empty",
+        output_location="s3://athena-results/dev-empty/",
+    )
+    athena.add_catalog("dev-analytics", "DevDataCatalog")
+    athena.add_database(
+        "dev-analytics",
+        "DevDataCatalog",
+        "dev_events",
+    )
+    athena.add_table(
+        "dev-analytics",
+        "DevDataCatalog",
+        "dev_events",
+        "events",
+    )
+    context = QueryContext(
+        "demo-dev",
+        "us-east-1",
+        "dev-analytics",
+        "DevDataCatalog",
+        "dev_events",
+    )
+    _add_demo_execution(
+        athena,
+        context,
+        "q-dev-succeeded",
+        QueryState.SUCCEEDED,
+        output_location="s3://athena-results/dev/",
+        rows=(("Ada", "42"), ("Lin", "")),
+        reused=True,
+    )
+    _add_demo_execution(
+        athena,
+        context,
+        "q-dev-running",
+        QueryState.RUNNING,
+        output_location="s3://athena-results/dev/running/",
+    )
+    _add_demo_execution(
+        athena,
+        context,
+        "q-dev-failed",
+        QueryState.FAILED,
+        output_location="s3://athena-results/dev/failed/",
+        error=AthenaQueryError(2, 1006, False, "Demo query validation failed"),
+    )
+    _add_demo_execution(
+        athena,
+        context,
+        "q-dev-empty",
+        QueryState.SUCCEEDED,
+        output_location="s3://athena-results/dev/empty/",
+        rows=(),
+    )
+    _add_demo_execution(
+        athena,
+        context,
+        "q-dev-access-denied",
+        QueryState.SUCCEEDED,
+        output_location="s3://athena-results/dev/restricted/",
+        result_error=PermissionDeniedError("result access denied"),
+    )
+    _add_demo_execution(
+        athena,
+        context,
+        "q-dev-missing-output",
+        QueryState.SUCCEEDED,
+        output_location=None,
+        rows=(("missing", None),),
+    )
+    athena.add_named_query(
+        NamedQuery(
+            "nq-dev-events",
+            "Recent dev events",
+            "Bounded demo query",
+            "dev_events",
+            "SELECT * FROM events LIMIT 25",
+            "dev-analytics",
+        )
+    )
+    athena.add_prepared_statement(
+        PreparedStatement(
+            "ps-dev-event-by-id",
+            "SELECT * FROM events WHERE event_id = ?",
+            "dev-analytics",
+            "Find one development event",
+            _NOW,
+        )
+    )
+
+
+def _seed_prod_athena(athena: InMemoryAthena) -> None:
+    athena.add_workgroup(
+        "prod-reporting",
+        output_location="s3://athena-results/prod/",
+    )
+    athena.add_catalog("prod-reporting", "ProdDataCatalog")
+    athena.add_database(
+        "prod-reporting",
+        "ProdDataCatalog",
+        "prod_sales",
+    )
+    athena.add_table(
+        "prod-reporting",
+        "ProdDataCatalog",
+        "prod_sales",
+        "daily_sales",
+    )
+    context = QueryContext(
+        "demo-prod",
+        "us-east-1",
+        "prod-reporting",
+        "ProdDataCatalog",
+        "prod_sales",
+    )
+    _add_demo_execution(
+        athena,
+        context,
+        "q-prod-succeeded",
+        QueryState.SUCCEEDED,
+        output_location="s3://athena-results/prod/",
+        rows=(("2026-07-25", "1048576"),),
+    )
+    _add_demo_execution(
+        athena,
+        context,
+        "q-prod-cancelled",
+        QueryState.CANCELLED,
+        output_location="s3://athena-results/prod/cancelled/",
+    )
+    athena.add_named_query(
+        NamedQuery(
+            "nq-prod-daily-sales",
+            "Daily sales",
+            "Production daily summary",
+            "prod_sales",
+            "SELECT * FROM daily_sales LIMIT 25",
+            "prod-reporting",
+        )
+    )
+    athena.add_prepared_statement(
+        PreparedStatement(
+            "ps-prod-sales-by-day",
+            "SELECT * FROM daily_sales WHERE sales_date = ?",
+            "prod-reporting",
+            "Production sales for one day",
+            _NOW,
+        )
+    )
+
+
+def _add_demo_execution(
+    athena: InMemoryAthena,
+    context: QueryContext,
+    execution_id: str,
+    state: QueryState,
+    *,
+    output_location: str | None,
+    rows: tuple[tuple[str | None, ...], ...] = (),
+    error: AthenaQueryError | None = None,
+    result_error: Exception | None = None,
+    reused: bool = False,
+) -> None:
+    ref = QueryExecutionRef(
+        execution_id,
+        context.connection_name,
+        context.region,
+        context.workgroup,
+    )
+    detail = QueryExecutionDetail(
+        QueryExecutionSummary(
+            ref,
+            state,
+            _NOW - timedelta(minutes=10),
+            _NOW - timedelta(minutes=9) if state is not QueryState.RUNNING else None,
+            "DML",
+        ),
+        error.message if error is not None else None,
+        context,
+        QueryStatistics(420, 12, 24, 8, 2_097_152, reused),
+        output_location,
+        "Athena engine version 3",
+        error,
+    )
+    result_pages = (
+        ResultPage(
+            (
+                ResultColumn("value", "varchar", "NULLABLE"),
+                ResultColumn("metric", "varchar", "NULLABLE"),
+            ),
+            rows,
+            None,
+        ),
+    )
+    athena.add_query_execution(
+        detail,
+        result_pages=result_pages,
+        result_error=result_error,
+    )
+
+
 __all__ = [
     "seed_emr_data",
     "seed_s3_data",
+    "seeded_demo_athena",
     "seeded_demo_emr",
     "seeded_demo_fs",
     "seeded_demo_glue",

@@ -131,4 +131,6 @@ def test_demo_mode_renders_chip_and_seed_data(theme: str) -> None:
         f"no DEMO affordance visible in {theme}"
     )
     assert "etl-input/" in svg_plain, f"no demo seed artifact rendered in {theme}"
-    assert "2 obj" in svg_plain, f"no settled demo pane summary rendered in {theme}"
+    assert "athena-results/" in svg_plain, f"no Athena result bucket rendered in {theme}"
+    assert "Athena" in svg_plain, f"no Athena service row rendered in {theme}"
+    assert "3 obj" in svg_plain, f"no settled demo pane summary rendered in {theme}"
