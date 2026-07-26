@@ -89,6 +89,8 @@ class AthenaQueryVM:
         self._sleep = sleep
         self._generation = 0
         self._execution_task: asyncio.Task[None] | None = None
+        self._submission_task: asyncio.Task[QueryExecutionRef] | None = None
+        self._pending_cleanup_refs: dict[str, QueryExecutionRef] = {}
         self._owns_active_query = False
         self._busy = False
         self._is_submitting = False
@@ -216,22 +218,18 @@ class AthenaQueryVM:
         async with self._lifecycle_lock:
             if self._disposed or context == self._context:
                 return
-            if (
-                self._owns_active_query
-                and self._execution_ref is not None
-                and not await self._try_stop(self._execution_ref)
-            ):
-                return
             self._lifecycle_transition = True
             self._generation += 1
+            if self._owns_active_query and self._execution_ref is not None:
+                self._retain_cleanup(self._execution_ref)
             self._owns_active_query = False
-            self._results.clear()
-            self._execute_command.cancel()
-            await self._drain_execution_task()
             self._context = context
             self._reset_execution_state()
-            self._lifecycle_transition = False
             self._notify("context")
+            self._execute_command.cancel()
+            await self._drain_execution_task()
+            await self._stop_pending_cleanup(report_error=False)
+            self._lifecycle_transition = False
 
     async def execute(self) -> None:
         await self._execute_command.execute_async()
@@ -248,11 +246,14 @@ class AthenaQueryVM:
             self._generation += 1
             self._results.clear()
             ref = self._execution_ref
-            if self._owns_active_query and ref is not None and await self._try_stop(ref):
-                self._owns_active_query = False
-                self._notify("owns_active_query")
+            if self._owns_active_query and ref is not None:
+                self._retain_cleanup(ref)
+            self._owns_active_query = False
+            self._notify("owns_active_query")
             self._execute_command.cancel()
             await self._drain_execution_task()
+            await self._stop_pending_cleanup(report_error=True)
+            await self._results.shutdown()
             self._is_submitting = False
             self._shutdown_complete = True
             self._notify("is_executing")
@@ -293,14 +294,20 @@ class AthenaQueryVM:
             self._notify("validation_error")
             self._notify("is_submitting")
             self._notify("pane_state")
-            request_token = _request_token(self._context)
-            try:
-                ref = await self._client.start_query(
+            submission_context = self._context
+            request_token = _request_token(submission_context)
+            submission_task = asyncio.create_task(
+                self._client.start_query(
                     normalized_sql,
-                    self._context,
+                    submission_context,
                     request_token=request_token,
                 )
+            )
+            self._submission_task = submission_task
+            try:
+                ref = await asyncio.shield(submission_task)
             except asyncio.CancelledError:
+                await self._drain_cancelled_submission(submission_task)
                 raise
             except ProviderError as exc:
                 if generation == self._generation:
@@ -314,6 +321,8 @@ class AthenaQueryVM:
                 if generation == self._generation:
                     self._is_submitting = False
                     self._notify("is_submitting")
+                if self._submission_task is submission_task:
+                    self._submission_task = None
             if generation != self._generation or self._disposed:
                 await self._stop_stale_submission(ref)
                 return
@@ -388,6 +397,7 @@ class AthenaQueryVM:
             self._notify("is_submitting")
             self._execute_command.cancel()
             await self._drain_execution_task()
+            await self._stop_pending_cleanup(report_error=True)
             self._lifecycle_transition = False
 
     async def _try_stop(
@@ -408,12 +418,41 @@ class AthenaQueryVM:
             return False
         return True
 
+    async def _drain_cancelled_submission(
+        self,
+        task: asyncio.Task[QueryExecutionRef],
+    ) -> None:
+        try:
+            ref = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            return
+        await self._stop_stale_submission(ref)
+
     async def _stop_stale_submission(self, ref: QueryExecutionRef) -> None:
-        if not (self._shutdown_started or self._lifecycle_transition):
+        self._retain_cleanup(ref)
+        if self._lifecycle_transition and not self._disposed:
             return
-        if not self._ref_matches_context(ref, self._context):
-            return
-        await self._try_stop(ref, report_error=False)
+        await self._stop_retained_ref(ref, report_error=False)
+
+    def _retain_cleanup(self, ref: QueryExecutionRef) -> None:
+        self._pending_cleanup_refs[ref.execution_id] = ref
+
+    async def _stop_retained_ref(
+        self,
+        ref: QueryExecutionRef,
+        *,
+        report_error: bool,
+    ) -> bool:
+        if not await self._try_stop(ref, report_error=report_error):
+            return False
+        self._pending_cleanup_refs.pop(ref.execution_id, None)
+        return True
+
+    async def _stop_pending_cleanup(self, *, report_error: bool) -> None:
+        for ref in tuple(self._pending_cleanup_refs.values()):
+            await self._stop_retained_ref(ref, report_error=report_error)
 
     async def _drain_execution_task(self) -> None:
         task = self._execution_task

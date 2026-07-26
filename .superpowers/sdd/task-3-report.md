@@ -191,3 +191,136 @@ missing `/tmp/vmx-cargo-182/env` appeared on commands and is omitted above.
 - Structured Athena failure messages, state reasons, and result locations remain
   available as explicit UI properties. They are excluded from reprs and are never
   copied into VM exception/error text or logs.
+
+## Review Fix Addendum: 2026-07-25
+
+### Status
+
+All Athena Task 3 review findings are closed on
+`codex/aws-service-expansion-study`. This addendum supersedes the first original
+concern above: submission ambiguity is now resolved at the VM boundary by
+shielding and draining the response-bearing submission task.
+
+### Implementation
+
+- `AthenaQueryVM` now gives each `start_query` call an independently owned,
+  shielded task. Shutdown, explicit cancel, context replacement, external task
+  cancellation, and synchronous disposal drain that task to either an execution
+  reference or an error. Accepted executions are stopped through the
+  authority-enforcing domain API even when stale response metadata is
+  out-of-context.
+- Stale submission errors and cleanup failures remain silent. Shutdown awaits
+  submission completion and stop dispatch deterministically; no response task or
+  exception is abandoned.
+- Context replacement now invalidates old generations and installs the new local
+  context before remote cleanup. Old execution references move to a private
+  cleanup registry. A failed stop cannot block the new context or publish into
+  its pane, and shutdown retries retained cleanup ownership.
+- `AthenaResultsVM` now owns one pager, outer load-more command, and active-task
+  set per generation. Replacing a query retires the old generation immediately,
+  so a cancellation-resistant old page cannot keep the new command disabled.
+  `shutdown()` retires and drains every surviving generation.
+- Existing request-token derivation, domain stop authority, bounded polling,
+  one-page no-prefetch behavior, null rendering, privacy mappings, and
+  synchronous disposal surfaces are unchanged.
+
+### TDD Evidence
+
+The review regressions were added before production edits.
+
+Initial RED:
+
+```text
+uv run pytest tests/unit/vm/athena/test_query_vm.py \
+  tests/unit/vm/athena/test_results_vm.py -q
+
+8 failed, 30 passed
+```
+
+The failures covered all three lifecycle transitions losing a detached accepted
+submission, delayed submission-error draining, direct disposal, failed-stop
+context replacement, reused result commands, and missing result-worker
+shutdown.
+
+An additional ownership edge was pinned during self-review:
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_query_vm.py::test_shutdown_stops_detached_submission_with_mismatched_response_context \
+  -q
+
+1 failed
+```
+
+Final GREEN:
+
+```text
+uv run pytest tests/unit/vm/athena/test_query_vm.py \
+  tests/unit/vm/athena/test_results_vm.py -q
+
+39 passed in 0.41s
+```
+
+### Verification
+
+Full VM regression:
+
+```text
+uv run pytest tests/unit/vm -q
+538 passed in 29.56s
+```
+
+Athena domain, query records, and SQL policy:
+
+```text
+uv run pytest tests/unit/domain/test_athena.py \
+  tests/unit/domain/test_query.py \
+  tests/unit/domain/test_sql_policy.py -q
+257 passed in 0.60s
+```
+
+Privacy and crash paths:
+
+```text
+uv run pytest tests/unit/infra/test_crash_dump.py \
+  tests/unit/infra/test_redaction.py \
+  tests/unit/infra/test_log_sink.py \
+  tests/unit/test_notifications.py -q
+38 passed in 0.35s
+```
+
+The non-overlapping VM, domain/policy, and privacy runs total **833 passing
+tests**.
+
+Static, formatting, and layers:
+
+```text
+uv run mypy src/aws_tui/domain/query.py src/aws_tui/domain/athena.py \
+  src/aws_tui/vm/athena
+Success: no issues found in 6 source files
+
+uv run ruff check src/aws_tui/vm/athena tests/unit/vm/athena
+All checks passed!
+
+uv run ruff format --check src/aws_tui/vm/athena tests/unit/vm/athena
+6 files already formatted
+
+scripts/check-layers.sh
+layer rules clean
+```
+
+Every listed command exited 0. The unrelated shell startup warning for the
+missing `/tmp/vmx-cargo-182/env` appeared on commands and is omitted above.
+
+### Updated Concerns
+
+- Shielding intentionally makes graceful shutdown wait for the submission
+  transport to return. This is required to recover the accepted execution ID;
+  the VM does not impose a second timeout over the configured AWS transport
+  timeout.
+- A context-replacement stop failure is retained silently and retried on the
+  next lifecycle cleanup. If the final shutdown stop also fails, the existing
+  pane-local stable error is shown rather than retrying indefinitely.
+- Results still accumulate only pages explicitly requested by the user. Retired
+  cancellation-resistant pages are tracked until completion but can never
+  publish or disable the current generation.

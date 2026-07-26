@@ -25,6 +25,7 @@ class ResultClient:
         self.calls: list[tuple[str, str | None]] = []
         self.failures: dict[tuple[str, str | None], Exception] = {}
         self.blocked_execution: str | None = None
+        self.blocked_request: tuple[str, str | None] | None = None
         self.fetch_started = asyncio.Event()
         self.release_fetch = asyncio.Event()
         self.ignore_cancellation = False
@@ -36,7 +37,10 @@ class ResultClient:
         start_token: str | None = None,
     ) -> ResultPage:
         self.calls.append((execution_id, start_token))
-        if execution_id == self.blocked_execution:
+        if (
+            execution_id == self.blocked_execution
+            or (execution_id, start_token) == self.blocked_request
+        ):
             self.fetch_started.set()
             try:
                 await self.release_fetch.wait()
@@ -150,6 +154,77 @@ async def test_result_load_replacement_discards_stale_completion() -> None:
     assert vm.execution_id == "q-new"
     assert vm.columns == (_VALUE,)
     assert vm.rows == (("new",),)
+
+
+@pytest.mark.asyncio
+async def test_replacement_load_more_uses_new_generation_while_old_page_is_blocked() -> None:
+    client = ResultClient(
+        {
+            ("q-old", None): ResultPage((_ID,), (("old-first",),), "old-next"),
+            ("q-old", "old-next"): ResultPage((_ID,), (("old-late",),), None),
+            ("q-new", None): ResultPage((_VALUE,), (("new-first",),), "new-next"),
+            ("q-new", "new-next"): ResultPage(
+                (_VALUE,),
+                (("new-second",),),
+                None,
+            ),
+        }
+    )
+    vm = make_results_vm(client)
+    await vm.load("q-old")
+    old_command = vm.load_more_command
+    client.blocked_request = ("q-old", "old-next")
+    client.ignore_cancellation = True
+    old_load_more = asyncio.create_task(vm.load_more())
+    await client.fetch_started.wait()
+
+    await vm.load("q-new")
+    new_command = vm.load_more_command
+    await vm.load_more()
+    client.release_fetch.set()
+    await old_load_more
+
+    assert new_command is not old_command
+    assert vm.execution_id == "q-new"
+    assert vm.columns == (_VALUE,)
+    assert vm.rows == (("new-first",), ("new-second",))
+    assert client.calls == [
+        ("q-old", None),
+        ("q-old", "old-next"),
+        ("q-new", None),
+        ("q-new", "new-next"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drains_retired_generation_that_ignores_cancellation() -> None:
+    client = ResultClient(
+        {
+            ("q-old", None): ResultPage((_ID,), (("old-first",),), "old-next"),
+            ("q-old", "old-next"): ResultPage((_ID,), (("old-late",),), None),
+            ("q-new", None): ResultPage((_VALUE,), (("new-first",),), None),
+        }
+    )
+    vm = make_results_vm(client)
+    await vm.load("q-old")
+    client.blocked_request = ("q-old", "old-next")
+    client.ignore_cancellation = True
+    old_load_more = asyncio.create_task(vm.load_more())
+    await client.fetch_started.wait()
+    await vm.load("q-new")
+
+    shutdown = asyncio.create_task(vm.shutdown())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    shutdown_waited_for_old_worker = not shutdown.done()
+    client.release_fetch.set()
+    await shutdown
+    await old_load_more
+
+    assert shutdown_waited_for_old_worker
+    assert vm.execution_id is None
+    assert vm.rows == ()
+    assert not vm.load_more_command.can_execute()
 
 
 @pytest.mark.asyncio

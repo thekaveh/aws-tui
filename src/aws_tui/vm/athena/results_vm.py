@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,6 +40,17 @@ class _ResultColumnsChangedError(Exception):
     pass
 
 
+@dataclass(eq=False)
+class _PagerGeneration:
+    generation: int
+    execution_id: str | None = field(repr=False)
+    columns: tuple[ResultColumn, ...] = field(default=(), repr=False)
+    tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
+    retired: bool = False
+    pager: TokenPagedComposition[ResultRow, str] = field(init=False, repr=False)
+    load_more_command: AsyncRelayCommand = field(init=False, repr=False)
+
+
 class AthenaResultsVM:
     def __init__(
         self,
@@ -50,6 +62,8 @@ class AthenaResultsVM:
         self._client = client
         self._hub = hub
         self._disposed = False
+        self._shutdown_started = False
+        self._shutdown_complete = False
         self._on_property_changed: Subject[str] = Subject()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -64,14 +78,9 @@ class AthenaResultsVM:
         self._columns: tuple[ResultColumn, ...] = ()
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
-        self._pager = self._make_pager(None, self._generation)
-        self._load_more_command: AsyncRelayCommand = (
-            AsyncRelayCommand.builder()
-            .predicate(self._can_load_more)
-            .triggers(self._on_property_changed)
-            .task(self._load_more)
-            .build()
-        )
+        self._workers: set[_PagerGeneration] = set()
+        self._worker = self._make_worker(None, self._generation)
+        self._pager = self._worker.pager
 
     @property
     def execution_id(self) -> str | None:
@@ -112,7 +121,7 @@ class AthenaResultsVM:
 
     @property
     def load_more_command(self) -> AsyncRelayCommand:
-        return self._load_more_command
+        return self._worker.load_more_command
 
     @property
     def status(self) -> ConstructionStatus:
@@ -126,27 +135,28 @@ class AthenaResultsVM:
         self._inner.construct()
 
     async def load(self, execution_id: str) -> None:
-        if self._disposed:
+        if self._disposed or self._shutdown_started:
             return
         self._generation += 1
         generation = self._generation
         self._execution_id = execution_id
         self._columns = ()
         self._error_text = None
-        self._replace_pager(execution_id, generation)
+        worker = self._replace_worker(execution_id, generation)
         self._set_state(PaneState.LOADING)
         self._notify_all()
+        task = self._track_current_task(worker)
         try:
-            await self._pager.refresh_command.execute_async()
+            await worker.pager.refresh_command.execute_async()
         except _ResultColumnsChangedError:
-            if generation != self._generation:
+            if not self._is_current(worker):
                 return
             self._error_text = _COLUMN_ERROR
             self._set_state(PaneState.ERROR)
             self._notify("error_text")
             return
         except ProviderError as exc:
-            if generation != self._generation:
+            if not self._is_current(worker):
                 return
             self._state, self._error_text = map_provider_error(
                 exc,
@@ -156,7 +166,7 @@ class AthenaResultsVM:
             self._notify("error_text")
             return
         except Exception:
-            if generation != self._generation:
+            if not self._is_current(worker):
                 return
             self._state, self._error_text = map_unexpected_error(
                 fallback=_RESULTS_ERROR,
@@ -164,53 +174,79 @@ class AthenaResultsVM:
             self._notify("state")
             self._notify("error_text")
             return
-        if generation != self._generation:
-            return
-        self._notify_all()
-        self._set_state(PaneState.IDLE if self.rows else PaneState.EMPTY)
+        finally:
+            self._untrack_task(worker, task)
+        if self._is_current(worker):
+            self._notify_all()
+            self._set_state(PaneState.IDLE if self.rows else PaneState.EMPTY)
 
     async def load_more(self) -> None:
-        await self._load_more_command.execute_async()
+        await self._worker.load_more_command.execute_async()
 
     def clear(self) -> None:
-        if self._disposed:
+        if self._disposed or self._shutdown_started:
             return
         self._generation += 1
         self._execution_id = None
         self._columns = ()
         self._error_text = None
-        self._replace_pager(None, self._generation)
+        self._replace_worker(None, self._generation)
         self._state = PaneState.EMPTY
         self._notify_all()
+
+    async def shutdown(self) -> None:
+        if self._shutdown_complete:
+            return
+        self._shutdown_started = True
+        self._generation += 1
+        self._execution_id = None
+        self._columns = ()
+        self._error_text = None
+        current = self._replace_worker(None, self._generation)
+        self._state = PaneState.EMPTY
+        self._notify_all()
+        for worker in tuple(self._workers):
+            self._retire_worker(worker)
+        await self._drain_workers()
+        self._worker = current
+        self._pager = current.pager
+        self._shutdown_complete = True
 
     def dispose(self) -> None:
         if self._disposed:
             return
         self._disposed = True
         self._generation += 1
-        self._load_more_command.dispose()
-        self._pager.dispose()
+        if not self._shutdown_started:
+            self._execution_id = None
+            self._columns = ()
+            self._error_text = None
+            current = self._replace_worker(None, self._generation)
+            self._worker = current
+            self._pager = current.pager
+        for worker in tuple(self._workers):
+            self._retire_worker(worker)
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
 
-    async def _load_more(self) -> None:
-        generation = self._generation
-        if not self._can_load_more():
+    async def _load_more(self, worker: _PagerGeneration) -> None:
+        if not self._can_load_more(worker):
             return
+        task = self._track_current_task(worker)
         self._error_text = None
         self._notify("error_text")
         try:
-            await self._pager.load_more_command.execute_async()
+            await worker.pager.load_more_command.execute_async()
         except _ResultColumnsChangedError:
-            if generation != self._generation:
+            if not self._is_current(worker):
                 return
             self._error_text = _COLUMN_ERROR
             self._set_state(PaneState.ERROR)
             self._notify("error_text")
             return
         except ProviderError as exc:
-            if generation != self._generation:
+            if not self._is_current(worker):
                 return
             self._state, self._error_text = map_provider_error(
                 exc,
@@ -220,7 +256,7 @@ class AthenaResultsVM:
             self._notify("error_text")
             return
         except Exception:
-            if generation != self._generation:
+            if not self._is_current(worker):
                 return
             self._state, self._error_text = map_unexpected_error(
                 fallback=_RESULTS_ERROR,
@@ -228,25 +264,31 @@ class AthenaResultsVM:
             self._notify("state")
             self._notify("error_text")
             return
-        if generation != self._generation:
+        finally:
+            self._untrack_task(worker, task)
+        if not self._is_current(worker):
             return
         self._notify("rows")
         self._notify("rendered_rows")
         self._notify("has_more")
         self._set_state(PaneState.IDLE if self.rows else PaneState.EMPTY)
 
-    def _can_load_more(self) -> bool:
+    def _can_load_more(self, worker: _PagerGeneration) -> bool:
         return (
             not self._disposed
-            and self._execution_id is not None
-            and self._pager.current_token is not None
+            and not self._shutdown_started
+            and self._is_current(worker)
+            and worker.execution_id is not None
+            and worker.pager.current_token is not None
         )
 
-    def _make_pager(
+    def _make_worker(
         self,
         execution_id: str | None,
         generation: int,
-    ) -> TokenPagedComposition[ResultRow, str]:
+    ) -> _PagerGeneration:
+        worker = _PagerGeneration(generation, execution_id)
+
         async def fetch(token: str | None) -> tuple[list[ResultRow], str | None]:
             if execution_id is None:
                 return [], None
@@ -254,20 +296,87 @@ class AthenaResultsVM:
                 execution_id,
                 start_token=token,
             )
-            if generation != self._generation or self._disposed:
+            if not self._is_current(worker):
                 return [], None
             if token is None:
+                worker.columns = page.columns
                 self._columns = page.columns
-            elif page.columns != self._columns:
+            elif page.columns != worker.columns:
                 raise _ResultColumnsChangedError
             return list(page.rows), page.next_token
 
-        return TokenPagedComposition(fetch)
+        worker.pager = TokenPagedComposition(fetch)
+        worker.load_more_command = (
+            AsyncRelayCommand.builder()
+            .predicate(lambda: self._can_load_more(worker))
+            .triggers(self._on_property_changed)
+            .task(lambda: self._load_more(worker))
+            .build()
+        )
+        self._workers.add(worker)
+        return worker
 
-    def _replace_pager(self, execution_id: str | None, generation: int) -> None:
-        old_pager = self._pager
-        self._pager = self._make_pager(execution_id, generation)
-        old_pager.dispose()
+    def _replace_worker(
+        self,
+        execution_id: str | None,
+        generation: int,
+    ) -> _PagerGeneration:
+        old_worker = self._worker
+        worker = self._make_worker(execution_id, generation)
+        self._worker = worker
+        self._pager = worker.pager
+        self._retire_worker(old_worker)
+        return worker
+
+    def _retire_worker(self, worker: _PagerGeneration) -> None:
+        if worker.retired:
+            return
+        worker.retired = True
+        worker.load_more_command.dispose()
+        worker.pager.dispose()
+        if not worker.tasks and worker is not self._worker:
+            self._workers.discard(worker)
+
+    def _track_current_task(
+        self,
+        worker: _PagerGeneration,
+    ) -> asyncio.Task[Any] | None:
+        task = asyncio.current_task()
+        if task is not None:
+            worker.tasks.add(task)
+        return task
+
+    def _untrack_task(
+        self,
+        worker: _PagerGeneration,
+        task: asyncio.Task[Any] | None,
+    ) -> None:
+        if task is not None:
+            worker.tasks.discard(task)
+        if worker.retired and not worker.tasks and worker is not self._worker:
+            self._workers.discard(worker)
+
+    async def _drain_workers(self) -> None:
+        current = asyncio.current_task()
+        while True:
+            tasks = {
+                task
+                for worker in self._workers
+                for task in worker.tasks
+                if task is not current and not task.done()
+            }
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _is_current(self, worker: _PagerGeneration) -> bool:
+        return (
+            worker is self._worker
+            and worker.generation == self._generation
+            and not worker.retired
+            and not self._disposed
+            and not self._shutdown_started
+        )
 
     def _notify_all(self) -> None:
         for property_name in (

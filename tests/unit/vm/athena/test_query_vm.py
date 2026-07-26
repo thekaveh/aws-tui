@@ -181,6 +181,70 @@ class InMemoryAthena:
         return self.result_pages[(execution_id, start_token)]
 
 
+class DetachedStartAthena(InMemoryAthena):
+    """Model a transport request that outlives cancellation of its waiter."""
+
+    def __init__(
+        self,
+        *,
+        executions: Sequence[Sequence[QueryExecutionDetail]],
+        start_error: Exception | None = None,
+    ) -> None:
+        super().__init__(executions=executions)
+        self.start_error = start_error
+        self.start_cancelled = asyncio.Event()
+        self.start_accepted = asyncio.Event()
+        self.remote_tasks: list[asyncio.Task[QueryExecutionRef]] = []
+
+    async def start_query(
+        self,
+        sql: str,
+        context: QueryContext,
+        *,
+        request_token: str,
+    ) -> QueryExecutionRef:
+        self.calls.append("start")
+        self.start_calls.append((sql, context, request_token))
+        self.start_started.set()
+        remote = asyncio.create_task(self._finish_remote_start(context))
+        self.remote_tasks.append(remote)
+        try:
+            return await asyncio.shield(remote)
+        except asyncio.CancelledError:
+            self.start_cancelled.set()
+            raise
+
+    async def _finish_remote_start(self, context: QueryContext) -> QueryExecutionRef:
+        await self.release_start.wait()
+        self.start_accepted.set()
+        if self.start_error is not None:
+            raise self.start_error
+        execution_id = f"q-app-{self._next_execution + 1}"
+        states = self.executions[self._next_execution]
+        self._next_execution += 1
+        self._states[execution_id] = states
+        return QueryExecutionRef(
+            execution_id,
+            context.connection_name,
+            context.region,
+            context.workgroup,
+        )
+
+    async def drain_remote_tasks(self) -> None:
+        await asyncio.gather(*self.remote_tasks, return_exceptions=True)
+
+
+class DetachedWrongIdentityStartAthena(DetachedStartAthena):
+    async def _finish_remote_start(self, context: QueryContext) -> QueryExecutionRef:
+        ref = await super()._finish_remote_start(context)
+        return QueryExecutionRef(
+            ref.execution_id,
+            "unexpected-connection",
+            ref.region,
+            ref.workgroup,
+        )
+
+
 def seeded_athena(
     states: Sequence[QueryState],
     *,
@@ -425,6 +489,130 @@ async def test_context_replacement_drains_stale_submit_and_clears_submitting() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transition", ["shutdown", "cancel", "context"])
+async def test_lifecycle_transition_retains_detached_submission_until_remote_stop(
+    transition: str,
+) -> None:
+    fake = DetachedStartAthena(executions=((_detail("q-app-1", QueryState.RUNNING),),))
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 1")
+    execution = asyncio.create_task(vm.execute())
+    await fake.start_started.wait()
+    replacement = QueryContext(
+        "prod-west",
+        "us-west-2",
+        "other-workgroup",
+        "AwsDataCatalog",
+        "other_database",
+    )
+
+    if transition == "shutdown":
+        lifecycle = asyncio.create_task(vm.shutdown())
+    elif transition == "cancel":
+        lifecycle = asyncio.create_task(vm.cancel())
+    else:
+        lifecycle = asyncio.create_task(vm.set_context(replacement))
+    await asyncio.sleep(0)
+    fake.release_start.set()
+    await lifecycle
+    await execution
+    await fake.drain_remote_tasks()
+
+    assert fake.start_accepted.is_set()
+    assert not fake.start_cancelled.is_set()
+    assert fake.stop_calls == ["q-app-1"]
+    assert not vm.is_submitting
+    assert not vm.is_executing
+    if transition == "context":
+        assert vm.context == replacement
+    await vm.shutdown()
+    vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_awaits_detached_submission_error_without_publication() -> None:
+    fake = DetachedStartAthena(
+        executions=((_detail("q-app-1", QueryState.RUNNING),),),
+        start_error=ProviderError("delayed SQL_SECRET submission failure"),
+    )
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 'SQL_SECRET'")
+    visible_errors: list[str] = []
+    subscription = vm.on_property_changed.subscribe(
+        lambda name: (
+            visible_errors.append(vm.error_text)
+            if name == "error_text" and vm.error_text is not None
+            else None
+        )
+    )
+    execution = asyncio.create_task(vm.execute())
+    await fake.start_started.wait()
+
+    shutdown = asyncio.create_task(vm.shutdown())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    shutdown_waited_for_transport = not shutdown.done()
+    fake.release_start.set()
+    await shutdown
+    await execution
+    await fake.drain_remote_tasks()
+
+    assert shutdown_waited_for_transport
+    assert not fake.start_cancelled.is_set()
+    assert visible_errors == []
+    assert vm.error_text is None
+    assert not vm.is_submitting
+    subscription.dispose()
+    vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_stops_detached_submission_with_mismatched_response_context() -> None:
+    fake = DetachedWrongIdentityStartAthena(executions=((_detail("q-app-1", QueryState.RUNNING),),))
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 1")
+    execution = asyncio.create_task(vm.execute())
+    await fake.start_started.wait()
+
+    shutdown = asyncio.create_task(vm.shutdown())
+    await asyncio.sleep(0)
+    fake.release_start.set()
+    await shutdown
+    await execution
+    await fake.drain_remote_tasks()
+
+    assert fake.stop_calls == ["q-app-1"]
+    assert vm.execution_ref is None
+    assert vm.error_text is None
+    vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispose_retains_detached_submission_until_silent_remote_stop() -> None:
+    fake = DetachedStartAthena(executions=((_detail("q-app-1", QueryState.RUNNING),),))
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 1")
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(notifications.append)
+    execution = asyncio.create_task(vm.execute())
+    await fake.start_started.wait()
+
+    notifications.clear()
+    vm.dispose()
+    fake.release_start.set()
+    await execution
+    await fake.drain_remote_tasks()
+
+    assert fake.start_accepted.is_set()
+    assert not fake.start_cancelled.is_set()
+    assert fake.stop_calls == ["q-app-1"]
+    assert notifications == []
+    assert not vm.execute_command.can_execute()
+    assert not vm.cancel_command.can_execute()
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
 async def test_stale_submit_cleanup_failure_cannot_publish_into_new_context() -> None:
     fake = seeded_athena([QueryState.RUNNING])
     fake.block_start = True
@@ -663,6 +851,61 @@ async def test_stop_failure_is_reported_without_cancelling_poll_or_leaking_sql()
     assert execution.done()
     assert fake.stop_calls == ["q-app-1", "q-app-1"]
     assert "SQL_SECRET" not in (vm.error_text or "")
+
+
+@pytest.mark.asyncio
+async def test_context_replacement_installs_locally_when_old_stop_fails() -> None:
+    replacement = QueryContext(
+        "prod-west",
+        "us-west-2",
+        "other-workgroup",
+        "AwsDataCatalog",
+        "other_database",
+    )
+    fake = InMemoryAthena(
+        executions=(
+            (_detail("q-app-1", QueryState.RUNNING),),
+            (
+                _detail(
+                    "q-app-2",
+                    QueryState.SUCCEEDED,
+                    context=replacement,
+                ),
+            ),
+        ),
+        result_pages={
+            ("q-app-2", None): ResultPage((_COLUMN,), (("new-context",),), None),
+        },
+    )
+    fake.stop_error = ProviderError("old context cleanup failed")
+    sleep_started = asyncio.Event()
+
+    async def blocking_sleep(_: float) -> None:
+        sleep_started.set()
+        await asyncio.Event().wait()
+
+    vm = make_query_vm(fake, sleep=blocking_sleep)
+    vm.set_sql("SELECT 1")
+    old_execution = asyncio.create_task(vm.execute())
+    await sleep_started.wait()
+
+    await vm.set_context(replacement)
+    vm.set_sql("SELECT 2")
+    await vm.execute()
+
+    assert vm.context == replacement
+    assert vm.execution_ref is not None
+    assert vm.execution_ref.execution_id == "q-app-2"
+    assert vm.state is QueryState.SUCCEEDED
+    assert vm.results.rows == (("new-context",),)
+    assert vm.error_text is None
+
+    fake.stop_error = None
+    await vm.shutdown()
+    await old_execution
+
+    assert fake.stop_calls == ["q-app-1", "q-app-1"]
+    vm.dispose()
 
 
 def test_commands_follow_vmx_gating_and_disposal() -> None:
