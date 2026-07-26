@@ -403,3 +403,150 @@ git diff --check
 - No code or test concern remains. Commands continue to print the pre-existing
   `.zshenv` warning for missing `/tmp/vmx-cargo-182/env`; exit status and
   verification results are unaffected.
+
+## Final Two Findings Follow-up
+
+### Root Cause and RED Evidence
+
+The existing parser accepted hostile URI components because it validated only
+the scheme, nonempty netloc, and parsed userinfo. A direct reproduction showed
+ports, queries, fragments, percent-encoded newlines, and IPv4-shaped
+authorities all returning a valid `S3Uri`. The demo composition issue had a
+separate cause: Athena clients were eagerly built from the resolver's startup
+list while S3 filesystems were lazy, so an injected runtime alias failed with
+`KeyError`.
+
+The table-driven parser tests failed before implementation:
+
+```text
+uv run pytest tests/unit/domain/test_s3_uri.py -q
+
+30 failed, 10 passed
+```
+
+The lazy-cache and one representative three-boundary integration regression
+also failed for the intended reasons:
+
+```text
+uv run pytest \
+  tests/integration/test_athena_s3_handoff.py::test_runtime_alias_uses_lazy_cached_athena_and_exact_s3_result_store \
+  tests/integration/test_athena_s3_handoff.py::test_demo_athena_and_s3_caches_are_isolated_between_app_contexts -q
+
+2 failed, 4 rerun
+- runtime-dev raised KeyError in the eager Athena map
+
+uv run pytest \
+  'tests/integration/test_athena_s3_handoff.py::test_hostile_s3_uri_is_advisory_redacted_and_non_navigating_at_every_boundary[port]' -q
+
+1 failed, 2 rerun
+- the port-bearing authority started handoff instead of issuing the stable
+  invalid-location advisory
+```
+
+### Implementation
+
+- `parse_s3_uri()` is now a total, non-throwing parser that rejects malformed
+  percent escapes, raw or decoded controls and whitespace, query strings,
+  fragments, IPv6 literals, ports, userinfo, empty authorities, and invalid
+  bucket names without returning or logging the URI, bucket, or path.
+- Bucket validation applies current AWS general-purpose naming constraints:
+  3-63 lowercase alphanumeric/period/hyphen characters, alphanumeric ends, no
+  adjacent periods, no IPv4-shaped names, and no reserved S3 prefixes or
+  suffixes. Valid bucket-root objects and ordinary dotted/hyphenated buckets
+  remain accepted.
+- History, Results, the app transaction, and demo result publication continue
+  to use the one domain parser. Thirteen hostile families now traverse
+  History, Results, and direct app validation with advisory-only behavior, no
+  navigation, no exception, and redacted diagnostics.
+- Demo composition now owns lazy S3 and Athena caches keyed by connection name.
+  Each Athena cache miss receives the exact object returned by
+  `demo_s3_fs(connection)`. Seed profile is separate from runtime connection
+  identity, so aliases inherit profile data while query refs, contexts, and
+  handoffs retain the alias name and region.
+- Same-name calls reuse both clients; different profiles and app contexts
+  remain disjoint; runtime `demo-shared` aliases retain typed access denial.
+  No module globals or background tasks were added.
+- The first full gate exposed seven existing Glue rollback fixtures whose
+  nominal request included a query string. Because query strings are now
+  intentionally invalid, that shared nominal URI was changed to a valid S3
+  location. Secret-bearing injected exceptions still exercise the original
+  failure redaction checks.
+
+### GREEN Evidence
+
+```text
+uv run pytest tests/unit/domain/test_s3_uri.py -q
+40 passed
+
+uv run pytest tests/integration/test_athena_s3_handoff.py \
+  -k hostile_s3_uri_is_advisory_redacted_and_non_navigating_at_every_boundary -q
+13 passed, 20 deselected
+
+uv run pytest \
+  tests/integration/test_athena_s3_handoff.py::test_runtime_alias_uses_lazy_cached_athena_and_exact_s3_result_store \
+  tests/integration/test_athena_s3_handoff.py::test_demo_athena_and_s3_caches_are_isolated_between_app_contexts -q
+2 passed
+
+uv run pytest tests/unit/demo/test_in_memory_athena.py -q
+18 passed
+
+uv run pytest \
+  tests/unit/domain/test_s3_uri.py \
+  tests/unit/demo/test_in_memory_athena.py \
+  tests/unit/vm/athena/test_history_vm.py \
+  tests/unit/vm/athena/test_results_vm.py \
+  tests/unit/vm/athena/test_page_vm.py \
+  tests/integration/test_athena_s3_handoff.py \
+  tests/integration/test_demo_mode.py \
+  tests/integration/test_service_source_swap.py \
+  tests/e2e/test_journeys.py -q
+174 passed in 30.36s
+
+uv run pytest tests/integration/test_glue_s3_handoff.py -q
+12 passed in 6.97s
+```
+
+The authoritative full functional gate passed after the intentional Glue
+fixture correction:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color uv run pytest tests/unit tests/integration tests/e2e -q
+
+1974 passed, 9 deselected in 307.43s (0:05:07)
+```
+
+Static and architecture gates:
+
+```text
+uv run ruff check src tests
+All checks passed!
+
+uv run ruff format --check src tests
+372 files already formatted
+
+uv run mypy src
+Success: no issues found in 150 source files
+
+bash scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+(no output; exit 0)
+```
+
+### Final Follow-up Changed Files
+
+- `.superpowers/sdd/task-6-report.md`
+- `src/aws_tui/composition.py`
+- `src/aws_tui/demo/seeds.py`
+- `src/aws_tui/domain/s3_uri.py`
+- `tests/integration/test_athena_s3_handoff.py`
+- `tests/integration/test_glue_s3_handoff.py`
+- `tests/unit/domain/test_s3_uri.py`
+
+### Final Follow-up Concerns
+
+- No code or test concern remains. The pre-existing `.zshenv` warning for the
+  missing `/tmp/vmx-cargo-182/env` still appears on every shell command but
+  does not affect exit status or verification.

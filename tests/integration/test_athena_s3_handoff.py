@@ -13,7 +13,12 @@ from aws_tui.composition import AppContext, build_app_context
 from aws_tui.demo import seeds
 from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.demo.in_memory_fs import InMemoryFS
-from aws_tui.domain.filesystem import EntryKind, NotFoundError, PathRef
+from aws_tui.domain.filesystem import (
+    EntryKind,
+    NotFoundError,
+    PathRef,
+    PermissionDeniedError,
+)
 from aws_tui.domain.query import QueryContext, QueryState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
@@ -23,6 +28,61 @@ from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 from aws_tui.vm.messages import OpenS3LocationRequest
+
+_HOSTILE_S3_URIS = [
+    pytest.param(
+        "s3://[2001:db8::1]/URI_SECRET.csv",
+        id="ipv6-literal",
+    ),
+    pytest.param(
+        "s3://valid-bucket:443/URI_SECRET.csv",
+        id="port",
+    ),
+    pytest.param(
+        "s3://URI_SECRET@valid-bucket/result.csv",
+        id="userinfo",
+    ),
+    pytest.param(
+        "s3://valid-bucket/URI_SECRET\x00.csv",
+        id="raw-control",
+    ),
+    pytest.param(
+        "s3://valid bucket/URI_SECRET.csv",
+        id="raw-whitespace",
+    ),
+    pytest.param(
+        "s3://valid-bucket/URI_SECRET\n.csv",
+        id="raw-newline",
+    ),
+    pytest.param(
+        "s3://valid-bucket/URI_SECRET%00.csv",
+        id="encoded-control",
+    ),
+    pytest.param(
+        "s3://valid-bucket/URI_SECRET%20.csv",
+        id="encoded-whitespace",
+    ),
+    pytest.param(
+        "s3://valid-bucket/URI_SECRET%0A.csv",
+        id="encoded-newline",
+    ),
+    pytest.param(
+        "s3://valid-bucket/result.csv?URI_SECRET=1",
+        id="query",
+    ),
+    pytest.param(
+        "s3://valid-bucket/result.csv#URI_SECRET",
+        id="fragment",
+    ),
+    pytest.param(
+        "s3:///URI_SECRET.csv",
+        id="empty-bucket",
+    ),
+    pytest.param(
+        "s3://URI_SECRET_invalid/result.csv",
+        id="invalid-bucket",
+    ),
+]
 
 
 async def _wait_for_service_setup(
@@ -413,6 +473,64 @@ async def test_app_validation_rejects_hostile_s3_uri_without_navigation(
             ctx.root_vm.dispose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hostile_uri", _HOSTILE_S3_URIS)
+async def test_hostile_s3_uri_is_advisory_redacted_and_non_navigating_at_every_boundary(
+    tmp_path: Path,
+    hostile_uri: str,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        client = _athena_client(ctx, "demo-dev")
+        detail = client.query_executions["q-dev-succeeded"]
+        client.query_executions["q-dev-succeeded"] = replace(
+            detail,
+            output_location=hostile_uri,
+        )
+
+        async with app.run_test(size=(120, 40)) as pilot:
+            page = await _open_athena(ctx, app, pilot)
+            await page.select_view("history")
+            await page.select_history_execution("q-dev-succeeded")
+
+            await _invoke_result_handoff(app)
+
+            assert ctx.root_vm.content_host.current_id == "athena"
+            assert ctx.root_vm.content_host.current is page
+            assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
+                "athena-result-location-invalid"
+            )
+
+            await page.results.load("q-dev-succeeded")
+            await page.select_view("results")
+            await _invoke_result_handoff(app)
+
+            assert ctx.root_vm.content_host.current_id == "athena"
+            assert ctx.root_vm.content_host.current is page
+            assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
+                "athena-result-location-invalid"
+            )
+
+            await app._open_s3_location_request(replace(_result_request(), uri=hostile_uri))
+
+            assert ctx.root_vm.content_host.current_id == "athena"
+            assert ctx.root_vm.content_host.current is page
+            toast = ctx.root_vm.chrome.toast_stack.toasts[-1].model
+            assert toast.id == "s3-handoff-invalid-location"
+            ctx.log_sink.flush()
+            diagnostic = f"{toast.text}\n{ctx.log_sink.path.read_text(encoding='utf-8')}"
+            assert "URI_SECRET" not in diagnostic
+            assert hostile_uri not in diagnostic
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
 async def _read_bytes(fs: InMemoryFS, path: PathRef) -> bytes:
     chunks = await fs.read_stream(path)
     return b"".join([chunk async for chunk in chunks])
@@ -531,6 +649,146 @@ async def test_app_started_demo_query_opens_its_exact_result_object(
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_alias_uses_lazy_cached_athena_and_exact_s3_result_store(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    alias = Connection(
+        name="runtime-dev",
+        kind="aws",
+        region="us-east-1",
+        source="test",
+        profile="demo-dev",
+    )
+    original_connections = tuple(ctx.connection_resolver.list())
+    connections = (alias, *original_connections)
+    by_name = {connection.name: connection for connection in connections}
+    ctx.connection_resolver.list = lambda: connections  # type: ignore[method-assign]
+    ctx.connection_resolver.resolve = lambda name: by_name[name]  # type: ignore[method-assign]
+    athena_factory = _athena_service(ctx)._client_factory
+    s3_service = ctx.registry.get("s3")
+    assert athena_factory is not None
+    assert isinstance(s3_service, S3Service)
+    assert s3_service._s3_fs_factory is not None
+
+    client = athena_factory(alias)
+    store = s3_service._s3_fs_factory(alias)
+    assert isinstance(client, InMemoryAthena)
+    assert isinstance(store, InMemoryFS)
+    assert athena_factory(alias) is client
+    assert s3_service._s3_fs_factory(alias) is store
+    assert client.connection_name == alias.name
+    assert client.region == alias.region
+
+    context = QueryContext(
+        alias.name,
+        alias.region,
+        "dev-analytics",
+        "DevDataCatalog",
+        "dev_events",
+    )
+    ref = await client.start_query(
+        "SELECT 1",
+        context,
+        request_token="runtime-alias",
+    )
+    await _advance_to_success(client, ref.execution_id)
+    detail = await client.get_query_execution(ref.execution_id)
+    assert detail.output_location is not None
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _wait_for_service_setup(ctx, app, pilot)
+            await app._open_s3_location_request(
+                OpenS3LocationRequest(
+                    connection_name=alias.name,
+                    region=alias.region,
+                    uri=detail.output_location,
+                    preferred_pane="left",
+                    reveal_object=True,
+                )
+            )
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            dual = ctx.root_vm.content_host.current
+            assert isinstance(dual, DualPaneVM)
+            assert ctx.root_vm.active_connection == alias
+            assert dual.left.provider is store
+            assert dual.left.selected_entry is not None
+            assert dual.left.selected_entry.entry.name == f"{ref.execution_id}.csv"
+            assert dual.left.selected_entry.kind is EntryKind.FILE
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_demo_athena_and_s3_caches_are_isolated_between_app_contexts(
+    tmp_path: Path,
+) -> None:
+    alias = Connection(
+        name="runtime-dev",
+        kind="aws",
+        region="us-east-1",
+        source="test",
+        profile="demo-dev",
+    )
+    first = build_app_context(
+        config_dir=tmp_path / "first-config",
+        cache_dir=tmp_path / "first-cache",
+        demo=True,
+    )
+    second = build_app_context(
+        config_dir=tmp_path / "second-config",
+        cache_dir=tmp_path / "second-cache",
+        demo=True,
+    )
+    try:
+        first_athena_factory = _athena_service(first)._client_factory
+        second_athena_factory = _athena_service(second)._client_factory
+        first_s3 = first.registry.get("s3")
+        second_s3 = second.registry.get("s3")
+        assert first_athena_factory is not None
+        assert second_athena_factory is not None
+        assert isinstance(first_s3, S3Service)
+        assert isinstance(second_s3, S3Service)
+        assert first_s3._s3_fs_factory is not None
+        assert second_s3._s3_fs_factory is not None
+
+        first_client = first_athena_factory(alias)
+        second_client = second_athena_factory(alias)
+        first_store = first_s3._s3_fs_factory(alias)
+        second_store = second_s3._s3_fs_factory(alias)
+
+        assert first_client is not second_client
+        assert first_store is not second_store
+        assert first_athena_factory(alias) is first_client
+        assert second_athena_factory(alias) is second_client
+        assert first_s3._s3_fs_factory(alias) is first_store
+        assert second_s3._s3_fs_factory(alias) is second_store
+
+        shared_alias = replace(
+            alias,
+            name="runtime-shared",
+            region="us-west-2",
+            profile="demo-shared",
+        )
+        shared_client = first_athena_factory(shared_alias)
+        with pytest.raises(PermissionDeniedError):
+            await shared_client.list_workgroups_page()
+    finally:
+        with contextlib.suppress(Exception):
+            first.root_vm.dispose()
+        with contextlib.suppress(Exception):
+            second.root_vm.dispose()
 
 
 def _result_request(*, preferred_pane: str = "left") -> OpenS3LocationRequest:

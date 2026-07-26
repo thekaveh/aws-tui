@@ -261,6 +261,8 @@ def seeded_demo_glue() -> dict[str, InMemoryGlue]:
 def seeded_demo_athena(
     profile: str,
     *,
+    connection_name: str | None = None,
+    region: str | None = None,
     result_store: FileSystemProvider | None = None,
 ) -> InMemoryAthena:
     """Build one fresh, profile-local Athena demo client."""
@@ -270,8 +272,8 @@ def seeded_demo_athena(
         "demo-shared": "us-west-2",
     }
     athena = InMemoryAthena(
-        connection_name=profile,
-        region=regions.get(profile, "us-east-1"),
+        connection_name=connection_name or profile,
+        region=region or regions.get(profile, "us-east-1"),
         result_store=result_store,
     )
     if profile == "demo-dev":
@@ -305,8 +307,8 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
         "events",
     )
     context = QueryContext(
-        "demo-dev",
-        "us-east-1",
+        athena.connection_name,
+        athena.region,
         "dev-analytics",
         "DevDataCatalog",
         "dev_events",
@@ -398,8 +400,8 @@ def _seed_prod_athena(athena: InMemoryAthena) -> None:
         "daily_sales",
     )
     context = QueryContext(
-        "demo-prod",
-        "us-east-1",
+        athena.connection_name,
+        athena.region,
         "prod-reporting",
         "ProdDataCatalog",
         "prod_sales",

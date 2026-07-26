@@ -83,7 +83,7 @@ def _handoff_request(*, preferred_pane: str = "left") -> OpenS3LocationRequest:
     return OpenS3LocationRequest(
         connection_name="demo-dev",
         region="us-east-1",
-        uri="s3://demo-dev/dev_analytics/dev_events/?token=HANDOFF_SECRET",
+        uri="s3://demo-dev/dev_analytics/dev_events/",
         preferred_pane=preferred_pane,  # type: ignore[arg-type]
     )
 

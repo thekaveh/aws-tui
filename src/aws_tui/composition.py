@@ -215,6 +215,7 @@ def build_app_context(
     )
     if demo:
         from aws_tui.demo.connections import DemoConnectionResolver
+        from aws_tui.demo.in_memory_athena import InMemoryAthena
         from aws_tui.demo.in_memory_fs import InMemoryFS
         from aws_tui.demo.seeds import (
             seeded_demo_athena,
@@ -229,6 +230,7 @@ def build_app_context(
         _demo_emr: InMemoryEmr = seeded_demo_emr()
         demo_glue_clients = seeded_demo_glue()
         demo_s3_filesystems: dict[str, InMemoryFS] = {}
+        demo_athena_clients: dict[str, InMemoryAthena] = {}
 
         def demo_s3_fs(connection: Connection) -> InMemoryFS:
             filesystem = demo_s3_filesystems.get(connection.name)
@@ -237,14 +239,18 @@ def build_app_context(
                 demo_s3_filesystems[connection.name] = filesystem
             return filesystem
 
-        demo_athena_clients = {
-            connection.name: seeded_demo_athena(
-                connection.name,
-                result_store=demo_s3_fs(connection),
-            )
-            for connection in connection_resolver.list()
-            if connection.kind == "aws"
-        }
+        def demo_athena(connection: Connection) -> InMemoryAthena:
+            client = demo_athena_clients.get(connection.name)
+            if client is None:
+                client = seeded_demo_athena(
+                    connection.profile or "demo-default",
+                    connection_name=connection.name,
+                    region=connection.region,
+                    result_store=demo_s3_fs(connection),
+                )
+                demo_athena_clients[connection.name] = client
+            return client
+
         demo_emr_ref: InMemoryEmr | None = _demo_emr
         s3_fs_factory = demo_s3_fs
         # Captured by the lambda so every emr_client_factory(connection)
@@ -254,7 +260,7 @@ def build_app_context(
         # gets its own _demo_emr; we don't share at module scope.
         emr_client_factory = lambda c: _demo_emr  # noqa: E731
         glue_client_factory = lambda c: demo_glue_clients[c.name]  # noqa: E731
-        athena_client_factory = lambda c: demo_athena_clients[c.name]  # noqa: E731
+        athena_client_factory = demo_athena
     else:
         connection_resolver = ConnectionResolver(config_store=config_store)
         demo_emr_ref = None
