@@ -26,6 +26,10 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 _VIEW_ORDER: tuple[AthenaView, ...] = ("query", "history", "results", "saved")
+_ContextControls = tuple[
+    tuple[Select[str], Select[str], Select[str]],
+    tuple[AthenaLoadMoreButton, AthenaLoadMoreButton, AthenaLoadMoreButton],
+]
 
 
 class _ViewTab(Static, can_focus=True):
@@ -404,21 +408,45 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self.call_after_refresh(self._refresh_page)
 
     def _refresh_page(self) -> None:
-        self._sync_context()
-        self._sync_view()
-        try:
-            query = self.query_one(AthenaQueryView)
-        except NoMatches:
+        context_controls = self._context_controls()
+        view_controls = self._view_controls()
+        if context_controls is None or view_controls is None:
             return
-        query.refresh_from_vm()
+        self._sync_context(context_controls)
+        self._sync_view(view_controls)
+        cast(AthenaQueryView, view_controls[0][0]).refresh_from_vm()
 
-    def _sync_context(self) -> None:
+    def _context_controls(self) -> _ContextControls | None:
+        if not self.is_mounted:
+            return None
         try:
-            workgroup = self.query_one("#athena-workgroup", Select)
-            catalog = self.query_one("#athena-catalog", Select)
-            database = self.query_one("#athena-database", Select)
-        except Exception:
+            controls = (
+                (
+                    self.query_one("#athena-workgroup", Select),
+                    self.query_one("#athena-catalog", Select),
+                    self.query_one("#athena-database", Select),
+                ),
+                (
+                    self.query_one("#athena-more-workgroups", AthenaLoadMoreButton),
+                    self.query_one("#athena-more-catalogs", AthenaLoadMoreButton),
+                    self.query_one("#athena-more-databases", AthenaLoadMoreButton),
+                ),
+            )
+        except NoMatches:
+            return None
+        if not all(control.is_mounted for group in controls for control in group):
+            return None
+        return controls
+
+    def _sync_context(
+        self,
+        controls: _ContextControls | None = None,
+    ) -> None:
+        controls = controls or self._context_controls()
+        if controls is None:
             return
+        selects, load_more = controls
+        workgroup, catalog, database = selects
         self._syncing_context = True
         try:
             self._replace_select(
@@ -439,43 +467,73 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 self._vm.context.database,
                 self._vm.databases_state,
             )
-            self._sync_context_load_more()
+            self._sync_context_load_more(load_more)
         finally:
             self._syncing_context = False
 
-    def _sync_context_load_more(self) -> None:
-        for kind, has_more, busy, state, error_text in (
+    def _sync_context_load_more(
+        self,
+        buttons: tuple[AthenaLoadMoreButton, ...],
+    ) -> None:
+        for button, (has_more, busy, state, error_text) in zip(
+            buttons,
             (
-                "workgroups",
-                self._vm.has_more_workgroups,
-                self._vm.is_loading_more_workgroups,
-                self._vm.workgroups_state,
-                self._vm.workgroups_error_text,
+                (
+                    self._vm.has_more_workgroups,
+                    self._vm.is_loading_more_workgroups,
+                    self._vm.workgroups_state,
+                    self._vm.workgroups_error_text,
+                ),
+                (
+                    self._vm.has_more_catalogs,
+                    self._vm.is_loading_more_catalogs,
+                    self._vm.catalogs_state,
+                    self._vm.catalogs_error_text,
+                ),
+                (
+                    self._vm.has_more_databases,
+                    self._vm.is_loading_more_databases,
+                    self._vm.databases_state,
+                    self._vm.databases_error_text,
+                ),
             ),
-            (
-                "catalogs",
-                self._vm.has_more_catalogs,
-                self._vm.is_loading_more_catalogs,
-                self._vm.catalogs_state,
-                self._vm.catalogs_error_text,
-            ),
-            (
-                "databases",
-                self._vm.has_more_databases,
-                self._vm.is_loading_more_databases,
-                self._vm.databases_state,
-                self._vm.databases_error_text,
-            ),
+            strict=True,
         ):
-            self.query_one(
-                f"#athena-more-{kind}",
-                AthenaLoadMoreButton,
-            ).sync(
+            button.sync(
                 has_more=has_more,
                 busy=busy,
                 state=state,
                 error_text=error_text,
             )
+
+    def _view_controls(self) -> tuple[tuple[Widget, _ViewTab], ...] | None:
+        if not self.is_mounted:
+            return None
+        try:
+            controls = tuple(
+                (
+                    self.query_one(f"#athena-{view}-view", Widget),
+                    self.query_one(f"#athena-tab-{view}", _ViewTab),
+                )
+                for view in _VIEW_ORDER
+            )
+        except NoMatches:
+            return None
+        if not all(control.is_mounted for pair in controls for control in pair):
+            return None
+        return controls
+
+    def _sync_view(
+        self,
+        controls: tuple[tuple[Widget, _ViewTab], ...] | None = None,
+    ) -> None:
+        controls = controls or self._view_controls()
+        if controls is None:
+            return
+        active = self._vm.active_view
+        for view, (child, tab) in zip(_VIEW_ORDER, controls, strict=True):
+            child.display = view == active
+            tab.set_class(view == active, "-active")
 
     def _replace_select(
         self,
@@ -501,17 +559,6 @@ class AthenaPage(HubSubscriberMixin, Widget):
         select.tooltip = error_text
         select.set_class(state is PaneState.FORBIDDEN, "-warning")
         select.set_class(state is PaneState.ERROR, "-error")
-
-    def _sync_view(self) -> None:
-        active = self._vm.active_view
-        for view in _VIEW_ORDER:
-            try:
-                child = self.query_one(f"#athena-{view}-view")
-                tab = self.query_one(f"#athena-tab-{view}", _ViewTab)
-            except Exception:
-                continue
-            child.display = view == active
-            tab.set_class(view == active, "-active")
 
     def _maybe_focus_active(self) -> None:
         focused = self.app.focused

@@ -74,6 +74,53 @@ async def test_queued_page_refresh_is_safe_after_descendants_are_removed() -> No
 
 
 @pytest.mark.asyncio
+async def test_page_refresh_is_safe_during_partial_descendant_teardown() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        workgroup = page.query_one("#athena-workgroup", Select)
+        await page.query_one("#athena-more-workgroups", Button).remove()
+
+        assert page.is_mounted
+        assert workgroup.is_mounted
+        page._sync_context()  # type: ignore[attr-defined]
+        page._refresh_page()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_live_page_context_query_errors_are_not_masked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        original_query_one = page.query_one
+
+        def fail_workgroup_query(
+            selector: object,
+            expect_type: object | None = None,
+        ) -> object:
+            if selector == "#athena-workgroup":
+                raise RuntimeError("live context query failed")
+            if expect_type is None:
+                return original_query_one(selector)  # type: ignore[arg-type]
+            return original_query_one(selector, expect_type)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(page, "query_one", fail_workgroup_query)
+
+        with pytest.raises(RuntimeError, match="live context query failed"):
+            page._sync_context()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
 async def test_load_more_routes_by_focused_context_or_active_surface() -> None:
     vm, _client = _build_vm()
     await vm.setup()

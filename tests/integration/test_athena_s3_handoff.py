@@ -614,12 +614,15 @@ async def test_demo_query_artifacts_are_profile_local_replay_safe_and_distinct(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("attempt", range(8))
 async def test_app_started_demo_query_opens_its_exact_result_object(
     tmp_path: Path,
+    attempt: int,
 ) -> None:
+    run_path = tmp_path / f"attempt-{attempt}"
     ctx = build_app_context(
-        config_dir=tmp_path / "config",
-        cache_dir=tmp_path / "cache",
+        config_dir=run_path / "config",
+        cache_dir=run_path / "cache",
         demo=True,
     )
     app = AwsTuiApp(ctx)

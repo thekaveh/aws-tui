@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
@@ -9,6 +10,7 @@ from vmx.messages.protocols import Message
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
+from aws_tui.vm.messages import OpenS3LocationRequest
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
@@ -223,6 +225,70 @@ async def test_catalog_load_more_unexpected_errors_are_scoped_and_redacted() -> 
     assert vm.partitions_error_text is not None
     assert "PARTITION_SECRET" not in vm.partitions_error_text
     assert "[REDACTED]" in vm.partitions_error_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location",
+    [
+        pytest.param("s3://[GLUE_URI_SECRET", id="malformed-authority"),
+        pytest.param("s3://valid-bucket:443/GLUE_URI_SECRET", id="port"),
+        pytest.param("s3://valid-bucket/prefix?GLUE_URI_SECRET=1", id="query"),
+        pytest.param("s3://valid-bucket/raw\x00GLUE_URI_SECRET", id="raw-control"),
+        pytest.param("s3://valid-bucket/%0AGLUE_URI_SECRET", id="encoded-control"),
+    ],
+)
+async def test_catalog_rejects_invalid_s3_locations_without_publishing(
+    location: str,
+) -> None:
+    vm = make_catalog_vm(seeded_glue())
+    await vm.setup()
+    await vm.select_database("analytics")
+    await vm.select_table("events")
+    detail = vm.table_detail
+    assert detail is not None
+    vm._table_detail = replace(  # type: ignore[attr-defined]
+        detail,
+        storage=replace(detail.storage, location=location),
+    )
+    published: list[Message] = []
+    subscription = vm._hub.messages.subscribe(on_next=published.append)  # type: ignore[attr-defined]
+
+    try:
+        assert not vm.open_s3_location()
+        assert published == []
+    finally:
+        subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalog_publishes_valid_dotted_hyphenated_s3_prefix() -> None:
+    vm = make_catalog_vm(seeded_glue())
+    await vm.setup()
+    await vm.select_database("analytics")
+    await vm.select_table("events")
+    detail = vm.table_detail
+    assert detail is not None
+    location = "s3://warehouse.prod-2026/events-data/prefix/"
+    vm._table_detail = replace(  # type: ignore[attr-defined]
+        detail,
+        storage=replace(detail.storage, location=location),
+    )
+    published: list[Message] = []
+    subscription = vm._hub.messages.subscribe(on_next=published.append)  # type: ignore[attr-defined]
+
+    try:
+        assert vm.open_s3_location(preferred_pane="right")
+        assert published == [
+            OpenS3LocationRequest(
+                connection_name=detail.summary.ref.connection_name,
+                region=detail.summary.ref.region,
+                uri=location,
+                preferred_pane="right",
+            )
+        ]
+    finally:
+        subscription.dispose()
 
 
 @pytest.mark.asyncio

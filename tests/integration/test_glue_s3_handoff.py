@@ -12,6 +12,7 @@ from textual.worker import WorkerCancelled
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.demo import seeds
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets.dual_pane import DualPane
@@ -544,7 +545,22 @@ async def test_s3_handoff_rejects_region_mismatch_without_substitution(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("location", [None, "", "https://user:pass@example.test/data?token=SECRET"])
+@pytest.mark.parametrize(
+    "location",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param("", id="empty"),
+        pytest.param(
+            "https://user:pass@example.test/data?token=GLUE_URI_SECRET",
+            id="unsupported-scheme",
+        ),
+        pytest.param("s3://[GLUE_URI_SECRET", id="malformed-authority"),
+        pytest.param("s3://valid-bucket:443/GLUE_URI_SECRET", id="port"),
+        pytest.param("s3://valid-bucket/prefix?GLUE_URI_SECRET=1", id="query"),
+        pytest.param("s3://valid-bucket/raw\x00GLUE_URI_SECRET", id="raw-control"),
+        pytest.param("s3://valid-bucket/%0AGLUE_URI_SECRET", id="encoded-control"),
+    ],
+)
 async def test_missing_or_malformed_glue_location_is_advisory_and_redacted(
     tmp_path: Path,
     location: str | None,
@@ -568,12 +584,57 @@ async def test_missing_or_malformed_glue_location_is_advisory_and_redacted(
             await _invoke_open_s3(app)
             await _wait_for_service_setup(ctx, app, pilot)
 
-            assert ctx.root_vm.content_host.current_id == "glue"
+            _assert_visible_glue(ctx, app)
             toast = ctx.root_vm.chrome.toast_stack.toasts[-1].model
             assert toast.id == "glue-s3-location-invalid"
-            assert "SECRET" not in toast.text
-            assert "user:pass" not in toast.text
-            assert "example.test" not in toast.text
+            assert "selected table has no valid S3 location" in toast.text
+            ctx.log_sink.flush()
+            diagnostic = f"{toast.text}\n{ctx.log_sink.path.read_text(encoding='utf-8')}"
+            assert "GLUE_URI_SECRET" not in diagnostic
+            assert "user:pass" not in diagnostic
+            assert "example.test" not in diagnostic
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_valid_dotted_hyphenated_glue_prefix_opens_as_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    location = "s3://warehouse.prod-2026/events-data/prefix/"
+    monkeypatch.setitem(
+        seeds._PROFILE_OBJECTS,  # type: ignore[attr-defined]
+        "demo-dev",
+        (
+            *seeds._PROFILE_OBJECTS["demo-dev"],  # type: ignore[attr-defined]
+            ("warehouse.prod-2026/events-data/prefix/part-0000.parquet", 128),
+        ),
+    )
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            vm = await _open_demo_glue(ctx, app, pilot)
+            detail = vm.catalog.table_detail
+            assert detail is not None
+            vm.catalog._table_detail = replace(  # type: ignore[attr-defined]
+                detail,
+                storage=replace(detail.storage, location=location),
+            )
+
+            await _invoke_open_s3(app)
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            dual = _assert_visible_s3(ctx, app)
+            assert dual.left.path.as_posix() == "/warehouse.prod-2026/events-data/prefix"
+            assert dual.left.selected_entry is not None
+            assert dual.left.selected_entry.entry.name == ".."
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

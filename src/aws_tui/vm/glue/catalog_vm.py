@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any, Literal, cast
-from urllib.parse import urlparse
 
 import reactivex as rx
 from reactivex.subject import Subject
@@ -19,6 +18,7 @@ from aws_tui.domain.data_catalog import (
     TableSummary,
 )
 from aws_tui.domain.filesystem import ProviderError
+from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.messages import OpenS3LocationRequest
@@ -384,15 +384,7 @@ class GlueCatalogVM:
         if self._disposed or detail is None:
             return False
         location = detail.storage.location
-        if not location:
-            return False
-        parsed = urlparse(location)
-        if (
-            parsed.scheme.casefold() != "s3"
-            or not parsed.netloc
-            or parsed.username is not None
-            or parsed.password is not None
-        ):
+        if location is None or parse_s3_uri(location) is None:
             return False
         ref = detail.summary.ref
         self._hub.send(

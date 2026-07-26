@@ -550,3 +550,140 @@ git diff --check
 - No code or test concern remains. The pre-existing `.zshenv` warning for the
   missing `/tmp/vmx-cargo-182/env` still appears on every shell command but
   does not affect exit status or verification.
+
+## Final Approval Findings
+
+### Root Cause and RED Evidence
+
+Athena page refresh guarded only the final query-view lookup. During partial
+service teardown, `_sync_context()` found the surviving selects and then
+raised while querying a removed load-more button. Broad `Exception` catches
+around other widget queries also hid live-page errors instead of limiting the
+teardown exception to `NoMatches`.
+
+The direct partial-removal regression failed at the reported boundary:
+
+```text
+uv run pytest \
+  tests/unit/ui/athena/test_page.py::test_page_refresh_is_safe_during_partial_descendant_teardown \
+  -q --tb=short -p no:rerunfailures
+
+1 failed
+NoMatches: No nodes match '#athena-more-workgroups' on AthenaPage()
+```
+
+The live-error regression proved the old broad catch masked an unexpected
+widget query failure:
+
+```text
+uv run pytest \
+  tests/unit/ui/athena/test_page.py::test_live_page_context_query_errors_are_not_masked \
+  -q --tb=short -p no:rerunfailures
+
+1 failed
+Failed: DID NOT RAISE RuntimeError
+```
+
+Glue Catalog independently parsed table locations with `urlparse()`. The VM
+raised on a malformed bracket authority and published requests for ports,
+queries, raw controls, and encoded controls:
+
+```text
+uv run pytest \
+  tests/unit/vm/glue/test_catalog_vm.py::test_catalog_rejects_invalid_s3_locations_without_publishing \
+  -q --tb=short -p no:rerunfailures
+
+5 failed
+- malformed authority raised ValueError: Invalid IPv6 URL
+- port, query, raw-control, and encoded-control locations returned True
+```
+
+### Implementation
+
+- Athena refresh now preflights the complete mounted context-control and
+  view-control sets before mutating any widget. Missing or unmounted required
+  descendants produce a teardown-only no-op; only `NoMatches` is caught, so
+  normal live-page failures still surface.
+- Context load-more synchronization uses the already validated controls, and
+  view refresh reuses the preflighted query view. No worker or task lifecycle
+  was added.
+- Glue Catalog removed `urlparse` and validates every non-null table location
+  with the shared total `parse_s3_uri()` before publishing.
+- Invalid Glue locations return `False`, publish nothing, retain Glue as the
+  active service, and use the existing stable redacted
+  `glue-s3-location-invalid` advisory.
+- Valid dotted/hyphenated bucket prefixes still publish the original URI with
+  `reveal_object=False`, navigate to the prefix directory, and leave the
+  directory cursor semantics unchanged.
+
+### GREEN Evidence
+
+Focused Athena page, Glue Catalog, and Athena/Glue handoff matrix:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color uv run pytest \
+  tests/unit/ui/athena/test_page.py \
+  tests/unit/vm/glue/test_catalog_vm.py \
+  tests/integration/test_athena_s3_handoff.py \
+  tests/integration/test_glue_s3_handoff.py -q
+
+87 passed in 49.26s
+```
+
+The app-started demo query handoff runs eight isolated app contexts through
+query success, Athena teardown, S3 mount, and exact result-object selection.
+The warning-as-error stress run was clean:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color uv run pytest \
+  tests/integration/test_athena_s3_handoff.py::test_app_started_demo_query_opens_its_exact_result_object \
+  -W error::RuntimeWarning -q
+
+8 passed in 14.11s
+```
+
+Authoritative functional gate:
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  TERM=xterm-256color uv run pytest tests/unit tests/integration tests/e2e -q
+
+1995 passed, 9 deselected in 325.70s (0:05:25)
+```
+
+Static and architecture gates:
+
+```text
+uv run ruff check src tests
+All checks passed!
+
+uv run ruff format --check src tests
+372 files already formatted
+
+uv run mypy src
+Success: no issues found in 150 source files
+
+bash scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+(no output; exit 0)
+```
+
+### Final Approval Changed Files
+
+- `.superpowers/sdd/task-6-report.md`
+- `src/aws_tui/ui/widgets/athena/page.py`
+- `src/aws_tui/vm/glue/catalog_vm.py`
+- `tests/integration/test_athena_s3_handoff.py`
+- `tests/integration/test_glue_s3_handoff.py`
+- `tests/unit/ui/athena/test_page.py`
+- `tests/unit/vm/glue/test_catalog_vm.py`
+
+### Final Approval Concerns
+
+- No code, lifecycle, navigation, or security concern remains. The pre-existing
+  `.zshenv` warning for missing `/tmp/vmx-cargo-182/env` appears on shell
+  commands but does not affect exit status or verification.
