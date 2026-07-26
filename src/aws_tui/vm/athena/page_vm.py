@@ -19,10 +19,10 @@ from aws_tui.domain.athena import (
     AthenaWorkgroupSummary,
 )
 from aws_tui.domain.athena_runner import AthenaQueryRunner
-from aws_tui.domain.data_catalog import DatabaseSummary
+from aws_tui.domain.data_catalog import DatabaseSummary, TableRef
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext
-from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
+from aws_tui.domain.sql_policy import ReadOnlySqlPolicy, select_starter_sql
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.athena.history_vm import AthenaHistoryVM
@@ -30,6 +30,7 @@ from aws_tui.vm.athena.query_vm import AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
 from aws_tui.vm.athena.saved_vm import AthenaSavedVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.messages import OpenGlueTableRequest
 from aws_tui.vm.service_source_vm import (
     SelectionScope,
     ServiceSelectionStore,
@@ -65,6 +66,7 @@ class AthenaPageVM:
         sleep: Sleep = anyio.sleep,
     ) -> None:
         self._client = client
+        self._policy = policy
         self._connection = connection
         self._hub = hub
         self._source = ServiceSourceContext.from_connection(connection)
@@ -367,6 +369,47 @@ class AthenaPageVM:
         if self._is_current_context(generation):
             await self._setup_view(self._active_view, generation)
 
+    async def open_table(
+        self,
+        table_ref: TableRef,
+        snapshot_id: int | None = None,
+    ) -> None:
+        """Prefill one exact table in the editor without executing it."""
+        if (
+            not self._is_alive()
+            or table_ref.connection_name != self._connection.name
+            or table_ref.region != self._connection.region
+            or not self._context.workgroup
+        ):
+            raise ValueError("table is unavailable in the active Athena source")
+        if not await self._ensure_catalog_loaded(table_ref):
+            raise ValueError("table is unavailable in the active Athena source")
+
+        if self._context.catalog != table_ref.catalog_name:
+            await self.select_catalog(table_ref.catalog_name)
+        if not await self._ensure_database_loaded(table_ref):
+            raise ValueError("table is unavailable in the active Athena source")
+        if self._context.database != table_ref.database_name:
+            await self.select_database(table_ref.database_name)
+        if (
+            not self._is_alive()
+            or self._context.catalog != table_ref.catalog_name
+            or self._context.database != table_ref.database_name
+        ):
+            raise ValueError("table is unavailable in the active Athena source")
+        await self.select_view("query")
+        self.query.set_sql(select_starter_sql(table_ref, snapshot_id))
+
+    def open_table_in_glue(self) -> bool:
+        """Request Glue navigation for one unambiguous visible SQL table."""
+        if not self._is_alive() or self._active_view != "query":
+            return False
+        refs = self._policy.table_refs(self.query.sql, self._context)
+        if len(refs) != 1:
+            return False
+        self._hub.send(OpenGlueTableRequest(refs[0]))
+        return True
+
     async def load_more_workgroups(self) -> None:
         if not self._is_alive():
             return
@@ -667,6 +710,34 @@ class AthenaPageVM:
         await self.query.set_context(self._context)
         if setup_active and self._is_current_context(final_generation):
             await self._setup_view(self._active_view, final_generation)
+
+    async def _ensure_catalog_loaded(self, table_ref: TableRef) -> bool:
+        def matches() -> bool:
+            return any(row.name == table_ref.catalog_name for row in self.catalogs)
+
+        while not matches() and self.has_more_catalogs:
+            before = (len(self.catalogs), self._catalog_pager.current_token)
+            await self.load_more_catalogs()
+            if before == (len(self.catalogs), self._catalog_pager.current_token):
+                break
+        return matches()
+
+    async def _ensure_database_loaded(self, table_ref: TableRef) -> bool:
+        def matches() -> bool:
+            return any(
+                row.ref.database_name == table_ref.database_name
+                and row.ref.catalog_name == table_ref.catalog_name
+                and row.ref.connection_name == table_ref.connection_name
+                and row.ref.region == table_ref.region
+                for row in self.databases
+            )
+
+        while not matches() and self.has_more_databases:
+            before = (len(self.databases), self._database_pager.current_token)
+            await self.load_more_databases()
+            if before == (len(self.databases), self._database_pager.current_token):
+                break
+        return matches()
 
     def _begin_context_change(
         self,

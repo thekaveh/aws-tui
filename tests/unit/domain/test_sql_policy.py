@@ -4,7 +4,21 @@ import logging
 
 import pytest
 
-from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
+from aws_tui.domain.data_catalog import TableRef
+from aws_tui.domain.query import QueryContext
+from aws_tui.domain.sql_policy import (
+    QueryRejectedError,
+    ReadOnlySqlPolicy,
+    select_starter_sql,
+)
+
+CONTEXT = QueryContext(
+    "prod-west",
+    "us-west-2",
+    "analysts",
+    "AwsDataCatalog",
+    "analytics",
+)
 
 
 @pytest.mark.parametrize(
@@ -384,3 +398,183 @@ def test_policy_does_not_log_query_text_during_command_fallback(
     ReadOnlySqlPolicy().validate(sql)
 
     assert "sensitive_customer_secret" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        (
+            "SELECT * FROM events",
+            (
+                TableRef(
+                    "AwsDataCatalog",
+                    "analytics",
+                    "events",
+                    "prod-west",
+                    "us-west-2",
+                ),
+            ),
+        ),
+        (
+            "SELECT * FROM reporting.events AS e",
+            (
+                TableRef(
+                    "AwsDataCatalog",
+                    "reporting",
+                    "events",
+                    "prod-west",
+                    "us-west-2",
+                ),
+            ),
+        ),
+        (
+            'SELECT * FROM "AwsDataCatalog"."analytics"."events"',
+            (
+                TableRef(
+                    "AwsDataCatalog",
+                    "analytics",
+                    "events",
+                    "prod-west",
+                    "us-west-2",
+                ),
+            ),
+        ),
+    ],
+)
+def test_table_refs_resolves_catalog_and_database_defaults(
+    sql: str,
+    expected: tuple[TableRef, ...],
+) -> None:
+    assert ReadOnlySqlPolicy().table_refs(sql, CONTEXT) == expected
+
+
+def test_table_refs_excludes_cte_aliases_and_preserves_nested_physical_tables() -> None:
+    sql = """
+        WITH recent AS (
+            SELECT * FROM events AS source_events
+        ),
+        counted AS (
+            SELECT event_id FROM recent
+        )
+        SELECT *
+        FROM counted
+        JOIN (SELECT event_id FROM users) AS nested USING (event_id)
+    """
+
+    assert ReadOnlySqlPolicy().table_refs(sql, CONTEXT) == (
+        TableRef(
+            "AwsDataCatalog",
+            "analytics",
+            "events",
+            "prod-west",
+            "us-west-2",
+        ),
+        TableRef(
+            "AwsDataCatalog",
+            "analytics",
+            "users",
+            "prod-west",
+            "us-west-2",
+        ),
+    )
+
+
+def test_table_refs_deduplicates_aliases_but_keeps_distinct_tables() -> None:
+    sql = """
+        SELECT *
+        FROM events AS current_events
+        JOIN events AS previous_events ON current_events.id = previous_events.id
+        JOIN users ON users.id = current_events.user_id
+    """
+
+    assert ReadOnlySqlPolicy().table_refs(sql, CONTEXT) == (
+        TableRef(
+            "AwsDataCatalog",
+            "analytics",
+            "events",
+            "prod-west",
+            "us-west-2",
+        ),
+        TableRef(
+            "AwsDataCatalog",
+            "analytics",
+            "users",
+            "prod-west",
+            "us-west-2",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'SELECT * FROM "ForeignCatalog"."analytics"."events"',
+        (
+            'SELECT * FROM "AwsDataCatalog"."analytics"."events" '
+            'JOIN "ForeignCatalog"."analytics"."users" USING (id)'
+        ),
+        "SELECT 1; SELECT * FROM events",
+        "DELETE FROM events",
+        "SELEC sensitive_sql_marker FROM events",
+    ],
+)
+def test_table_refs_fails_closed_for_foreign_or_invalid_sql(sql: str) -> None:
+    assert ReadOnlySqlPolicy().table_refs(sql, CONTEXT) == ()
+
+
+def test_table_refs_does_not_log_full_sql(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sql = "SELEC sensitive_sql_marker FROM events"
+    caplog.set_level(logging.DEBUG)
+
+    assert ReadOnlySqlPolicy().table_refs(sql, CONTEXT) == ()
+
+    assert "sensitive_sql_marker" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("snapshot_id", "expected"),
+    [
+        (
+            None,
+            'SELECT * FROM "Catalog""Name"."db name"."table""name" LIMIT 100',
+        ),
+        (
+            42,
+            (
+                'SELECT * FROM "Catalog""Name"."db name"."table""name" '
+                "FOR VERSION AS OF 42 LIMIT 100"
+            ),
+        ),
+    ],
+)
+def test_select_starter_sql_quotes_every_identifier_exactly(
+    snapshot_id: int | None,
+    expected: str,
+) -> None:
+    ref = TableRef(
+        'Catalog"Name',
+        "db name",
+        'table"name',
+        "prod-west",
+        "us-west-2",
+    )
+
+    assert select_starter_sql(ref, snapshot_id) == expected
+
+
+@pytest.mark.parametrize("snapshot_id", [-1, True, 1.5, "42"])
+def test_select_starter_sql_requires_a_non_negative_integer_snapshot(
+    snapshot_id: object,
+) -> None:
+    ref = TableRef(
+        "AwsDataCatalog",
+        "analytics",
+        "events",
+        "prod-west",
+        "us-west-2",
+    )
+
+    with pytest.raises(ValueError, match="snapshot"):
+        select_starter_sql(ref, snapshot_id)  # type: ignore[arg-type]

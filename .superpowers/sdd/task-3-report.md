@@ -192,6 +192,156 @@ missing `/tmp/vmx-cargo-182/env` appeared on commands and is omitted above.
   available as explicit UI properties. They are excluded from reprs and are never
   copied into VM exception/error text or logs.
 
+---
+
+# Iceberg Task 3 Addendum: Connection-Preserving Glue/Athena Navigation
+
+## Status
+
+Implemented Iceberg plan Task 3 on `codex/aws-service-expansion-study`.
+The implementation commit is the commit containing this addendum.
+
+## Implementation
+
+- Added frozen, slot-backed `OpenAthenaTableRequest` and
+  `OpenGlueTableRequest` VMx envelopes carrying the complete `TableRef`.
+- Added `ReadOnlySqlPolicy.table_refs()` using sqlglot scope traversal. It
+  resolves current catalog/database defaults, excludes CTE and subquery aliases,
+  de-duplicates repeated physical tables, preserves distinct physical sources,
+  and fails closed for invalid SQL, writes, multiple statements, or foreign
+  catalogs.
+- Added exact identifier quoting and bounded starter SQL generation, including
+  optional non-negative integer `FOR VERSION AS OF` and mandatory `LIMIT 100`.
+- Added Glue and Athena VM source/destination operations. Glue selects exact
+  catalog/database/table identities across later provider pages. Athena preserves
+  the active workgroup, loads exact later-page catalogs/databases, prefills the
+  query editor, and never executes generated SQL. Athena-to-Glue navigation is
+  available only from the active query view with one distinct visible table.
+- Added app action and command-palette routing for both directions. The
+  composition root resolves the exact connection, requires region equality,
+  probes auth, transactionally switches/mounts the destination, waits for setup,
+  and selects the resource.
+- Added generation-owned lifecycle handling so the newest competing handoff
+  wins. Missing/deleted connections and region mismatches fail before mutation;
+  destination failures restore the prior connection/service/selection and
+  redacted Athena editor state.
+- Added stable visible failure toasts and structured logs that retain no SQL or
+  exception text. The rollback snapshot excludes SQL from repr output.
+
+## TDD Evidence
+
+Initial interface RED:
+
+```text
+uv run pytest tests/unit/vm/test_messages.py \
+  tests/unit/domain/test_sql_policy.py \
+  tests/unit/vm/athena/test_page_vm.py \
+  tests/unit/vm/glue/test_page_vm.py -q
+
+4 collection errors: missing messages, starter SQL, and VM interfaces
+```
+
+App orchestration RED:
+
+```text
+uv run pytest tests/integration/test_glue_athena_navigation.py -q
+
+8 failed: actions unregistered, messages ignored, no rollback/toasts,
+and no competing-request ownership
+```
+
+Pagination RED:
+
+```text
+uv run pytest \
+  tests/unit/vm/glue/test_page_vm.py::test_catalog_open_table_selects_exact_table_identity \
+  tests/integration/test_glue_athena_navigation.py::test_glue_to_athena_preserves_identity_and_prefills_without_running -q
+
+2 failed: exact targets beyond the first provider page were unavailable
+```
+
+Visible-query RED:
+
+```text
+uv run pytest \
+  tests/unit/vm/athena/test_page_vm.py::test_open_table_in_glue_requires_one_visible_unambiguous_table -q
+
+1 failed: stale editor SQL could navigate while History was active
+```
+
+Each RED was followed by the minimal implementation and a focused GREEN run.
+
+## Verification
+
+Final focused contract, warnings treated as errors:
+
+```text
+312 passed in 6.43s
+```
+
+Final affected Glue/Athena VM and integration suite:
+
+```text
+188 passed in 17.13s
+```
+
+Broad domain, VM, and integration regression:
+
+```text
+1595 passed, 9 deselected in 303.89s
+```
+
+Standalone Glue/Athena page and navigation integration:
+
+```text
+20 passed in 16.84s
+```
+
+Static and release checks:
+
+```text
+uv run mypy src/aws_tui
+Success: no issues found in 152 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+386 files already formatted
+
+bash scripts/check-layers.sh
+layer rules clean
+
+uv build
+Successfully built source and wheel distributions
+
+git diff --check
+```
+
+## Changed Files
+
+- `src/aws_tui/app.py`
+- `src/aws_tui/domain/sql_policy.py`
+- `src/aws_tui/vm/athena/page_vm.py`
+- `src/aws_tui/vm/glue/catalog_vm.py`
+- `src/aws_tui/vm/glue/page_vm.py`
+- `src/aws_tui/vm/messages.py`
+- `tests/integration/test_glue_athena_navigation.py`
+- `tests/unit/domain/test_sql_policy.py`
+- `tests/unit/vm/athena/test_page_vm.py`
+- `tests/unit/vm/glue/test_page_vm.py`
+- `tests/unit/vm/test_messages.py`
+
+## Concerns
+
+- Athena preserves the selected workgroup and validates catalog/database
+  visibility before prefilling. It intentionally does not execute a provider
+  query or metadata lookup to re-prove table existence; the source Glue
+  `TableRef` remains authoritative and generated SQL stays inert.
+- The repository shell emits the pre-existing missing
+  `/tmp/vmx-cargo-182/env` startup warning; it did not affect command results.
+- `.superpowers/sdd/progress.md` was not edited.
+
 ## Review Fix Addendum: 2026-07-25
 
 ### Status

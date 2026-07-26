@@ -7,10 +7,12 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
+from aws_tui.vm.messages import OpenAthenaTableRequest
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
@@ -62,6 +64,85 @@ async def test_setup_loads_only_catalog_and_first_selections() -> None:
     assert page.catalog.selected_table_name == "events"
     assert fake.job_tokens == []
     assert fake.crawler_requests == []
+
+
+@pytest.mark.asyncio
+async def test_catalog_open_table_selects_exact_table_identity() -> None:
+    fake = seeded_glue()
+    fake.table_page_size = 1
+    page = make_page_vm(fake)
+    await page.setup()
+    ref = TableRef("AwsDataCatalog", "analytics", "sessions", "dev", "us-east-1")
+
+    await page.catalog.open_table(ref)
+
+    assert page.catalog.selected_database_name == "analytics"
+    assert page.catalog.selected_table_name == "sessions"
+
+
+@pytest.mark.asyncio
+async def test_catalog_open_table_loads_later_database_page() -> None:
+    fake = seeded_glue()
+    table = fake.add_table("warehouse", "orders")
+    fake.database_page_size = 1
+    page = make_page_vm(fake)
+    await page.setup()
+
+    await page.catalog.open_table(table.ref)
+
+    assert page.catalog.selected_database_name == "warehouse"
+    assert page.catalog.selected_table_name == "orders"
+
+
+@pytest.mark.asyncio
+async def test_catalog_open_table_rejects_mismatched_or_missing_identity() -> None:
+    page = make_page_vm(seeded_glue())
+    await page.setup()
+    before = (
+        page.catalog.selected_database_name,
+        page.catalog.selected_table_name,
+    )
+
+    for ref in (
+        TableRef("AwsDataCatalog", "analytics", "events", "other", "us-east-1"),
+        TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-west-2"),
+        TableRef("OtherCatalog", "analytics", "events", "dev", "us-east-1"),
+        TableRef("AwsDataCatalog", "missing", "events", "dev", "us-east-1"),
+        TableRef("AwsDataCatalog", "analytics", "missing", "dev", "us-east-1"),
+    ):
+        with pytest.raises(ValueError, match="table"):
+            await page.catalog.open_table(ref)
+        assert (
+            page.catalog.selected_database_name,
+            page.catalog.selected_table_name,
+        ) == before
+
+
+@pytest.mark.asyncio
+async def test_catalog_query_in_athena_sends_selected_table_identity() -> None:
+    page = make_page_vm(seeded_glue())
+    await page.setup()
+    messages: list[OpenAthenaTableRequest] = []
+    subscription = page._hub.messages.subscribe(  # type: ignore[attr-defined]
+        on_next=lambda message: (
+            messages.append(message) if isinstance(message, OpenAthenaTableRequest) else None
+        )
+    )
+    try:
+        assert page.catalog.query_in_athena()
+        assert messages == [
+            OpenAthenaTableRequest(
+                TableRef(
+                    "AwsDataCatalog",
+                    "analytics",
+                    "events",
+                    "dev",
+                    "us-east-1",
+                )
+            )
+        ]
+    finally:
+        subscription.dispose()
 
 
 @pytest.mark.asyncio

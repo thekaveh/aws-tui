@@ -5,6 +5,7 @@ from typing import Any, Literal, TypeAlias
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
@@ -129,6 +130,32 @@ class GluePageVM:
     async def select_table(self, table_name: str) -> None:
         generation = self._lifecycle_generation
         await self._select_table(table_name, generation)
+
+    async def open_table(self, table_ref: TableRef) -> None:
+        """Open an exact table and persist its destination selection."""
+        if (
+            self._disposed
+            or table_ref.connection_name != self._connection.name
+            or table_ref.region != self._connection.region
+        ):
+            raise ValueError("table is unavailable in the active Glue source")
+        generation = self._lifecycle_generation
+        await self.select_view("catalog")
+        if not self._is_current(generation):
+            raise ValueError("table is unavailable in the active Glue source")
+        await self.catalog.open_table(table_ref)
+        if not self._is_current(generation):
+            raise ValueError("table is unavailable in the active Glue source")
+        self._selection_store.set(
+            self._selection_scope,
+            "database_name",
+            table_ref.database_name,
+        )
+        self._selection_store.set(
+            self._selection_scope,
+            "table_name",
+            table_ref.table_name,
+        )
 
     async def _select_table(self, table_name: str, generation: int) -> None:
         await self.catalog.select_table(table_name)

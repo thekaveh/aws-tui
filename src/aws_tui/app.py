@@ -15,7 +15,7 @@ import os
 import sys
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -62,7 +62,7 @@ from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.version import __version__
-from aws_tui.vm.athena.page_vm import AthenaPageVM
+from aws_tui.vm.athena.page_vm import AthenaPageVM, AthenaView
 from aws_tui.vm.chrome.command_palette_vm import PaletteEntry
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
@@ -71,8 +71,11 @@ from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.messages import (
     ConnectionListChangedMessage,
+    OpenAthenaTableRequest,
+    OpenGlueTableRequest,
     OpenS3LocationRequest,
     ThemeChangedMessage,
 )
@@ -90,6 +93,15 @@ class _S3HandoffSnapshot:
     athena_result_execution_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class _TableHandoffSnapshot:
+    connection: Connection | None
+    auth_state: TokenState | None
+    service_id: str | None
+    athena_view: str | None
+    athena_sql: str | None = field(repr=False)
+
+
 class _S3HandoffStageError(Exception):
     def __init__(self, stage: str, error_type: str) -> None:
         super().__init__(f"S3 handoff failed during {stage}")
@@ -104,6 +116,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("app.cycle_theme", "Cycle theme"),
     ("app.swap_source", "Switch source"),
     ("glue.open_s3_location", "Open table location in S3"),
+    ("glue.query_in_athena", "Query table in Athena"),
     ("athena.query", "Athena query"),
     ("athena.history", "Athena history"),
     ("athena.results", "Athena results"),
@@ -112,6 +125,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("athena.cancel", "Cancel Athena query"),
     ("athena.load_more", "Load more Athena rows"),
     ("athena.open_result_location", "Open Athena result in S3"),
+    ("athena.open_in_glue", "Open query table in Glue"),
     ("app.open_settings", "Settings"),
     ("app.help", "Help"),
     ("app.quit", "Quit"),
@@ -393,6 +407,7 @@ class AwsTuiApp(App[None]):
             partial(self.action_select_glue_view, "crawlers"),
         )
         self._actions.register("glue.open_s3_location", self.action_open_glue_s3_location)
+        self._actions.register("glue.query_in_athena", self.action_query_glue_table_in_athena)
         self._actions.register(
             "athena.query",
             partial(self.action_select_athena_view, "query"),
@@ -416,6 +431,7 @@ class AwsTuiApp(App[None]):
             "athena.open_result_location",
             self.action_open_athena_result_location,
         )
+        self._actions.register("athena.open_in_glue", self.action_open_athena_table_in_glue)
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
@@ -442,6 +458,7 @@ class AwsTuiApp(App[None]):
         self._nav_selection_sub: DisposableBase | None = None
         self._cursor_sub: DisposableBase | None = None
         self._service_navigation_sub: DisposableBase | None = None
+        self._table_navigation_generation = 0
         self._service_navigation_suppressed_selection: (
             tuple[asyncio.Task[object] | None, str] | None
         ) = None
@@ -2321,6 +2338,30 @@ class AwsTuiApp(App[None]):
             toast_id="glue-s3-location-invalid",
         )
 
+    async def action_query_glue_table_in_athena(self) -> None:
+        self.record_action("glue.query_in_athena")
+        page = self._glue_page()
+        if page is not None and page.vm.catalog.query_in_athena():
+            return
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="select a Glue table to query in Athena",
+            toast_id="glue-athena-table-unavailable",
+        )
+
+    async def action_open_athena_table_in_glue(self) -> None:
+        self.record_action("athena.open_in_glue")
+        page = self._athena_page()
+        if page is not None and page.vm.open_table_in_glue():
+            return
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="query must reference one visible Glue table",
+            toast_id="athena-glue-table-ambiguous",
+        )
+
     async def _swap_single_context_source(self, service_id: str) -> None:
         """Rebuild a non-S3 service under its next supported AWS profile."""
         ctx = self._app_ctx
@@ -2659,13 +2700,188 @@ class AwsTuiApp(App[None]):
                     await self._rebind_pane_to_connection(pane, conn)
 
     def _on_service_navigation_message(self, msg: object) -> None:
-        if not isinstance(msg, OpenS3LocationRequest):
+        if isinstance(msg, OpenS3LocationRequest):
+            self.run_worker(
+                self._open_s3_location_request(msg),
+                exclusive=True,
+                group="content-mount",
+            )
             return
-        self.run_worker(
-            self._open_s3_location_request(msg),
-            exclusive=True,
-            group="content-mount",
+        if isinstance(msg, (OpenAthenaTableRequest, OpenGlueTableRequest)):
+            self._table_navigation_generation += 1
+            generation = self._table_navigation_generation
+            navigation = asyncio.create_task(
+                self._open_table_request(msg, generation),
+                name=f"table-navigation-{generation}",
+            )
+            self.run_worker(
+                navigation,
+                exclusive=True,
+                group="content-mount",
+            )
+
+    async def _open_table_request(
+        self,
+        request: OpenAthenaTableRequest | OpenGlueTableRequest,
+        generation: int,
+    ) -> None:
+        """Switch, mount, and select one exact Glue/Athena table."""
+        ctx = self._app_ctx
+        ref = request.table_ref
+        try:
+            connection = ctx.connection_resolver.resolve(ref.connection_name)
+        except Exception as exc:
+            ctx.log_sink.warning(
+                "service_navigation.table_connection_missing",
+                connection=ref.connection_name,
+                error_type=type(exc).__name__,
+            )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message=f"connection {ref.connection_name!r} is unavailable",
+                toast_id="table-handoff-connection-missing",
+            )
+            return
+        if connection.region != ref.region:
+            ctx.log_sink.warning(
+                "service_navigation.table_region_mismatch",
+                connection=ref.connection_name,
+                expected_region=ref.region,
+                resolved_region=connection.region,
+            )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="table region does not match the source connection",
+                toast_id="table-handoff-region-mismatch",
+            )
+            return
+
+        current = ctx.root_vm.content_host.current
+        snapshot = _TableHandoffSnapshot(
+            connection=ctx.root_vm.active_connection,
+            auth_state=ctx.root_vm.active_auth_state,
+            service_id=ctx.root_vm.content_host.current_id,
+            athena_view=current.active_view if isinstance(current, AthenaPageVM) else None,
+            athena_sql=current.query.sql if isinstance(current, AthenaPageVM) else None,
         )
+        destination = "athena" if isinstance(request, OpenAthenaTableRequest) else "glue"
+        try:
+            try:
+                auth_state = ctx.aws_session.probe_token(connection).state
+            except Exception as exc:
+                ctx.log_sink.warning(
+                    "service_navigation.table_probe_failed",
+                    connection=connection.name,
+                    error_type=type(exc).__name__,
+                )
+                auth_state = TokenState.MISSING
+
+            suppression = (asyncio.current_task(), destination)
+            self._service_navigation_suppressed_selection = suppression
+            try:
+                await ctx.root_vm.switch_connection_and_service(
+                    connection,
+                    auth_state,
+                    destination,
+                )
+            finally:
+                if self._service_navigation_suppressed_selection is suppression:
+                    self._service_navigation_suppressed_selection = None
+            if generation != self._table_navigation_generation:
+                return
+            if not await self._mount_service_view(
+                destination,
+                required_connection=connection,
+            ):
+                raise RuntimeError("destination mount failed")
+            await self._wait_for_current_service_setup()
+            if generation != self._table_navigation_generation:
+                return
+
+            target = ctx.root_vm.content_host.current
+            if isinstance(request, OpenAthenaTableRequest):
+                if not isinstance(target, AthenaPageVM):
+                    raise RuntimeError("Athena destination is unavailable")
+                await target.open_table(ref, request.snapshot_id)
+            else:
+                if not isinstance(target, GluePageVM):
+                    raise RuntimeError("Glue destination is unavailable")
+                await target.open_table(ref)
+        except asyncio.CancelledError:
+            if generation == self._table_navigation_generation:
+                await self._restore_table_handoff(snapshot)
+            raise
+        except Exception as exc:
+            if generation != self._table_navigation_generation:
+                return
+            await self._restore_table_handoff(snapshot)
+            ctx.log_sink.error(
+                "service_navigation.table_handoff_failed",
+                connection=connection.name,
+                destination=destination,
+                error_type=type(exc).__name__,
+            )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message=f"could not open the table in {destination.title()}",
+                toast_id="table-handoff-destination-failed",
+            )
+
+    async def _wait_for_current_service_setup(self) -> None:
+        task = self._app_ctx.root_vm.content_host._setup_task
+        if task is not None and not task.done():
+            await task
+
+    async def _restore_table_handoff(
+        self,
+        snapshot: _TableHandoffSnapshot,
+    ) -> bool:
+        if (
+            snapshot.connection is None
+            or snapshot.auth_state is None
+            or snapshot.service_id is None
+        ):
+            self._app_ctx.log_sink.error(
+                "service_navigation.table_rollback_failed",
+                stage="missing_snapshot",
+            )
+            return False
+        suppression = (asyncio.current_task(), snapshot.service_id)
+        self._service_navigation_suppressed_selection = suppression
+        try:
+            await self._app_ctx.root_vm.switch_connection_and_service(
+                snapshot.connection,
+                snapshot.auth_state,
+                snapshot.service_id,
+            )
+        except Exception as exc:
+            self._app_ctx.log_sink.error(
+                "service_navigation.table_rollback_failed",
+                connection=snapshot.connection.name,
+                service_id=snapshot.service_id,
+                stage="switch",
+                error_type=type(exc).__name__,
+            )
+            return False
+        finally:
+            if self._service_navigation_suppressed_selection is suppression:
+                self._service_navigation_suppressed_selection = None
+        if not await self._mount_service_view(
+            snapshot.service_id,
+            required_connection=snapshot.connection,
+        ):
+            return False
+        await self._wait_for_current_service_setup()
+        current = self._app_ctx.root_vm.content_host.current
+        if isinstance(current, AthenaPageVM):
+            if snapshot.athena_view is not None:
+                await current.select_view(cast("AthenaView", snapshot.athena_view))
+            if snapshot.athena_sql is not None:
+                current.query.set_sql(snapshot.athena_sql)
+        return True
 
     async def _open_s3_location_request(self, request: OpenS3LocationRequest) -> None:
         """Resolve and mount an S3 request without changing source identity."""

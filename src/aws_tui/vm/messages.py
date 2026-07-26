@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 
@@ -227,6 +228,31 @@ class OpenS3LocationRequest:
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class OpenAthenaTableRequest:
+    """Request Athena navigation for one exact Glue table identity."""
+
+    table_ref: TableRef
+    snapshot_id: int | None = None
+    sender_name: str = "service_navigation"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class OpenGlueTableRequest:
+    """Request Glue navigation for one exact Athena table identity."""
+
+    table_ref: TableRef
+    sender_name: str = "service_navigation"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
 __all__ = [
     "AuthExpiredMessage",
     "AuthExpiredReason",
@@ -234,6 +260,8 @@ __all__ = [
     "ConnectionListChangedMessage",
     "FocusChangedMessage",
     "KeymapChangedMessage",
+    "OpenAthenaTableRequest",
+    "OpenGlueTableRequest",
     "OpenS3LocationRequest",
     "ThemeChangedMessage",
     "TransferCancelRequestedMessage",

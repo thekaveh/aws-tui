@@ -13,7 +13,7 @@ from aws_tui.domain.athena import (
     AthenaWorkgroupDetail,
     AthenaWorkgroupSummary,
 )
-from aws_tui.domain.data_catalog import DatabaseRef, DatabaseSummary
+from aws_tui.domain.data_catalog import DatabaseRef, DatabaseSummary, TableRef
 from aws_tui.domain.filesystem import (
     PermissionDeniedError,
     ProviderError,
@@ -37,6 +37,7 @@ from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.messages import OpenGlueTableRequest
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 
 _STATS = QueryStatistics(1, 1, 1, 1, 0, False)
@@ -353,6 +354,96 @@ def make_page_vm(
     )
     page.construct()
     return page
+
+
+@pytest.mark.asyncio
+async def test_open_table_preserves_context_and_prefills_without_execution() -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    await page.setup()
+    ref = TableRef(
+        "AwsDataCatalog",
+        "default",
+        'events"archive',
+        "analytics",
+        "us-west-2",
+    )
+
+    await page.open_table(ref, snapshot_id=42)
+
+    assert page.active_view == "query"
+    assert page.context == QueryContext(
+        "analytics",
+        "us-west-2",
+        "primary",
+        "AwsDataCatalog",
+        "default",
+    )
+    assert page.query.sql == (
+        'SELECT * FROM "AwsDataCatalog"."default"."events""archive" FOR VERSION AS OF 42 LIMIT 100'
+    )
+    assert page.query.execution_ref is None
+    assert client.start_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ref",
+    [
+        TableRef("AwsDataCatalog", "default", "events", "other", "us-west-2"),
+        TableRef("AwsDataCatalog", "default", "events", "analytics", "us-east-1"),
+        TableRef("missing", "default", "events", "analytics", "us-west-2"),
+        TableRef("AwsDataCatalog", "missing", "events", "analytics", "us-west-2"),
+    ],
+)
+async def test_open_table_rejects_mismatched_or_unavailable_identity(
+    ref: TableRef,
+) -> None:
+    page = make_page_vm(PageClient())
+    await page.setup()
+    before = (page.context, page.active_view, page.query.sql)
+
+    with pytest.raises(ValueError, match="table"):
+        await page.open_table(ref)
+
+    assert (page.context, page.active_view, page.query.sql) == before
+
+
+@pytest.mark.asyncio
+async def test_open_table_in_glue_requires_one_visible_unambiguous_table() -> None:
+    page = make_page_vm(PageClient())
+    await page.setup()
+    messages: list[OpenGlueTableRequest] = []
+    subscription = page._hub.messages.subscribe(  # type: ignore[attr-defined]
+        on_next=lambda message: (
+            messages.append(message) if isinstance(message, OpenGlueTableRequest) else None
+        )
+    )
+    try:
+        page.query.set_sql("SELECT * FROM events AS first JOIN events AS second USING (id)")
+        assert page.open_table_in_glue()
+        assert messages == [
+            OpenGlueTableRequest(
+                TableRef(
+                    "AwsDataCatalog",
+                    "default",
+                    "events",
+                    "analytics",
+                    "us-west-2",
+                )
+            )
+        ]
+
+        page.query.set_sql("SELECT * FROM events JOIN users USING (id)")
+        assert not page.open_table_in_glue()
+        page.query.set_sql('SELECT * FROM "foreign"."default"."events"')
+        assert not page.open_table_in_glue()
+        page.query.set_sql("SELECT * FROM events")
+        await page.select_view("history")
+        assert not page.open_table_in_glue()
+        assert len(messages) == 1
+    finally:
+        subscription.dispose()
 
 
 def test_athena_package_exports_task_4_viewmodels() -> None:

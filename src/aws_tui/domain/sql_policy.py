@@ -5,8 +5,11 @@ from __future__ import annotations
 import sqlglot
 from sqlglot import Dialect, TokenType, exp
 from sqlglot.errors import SqlglotError
+from sqlglot.optimizer.scope import traverse_scope
 
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import ValidationError
+from aws_tui.domain.query import QueryContext
 
 _EXPLAIN_FORMATS = frozenset({"GRAPHVIZ", "JSON", "TEXT"})
 _EXPLAIN_TYPES = frozenset({"DISTRIBUTED", "IO", "LOGICAL", "VALIDATE"})
@@ -114,6 +117,45 @@ class ReadOnlySqlPolicy:
 
         self._validate_expression(statements[0])
         return normalized
+
+    def table_refs(
+        self,
+        sql: str,
+        context: QueryContext,
+    ) -> tuple[TableRef, ...]:
+        """Return physical table sources or fail closed on ambiguity."""
+        try:
+            normalized = self.validate(sql)
+            statements = self._parse(normalized)
+            if len(statements) != 1 or statements[0] is None:
+                return ()
+            refs: list[TableRef] = []
+            seen: set[tuple[str, str, str]] = set()
+            for scope in traverse_scope(statements[0]):
+                for _, source in scope.selected_sources.values():
+                    if not isinstance(source, exp.Table):
+                        continue
+                    catalog = source.catalog or context.catalog
+                    database = source.db or context.database
+                    table = source.name
+                    if not catalog or not database or not table or catalog != context.catalog:
+                        return ()
+                    key = (catalog, database, table)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    refs.append(
+                        TableRef(
+                            catalog,
+                            database,
+                            table,
+                            context.connection_name,
+                            context.region,
+                        )
+                    )
+            return tuple(refs)
+        except Exception:
+            return ()
 
     def _parse(self, sql: str) -> list[exp.Expr | None]:
         try:
@@ -350,4 +392,29 @@ class ReadOnlySqlPolicy:
                 raise QueryRejectedError(f"nested statement type {node.key!r} is not read-only")
 
 
-__all__ = ["QueryRejectedError", "ReadOnlySqlPolicy"]
+def quote_athena_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def select_starter_sql(
+    ref: TableRef,
+    snapshot_id: int | None = None,
+) -> str:
+    if snapshot_id is not None and (
+        isinstance(snapshot_id, bool) or not isinstance(snapshot_id, int) or snapshot_id < 0
+    ):
+        raise ValueError("snapshot ID must be a non-negative integer")
+    qualified = ".".join(
+        quote_athena_identifier(part)
+        for part in (ref.catalog_name, ref.database_name, ref.table_name)
+    )
+    travel = f" FOR VERSION AS OF {snapshot_id}" if snapshot_id is not None else ""
+    return f"SELECT * FROM {qualified}{travel} LIMIT 100"
+
+
+__all__ = [
+    "QueryRejectedError",
+    "ReadOnlySqlPolicy",
+    "quote_athena_identifier",
+    "select_starter_sql",
+]

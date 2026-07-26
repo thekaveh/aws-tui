@@ -21,7 +21,7 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.messages import OpenS3LocationRequest
+from aws_tui.vm.messages import OpenAthenaTableRequest, OpenS3LocationRequest
 
 
 class GlueCatalogVM:
@@ -351,6 +351,59 @@ class GlueCatalogVM:
             self._set_state("_statistics_state", PaneState.EMPTY, "statistics_state")
             return
         await self._load_statistics(detail, generation)
+
+    async def open_table(self, ref: TableRef) -> None:
+        """Select one exact table without substituting source identity."""
+        if self._disposed:
+            raise ValueError("table cannot be opened")
+
+        def database_available() -> bool:
+            return any(
+                row
+                for row in self.databases
+                if row.ref.catalog_name == ref.catalog_name
+                and row.ref.database_name == ref.database_name
+                and row.ref.connection_name == ref.connection_name
+                and row.ref.region == ref.region
+            )
+
+        while not database_available() and self.has_more_databases:
+            before = (len(self.databases), self._database_pager.current_token)
+            await self.load_more_databases()
+            if before == (len(self.databases), self._database_pager.current_token):
+                break
+        if not database_available():
+            raise ValueError("table is unavailable in the active Glue source")
+        if self._selected_database_name != ref.database_name:
+            await self.select_database(ref.database_name)
+        while not any(row.ref == ref for row in self.tables) and self.has_more_tables:
+            before = (len(self.tables), self._table_pager.current_token)
+            await self.load_more_tables()
+            if before == (len(self.tables), self._table_pager.current_token):
+                break
+        if not any(row.ref == ref for row in self.tables):
+            raise ValueError("table is unavailable in the active Glue source")
+        await self.select_table(ref.table_name)
+        if self._selected_table_name != ref.table_name:
+            raise ValueError("table is unavailable in the active Glue source")
+
+    def query_in_athena(self, snapshot_id: int | None = None) -> bool:
+        """Publish the selected table identity for Athena composition."""
+        if self._disposed or self._selected_table_name is None:
+            return False
+        summary = next(
+            (row for row in self.tables if row.ref.table_name == self._selected_table_name),
+            None,
+        )
+        if summary is None:
+            return False
+        self._hub.send(
+            OpenAthenaTableRequest(
+                table_ref=summary.ref,
+                snapshot_id=snapshot_id,
+            )
+        )
+        return True
 
     async def load_more_partitions(self) -> None:
         if not self.has_more_partitions:

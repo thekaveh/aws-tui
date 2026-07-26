@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from vmx.messages.protocols import Message
 
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.messages import (
@@ -12,6 +13,8 @@ from aws_tui.vm.messages import (
     ConnectionChangedMessage,
     FocusChangedMessage,
     KeymapChangedMessage,
+    OpenAthenaTableRequest,
+    OpenGlueTableRequest,
     OpenS3LocationRequest,
     ThemeChangedMessage,
     TransferProgressMessage,
@@ -52,6 +55,25 @@ def _connection() -> Connection:
             connection_name="prod-west",
             region="us-west-2",
             uri="s3://lake/events/",
+        ),
+        lambda: OpenAthenaTableRequest(
+            table_ref=TableRef(
+                "AwsDataCatalog",
+                "analytics",
+                "events",
+                "prod-west",
+                "us-west-2",
+            ),
+            snapshot_id=42,
+        ),
+        lambda: OpenGlueTableRequest(
+            table_ref=TableRef(
+                "AwsDataCatalog",
+                "analytics",
+                "events",
+                "prod-west",
+                "us-west-2",
+            )
         ),
     ],
 )
@@ -129,6 +151,55 @@ def test_open_s3_request_carries_source_identity() -> None:
     assert request.reveal_object is True
     assert request.sender_name == "service_navigation"
     assert request.sender_object is request
+
+
+def test_cross_service_messages_preserve_table_security_context() -> None:
+    table = TableRef(
+        "AwsDataCatalog",
+        "analytics",
+        "events",
+        "prod-west",
+        "us-west-2",
+    )
+
+    athena = OpenAthenaTableRequest(table_ref=table, snapshot_id=42)
+    glue = OpenGlueTableRequest(table_ref=table)
+
+    assert athena.table_ref == glue.table_ref == table
+    assert athena.snapshot_id == 42
+    assert athena.sender_name == glue.sender_name == "service_navigation"
+    assert athena.sender_object is athena
+    assert glue.sender_object is glue
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        OpenAthenaTableRequest(
+            TableRef(
+                "AwsDataCatalog",
+                "analytics",
+                "events",
+                "prod-west",
+                "us-west-2",
+            )
+        ),
+        OpenGlueTableRequest(
+            TableRef(
+                "AwsDataCatalog",
+                "analytics",
+                "events",
+                "prod-west",
+                "us-west-2",
+            )
+        ),
+    ],
+)
+def test_cross_service_messages_are_frozen_and_slot_backed(message: object) -> None:
+    with pytest.raises((AttributeError, TypeError)):
+        message.table_ref = None  # type: ignore[attr-defined]
+    with pytest.raises((AttributeError, TypeError)):
+        message.unplanned_field = "value"  # type: ignore[attr-defined]
 
 
 def test_messages_are_immutable() -> None:
