@@ -271,7 +271,7 @@ def _glue_error_message(code: str) -> str:
 
 
 def _client_error_indicators(exc: botocore.exceptions.ClientError) -> tuple[str, bool]:
-    response = _safe_client_error_mapping(exc.response)
+    response = _safe_client_error_mapping(_safe_attribute(exc, "response"))
     if response is None:
         return "", False
     error = _safe_client_error_mapping(_safe_mapping_value(response, "Error"))
@@ -305,14 +305,18 @@ def _safe_mapping_string(mapping: Mapping[object, object], key: str) -> str | No
     return value if type(value) is str else None
 
 
+def _safe_attribute(value: object, attribute: str) -> object | None:
+    try:
+        return cast(object, getattr(value, attribute))
+    except Exception:
+        return None
+
+
 def _safe_client_error_string_attribute(
     exc: botocore.exceptions.ClientError,
     attribute: str,
 ) -> str | None:
-    try:
-        value = getattr(exc, attribute)
-    except Exception:
-        return None
+    value = _safe_attribute(exc, attribute)
     return value if type(value) is str else None
 
 

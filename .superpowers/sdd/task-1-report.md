@@ -479,3 +479,82 @@ All listed final verification commands exited zero.
 - `ClientError` code and Lake Formation detection intentionally require plain
   string values. Malformed response values fall back to the generic safe Glue
   failure rather than being coerced or formatted.
+
+## Final Iceberg Task 1 ClientError Attribute Privacy Follow-up (2026-07-26)
+
+### Status
+
+Closed the final `ClientError.response` attribute-access privacy bypass.
+
+- `_client_error_indicators()` now reads `response` through an exception-safe
+  generic attribute helper before response mapping validation. The same helper
+  backs the existing `operation_name` string reader.
+- A hostile `ClientError.response` descriptor that raises either
+  `AssertionError` or `RuntimeError` now becomes the stable generic
+  `ProviderError("Glue request failed")` without retaining raw `ClientError`
+  context or the hostile exception.
+- The regression covers an ordinary public method, crawler STS caller identity,
+  and crawler metrics. Each case uses the exception graph, traceback-local
+  identity checks, `TracebackException(capture_locals=True)`, formatted
+  traceback, and a real `CrashDump` oracle.
+- Existing valid and malformed `ClientError` mappings, residual `BotoCoreError`
+  fallback behavior, and unrelated non-botocore exception identity remain
+  covered by the focused suite.
+
+### Changed Files
+
+- `src/aws_tui/domain/glue.py`
+- `tests/unit/domain/test_glue.py`
+- `.superpowers/sdd/task-1-report.md`
+
+`progress.md` was not edited.
+
+### TDD Evidence
+
+The hostile-descriptor test was added before the mapper change:
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q -k hostile_client_error_response_attribute
+6 failed, 105 deselected in 0.81s
+```
+
+Each failure escaped from the direct `exc.response` lookup, including both
+sentinel-bearing `AssertionError` and `RuntimeError` cases. After introducing
+the generic helper, the focused regression and retained mapper coverage passed:
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q -k 'hostile_client_error_response_attribute or malformed_client_error_shapes or residual_botocore_errors or map_glue_error_uses_canonical_provider_errors or unrelated_programming_error'
+32 passed, 79 deselected in 0.38s
+```
+
+### Final Verification
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q -k 'privacy or hostile_client_error_response_attribute or malformed_client_error_shapes or residual_botocore_errors'
+18 passed, 93 deselected in 0.45s
+
+$ uv run pytest tests/unit/domain/test_glue.py -q
+111 passed in 0.90s
+
+$ uv run pytest tests/unit/domain/test_data_catalog.py tests/unit/domain/test_iceberg.py tests/unit/domain/test_glue.py -q
+166 passed in 0.88s
+
+$ uv run pytest tests/unit/domain -q
+672 passed in 15.70s
+
+$ uv run mypy
+Success: no issues found in 151 source files
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+383 files already formatted
+
+$ ./scripts/check-layers.sh
+layer rules clean
+
+$ git diff --check
+```
+
+All listed verification commands exited zero.

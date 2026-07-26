@@ -81,6 +81,29 @@ class _UnformattableSecretValue:
         return _PROVIDER_VALUE_SECRET
 
 
+class _HostileResponseClientError(botocore.exceptions.ClientError):
+    def __init__(self, operation: str, response_error: Exception) -> None:
+        self.response_error = response_error
+        super().__init__(
+            {
+                "Error": {
+                    "Code": "AccessDeniedException",
+                    "Message": _PROVIDER_MESSAGE_SECRET,
+                },
+                "ResponseMetadata": {"RequestId": _PROVIDER_RESPONSE_SECRET},
+            },
+            operation,
+        )
+
+    @property
+    def response(self) -> object:
+        raise self.response_error
+
+    @response.setter
+    def response(self, value: object) -> None:
+        del value
+
+
 def _connection(*, region: str = "us-east-1") -> Connection:
     return Connection(
         name="dev",
@@ -1220,6 +1243,16 @@ def _response_streaming_error() -> botocore.exceptions.ResponseStreamingError:
     return botocore.exceptions.ResponseStreamingError(error=_PROVIDER_VALUE_SECRET)
 
 
+def _hostile_response_client_error(
+    operation: str,
+    response_error_type: type[Exception],
+) -> _HostileResponseClientError:
+    return _HostileResponseClientError(
+        operation,
+        response_error_type(_PROVIDER_RESPONSE_SECRET),
+    )
+
+
 def _assert_mapped_error_has_no_raw_provider_references(
     error: ProviderError,
     *,
@@ -1465,6 +1498,51 @@ async def test_residual_botocore_errors_are_sanitized_at_public_and_crawler_boun
         crash_dir=tmp_path / f"residual-botocore-{supplement or 'public'}",
         secrets=(_PROVIDER_VALUE_SECRET,),
         raw_objects=(raw_error,),
+    )
+
+
+@pytest.mark.parametrize("response_error_type", [AssertionError, RuntimeError])
+@pytest.mark.parametrize(
+    ("client_method", "supplement"),
+    [
+        ("list_jobs_page", None),
+        ("get_crawler", "caller_identity"),
+        ("get_crawler", "metrics"),
+    ],
+)
+async def test_hostile_client_error_response_attribute_is_sanitized_at_public_and_crawler_boundaries(
+    client_method: str,
+    supplement: str | None,
+    response_error_type: type[Exception],
+    tmp_path: Path,
+) -> None:
+    client, glue, sts, _ = _client()
+    boto_method = "get_jobs"
+    if supplement is not None:
+        glue.get_crawler.return_value = {"Crawler": _crawler()}
+        sts.get_caller_identity.return_value = {
+            "Account": "123456789012",
+            "Arn": "arn:aws:iam::123456789012:user/dev",
+        }
+        glue.get_tags.return_value = {"Tags": {}}
+        glue.get_crawler_metrics.return_value = {"CrawlerMetricsList": []}
+        boto_method = (
+            "get_caller_identity" if supplement == "caller_identity" else "get_crawler_metrics"
+        )
+    raw_error = _hostile_response_client_error(boto_method, response_error_type)
+    target = sts if supplement == "caller_identity" else glue
+    getattr(target, boto_method).side_effect = raw_error
+
+    raised = await _capture_glue_provider_error(client, client_method)
+
+    assert type(raised) is ProviderError
+    assert str(raised) == "Glue request failed"
+    _assert_mapped_error_has_no_raw_provider_references(
+        raised,
+        crash_dir=tmp_path
+        / f"hostile-response-{supplement or 'public'}-{response_error_type.__name__}",
+        secrets=(_PROVIDER_MESSAGE_SECRET, _PROVIDER_RESPONSE_SECRET),
+        raw_objects=(raw_error, raw_error.response_error),
     )
 
 
