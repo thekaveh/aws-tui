@@ -852,6 +852,115 @@ async def test_page_snapshot_round_trip_restores_query_results_and_selections_wi
 
 
 @pytest.mark.asyncio
+async def test_page_snapshot_rejects_forged_cross_component_state_without_leaking(
+    tmp_path: Path,
+) -> None:
+    marker = "FORGED_SNAPSHOT_PAYLOAD_SECRET"
+
+    class SensitiveCell:
+        def __repr__(self) -> str:
+            return marker
+
+    source = make_page_vm(PageClient())
+    await source.setup()
+    source.query.set_sql("SELECT 'VALID_SNAPSHOT_SQL_SECRET'")
+    await source.query.execute()
+    snapshot = source.export_snapshot()
+    assert snapshot.query.execution_ref is not None
+
+    foreign_ref = replace(
+        snapshot.query.execution_ref,
+        execution_id=marker,
+        connection_name="other-profile",
+    )
+    foreign_results = replace(
+        snapshot.query.results,
+        execution_id=marker,
+    )
+    hostile_snapshots = (
+        replace(snapshot, query=replace(snapshot.query, execution_ref=foreign_ref)),
+        replace(snapshot, query=replace(snapshot.query, state=QueryState.RUNNING)),
+        replace(snapshot, query=replace(snapshot.query, results=foreign_results)),
+        replace(
+            snapshot,
+            query=replace(
+                snapshot.query,
+                results=replace(
+                    snapshot.query.results,
+                    rows=((marker, "too-wide"),),
+                ),
+            ),
+        ),
+        replace(
+            snapshot,
+            query=replace(
+                snapshot.query,
+                results=replace(
+                    snapshot.query.results,
+                    rows=((SensitiveCell(),),),  # type: ignore[arg-type]
+                ),
+            ),
+        ),
+        replace(
+            snapshot,
+            query=replace(
+                snapshot.query,
+                results=replace(
+                    snapshot.query.results,
+                    is_loading_more=True,
+                ),
+            ),
+        ),
+        replace(
+            snapshot,
+            query=replace(
+                snapshot.query,
+                execution_ref=None,
+            ),
+        ),
+        replace(
+            snapshot,
+            query=replace(
+                snapshot.query,
+                results=object(),  # type: ignore[arg-type]
+            ),
+        ),
+    )
+
+    for index, hostile in enumerate(hostile_snapshots):
+        destination = make_page_vm(PageClient())
+        await destination.setup()
+        destination.query.set_sql("UNCHANGED_DESTINATION_SQL")
+        before = (
+            destination.context,
+            destination.active_view,
+            destination.query.sql,
+            destination.query.execution_ref,
+            destination.results.execution_id,
+            destination.results.rows,
+        )
+
+        error_text, trace, crash = await _snapshot_failure_artifacts(
+            destination,
+            hostile,
+            tmp_path / f"crash-{index}",
+        )
+
+        assert error_text == "Athena snapshot is invalid"
+        assert (
+            destination.context,
+            destination.active_view,
+            destination.query.sql,
+            destination.query.execution_ref,
+            destination.results.execution_id,
+            destination.results.rows,
+        ) == before
+        for secret in (marker, "VALID_SNAPSHOT_SQL_SECRET"):
+            assert secret not in trace
+            assert secret not in crash
+
+
+@pytest.mark.asyncio
 async def test_page_snapshot_restores_context_from_later_discovery_pages() -> None:
     class PagedContextClient(PageClient):
         def __init__(self) -> None:

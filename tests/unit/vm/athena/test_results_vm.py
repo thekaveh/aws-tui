@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import replace
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
@@ -132,7 +133,7 @@ async def test_results_snapshot_restores_loaded_page_without_provider_fetch() ->
 
 
 @pytest.mark.asyncio
-async def test_results_snapshot_preserves_visible_loading_and_error_state() -> None:
+async def test_results_snapshot_rejects_unowned_loading_state() -> None:
     snapshot = AthenaResultsSnapshot(
         execution_id="RESULT_EXECUTION_SECRET",
         columns=(_VALUE,),
@@ -145,11 +146,13 @@ async def test_results_snapshot_preserves_visible_loading_and_error_state() -> N
     destination_client = ResultClient({})
     destination = make_results_vm(destination_client)
 
-    await destination.restore_snapshot(snapshot)
+    with pytest.raises(ValueError, match=r"^Athena results snapshot is invalid$"):
+        await destination.restore_snapshot(snapshot)
 
-    assert destination.state is PaneState.ERROR
-    assert destination.error_text == "RESULT_ERROR_SECRET"
-    assert destination.is_loading_more
+    assert destination.execution_id is None
+    assert destination.rows == ()
+    assert destination.state is PaneState.EMPTY
+    assert not destination.is_loading_more
     assert destination_client.calls == []
     rendered = repr(snapshot)
     for marker in (
@@ -159,6 +162,106 @@ async def test_results_snapshot_preserves_visible_loading_and_error_state() -> N
         "RESULT_ERROR_SECRET",
     ):
         assert marker not in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        AthenaResultsSnapshot(
+            execution_id="q-1",
+            columns=(_ID,),
+            rows=(("one", "too-wide"),),
+            next_token=None,
+            state=PaneState.IDLE,
+            error_text=None,
+            is_loading_more=False,
+        ),
+        AthenaResultsSnapshot(
+            execution_id="q-1",
+            columns=(_ID,),
+            rows=((1,),),  # type: ignore[arg-type]
+            next_token=None,
+            state=PaneState.IDLE,
+            error_text=None,
+            is_loading_more=False,
+        ),
+        AthenaResultsSnapshot(
+            execution_id=None,
+            columns=(),
+            rows=(),
+            next_token="next",
+            state=PaneState.EMPTY,
+            error_text=None,
+            is_loading_more=False,
+        ),
+        AthenaResultsSnapshot(
+            execution_id="q-1",
+            columns=(_ID,),
+            rows=(("one",),),
+            next_token=None,
+            state=PaneState.LOADING,
+            error_text=None,
+            is_loading_more=False,
+        ),
+        AthenaResultsSnapshot(
+            execution_id="q-1",
+            columns=(_ID,),
+            rows=(("one",),),
+            next_token=None,
+            state=PaneState.ERROR,
+            error_text=None,
+            is_loading_more=False,
+        ),
+        AthenaResultsSnapshot(
+            execution_id="q-1",
+            columns=(_ID,),
+            rows=(("one",),),
+            next_token=None,
+            state=PaneState.IDLE,
+            error_text="unexpected",
+            is_loading_more=False,
+        ),
+    ],
+)
+async def test_results_snapshot_rejects_structurally_incoherent_data(
+    snapshot: AthenaResultsSnapshot,
+) -> None:
+    destination = make_results_vm(ResultClient({}))
+
+    with pytest.raises(ValueError, match=r"^Athena results snapshot is invalid$"):
+        await destination.restore_snapshot(snapshot)
+
+    assert destination.execution_id is None
+    assert destination.rows == ()
+
+
+@pytest.mark.asyncio
+async def test_results_snapshot_preserves_duplicate_column_names() -> None:
+    duplicate = replace(_VALUE, name="duplicate")
+    snapshot = AthenaResultsSnapshot(
+        execution_id="q-duplicate",
+        columns=(duplicate, duplicate),
+        rows=(("left", "right"),),
+        next_token=None,
+        state=PaneState.IDLE,
+        error_text=None,
+        is_loading_more=False,
+    )
+    destination = make_results_vm(ResultClient({}))
+
+    await destination.restore_snapshot(snapshot)
+
+    assert destination.columns == (duplicate, duplicate)
+    assert destination.rows == (("left", "right"),)
+
+
+def test_results_snapshot_export_rejects_active_page_load() -> None:
+    vm = make_results_vm(ResultClient({}))
+    vm._is_loading_more = True  # type: ignore[attr-defined]
+
+    with pytest.raises(ValueError, match=r"^Athena results are busy$"):
+        vm.export_snapshot()
 
 
 @pytest.mark.asyncio

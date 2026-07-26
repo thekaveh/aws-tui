@@ -333,7 +333,9 @@ class AthenaPageVM:
         await self._setup_view(view, self._context_generation)
 
     def export_snapshot(self) -> AthenaPageSnapshot:
-        return AthenaPageSnapshot(
+        if not self._is_alive():
+            raise ValueError("Athena page is unavailable")
+        snapshot = AthenaPageSnapshot(
             context=self._context,
             active_view=self._active_view,
             query=self.query.export_snapshot(),
@@ -341,17 +343,23 @@ class AthenaPageVM:
             saved_kind=self.saved.selected_kind,
             saved_query_id=self.saved.selected_query_id,
         )
+        if not self.snapshot_is_valid(snapshot):
+            raise ValueError("Athena snapshot is invalid")
+        return snapshot
 
     async def restore_snapshot(self, snapshot: AthenaPageSnapshot) -> None:
         if not self._is_alive():
             raise ValueError("Athena page is unavailable")
+        if type(snapshot) is not AthenaPageSnapshot:
+            raise ValueError("Athena snapshot is invalid")
         if (
-            not isinstance(snapshot, AthenaPageSnapshot)
+            type(snapshot.context) is not QueryContext
             or snapshot.context.connection_name != self._connection.name
             or snapshot.context.region != self._connection.region
-            or snapshot.query.context != snapshot.context
         ):
             raise ValueError("Athena snapshot does not match the active source")
+        if not self.snapshot_is_valid(snapshot):
+            raise ValueError("Athena snapshot is invalid")
 
         for key, value in (
             ("workgroup", snapshot.context.workgroup),
@@ -372,6 +380,32 @@ class AthenaPageVM:
         await self._restore_snapshot_history_selection(snapshot)
         await self._restore_snapshot_saved_selection(snapshot)
         await self.select_view(snapshot.active_view)
+
+    @staticmethod
+    def snapshot_is_valid(snapshot: object) -> bool:
+        return not (
+            type(snapshot) is not AthenaPageSnapshot
+            or type(snapshot.context) is not QueryContext
+            or type(snapshot.active_view) is not str
+            or snapshot.active_view not in _VIEWS
+            or not all(
+                type(part) is str
+                for part in (
+                    snapshot.context.connection_name,
+                    snapshot.context.region,
+                    snapshot.context.workgroup,
+                    snapshot.context.catalog,
+                    snapshot.context.database,
+                )
+            )
+            or not AthenaQueryVM.snapshot_is_valid(
+                snapshot.query,
+                snapshot.context,
+            )
+            or not _optional_exact_string(snapshot.history_execution_id)
+            or (snapshot.saved_kind is not None and type(snapshot.saved_kind) is not SavedQueryKind)
+            or not _optional_exact_string(snapshot.saved_query_id)
+        )
 
     async def _restore_snapshot_context(self, snapshot: AthenaPageSnapshot) -> None:
         if self._context.workgroup != snapshot.context.workgroup:
@@ -1373,6 +1407,10 @@ class AthenaPageVM:
             )
         )
         self._on_property_changed.on_next(property_name)
+
+
+def _optional_exact_string(value: object) -> bool:
+    return value is None or type(value) is str
 
 
 __all__ = ["AthenaPageSnapshot", "AthenaPageVM", "AthenaView"]

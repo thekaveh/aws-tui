@@ -465,6 +465,7 @@ class AwsTuiApp(App[None]):
         self._table_navigation_generation = 0
         self._service_navigation_owner: tuple[str, int] | None = None
         self._table_navigation_lock = asyncio.Lock()
+        self._service_navigation_lock = asyncio.Lock()
         self._table_navigation_tasks: set[asyncio.Task[None]] = set()
         self._table_handoff_rollbacks: set[asyncio.Task[bool]] = set()
         self._service_navigation_suppressed_selection: (
@@ -2172,7 +2173,13 @@ class AwsTuiApp(App[None]):
         services rebuild under the next supported AWS connection.
         """
         self.record_action("app.swap_source")
-        self._supersede_table_navigation()
+        generation = self._supersede_table_navigation()
+        async with self._service_navigation_lock:
+            if not self._service_navigation_is_owned_by("external", generation):
+                return
+            await self._swap_source_transaction()
+
+    async def _swap_source_transaction(self) -> None:
         ctx = self._app_ctx
         dual = self._dual_pane()
         if dual is None:
@@ -2712,8 +2719,12 @@ class AwsTuiApp(App[None]):
         if self._service_navigation_closed:
             return
         if isinstance(msg, OpenS3LocationRequest):
+            generation = self._advance_service_navigation(
+                "external",
+                cancel_table_tasks=True,
+            )
             self.run_worker(
-                self._open_s3_location_request(msg),
+                self._open_s3_location_request(msg, generation),
                 exclusive=True,
                 group="content-mount",
             )
@@ -2748,11 +2759,18 @@ class AwsTuiApp(App[None]):
                     task.cancel()
         return generation
 
-    def _supersede_table_navigation(self) -> None:
-        self._advance_service_navigation(
+    def _supersede_table_navigation(self) -> int:
+        return self._advance_service_navigation(
             "external",
             cancel_table_tasks=True,
         )
+
+    def _service_navigation_is_owned_by(
+        self,
+        owner: str,
+        generation: int,
+    ) -> bool:
+        return self._service_navigation_owner == (owner, generation)
 
     def _table_handoff_should_restore(self, generation: int) -> bool:
         owner = self._service_navigation_owner
@@ -2809,7 +2827,20 @@ class AwsTuiApp(App[None]):
             )
             return
 
-        snapshot = self._capture_table_handoff_snapshot()
+        try:
+            snapshot = self._capture_table_handoff_snapshot()
+        except ValueError:
+            ctx.log_sink.info(
+                "service_navigation.table_handoff_deferred",
+                destination=("athena" if isinstance(request, OpenAthenaTableRequest) else "glue"),
+            )
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="finish the active Athena operation before switching services",
+                toast_id="table-handoff-athena-busy",
+            )
+            return
         destination = "athena" if isinstance(request, OpenAthenaTableRequest) else "glue"
         mutation_started = False
         try:
@@ -2979,6 +3010,17 @@ class AwsTuiApp(App[None]):
         snapshot: _TableHandoffSnapshot,
         generation: int,
     ) -> bool:
+        async with self._service_navigation_lock:
+            return await self._restore_table_handoff_transaction(
+                snapshot,
+                generation,
+            )
+
+    async def _restore_table_handoff_transaction(
+        self,
+        snapshot: _TableHandoffSnapshot,
+        generation: int,
+    ) -> bool:
         if not self._table_handoff_should_restore(generation):
             return False
         if (
@@ -3037,11 +3079,25 @@ class AwsTuiApp(App[None]):
         await self.wait_for_refresh()
         return True
 
-    async def _open_s3_location_request(self, request: OpenS3LocationRequest) -> None:
+    async def _open_s3_location_request(
+        self,
+        request: OpenS3LocationRequest,
+        generation: int | None = None,
+    ) -> None:
         """Resolve and mount an S3 request without changing source identity."""
         if self._service_navigation_closed:
             return
-        self._supersede_table_navigation()
+        if generation is None:
+            generation = self._supersede_table_navigation()
+        async with self._service_navigation_lock:
+            if not self._service_navigation_is_owned_by("external", generation):
+                return
+            await self._open_s3_location_request_transaction(request)
+
+    async def _open_s3_location_request_transaction(
+        self,
+        request: OpenS3LocationRequest,
+    ) -> None:
         ctx = self._app_ctx
         try:
             connection = ctx.connection_resolver.resolve(request.connection_name)
@@ -3473,7 +3529,7 @@ class AwsTuiApp(App[None]):
         ):
             self._service_navigation_suppressed_selection = None
             return
-        self._supersede_table_navigation()
+        generation = self._supersede_table_navigation()
         # Skip the seed selected_id change that on_mount fires while
         # priming the initial service. on_mount drives that mount
         # synchronously via _mount_initial_service_view; if we ALSO
@@ -3485,18 +3541,11 @@ class AwsTuiApp(App[None]):
                 self._pending_boot_nav_selection = None
                 self._boot_in_flight = False
                 self.workers.cancel_group(self, "content-mount")
-                if selected == SETTINGS_NAV_ID:
-                    self.run_worker(
-                        self._mount_settings_view(),
-                        exclusive=True,
-                        group="content-mount",
-                    )
-                else:
-                    self.run_worker(
-                        self._mount_service_view(selected),
-                        exclusive=True,
-                        group="content-mount",
-                    )
+                self.run_worker(
+                    self._mount_external_navigation(selected, generation),
+                    exclusive=True,
+                    group="content-mount",
+                )
             return
         # Serialize the two mount workers via an exclusive worker
         # group so a rapid Settings → S3 → Settings toggle can't race
@@ -3512,13 +3561,43 @@ class AwsTuiApp(App[None]):
         # Textual cancel any in-flight worker in the group before
         # starting the new one.
         if selected == SETTINGS_NAV_ID:
-            self.run_worker(self._mount_settings_view(), exclusive=True, group="content-mount")
+            self.run_worker(
+                self._mount_external_navigation(selected, generation),
+                exclusive=True,
+                group="content-mount",
+            )
         else:
             # Re-use the S3 content if it's already hosted; switch_service
             # is idempotent on the same service_id.
             self.run_worker(
-                self._mount_service_view(selected), exclusive=True, group="content-mount"
+                self._mount_external_navigation(selected, generation),
+                exclusive=True,
+                group="content-mount",
             )
+
+    async def _mount_external_navigation(
+        self,
+        selected: str,
+        generation: int,
+    ) -> None:
+        async with self._service_navigation_lock:
+            if self._service_navigation_closed or not self._service_navigation_is_owned_by(
+                "external", generation
+            ):
+                return
+            menu = self._app_ctx.root_vm.services_menu
+            if menu.selected_id != selected:
+                suppression = (asyncio.current_task(), selected)
+                self._service_navigation_suppressed_selection = suppression
+                try:
+                    menu.switch_service_command.execute(selected)
+                finally:
+                    if self._service_navigation_suppressed_selection is suppression:
+                        self._service_navigation_suppressed_selection = None
+            if selected == SETTINGS_NAV_ID:
+                await self._mount_settings_view()
+            else:
+                await self._mount_service_view(selected)
 
     async def _mount_settings_view(self) -> None:
         """Swap the content host to show SettingsView.

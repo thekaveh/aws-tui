@@ -871,3 +871,130 @@ warning promoted to an error exposed its existing suite-order resource warning
 The brand-banner test passes in isolation, the affected Glue/Athena UI tests
 pass under warnings-as-errors in the 516-test contract above, and the full UI
 suite passes under its normal configured warning policy.
+
+## Final Task 3 Snapshot And Rollback Corrections: 2026-07-26
+
+### Root Cause
+
+The final review found three remaining consistency gaps:
+
+1. Rollback ownership checks and host mutation were separate. A rollback could
+   pass its ownership check, pause in switch or mount, and overwrite a newer
+   S3, Settings, or service selection after that user navigation completed.
+2. Athena snapshots represented visible state but not operation ownership.
+   Exporting during submission, execution, cancellation, or result pagination
+   could therefore recreate `QUEUED`, `RUNNING`, or loading state without the
+   task that owned it.
+3. Snapshot restore trusted nested records. Cross-execution results, malformed
+   rows, invalid cell types, impossible token/loading/error combinations, and
+   nested non-snapshot objects could be installed before rejection.
+
+### TDD Evidence
+
+The first snapshot RED run produced the expected failures:
+
+```text
+15 failed, 4 passed, 103 deselected
+```
+
+The active-operation app probe switched from Athena to Glue instead of failing
+before mutation. The rollback probe ended with `athena` selected after a newer
+S3 selection and also reproduced concurrent pane mutation. Both probes failed
+consistently through the repository's two configured reruns.
+
+After the implementation:
+
+```text
+19 focused snapshot tests passed
+11 active-preflight and rollback race tests passed
+```
+
+The new race matrix pauses rollback at switch, mount, and Athena state restore,
+then selects S3, Settings, or EMR Serverless. All nine combinations assert that
+the newer user destination wins and that navigation and rollback task sets are
+empty. Two additional cases prove query execution and result load-more preflight
+without any service switch.
+
+### Implementation
+
+- A shared service-navigation transaction lock now owns rollback, ordinary
+  menu navigation, Settings/service mounting, S3 handoffs, and source swaps.
+  External navigation claims its generation synchronously, then performs host
+  mutation under the lock. A rollback that was already in progress completes
+  first; the waiting newer user transaction then reasserts and mounts its exact
+  destination. A rollback starting later sees external ownership and performs
+  no mutation. The existing table transaction lock remains responsible for
+  table-to-table stable-base ordering.
+- Athena page capture fails before handoff mutation while query submission,
+  execution, cancellation, initial result loading, or continuation loading has
+  an owner. The app catches that stable `ValueError`, records no provider
+  payload, leaves the current VM and host unchanged, and presents a bounded
+  wait-for-completion toast.
+- Page, query, and result snapshots now require their exact frozen record
+  types. Validation runs before selection, context, pager, query, or host state
+  changes. It checks context and execution identity, terminal query state,
+  result execution identity, exact tuple structure, row widths, string/null
+  cells, continuation/loading/state/error coherence, and nested domain value
+  types. `QUEUED`, `RUNNING`, `LOADING`, and ownerless load-more snapshots are
+  rejected.
+- Legitimate duplicate Athena column names remain valid and round-trip exactly.
+  Terminal snapshots restore without query execution or result fetching.
+  Snapshot records continue to exclude SQL, execution IDs, rows, tokens,
+  provider detail, and error payloads from `repr`.
+- Forged nested payload tests render `TracebackException(capture_locals=True)`
+  and real `CrashDump` files. Stable rejection text is preserved and neither
+  the malicious marker nor valid snapshot SQL appears in either artifact.
+
+### Coverage And Verification
+
+This correction adds 26 collected test cases: 15 domain/VM snapshot cases and
+11 integration preflight/race cases. Focused coverage over the three modified
+Athena VMs is:
+
+```text
+AthenaPageVM     87%
+AthenaQueryVM    88%
+AthenaResultsVM  80%
+Aggregate        86%
+165 passed in 79.58s
+```
+
+Affected and broad verification:
+
+```text
+122 Athena query/results/page VM tests passed
+43 Glue/Athena navigation integration tests passed
+40 Athena-to-S3 handoff tests passed
+18 Glue-to-S3 handoff tests passed
+21 Settings navigation tests passed
+1513 domain and VM tests passed
+119 privacy/crash tests passed with runtime/unraisable warnings as errors
+357 UI tests passed
+219 integration tests passed, 9 deselected, in 302.61s
+```
+
+Static, architecture, packaging, and process gates:
+
+```text
+uv run mypy src/aws_tui
+Success: no issues found in 152 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+386 files already formatted
+
+scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+clean
+
+uv build --no-build-isolation
+Successfully built aws_tui-0.8.0.tar.gz and
+aws_tui-0.8.0-py3-none-any.whl
+```
+
+No pytest, `uv run pytest`, or retained navigation process remained after the
+bounded verification runs. `.superpowers/sdd/progress.md` was not modified.

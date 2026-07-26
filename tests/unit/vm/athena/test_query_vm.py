@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -1115,6 +1116,50 @@ async def test_context_replacement_installs_locally_when_old_stop_fails() -> Non
 
     assert fake.stop_calls == ["q-app-1", "q-app-1"]
     vm.dispose()
+
+
+@pytest.mark.parametrize(
+    "active_attribute",
+    [
+        "_busy",
+        "_is_submitting",
+        "_owns_active_query",
+        "_lifecycle_transition",
+    ],
+)
+def test_query_snapshot_export_rejects_active_lifecycle(
+    active_attribute: str,
+) -> None:
+    vm = make_query_vm(InMemoryAthena())
+    setattr(vm, active_attribute, True)
+
+    with pytest.raises(ValueError, match=r"^Athena query is busy$"):
+        vm.export_snapshot()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active_state", [QueryState.QUEUED, QueryState.RUNNING])
+async def test_query_snapshot_restore_rejects_unowned_active_state(
+    active_state: QueryState,
+) -> None:
+    vm = make_query_vm(InMemoryAthena())
+    snapshot = vm.export_snapshot()
+    hostile = replace(
+        snapshot,
+        execution_ref=QueryExecutionRef(
+            "q-active",
+            _CONTEXT.connection_name,
+            _CONTEXT.region,
+            _CONTEXT.workgroup,
+        ),
+        state=active_state,
+    )
+
+    with pytest.raises(ValueError, match=r"^Athena query snapshot is invalid$"):
+        await vm.restore_snapshot(hostile)
+
+    assert vm.execution_ref is None
+    assert vm.state is None
 
 
 def test_commands_follow_vmx_gating_and_disposal() -> None:

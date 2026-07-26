@@ -32,6 +32,15 @@ from aws_tui.vm.messages import OpenS3LocationRequest
 
 _RESULTS_ERROR = "Athena results request failed"
 _COLUMN_ERROR = "Athena returned inconsistent result columns"
+_SNAPSHOT_ERROR = "Athena results snapshot is invalid"
+_SNAPSHOT_ERROR_STATES = frozenset(
+    {
+        PaneState.AUTH_REQUIRED,
+        PaneState.FORBIDDEN,
+        PaneState.UNREACHABLE,
+        PaneState.ERROR,
+    }
+)
 
 ResultRow = tuple[str | None, ...]
 
@@ -210,7 +219,11 @@ class AthenaResultsVM:
         await self._worker.load_more_command.execute_async()
 
     def export_snapshot(self) -> AthenaResultsSnapshot:
-        return AthenaResultsSnapshot(
+        if self._disposed or self._shutdown_started:
+            raise ValueError("Athena results are unavailable")
+        if self._snapshot_export_is_busy():
+            raise ValueError("Athena results are busy")
+        snapshot = AthenaResultsSnapshot(
             execution_id=self._execution_id,
             columns=self._columns,
             rows=self.rows,
@@ -219,12 +232,15 @@ class AthenaResultsVM:
             error_text=self._error_text,
             is_loading_more=self._is_loading_more,
         )
+        if not self.snapshot_is_valid(snapshot):
+            raise ValueError(_SNAPSHOT_ERROR)
+        return snapshot
 
     async def restore_snapshot(self, snapshot: AthenaResultsSnapshot) -> None:
         if self._disposed or self._shutdown_started:
             raise ValueError("Athena results are unavailable")
-        if not isinstance(snapshot, AthenaResultsSnapshot):
-            raise ValueError("Athena results snapshot is invalid")
+        if not self.snapshot_is_valid(snapshot):
+            raise ValueError(_SNAPSHOT_ERROR)
         self._generation += 1
         generation = self._generation
         self._execution_id = snapshot.execution_id
@@ -247,6 +263,54 @@ class AthenaResultsVM:
         self._is_loading_more = snapshot.is_loading_more
         self._notify_all()
         self._notify("is_loading_more")
+
+    @staticmethod
+    def snapshot_is_valid(snapshot: object) -> bool:
+        if type(snapshot) is not AthenaResultsSnapshot:
+            return False
+        if (
+            type(snapshot.columns) is not tuple
+            or type(snapshot.rows) is not tuple
+            or type(snapshot.is_loading_more) is not bool
+            or snapshot.is_loading_more
+            or type(snapshot.state) is not PaneState
+            or snapshot.state is PaneState.LOADING
+            or not _optional_exact_string(snapshot.execution_id)
+            or not _optional_exact_string(snapshot.next_token)
+            or not _optional_exact_string(snapshot.error_text)
+            or not all(_valid_result_column(column) for column in snapshot.columns)
+            or not all(
+                type(row) is tuple
+                and len(row) == len(snapshot.columns)
+                and all(cell is None or type(cell) is str for cell in row)
+                for row in snapshot.rows
+            )
+        ):
+            return False
+        if snapshot.execution_id is None:
+            return (
+                not snapshot.columns
+                and not snapshot.rows
+                and snapshot.next_token is None
+                and snapshot.state is PaneState.EMPTY
+                and snapshot.error_text is None
+            )
+        if (snapshot.rows or snapshot.next_token is not None) and not snapshot.columns:
+            return False
+        if snapshot.state is PaneState.IDLE:
+            return bool(snapshot.rows) and snapshot.error_text is None
+        if snapshot.state is PaneState.EMPTY:
+            return not snapshot.rows and snapshot.error_text is None
+        if snapshot.state in _SNAPSHOT_ERROR_STATES:
+            return snapshot.error_text is not None and bool(snapshot.error_text)
+        return False
+
+    def _snapshot_export_is_busy(self) -> bool:
+        return (
+            self._is_loading_more
+            or self._state is PaneState.LOADING
+            or any(not task.done() for worker in self._workers for task in worker.tasks)
+        )
 
     async def open_s3_location(
         self,
@@ -545,4 +609,17 @@ def _execution_identity_belongs_to(
         and ref.region == detail.context.region
         and ref.workgroup == detail.context.workgroup
         and detail.context == expected
+    )
+
+
+def _optional_exact_string(value: object) -> bool:
+    return value is None or type(value) is str
+
+
+def _valid_result_column(value: object) -> bool:
+    return (
+        type(value) is ResultColumn
+        and type(value.name) is str
+        and type(value.type_name) is str
+        and type(value.nullable) is str
     )
