@@ -183,12 +183,13 @@ round-trip just to render the UI). Otherwise the picker shows the
 connection in `login needed` state — the `auth.authenticate` action is
 spec'd as `a` in
 [`docs/keybindings.md` connection/auth](docs/keybindings.md#116-connection-auth) but its
-runtime wiring is deferred to v0.9 (the `BindingResolver`
-work — see the `Deferred / v0.9 roadmap` block in `CHANGELOG.md`).
-Today, run `aws sso login --profile <name>` in your shell and
-relaunch. Non-SSO profiles are attempted directly through boto3; debug
-shared credentials, `credential_process`, env, or role-backed profiles
-with `aws sts get-caller-identity --profile <name>`.
+handler is deferred to v0.9. `BindingResolver` already installs handled
+overrides on the live keymap. Handlerless action IDs, including
+`auth.authenticate`, remain unbound. Today, run
+`aws sso login --profile <name>` in your shell and relaunch. Non-SSO
+profiles are attempted directly through boto3; debug shared credentials,
+`credential_process`, env, or role-backed profiles with
+`aws sts get-caller-identity --profile <name>`.
 
 If `aws s3 ls` works on your shell but `aws-tui` shows
 `access denied` on the left pane, the most common cause is that
@@ -220,7 +221,7 @@ Numbered hierarchically for navigation.
 
 1. **User-facing**
    1. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
-   2. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and the pending `[keybindings]` overlay contract.
+   2. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and shipped `[keybindings]` overlay behavior.
    3. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
    4. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to MinIO, switch theme on the fly, prepare keybinding overlays, resume after a crash).
    5. [Supported platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.

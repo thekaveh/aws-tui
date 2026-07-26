@@ -655,11 +655,17 @@ class AwsTuiApp(App[None]):
             self._raise_local_fallback_toast()
             self._chain_resolved_to_local = True
             self._chain_initial_conn = initial_conn
-            await self._mount_local_only_dual_pane(
+            mounted = await self._mount_local_only_dual_pane(
                 initial_conn=initial_conn,
                 reason="chain-exhausted",
             )
-            ctx.log_sink.info("app.boot_chain.local_fallback", initial=initial_conn.name)
+            if mounted:
+                ctx.log_sink.info("app.boot_chain.local_fallback", initial=initial_conn.name)
+            else:
+                ctx.log_sink.error(
+                    "app.boot_chain.local_fallback_failed",
+                    initial=initial_conn.name,
+                )
         finally:
             self._boot_in_flight = False
             selected = self._pending_boot_nav_selection
@@ -856,7 +862,12 @@ class AwsTuiApp(App[None]):
             "error": "errored",
         }.get(outcome, outcome)
 
-    async def _mount_local_only_dual_pane(self, *, initial_conn: Connection, reason: str) -> None:
+    async def _mount_local_only_dual_pane(
+        self,
+        *,
+        initial_conn: Connection,
+        reason: str,
+    ) -> bool:
         """Mount a DualPane with ``LocalFS`` on BOTH panes, bypassing
         ``S3Service.build_vm`` so we never construct an S3FS provider
         that would block 15s on boto3.
@@ -911,7 +922,7 @@ class AwsTuiApp(App[None]):
             # Shouldn't happen — S3Service always has a journal — but
             # bail cleanly if it does.
             ctx.log_sink.error("app.local_only_mount.missing_journal")
-            return
+            return False
         dual = DualPaneVM(
             left=left,
             right=right,
@@ -943,7 +954,7 @@ class AwsTuiApp(App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
-            return
+            return False
         # Mount the widget.
         try:
             host = self.query_one("#content-host", Container)
@@ -962,6 +973,7 @@ class AwsTuiApp(App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            return False
 
         # Recovery-hint toast. Originally sticky so the user could read
         # the recovery command at their own pace; the user reported the
@@ -1002,6 +1014,7 @@ class AwsTuiApp(App[None]):
             kind=initial_conn.kind,
             name=initial_conn.name,
         )
+        return True
 
     # ── on_mount helpers ───────────────────────────────────────────────────
 
@@ -2543,6 +2556,10 @@ class AwsTuiApp(App[None]):
             )
             return
 
+        prior_connection = ctx.root_vm.active_connection
+        prior_auth_state = ctx.root_vm.active_auth_state
+        prior_service_id = ctx.root_vm.content_host.current_id
+
         try:
             auth_state = ctx.aws_session.probe_token(connection).state
         except Exception as exc:
@@ -2555,67 +2572,132 @@ class AwsTuiApp(App[None]):
 
         try:
             self._service_navigation_switching = True
-            try:
-                await ctx.root_vm.switch_connection_and_service(
-                    connection,
-                    auth_state,
-                    "s3",
-                )
-            finally:
-                self._service_navigation_switching = False
-
-            if not await self._mount_service_view("s3"):
-                self._raise_s3_handoff_failure(connection=connection, stage="mount")
-                return
-
-            dual = self._dual_pane()
-            if dual is None:
-                self._raise_s3_handoff_failure(connection=connection, stage="mount")
-                return
-
-            pane = dual.left if request.preferred_pane == "left" else dual.right
-            connection_key = (connection.kind, connection.name)
-            if pane.current_connection_key != connection_key:
-                try:
-                    await self._rebind_pane_to_connection(pane, connection)
-                except Exception as exc:
-                    self._raise_s3_handoff_failure(
-                        connection=connection,
-                        stage="bind",
-                        error=exc,
-                    )
-                    return
-
-            from aws_tui.domain.filesystem import PathRef
-
-            try:
-                await pane.navigate_to(PathRef.from_posix(parsed.netloc + parsed.path))
-            except Exception as exc:
-                self._raise_s3_handoff_failure(
-                    connection=connection,
-                    stage="navigation",
-                    error=exc,
-                )
-                return
-
-            focused = FocusedPane.LEFT if request.preferred_pane == "left" else FocusedPane.RIGHT
-            slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
-            try:
-                dual.set_focused(focused)
-                ctx.focus_coordinator.set_focused_slot(slot)
-                self._project_focus_slot(slot)
-            except Exception as exc:
-                self._raise_s3_handoff_failure(
-                    connection=connection,
-                    stage="focus",
-                    error=exc,
-                )
+            await ctx.root_vm.switch_connection_and_service(
+                connection,
+                auth_state,
+                "s3",
+            )
         except Exception as exc:
+            await self._restore_service_after_s3_handoff_failure(
+                connection=prior_connection,
+                auth_state=prior_auth_state,
+                service_id=prior_service_id,
+            )
             self._raise_s3_handoff_failure(
                 connection=connection,
                 stage="mount",
                 error=exc,
             )
+            return
+        finally:
+            self._service_navigation_switching = False
+
+        if not await self._mount_service_view(
+            "s3",
+            required_connection=connection,
+        ):
+            await self._restore_service_after_s3_handoff_failure(
+                connection=prior_connection,
+                auth_state=prior_auth_state,
+                service_id=prior_service_id,
+            )
+            self._raise_s3_handoff_failure(connection=connection, stage="mount")
+            return
+
+        dual = self._dual_pane()
+        if dual is None:
+            await self._restore_service_after_s3_handoff_failure(
+                connection=prior_connection,
+                auth_state=prior_auth_state,
+                service_id=prior_service_id,
+            )
+            self._raise_s3_handoff_failure(connection=connection, stage="mount")
+            return
+
+        pane = dual.left if request.preferred_pane == "left" else dual.right
+        connection_key = (connection.kind, connection.name)
+        if pane.current_connection_key != connection_key:
+            try:
+                await self._rebind_pane_to_connection(pane, connection)
+            except Exception as exc:
+                self._raise_s3_handoff_failure(
+                    connection=connection,
+                    stage="bind",
+                    error=exc,
+                )
+                return
+
+        from aws_tui.domain.filesystem import PathRef
+
+        try:
+            await pane.navigate_to(PathRef.from_posix(parsed.netloc + parsed.path))
+        except Exception as exc:
+            self._raise_s3_handoff_failure(
+                connection=connection,
+                stage="navigation",
+                error=exc,
+            )
+            return
+
+        focused = FocusedPane.LEFT if request.preferred_pane == "left" else FocusedPane.RIGHT
+        slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
+        try:
+            dual.set_focused(focused)
+            ctx.focus_coordinator.set_focused_slot(slot)
+            self._project_focus_slot(slot)
+        except Exception as exc:
+            self._raise_s3_handoff_failure(
+                connection=connection,
+                stage="focus",
+                error=exc,
+            )
+
+    async def _restore_service_after_s3_handoff_failure(
+        self,
+        *,
+        connection: Connection | None,
+        auth_state: TokenState | None,
+        service_id: str | None,
+    ) -> bool:
+        """Restore the coherent service snapshot captured before a handoff."""
+        if connection is None or auth_state is None or service_id is None:
+            self._app_ctx.log_sink.error(
+                "service_navigation.s3_rollback_failed",
+                stage="missing_snapshot",
+            )
+            return False
+
+        try:
+            self._service_navigation_switching = True
+            await self._app_ctx.root_vm.switch_connection_and_service(
+                connection,
+                auth_state,
+                service_id,
+            )
+        except Exception as exc:
+            self._app_ctx.log_sink.error(
+                "service_navigation.s3_rollback_failed",
+                connection=connection.name,
+                service_id=service_id,
+                stage="switch",
+                error_type=type(exc).__name__,
+            )
+            return False
+        finally:
+            self._service_navigation_switching = False
+
+        restored = await self._mount_service_view(
+            service_id,
+            required_connection=connection,
+        )
+        if not restored:
+            self._app_ctx.log_sink.error(
+                "service_navigation.s3_rollback_failed",
+                connection=connection.name,
+                service_id=service_id,
+                stage="mount",
+            )
+        return restored
 
     def _raise_s3_handoff_failure(
         self,
@@ -2842,7 +2924,12 @@ class AwsTuiApp(App[None]):
                 error_type=type(exc).__name__,
             )
 
-    async def _mount_service_view(self, service_id: str) -> bool:
+    async def _mount_service_view(
+        self,
+        service_id: str,
+        *,
+        required_connection: Connection | None = None,
+    ) -> bool:
         """Swap the content host to show the DualPane for ``service_id``.
 
         Always runs the full ``switch_service`` + ``remove_children``
@@ -2868,6 +2955,15 @@ class AwsTuiApp(App[None]):
         """
         ctx = self._app_ctx
         await self._cancel_transfer_workers_before_content_swap()
+        if required_connection is not None and ctx.root_vm.active_connection != required_connection:
+            active = ctx.root_vm.active_connection
+            ctx.log_sink.error(
+                "app.mount_service_view.connection_mismatch",
+                service_id=service_id,
+                required_connection=required_connection.name,
+                active_connection=active.name if active is not None else None,
+            )
+            return False
         # Explicit S3 selection after boot-chain local fallback is a
         # retry. Earlier builds made the fallback sticky for the whole
         # session, which left users unable to recover from Settings
@@ -2876,6 +2972,7 @@ class AwsTuiApp(App[None]):
         # the content host never stays stranded on the previous screen.
         if (
             service_id == "s3"
+            and required_connection is None
             and self._chain_resolved_to_local
             and self._chain_initial_conn is not None
         ):
@@ -2892,11 +2989,10 @@ class AwsTuiApp(App[None]):
             self._raise_local_fallback_toast()
             self._chain_resolved_to_local = True
             self._chain_initial_conn = retry_conn
-            await self._mount_local_only_dual_pane(
+            return await self._mount_local_only_dual_pane(
                 initial_conn=retry_conn,
                 reason="chain-exhausted",
             )
-            return True
         try:
             await ctx.root_vm.switch_service(service_id)
         except Exception as exc:

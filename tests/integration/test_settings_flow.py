@@ -533,6 +533,161 @@ async def test_s3_selection_after_local_fallback_retries_initial_connection(
 
 
 @pytest.mark.asyncio
+async def test_s3_selection_propagates_failed_local_fallback_mount(
+    tmp_path: Path,
+) -> None:
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    conn = ctx.connection_resolver.resolve("minio-local")
+    app._chain_resolved_to_local = True
+    app._chain_initial_conn = conn
+
+    async def _noop_cancel_transfers() -> None:
+        return None
+
+    async def _failed_try_connection(retry_conn: object) -> str:
+        assert retry_conn is conn
+        return "unreachable"
+
+    async def _failed_local_mount(*args: object, **kwargs: object) -> bool:
+        del args, kwargs
+        return False
+
+    app._cancel_transfer_workers_before_content_swap = _noop_cancel_transfers  # type: ignore[method-assign]
+    app._try_connection = _failed_try_connection  # type: ignore[method-assign]
+    app._mount_local_only_dual_pane = _failed_local_mount  # type: ignore[method-assign]
+
+    try:
+        result = await app._mount_service_view("s3")
+    finally:
+        with contextlib.suppress(Exception):
+            _dispose(ctx)
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_local_only_mount_returns_true_only_with_mounted_view(tmp_path: Path) -> None:
+    from aws_tui.ui.widgets.dual_pane import DualPane
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+
+            result = await app._mount_local_only_dual_pane(
+                initial_conn=connection,
+                reason="test",
+            )
+            await pilot.pause()
+
+            assert result is True
+            host = app.query_one("#content-host")
+            mounted = list(host.query(DualPane))
+            assert len(mounted) == 1
+            assert mounted[0].vm is ctx.root_vm.content_host.current
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_local_only_mount_returns_false_without_transfer_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+            monkeypatch.setattr(ctx.registry.get("s3"), "_journal", None)
+
+            result = await app._mount_local_only_dual_pane(
+                initial_conn=connection,
+                reason="test",
+            )
+
+            assert result is False
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_local_only_mount_returns_false_when_content_adoption_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+
+            async def fail_set_content(vm: object, *, service_id: str | None) -> None:
+                del vm, service_id
+                raise RuntimeError("content adoption failed")
+
+            monkeypatch.setattr(ctx.root_vm.content_host, "set_content", fail_set_content)
+            result = await app._mount_local_only_dual_pane(
+                initial_conn=connection,
+                reason="test",
+            )
+
+            assert result is False
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_local_only_mount_returns_false_when_widget_mount_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+            host = app.query_one("#content-host")
+
+            def fail_mount(*widgets: object, **kwargs: object) -> object:
+                del widgets, kwargs
+                raise RuntimeError("widget mount failed")
+
+            monkeypatch.setattr(host, "mount", fail_mount)
+            result = await app._mount_local_only_dual_pane(
+                initial_conn=connection,
+                reason="test",
+            )
+
+            assert result is False
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
 async def test_expired_sso_proactively_falls_back_to_local(tmp_path: Path) -> None:
     """Regression: when probe_token returns EXPIRED for the resolved AWS
     connection at startup, the app MUST mount a LocalFS-on-both-panes

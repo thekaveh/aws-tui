@@ -419,6 +419,179 @@ architecture source changed.
   remain deferred, and Glue-backed demo mode.
 - No unrelated snapshots or generated docs artifacts remain in the diff.
 
+## Second Important Review Follow-up
+
+### Status and implementation
+
+Resolved the remaining exact-profile, mount-result, transactional rollback,
+and README findings.
+
+- `_mount_service_view()` now accepts an optional `required_connection`.
+  Exact-profile handoffs pass the resolved connection, verify that it is still
+  RootVM's active connection, and bypass the session-wide local-fallback retry
+  branch. Ordinary S3 nav selections retain the existing retry behavior.
+- `_mount_local_only_dual_pane()` now returns `True` only after the local
+  `DualPane` widget has mounted. Missing-journal, content-adoption, and widget
+  mount failures return `False`; `_mount_service_view()` propagates that result
+  instead of returning unconditional success.
+- The Glue-to-S3 handler captures the prior connection, auth state, and service
+  before mutating RootVM. An S3 switch or mount failure rebuilds and remounts
+  that prior state before raising the redacted advisory.
+- Bind and navigation failures retain the already-mounted S3 page because its
+  root, nav, content VM, mounted widget, and remote pane remain coherent and
+  usable.
+- README current-behavior sections now distinguish the deferred
+  `auth.authenticate` handler from the shipped `BindingResolver` and
+  `[keybindings]` overlay behavior.
+
+### RED evidence
+
+Tests were added or strengthened before production and README edits:
+
+```text
+uv run pytest \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_ignores_stale_fallback_retry_and_keeps_exact_profile \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_mount_failure_is_reported_and_redacted \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_bind_failure_is_contained_and_redacted \
+  tests/integration/test_glue_s3_handoff.py::test_s3_handoff_navigation_failure_is_contained_and_redacted \
+  tests/integration/test_settings_flow.py::test_s3_selection_propagates_failed_local_fallback_mount \
+  tests/integration/test_settings_flow.py::test_local_only_mount_returns_true_only_with_mounted_view \
+  tests/integration/test_settings_flow.py::test_local_only_mount_returns_false_without_transfer_journal \
+  tests/integration/test_settings_flow.py::test_local_only_mount_returns_false_when_content_adoption_fails \
+  tests/integration/test_settings_flow.py::test_local_only_mount_returns_false_when_widget_mount_fails \
+  tests/docs/test_shipped_behavior.py::test_readme_describes_shipped_runtime_bindings_quick_look_and_palette -q
+```
+
+Captured result:
+
+```text
+8 failed, 2 passed, 14 rerun in 23.91s
+```
+
+The failures showed:
+
+- the stale fallback retry ran for `demo-prod` after an exact `demo-dev`
+  handoff;
+- the fallback caller returned `True` after its local mount helper returned
+  `False`;
+- every local-helper result assertion received `None`;
+- the mount path had neither the required-connection contract nor Glue
+  rollback;
+- README still called `BindingResolver` wiring deferred and the overlay
+  contract pending.
+
+The strengthened bind and navigation checks already passed in the RED run,
+confirming that those stages retained a visible S3 view; they now also pin
+root/nav/content/widget/pane coherence.
+
+### Focused GREEN evidence
+
+The same ten-test command after implementation:
+
+```text
+10 passed in 3.61s
+```
+
+The formatted focused regression set:
+
+```text
+uv run pytest tests/integration/test_glue_s3_handoff.py \
+  tests/integration/test_settings_flow.py::test_s3_selection_propagates_failed_local_fallback_mount \
+  tests/integration/test_settings_flow.py::test_local_only_mount_returns_true_only_with_mounted_view \
+  tests/integration/test_settings_flow.py::test_local_only_mount_returns_false_without_transfer_journal \
+  tests/integration/test_settings_flow.py::test_local_only_mount_returns_false_when_content_adoption_fails \
+  tests/integration/test_settings_flow.py::test_local_only_mount_returns_false_when_widget_mount_fails \
+  tests/docs/test_shipped_behavior.py -q
+19 passed in 7.01s
+```
+
+The first complete affected-file run exposed one existing test wrapper that
+still implemented the old `_mount_service_view(service_id)` signature:
+
+```text
+1 failed, 34 passed, 2 rerun in 157.42s
+TypeError: observed_mount() got an unexpected keyword argument
+'required_connection'
+```
+
+After forwarding the optional connection pin, the full handoff file passed:
+
+```text
+uv run pytest tests/integration/test_glue_s3_handoff.py -q
+10 passed in 5.60s
+```
+
+### Final verification
+
+```text
+env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE -u FORCE_COLOR \
+  uv run pytest tests/snapshot -q
+329 snapshots passed.
+624 passed in 88.89s (0:01:28)
+
+uv run pytest tests/unit tests/integration tests/e2e -q
+1472 passed, 9 deselected in 272.84s (0:04:32)
+
+uv run pytest tests/docs -q
+55 passed, 2 skipped in 0.26s
+
+make docs-check
+check_docs: clean
+Documentation built in 0.39 seconds
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+342 files already formatted
+
+uv run mypy src
+Success: no issues found in 129 source files
+
+./scripts/check-layers.sh
+layer rules clean
+
+uv build
+Successfully built dist/aws_tui-0.8.0.tar.gz
+Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
+
+git diff --check
+(no output; exit 0)
+```
+
+The direct docs run retains the two existing optional Cairo renderer skips.
+`make docs-check` supplied Homebrew Cairo and completed rendering, repository
+checks, and strict MkDocs. The generated architecture PNG was restored because
+no diagram source changed. The Material for MkDocs 2.0 notice and the shell's
+missing `/tmp/vmx-cargo-182/env` warning are pre-existing warnings; every gate
+exited zero.
+
+### Self-review
+
+- The deterministic identity regression forces a stale `demo-prod` fallback
+  while requesting `demo-dev`; it proves no retry occurs and RootVM, selected
+  service, ContentHostVM, mounted `DualPane`, target pane, and final path all
+  remain on `demo-dev`.
+- The mount-failure regression proves rollback produces one visible
+  `GluePage` whose VM is exactly `ContentHostVM.current`, with Glue selected,
+  the original profile active, and no residual `DualPane`.
+- Bind failure leaves the requested-profile S3 left pane usable while the
+  requested right pane remains local. Navigation failure leaves the
+  requested-profile S3 pane at root. Both retain a nonempty host and one
+  mounted widget bound to the current VM.
+- The local-only helper covers success, missing journal, failed content
+  adoption, and failed widget mount. Its caller now propagates `False`.
+  Ordinary `Exception` handling is unchanged and `asyncio.CancelledError`
+  remains uncaught, so worker cancellation still propagates.
+- Handoff failure logs retain only connection name, stage, and exception type.
+  Request URI, query token, exception text, bucket, and credentials remain
+  absent from advisories and durable logs.
+- All 75 previously approved EMR/Glue color baselines and every other snapshot
+  file are unchanged.
+- A current-README scan finds only shipped `BindingResolver`/overlay claims;
+  the remaining deferred wording applies to handlerless action IDs, not the
+  resolver or overlay.
+
 ### Remaining concern
 
 Every shell still emits the pre-existing `.zshenv` warning for missing
