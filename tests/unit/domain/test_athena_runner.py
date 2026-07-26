@@ -11,13 +11,22 @@ from typing import Any
 
 import pytest
 
+from aws_tui.domain.athena import ResultConfigurationRequiredError
 from aws_tui.domain.athena_runner import (
     AthenaQueryCancelledError,
     AthenaQueryFailedError,
     AthenaQueryRunner,
     AthenaResultShapeError,
 )
-from aws_tui.domain.filesystem import ProviderError, ValidationError
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    NotFoundError,
+    PermissionDeniedError,
+    ProviderError,
+    ProviderUnreachableError,
+    ThrottledError,
+    ValidationError,
+)
 from aws_tui.domain.query import (
     QueryContext,
     QueryExecutionDetail,
@@ -30,6 +39,8 @@ from aws_tui.domain.query import (
 )
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.vm.athena._errors import map_provider_error
+from aws_tui.vm.file_manager.pane_vm import PaneState
 
 pytestmark = pytest.mark.unit
 
@@ -385,6 +396,125 @@ async def test_runner_cancellation_finalizes_accepted_submission_and_stops_query
     assert len(client.start_calls) == 1
 
 
+class RepeatedCancellationClient(DelayedSubmissionClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stop_started = asyncio.Event()
+        self.release_stop = asyncio.Event()
+
+    async def start_query(
+        self,
+        sql: str,
+        context: QueryContext,
+        *,
+        request_token: str,
+    ) -> QueryExecutionRef:
+        self.start_calls.append((sql, context, request_token))
+        self.accepted.set()
+        while not self.release.is_set():
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                continue
+        return QueryExecutionRef(
+            "query-1",
+            context.connection_name,
+            context.region,
+            context.workgroup,
+        )
+
+    async def stop_query(self, execution_id: str) -> None:
+        self.stop_calls.append(execution_id)
+        self.stop_started.set()
+        while not self.release_stop.is_set():
+            try:
+                await self.release_stop.wait()
+            except asyncio.CancelledError:
+                continue
+
+
+@pytest.mark.asyncio
+async def test_runner_repeated_cancellation_waits_for_owned_submission_cleanup() -> None:
+    client = RepeatedCancellationClient()
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+    task = asyncio.create_task(
+        runner.run(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-repeated-cancel",
+            max_rows=1,
+        )
+    )
+    await asyncio.wait_for(client.accepted.wait(), timeout=1)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    client.release.set()
+    await asyncio.wait_for(client.stop_started.wait(), timeout=1)
+    task.cancel()
+    await asyncio.sleep(0)
+
+    assert not task.done()
+    assert len(client.start_calls) == 1
+    assert client.stop_calls == ["query-1"]
+
+    client.release_stop.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+
+    assert not runner._submission_finalizers
+
+
+@pytest.mark.asyncio
+async def test_runner_shutdown_style_finalizer_cancellation_cannot_orphan_query() -> None:
+    client = RepeatedCancellationClient()
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+    task = asyncio.create_task(
+        runner.run(
+            "SELECT 1",
+            CONTEXT,
+            request_token="metadata-loop-shutdown",
+            max_rows=1,
+        )
+    )
+    await asyncio.wait_for(client.accepted.wait(), timeout=1)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    assert len(runner._submission_finalizers) == 1
+    finalizer = next(iter(runner._submission_finalizers))
+    submission = next(
+        candidate
+        for candidate in asyncio.all_tasks()
+        if "RepeatedCancellationClient.start_query"
+        in getattr(candidate.get_coro(), "__qualname__", "")
+    )
+    submission.cancel()
+    finalizer.cancel()
+    client.release.set()
+    await asyncio.wait_for(client.stop_started.wait(), timeout=1)
+    for candidate in tuple(asyncio.all_tasks()):
+        if "AthenaQueryRunner._best_effort_stop" in getattr(
+            candidate.get_coro(),
+            "__qualname__",
+            "",
+        ):
+            candidate.cancel()
+    next(iter(runner._submission_finalizers)).cancel()
+    await asyncio.sleep(0)
+
+    assert not task.done()
+    assert client.stop_calls == ["query-1"]
+
+    client.release_stop.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+
+    assert finalizer.done()
+    assert not runner._submission_finalizers
+
+
 class PollFailureClient(RunnerClient):
     def __init__(self, error: Exception) -> None:
         super().__init__(states=(_detail(QueryState.RUNNING),))
@@ -447,8 +577,8 @@ async def test_runner_rejects_nonprogressing_continuation_page() -> None:
         ResultPage([], (), None),  # type: ignore[arg-type]
         ResultPage((object(),), (), None),  # type: ignore[arg-type]
         ResultPage((COLUMN,), [], None),  # type: ignore[arg-type]
-        ResultPage((COLUMN,), ([None],), None),  # type: ignore[arg-type,list-item]
-        ResultPage((COLUMN,), ((7,),), None),  # type: ignore[arg-type,list-item]
+        ResultPage((COLUMN,), ([None],), None),  # type: ignore[arg-type]
+        ResultPage((COLUMN,), ((7,),), None),  # type: ignore[arg-type]
         ResultPage((COLUMN,), (), 7),  # type: ignore[arg-type]
     ],
 )
@@ -594,5 +724,141 @@ async def test_runner_failure_boundaries_exclude_sql_results_and_provider_values
     _assert_runner_failure_is_private(
         raised.value,
         crash_dir=tmp_path / phase,
+        secrets=(sql_secret, provider_secret),
+    )
+
+
+class ProviderTypedFailureClient(RunnerClient):
+    def __init__(self, phase: str, error: Exception) -> None:
+        super().__init__(
+            states=(_detail(QueryState.SUCCEEDED),),
+            pages={None: ResultPage((COLUMN,), (("1",),), None)},
+        )
+        self.phase = phase
+        self.error = error
+
+    async def start_query(
+        self,
+        sql: str,
+        context: QueryContext,
+        *,
+        request_token: str,
+    ) -> QueryExecutionRef:
+        if self.phase == "start":
+            raise self.error
+        return await super().start_query(sql, context, request_token=request_token)
+
+    async def get_query_execution(self, execution_id: str) -> QueryExecutionDetail:
+        if self.phase == "poll":
+            raise self.error
+        return await super().get_query_execution(execution_id)
+
+    async def get_results_page(
+        self,
+        execution_id: str,
+        *,
+        start_token: str | None = None,
+    ) -> ResultPage:
+        if self.phase == "results":
+            raise self.error
+        return await super().get_results_page(execution_id, start_token=start_token)
+
+
+class ProviderValidationLookalike(ValidationError):
+    """Provider-owned validation subtype that must not be trusted."""
+
+
+class ProviderShapeLookalike(AthenaResultShapeError):
+    """Provider-owned shape subtype that must not be trusted."""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["start", "poll", "results"])
+@pytest.mark.parametrize(
+    ("provider_error_type", "public_error_type"),
+    [
+        (ValidationError, ValidationError),
+        (ProviderValidationLookalike, ValidationError),
+        (AthenaResultShapeError, AthenaResultShapeError),
+        (ProviderShapeLookalike, AthenaResultShapeError),
+    ],
+)
+async def test_provider_validation_and_shape_errors_use_owned_safe_messages(
+    phase: str,
+    provider_error_type: type[ProviderError],
+    public_error_type: type[ProviderError],
+    tmp_path: Path,
+) -> None:
+    sql_secret = "SQL_PROVIDER_TYPED_SECRET_7F4C2A9D"
+    provider_secret = "PROVIDER_TYPED_SECRET_7F4C2A9D"
+    provider_error = provider_error_type(provider_secret)
+    provider_error.__cause__ = RuntimeError(provider_secret)
+    client = ProviderTypedFailureClient(phase, provider_error)
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+
+    with pytest.raises(public_error_type) as raised:
+        await runner.run(
+            f"SELECT '{sql_secret}'",
+            CONTEXT,
+            request_token="metadata-provider-typed",
+            max_rows=1,
+        )
+
+    expected_operation = {
+        "start": "query start",
+        "poll": "query status request",
+        "results": "results request",
+    }[phase]
+    assert expected_operation in str(raised.value)
+    _assert_runner_failure_is_private(
+        raised.value,
+        crash_dir=tmp_path / f"{phase}-{provider_error_type.__name__}",
+        secrets=(sql_secret, provider_secret),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["start", "poll", "results"])
+@pytest.mark.parametrize(
+    ("error_type", "expected_state"),
+    [
+        (AuthRequiredError, PaneState.AUTH_REQUIRED),
+        (PermissionDeniedError, PaneState.FORBIDDEN),
+        (ThrottledError, PaneState.ERROR),
+        (ProviderUnreachableError, PaneState.UNREACHABLE),
+        (ResultConfigurationRequiredError, PaneState.ERROR),
+        (NotFoundError, PaneState.ERROR),
+    ],
+)
+async def test_runner_preserves_provider_taxonomy_with_private_phase_errors(
+    phase: str,
+    error_type: type[ProviderError],
+    expected_state: PaneState,
+    tmp_path: Path,
+) -> None:
+    sql_secret = "SQL_TAXONOMY_SECRET_7F4C2A9D"
+    provider_secret = "PROVIDER_TAXONOMY_SECRET_7F4C2A9D"
+    client = ProviderTypedFailureClient(phase, error_type(provider_secret))
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+
+    with pytest.raises(error_type) as raised:
+        await runner.run(
+            f"SELECT '{sql_secret}'",
+            CONTEXT,
+            request_token="metadata-provider-taxonomy",
+            max_rows=1,
+        )
+
+    state, _ = map_provider_error(raised.value, fallback="fallback")
+    assert state is expected_state
+    expected_operation = {
+        "start": "query start",
+        "poll": "query status request",
+        "results": "results request",
+    }[phase]
+    assert expected_operation in str(raised.value)
+    _assert_runner_failure_is_private(
+        raised.value,
+        crash_dir=tmp_path / f"{phase}-{error_type.__name__}",
         secrets=(sql_secret, provider_secret),
     )

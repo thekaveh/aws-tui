@@ -653,3 +653,121 @@ git diff --check
 - The maximum number of result-page requests is `max_rows`. A continuation page
   must add at least one row, so this request bound cannot truncate a valid
   result before the existing row bound.
+
+## Second Corrective Wave
+
+### Root Cause
+
+The runner treated every `ValidationError` and `AthenaResultShapeError` as
+app-authored and copied `str(exc)`, even when a provider client raised the
+exception. It also collapsed every other provider subtype into
+`ProviderError`. Both behaviors occurred before the final value-free raise
+boundary, so provider text could survive in the public error while canonical
+Athena VM state mapping was lost.
+
+Cancellation had a separate ownership race. A second cancellation could
+interrupt `run()` while it shielded a detached submission finalizer. More
+subtly, an event-loop shutdown sweep could cancel a newly created finalizer
+before its coroutine executed its first instruction. In that state no
+in-coroutine `CancelledError` handler could run, the old callback merely
+discarded the task, and no owner remained to recover and stop an accepted
+query. The regression test then waited indefinitely for `stop_started`.
+
+The debugging session found and terminated only the probe trees created by
+this task. Their Python main threads were idle in the asyncio selector; native
+samples were captured under `/tmp/python_2026-07-26_*.sample.txt`. All
+subsequent cancellation tests and broad suites used external TERM/KILL limits
+and in-test one-second event deadlines.
+
+### Implementation
+
+- Added a private `_PreparedRunError` carrier. Detailed text reaches the public
+  boundary only when runner-owned validation or result-shape code creates this
+  carrier.
+- Reconstructed provider-originated failures using fixed, phase-specific
+  messages and the canonical public taxonomy:
+  `AuthRequiredError`, `PermissionDeniedError`, `ThrottledError`,
+  `ProviderUnreachableError`, `ResultConfigurationRequiredError`,
+  `NotFoundError`, `ValidationError`, and `AthenaResultShapeError`.
+- Kept provider exceptions, their traceback chains, SQL, result values, and
+  request tokens out of the final exception graph and traceback locals.
+- Retained submission finalizers in a runner-owned registry. `run()` drains the
+  registry through repeated caller cancellation. If shutdown cancels a
+  finalizer before it starts, the registry callback recreates the owner and
+  continues draining until submission recovery and best-effort stop complete.
+- Added adversarial exact-type and subtype-lookalike privacy tests for start,
+  polling, and results phases. Each test checks exception text and arguments,
+  exception graphs, traceback locals, `TracebackException`, formatted
+  tracebacks, and a real `CrashDump`.
+- Added repeated-cancellation and shutdown-sweep tests that directly cancel the
+  caller, submission, finalizer, and stop task while asserting one submission,
+  one stop, preserved caller cancellation, and an empty finalizer registry.
+
+### TDD Evidence
+
+The new tests first reproduced all three review findings:
+
+```text
+provider ValidationError at start:
+expected fixed phase message, received PROVIDER_TYPED_SECRET_7F4C2A9D
+
+provider AuthRequiredError at start:
+expected AuthRequiredError, received ProviderError
+
+repeated/shutdown cancellation:
+pytest remained blocked waiting for stop_started with detached cleanup tasks
+```
+
+The first implementation made ordinary repeated cancellation pass but exposed
+the canceled-before-first-instruction shutdown race. The retained-registry
+callback fixed that distinct race without weakening the test.
+
+### Final Verification
+
+```text
+timeout 20s pytest repeated/shutdown cancellation probes
+2 passed in 0.24s
+
+timeout 30s pytest tests/unit/domain/test_athena_runner.py
+57 passed in 0.38s
+
+timeout 60s pytest runner + Iceberg + Athena VM + Athena service
+202 passed in 0.75s
+
+timeout 60s pytest privacy suites
+332 passed in 1.33s
+
+timeout 180s pytest tests/unit/domain tests/unit/vm
+1372 passed in 45.63s
+
+uv run mypy
+Success: no issues found in 152 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+385 files already formatted
+
+./scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+clean
+```
+
+No pytest or `uv run pytest` process remained after final verification.
+
+### Changed Files
+
+- `src/aws_tui/domain/athena_runner.py`
+- `tests/unit/domain/test_athena_runner.py`
+- `.superpowers/sdd/task-2-report.md`
+
+### Concerns
+
+- Best-effort stop is cancellation-resistant while the client coroutine remains
+  able to finish. If the process or provider transport is forcibly destroyed,
+  no in-process design can prove remote stop completion; the runner still
+  preserves ownership and does not return while an in-process cleanup path
+  remains viable.

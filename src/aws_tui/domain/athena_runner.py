@@ -5,11 +5,20 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, NoReturn, Protocol
+from typing import Any, NoReturn, Protocol, TypeVar
 
 import anyio
 
-from aws_tui.domain.filesystem import ProviderError, ValidationError
+from aws_tui.domain.athena import ResultConfigurationRequiredError
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    NotFoundError,
+    PermissionDeniedError,
+    ProviderError,
+    ProviderUnreachableError,
+    ThrottledError,
+    ValidationError,
+)
 from aws_tui.domain.query import (
     QueryContext,
     QueryExecutionDetail,
@@ -21,6 +30,7 @@ from aws_tui.domain.query import (
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 
 Sleep = Callable[[float], Awaitable[None]]
+T = TypeVar("T")
 _TERMINAL_STATES = frozenset(
     {
         QueryState.SUCCEEDED,
@@ -40,6 +50,17 @@ class AthenaQueryCancelledError(ProviderError):
 
 class AthenaResultShapeError(ValidationError):
     """Athena returned inconsistent bounded-result metadata."""
+
+
+class _PreparedRunError(Exception):
+    """Carry only an app-owned public error type and a sanitized message."""
+
+    def __init__(self, error_type: type[ProviderError], message: str) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+    def public_error(self) -> ProviderError:
+        return self.error_type(str(self))
 
 
 class AthenaRunnerClient(Protocol):
@@ -86,6 +107,7 @@ class AthenaQueryRunner:
         self._client = client
         self._policy = policy
         self._sleep = sleep
+        self._submission_finalizers: set[asyncio.Task[None]] = set()
 
     @property
     def client(self) -> AthenaRunnerClient:
@@ -150,10 +172,13 @@ class AthenaQueryRunner:
         except asyncio.CancelledError:
             del operation_task
             raise
-        except Exception as exc:
-            prepared_error = _prepared_run_error(exc, phase="run")
+        except _PreparedRunError as exc:
+            prepared_error = exc.public_error()
             del exc
             del operation_task
+        except Exception:
+            del operation_task
+            prepared_error = ProviderError("Athena query request failed")
         _raise_prepared_run_error(prepared_error)
 
     async def _run_request(
@@ -164,7 +189,20 @@ class AthenaQueryRunner:
         request_token: str,
         max_rows: int,
     ) -> BoundedQueryResult:
-        normalized_sql = self.validate(sql, context)
+        try:
+            normalized_sql = self.validate(sql, context)
+        except QueryRejectedError as exc:
+            prepared_error = _PreparedRunError(QueryRejectedError, str(exc))
+            del exc
+            sql = ""
+            request_token = ""
+            raise prepared_error from None
+        except ValidationError as exc:
+            prepared_error = _PreparedRunError(ValidationError, str(exc))
+            del exc
+            sql = ""
+            request_token = ""
+            raise prepared_error from None
         operation = self._run_validated(
             normalized_sql, context, request_token=request_token, max_rows=max_rows
         )
@@ -193,50 +231,61 @@ class AthenaQueryRunner:
         try:
             ref = await asyncio.shield(submission_task)
         except asyncio.CancelledError:
-            finalizer = asyncio.create_task(self._finalize_cancelled_submission(submission_task))
+            self._retain_submission_finalizer(submission_task)
             del submission_task
-            await asyncio.shield(finalizer)
-            del finalizer
+            await self._drain_submission_finalizers()
             raise
         except Exception as exc:
-            prepared_error = _prepared_run_error(exc, phase="start")
+            prepared_error = _prepared_provider_error(exc, phase="start")
             del exc
             del submission_task
-            _raise_prepared_run_error(prepared_error)
+            raise prepared_error from None
         del submission_task
 
         if not _ref_matches_context(ref, context):
             await self._best_effort_stop(ref)
-            raise ValidationError("Athena query does not match the active context")
+            raise _PreparedRunError(
+                ValidationError,
+                "Athena query does not match the active context",
+            )
 
         try:
             detail = await self._poll(ref, context)
         except asyncio.CancelledError:
             await asyncio.shield(self._best_effort_stop(ref))
             raise
+        except _PreparedRunError:
+            await self._best_effort_stop(ref)
+            raise
         except Exception as exc:
             await self._best_effort_stop(ref)
-            prepared_error = _prepared_run_error(exc, phase="poll")
+            prepared_error = _prepared_provider_error(exc, phase="poll")
             del exc
-            _raise_prepared_run_error(prepared_error)
+            raise prepared_error from None
 
         state = detail.summary.state
         if state is QueryState.FAILED:
             del detail
-            _raise_prepared_run_error(AthenaQueryFailedError("Athena query failed"))
+            raise _PreparedRunError(AthenaQueryFailedError, "Athena query failed")
         if state is QueryState.CANCELLED:
             del detail
-            _raise_prepared_run_error(AthenaQueryCancelledError("Athena query was cancelled"))
+            raise _PreparedRunError(
+                AthenaQueryCancelledError,
+                "Athena query was cancelled",
+            )
         try:
             columns, rows = await self._bounded_results(ref, max_rows=max_rows)
         except asyncio.CancelledError:
             del detail
             raise
+        except _PreparedRunError:
+            del detail
+            raise
         except Exception as exc:
             del detail
-            prepared_error = _prepared_run_error(exc, phase="results")
+            prepared_error = _prepared_provider_error(exc, phase="results")
             del exc
-            _raise_prepared_run_error(prepared_error)
+            raise prepared_error from None
         return BoundedQueryResult(detail, columns, rows)
 
     async def _poll(
@@ -248,7 +297,10 @@ class AthenaQueryRunner:
         while True:
             detail = await self.detail(ref, context)
             if not _detail_matches_context(detail, ref, context):
-                raise ValidationError("Athena query does not match the active context")
+                raise _PreparedRunError(
+                    ValidationError,
+                    "Athena query does not match the active context",
+                )
             if detail.summary.state in _TERMINAL_STATES:
                 return detail
             await self.pause(delay)
@@ -267,7 +319,10 @@ class AthenaQueryRunner:
         request_count = 0
         while len(rows) < max_rows:
             if request_count >= max_rows:
-                raise AthenaResultShapeError("Athena result pagination exceeded its bound")
+                raise _PreparedRunError(
+                    AthenaResultShapeError,
+                    "Athena result pagination exceeded its bound",
+                )
             raw_page = await self._client.get_results_page(
                 ref.execution_id,
                 start_token=token,
@@ -279,7 +334,10 @@ class AthenaQueryRunner:
             if columns is None:
                 columns = page_columns
             elif page_columns != columns:
-                raise AthenaResultShapeError("Athena result columns changed between pages")
+                raise _PreparedRunError(
+                    AthenaResultShapeError,
+                    "Athena result columns changed between pages",
+                )
             remaining = max_rows - len(rows)
             page_rows = page.rows
             rows.extend(page_rows[:remaining])
@@ -287,9 +345,15 @@ class AthenaQueryRunner:
             if len(rows) >= max_rows or next_token is None:
                 break
             if not page_rows:
-                raise AthenaResultShapeError("Athena result pagination did not advance")
+                raise _PreparedRunError(
+                    AthenaResultShapeError,
+                    "Athena result pagination did not advance",
+                )
             if next_token in seen_tokens:
-                raise AthenaResultShapeError("Athena result pagination token repeated")
+                raise _PreparedRunError(
+                    AthenaResultShapeError,
+                    "Athena result pagination token repeated",
+                )
             seen_tokens.add(next_token)
             token = next_token
         return columns or (), tuple(rows)
@@ -299,10 +363,35 @@ class AthenaQueryRunner:
         task: asyncio.Task[QueryExecutionRef],
     ) -> None:
         try:
-            ref = await task
+            ref = await _await_task_through_cancellation(task)
         except (asyncio.CancelledError, Exception):
             return
-        await asyncio.shield(self._best_effort_stop(ref))
+        stop_task = asyncio.create_task(self._best_effort_stop(ref))
+        await _await_task_through_cancellation(stop_task)
+
+    def _retain_submission_finalizer(
+        self,
+        submission_task: asyncio.Task[QueryExecutionRef],
+    ) -> None:
+        finalizer = asyncio.create_task(self._finalize_cancelled_submission(submission_task))
+        self._submission_finalizers.add(finalizer)
+
+        def complete(task: asyncio.Task[None]) -> None:
+            self._submission_finalizers.discard(task)
+            if task.cancelled():
+                self._retain_submission_finalizer(submission_task)
+
+        finalizer.add_done_callback(complete)
+
+    async def _drain_submission_finalizers(self) -> None:
+        while self._submission_finalizers:
+            finalizers = tuple(self._submission_finalizers)
+            for finalizer in finalizers:
+                try:
+                    await asyncio.shield(finalizer)
+                except asyncio.CancelledError:
+                    continue
+            await asyncio.sleep(0)
 
     async def _best_effort_stop(self, ref: QueryExecutionRef) -> None:
         try:
@@ -313,7 +402,10 @@ class AthenaQueryRunner:
 
 def _validated_result_page(value: object) -> ResultPage:
     if type(value) is not ResultPage:
-        raise AthenaResultShapeError("Athena returned an invalid result page")
+        raise _PreparedRunError(
+            AthenaResultShapeError,
+            "Athena returned an invalid result page",
+        )
     page = value
     if type(page.columns) is not tuple or not all(
         type(column) is ResultColumn
@@ -322,41 +414,96 @@ def _validated_result_page(value: object) -> ResultPage:
         and type(column.nullable) is str
         for column in page.columns
     ):
-        raise AthenaResultShapeError("Athena returned invalid result columns")
+        raise _PreparedRunError(
+            AthenaResultShapeError,
+            "Athena returned invalid result columns",
+        )
     if type(page.rows) is not tuple:
-        raise AthenaResultShapeError("Athena returned invalid result rows")
+        raise _PreparedRunError(
+            AthenaResultShapeError,
+            "Athena returned invalid result rows",
+        )
     for row in page.rows:
         if type(row) is not tuple:
-            raise AthenaResultShapeError("Athena returned an invalid result row")
+            raise _PreparedRunError(
+                AthenaResultShapeError,
+                "Athena returned an invalid result row",
+            )
         if len(row) != len(page.columns):
-            raise AthenaResultShapeError("Athena result row width does not match columns")
+            raise _PreparedRunError(
+                AthenaResultShapeError,
+                "Athena result row width does not match columns",
+            )
         if not all(item is None or type(item) is str for item in row):
-            raise AthenaResultShapeError("Athena returned an invalid result value")
+            raise _PreparedRunError(
+                AthenaResultShapeError,
+                "Athena returned an invalid result value",
+            )
     if page.next_token is not None and (type(page.next_token) is not str or not page.next_token):
-        raise AthenaResultShapeError("Athena returned an invalid pagination token")
+        raise _PreparedRunError(
+            AthenaResultShapeError,
+            "Athena returned an invalid pagination token",
+        )
     return page
 
 
-def _prepared_run_error(exc: BaseException, *, phase: str) -> BaseException:
-    if isinstance(exc, AthenaResultShapeError):
-        return AthenaResultShapeError(str(exc))
-    if isinstance(exc, AthenaQueryFailedError):
-        return AthenaQueryFailedError("Athena query failed")
-    if isinstance(exc, AthenaQueryCancelledError):
-        return AthenaQueryCancelledError("Athena query was cancelled")
-    if isinstance(exc, QueryRejectedError):
-        return QueryRejectedError(str(exc))
-    if isinstance(exc, ValidationError):
-        return ValidationError(str(exc))
-    if isinstance(exc, ProviderError) and phase == "run":
-        return ProviderError(str(exc))
-    if phase == "start":
-        return ProviderError("Athena query start failed")
-    if phase == "poll":
-        return ProviderError("Athena query status request failed")
-    if phase == "results":
-        return ProviderError("Athena results request failed")
-    return ProviderError("Athena query request failed")
+async def _await_task_through_cancellation(task: asyncio.Task[T]) -> T:
+    """Wait for an owned task despite repeated cancellation of this waiter."""
+
+    while True:
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.done():
+                return await task
+
+
+def _prepared_provider_error(exc: BaseException, *, phase: str) -> _PreparedRunError:
+    error_type: type[ProviderError]
+    if isinstance(exc, ResultConfigurationRequiredError):
+        error_type = ResultConfigurationRequiredError
+    elif isinstance(exc, AuthRequiredError):
+        error_type = AuthRequiredError
+    elif isinstance(exc, ProviderUnreachableError):
+        error_type = ProviderUnreachableError
+    elif isinstance(exc, PermissionDeniedError):
+        error_type = PermissionDeniedError
+    elif isinstance(exc, NotFoundError):
+        error_type = NotFoundError
+    elif isinstance(exc, ThrottledError):
+        error_type = ThrottledError
+    elif isinstance(exc, AthenaResultShapeError):
+        error_type = AthenaResultShapeError
+    elif isinstance(exc, ValidationError):
+        error_type = ValidationError
+    else:
+        error_type = ProviderError
+    return _PreparedRunError(error_type, _provider_phase_message(error_type, phase=phase))
+
+
+def _provider_phase_message(error_type: type[ProviderError], *, phase: str) -> str:
+    operation = {
+        "start": "query start",
+        "poll": "query status request",
+        "results": "results request",
+    }[phase]
+    if issubclass(error_type, AuthRequiredError):
+        return f"Athena authentication failed during {operation}"
+    if issubclass(error_type, ProviderUnreachableError):
+        return f"Athena is unreachable during {operation}"
+    if issubclass(error_type, PermissionDeniedError):
+        return f"Athena {operation} is forbidden"
+    if issubclass(error_type, NotFoundError):
+        return f"Athena resource was not found during {operation}"
+    if issubclass(error_type, ThrottledError):
+        return f"Athena {operation} was throttled"
+    if issubclass(error_type, ResultConfigurationRequiredError):
+        return f"Athena result configuration is required during {operation}"
+    if issubclass(error_type, AthenaResultShapeError):
+        return f"Athena returned invalid data during {operation}"
+    if issubclass(error_type, ValidationError):
+        return f"Athena rejected the {operation}"
+    return f"Athena {operation} failed"
 
 
 def _raise_prepared_run_error(error: BaseException) -> NoReturn:
