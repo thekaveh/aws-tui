@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
+from itertools import permutations
+from typing import get_type_hints
 
 import pytest
 
@@ -136,6 +138,84 @@ def test_detect_table_format_uses_case_insensitive_conservative_precedence(
     assert detect_table_format(parameters, input_format, table_type) is expected
 
 
+@pytest.mark.parametrize(
+    "items",
+    tuple(
+        permutations(
+            (
+                ("Classification", " delta "),
+                ("classification", " HUDI "),
+                (" CLASSIFICATION ", " IceBeRg "),
+            )
+        )
+    ),
+)
+def test_detect_table_format_aggregates_duplicate_casefold_keys_in_any_order(
+    items: tuple[tuple[str, str], ...],
+) -> None:
+    assert detect_table_format(dict(items), None, None) is TableFormat.ICEBERG
+
+
+@pytest.mark.parametrize(
+    "items",
+    tuple(
+        permutations(
+            (
+                ("spark.sql.sources.provider", "delta"),
+                ("tableType", "hudi"),
+            )
+        )
+    ),
+)
+def test_detect_table_format_hudi_beats_delta_in_any_order(
+    items: tuple[tuple[str, str], ...],
+) -> None:
+    assert detect_table_format(dict(items), None, None) is TableFormat.HUDI
+
+
+@pytest.mark.parametrize(
+    ("parameters", "input_format", "table_type", "expected"),
+    [
+        ({" table_type ": " iceberg "}, None, None, TableFormat.ICEBERG),
+        ({" TABLETYPE ": " hudi "}, None, None, TableFormat.HUDI),
+        ({" Classification ": " delta "}, None, None, TableFormat.DELTA),
+        ({" SPARK.SQL.SOURCES.PROVIDER ": " iceberg "}, None, None, TableFormat.ICEBERG),
+        ({" provider ": " hudi "}, None, None, TableFormat.HUDI),
+        ({"classification": "delta"}, None, " hudi ", TableFormat.HUDI),
+        ({"classification": "hudi"}, None, " iceberg ", TableFormat.ICEBERG),
+        ({}, " \t ", " VIRTUAL_VIEW ", TableFormat.OTHER),
+        ({}, " parquet-input ", " VIRTUAL_VIEW ", TableFormat.OTHER),
+        ({}, " \t ", " EXTERNAL_TABLE ", TableFormat.HIVE),
+        ({}, " parquet-input ", None, TableFormat.HIVE),
+    ],
+)
+def test_detect_table_format_normalizes_exact_markers_and_physical_fallback(
+    parameters: dict[str, str],
+    input_format: str | None,
+    table_type: str | None,
+    expected: TableFormat,
+) -> None:
+    assert detect_table_format(parameters, input_format, table_type) is expected
+
+
+@pytest.mark.parametrize(
+    ("parameters", "input_format", "table_type"),
+    [
+        ({"classification": "iceberg-v2"}, None, None),
+        ({"provider": "s3://warehouse/iceberg"}, None, None),
+        ({"table_type": "not_iceberg"}, None, None),
+        ({"location": "s3://warehouse/iceberg"}, None, None),
+        ({}, None, "MY_EXTERNAL_TABLE"),
+    ],
+)
+def test_detect_table_format_does_not_match_substrings_or_paths(
+    parameters: dict[str, str],
+    input_format: str | None,
+    table_type: str | None,
+) -> None:
+    assert detect_table_format(parameters, input_format, table_type) is TableFormat.OTHER
+
+
 def test_column_statistics_sorts_values_by_key() -> None:
     statistics = ColumnStatistics(
         column_name="event_id",
@@ -166,7 +246,7 @@ def test_catalog_records_preserve_summary_and_partition_fields() -> None:
 def test_public_types_are_exported() -> None:
     from aws_tui.domain import data_catalog
 
-    assert set(data_catalog.__all__) == {
+    assert data_catalog.__all__ == [
         "CatalogRef",
         "Column",
         "ColumnStatistics",
@@ -179,7 +259,7 @@ def test_public_types_are_exported() -> None:
         "TableRef",
         "TableSummary",
         "detect_table_format",
-    }
+    ]
 
 
 def test_record_field_order_matches_catalog_contract() -> None:
@@ -196,4 +276,13 @@ def test_record_field_order_matches_catalog_contract() -> None:
         "classification",
         "table_format",
         "parameters",
+    ]
+    assert list(get_type_hints(TableDetail).items()) == [
+        ("summary", TableSummary),
+        ("columns", tuple[Column, ...]),
+        ("partition_keys", tuple[Column, ...]),
+        ("storage", StorageDescriptor),
+        ("classification", str | None),
+        ("table_format", TableFormat),
+        ("parameters", tuple[tuple[str, str], ...]),
     ]

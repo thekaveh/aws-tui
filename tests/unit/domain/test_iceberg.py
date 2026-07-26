@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
+from typing import get_type_hints
 
 import pytest
 
@@ -115,6 +116,76 @@ def test_iceberg_records_are_frozen_slot_dataclasses_with_exact_fields() -> None
         "max_reference_age_in_ms",
         "min_snapshots_to_keep",
         "max_snapshot_age_in_ms",
+    ]
+    assert list(get_type_hints(IcebergSnapshot).items()) == [
+        ("committed_at", datetime),
+        ("snapshot_id", int),
+        ("parent_id", int | None),
+        ("operation", str),
+        ("manifest_list", str),
+        ("summary", tuple[tuple[str, str], ...]),
+    ]
+    assert list(get_type_hints(IcebergHistoryEntry).items()) == [
+        ("made_current_at", datetime),
+        ("snapshot_id", int),
+        ("parent_id", int | None),
+        ("is_current_ancestor", bool),
+    ]
+    assert list(get_type_hints(IcebergManifest).items()) == [
+        ("path", str),
+        ("length", int),
+        ("partition_spec_id", int),
+        ("added_snapshot_id", int),
+        ("added_data_files_count", int),
+        ("existing_data_files_count", int),
+        ("deleted_data_files_count", int),
+        ("partition_summaries", str | None),
+    ]
+    assert list(get_type_hints(IcebergDataFile).items()) == [
+        ("content", int),
+        ("file_path", str),
+        ("file_format", str),
+        ("spec_id", int),
+        ("partition", str | None),
+        ("record_count", int),
+        ("file_size_in_bytes", int),
+        ("equality_ids", str | None),
+        ("sort_order_id", int | None),
+    ]
+    assert list(get_type_hints(IcebergPartitionSpec).items()) == [("field_names", tuple[str, ...])]
+    assert list(get_type_hints(IcebergPartition).items()) == [
+        ("values", tuple[tuple[str, str | None], ...]),
+        ("record_count", int),
+        ("file_count", int),
+        ("total_data_file_size_in_bytes", int),
+        ("position_delete_record_count", int | None),
+        ("position_delete_file_count", int | None),
+        ("equality_delete_record_count", int | None),
+        ("equality_delete_file_count", int | None),
+        ("last_updated_at", datetime | None),
+        ("last_updated_snapshot_id", int | None),
+    ]
+    assert list(get_type_hints(IcebergReference).items()) == [
+        ("name", str),
+        ("ref_type", str),
+        ("snapshot_id", int),
+        ("max_reference_age_in_ms", int | None),
+        ("min_snapshots_to_keep", int | None),
+        ("max_snapshot_age_in_ms", int | None),
+    ]
+
+
+def test_iceberg_public_contract_exports_exact_record_set() -> None:
+    from aws_tui.domain import iceberg
+
+    assert iceberg.__all__ == [
+        "IcebergDataFile",
+        "IcebergHistoryEntry",
+        "IcebergManifest",
+        "IcebergPartition",
+        "IcebergPartitionSpec",
+        "IcebergReference",
+        "IcebergSnapshot",
     ]
 
 

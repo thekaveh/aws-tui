@@ -22,25 +22,35 @@ def detect_table_format(
     table_type: str | None,
 ) -> TableFormat:
     """Classify a physical Glue table from its normalized catalog metadata."""
-    normalized = {
-        key.casefold(): value.casefold()
+    marker_keys = frozenset(
+        {
+            "table_type",
+            "tabletype",
+            "classification",
+            "provider",
+            "spark.sql.sources.provider",
+        }
+    )
+    markers = {
+        value.strip().casefold()
         for key, value in parameters.items()
-        if isinstance(key, str) and isinstance(value, str)
+        if isinstance(key, str) and isinstance(value, str) and key.strip().casefold() in marker_keys
     }
-    declared = normalized.get("table_type") or normalized.get("tabletype")
-    classification = normalized.get("classification")
-    provider = normalized.get("spark.sql.sources.provider")
-    if declared == "iceberg" or classification == "iceberg" or provider == "iceberg":
+    normalized_type = table_type.strip().casefold() if isinstance(table_type, str) else None
+    if normalized_type:
+        markers.add(normalized_type)
+
+    if "iceberg" in markers:
         return TableFormat.ICEBERG
-    if classification == "hudi" or provider == "hudi":
+    if "hudi" in markers:
         return TableFormat.HUDI
-    if classification == "delta" or provider == "delta":
+    if "delta" in markers:
         return TableFormat.DELTA
 
-    normalized_type = table_type.casefold() if isinstance(table_type, str) else None
     if normalized_type == "virtual_view":
         return TableFormat.OTHER
-    if normalized_type in {"external_table", "managed_table"} or input_format:
+    normalized_input = input_format.strip() if isinstance(input_format, str) else ""
+    if normalized_type in {"external_table", "managed_table"} or normalized_input:
         return TableFormat.HIVE
     return TableFormat.OTHER
 

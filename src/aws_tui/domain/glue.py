@@ -188,12 +188,31 @@ def map_glue_error(exc: BaseException) -> ProviderError | None:
 
 def raise_mapped_glue_error(exc: Exception) -> NoReturn:
     """Raise the mapped provider error, or preserve an unrelated exception."""
-    if isinstance(exc, ProviderError):
-        raise exc from None
-    mapped = map_glue_error(exc)
+    mapped = _map_caught_glue_error(exc)
     if mapped is None:
         raise exc
-    raise mapped from None
+    # Drop the raw provider exception from this frame before the mapped raise.
+    exc = mapped
+    _raise_prepared_glue_error(mapped)
+
+
+def _map_caught_glue_error(exc: Exception) -> ProviderError | None:
+    if isinstance(exc, ProviderError):
+        return exc
+    return map_glue_error(exc)
+
+
+def _raise_prepared_glue_error(error: ProviderError) -> NoReturn:
+    error.__traceback__ = None
+    error.__context__ = None
+    error.__cause__ = None
+    try:
+        raise error from None
+    except ProviderError as raised:
+        # Python assigns active exception context at raise time, so clear it after.
+        raised.__context__ = None
+        raised.__cause__ = None
+        raise
 
 
 def _glue_error_message(code: str) -> str:
@@ -262,6 +281,7 @@ class GlueClient:
         start_token: str | None = None,
     ) -> tuple[list[DatabaseSummary], str | None]:
         kwargs: dict[str, object] = {"MaxResults": 100}
+        mapped_error: ProviderError | None = None
         if start_token is not None:
             kwargs["NextToken"] = start_token
         try:
@@ -273,7 +293,10 @@ class GlueClient:
             ]
             return rows, _response_token(response)
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     async def list_tables_page(
         self,
@@ -285,6 +308,7 @@ class GlueClient:
             "DatabaseName": database,
             "MaxResults": 100,
         }
+        mapped_error: ProviderError | None = None
         if start_token is not None:
             kwargs["NextToken"] = start_token
         try:
@@ -296,9 +320,13 @@ class GlueClient:
             ]
             return rows, _response_token(response)
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     async def get_table(self, ref: TableRef) -> TableDetail:
+        mapped_error: ProviderError | None = None
         try:
             async with await self._aws_session.client(self._connection, "glue") as client:
                 response = await client.get_table(
@@ -308,7 +336,10 @@ class GlueClient:
             table = _required_mapping(_response_mapping(response), "Table")
             return self._map_table_detail(table, ref=ref)
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     async def list_partitions_page(
         self,
@@ -320,6 +351,7 @@ class GlueClient:
             "DatabaseName": ref.database_name,
             "TableName": ref.table_name,
         }
+        mapped_error: ProviderError | None = None
         if start_token is not None:
             kwargs["NextToken"] = start_token
         try:
@@ -328,7 +360,10 @@ class GlueClient:
             rows = [self._map_partition(item) for item in _response_items(response, "Partitions")]
             return rows, _response_token(response)
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     async def get_column_statistics(
         self,
@@ -337,6 +372,7 @@ class GlueClient:
     ) -> tuple[ColumnStatistics, ...]:
         if not columns:
             return ()
+        mapped_error: ProviderError | None = None
         try:
             rows: list[ColumnStatistics] = []
             async with await self._aws_session.client(self._connection, "glue") as client:
@@ -354,7 +390,10 @@ class GlueClient:
                     )
             return tuple(rows)
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     async def list_jobs_page(
         self,
@@ -362,6 +401,7 @@ class GlueClient:
         start_token: str | None = None,
     ) -> tuple[list[GlueJobSummary], str | None]:
         kwargs: dict[str, object] = {"MaxResults": 100}
+        mapped_error: ProviderError | None = None
         if start_token is not None:
             kwargs["NextToken"] = start_token
         try:
@@ -370,7 +410,10 @@ class GlueClient:
             rows = [self._map_job(item) for item in _response_items(response, "Jobs")]
             return rows, _response_token(response)
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     async def list_job_runs_page(
         self,
@@ -383,6 +426,7 @@ class GlueClient:
             "JobName": job_name,
             "MaxResults": 200,
         }
+        mapped_error: ProviderError | None = None
         if start_token is not None:
             kwargs["NextToken"] = start_token
         try:
@@ -404,7 +448,10 @@ class GlueClient:
                 rows = [row for row in rows if row.state in state_filter]
             return rows, _response_token(response)
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     async def list_crawlers_page(
         self,
@@ -413,6 +460,7 @@ class GlueClient:
         state: str | None = None,
     ) -> tuple[list[GlueCrawlerSummary], str | None]:
         kwargs: dict[str, object] = {"MaxResults": 100}
+        mapped_error: ProviderError | None = None
         if start_token is not None:
             kwargs["NextToken"] = start_token
         try:
@@ -425,15 +473,23 @@ class GlueClient:
                 rows = [row for row in rows if row.state == state]
             return rows, _response_token(response)
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     async def get_crawler(self, name: str) -> GlueCrawlerDetail:
+        mapped_error: ProviderError | None = None
         try:
             async with await self._aws_session.client(self._connection, "glue") as client:
                 response = await client.get_crawler(Name=name)
             crawler = _required_mapping(_response_mapping(response), "Crawler")
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        if mapped_error is not None:
+            _raise_prepared_glue_error(mapped_error)
 
         warnings: list[str] = []
         tags: tuple[tuple[str, str], ...] = ()
@@ -442,22 +498,28 @@ class GlueClient:
         try:
             tags = await self._get_crawler_tags(name)
         except Exception as exc:
-            mapped = map_glue_error(exc)
+            mapped = _map_caught_glue_error(exc)
             if mapped is None:
                 raise
             if not isinstance(mapped, PermissionDeniedError):
-                raise mapped from exc
-            warnings.append(_supplemental_warning("Tags", mapped))
+                mapped_error = mapped
+            else:
+                warnings.append(_supplemental_warning("Tags", mapped))
+        if mapped_error is not None:
+            _raise_prepared_glue_error(mapped_error)
 
         try:
             metrics_result = await self._get_crawler_metrics_result(name)
         except Exception as exc:
-            mapped = map_glue_error(exc)
+            mapped = _map_caught_glue_error(exc)
             if mapped is None:
                 raise
             if not isinstance(mapped, PermissionDeniedError):
-                raise mapped from exc
-            warnings.append(_supplemental_warning("Crawler metrics", mapped))
+                mapped_error = mapped
+            else:
+                warnings.append(_supplemental_warning("Crawler metrics", mapped))
+        if mapped_error is not None:
+            _raise_prepared_glue_error(mapped_error)
 
         try:
             return self._map_crawler_detail(
@@ -467,13 +529,20 @@ class GlueClient:
                 warnings=tuple(warnings),
             )
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     async def get_crawler_metrics(self, name: str) -> GlueCrawlerMetrics | None:
+        mapped_error: ProviderError | None = None
         try:
             return (await self._get_crawler_metrics_result(name)).metrics
         except Exception as exc:
-            raise_mapped_glue_error(exc)
+            mapped_error = _map_caught_glue_error(exc)
+            if mapped_error is None:
+                raise
+        _raise_prepared_glue_error(mapped_error)
 
     def _map_database(self, item: Mapping[str, Any]) -> DatabaseSummary:
         name = _required_string(item, "Name")
@@ -842,21 +911,12 @@ def _optional_table_mapping_items(
     value = mapping.get(field)
     if isinstance(value, str | bytes | bytearray) or not isinstance(value, Sequence):
         return []
-    return [cast(Mapping[str, Any], item) for item in value if isinstance(item, Mapping)]
+    return _mapping_items(value, field=field)
 
 
 def _optional_table_parameters(mapping: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
     parameters = _optional_table_mapping(mapping, "Parameters")
-    return tuple(
-        sorted(
-            (
-                (key, value)
-                for key, value in parameters.items()
-                if isinstance(key, str) and isinstance(value, str)
-            ),
-            key=lambda item: item[0],
-        )
-    )
+    return _string_pairs(parameters)
 
 
 def _table_parameter_value(parameters: Mapping[str, str], key: str) -> str | None:

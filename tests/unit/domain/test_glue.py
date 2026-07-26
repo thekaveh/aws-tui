@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from traceback import TracebackException
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import call
+from unittest.mock import call, patch
 
 import botocore.exceptions
 import pytest
@@ -24,6 +26,7 @@ from aws_tui.domain.data_catalog import (
     TableFormat,
     TableRef,
     TableSummary,
+    detect_table_format,
 )
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
@@ -43,14 +46,18 @@ from aws_tui.domain.glue import (
     GlueJobSummary,
     LakeFormationPermissionError,
     map_glue_error,
+    raise_mapped_glue_error,
 )
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.crash_dump import CrashDump
 from tests.unit.domain._fake_aws_client import FakeAwsClient, FakeAwsSession
 
 pytestmark = pytest.mark.unit
 
 NOW = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
+_PROVIDER_MESSAGE_SECRET = "GLUE_PROVIDER_MESSAGE_SECRET_7F4C2A9D"
+_PROVIDER_RESPONSE_SECRET = "GLUE_PROVIDER_RESPONSE_SECRET_7F4C2A9D"
 
 
 def _connection(*, region: str = "us-east-1") -> Connection:
@@ -341,21 +348,48 @@ async def test_get_table_detects_supported_formats(
     assert detail.table_format is expected
 
 
+async def test_get_table_calls_central_detector_exactly_once() -> None:
+    client, glue, _, _ = _client()
+    glue.get_table.return_value = {
+        "Table": {
+            "Name": "events",
+            "TableType": " EXTERNAL_TABLE ",
+            "Parameters": {"classification": " iceberg "},
+            "StorageDescriptor": {"InputFormat": " parquet-input "},
+        }
+    }
+
+    with patch(
+        "aws_tui.domain.glue.detect_table_format",
+        wraps=detect_table_format,
+    ) as detector:
+        detail = await client.get_table(
+            TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+        )
+
+    assert detail.table_format is TableFormat.ICEBERG
+    detector.assert_called_once_with(
+        parameters={"classification": " iceberg "},
+        input_format=" parquet-input ",
+        table_type=" EXTERNAL_TABLE ",
+    )
+
+
 async def test_get_table_ignores_malformed_optional_fields_for_a_view() -> None:
     client, glue, _, _ = _client()
     glue.get_table.return_value = {
         "Table": {
             "Name": "events_view",
-            "TableType": "VIRTUAL_VIEW",
-            "Parameters": {"classification": ["ICEBERG"]},
+            "TableType": " VIRTUAL_VIEW ",
+            "Parameters": ["not-a-mapping"],
             "StorageDescriptor": {
                 "InputFormat": {"not": "a string"},
                 "Compressed": "not-a-bool",
                 "NumberOfBuckets": True,
-                "Columns": ["not-a-mapping"],
+                "Columns": {"not": "a-list"},
                 "SerdeInfo": "not-a-mapping",
             },
-            "PartitionKeys": ["not-a-mapping"],
+            "PartitionKeys": "not-a-list",
         }
     }
 
@@ -366,6 +400,73 @@ async def test_get_table_ignores_malformed_optional_fields_for_a_view() -> None:
     assert detail.table_format is TableFormat.OTHER
     assert detail.parameters == ()
     assert detail.storage.input_format is None
+    assert detail.partition_keys == ()
+
+
+@pytest.mark.parametrize(
+    ("nested_fields", "field_name"),
+    [
+        ({"Parameters": {"classification": ["ICEBERG"]}}, "string map"),
+        ({"Parameters": {1: "iceberg"}}, "string map"),
+        ({"StorageDescriptor": {"Columns": ["not-a-mapping"]}}, "Columns"),
+        ({"StorageDescriptor": {"Columns": [{}]}}, "Name"),
+        (
+            {
+                "StorageDescriptor": {
+                    "Columns": [{"Name": "valid"}, "not-a-mapping"],
+                }
+            },
+            "Columns",
+        ),
+        ({"PartitionKeys": ["not-a-mapping"]}, "PartitionKeys"),
+        ({"PartitionKeys": [{}]}, "Name"),
+        (
+            {
+                "PartitionKeys": [
+                    {"Name": "valid", "Type": "string"},
+                    {"Name": 42},
+                ]
+            },
+            "Name",
+        ),
+    ],
+)
+async def test_get_table_rejects_malformed_entries_in_recognized_nested_containers(
+    nested_fields: dict[str, object],
+    field_name: str,
+) -> None:
+    client, glue, _, _ = _client()
+    table: dict[str, object] = {"Name": "events", "TableType": "EXTERNAL_TABLE"}
+    table.update(nested_fields)
+    glue.get_table.return_value = {"Table": table}
+
+    with pytest.raises(
+        ValidationError,
+        match=rf"malformed Glue response: .*{field_name}",
+    ):
+        await client.get_table(
+            TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+        )
+
+
+async def test_get_table_accepts_empty_recognized_nested_containers() -> None:
+    client, glue, _, _ = _client()
+    glue.get_table.return_value = {
+        "Table": {
+            "Name": "events",
+            "TableType": "EXTERNAL_TABLE",
+            "Parameters": {},
+            "StorageDescriptor": {"Columns": []},
+            "PartitionKeys": [],
+        }
+    }
+
+    detail = await client.get_table(
+        TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+    )
+
+    assert detail.parameters == ()
+    assert detail.columns == ()
     assert detail.partition_keys == ()
 
 
@@ -1019,6 +1120,175 @@ async def test_get_table_error_hides_provider_payload_and_raw_response() -> None
     rendered = "".join(TracebackException.from_exception(exc_info.value).format())
     assert "PROVIDER_TEXT_SECRET" not in str(exc_info.value)
     assert "PROVIDER_TEXT_SECRET" not in rendered
+
+
+async def _invoke_glue_client_method(client: GlueClient, method: str) -> None:
+    ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+    if method == "list_databases_page":
+        await client.list_databases_page()
+    elif method == "list_tables_page":
+        await client.list_tables_page("analytics")
+    elif method == "get_table":
+        await client.get_table(ref)
+    elif method == "list_partitions_page":
+        await client.list_partitions_page(ref)
+    elif method == "get_column_statistics":
+        await client.get_column_statistics(ref, ("event_id",))
+    elif method == "list_jobs_page":
+        await client.list_jobs_page()
+    elif method == "list_job_runs_page":
+        await client.list_job_runs_page("daily-etl")
+    elif method == "list_crawlers_page":
+        await client.list_crawlers_page()
+    elif method == "get_crawler":
+        await client.get_crawler("events-crawler")
+    else:
+        await client.get_crawler_metrics("events-crawler")
+
+
+def _privacy_client_error(operation: str) -> botocore.exceptions.ClientError:
+    return botocore.exceptions.ClientError(
+        {
+            "Error": {
+                "Code": "AccessDeniedException",
+                "Message": _PROVIDER_MESSAGE_SECRET,
+            },
+            "ResponseMetadata": {
+                "HTTPStatusCode": 403,
+                "RequestId": _PROVIDER_RESPONSE_SECRET,
+                "HTTPHeaders": {"x-provider-secret": _PROVIDER_RESPONSE_SECRET},
+            },
+        },
+        operation,
+    )
+
+
+def _assert_mapped_error_has_no_raw_provider_references(
+    error: ProviderError,
+    *,
+    crash_dir: Path,
+) -> None:
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    exception_graph: list[BaseException] = []
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        exception_graph.append(current)
+        pending.extend(
+            linked for linked in (current.__context__, current.__cause__) if linked is not None
+        )
+        pending.extend(item for item in current.args if isinstance(item, BaseException))
+
+    assert not any(isinstance(item, botocore.exceptions.ClientError) for item in exception_graph)
+    assert error.__context__ is None
+    assert error.__cause__ is None
+
+    tb = error.__traceback__
+    while tb is not None:
+        for value in tb.tb_frame.f_locals.values():
+            if isinstance(value, BaseException):
+                assert not isinstance(value, botocore.exceptions.ClientError)
+            elif isinstance(value, dict):
+                assert not any(
+                    isinstance(item, botocore.exceptions.ClientError)
+                    for item in (*value.keys(), *value.values())
+                )
+            elif isinstance(value, list | tuple | set | frozenset):
+                assert not any(isinstance(item, botocore.exceptions.ClientError) for item in value)
+        tb = tb.tb_next
+
+    rendered_with_locals = "".join(
+        TracebackException.from_exception(error, capture_locals=True).format()
+    )
+    crash_compatible = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    crash_path = CrashDump(base_dir=crash_dir).write(exc=error)
+    crash_text = crash_path.read_text(encoding="utf-8")
+    visible = "\n".join(
+        (
+            str(error),
+            repr(error),
+            repr(error.args),
+            rendered_with_locals,
+            crash_compatible,
+            crash_text,
+        )
+    )
+    assert _PROVIDER_MESSAGE_SECRET not in visible
+    assert _PROVIDER_RESPONSE_SECRET not in visible
+
+
+def test_raise_mapped_glue_error_severs_active_exception_scope(tmp_path: Path) -> None:
+    try:
+        raise _privacy_client_error("GetTable")
+    except Exception as exc:
+        with pytest.raises(PermissionDeniedError) as raised:
+            raise_mapped_glue_error(exc)
+
+    _assert_mapped_error_has_no_raw_provider_references(
+        raised.value,
+        crash_dir=tmp_path / "raise_mapped_glue_error",
+    )
+
+
+@pytest.mark.parametrize(
+    ("client_method", "boto_method"),
+    [
+        ("list_databases_page", "get_databases"),
+        ("list_tables_page", "get_tables"),
+        ("get_table", "get_table"),
+        ("list_partitions_page", "get_partitions"),
+        ("get_column_statistics", "get_column_statistics_for_table"),
+        ("list_jobs_page", "get_jobs"),
+        ("list_job_runs_page", "get_job_runs"),
+        ("list_crawlers_page", "get_crawlers"),
+        ("get_crawler", "get_crawler"),
+        ("get_crawler_metrics", "get_crawler_metrics"),
+    ],
+)
+async def test_every_glue_client_method_severs_raw_client_error_references(
+    client_method: str,
+    boto_method: str,
+    tmp_path: Path,
+) -> None:
+    client, glue, _, _ = _client()
+    getattr(glue, boto_method).side_effect = _privacy_client_error(boto_method)
+
+    with pytest.raises(PermissionDeniedError) as raised:
+        await _invoke_glue_client_method(client, client_method)
+
+    _assert_mapped_error_has_no_raw_provider_references(
+        raised.value,
+        crash_dir=tmp_path / client_method,
+    )
+
+
+@pytest.mark.parametrize("supplement", ["tags", "metrics"])
+async def test_get_crawler_supplement_failures_sever_raw_client_error_references(
+    supplement: str,
+    tmp_path: Path,
+) -> None:
+    client, glue, sts, _ = _client()
+    glue.get_crawler.return_value = {"Crawler": _crawler()}
+    sts.get_caller_identity.return_value = {
+        "Account": "123456789012",
+        "Arn": "arn:aws:iam::123456789012:user/dev",
+    }
+    glue.get_tags.return_value = {"Tags": {}}
+    glue.get_crawler_metrics.return_value = {"CrawlerMetricsList": []}
+    boto_method = "get_tags" if supplement == "tags" else "get_crawler_metrics"
+    getattr(glue, boto_method).side_effect = _privacy_client_error(boto_method)
+    getattr(glue, boto_method).side_effect.response["Error"]["Code"] = "InternalServiceException"
+
+    with pytest.raises(ProviderError) as raised:
+        await client.get_crawler("events-crawler")
+
+    _assert_mapped_error_has_no_raw_provider_references(
+        raised.value,
+        crash_dir=tmp_path / supplement,
+    )
 
 
 @pytest.mark.parametrize(

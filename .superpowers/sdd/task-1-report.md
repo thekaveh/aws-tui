@@ -164,3 +164,107 @@ All listed final verification commands exited zero.
   every value. Any later UI that needs a display value must introduce an
   explicitly reviewed, privacy-safe projection rather than retaining raw Glue
   values on the domain record.
+
+## Review Findings Follow-up (2026-07-26)
+
+### Status
+
+Fixed all Task 1 findings from the review of `3ded08d..39d5b39`.
+
+- Glue now creates mapped errors inside each `except` block and raises them only
+  after leaving the active provider-exception scope. The shared raise helper
+  also clears context assigned by Python at raise time.
+- Every public Glue client method, including both crawler supplement paths, is
+  covered by realistic `ClientError` response-secret probes.
+- Format detection aggregates every recognized, case-insensitive marker instead
+  of collapsing duplicate keys. Exact precedence is Iceberg, Hudi, Delta, Hive,
+  then Other, independent of insertion order and marker source.
+- Marker keys and values, the external table type, and input format are trimmed.
+  Exact matching prevents substring and path false positives; trimmed views stay
+  Other and whitespace-only input formats do not imply Hive.
+- Recognized `Parameters` mappings and `Columns`/`PartitionKeys` sequences now
+  reject malformed entries and required value types with `ValidationError`.
+  Empty recognized containers remain valid.
+- Iceberg metadata records now have exact annotation, field-order, frozen,
+  slots, export, and sensitive-repr contract coverage. Glue calls the central
+  detector exactly once per table-detail mapping.
+
+### Changed Files
+
+- `src/aws_tui/domain/data_catalog.py`
+- `src/aws_tui/domain/glue.py`
+- `tests/unit/domain/test_data_catalog.py`
+- `tests/unit/domain/test_glue.py`
+- `tests/unit/domain/test_iceberg.py`
+- `.superpowers/sdd/task-1-report.md`
+
+`progress.md` was not edited.
+
+### TDD Evidence
+
+The detector regressions failed against the original implementation:
+
+```console
+$ uv run pytest tests/unit/domain/test_data_catalog.py -q
+15 failed, 33 passed in 0.34s
+```
+
+The Glue run reproduced silent recognized-container filtering and raw
+`ClientError` reachability across every public method and crawler supplement:
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py -q
+18 failed, 57 passed in 0.92s
+```
+
+The exported raise helper then received a separate active-exception-scope
+regression, which failed through `__context__` before the helper trampoline was
+added:
+
+```console
+$ uv run pytest tests/unit/domain/test_glue.py::test_raise_mapped_glue_error_severs_active_exception_scope -q
+1 failed in 0.31s
+```
+
+The privacy assertions traverse context, cause, and exception-valued args;
+inspect traceback-frame locals; render
+`TracebackException(capture_locals=True)`; render
+`traceback.format_exception`; write a real `CrashDump`; and inspect
+`str`, `repr`, and `args`.
+
+### Final Verification
+
+```console
+$ uv run pytest tests/unit/domain/test_data_catalog.py tests/unit/domain/test_iceberg.py tests/unit/domain/test_glue.py -q
+131 passed in 0.66s
+
+$ uv run pytest tests/unit/domain -q
+637 passed in 14.84s
+
+$ uv run pytest tests/unit/vm/glue tests/unit/ui/glue -q
+57 passed in 4.12s
+
+$ uv run mypy
+Success: no issues found in 151 source files
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+383 files already formatted
+
+$ ./scripts/check-layers.sh
+layer rules clean
+
+$ git diff --check
+```
+
+All listed final verification commands exited zero. A read-only Codex review
+also reran the focused tests and static checks and reported no findings.
+
+### Concerns
+
+- Malformed optional table-detail containers as a whole remain absent by the
+  established compatibility contract. Once a mapping or sequence is
+  structurally recognized, malformed nested entries are rejected rather than
+  discarded.
