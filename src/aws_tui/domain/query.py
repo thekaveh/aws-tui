@@ -72,10 +72,10 @@ class QueryExecutionSummary:
 @dataclass(frozen=True, slots=True)
 class QueryExecutionDetail:
     summary: QueryExecutionSummary
-    state_reason: str | None
+    state_reason: str | None = field(repr=False)
     context: QueryContext
     statistics: QueryStatistics
-    output_location: str | None
+    output_location: str | None = field(repr=False)
     engine_version: str | None
     error: AthenaQueryError | None
 

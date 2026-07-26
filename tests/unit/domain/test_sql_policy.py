@@ -32,6 +32,143 @@ def test_policy_accepts_one_read_only_statement(sql: str) -> None:
 @pytest.mark.parametrize(
     "sql",
     [
+        "DESCRIBE analytics.events",
+        "DESCRIBE FORMATTED analytics.events",
+        "DESCRIBE EXTENDED analytics.events",
+        "DESCRIBE analytics.events PARTITION (event_date = '2026-07-25')",
+    ],
+)
+def test_policy_accepts_athena_table_describe_grammar(sql: str) -> None:
+    assert ReadOnlySqlPolicy().validate(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DESCRIBE SELECT 1",
+        "DESCRIBE TABLE events",
+        "DESCRIBE DELETE FROM events",
+        "DESCRIBE INSERT INTO events SELECT 1",
+        "DESCRIBE UPDATE events SET value = 1",
+        "DESCRIBE CREATE TABLE events (value int)",
+        "DESCRIBE DROP TABLE events",
+        "DESCRIBE CALL system.runtime.kill_query()",
+        "DESCRIBE VACUUM events",
+        "EXPLAIN DESCRIBE DELETE FROM events",
+        "EXPLAIN DESCRIBE INSERT INTO events SELECT 1",
+        "EXPLAIN DESCRIBE UPDATE events SET value = 1",
+        "EXPLAIN DESCRIBE CREATE TABLE events (value int)",
+    ],
+)
+def test_policy_rejects_non_table_or_write_describe_grammar(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SHOW DATABASES",
+        "SHOW DATABASES LIKE '.*analytics'",
+        "SHOW DATABASES IN `lambda:function`",
+        "SHOW SCHEMAS",
+        "SHOW TABLES",
+        "SHOW TABLES IN sampledb",
+        "SHOW TABLES IN AwsDataCatalog.sampledb '*logs'",
+        "SHOW COLUMNS FROM orders",
+        "SHOW COLUMNS IN customers.orders",
+        "SHOW COLUMNS FROM orders FROM customers",
+        "SHOW PARTITIONS flight_delays_csv",
+        "SHOW TBLPROPERTIES orders",
+        "SHOW TBLPROPERTIES orders('comment')",
+        "SHOW VIEWS",
+        "SHOW VIEWS IN marketing_analytics LIKE 'orders*'",
+    ],
+)
+def test_policy_accepts_allowlisted_athena_show_grammar(sql: str) -> None:
+    assert ReadOnlySqlPolicy().validate(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SHOW",
+        "SHOW FROBNICATE events",
+        "SHOW DROP TABLE events",
+        "SHOW CALL system.runtime.kill_query()",
+        "SHOW VACUUM events",
+        "SHOW TABLES DELETE FROM events",
+        "SHOW TABLES IN analytics INSERT INTO events SELECT 1",
+        "SHOW DATABASES LIKE 'analytics' UPDATE events SET value = 1",
+        "SHOW CREATE TABLE events",
+        "SHOW CREATE VIEW event_view",
+        "SHOW COLUMNS",
+        "SHOW PARTITIONS",
+        "SHOW TBLPROPERTIES",
+    ],
+)
+def test_policy_rejects_unknown_write_or_incomplete_show_grammar(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 UNION SELECT 2",
+        "SELECT 1 INTERSECT SELECT 1",
+        "SELECT 1 EXCEPT SELECT 2",
+        "(SELECT 1 UNION SELECT 2) EXCEPT SELECT 3",
+        "SELECT * FROM (SELECT 1 UNION SELECT 2) AS combined",
+    ],
+)
+def test_policy_accepts_safe_select_set_operations(sql: str) -> None:
+    assert ReadOnlySqlPolicy().validate(sql) == sql
+
+
+def test_policy_rejects_write_nested_in_set_operation() -> None:
+    sql = (
+        "WITH changed AS (DELETE FROM events RETURNING *) "
+        "SELECT * FROM changed UNION SELECT * FROM events"
+    )
+
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "EXPLAIN (TYPE DISTRIBUTED) SELECT * FROM analytics.events",
+        "EXPLAIN (FORMAT JSON) SELECT * FROM analytics.events",
+        "EXPLAIN (FORMAT GRAPHVIZ, TYPE LOGICAL) SELECT 1 UNION SELECT 2",
+        "EXPLAIN (TYPE IO, FORMAT TEXT) DESCRIBE analytics.events",
+    ],
+)
+def test_policy_accepts_valid_explain_options(sql: str) -> None:
+    assert ReadOnlySqlPolicy().validate(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "EXPLAIN (TYPE UNKNOWN) SELECT 1",
+        "EXPLAIN (FORMAT YAML) SELECT 1",
+        'EXPLAIN ("TYPE" DISTRIBUTED) SELECT 1',
+        'EXPLAIN ("FORMAT" JSON) SELECT 1',
+        "EXPLAIN (FORMAT JSON) ANALYZE SELECT 1",
+        "EXPLAIN (TYPE DISTRIBUTED) DELETE FROM events",
+        "EXPLAIN (FORMAT JSON) CREATE TABLE events AS SELECT 1",
+    ],
+)
+def test_policy_rejects_unknown_explain_options_or_unsafe_body(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
         "",
         "   ",
         "SELECT 1; SELECT 2",

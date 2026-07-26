@@ -141,3 +141,27 @@ def test_sensitive_query_values_are_excluded_from_repr() -> None:
     assert "secret_column" not in repr(named)
     assert "api_token" not in repr(prepared)
     assert "secret-value" not in repr(page)
+
+
+def test_query_execution_detail_sensitive_aws_fields_are_excluded_from_repr() -> None:
+    detail = QueryExecutionDetail(
+        QueryExecutionSummary(
+            QueryExecutionRef("execution-1", "prod-west", "us-west-2", "analysts"),
+            QueryState.FAILED,
+            NOW,
+            NOW,
+            "DML",
+        ),
+        "state-reason-secret-7f4c2a9d",
+        QueryContext("prod-west", "us-west-2", "analysts", "AwsDataCatalog", "sales"),
+        QueryStatistics(120, 4, 8, 2, 1024, False),
+        "s3://sensitive-results-bucket/execution-1.csv",
+        "Athena engine version 3",
+        AthenaQueryError(2, 1001, False, "aws-error-secret-7f4c2a9d"),
+    )
+
+    rendered = repr(detail)
+
+    assert "state-reason-secret-7f4c2a9d" not in rendered
+    assert "sensitive-results-bucket" not in rendered
+    assert "aws-error-secret-7f4c2a9d" not in rendered

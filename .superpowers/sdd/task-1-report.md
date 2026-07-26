@@ -225,3 +225,196 @@ another third-party dependency.
   traceback/cause text for user-entered SQL.
 - `pip-audit` cannot audit the local unpublished `aws-tui==0.8.0` package; it found
   no known vulnerabilities in resolved third-party dependencies.
+
+## Important Findings Follow-up (2026-07-25)
+
+### Status
+
+All Important Athena Task 1 review findings are fixed on
+`codex/aws-service-expansion-study`.
+
+- `DESCRIBE` now accepts only sqlglot `Describe` trees using Athena table grammar.
+  Non-table roots, `DESCRIBE TABLE`, and any nested DDL, DML, command, or write
+  expression are rejected, including through `EXPLAIN`.
+- Opaque `SHOW` command bodies now pass a positive token grammar. The v1 allowlist is
+  `DATABASES`/`SCHEMAS`, `TABLES`, `COLUMNS`, `PARTITIONS`, `TBLPROPERTIES`, and
+  `VIEWS`, with only their documented optional scopes, filters, and property name.
+  Unknown, incomplete, appended, and `SHOW CREATE` forms are rejected.
+- `UNION`, `INTERSECT`, and `EXCEPT` roots are accepted when their complete trees are
+  read-only. Nested set operations and set operations inside a `SELECT` are covered.
+- `EXPLAIN` accepts `FORMAT TEXT|GRAPHVIZ|JSON` and
+  `TYPE LOGICAL|DISTRIBUTED|VALIDATE|IO`, strips the validated option list, then
+  recursively validates exactly one allowed statement. `EXPLAIN ANALYZE`, unknown
+  options, and unsafe bodies remain rejected.
+- Parser and tokenizer failures use suppressed exception chaining. Raw SQL fragments
+  no longer enter formatted exception chains, modal traceback previews, sqlglot log
+  capture, or crash dumps.
+- `QueryExecutionDetail.state_reason` and `output_location` now use `repr=False`.
+  The complete query-model repr audit also confirms that Athena error messages,
+  result rows, named-query SQL, and prepared-statement SQL remain excluded.
+
+The earlier concern about a sqlglot `TokenError` retaining a query fragment in a
+rendered cause is resolved by this follow-up.
+
+### Focused RED evidence
+
+The `DESCRIBE` bypass matrix failed because the previous policy returned immediately
+for every `Describe` root:
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_athena_table_describe_grammar tests/unit/domain/test_sql_policy.py::test_policy_rejects_non_table_or_write_describe_grammar -q
+....FFFFFFF..FFFF                                                        [100%]
+E       Failed: DID NOT RAISE QueryRejectedError
+11 failed, 6 passed in 0.30s
+```
+
+The `SHOW` deny matrix failed because every opaque body except structural `CREATE`
+was allowed:
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_allowlisted_athena_show_grammar tests/unit/domain/test_sql_policy.py::test_policy_rejects_unknown_write_or_incomplete_show_grammar -q
+................FFFFFFF..FFF                                             [100%]
+E       Failed: DID NOT RAISE QueryRejectedError
+10 failed, 18 passed in 0.31s
+```
+
+Set-operation roots and option-bearing `EXPLAIN` statements failed before the valid
+read implementation:
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_safe_select_set_operations tests/unit/domain/test_sql_policy.py::test_policy_rejects_write_nested_in_set_operation tests/unit/domain/test_sql_policy.py::test_policy_accepts_valid_explain_options tests/unit/domain/test_sql_policy.py::test_policy_rejects_unknown_explain_options_or_unsafe_body -q
+FFFF..FFFF.....                                                          [100%]
+8 failed, 7 passed in 1.15s
+```
+
+The privacy regression used the unique marker `SQLSECRET_7F4C2A9D`. Before suppressed
+chaining, it appeared in the formatted sqlglot `TokenError` chain:
+
+```console
+$ uv run pytest tests/unit/infra/test_crash_dump.py::test_rejected_sql_is_absent_from_exception_chains_logs_and_crash_dump -q
+F                                                                        [100%]
+E       AssertionError: assert 'SQLSECRET_7F4C2A9D' not in 'Traceback (...Athena SQL\n'
+1 failed in 0.34s
+```
+
+The detail repr regression failed on the Athena state reason before reaching the
+result-location assertion:
+
+```console
+$ uv run pytest tests/unit/domain/test_query.py::test_query_execution_detail_sensitive_aws_fields_are_excluded_from_repr -q
+F                                                                        [100%]
+E       AssertionError: assert 'state-reason-secret-7f4c2a9d' not in 'QueryExecut...able=False))'
+1 failed in 0.26s
+```
+
+Final self-review found that quoted option names could impersonate `TYPE` or `FORMAT`.
+The deny cases were added before tightening the token-kind check:
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_rejects_unknown_explain_options_or_unsafe_body -q
+..FF...                                                                  [100%]
+E       Failed: DID NOT RAISE QueryRejectedError
+2 failed, 5 passed in 0.30s
+```
+
+### Focused GREEN evidence
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_athena_table_describe_grammar tests/unit/domain/test_sql_policy.py::test_policy_rejects_non_table_or_write_describe_grammar -q
+.................                                                        [100%]
+17 passed in 0.26s
+
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_allowlisted_athena_show_grammar tests/unit/domain/test_sql_policy.py::test_policy_rejects_unknown_write_or_incomplete_show_grammar -q
+............................                                             [100%]
+28 passed in 0.26s
+
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_safe_select_set_operations tests/unit/domain/test_sql_policy.py::test_policy_rejects_write_nested_in_set_operation tests/unit/domain/test_sql_policy.py::test_policy_accepts_valid_explain_options tests/unit/domain/test_sql_policy.py::test_policy_rejects_unknown_explain_options_or_unsafe_body -q
+...............                                                          [100%]
+15 passed in 0.23s
+
+$ uv run pytest tests/unit/infra/test_crash_dump.py::test_rejected_sql_is_absent_from_exception_chains_logs_and_crash_dump -q
+.                                                                        [100%]
+1 passed in 0.50s
+
+$ uv run pytest tests/unit/domain/test_query.py::test_query_execution_detail_sensitive_aws_fields_are_excluded_from_repr -q
+.                                                                        [100%]
+1 passed in 0.22s
+
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_rejects_unknown_explain_options_or_unsafe_body -q
+.......                                                                  [100%]
+7 passed in 0.25s
+
+$ uv run pytest tests/unit/domain/test_query.py tests/unit/domain/test_sql_policy.py tests/unit/infra/test_crash_dump.py -q
+........................................................................ [ 58%]
+...................................................                      [100%]
+123 passed in 0.32s
+```
+
+### Final verification
+
+```console
+$ uv run pytest tests/unit/domain -q
+........................................................................ [ 20%]
+........................................................................ [ 41%]
+........................................................................ [ 62%]
+........................................................................ [ 82%]
+............................................................             [100%]
+348 passed in 14.95s
+
+$ uv run pytest tests/unit/infra/test_crash_dump.py -q
+........                                                                 [100%]
+8 passed in 0.30s
+
+$ uv run mypy
+Success: no issues found in 131 source files
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+346 files already formatted
+
+$ ./scripts/check-layers.sh
+layer rules clean
+
+$ uv lock --check
+Resolved 176 packages in 4ms
+
+$ uv run pip-audit
+No known vulnerabilities found
+Name    Skip Reason
+------- ----------------------------------------------------------------------
+aws-tui Dependency not found on PyPI and could not be audited: aws-tui (0.8.0)
+
+$ git diff --check
+```
+
+All requested follow-up verification commands listed above exited 0. As in the
+original report, the repeated local `.zshenv` warning is unrelated and omitted. The
+dependency-audit skip remains limited to the unpublished local package.
+
+An additional repository-wide `uv run pytest -q` check, beyond the requested Task 1
+gate, was interrupted after four minutes once it had established widespread
+unrelated failures:
+
+```console
+$ uv run pytest -q
+109 failed, 289 passed, 2 skipped, 9 deselected, 1 warning in 241.73s (0:04:01)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+```
+
+The first non-snapshot failure was the existing silent-SSO journey receiving one
+startup toast instead of zero. The remaining displayed failures were Textual
+snapshot comparisons across demo, EMR, EMR logs, and Glue. None exercised the Athena
+query models or SQL policy, and the run created no tracked changes.
+
+### Remaining concerns
+
+- No Important Task 1 finding remains open.
+- The parser policy remains defense in depth behind IAM, Lake Formation, Athena
+  workgroup, and S3 controls.
+- The earlier Minor review scope around exact field/`__all__` assertions and
+  exhaustive per-model immutability coverage was not expanded in this focused fix.
+- The unrelated repository-wide E2E/snapshot failures above remain outside Task 1;
+  the requested focused, domain, crash-dump, type, lint, format, layer, lock, audit,
+  and diff gates are green.
