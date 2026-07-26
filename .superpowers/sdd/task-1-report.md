@@ -505,3 +505,75 @@ $ git diff --check
 All listed commands exited 0. The recurring local `.zshenv` warning was unrelated
 and omitted from the transcript. No new Task 1 concern remains; this policy stays
 defense in depth behind IAM, Lake Formation, Athena workgroup, and S3 controls.
+
+## Final Complex-Column DESCRIBE Selectors (2026-07-25)
+
+### Status
+
+Closed the remaining Task 1 grammar gap for Athena complex-column `DESCRIBE`
+selectors.
+
+- The bounded optional column grammar accepts zero or more documented selectors:
+  `.field_name`, `.'$elem$'`, `.'$key$'`, and `.'$value$'`.
+- Identifier selectors retain existing quoted-identifier handling, and selectors
+  can be chained recursively.
+- Direct `DESCRIBE` and `EXPLAIN DESCRIBE`, including constrained `EXPLAIN`
+  options, use the same cursor validation.
+- Unknown quoted dollar values, arbitrary quoted fields, empty dots, operators,
+  calls, brackets/subscripts, malformed quoting, commands, and all trailing
+  tokens remain rejected. The partition grammar is unchanged.
+
+The [Athena DESCRIBE reference](https://docs.aws.amazon.com/athena/latest/ug/describe-table.html)
+documents each selector and recursive application.
+
+### TDD Evidence
+
+The selector acceptance/rejection matrix was added before production code. The
+new valid direct and `EXPLAIN` cases failed at the prior bounded end-of-input
+guard; invalid cases remained rejected:
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_documented_athena_describe_complex_column_selectors tests/unit/domain/test_sql_policy.py::test_policy_rejects_non_documented_athena_describe_complex_column_selectors -q
+7 failed, 20 passed in 0.37s
+```
+
+The minimal cursor change consumes only documented selector tokens after an
+already-valid column identifier:
+
+```console
+$ uv run pytest tests/unit/domain/test_sql_policy.py::test_policy_accepts_documented_athena_describe_complex_column_selectors tests/unit/domain/test_sql_policy.py::test_policy_rejects_non_documented_athena_describe_complex_column_selectors -q
+27 passed in 0.26s
+```
+
+### Final Verification
+
+```console
+$ uv run pytest tests/unit/domain/test_query.py tests/unit/domain/test_sql_policy.py -q
+167 passed in 0.33s
+
+$ uv run pytest tests/unit/domain -q
+400 passed in 15.25s
+
+$ uv run pytest tests/unit/infra/test_crash_dump.py -q
+8 passed in 0.32s
+
+$ uv run mypy
+Success: no issues found in 131 source files
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+346 files already formatted
+
+$ ./scripts/check-layers.sh
+layer rules clean
+
+$ uv lock --check
+Resolved 176 packages in 5ms
+
+$ git diff --check
+```
+
+All listed commands exited 0. No Task 1 concern remains beyond the existing
+defense-in-depth limits documented above.

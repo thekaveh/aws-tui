@@ -61,6 +61,56 @@ def test_policy_accepts_bounded_athena_describe_column_grammar(sql: str) -> None
 @pytest.mark.parametrize(
     "sql",
     [
+        "DESCRIBE orders complex.field",
+        "DESCRIBE orders complex.'$elem$'.field",
+        "DESCRIBE orders complex.'$key$'.'$value$'",
+        "DESCRIBE `orders table` `complex column`.`field name`.'$elem$'",
+        "DESCRIBE orders PARTITION (shard = 7) complex.'$value$'.nested",
+        "EXPLAIN DESCRIBE orders complex.'$key$'.'$value$'",
+        "EXPLAIN (TYPE IO, FORMAT TEXT) DESCRIBE orders complex.'$elem$'.field",
+    ],
+)
+def test_policy_accepts_documented_athena_describe_complex_column_selectors(
+    sql: str,
+) -> None:
+    assert ReadOnlySqlPolicy().validate(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DESCRIBE orders complex.'$unknown$'",
+        "DESCRIBE orders complex.'field'",
+        "DESCRIBE orders complex.",
+        "DESCRIBE orders complex..field",
+        "DESCRIBE orders complex.field + 1",
+        "DESCRIBE orders complex.lower()",
+        "DESCRIBE orders complex[1]",
+        "DESCRIBE orders complex.'$elem$' DELETE FROM orders",
+        "DESCRIBE orders complex.'$elem$' trailing",
+        "DESCRIBE orders complex.'$elem",
+        "EXPLAIN DESCRIBE orders complex.'$unknown$'",
+        "EXPLAIN DESCRIBE orders complex.'field'",
+        "EXPLAIN DESCRIBE orders complex.",
+        "EXPLAIN DESCRIBE orders complex..field",
+        "EXPLAIN DESCRIBE orders complex.field + 1",
+        "EXPLAIN DESCRIBE orders complex.lower()",
+        "EXPLAIN DESCRIBE orders complex[1]",
+        "EXPLAIN DESCRIBE orders complex.'$elem$' DELETE FROM orders",
+        "EXPLAIN DESCRIBE orders complex.'$elem$' trailing",
+        "EXPLAIN DESCRIBE orders complex.'$elem",
+    ],
+)
+def test_policy_rejects_non_documented_athena_describe_complex_column_selectors(
+    sql: str,
+) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
         "DESCRIBE orders PARTITION (p > 1)",
         "DESCRIBE orders PARTITION (p <> 1)",
         "DESCRIBE orders PARTITION (p = other_column)",

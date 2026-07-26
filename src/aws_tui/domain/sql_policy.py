@@ -11,6 +11,7 @@ from aws_tui.domain.filesystem import ValidationError
 _EXPLAIN_FORMATS = frozenset({"GRAPHVIZ", "JSON", "TEXT"})
 _EXPLAIN_TYPES = frozenset({"DISTRIBUTED", "IO", "LOGICAL", "VALIDATE"})
 _SHOW_SCOPE_TOKENS = frozenset({TokenType.FROM, TokenType.IN})
+_DESCRIBE_DOLLAR_SELECTORS = frozenset({"$elem$", "$key$", "$value$"})
 
 
 class QueryRejectedError(ValidationError):
@@ -159,7 +160,8 @@ class ReadOnlySqlPolicy:
         if cursor.consume_word("PARTITION") and not self._consume_describe_partition(cursor):
             raise QueryRejectedError("DESCRIBE must use Athena table grammar")
 
-        cursor._consume_identifier()
+        if cursor._consume_identifier() and not self._consume_describe_column_selectors(cursor):
+            raise QueryRejectedError("DESCRIBE must use Athena table grammar")
         if cursor.consume_type(TokenType.SEMICOLON):
             if cursor.at_end:
                 return
@@ -183,6 +185,17 @@ class ReadOnlySqlPolicy:
                 return True
             if not cursor.consume_type(TokenType.COMMA):
                 return False
+
+    def _consume_describe_column_selectors(self, cursor: _TokenCursor) -> bool:
+        while cursor.consume_type(TokenType.DOT):
+            selector = cursor.peek()
+            if selector is not None and selector.token_type is TokenType.STRING:
+                if selector.text not in _DESCRIBE_DOLLAR_SELECTORS:
+                    return False
+                cursor.index += 1
+            elif not cursor._consume_identifier():
+                return False
+        return True
 
     def _validate_command(self, command: exp.Command) -> None:
         verb = str(command.this).upper()
