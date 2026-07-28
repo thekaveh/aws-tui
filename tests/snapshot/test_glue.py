@@ -9,6 +9,7 @@ from tests.snapshot.conftest import THEMES
 
 WIDE = (150, 44)
 COMPACT = (100, 30)
+NARROW = (80, 24)
 
 
 @pytest.mark.parametrize("theme", THEMES)
@@ -62,6 +63,13 @@ def test_glue_iceberg_metadata_snapshot(iceberg_view: str, snap_compare) -> None
             iceberg_view=iceberg_view,
         ),
         terminal_size=WIDE,
+    )
+
+
+def test_glue_iceberg_narrow_snapshot(snap_compare) -> None:
+    assert snap_compare(
+        GluePageApp(theme="carbon", fixture="iceberg"),
+        terminal_size=NARROW,
     )
 
 
@@ -130,3 +138,7 @@ def test_glue_iceberg_metadata_content_guards() -> None:
     assert "day=2026-07-28" in partitions
     assert "BRANCH" in refs
     assert "86400000" in refs
+
+    narrow = _snapshot("test_glue_iceberg_narrow_snapshot")
+    for label in ("Snaps", "Hist", "Mnfst", "Files", "Parts", "Refs"):
+        assert label in narrow

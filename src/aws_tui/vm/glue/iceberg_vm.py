@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal, Protocol, TypeAlias, cast
 
 import reactivex as rx
@@ -11,8 +12,15 @@ from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.data_catalog import TableRef
-from aws_tui.domain.filesystem import ProviderError
+from aws_tui.domain.data_catalog import TableFormat, TableRef
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    PermissionDeniedError,
+    ProviderError,
+    ProviderUnreachableError,
+    ThrottledError,
+)
+from aws_tui.domain.glue import LakeFormationPermissionError
 from aws_tui.domain.iceberg import (
     IcebergDataFile,
     IcebergHistoryEntry,
@@ -23,7 +31,6 @@ from aws_tui.domain.iceberg import (
 )
 from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.glue._errors import map_provider_error
 from aws_tui.vm.messages import OpenAthenaTableRequest
 
 IcebergView: TypeAlias = Literal[
@@ -124,6 +131,11 @@ class _MetadataPane:
     error_text: str | None = None
     loaded: bool = False
     generation: int = 0
+    stable_rows: tuple[IcebergRow, ...] = field(default_factory=tuple)
+    stable_visible_count: int = 0
+    stable_state: PaneState = PaneState.EMPTY
+    stable_error_text: str | None = None
+    stable_loaded: bool = False
 
     @property
     def visible_rows(self) -> tuple[IcebergRow, ...]:
@@ -261,12 +273,23 @@ class GlueIcebergVM:
         self._on_property_changed.dispose()
         self._inner.dispose()
 
-    async def bind_table(self, table_ref: TableRef | None) -> None:
+    async def bind_table(
+        self,
+        table_ref: TableRef | None,
+        *,
+        table_format: TableFormat | None = None,
+    ) -> None:
         """Replace the table and clear every pane without issuing provider calls."""
         if self._disposed:
             return
-        if table_ref is not None and type(table_ref) is not TableRef:
-            raise ValueError("Iceberg table reference is invalid")
+        if (
+            table_ref is not None
+            and table_format is TableFormat.ICEBERG
+            and _valid_table_ref(table_ref)
+        ):
+            self._replace_table(table_ref)
+            return
+        table_ref = None
         self._replace_table(table_ref)
 
     def clear_table(self) -> None:
@@ -285,6 +308,7 @@ class GlueIcebergVM:
             pane.state = PaneState.EMPTY
             pane.error_text = None
             pane.loaded = False
+            self._remember_stable(pane)
         self._notify_all()
 
     async def select_view(self, view: IcebergView) -> bool:
@@ -353,13 +377,6 @@ class GlueIcebergVM:
         pane.generation += 1
         request_generation = pane.generation
         binding_generation = self._binding_generation
-        prior = (
-            pane.rows,
-            pane.visible_count,
-            pane.state,
-            pane.error_text,
-            pane.loaded,
-        )
         pane.state = PaneState.LOADING
         pane.error_text = None
         self._notify_view(view)
@@ -368,32 +385,21 @@ class GlueIcebergVM:
             rows = await self._loader(view)(table_ref)
             if caller_task is not None and caller_task.cancelling():
                 if self._is_current(view, request_generation, binding_generation, table_ref):
-                    (
-                        pane.rows,
-                        pane.visible_count,
-                        pane.state,
-                        pane.error_text,
-                        pane.loaded,
-                    ) = prior
+                    self._restore_stable(pane)
                     self._notify_view(view)
                 raise asyncio.CancelledError
             normalized = self._normalize_rows(view, rows)
         except asyncio.CancelledError:
             if self._is_current(view, request_generation, binding_generation, table_ref):
-                (
-                    pane.rows,
-                    pane.visible_count,
-                    pane.state,
-                    pane.error_text,
-                    pane.loaded,
-                ) = prior
+                self._restore_stable(pane)
                 self._notify_view(view)
             raise
         except ProviderError as exc:
             if not self._is_current(view, request_generation, binding_generation, table_ref):
                 return False
-            pane.state, pane.error_text = map_provider_error(exc)
+            pane.state, pane.error_text = _map_iceberg_provider_error(exc)
             pane.loaded = False
+            self._remember_stable(pane)
             self._notify_view(view)
             return False
         except Exception as exc:
@@ -403,6 +409,7 @@ class GlueIcebergVM:
             pane.state = PaneState.ERROR
             pane.error_text = "Iceberg metadata request failed"
             pane.loaded = False
+            self._remember_stable(pane)
             self._notify_view(view)
             return False
         if not self._is_current(view, request_generation, binding_generation, table_ref):
@@ -412,6 +419,7 @@ class GlueIcebergVM:
         pane.state = PaneState.IDLE if normalized else PaneState.EMPTY
         pane.error_text = None
         pane.loaded = True
+        self._remember_stable(pane)
         snapshots = cast(tuple[IcebergSnapshot, ...], normalized)
         if view == "snapshots" and not any(
             row.snapshot_id == self._selected_snapshot_id for row in snapshots
@@ -420,6 +428,24 @@ class GlueIcebergVM:
             self._notify("selected_snapshot_id")
         self._notify_view(view)
         return True
+
+    @staticmethod
+    def _remember_stable(pane: _MetadataPane) -> None:
+        if pane.state is PaneState.LOADING:
+            return
+        pane.stable_rows = pane.rows
+        pane.stable_visible_count = pane.visible_count
+        pane.stable_state = pane.state
+        pane.stable_error_text = pane.error_text
+        pane.stable_loaded = pane.loaded
+
+    @staticmethod
+    def _restore_stable(pane: _MetadataPane) -> None:
+        pane.rows = pane.stable_rows
+        pane.visible_count = pane.stable_visible_count
+        pane.state = pane.stable_state
+        pane.error_text = pane.stable_error_text
+        pane.loaded = pane.stable_loaded
 
     def _loader(self, view: IcebergView) -> Any:
         return getattr(self._inspector, f"list_{view}")
@@ -432,7 +458,9 @@ class GlueIcebergVM:
         if type(rows) is not tuple:
             raise ProviderError("Iceberg metadata response is invalid")
         expected = _ROW_TYPES[view]
-        if len(rows) > _ROW_LIMITS[view] or any(type(row) is not expected for row in rows):
+        if len(rows) > _ROW_LIMITS[view] or any(
+            type(row) is not expected or not _valid_row(view, row) for row in rows
+        ):
             raise ProviderError("Iceberg metadata response is invalid")
         typed = cast(tuple[IcebergRow, ...], rows)
         identities = tuple(_row_identity(view, row) for row in typed)
@@ -507,6 +535,133 @@ class GlueIcebergVM:
             PropertyChangedMessage.create(self, "glue.iceberg", property_name),
         )
         self._on_property_changed.on_next(property_name)
+
+
+def _map_iceberg_provider_error(exc: ProviderError) -> tuple[PaneState, str]:
+    if isinstance(exc, AuthRequiredError):
+        return PaneState.AUTH_REQUIRED, "AWS authentication is required"
+    if isinstance(exc, LakeFormationPermissionError | PermissionDeniedError):
+        return PaneState.FORBIDDEN, "Iceberg metadata access denied"
+    if isinstance(exc, ProviderUnreachableError):
+        return PaneState.UNREACHABLE, "Iceberg metadata service unavailable"
+    if isinstance(exc, ThrottledError):
+        return PaneState.ERROR, "Iceberg metadata request throttled"
+    if isinstance(exc, IcebergInspectionUnavailableError):
+        return PaneState.ERROR, "Athena workgroup unavailable"
+    return PaneState.ERROR, "Iceberg metadata request failed"
+
+
+def _valid_table_ref(value: object) -> bool:
+    return type(value) is TableRef and all(
+        type(field_value) is str and bool(field_value.strip())
+        for field_value in (
+            value.catalog_name,
+            value.database_name,
+            value.table_name,
+            value.connection_name,
+            value.region,
+        )
+    )
+
+
+def _valid_string(value: object, *, optional: bool = False) -> bool:
+    return (optional and value is None) or (type(value) is str and bool(value.strip()))
+
+
+def _valid_int(value: object, *, optional: bool = False) -> bool:
+    return (optional and value is None) or (type(value) is int and value >= 0)
+
+
+def _valid_datetime(value: object, *, optional: bool = False) -> bool:
+    return (optional and value is None) or type(value) is datetime
+
+
+def _valid_pairs(
+    value: object,
+    *,
+    optional_values: bool = False,
+) -> bool:
+    if type(value) is not tuple:
+        return False
+    keys: list[str] = []
+    for pair in value:
+        if type(pair) is not tuple or len(pair) != 2:
+            return False
+        key, item = pair
+        if not _valid_string(key) or not ((item is None and optional_values) or type(item) is str):
+            return False
+        keys.append(cast(str, key))
+    return len(keys) == len(set(keys))
+
+
+def _valid_row(view: IcebergView, row: IcebergRow) -> bool:
+    if view == "snapshots":
+        snapshot = cast(IcebergSnapshot, row)
+        return (
+            _valid_datetime(snapshot.committed_at)
+            and _valid_int(snapshot.snapshot_id)
+            and _valid_int(snapshot.parent_id, optional=True)
+            and snapshot.operation in {"append", "delete", "overwrite", "replace"}
+            and _valid_string(snapshot.manifest_list)
+            and _valid_pairs(snapshot.summary)
+        )
+    if view == "history":
+        history = cast(IcebergHistoryEntry, row)
+        return (
+            _valid_datetime(history.made_current_at)
+            and _valid_int(history.snapshot_id)
+            and _valid_int(history.parent_id, optional=True)
+            and type(history.is_current_ancestor) is bool
+        )
+    if view == "manifests":
+        manifest = cast(IcebergManifest, row)
+        return (
+            _valid_string(manifest.path)
+            and _valid_int(manifest.length)
+            and _valid_int(manifest.partition_spec_id)
+            and _valid_int(manifest.added_snapshot_id)
+            and _valid_int(manifest.added_data_files_count)
+            and _valid_int(manifest.existing_data_files_count)
+            and _valid_int(manifest.deleted_data_files_count)
+            and _valid_string(manifest.partition_summaries, optional=True)
+        )
+    if view == "files":
+        data_file = cast(IcebergDataFile, row)
+        return (
+            data_file.content in {0, 1, 2}
+            and type(data_file.content) is int
+            and _valid_string(data_file.file_path)
+            and data_file.file_format in {"AVRO", "ORC", "PARQUET"}
+            and _valid_int(data_file.spec_id)
+            and _valid_string(data_file.partition, optional=True)
+            and _valid_int(data_file.record_count)
+            and _valid_int(data_file.file_size_in_bytes)
+            and _valid_string(data_file.equality_ids, optional=True)
+            and _valid_int(data_file.sort_order_id, optional=True)
+        )
+    if view == "partitions":
+        partition = cast(IcebergPartition, row)
+        return (
+            _valid_pairs(partition.values, optional_values=True)
+            and _valid_int(partition.record_count)
+            and _valid_int(partition.file_count)
+            and _valid_int(partition.total_data_file_size_in_bytes)
+            and _valid_int(partition.position_delete_record_count, optional=True)
+            and _valid_int(partition.position_delete_file_count, optional=True)
+            and _valid_int(partition.equality_delete_record_count, optional=True)
+            and _valid_int(partition.equality_delete_file_count, optional=True)
+            and _valid_datetime(partition.last_updated_at, optional=True)
+            and _valid_int(partition.last_updated_snapshot_id, optional=True)
+        )
+    reference = cast(IcebergReference, row)
+    return (
+        _valid_string(reference.name)
+        and reference.ref_type in {"BRANCH", "TAG"}
+        and _valid_int(reference.snapshot_id)
+        and _valid_int(reference.max_reference_age_in_ms, optional=True)
+        and _valid_int(reference.min_snapshots_to_keep, optional=True)
+        and _valid_int(reference.max_snapshot_age_in_ms, optional=True)
+    )
 
 
 def _row_identity(view: IcebergView, row: IcebergRow) -> object:

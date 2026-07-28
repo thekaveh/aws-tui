@@ -32,6 +32,14 @@ _VIEW_ORDER: tuple[IcebergView, ...] = (
     "partitions",
     "refs",
 )
+_VIEW_LABELS: dict[IcebergView, str] = {
+    "snapshots": "Snaps",
+    "history": "Hist",
+    "manifests": "Mnfst",
+    "files": "Files",
+    "partitions": "Parts",
+    "refs": "Refs",
+}
 
 
 class _IcebergTab(Static, can_focus=True):
@@ -46,7 +54,7 @@ class _IcebergTab(Static, can_focus=True):
 
     def __init__(self, view: IcebergView) -> None:
         super().__init__(
-            view,
+            _VIEW_LABELS[view],
             id=f"glue-iceberg-tab-{view}",
             classes="glue-iceberg-tab",
             markup=False,
@@ -108,6 +116,7 @@ class GlueIcebergView(Widget):
         text-overflow: ellipsis;
     }
     GlueIcebergView #glue-iceberg-more,
+    GlueIcebergView #glue-iceberg-retry,
     GlueIcebergView #glue-iceberg-time-travel {
         width: 5;
         min-width: 5;
@@ -120,6 +129,7 @@ class GlueIcebergView(Widget):
         super().__init__(id=id, classes="glue-pane glue-iceberg-view")
         self._vm = vm
         self._sub: DisposableBase | None = None
+        self._suppress_highlight = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="glue-iceberg-tabs"):
@@ -140,6 +150,13 @@ class GlueIcebergView(Widget):
                 compact=True,
                 flat=True,
                 tooltip="Load more Iceberg metadata",
+            )
+            yield Button(
+                "↻",
+                id="glue-iceberg-retry",
+                compact=True,
+                flat=True,
+                tooltip="Retry Iceberg metadata",
             )
             yield Button(
                 "↗",
@@ -167,7 +184,12 @@ class GlueIcebergView(Widget):
         )
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if self._vm.active_view != "snapshots" or event.cursor_row >= len(self._vm.snapshots):
+        if (
+            self._suppress_highlight
+            or event.cursor_row != event.data_table.cursor_row
+            or self._vm.active_view != "snapshots"
+            or event.cursor_row >= len(self._vm.snapshots)
+        ):
             return
         self._vm.select_snapshot(self._vm.snapshots[event.cursor_row].snapshot_id)
 
@@ -178,8 +200,14 @@ class GlueIcebergView(Widget):
                 exclusive=True,
                 group="glue-iceberg-load-more",
             )
+        elif event.button.id == "glue-iceberg-retry":
+            self.run_worker(
+                self._vm.retry(),
+                exclusive=True,
+                group="glue-iceberg-retry",
+            )
         elif event.button.id == "glue-iceberg-time-travel":
-            self._vm.time_travel_in_athena()
+            self._time_travel_selected()
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh)
@@ -190,6 +218,7 @@ class GlueIcebergView(Widget):
             status = self.query_one("#glue-iceberg-status", Static)
             footer = self.query_one("#glue-iceberg-footer", Static)
             more = self.query_one("#glue-iceberg-more", Button)
+            retry = self.query_one("#glue-iceberg-retry", Button)
             time_travel = self.query_one("#glue-iceberg-time-travel", Button)
         except Exception:
             return
@@ -201,15 +230,37 @@ class GlueIcebergView(Widget):
                 view == self._vm.active_view,
                 "-active",
             )
-        table.clear(columns=True)
-        columns = _columns(self._vm.active_view)
-        for index, column in enumerate(columns):
-            table.add_column(column, key=f"glue-iceberg-column-{index}")
-        for index, row in enumerate(self._vm.items):
-            table.add_row(
-                *(Text(cell, no_wrap=True) for cell in _cells(self._vm.active_view, row)),
-                key=f"iceberg-row-{index}",
-            )
+        selected_snapshot_id = self._vm.selected_snapshot_id
+        self._suppress_highlight = True
+        try:
+            table.clear(columns=True)
+            columns = _columns(self._vm.active_view)
+            for index, column in enumerate(columns):
+                table.add_column(column, key=f"glue-iceberg-column-{index}")
+            for index, row in enumerate(self._vm.items):
+                row_key = (
+                    f"iceberg-snapshot-{cast(IcebergSnapshot, row).snapshot_id}"
+                    if self._vm.active_view == "snapshots"
+                    else f"iceberg-row-{index}"
+                )
+                table.add_row(
+                    *(Text(cell, no_wrap=True) for cell in _cells(self._vm.active_view, row)),
+                    key=row_key,
+                )
+            if self._vm.active_view == "snapshots" and self._vm.snapshots:
+                selected_index = next(
+                    (
+                        index
+                        for index, row in enumerate(self._vm.snapshots)
+                        if row.snapshot_id == selected_snapshot_id
+                    ),
+                    0,
+                )
+                selected_snapshot_id = self._vm.snapshots[selected_index].snapshot_id
+                table.move_cursor(row=selected_index)
+                self._vm.select_snapshot(selected_snapshot_id)
+        finally:
+            self.call_after_refresh(self._enable_highlight)
         placeholder = state_placeholder(
             self._vm.state,
             error_text=self._vm.error_text,
@@ -225,7 +276,31 @@ class GlueIcebergView(Widget):
         suffix = " · more available" if self._vm.has_more else ""
         footer.update(f"{len(self._vm.items)} rows{suffix}")
         more.disabled = not self._vm.has_more or self._vm.state is PaneState.LOADING
+        retry.display = self._vm.state in {
+            PaneState.AUTH_REQUIRED,
+            PaneState.FORBIDDEN,
+            PaneState.UNREACHABLE,
+            PaneState.ERROR,
+        }
+        retry.disabled = self._vm.state is PaneState.LOADING
         time_travel.disabled = self._vm.selected_snapshot_id is None
+
+    def _enable_highlight(self) -> None:
+        self._suppress_highlight = False
+
+    def _time_travel_selected(self) -> None:
+        try:
+            table = self.query_one("#glue-iceberg-table", DataTable)
+        except Exception:
+            return
+        if (
+            self._vm.active_view != "snapshots"
+            or table.cursor_row < 0
+            or table.cursor_row >= len(self._vm.snapshots)
+        ):
+            return
+        if self._vm.select_snapshot(self._vm.snapshots[table.cursor_row].snapshot_id):
+            self._vm.time_travel_in_athena()
 
 
 def _columns(view: IcebergView) -> tuple[str, ...]:

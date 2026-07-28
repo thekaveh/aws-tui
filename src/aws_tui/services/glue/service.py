@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from typing import Any, ClassVar, Protocol, cast
 
 from vmx import Message, MessageHub
@@ -144,6 +145,11 @@ class _ContextualIcebergInspector:
         return await (await self._inspector(table_ref)).list_refs(table_ref)
 
     async def _inspector(self, table_ref: TableRef) -> IcebergInspector:
+        if (
+            table_ref.connection_name != self._connection.name
+            or table_ref.region != self._connection.region
+        ):
+            raise IcebergInspectionUnavailableError("Iceberg table context is invalid")
         workgroup = await self._workgroup()
         return IcebergInspector(
             runner=self._runner,
@@ -157,41 +163,31 @@ class _ContextualIcebergInspector:
         )
 
     async def _workgroup(self) -> str:
-        selected = self._selections.get(self._scope, "workgroup")
-        if selected is not None and selected.strip():
-            return selected
         if self._resolved_workgroup is not None:
             return self._resolved_workgroup
         async with self._resolve_lock:
-            selected = self._selections.get(self._scope, "workgroup")
-            if selected is not None and selected.strip():
-                return selected
             if self._resolved_workgroup is not None:
                 return self._resolved_workgroup
-            workgroup = await self._first_available_workgroup()
+            workgroup = await self._resolve_available_workgroup()
             self._resolved_workgroup = workgroup
             self._selections.set(self._scope, "workgroup", workgroup)
             return workgroup
 
-    async def _first_available_workgroup(self) -> str:
+    async def _resolve_available_workgroup(self) -> str:
         token: str | None = None
         seen_tokens: set[str] = set()
         empty_pages = 0
+        all_rows: list[AthenaWorkgroupSummary] = []
+        complete = False
         for _request in range(_WORKGROUP_PAGE_LIMIT):
             rows, next_token = await self._client.list_workgroups_page(start_token=token)
-            if type(rows) is not list or any(
-                type(row) is not AthenaWorkgroupSummary for row in rows
-            ):
+            if type(rows) is not list or any(not _valid_workgroup_summary(row) for row in rows):
                 raise IcebergInspectionUnavailableError("Athena workgroup response is invalid")
             typed_rows = cast(list[AthenaWorkgroupSummary], rows)
-            enabled = next(
-                (row.name for row in typed_rows if row.state == "ENABLED" and row.name),
-                None,
-            )
-            if enabled is not None:
-                return enabled
+            all_rows.extend(typed_rows)
             empty_pages = empty_pages + 1 if not rows else 0
             if next_token is None:
+                complete = True
                 break
             if (
                 type(next_token) is not str
@@ -199,10 +195,34 @@ class _ContextualIcebergInspector:
                 or next_token in seen_tokens
                 or empty_pages > _WORKGROUP_EMPTY_PAGE_LIMIT
             ):
-                break
+                raise IcebergInspectionUnavailableError("Athena workgroup pagination is invalid")
             seen_tokens.add(next_token)
             token = next_token
+        if not complete:
+            raise IcebergInspectionUnavailableError("Athena workgroup pagination is incomplete")
+        names = tuple(row.name for row in all_rows)
+        if len(names) != len(set(names)):
+            raise IcebergInspectionUnavailableError("Athena workgroup response is invalid")
+        enabled = tuple(row.name for row in all_rows if row.state == "ENABLED")
+        selected = self._selections.get(self._scope, "workgroup")
+        if selected in enabled:
+            return selected
+        if enabled:
+            return enabled[0]
+        self._selections.discard(self._scope, "workgroup")
         raise IcebergInspectionUnavailableError("Athena workgroup unavailable")
+
+
+def _valid_workgroup_summary(value: object) -> bool:
+    return (
+        type(value) is AthenaWorkgroupSummary
+        and type(value.name) is str
+        and bool(value.name.strip())
+        and value.name == value.name.strip()
+        and value.state in {"ENABLED", "DISABLED"}
+        and (value.description is None or type(value.description) is str)
+        and (value.created_at is None or type(value.created_at) is datetime)
+    )
 
 
 class GlueService:

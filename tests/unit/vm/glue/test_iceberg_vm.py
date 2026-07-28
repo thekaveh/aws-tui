@@ -4,14 +4,14 @@ import asyncio
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.data_catalog import TableFormat, TableRef
-from aws_tui.domain.filesystem import PermissionDeniedError
+from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
 from aws_tui.domain.iceberg import (
     IcebergDataFile,
     IcebergHistoryEntry,
@@ -159,7 +159,7 @@ def make_vm(
 async def test_bind_table_is_lazy_and_snapshots_load_newest_first() -> None:
     vm, inspector, _hub = make_vm()
 
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
 
     assert vm.available
     assert inspector.calls == []
@@ -176,7 +176,7 @@ async def test_bind_table_is_lazy_and_snapshots_load_newest_first() -> None:
 @pytest.mark.asyncio
 async def test_metadata_views_load_once_on_demand_and_retry_only_current_view() -> None:
     vm, inspector, _hub = make_vm()
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     await vm.select_view("snapshots")
     await vm.select_view("refs")
     await vm.select_view("snapshots")
@@ -191,7 +191,7 @@ async def test_metadata_views_load_once_on_demand_and_retry_only_current_view() 
 @pytest.mark.asyncio
 async def test_manifest_pagination_is_local_bounded_and_preserves_exact_records() -> None:
     vm, inspector, _hub = make_vm(page_size=2)
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     await vm.select_view("manifests")
 
     assert vm.manifests == inspector.manifests[:2]
@@ -209,14 +209,14 @@ async def test_manifest_pagination_is_local_bounded_and_preserves_exact_records(
 @pytest.mark.asyncio
 async def test_pane_failure_is_isolated_and_retry_does_not_erase_other_panes() -> None:
     vm, inspector, _hub = make_vm()
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     await vm.select_view("refs")
     inspector.errors["snapshots"] = PermissionDeniedError("athena denied")
 
     await vm.select_view("snapshots")
 
     assert vm.state is PaneState.FORBIDDEN
-    assert vm.error_text == "athena denied"
+    assert vm.error_text == "Iceberg metadata access denied"
     assert vm.refs == inspector.refs
     assert vm.state_for("refs") is PaneState.IDLE
 
@@ -230,12 +230,12 @@ async def test_pane_failure_is_isolated_and_retry_does_not_erase_other_panes() -
 @pytest.mark.asyncio
 async def test_rebinding_discards_late_metadata_and_clears_snapshot_selection() -> None:
     vm, inspector, _hub = make_vm()
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     started = inspector.block("snapshots")
     loading = asyncio.create_task(vm.select_view("snapshots"))
     await started.wait()
 
-    await vm.bind_table(OTHER_REF)
+    await vm.bind_table(OTHER_REF, table_format=TableFormat.ICEBERG)
     inspector.release("snapshots")
     await loading
 
@@ -248,7 +248,7 @@ async def test_rebinding_discards_late_metadata_and_clears_snapshot_selection() 
 @pytest.mark.asyncio
 async def test_cancelled_load_rolls_back_without_stranding_loading_state() -> None:
     vm, inspector, _hub = make_vm()
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     started = inspector.block("snapshots")
     loading = asyncio.create_task(vm.select_view("snapshots"))
     await started.wait()
@@ -262,10 +262,50 @@ async def test_cancelled_load_rolls_back_without_stranding_loading_state() -> No
 
 
 @pytest.mark.asyncio
+async def test_cancelled_retry_never_restores_ownerless_loading_state() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    started = inspector.block("snapshots")
+    original = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+
+    retry = asyncio.create_task(vm.retry())
+    await asyncio.sleep(0)
+    retry.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await retry
+
+    assert vm.state is PaneState.EMPTY
+    assert vm.snapshots == ()
+
+    inspector.release("snapshots")
+    assert not await original
+    assert vm.state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
+async def test_retry_supersedes_retry_and_only_latest_completion_can_publish() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    started = inspector.block("snapshots")
+    first = asyncio.create_task(vm.retry())
+    await started.wait()
+    second = asyncio.create_task(vm.retry())
+    await asyncio.sleep(0)
+
+    inspector.release("snapshots")
+
+    assert not await first
+    assert await second
+    assert vm.state is PaneState.IDLE
+    assert [row.snapshot_id for row in vm.snapshots] == [43, 42]
+
+
+@pytest.mark.asyncio
 async def test_cancellation_resistant_provider_cannot_publish_late_rows() -> None:
     vm, inspector, _hub = make_vm()
     inspector.ignore_cancellation_for = "snapshots"
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     started = inspector.block("snapshots")
     loading = asyncio.create_task(vm.select_view("snapshots"))
     await started.wait()
@@ -289,7 +329,7 @@ async def test_selected_snapshot_sends_exact_time_travel_request_without_provide
             received.append(message) if isinstance(message, OpenAthenaTableRequest) else None
         )
     )
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     await vm.select_view("snapshots")
 
     assert vm.select_snapshot(43)
@@ -304,10 +344,77 @@ async def test_selected_snapshot_sends_exact_time_travel_request_without_provide
 @pytest.mark.asyncio
 async def test_time_travel_is_noop_for_missing_stale_or_non_integer_snapshot() -> None:
     vm, _inspector, _hub = make_vm()
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
 
     assert not vm.select_snapshot(True)
     assert not vm.select_snapshot(999)
+    assert not vm.time_travel_in_athena()
+
+
+@pytest.mark.asyncio
+async def test_bind_table_rejects_malformed_or_non_iceberg_context_without_calls() -> None:
+    vm, inspector, _hub = make_vm()
+    malformed = replace(ICEBERG_REF, region="")
+
+    await vm.bind_table(malformed, table_format=TableFormat.ICEBERG)
+    assert not vm.available
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.HIVE)
+    assert not vm.available
+    assert inspector.calls == []
+
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    assert vm.available
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view", "rows"),
+    [
+        ("snapshots", (replace(_snapshot(43), snapshot_id=-1),)),
+        (
+            "history",
+            (IcebergHistoryEntry(NOW, 43, 42, cast(Any, 1)),),
+        ),
+        (
+            "manifests",
+            (IcebergManifest("", 1, 0, 43, 0, 0, 0, None),),
+        ),
+        (
+            "files",
+            (IcebergDataFile(True, "s3://data/a", "PARQUET", 0, None, 1, 1, None, 0),),
+        ),
+        (
+            "partitions",
+            (
+                IcebergPartition(
+                    (("day", object()),),
+                    1,
+                    1,
+                    1,
+                    None,
+                    None,
+                    None,
+                    None,
+                    NOW,
+                    43,
+                ),
+            ),
+        ),
+        ("refs", (IcebergReference("main", "UNKNOWN", 43, None, None, None),)),
+    ],
+)
+async def test_malformed_exact_metadata_records_are_rejected_before_publish(
+    view: str,
+    rows: tuple[object, ...],
+) -> None:
+    vm, inspector, _hub = make_vm()
+    setattr(inspector, view, rows)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+
+    assert not await vm.select_view(cast(Any, view))
+    assert vm.state is PaneState.ERROR
+    assert vm.items == ()
+    assert vm.selected_snapshot_id is None
     assert not vm.time_travel_in_athena()
 
     await vm.bind_table(None)
@@ -353,7 +460,7 @@ async def test_catalog_exposes_iceberg_only_for_detected_table_and_keeps_glue_de
 @pytest.mark.asyncio
 async def test_dispose_invalidates_late_results_and_completes_lifecycle() -> None:
     vm, inspector, _hub = make_vm()
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     started = inspector.block("snapshots")
     loading = asyncio.create_task(vm.select_view("snapshots"))
     await started.wait()
@@ -378,7 +485,7 @@ async def test_throwing_property_observer_cannot_interrupt_binding_loading_or_di
     vm.on_property_changed.subscribe(on_next=broken)
     vm.on_property_changed.subscribe(on_next=received.append)
 
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     await vm.select_view("refs")
     vm.dispose()
 
@@ -399,7 +506,7 @@ async def test_hostile_hub_subscriber_is_value_free_and_does_not_interrupt_state
 
     hub.messages.subscribe(on_next=broken)
     with caplog.at_level(logging.ERROR):
-        await vm.bind_table(ICEBERG_REF)
+        await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
         await vm.select_view("refs")
 
     assert vm.refs
@@ -410,9 +517,34 @@ async def test_hostile_hub_subscriber_is_value_free_and_does_not_interrupt_state
 async def test_unexpected_inspector_error_is_value_free() -> None:
     vm, inspector, _hub = make_vm()
     inspector.errors["refs"] = RuntimeError("HOSTILE_ICEBERG_PROVIDER_VALUE")
-    await vm.bind_table(ICEBERG_REF)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
 
     await vm.select_view("refs")
 
     assert vm.state is PaneState.ERROR
     assert vm.error_text == "Iceberg metadata request failed"
+
+
+@pytest.mark.asyncio
+async def test_provider_error_with_hostile_string_is_contained_and_value_free(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    marker = "HOSTILE_ICEBERG_PROVIDER_MARKER"
+
+    class HostileProviderError(ProviderError):
+        def __str__(self) -> str:
+            raise RuntimeError(marker)
+
+        def __repr__(self) -> str:
+            return marker
+
+    vm, inspector, _hub = make_vm()
+    inspector.errors["snapshots"] = HostileProviderError()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+
+    with caplog.at_level(logging.DEBUG):
+        assert not await vm.select_view("snapshots")
+
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text == "Iceberg metadata request failed"
+    assert marker not in caplog.text

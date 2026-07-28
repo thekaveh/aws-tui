@@ -3,7 +3,34 @@
 ## Status
 
 Implemented Iceberg integration plan Task 4 on
-`codex/aws-service-expansion-study`.
+`codex/aws-service-expansion-study`, including the complete first-review
+correction pass.
+
+## Review Corrections
+
+- Snapshot table rebuilds now preserve the visible selection by stable
+  snapshot ID. Programmatic cursor movement is suppressed, stale highlight
+  events are ignored, removed rows fall back once to the first visible
+  snapshot, and time travel rechecks the visible row before publishing.
+- Each metadata pane retains a last stable non-loading state. A newer
+  load/retry supersedes the prior generation, cancellation restores that
+  stable state, and late results cannot publish after retry, rebind, profile
+  replacement, or disposal.
+- Exact Iceberg records are recursively validated before publication,
+  including nested tuples, optional values, enum-like fields, nonnegative
+  identifiers/counts/sizes, bool-vs-int distinctions, and unique identities.
+- Iceberg provider failures use constant, typed, value-free messages. Hostile
+  exception string/repr implementations cannot escape, enter logs, or leave
+  an owned pane loading.
+- Athena workgroups are always fetched and validated once per profile-local
+  inspector. Remembered selections are preferences only: deleted, disabled,
+  malformed, duplicate, or invalidly paginated responses are handled
+  deterministically, with fallback preserving provider order.
+- Table binding now requires exact Iceberg format context and a valid
+  `TableRef`. The UI has compact six-tab labels, an explicit retry action,
+  direct action/focus coverage, and an inspected 80x24 baseline.
+- The `.gitattributes` exception remains necessary because Textual's generated
+  `.raw` SVG snapshots contain intentional trailing spaces.
 
 ## Implementation
 
@@ -75,6 +102,20 @@ resolved workgroup was not persisted
 
 All corresponding focused tests pass after implementation.
 
+Review-correction RED:
+
+```text
+ownerless LOADING after cancelled retry
+older snapshot reset to newest after table refresh
+hostile ProviderError.__str__ escaped the VM
+malformed exact records published for all six metadata views
+remembered workgroup bypassed provider revalidation
+missing retry action and truncated 80-column tab labels
+```
+
+All review-correction tests failed for those intended reasons before the
+production changes and now pass.
+
 ## Verification
 
 ```text
@@ -97,6 +138,26 @@ mypy: 157 source files passed
 Layer checks: passed
 git diff --check: passed
 uv build: sdist and wheel passed
+```
+
+Review-correction verification:
+
+```text
+Focused VM/UI/service warning-strict: 44 passed
+Focused modified-surface coverage: 44 passed, 87.15%
+  GlueIcebergVM: 87%
+  GlueIcebergView: 90%
+  Glue service composition: 85%
+Broad Athena/Glue/Iceberg/navigation/integration warning-strict: 763 passed
+Iceberg visual suite: 17 passed, 16 snapshot comparisons
+  15 theme/metadata snapshots updated for compact labels
+  1 new 80x24 snapshot generated and inspected
+Ruff: all checks passed; 396 files formatted
+mypy: 157 source files passed
+Layer rules: clean
+uv build: sdist and wheel passed
+pre-commit: all 14 hooks passed across all files
+git diff --check: passed
 ```
 
 The broader warning-strict domain/VM/integration run completed with 1,339

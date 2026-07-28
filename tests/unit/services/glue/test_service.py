@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
@@ -80,7 +82,7 @@ async def test_glue_service_reuses_profile_scoped_selections_across_page_rebuild
 
 
 class _IcebergAthena:
-    def __init__(self, workgroups: tuple[str, ...]) -> None:
+    def __init__(self, workgroups: tuple[str | AthenaWorkgroupSummary, ...]) -> None:
         self.workgroups = workgroups
         self.workgroup_calls = 0
         self.start_calls = 0
@@ -92,7 +94,10 @@ class _IcebergAthena:
     ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
         self.workgroup_calls += 1
         return [
-            AthenaWorkgroupSummary(name, "ENABLED", None, None) for name in self.workgroups
+            row
+            if type(row) is AthenaWorkgroupSummary
+            else AthenaWorkgroupSummary(row, "ENABLED", None, None)
+            for row in self.workgroups
         ], None
 
     async def start_query(self, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -112,6 +117,25 @@ class _IcebergAthena:
         start_token: str | None = None,
     ):
         raise AssertionError((execution_id, start_token))
+
+
+class _PagedIcebergAthena(_IcebergAthena):
+    def __init__(
+        self,
+        pages: dict[str | None, tuple[list[AthenaWorkgroupSummary], str | None]],
+    ) -> None:
+        super().__init__(())
+        self.pages = pages
+        self.tokens: list[str | None] = []
+
+    async def list_workgroups_page(
+        self,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
+        self.workgroup_calls += 1
+        self.tokens.append(start_token)
+        return self.pages[start_token]
 
 
 def _iceberg_glue():
@@ -149,10 +173,147 @@ async def test_glue_service_prefers_profile_scoped_selected_athena_workgroup() -
     await page.setup()
     await page.catalog.iceberg.select_view("snapshots")
 
-    assert athena.workgroup_calls == 0
+    assert athena.workgroup_calls == 1
     assert athena.start_calls == 1
     assert page.catalog.iceberg.state is PaneState.FORBIDDEN
     assert page.catalog.table_detail is not None
+    page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_glue_service_revalidates_deleted_or_disabled_remembered_workgroup() -> None:
+    hub: MessageHub[Message] = MessageHub()
+    selections = ServiceSelectionStore()
+    connection = _connection("dev")
+    scope = SelectionScope("athena", connection.name, connection.region)
+    selections.set(scope, "workgroup", "selected")
+    athena = _IcebergAthena(
+        (
+            AthenaWorkgroupSummary("first", "ENABLED", None, None),
+            AthenaWorkgroupSummary("selected", "DISABLED", None, None),
+        )
+    )
+    service = GlueService(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        aws_session=AwsSession(),
+        glue_client_factory=lambda _connection: _iceberg_glue(),
+        athena_client_factory=lambda _connection: athena,
+        selection_store=selections,
+    )
+
+    page = service.build_vm(connection)
+    page.construct()
+    await page.setup()
+    await page.catalog.iceberg.select_view("snapshots")
+
+    assert athena.workgroup_calls == 1
+    assert selections.get(scope, "workgroup") == "first"
+    assert athena.start_calls == 1
+    page.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "workgroups",
+    [
+        (
+            AthenaWorkgroupSummary("duplicate", "ENABLED", None, None),
+            AthenaWorkgroupSummary("duplicate", "ENABLED", None, None),
+        ),
+        (
+            AthenaWorkgroupSummary(
+                "bad",
+                cast(Any, "UNKNOWN"),
+                None,
+                datetime(2026, 7, 28, tzinfo=UTC),
+            ),
+        ),
+        (
+            AthenaWorkgroupSummary(
+                "bad",
+                "ENABLED",
+                cast(Any, object()),
+                None,
+            ),
+        ),
+    ],
+)
+async def test_glue_service_rejects_malformed_workgroups_privately(
+    workgroups: tuple[AthenaWorkgroupSummary, ...],
+) -> None:
+    hub: MessageHub[Message] = MessageHub()
+    athena = _IcebergAthena(workgroups)
+    service = GlueService(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        aws_session=AwsSession(),
+        glue_client_factory=lambda _connection: _iceberg_glue(),
+        athena_client_factory=lambda _connection: athena,
+    )
+
+    page = service.build_vm(_connection("dev"))
+    page.construct()
+    await page.setup()
+    await page.catalog.iceberg.select_view("snapshots")
+
+    assert athena.workgroup_calls == 1
+    assert athena.start_calls == 0
+    assert page.catalog.iceberg.state is PaneState.ERROR
+    assert page.catalog.iceberg.error_text == "Athena workgroup unavailable"
+    page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_glue_service_resolves_enabled_workgroup_across_bounded_pages() -> None:
+    hub: MessageHub[Message] = MessageHub()
+    athena = _PagedIcebergAthena(
+        {
+            None: ([AthenaWorkgroupSummary("disabled", "DISABLED", None, None)], "next"),
+            "next": ([AthenaWorkgroupSummary("enabled", "ENABLED", None, None)], None),
+        }
+    )
+    service = GlueService(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        aws_session=AwsSession(),
+        glue_client_factory=lambda _connection: _iceberg_glue(),
+        athena_client_factory=lambda _connection: athena,
+    )
+
+    page = service.build_vm(_connection("dev"))
+    page.construct()
+    await page.setup()
+    await page.catalog.iceberg.select_view("snapshots")
+
+    assert athena.tokens == [None, "next"]
+    assert athena.start_calls == 1
+    page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_glue_service_rejects_invalid_workgroup_pagination_without_query() -> None:
+    hub: MessageHub[Message] = MessageHub()
+    athena = _PagedIcebergAthena(
+        {
+            None: ([AthenaWorkgroupSummary("enabled", "ENABLED", None, None)], ""),
+        }
+    )
+    service = GlueService(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        aws_session=AwsSession(),
+        glue_client_factory=lambda _connection: _iceberg_glue(),
+        athena_client_factory=lambda _connection: athena,
+    )
+
+    page = service.build_vm(_connection("dev"))
+    page.construct()
+    await page.setup()
+    await page.catalog.iceberg.select_view("snapshots")
+
+    assert athena.start_calls == 0
+    assert page.catalog.iceberg.error_text == "Athena workgroup unavailable"
     page.dispose()
 
 

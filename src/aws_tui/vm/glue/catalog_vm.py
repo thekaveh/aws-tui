@@ -364,7 +364,10 @@ class GlueCatalogVM:
             self._notify("table_detail")
             self._set_state("_detail_state", PaneState.IDLE, "detail_state")
             if detail.table_format is TableFormat.ICEBERG:
-                await self.iceberg.bind_table(detail.summary.ref)
+                await self.iceberg.bind_table(
+                    detail.summary.ref,
+                    table_format=detail.table_format,
+                )
                 if generation != self._detail_generation:
                     return
 
