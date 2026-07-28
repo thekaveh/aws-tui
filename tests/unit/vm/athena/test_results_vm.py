@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from collections.abc import Sequence
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
@@ -10,6 +12,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext, ResultColumn, ResultPage
+from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -72,6 +75,26 @@ def make_results_vm(client: ResultClient) -> AthenaResultsVM:
     )
     vm.construct()
     return vm
+
+
+async def _results_snapshot_failure_artifacts(
+    vm: AthenaResultsVM,
+    snapshot: object,
+    crash_dir: Path,
+) -> tuple[str, str, str]:
+    try:
+        await vm.restore_snapshot(snapshot)  # type: ignore[arg-type]
+    except ValueError as error:
+        snapshot = None
+        rendered = "".join(
+            traceback.TracebackException.from_exception(
+                error,
+                capture_locals=True,
+            ).format()
+        )
+        crash_path = CrashDump(base_dir=crash_dir).write(exc=error)
+        return str(error), rendered, crash_path.read_text(encoding="utf-8")
+    raise AssertionError("hostile snapshot should fail closed")
 
 
 @pytest.mark.asyncio
@@ -254,6 +277,40 @@ async def test_results_snapshot_preserves_duplicate_column_names() -> None:
 
     assert destination.columns == (duplicate, duplicate)
     assert destination.rows == (("left", "right"),)
+
+
+@pytest.mark.asyncio
+async def test_results_snapshot_rejection_is_value_free_for_arbitrary_and_exact_payloads(
+    tmp_path: Path,
+) -> None:
+    marker = "RESULTS_SNAPSHOT_PAYLOAD_SECRET"
+
+    class HostileSnapshot:
+        def __repr__(self) -> str:
+            return marker
+
+    exact = AthenaResultsSnapshot(
+        execution_id=marker,
+        columns=(_VALUE,),
+        rows=((marker,),),
+        next_token=marker,
+        state=PaneState.LOADING,
+        error_text=marker,
+        is_loading_more=True,
+    )
+    assert repr(exact) == "AthenaResultsSnapshot()"
+
+    for index, payload in enumerate((HostileSnapshot(), exact)):
+        destination = make_results_vm(ResultClient({}))
+        error_text, rendered, crash = await _results_snapshot_failure_artifacts(
+            destination,
+            payload,
+            tmp_path / f"crash-{index}",
+        )
+
+        assert error_text == "Athena results snapshot is invalid"
+        assert marker not in rendered
+        assert marker not in crash
 
 
 def test_results_snapshot_export_rejects_active_page_load() -> None:

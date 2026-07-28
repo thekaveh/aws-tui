@@ -40,6 +40,7 @@ from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.vm.athena.page_vm import AthenaPageVM
+from aws_tui.vm.athena.saved_vm import SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenGlueTableRequest
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
@@ -370,6 +371,7 @@ async def _snapshot_failure_artifacts(
     try:
         await page.restore_snapshot(snapshot)  # type: ignore[arg-type]
     except ValueError as error:
+        snapshot = None
         trace = "".join(
             traceback.TracebackException.from_exception(
                 error,
@@ -379,6 +381,41 @@ async def _snapshot_failure_artifacts(
         crash_path = CrashDump(base_dir=crash_dir).write(exc=error)
         return str(error), trace, crash_path.read_text(encoding="utf-8")
     raise AssertionError("mismatched snapshot should fail closed")
+
+
+def _page_restore_state(
+    page: AthenaPageVM,
+    store: ServiceSelectionStore,
+) -> tuple[object, ...]:
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    return (
+        page.context,
+        page.active_view,
+        page.query.context,
+        page.query.sql,
+        page.query.execution_ref,
+        page.query.state,
+        page.results.execution_id,
+        page.results.columns,
+        page.results.rows,
+        page.history.selected_execution_id,
+        page.saved.selected_kind,
+        page.saved.selected_query_id,
+        tuple(page.workgroups),
+        tuple(page.catalogs),
+        tuple(page.databases),
+        tuple(
+            (key, store.get(scope, key))
+            for key in (
+                "workgroup",
+                "catalog",
+                "database",
+                "active_view",
+                "history_execution_id",
+                "saved_query_id",
+            )
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -925,6 +962,8 @@ async def test_page_snapshot_rejects_forged_cross_component_state_without_leakin
                 results=object(),  # type: ignore[arg-type]
             ),
         ),
+        replace(snapshot, saved_kind=SavedQueryKind.NAMED, saved_query_id=None),
+        replace(snapshot, saved_kind=None, saved_query_id=marker),
     )
 
     for index, hostile in enumerate(hostile_snapshots):
@@ -958,6 +997,96 @@ async def test_page_snapshot_rejects_forged_cross_component_state_without_leakin
         for secret in (marker, "VALID_SNAPSHOT_SQL_SECRET"):
             assert secret not in trace
             assert secret not in crash
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_level", ["workgroup", "catalog", "database"])
+async def test_page_snapshot_restore_preflights_context_without_any_mutation(
+    missing_level: str,
+) -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    snapshot = source.export_snapshot()
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    destination.query.set_sql("UNCHANGED_DESTINATION_SQL")
+    if missing_level == "workgroup":
+        client.workgroups = [row for row in client.workgroups if row.name != "analysts"]
+    elif missing_level == "catalog":
+        client.catalogs["analysts"] = []
+    else:
+        client.databases[("analysts", "AwsDataCatalog")] = []
+    before = _page_restore_state(destination, store)
+
+    with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+        await destination.restore_snapshot(snapshot)
+
+    assert _page_restore_state(destination, store) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_attribute",
+    [
+        "workgroup_error",
+        "workgroup_detail_error",
+        "catalog_error",
+        "database_error",
+    ],
+)
+async def test_page_snapshot_preflight_provider_failures_are_atomic(
+    error_attribute: str,
+) -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    snapshot = source.export_snapshot()
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    destination.query.set_sql("UNCHANGED_DESTINATION_SQL")
+    setattr(client, error_attribute, ProviderError("SNAPSHOT_PROVIDER_SECRET"))
+    before = _page_restore_state(destination, store)
+
+    with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+        await destination.restore_snapshot(snapshot)
+
+    assert _page_restore_state(destination, store) == before
+
+
+@pytest.mark.asyncio
+async def test_page_snapshot_rejection_is_value_free_for_arbitrary_and_exact_payloads(
+    tmp_path: Path,
+) -> None:
+    marker = "PAGE_SNAPSHOT_PAYLOAD_SECRET"
+
+    class HostileSnapshot:
+        def __repr__(self) -> str:
+            return marker
+
+    page = make_page_vm(PageClient())
+    await page.setup()
+    exact = replace(page.export_snapshot(), active_view=marker)  # type: ignore[arg-type]
+    assert repr(exact) == "AthenaPageSnapshot()"
+
+    for index, payload in enumerate((HostileSnapshot(), exact)):
+        destination = make_page_vm(PageClient())
+        await destination.setup()
+        error_text, trace, crash = await _snapshot_failure_artifacts(
+            destination,
+            payload,
+            tmp_path / f"crash-{index}",
+        )
+
+        assert error_text == "Athena snapshot is invalid"
+        assert marker not in trace
+        assert marker not in crash
 
 
 @pytest.mark.asyncio

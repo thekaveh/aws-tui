@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import traceback
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -25,6 +27,7 @@ from aws_tui.domain.query import (
     ResultPage,
 )
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
+from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.vm.athena.query_vm import AthenaQueryVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -302,6 +305,26 @@ def make_query_vm(
     )
     vm.construct()
     return vm
+
+
+async def _query_snapshot_failure_artifacts(
+    vm: AthenaQueryVM,
+    snapshot: object,
+    crash_dir: Path,
+) -> tuple[str, str, str]:
+    try:
+        await vm.restore_snapshot(snapshot)  # type: ignore[arg-type]
+    except ValueError as error:
+        snapshot = None
+        rendered = "".join(
+            traceback.TracebackException.from_exception(
+                error,
+                capture_locals=True,
+            ).format()
+        )
+        crash_path = CrashDump(base_dir=crash_dir).write(exc=error)
+        return str(error), rendered, crash_path.read_text(encoding="utf-8")
+    raise AssertionError("hostile snapshot should fail closed")
 
 
 def test_query_vm_owns_reusable_runner_when_not_injected() -> None:
@@ -1160,6 +1183,155 @@ async def test_query_snapshot_restore_rejects_unowned_active_state(
 
     assert vm.execution_ref is None
     assert vm.state is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "changes"),
+    [
+        (QueryState.SUCCEEDED, {"pane_state": PaneState.LOADING}),
+        (QueryState.SUCCEEDED, {"pane_state": PaneState.AUTH_REQUIRED}),
+        (QueryState.SUCCEEDED, {"pane_state": PaneState.ERROR}),
+        (
+            QueryState.SUCCEEDED,
+            {
+                "query_error": AthenaQueryError(
+                    category=1,
+                    error_type=2,
+                    retryable=False,
+                    message="terminal error",
+                )
+            },
+        ),
+        (QueryState.SUCCEEDED, {"error_text": "terminal error"}),
+        (QueryState.SUCCEEDED, {"validation_error": "stale validation"}),
+        (QueryState.FAILED, {"pane_state": PaneState.LOADING}),
+        (QueryState.FAILED, {"error_text": "ownerless error"}),
+        (QueryState.CANCELLED, {"pane_state": PaneState.ERROR}),
+        (
+            QueryState.CANCELLED,
+            {
+                "query_error": AthenaQueryError(
+                    category=1,
+                    error_type=2,
+                    retryable=False,
+                    message="impossible cancellation error",
+                )
+            },
+        ),
+    ],
+)
+async def test_query_snapshot_rejects_incoherent_terminal_vm_states(
+    state: QueryState,
+    changes: dict[str, object],
+) -> None:
+    fake = InMemoryAthena(
+        executions=((_detail("q-app-1", QueryState.SUCCEEDED),),),
+        result_pages={
+            ("q-app-1", None): ResultPage((_COLUMN,), (("row",),), None),
+        },
+    )
+    source = make_query_vm(fake)
+    source.set_sql("SELECT 1")
+    await source.execute()
+    snapshot = source.export_snapshot()
+    if state is not QueryState.SUCCEEDED:
+        snapshot = replace(
+            snapshot,
+            state=state,
+            results=replace(
+                snapshot.results,
+                execution_id=None,
+                columns=(),
+                rows=(),
+                next_token=None,
+                state=PaneState.EMPTY,
+            ),
+        )
+    hostile = replace(snapshot, **changes)
+    destination = make_query_vm(InMemoryAthena())
+
+    with pytest.raises(ValueError, match=r"^Athena query snapshot is invalid$"):
+        await destination.restore_snapshot(hostile)
+
+    assert destination.execution_ref is None
+    assert destination.state is None
+    assert destination.pane_state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "error"),
+    [
+        (QueryState.SUCCEEDED, None),
+        (
+            QueryState.FAILED,
+            AthenaQueryError(
+                category=1,
+                error_type=2,
+                retryable=False,
+                message="query failed",
+            ),
+        ),
+        (QueryState.CANCELLED, None),
+    ],
+)
+async def test_query_snapshot_preserves_valid_terminal_states(
+    state: QueryState,
+    error: AthenaQueryError | None,
+) -> None:
+    fake = InMemoryAthena(
+        executions=((_detail("q-app-1", state, error=error),),),
+        result_pages={
+            ("q-app-1", None): ResultPage((_COLUMN,), (("row",),), None),
+        },
+    )
+    source = make_query_vm(fake)
+    source.set_sql("SELECT 1")
+    await source.execute()
+    snapshot = source.export_snapshot()
+    destination = make_query_vm(InMemoryAthena())
+
+    await destination.restore_snapshot(snapshot)
+
+    assert destination.state is state
+    assert destination.query_error == error
+    assert destination.pane_state is PaneState.IDLE
+    assert destination.error_text is None
+    expected_rows = (("row",),) if state is QueryState.SUCCEEDED else ()
+    assert destination.results.rows == expected_rows
+
+
+@pytest.mark.asyncio
+async def test_query_snapshot_rejection_is_value_free_for_arbitrary_and_exact_payloads(
+    tmp_path: Path,
+) -> None:
+    marker = "QUERY_SNAPSHOT_PAYLOAD_SECRET"
+
+    class HostileSnapshot:
+        def __repr__(self) -> str:
+            return marker
+
+    source = make_query_vm(InMemoryAthena())
+    exact = replace(
+        source.export_snapshot(),
+        sql=marker,
+        pane_state=PaneState.LOADING,
+        error_text=marker,
+    )
+    assert repr(exact) == "AthenaQuerySnapshot()"
+
+    for index, payload in enumerate((HostileSnapshot(), exact)):
+        destination = make_query_vm(InMemoryAthena())
+        error_text, rendered, crash = await _query_snapshot_failure_artifacts(
+            destination,
+            payload,
+            tmp_path / f"crash-{index}",
+        )
+
+        assert error_text == "Athena query snapshot is invalid"
+        assert marker not in rendered
+        assert marker not in crash
 
 
 def test_commands_follow_vmx_gating_and_disposal() -> None:

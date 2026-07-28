@@ -61,13 +61,13 @@ class AthenaQuerySnapshot:
     sql: str = field(repr=False)
     validation_error: str | None = field(repr=False)
     execution_ref: QueryExecutionRef | None = field(repr=False)
-    state: QueryState | None
+    state: QueryState | None = field(repr=False)
     statistics: QueryStatistics = field(repr=False)
     query_error: AthenaQueryError | None = field(repr=False)
     state_reason: str | None = field(repr=False)
     output_location: str | None = field(repr=False)
     engine_version: str | None = field(repr=False)
-    pane_state: PaneState
+    pane_state: PaneState = field(repr=False)
     error_text: str | None = field(repr=False)
     results: AthenaResultsSnapshot = field(repr=False)
 
@@ -267,14 +267,14 @@ class AthenaQueryVM:
         return snapshot
 
     async def restore_snapshot(self, snapshot: AthenaQuerySnapshot) -> None:
+        prepared = _prepare_query_snapshot(snapshot, self._context)
+        del snapshot
         if self._disposed or self._shutdown_started:
             raise ValueError("Athena query is unavailable")
-        if type(snapshot) is not AthenaQuerySnapshot:
+        if prepared is None:
             raise ValueError(_SNAPSHOT_ERROR)
-        if type(snapshot.context) is not QueryContext or snapshot.context != self._context:
+        if prepared.context != self._context:
             raise ValueError("Athena query snapshot does not match the active context")
-        if not self.snapshot_is_valid(snapshot, self._context):
-            raise ValueError(_SNAPSHOT_ERROR)
         if (
             self._execution_task is not None
             or self._submission_task is not None
@@ -284,19 +284,19 @@ class AthenaQueryVM:
         ):
             raise ValueError("Athena query is busy")
 
-        await self._results.restore_snapshot(snapshot.results)
+        await self._results.restore_snapshot(prepared.results)
         self._generation += 1
-        self._sql = snapshot.sql
-        self._validation_error = snapshot.validation_error
-        self._execution_ref = snapshot.execution_ref
-        self._state = snapshot.state
-        self._statistics = snapshot.statistics
-        self._query_error = snapshot.query_error
-        self._state_reason = snapshot.state_reason
-        self._output_location = snapshot.output_location
-        self._engine_version = snapshot.engine_version
-        self._pane_state = snapshot.pane_state
-        self._error_text = snapshot.error_text
+        self._sql = prepared.sql
+        self._validation_error = prepared.validation_error
+        self._execution_ref = prepared.execution_ref
+        self._state = prepared.state
+        self._statistics = prepared.statistics
+        self._query_error = prepared.query_error
+        self._state_reason = prepared.state_reason
+        self._output_location = prepared.output_location
+        self._engine_version = prepared.engine_version
+        self._pane_state = prepared.pane_state
+        self._error_text = prepared.error_text
         self._owns_active_query = False
         self._busy = False
         self._is_submitting = False
@@ -310,12 +310,17 @@ class AthenaQueryVM:
         snapshot: object,
         expected_context: QueryContext,
     ) -> bool:
+        return _prepare_query_snapshot(snapshot, expected_context) is not None
+
+    @staticmethod
+    def _snapshot_structure_is_valid(
+        snapshot: AthenaQuerySnapshot,
+        expected_context: QueryContext,
+    ) -> bool:
         if (
-            type(snapshot) is not AthenaQuerySnapshot
-            or type(expected_context) is not QueryContext
-            or type(snapshot.context) is not QueryContext
-            or snapshot.context != expected_context
+            not _valid_query_context(expected_context)
             or not _valid_query_context(snapshot.context)
+            or snapshot.context != expected_context
             or type(snapshot.sql) is not str
             or not _optional_exact_string(snapshot.validation_error)
             or not _optional_exact_string(snapshot.state_reason)
@@ -341,12 +346,34 @@ class AthenaQueryVM:
         if snapshot.state in {QueryState.QUEUED, QueryState.RUNNING}:
             return False
         if snapshot.execution_ref is None:
-            return snapshot.state is None and snapshot.results.execution_id is None
+            if snapshot.state is not None or snapshot.results.execution_id is not None:
+                return False
+            if snapshot.pane_state is PaneState.LOADING:
+                return False
+            if snapshot.pane_state in {
+                PaneState.AUTH_REQUIRED,
+                PaneState.FORBIDDEN,
+                PaneState.UNREACHABLE,
+                PaneState.ERROR,
+            }:
+                return snapshot.error_text is not None and bool(snapshot.error_text)
+            return snapshot.error_text is None
         if snapshot.state not in _TERMINAL_QUERY_STATES:
             return False
+        if (
+            snapshot.validation_error is not None
+            or snapshot.pane_state is not PaneState.IDLE
+            or snapshot.error_text is not None
+        ):
+            return False
         if snapshot.state is QueryState.SUCCEEDED:
-            return snapshot.results.execution_id == snapshot.execution_ref.execution_id
-        return snapshot.results.execution_id is None
+            return (
+                snapshot.query_error is None
+                and snapshot.results.execution_id == snapshot.execution_ref.execution_id
+            )
+        if snapshot.results.execution_id is not None:
+            return False
+        return not (snapshot.state is QueryState.CANCELLED and snapshot.query_error is not None)
 
     def _snapshot_export_is_busy(self) -> bool:
         return (
@@ -791,6 +818,17 @@ class AthenaQueryVM:
             )
         )
         self._on_property_changed.on_next(property_name)
+
+
+def _prepare_query_snapshot(
+    value: object,
+    expected_context: QueryContext,
+) -> AthenaQuerySnapshot | None:
+    if type(value) is not AthenaQuerySnapshot:
+        return None
+    if not AthenaQueryVM._snapshot_structure_is_valid(value, expected_context):
+        return None
+    return value
 
 
 def _optional_exact_string(value: object) -> bool:

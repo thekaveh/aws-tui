@@ -51,9 +51,9 @@ class AthenaResultsSnapshot:
     columns: tuple[ResultColumn, ...] = field(repr=False)
     rows: tuple[ResultRow, ...] = field(repr=False)
     next_token: str | None = field(repr=False)
-    state: PaneState
+    state: PaneState = field(repr=False)
     error_text: str | None = field(repr=False)
-    is_loading_more: bool
+    is_loading_more: bool = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,37 +237,41 @@ class AthenaResultsVM:
         return snapshot
 
     async def restore_snapshot(self, snapshot: AthenaResultsSnapshot) -> None:
+        prepared = _prepare_results_snapshot(snapshot)
+        del snapshot
         if self._disposed or self._shutdown_started:
             raise ValueError("Athena results are unavailable")
-        if not self.snapshot_is_valid(snapshot):
+        if prepared is None:
             raise ValueError(_SNAPSHOT_ERROR)
         self._generation += 1
         generation = self._generation
-        self._execution_id = snapshot.execution_id
-        self._columns = snapshot.columns
+        self._execution_id = prepared.execution_id
+        self._columns = prepared.columns
         worker = self._replace_worker(
-            snapshot.execution_id,
+            prepared.execution_id,
             generation,
             restored_page=ResultPage(
-                snapshot.columns,
-                snapshot.rows,
-                snapshot.next_token,
+                prepared.columns,
+                prepared.rows,
+                prepared.next_token,
             ),
         )
         await worker.pager.refresh_command.execute_async()
         if not self._is_current(worker):
             raise ValueError("Athena results snapshot is stale")
-        self._columns = snapshot.columns
-        self._state = snapshot.state
-        self._error_text = snapshot.error_text
-        self._is_loading_more = snapshot.is_loading_more
+        self._columns = prepared.columns
+        self._state = prepared.state
+        self._error_text = prepared.error_text
+        self._is_loading_more = prepared.is_loading_more
         self._notify_all()
         self._notify("is_loading_more")
 
     @staticmethod
     def snapshot_is_valid(snapshot: object) -> bool:
-        if type(snapshot) is not AthenaResultsSnapshot:
-            return False
+        return _prepare_results_snapshot(snapshot) is not None
+
+    @staticmethod
+    def _snapshot_structure_is_valid(snapshot: AthenaResultsSnapshot) -> bool:
         if (
             type(snapshot.columns) is not tuple
             or type(snapshot.rows) is not tuple
@@ -610,6 +614,14 @@ def _execution_identity_belongs_to(
         and ref.workgroup == detail.context.workgroup
         and detail.context == expected
     )
+
+
+def _prepare_results_snapshot(value: object) -> AthenaResultsSnapshot | None:
+    if type(value) is not AthenaResultsSnapshot:
+        return None
+    if not AthenaResultsVM._snapshot_structure_is_valid(value):
+        return None
+    return value
 
 
 def _optional_exact_string(value: object) -> bool:

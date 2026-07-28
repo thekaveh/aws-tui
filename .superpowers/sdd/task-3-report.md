@@ -998,3 +998,118 @@ aws_tui-0.8.0-py3-none-any.whl
 
 No pytest, `uv run pytest`, or retained navigation process remained after the
 bounded verification runs. `.superpowers/sdd/progress.md` was not modified.
+
+## Final Narrow Snapshot Boundary Corrections: 2026-07-28
+
+### Root Cause
+
+The last Task 3 review exposed three boundary gaps:
+
+1. Query snapshots validated terminal identity but not the complete visible VM
+   state. A terminal execution could therefore be paired with an ownerless
+   loading/error pane, stale validation text, or impossible query error data.
+2. Page restore persisted the target selection and changed workgroup/catalog
+   state while it was still discovering whether the complete target context
+   existed. A later rejection left a partially restored page.
+3. Snapshot records still rendered selected enum/string fields, and public
+   restore frames retained arbitrary caller objects while raising. Captured
+   traceback locals could therefore expose a hostile `repr`.
+
+### TDD Evidence
+
+The initial focused RED command covered terminal query coherence, normal
+terminal preservation, missing context at every level, and arbitrary/exact
+payload privacy across page/query/results:
+
+```text
+14 failed, 4 passed in 0.65s
+```
+
+The failures showed accepted ownerless terminal states, catalog/database
+rejection after visible context mutation, and value-bearing snapshot
+representations. A subsequent saved-query pair test failed because snapshots
+accepted a kind without an ID and an ID without a kind.
+
+After the implementation and the saved-query coherence correction:
+
+```text
+145 passed in 1.08s
+```
+
+This includes all Athena page/query/results VM tests with runtime and
+unraisable warnings promoted to errors.
+
+### Implementation
+
+- `AthenaPageSnapshot`, `AthenaQuerySnapshot`, and `AthenaResultsSnapshot` now
+  have entirely value-free generated representations.
+- Each public restore API immediately passes its argument through a total,
+  non-raising preparation helper, deletes the raw argument, and raises only
+  from a value-free boundary frame. Exact hostile records and arbitrary
+  hostile objects are absent from captured locals, formatted tracebacks,
+  exception graphs, and real crash dumps.
+- Query terminal validation now matches restorable VM states: active states
+  and owner-like loading states are rejected; terminal executions require an
+  idle query pane and no UI/validation error text; success forbids query error
+  data; cancellation forbids query error data; failed/success/cancel snapshots
+  produced by the VM continue to round-trip.
+- Page restore validates the complete nested snapshot and saved-query pair
+  before discovery. Workgroups, workgroup detail, catalogs, and databases are
+  then fetched into a private value-free stage with bounded/repeated-token and
+  empty-page guards. Missing resources, malformed pages, and provider failures
+  return a stable error without changing context, lists, sub-VMs, active view,
+  or the selection store.
+- A successful commit installs validated staged pages through the existing
+  `TokenPagedComposition` workers, preserves continuation tokens, restores the
+  exact query/results state without provider result fetching, and only then
+  persists selections.
+- Adversarial tests compare complete observable page state before and after
+  workgroup, detail, catalog, and database failures. Duplicate result column
+  names and valid succeeded/failed/cancelled snapshots remain supported.
+
+### Verification
+
+Affected snapshot, navigation, privacy, crash-dump, and app sanity matrix:
+
+```text
+291 passed in 97.61s
+```
+
+Broad domain and VM regression:
+
+```text
+1536 passed in 45.61s
+```
+
+Full integration regression:
+
+```text
+219 passed, 9 deselected in 277.65s
+```
+
+Static, architecture, formatting, diff, and packaging gates:
+
+```text
+uv run mypy src/aws_tui
+Success: no issues found in 152 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+386 files already formatted
+
+scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+clean
+
+uv build --no-build-isolation
+Successfully built dist/aws_tui-0.8.0.tar.gz
+Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
+```
+
+No pytest or `uv run pytest` process remained after verification.
+`.superpowers/sdd/progress.md` was not modified. This correction is the single
+focused commit immediately following `14a6997`.
