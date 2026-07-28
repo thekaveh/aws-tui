@@ -126,13 +126,6 @@ Master:
 docs/diagrams/architecture.html
 ```
 
-Committed artifacts:
-
-```text
-docs/diagrams/img/architecture.svg  20,323 bytes
-docs/diagrams/img/architecture.png  125,142 bytes
-```
-
 Geometry and format:
 
 ```text
@@ -149,22 +142,9 @@ views; Glue/Athena VM trees and plugins/providers; `TableRef`,
 `ConnectionResolver`, and MessageHub requests; S3 handoffs; and the AWS
 Glue/Athena/S3/Lake Formation boundary.
 
-Deterministic SVG hash across canonical, generated site, and generated wiki
-source copies:
-
-```text
-35dfe333d76657094dd76fd9fddaae86330cd103038bd786aead89a95696db0c
-```
-
-The SVG is 20,323 bytes after newline normalization. MkDocs strips that final
-newline when copying the asset into `site/`; the generated source surfaces
-remain byte-identical and are the determinism contract.
-
-Deterministic PNG hash across canonical and generated wiki copies:
-
-```text
-d87adaa49de051165a91ce24f44efcd89cc29195c4f084f8937b72ee207e45c6
-```
+Final artifact sizes and hashes are recorded in Section 9.3, Final
+Regeneration and Verification, which is authoritative for the regenerated
+files and their determinism evidence.
 
 Browser inspection used the self-contained master through a local HTTP server:
 
@@ -400,6 +380,15 @@ Resolved 176 packages
 ```
 
 The regenerated PNG is RGB 1600x900 and the SVG viewBox is `0 0 1600 900`.
+Final artifact evidence (authoritative):
+
+```text
+docs/diagrams/img/architecture.svg  19,974 bytes
+docs/diagrams/img/architecture.png  125,122 bytes
+SVG SHA-256: 52362e77d14e8471758a1eb41f9358bd365d602fe7855ff81055d9291ed7ca2a
+PNG SHA-256: f80b2f3280dd1548462171e9402fd9265ce1b4d130bf370790c93132df328d36
+```
+
 Canonical, generated-site, and generated-wiki SVGs are byte-identical:
 
 ```text
