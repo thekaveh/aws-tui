@@ -50,6 +50,7 @@ from aws_tui.vm.chrome.quick_look_vm import QuickLookVM
 from aws_tui.vm.chrome.resume_vm import ResumeAction
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
+from aws_tui.vm.service_source_vm import ServiceSelectionStore
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM, entry_from_s3_form
 
@@ -274,6 +275,7 @@ def build_app_context(
     # ── Hub + dispatcher ───────────────────────────────────────────────────
     hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
+    service_selections = ServiceSelectionStore()
 
     # ── Registry ───────────────────────────────────────────────────────────
     registry = ServiceRegistry()
@@ -299,6 +301,8 @@ def build_app_context(
         dispatcher=dispatcher,
         aws_session=aws_session,
         glue_client_factory=glue_client_factory,
+        athena_client_factory=athena_client_factory,
+        selection_store=service_selections,
     )
     registry.register(cast("Service", glue_service))
 
@@ -307,6 +311,7 @@ def build_app_context(
         dispatcher=dispatcher,
         aws_session=aws_session,
         athena_client_factory=athena_client_factory,
+        selection_store=service_selections,
     )
     registry.register(cast("Service", athena_service))
 

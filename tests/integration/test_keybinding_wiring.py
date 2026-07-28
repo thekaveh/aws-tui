@@ -43,6 +43,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("1", "dispatch('glue.catalog')", False, False),
     ("2", "dispatch('glue.jobs')", False, False),
     ("3", "dispatch('glue.crawlers')", False, False),
+    ("V", "dispatch('glue.time_travel_in_athena')", False, False),
     ("1", "dispatch('athena.query')", False, False),
     ("2", "dispatch('athena.history')", False, False),
     ("3", "dispatch('athena.results')", False, False),

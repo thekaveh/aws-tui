@@ -108,13 +108,14 @@ class AthenaService:
         aws_session: AwsSession,
         athena_client_factory: AthenaClientFactory | None = None,
         sql_policy_factory: SqlPolicyFactory | None = None,
+        selection_store: ServiceSelectionStore | None = None,
     ) -> None:
         self._hub = hub
         self._dispatcher = dispatcher
         self._aws_session = aws_session
         self._client_factory = athena_client_factory
         self._policy_factory = sql_policy_factory or ReadOnlySqlPolicy
-        self._selections = ServiceSelectionStore()
+        self._selections = selection_store or ServiceSelectionStore()
 
     def supports(self, connection: Connection) -> bool:
         return connection.kind == "aws"

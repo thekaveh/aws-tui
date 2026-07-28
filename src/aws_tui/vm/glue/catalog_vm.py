@@ -15,6 +15,7 @@ from aws_tui.domain.data_catalog import (
     DatabaseSummary,
     PartitionSummary,
     TableDetail,
+    TableFormat,
     TableRef,
     TableSummary,
 )
@@ -22,6 +23,11 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.glue.iceberg_vm import (
+    GlueIcebergVM,
+    IcebergInspectorProtocol,
+    UnavailableIcebergInspector,
+)
 from aws_tui.vm.messages import OpenAthenaTableRequest, OpenS3LocationRequest
 
 _DISCOVERY_PAGE_LIMIT = 64
@@ -33,6 +39,7 @@ class GlueCatalogVM:
         self,
         *,
         client: Any,
+        iceberg_inspector: IcebergInspectorProtocol | None = None,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
@@ -47,6 +54,11 @@ class GlueCatalogVM:
             .model(None)
             .services(hub, dispatcher)
             .build()
+        )
+        self.iceberg = GlueIcebergVM(
+            inspector=iceberg_inspector or UnavailableIcebergInspector(),
+            hub=hub,
+            dispatcher=dispatcher,
         )
 
         self._database_generation = 0
@@ -171,6 +183,7 @@ class GlueCatalogVM:
 
     def construct(self) -> None:
         self._inner.construct()
+        self.iceberg.construct()
 
     def dispose(self) -> None:
         if self._disposed:
@@ -183,6 +196,7 @@ class GlueCatalogVM:
         self._partition_pager.dispose()
         self._table_pager.dispose()
         self._database_pager.dispose()
+        self.iceberg.dispose()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
@@ -254,6 +268,7 @@ class GlueCatalogVM:
         generation = self._table_generation
         self._selected_database_name = database_name
         self._selected_table_name = None
+        self.iceberg.clear_table()
         self._table_detail = None
         self._column_statistics = ()
         self._detail_generation += 1
@@ -328,6 +343,7 @@ class GlueCatalogVM:
         self._selected_table_name = table_name
         self._table_detail = None
         self._column_statistics = ()
+        self.iceberg.clear_table()
         self._replace_partition_pager(summary.ref)
         self._detail_error_text = None
         self._partitions_error_text = None
@@ -347,6 +363,10 @@ class GlueCatalogVM:
             self._table_detail = detail
             self._notify("table_detail")
             self._set_state("_detail_state", PaneState.IDLE, "detail_state")
+            if detail.table_format is TableFormat.ICEBERG:
+                await self.iceberg.bind_table(detail.summary.ref)
+                if generation != self._detail_generation:
+                    return
 
         await self._load_partitions(generation)
         if generation != self._detail_generation:
@@ -633,6 +653,7 @@ class GlueCatalogVM:
         self._detail_generation += 1
         self._selected_database_name = None
         self._selected_table_name = None
+        self.iceberg.clear_table()
         self._table_detail = None
         self._column_statistics = ()
         self._replace_table_pager(None)

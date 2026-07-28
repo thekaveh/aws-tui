@@ -42,6 +42,29 @@ def test_glue_catalog_empty_snapshot(theme: str, snap_compare) -> None:
     )
 
 
+@pytest.mark.parametrize("theme", THEMES)
+def test_glue_iceberg_snapshots_snapshot(theme: str, snap_compare) -> None:
+    assert snap_compare(
+        GluePageApp(theme=theme, fixture="iceberg"),
+        terminal_size=WIDE,
+    )
+
+
+@pytest.mark.parametrize(
+    "iceberg_view",
+    ["history", "manifests", "files", "partitions", "refs"],
+)
+def test_glue_iceberg_metadata_snapshot(iceberg_view: str, snap_compare) -> None:
+    assert snap_compare(
+        GluePageApp(
+            theme="carbon",
+            fixture="iceberg",
+            iceberg_view=iceberg_view,
+        ),
+        terminal_size=WIDE,
+    )
+
+
 @pytest.mark.parametrize(
     ("view", "fixture"),
     [
@@ -59,8 +82,9 @@ def test_glue_compact_snapshot(view: str, fixture: str, snap_compare) -> None:
     )
 
 
-def _snapshot(test_name: str, theme: str) -> str:
-    path = Path(__file__).parent / "__snapshots__" / "test_glue" / f"{test_name}[{theme}].raw"
+def _snapshot(test_name: str, theme: str | None = None) -> str:
+    suffix = f"[{theme}]" if theme is not None else ""
+    path = Path(__file__).parent / "__snapshots__" / "test_glue" / f"{test_name}{suffix}.raw"
     assert path.is_file(), f"missing snapshot {path.name}; run --snapshot-update"
     return path.read_text()
 
@@ -86,3 +110,23 @@ def test_glue_snapshot_content_guards(theme: str) -> None:
     assert "events" not in forbidden
     assert "no&#160;databases" in empty
     assert "events" not in empty
+
+    snapshots = _snapshot("test_glue_iceberg_snapshots_snapshot", theme)
+    assert "snapshots" in snapshots
+    assert "43" in snapshots
+    assert "append" in snapshots
+
+
+def test_glue_iceberg_metadata_content_guards() -> None:
+    history = _snapshot("test_glue_iceberg_metadata_snapshot[history]")
+    manifests = _snapshot("test_glue_iceberg_metadata_snapshot[manifests]")
+    files = _snapshot("test_glue_iceberg_metadata_snapshot[files]")
+    partitions = _snapshot("test_glue_iceberg_metadata_snapshot[partitions]")
+    refs = _snapshot("test_glue_iceberg_metadata_snapshot[refs]")
+
+    assert "Ancestor" in history
+    assert "manifest-0.avro" in manifests
+    assert "a.parquet" in files
+    assert "day=2026-07-28" in partitions
+    assert "BRANCH" in refs
+    assert "86400000" in refs

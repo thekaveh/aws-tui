@@ -10,6 +10,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
 from aws_tui.vm.glue.crawlers_vm import GlueCrawlersVM
+from aws_tui.vm.glue.iceberg_vm import IcebergInspectorProtocol
 from aws_tui.vm.glue.jobs_vm import GlueJobsVM
 from aws_tui.vm.service_source_vm import (
     SelectionScope,
@@ -27,6 +28,7 @@ class GluePageVM:
         self,
         *,
         client: Any,
+        iceberg_inspector: IcebergInspectorProtocol | None = None,
         connection: Connection,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
@@ -51,7 +53,12 @@ class GluePageVM:
             .services(hub, dispatcher)
             .build()
         )
-        self.catalog = GlueCatalogVM(client=client, hub=hub, dispatcher=dispatcher)
+        self.catalog = GlueCatalogVM(
+            client=client,
+            iceberg_inspector=iceberg_inspector,
+            hub=hub,
+            dispatcher=dispatcher,
+        )
         self.jobs = GlueJobsVM(client=client, hub=hub, dispatcher=dispatcher)
         self.crawlers = GlueCrawlersVM(client=client, hub=hub, dispatcher=dispatcher)
 

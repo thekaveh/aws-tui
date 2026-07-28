@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+from typing import ClassVar, cast
+
+from reactivex.abc import DisposableBase
+from rich.text import Text
+from textual.app import ComposeResult
+from textual.binding import Binding, BindingType
+from textual.containers import Horizontal
+from textual.events import Click
+from textual.message import Message as TextualMessage
+from textual.widget import Widget
+from textual.widgets import Button, DataTable, Static
+
+from aws_tui.domain.iceberg import (
+    IcebergDataFile,
+    IcebergHistoryEntry,
+    IcebergManifest,
+    IcebergPartition,
+    IcebergReference,
+    IcebergSnapshot,
+)
+from aws_tui.ui.widgets.glue.detail_rows import display_time, display_value, state_placeholder
+from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergRow, IcebergView
+
+_VIEW_ORDER: tuple[IcebergView, ...] = (
+    "snapshots",
+    "history",
+    "manifests",
+    "files",
+    "partitions",
+    "refs",
+)
+
+
+class _IcebergTab(Static, can_focus=True):
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("enter,space", "select", "Select", show=False),
+    ]
+
+    class Selected(TextualMessage):
+        def __init__(self, view: IcebergView) -> None:
+            super().__init__()
+            self.view = view
+
+    def __init__(self, view: IcebergView) -> None:
+        super().__init__(
+            view,
+            id=f"glue-iceberg-tab-{view}",
+            classes="glue-iceberg-tab",
+            markup=False,
+        )
+        self.view = view
+        self.tooltip = f"Show Iceberg {view}"
+
+    def on_click(self, _event: Click) -> None:
+        self.action_select()
+
+    def action_select(self) -> None:
+        self.post_message(self.Selected(self.view))
+
+
+class GlueIcebergView(Widget):
+    DEFAULT_CSS: ClassVar[str] = """
+    GlueIcebergView {
+        width: 1fr;
+        height: 3fr;
+        min-height: 8;
+        layout: grid;
+        grid-size: 1 4;
+        grid-rows: 1 1 1fr 3;
+        grid-columns: 1fr;
+        border-title-align: left;
+    }
+    GlueIcebergView > #glue-iceberg-tabs {
+        width: 1fr;
+        height: 1;
+        layout: horizontal;
+    }
+    GlueIcebergView .glue-iceberg-tab {
+        width: 1fr;
+        height: 1;
+        content-align: center middle;
+        text-overflow: ellipsis;
+    }
+    GlueIcebergView > #glue-iceberg-status {
+        width: 1fr;
+        height: 1;
+        padding: 0 1;
+        text-overflow: ellipsis;
+    }
+    GlueIcebergView > #glue-iceberg-table {
+        width: 1fr;
+        height: 1fr;
+        scrollbar-size: 1 1;
+    }
+    GlueIcebergView > #glue-iceberg-controls {
+        width: 1fr;
+        height: 3;
+        layout: horizontal;
+    }
+    GlueIcebergView #glue-iceberg-footer {
+        width: 1fr;
+        height: 1;
+        padding: 1 1 0 1;
+        text-align: right;
+        text-overflow: ellipsis;
+    }
+    GlueIcebergView #glue-iceberg-more,
+    GlueIcebergView #glue-iceberg-time-travel {
+        width: 5;
+        min-width: 5;
+        height: 3;
+        margin: 0 0 0 1;
+    }
+    """
+
+    def __init__(self, vm: GlueIcebergVM, *, id: str | None = None) -> None:
+        super().__init__(id=id, classes="glue-pane glue-iceberg-view")
+        self._vm = vm
+        self._sub: DisposableBase | None = None
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="glue-iceberg-tabs"):
+            for view in _VIEW_ORDER:
+                yield _IcebergTab(view)
+        yield Static("", id="glue-iceberg-status", markup=False)
+        yield DataTable(
+            id="glue-iceberg-table",
+            cursor_type="row",
+            zebra_stripes=True,
+            header_height=1,
+        )
+        with Horizontal(id="glue-iceberg-controls"):
+            yield Static("", id="glue-iceberg-footer", markup=False)
+            yield Button(
+                "↓",
+                id="glue-iceberg-more",
+                compact=True,
+                flat=True,
+                tooltip="Load more Iceberg metadata",
+            )
+            yield Button(
+                "↗",
+                id="glue-iceberg-time-travel",
+                compact=True,
+                flat=True,
+                tooltip="Open selected snapshot in Athena",
+            )
+
+    def on_mount(self) -> None:
+        self.border_title = "Iceberg metadata"
+        self._refresh()
+        self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
+
+    def on_unmount(self) -> None:
+        if self._sub is not None:
+            self._sub.dispose()
+            self._sub = None
+
+    def on__iceberg_tab_selected(self, event: _IcebergTab.Selected) -> None:
+        self.run_worker(
+            self._vm.select_view(event.view),
+            exclusive=True,
+            group="glue-iceberg-select-view",
+        )
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if self._vm.active_view != "snapshots" or event.cursor_row >= len(self._vm.snapshots):
+            return
+        self._vm.select_snapshot(self._vm.snapshots[event.cursor_row].snapshot_id)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "glue-iceberg-more":
+            self.run_worker(
+                self._vm.load_more(),
+                exclusive=True,
+                group="glue-iceberg-load-more",
+            )
+        elif event.button.id == "glue-iceberg-time-travel":
+            self._vm.time_travel_in_athena()
+
+    def _on_vm_changed(self, _property_name: str) -> None:
+        self.call_after_refresh(self._refresh)
+
+    def _refresh(self) -> None:
+        try:
+            table = self.query_one("#glue-iceberg-table", DataTable)
+            status = self.query_one("#glue-iceberg-status", Static)
+            footer = self.query_one("#glue-iceberg-footer", Static)
+            more = self.query_one("#glue-iceberg-more", Button)
+            time_travel = self.query_one("#glue-iceberg-time-travel", Button)
+        except Exception:
+            return
+        self.display = self._vm.available
+        if not self._vm.available:
+            return
+        for view in _VIEW_ORDER:
+            self.query_one(f"#glue-iceberg-tab-{view}", _IcebergTab).set_class(
+                view == self._vm.active_view,
+                "-active",
+            )
+        table.clear(columns=True)
+        columns = _columns(self._vm.active_view)
+        for index, column in enumerate(columns):
+            table.add_column(column, key=f"glue-iceberg-column-{index}")
+        for index, row in enumerate(self._vm.items):
+            table.add_row(
+                *(Text(cell, no_wrap=True) for cell in _cells(self._vm.active_view, row)),
+                key=f"iceberg-row-{index}",
+            )
+        placeholder = state_placeholder(
+            self._vm.state,
+            error_text=self._vm.error_text,
+            empty_text=f"No Iceberg {self._vm.active_view}",
+        )
+        status.update(
+            placeholder[0]
+            if placeholder is not None and self._vm.state is not PaneState.IDLE
+            else ""
+        )
+        status.set_class(self._vm.state is PaneState.FORBIDDEN, "-warning")
+        status.set_class(self._vm.state is PaneState.ERROR, "-error")
+        suffix = " · more available" if self._vm.has_more else ""
+        footer.update(f"{len(self._vm.items)} rows{suffix}")
+        more.disabled = not self._vm.has_more or self._vm.state is PaneState.LOADING
+        time_travel.disabled = self._vm.selected_snapshot_id is None
+
+
+def _columns(view: IcebergView) -> tuple[str, ...]:
+    return {
+        "snapshots": ("Committed", "Snapshot", "Parent", "Operation"),
+        "history": ("Current at", "Snapshot", "Parent", "Ancestor"),
+        "manifests": ("Path", "Bytes", "Spec", "Snapshot", "Added", "Existing", "Deleted"),
+        "files": ("Path", "Format", "Spec", "Records", "Bytes", "Content"),
+        "partitions": ("Partition", "Records", "Files", "Bytes", "Snapshot"),
+        "refs": ("Name", "Type", "Snapshot", "Ref age", "Keep", "Snapshot age"),
+    }[view]
+
+
+def _cells(view: IcebergView, item: IcebergRow) -> tuple[str, ...]:
+    if view == "snapshots":
+        snapshot = cast(IcebergSnapshot, item)
+        return (
+            display_time(snapshot.committed_at),
+            str(snapshot.snapshot_id),
+            display_value(snapshot.parent_id),
+            snapshot.operation,
+        )
+    if view == "history":
+        history = cast(IcebergHistoryEntry, item)
+        return (
+            display_time(history.made_current_at),
+            str(history.snapshot_id),
+            display_value(history.parent_id),
+            display_value(history.is_current_ancestor),
+        )
+    if view == "manifests":
+        manifest = cast(IcebergManifest, item)
+        return (
+            manifest.path,
+            str(manifest.length),
+            str(manifest.partition_spec_id),
+            str(manifest.added_snapshot_id),
+            str(manifest.added_data_files_count),
+            str(manifest.existing_data_files_count),
+            str(manifest.deleted_data_files_count),
+        )
+    if view == "files":
+        data_file = cast(IcebergDataFile, item)
+        return (
+            data_file.file_path,
+            data_file.file_format,
+            str(data_file.spec_id),
+            str(data_file.record_count),
+            str(data_file.file_size_in_bytes),
+            str(data_file.content),
+        )
+    if view == "partitions":
+        partition = cast(IcebergPartition, item)
+        values = " / ".join(f"{name}={display_value(value)}" for name, value in partition.values)
+        return (
+            values,
+            str(partition.record_count),
+            str(partition.file_count),
+            str(partition.total_data_file_size_in_bytes),
+            display_value(partition.last_updated_snapshot_id),
+        )
+    reference = cast(IcebergReference, item)
+    return (
+        reference.name,
+        reference.ref_type,
+        str(reference.snapshot_id),
+        display_value(reference.max_reference_age_in_ms),
+        display_value(reference.min_snapshots_to_keep),
+        display_value(reference.max_snapshot_age_in_ms),
+    )
+
+
+__all__ = ["GlueIcebergView"]

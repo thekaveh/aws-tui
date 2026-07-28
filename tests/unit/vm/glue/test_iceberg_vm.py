@@ -1,0 +1,418 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import pytest
+from vmx import NULL_DISPATCHER, MessageHub
+from vmx.messages.protocols import Message
+
+from aws_tui.domain.data_catalog import TableFormat, TableRef
+from aws_tui.domain.filesystem import PermissionDeniedError
+from aws_tui.domain.iceberg import (
+    IcebergDataFile,
+    IcebergHistoryEntry,
+    IcebergManifest,
+    IcebergPartition,
+    IcebergReference,
+    IcebergSnapshot,
+)
+from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
+from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM
+from aws_tui.vm.messages import OpenAthenaTableRequest
+from tests.unit.vm.glue._fake_glue import InMemoryGlue
+
+NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
+ICEBERG_REF = TableRef(
+    "AwsDataCatalog",
+    "analytics",
+    "events",
+    "dev",
+    "us-east-1",
+)
+OTHER_REF = replace(ICEBERG_REF, table_name="sessions")
+
+
+def _snapshot(snapshot_id: int, *, age: int = 0) -> IcebergSnapshot:
+    return IcebergSnapshot(
+        committed_at=NOW - timedelta(minutes=age),
+        snapshot_id=snapshot_id,
+        parent_id=snapshot_id - 1,
+        operation="append",
+        manifest_list=f"s3://warehouse/metadata/snap-{snapshot_id}.avro",
+        summary=(("added-records", "10"),),
+    )
+
+
+class RecordingInspector:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, TableRef]] = []
+        self.snapshots = (_snapshot(41, age=2), _snapshot(43), _snapshot(42, age=1))
+        self.history = (
+            IcebergHistoryEntry(NOW - timedelta(minutes=1), 42, 41, True),
+            IcebergHistoryEntry(NOW, 43, 42, True),
+        )
+        self.manifests = tuple(
+            IcebergManifest(
+                f"s3://warehouse/metadata/manifest-{index}.avro",
+                100 + index,
+                0,
+                43,
+                1,
+                0,
+                0,
+                None,
+            )
+            for index in range(5)
+        )
+        self.files = (
+            IcebergDataFile(
+                0, "s3://warehouse/data/a.parquet", "PARQUET", 0, None, 10, 100, None, 0
+            ),
+        )
+        self.partitions = (
+            IcebergPartition(
+                (("day", "2026-07-28"),),
+                10,
+                1,
+                100,
+                0,
+                0,
+                0,
+                0,
+                NOW,
+                43,
+            ),
+        )
+        self.refs = (IcebergReference("main", "BRANCH", 43, None, 2, 86_400_000),)
+        self.errors: dict[str, Exception] = {}
+        self.blocked: dict[str, tuple[asyncio.Event, asyncio.Event]] = {}
+        self.ignore_cancellation_for: str | None = None
+        self.cancellation_seen = asyncio.Event()
+
+    def block(self, view: str) -> asyncio.Event:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        self.blocked[view] = (started, release)
+        return started
+
+    def release(self, view: str) -> None:
+        self.blocked[view][1].set()
+
+    async def _load(self, view: str, ref: TableRef) -> tuple[Any, ...]:
+        self.calls.append((view, ref))
+        if view in self.blocked:
+            started, release = self.blocked[view]
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                if self.ignore_cancellation_for != view:
+                    raise
+                self.cancellation_seen.set()
+                await release.wait()
+        if view in self.errors:
+            raise self.errors[view]
+        return tuple(getattr(self, view))
+
+    async def list_snapshots(self, ref: TableRef) -> tuple[IcebergSnapshot, ...]:
+        return await self._load("snapshots", ref)
+
+    async def list_history(self, ref: TableRef) -> tuple[IcebergHistoryEntry, ...]:
+        return await self._load("history", ref)
+
+    async def list_manifests(self, ref: TableRef) -> tuple[IcebergManifest, ...]:
+        return await self._load("manifests", ref)
+
+    async def list_files(self, ref: TableRef) -> tuple[IcebergDataFile, ...]:
+        return await self._load("files", ref)
+
+    async def list_partitions(self, ref: TableRef) -> tuple[IcebergPartition, ...]:
+        return await self._load("partitions", ref)
+
+    async def list_refs(self, ref: TableRef) -> tuple[IcebergReference, ...]:
+        return await self._load("refs", ref)
+
+
+def make_vm(
+    inspector: RecordingInspector | None = None,
+    *,
+    page_size: int = 2,
+) -> tuple[GlueIcebergVM, RecordingInspector, MessageHub[Message]]:
+    source = inspector or RecordingInspector()
+    hub: MessageHub[Message] = MessageHub()
+    vm = GlueIcebergVM(
+        inspector=source,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        page_size=page_size,
+    )
+    vm.construct()
+    return vm, source, hub
+
+
+@pytest.mark.asyncio
+async def test_bind_table_is_lazy_and_snapshots_load_newest_first() -> None:
+    vm, inspector, _hub = make_vm()
+
+    await vm.bind_table(ICEBERG_REF)
+
+    assert vm.available
+    assert inspector.calls == []
+    assert vm.state is PaneState.EMPTY
+
+    await vm.select_view("snapshots")
+
+    assert inspector.calls == [("snapshots", ICEBERG_REF)]
+    assert [row.snapshot_id for row in vm.snapshots] == [43, 42]
+    assert vm.has_more
+    assert vm.state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_metadata_views_load_once_on_demand_and_retry_only_current_view() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF)
+    await vm.select_view("snapshots")
+    await vm.select_view("refs")
+    await vm.select_view("snapshots")
+
+    assert [call[0] for call in inspector.calls] == ["snapshots", "refs"]
+
+    await vm.retry()
+
+    assert [call[0] for call in inspector.calls] == ["snapshots", "refs", "snapshots"]
+
+
+@pytest.mark.asyncio
+async def test_manifest_pagination_is_local_bounded_and_preserves_exact_records() -> None:
+    vm, inspector, _hub = make_vm(page_size=2)
+    await vm.bind_table(ICEBERG_REF)
+    await vm.select_view("manifests")
+
+    assert vm.manifests == inspector.manifests[:2]
+    assert vm.has_more
+
+    await vm.load_more()
+    await vm.load_more()
+    await vm.load_more()
+
+    assert vm.manifests == inspector.manifests
+    assert not vm.has_more
+    assert inspector.calls == [("manifests", ICEBERG_REF)]
+
+
+@pytest.mark.asyncio
+async def test_pane_failure_is_isolated_and_retry_does_not_erase_other_panes() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF)
+    await vm.select_view("refs")
+    inspector.errors["snapshots"] = PermissionDeniedError("athena denied")
+
+    await vm.select_view("snapshots")
+
+    assert vm.state is PaneState.FORBIDDEN
+    assert vm.error_text == "athena denied"
+    assert vm.refs == inspector.refs
+    assert vm.state_for("refs") is PaneState.IDLE
+
+    inspector.errors.pop("snapshots")
+    await vm.retry()
+
+    assert vm.state is PaneState.IDLE
+    assert vm.refs == inspector.refs
+
+
+@pytest.mark.asyncio
+async def test_rebinding_discards_late_metadata_and_clears_snapshot_selection() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF)
+    started = inspector.block("snapshots")
+    loading = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+
+    await vm.bind_table(OTHER_REF)
+    inspector.release("snapshots")
+    await loading
+
+    assert vm.table_ref == OTHER_REF
+    assert vm.snapshots == ()
+    assert vm.selected_snapshot_id is None
+    assert vm.state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
+async def test_cancelled_load_rolls_back_without_stranding_loading_state() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF)
+    started = inspector.block("snapshots")
+    loading = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+
+    loading.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await loading
+
+    assert vm.state is PaneState.EMPTY
+    assert vm.snapshots == ()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_resistant_provider_cannot_publish_late_rows() -> None:
+    vm, inspector, _hub = make_vm()
+    inspector.ignore_cancellation_for = "snapshots"
+    await vm.bind_table(ICEBERG_REF)
+    started = inspector.block("snapshots")
+    loading = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+
+    loading.cancel()
+    await inspector.cancellation_seen.wait()
+    inspector.release("snapshots")
+    with pytest.raises(asyncio.CancelledError):
+        await loading
+
+    assert vm.snapshots == ()
+    assert vm.state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
+async def test_selected_snapshot_sends_exact_time_travel_request_without_provider_call() -> None:
+    vm, inspector, hub = make_vm()
+    received: list[OpenAthenaTableRequest] = []
+    subscription = hub.messages.subscribe(
+        on_next=lambda message: (
+            received.append(message) if isinstance(message, OpenAthenaTableRequest) else None
+        )
+    )
+    await vm.bind_table(ICEBERG_REF)
+    await vm.select_view("snapshots")
+
+    assert vm.select_snapshot(43)
+    calls_before = tuple(inspector.calls)
+    assert vm.time_travel_in_athena()
+
+    assert tuple(inspector.calls) == calls_before
+    assert received == [OpenAthenaTableRequest(table_ref=ICEBERG_REF, snapshot_id=43)]
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_time_travel_is_noop_for_missing_stale_or_non_integer_snapshot() -> None:
+    vm, _inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF)
+
+    assert not vm.select_snapshot(True)
+    assert not vm.select_snapshot(999)
+    assert not vm.time_travel_in_athena()
+
+    await vm.bind_table(None)
+
+    assert not vm.available
+    assert not vm.time_travel_in_athena()
+
+
+@pytest.mark.asyncio
+async def test_catalog_exposes_iceberg_only_for_detected_table_and_keeps_glue_detail() -> None:
+    fake = InMemoryGlue()
+    iceberg = fake.add_table("analytics", "events")
+    parquet = fake.add_table("analytics", "sessions")
+    fake.table_details[iceberg.ref] = replace(
+        fake.table_details[iceberg.ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    inspector = RecordingInspector()
+    hub: MessageHub[Message] = MessageHub()
+    catalog = GlueCatalogVM(
+        client=fake,
+        iceberg_inspector=inspector,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    catalog.construct()
+    await catalog.setup()
+    await catalog.select_database("analytics")
+
+    await catalog.select_table(iceberg.ref.table_name)
+    assert catalog.iceberg.available
+    await catalog.iceberg.select_view("snapshots")
+    assert catalog.table_detail is fake.table_details[iceberg.ref]
+
+    await catalog.select_table(parquet.ref.table_name)
+
+    assert not catalog.iceberg.available
+    assert catalog.iceberg.snapshots == ()
+    assert catalog.table_detail is fake.table_details[parquet.ref]
+    assert catalog.table_detail.table_format is TableFormat.HIVE
+
+
+@pytest.mark.asyncio
+async def test_dispose_invalidates_late_results_and_completes_lifecycle() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF)
+    started = inspector.block("snapshots")
+    loading = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+
+    vm.dispose()
+    inspector.release("snapshots")
+    await loading
+
+    assert vm.snapshots == ()
+    assert not vm.available
+    assert not await vm.select_view("refs")
+
+
+@pytest.mark.asyncio
+async def test_throwing_property_observer_cannot_interrupt_binding_loading_or_disposal() -> None:
+    vm, _inspector, _hub = make_vm()
+    received: list[str] = []
+
+    def broken(property_name: str) -> None:
+        raise RuntimeError(f"HOSTILE_OBSERVER_{property_name}")
+
+    vm.on_property_changed.subscribe(on_next=broken)
+    vm.on_property_changed.subscribe(on_next=received.append)
+
+    await vm.bind_table(ICEBERG_REF)
+    await vm.select_view("refs")
+    vm.dispose()
+
+    assert vm.refs == ()
+    assert "available" in received
+    assert "refs" in received
+
+
+@pytest.mark.asyncio
+async def test_hostile_hub_subscriber_is_value_free_and_does_not_interrupt_state(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    vm, _inspector, hub = make_vm()
+    marker = "HOSTILE_ICEBERG_HUB_VALUE"
+
+    def broken(_message: Message) -> None:
+        raise RuntimeError(marker)
+
+    hub.messages.subscribe(on_next=broken)
+    with caplog.at_level(logging.ERROR):
+        await vm.bind_table(ICEBERG_REF)
+        await vm.select_view("refs")
+
+    assert vm.refs
+    assert marker not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unexpected_inspector_error_is_value_free() -> None:
+    vm, inspector, _hub = make_vm()
+    inspector.errors["refs"] = RuntimeError("HOSTILE_ICEBERG_PROVIDER_VALUE")
+    await vm.bind_table(ICEBERG_REF)
+
+    await vm.select_view("refs")
+
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text == "Iceberg metadata request failed"

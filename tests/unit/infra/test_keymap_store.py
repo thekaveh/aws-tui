@@ -26,6 +26,7 @@ class TestDefaults:
         assert store.resolve("glue.catalog") == ("1",)
         assert store.resolve("glue.jobs") == ("2",)
         assert store.resolve("glue.crawlers") == ("3",)
+        assert store.resolve("glue.time_travel_in_athena") == ("V",)
 
     def test_athena_controls_have_dedicated_bindings(self) -> None:
         store = KeymapStore()

@@ -66,6 +66,7 @@ class KeymapStore:
         "glue.catalog": ("1",),
         "glue.jobs": ("2",),
         "glue.crawlers": ("3",),
+        "glue.time_travel_in_athena": ("V",),
         "athena.query": ("1",),
         "athena.history": ("2",),
         "athena.results": ("3",),

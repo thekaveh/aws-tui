@@ -120,6 +120,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("app.swap_source", "Switch source"),
     ("glue.open_s3_location", "Open table location in S3"),
     ("glue.query_in_athena", "Query table in Athena"),
+    ("glue.time_travel_in_athena", "Query Iceberg snapshot in Athena"),
     ("athena.query", "Athena query"),
     ("athena.history", "Athena history"),
     ("athena.results", "Athena results"),
@@ -411,6 +412,10 @@ class AwsTuiApp(App[None]):
         )
         self._actions.register("glue.open_s3_location", self.action_open_glue_s3_location)
         self._actions.register("glue.query_in_athena", self.action_query_glue_table_in_athena)
+        self._actions.register(
+            "glue.time_travel_in_athena",
+            self.action_time_travel_glue_table_in_athena,
+        )
         self._actions.register(
             "athena.query",
             partial(self.action_select_athena_view, "query"),
@@ -2364,6 +2369,18 @@ class AwsTuiApp(App[None]):
             subject="Source",
             message="select a Glue table to query in Athena",
             toast_id="glue-athena-table-unavailable",
+        )
+
+    async def action_time_travel_glue_table_in_athena(self) -> None:
+        self.record_action("glue.time_travel_in_athena")
+        page = self._glue_page()
+        if page is not None and page.vm.catalog.iceberg.time_travel_in_athena():
+            return
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="select an Iceberg snapshot to query in Athena",
+            toast_id="glue-athena-snapshot-unavailable",
         )
 
     async def action_open_athena_table_in_glue(self) -> None:

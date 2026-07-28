@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
+from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList
@@ -15,6 +16,7 @@ from aws_tui.ui.widgets.glue.detail_rows import (
     display_time,
     display_value,
 )
+from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM
 
 
@@ -27,6 +29,16 @@ class GlueCatalogView(Widget):
         grid-columns: 2fr 3fr 5fr;
         grid-rows: 1fr;
         grid-gutter: 0;
+    }
+    GlueCatalogView > #glue-table-detail-region {
+        width: 1fr;
+        height: 1fr;
+        layout: vertical;
+    }
+    GlueCatalogView > #glue-table-detail-region > #glue-table-detail-pane {
+        width: 1fr;
+        height: 2fr;
+        min-height: 6;
     }
     """
 
@@ -47,7 +59,9 @@ class GlueCatalogView(Widget):
             id="glue-tables-pane",
             empty_text="no tables",
         )
-        yield DetailRows("table detail", id="glue-table-detail-pane")
+        with Vertical(id="glue-table-detail-region"):
+            yield DetailRows("table detail", id="glue-table-detail-pane")
+            yield GlueIcebergView(self._vm.iceberg, id="glue-iceberg-view")
 
     def on_mount(self) -> None:
         self._refresh_all()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Literal
 
 from textual.app import App, ComposeResult
@@ -7,14 +8,17 @@ from textual.containers import Container
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
+from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
-GlueFixture = Literal["populated", "empty", "forbidden"]
+GlueFixture = Literal["populated", "empty", "forbidden", "iceberg"]
 
 
 class _ForbiddenGlue(InMemoryGlue):
@@ -33,6 +37,11 @@ def _client(fixture: GlueFixture) -> InMemoryGlue:
     if fixture == "empty":
         return fake
     table = fake.add_table("analytics", "events")
+    if fixture == "iceberg":
+        fake.table_details[table.ref] = replace(
+            fake.table_details[table.ref],
+            table_format=TableFormat.ICEBERG,
+        )
     fake.add_table("analytics", "sessions")
     fake.add_partition(table.ref, "dt=2026-07-25")
     fake.add_run("nightly", "jr-20260725", "RUNNING")
@@ -49,12 +58,14 @@ class GluePageApp(App[None]):
         theme: str,
         view: GlueView = "catalog",
         fixture: GlueFixture = "populated",
+        iceberg_view: IcebergView = "snapshots",
     ) -> None:
         super().__init__()
         self.CSS = ThemeStore().load(theme)
         hub: MessageHub[Message] = MessageHub()
         self._vm = GluePageVM(
             client=_client(fixture),
+            iceberg_inspector=RecordingInspector() if fixture == "iceberg" else None,
             connection=Connection(
                 name="analytics-prod",
                 kind="aws",
@@ -67,6 +78,7 @@ class GluePageApp(App[None]):
         )
         self._vm.construct()
         self._view = view
+        self._iceberg_view = iceberg_view
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -75,6 +87,8 @@ class GluePageApp(App[None]):
         await self._vm.setup()
         if self._view != "catalog":
             await self._vm.select_view(self._view)
+        if self._vm.catalog.iceberg.available:
+            await self._vm.catalog.iceberg.select_view(self._iceberg_view)
         await self.query_one("#content-host", Container).mount(
             GluePage(self._vm, hub=self._vm.hub, id="glue-page")
         )
