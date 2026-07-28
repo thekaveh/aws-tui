@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
 
 import pytest
@@ -8,6 +8,7 @@ import pytest
 from aws_tui.domain.query import (
     AthenaQueryError,
     NamedQuery,
+    NamedQuerySummary,
     PreparedStatement,
     PreparedStatementSummary,
     QueryContext,
@@ -21,6 +22,128 @@ from aws_tui.domain.query import (
 )
 
 NOW = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
+
+
+def _query_record_instances() -> tuple[object, ...]:
+    context = QueryContext(
+        "prod-west",
+        "us-west-2",
+        "analysts",
+        "AwsDataCatalog",
+        "sales",
+    )
+    ref = QueryExecutionRef("execution-1", "prod-west", "us-west-2", "analysts")
+    summary = QueryExecutionSummary(ref, QueryState.SUCCEEDED, NOW, NOW, "DML")
+    statistics = QueryStatistics(1, 2, 3, 4, 5, False)
+    error = AthenaQueryError(None, None, False, "failed")
+    return (
+        context,
+        ref,
+        statistics,
+        error,
+        summary,
+        QueryExecutionDetail(summary, None, context, statistics, None, None, None),
+        ResultColumn("value", "varchar", "UNKNOWN"),
+        ResultPage((), (), None),
+        NamedQuerySummary("id", "name", None, "sales", "analysts"),
+        NamedQuery("id", "name", None, "sales", "SELECT 1", "analysts"),
+        PreparedStatementSummary("name", None),
+        PreparedStatement("name", "SELECT 1", "analysts", None, None),
+    )
+
+
+def test_athena_query_records_have_exact_frozen_slot_contract() -> None:
+    expected_fields = {
+        QueryContext: (
+            "connection_name",
+            "region",
+            "workgroup",
+            "catalog",
+            "database",
+        ),
+        QueryExecutionRef: (
+            "execution_id",
+            "connection_name",
+            "region",
+            "workgroup",
+        ),
+        QueryStatistics: (
+            "engine_ms",
+            "queue_ms",
+            "planning_ms",
+            "service_ms",
+            "bytes_scanned",
+            "reused_previous_result",
+        ),
+        AthenaQueryError: ("category", "error_type", "retryable", "message"),
+        QueryExecutionSummary: (
+            "ref",
+            "state",
+            "submitted_at",
+            "completed_at",
+            "statement_type",
+        ),
+        QueryExecutionDetail: (
+            "summary",
+            "state_reason",
+            "context",
+            "statistics",
+            "output_location",
+            "engine_version",
+            "error",
+        ),
+        ResultColumn: ("name", "type_name", "nullable"),
+        ResultPage: ("columns", "rows", "next_token"),
+        NamedQuerySummary: ("query_id", "name", "description", "database", "workgroup"),
+        NamedQuery: (
+            "query_id",
+            "name",
+            "description",
+            "database",
+            "query_string",
+            "workgroup",
+        ),
+        PreparedStatementSummary: ("name", "last_modified_at"),
+        PreparedStatement: (
+            "name",
+            "query_statement",
+            "workgroup",
+            "description",
+            "last_modified_at",
+        ),
+    }
+
+    assert all(is_dataclass(record_type) for record_type in expected_fields)
+    assert all(record_type.__dataclass_params__.frozen for record_type in expected_fields)
+    assert all(hasattr(record_type, "__slots__") for record_type in expected_fields)
+    assert {
+        record_type: tuple(field.name for field in fields(record_type))
+        for record_type in expected_fields
+    } == expected_fields
+
+    for record in _query_record_instances():
+        with pytest.raises(FrozenInstanceError):
+            setattr(record, next(iter(record.__slots__)), None)
+
+
+def test_athena_query_domain_exports_exact_public_contract() -> None:
+    from aws_tui.domain import query
+
+    assert query.__all__ == [
+        "AthenaQueryError",
+        "NamedQuery",
+        "NamedQuerySummary",
+        "PreparedStatement",
+        "PreparedStatementSummary",
+        "QueryContext",
+        "QueryExecutionDetail",
+        "QueryExecutionRef",
+        "QueryExecutionSummary",
+        "QueryState",
+        "QueryStatistics",
+        "ResultColumn",
+        "ResultPage",
+    ]
 
 
 def test_query_context_includes_connection_region_and_workgroup() -> None:
