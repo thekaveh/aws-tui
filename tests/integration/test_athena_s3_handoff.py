@@ -575,22 +575,22 @@ async def test_demo_query_artifacts_are_profile_local_replay_safe_and_distinct(
         first = await dev.start_query(
             "SELECT 1",
             dev_context,
-            request_token="dev-first",
+            request_token="dev-first".ljust(32, "-"),
         )
         replay = await dev.start_query(
             "SELECT 1",
             dev_context,
-            request_token="dev-first",
+            request_token="dev-first".ljust(32, "-"),
         )
         second = await dev.start_query(
             "SELECT 1",
             dev_context,
-            request_token="dev-second",
+            request_token="dev-second".ljust(32, "-"),
         )
         prod_ref = await prod.start_query(
             "SELECT 1",
             prod_context,
-            request_token="prod-first",
+            request_token="prod-first".ljust(32, "-"),
         )
         for ref, client in ((first, dev), (second, dev), (prod_ref, prod)):
             await _advance_to_success(client, ref.execution_id)
@@ -699,7 +699,7 @@ async def test_runtime_alias_uses_lazy_cached_athena_and_exact_s3_result_store(
     ref = await client.start_query(
         "SELECT 1",
         context,
-        request_token="runtime-alias",
+        request_token="runtime-alias".ljust(32, "-"),
     )
     await _advance_to_success(client, ref.execution_id)
     detail = await client.get_query_execution(ref.execution_id)

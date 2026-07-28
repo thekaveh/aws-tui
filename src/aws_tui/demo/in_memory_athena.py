@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import csv
+import hmac
 import io
+import secrets
+import unicodedata
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -75,6 +78,69 @@ class _SeededQueryResult:
     pages: tuple[ResultPage, ...] = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class _ListTokenRecord:
+    scope: tuple[str | None, ...]
+    offset: int
+    page_size: int
+
+
+class _ListTokenCodec:
+    """Instance-owned opaque pagination tokens for deterministic demo lists."""
+
+    def __init__(self) -> None:
+        self._key = secrets.token_bytes(32)
+        self._records: dict[str, _ListTokenRecord] = {}
+
+    def page(
+        self,
+        rows: Sequence[T],
+        *,
+        scope: tuple[str | None, ...],
+        start_token: str | None,
+        page_size: int,
+    ) -> tuple[list[T], str | None]:
+        if type(page_size) is not int or page_size <= 0:
+            raise ValidationError("invalid Athena page size")
+        if start_token is None:
+            offset = 0
+        else:
+            record = self._record_for(start_token)
+            if record.scope != scope or record.page_size != page_size or record.offset >= len(rows):
+                raise ValidationError("invalid Athena pagination token")
+            offset = record.offset
+        page = list(rows[offset : offset + page_size])
+        next_offset = offset + page_size
+        if next_offset >= len(rows):
+            return page, None
+        record = _ListTokenRecord(scope, next_offset, page_size)
+        token = self._encode(record)
+        self._records[token] = record
+        return page, token
+
+    def _record_for(self, token: str) -> _ListTokenRecord:
+        if (
+            type(token) is not str
+            or len(token) != 64
+            or not token.isascii()
+            or token != token.lower()
+            or any(char not in "0123456789abcdef" for char in token)
+        ):
+            raise ValidationError("invalid Athena pagination token")
+        record = self._records.get(token)
+        if record is None or not hmac.compare_digest(token, self._encode(record)):
+            raise ValidationError("invalid Athena pagination token")
+        return record
+
+    def _encode(self, record: _ListTokenRecord) -> str:
+        material = _fingerprint(
+            *record.scope,
+            str(record.offset),
+            str(record.page_size),
+        )
+        return hmac.digest(self._key, material, "sha256").hex()
+
+
 class InMemoryAthena:
     """In-memory implementation of the paginated Athena client surface."""
 
@@ -108,6 +174,7 @@ class InMemoryAthena:
         self.prepared_names: dict[str, list[str]] = {}
         self.access_error: PermissionDeniedError | None = None
         self._sql_policy = ReadOnlySqlPolicy()
+        self._list_tokens = _ListTokenCodec()
         self._request_tokens: dict[bytes, _IdempotentQuery] = {}
         self._started_state_indexes: dict[str, int] = {}
         self._active_app_started: set[str] = set()
@@ -269,7 +336,12 @@ class InMemoryAthena:
     ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
         self._record("list_workgroups_page", start_token)
         self._raise_if_denied()
-        return _page(self.workgroups, start_token, self.page_size)
+        return self._list_tokens.page(
+            self.workgroups,
+            scope=("list_workgroups_page",),
+            start_token=start_token,
+            page_size=self.page_size,
+        )
 
     async def get_workgroup(self, name: str) -> AthenaWorkgroupDetail:
         self._record("get_workgroup", name)
@@ -288,7 +360,12 @@ class InMemoryAthena:
         self._record("list_catalogs_page", workgroup, start_token)
         self._raise_if_denied()
         rows = self.catalogs.get(workgroup or "", [])
-        return _page(rows, start_token, self.page_size)
+        return self._list_tokens.page(
+            rows,
+            scope=("list_catalogs_page", workgroup),
+            start_token=start_token,
+            page_size=self.page_size,
+        )
 
     async def list_databases_page(
         self,
@@ -300,7 +377,12 @@ class InMemoryAthena:
         self._record("list_databases_page", catalog, workgroup, start_token)
         self._raise_if_denied()
         rows = self.databases.get((workgroup or "", catalog), [])
-        return _page(rows, start_token, self.page_size)
+        return self._list_tokens.page(
+            rows,
+            scope=("list_databases_page", catalog, workgroup),
+            start_token=start_token,
+            page_size=self.page_size,
+        )
 
     async def list_tables_page(
         self,
@@ -319,7 +401,12 @@ class InMemoryAthena:
         )
         self._raise_if_denied()
         rows = self.tables.get((workgroup or "", catalog, database), [])
-        return _page(rows, start_token, self.page_size)
+        return self._list_tokens.page(
+            rows,
+            scope=("list_tables_page", catalog, database, workgroup),
+            start_token=start_token,
+            page_size=self.page_size,
+        )
 
     async def list_query_executions_page(
         self,
@@ -329,7 +416,12 @@ class InMemoryAthena:
     ) -> tuple[list[QueryExecutionRef], str | None]:
         self._record("list_query_executions_page", workgroup, start_token)
         self._raise_if_denied()
-        ids, token = _page(self.history.get(workgroup, []), start_token, self.page_size)
+        ids, token = self._list_tokens.page(
+            self.history.get(workgroup, []),
+            scope=("list_query_executions_page", workgroup),
+            start_token=start_token,
+            page_size=self.page_size,
+        )
         return [self.query_executions[execution_id].summary.ref for execution_id in ids], token
 
     async def get_query_execution(
@@ -504,10 +596,11 @@ class InMemoryAthena:
     ) -> tuple[list[str], str | None]:
         self._record("list_named_queries_page", workgroup, start_token)
         self._raise_if_denied()
-        return _page(
+        return self._list_tokens.page(
             self.named_query_ids.get(workgroup, []),
-            start_token,
-            self.page_size,
+            scope=("list_named_queries_page", workgroup),
+            start_token=start_token,
+            page_size=self.page_size,
         )
 
     async def get_named_queries(self, ids: list[str]) -> tuple[NamedQuery, ...]:
@@ -525,10 +618,11 @@ class InMemoryAthena:
     ) -> tuple[list[PreparedStatementSummary], str | None]:
         self._record("list_prepared_statements_page", workgroup, start_token)
         self._raise_if_denied()
-        names, token = _page(
+        names, token = self._list_tokens.page(
             self.prepared_names.get(workgroup, []),
-            start_token,
-            self.page_size,
+            scope=("list_prepared_statements_page", workgroup),
+            start_token=start_token,
+            page_size=self.page_size,
         )
         return [
             PreparedStatementSummary(
@@ -637,12 +731,25 @@ class InMemoryAthena:
             )
         ):
             raise ValidationError("Athena query context is unavailable")
-        if type(request_token) is not str or not request_token:
-            raise ValidationError("Athena request token is invalid")
-        if output_location is not None and (
-            type(output_location) is not str or not output_location
+        if (
+            type(request_token) is not str
+            or not 32 <= len(request_token) <= 128
+            or any(unicodedata.category(char) == "Cc" for char in request_token)
         ):
-            raise ValidationError("Athena output location is invalid")
+            raise ValidationError("Athena request token is invalid")
+        if output_location is not None:
+            location = (
+                parse_s3_uri(output_location)
+                if type(output_location) is str and output_location.startswith("s3://")
+                else None
+            )
+            if (
+                location is None
+                or not location.path.startswith("/")
+                or location.path.startswith("//")
+                or not location.path.strip("/")
+            ):
+                raise ValidationError("Athena output location is invalid")
 
     def _raise_if_denied(self) -> None:
         if self.access_error is not None:
@@ -650,33 +757,6 @@ class InMemoryAthena:
 
     def _record(self, method: str, *arguments: object) -> None:
         self.calls.append(AthenaCall(method, arguments))
-
-
-def _page(
-    rows: Sequence[T],
-    start_token: str | None,
-    page_size: int,
-) -> tuple[list[T], str | None]:
-    if type(page_size) is not int or page_size <= 0:
-        raise ValidationError("invalid Athena page size")
-    if start_token is None:
-        offset = 0
-    elif (
-        type(start_token) is not str
-        or not start_token
-        or len(start_token) > 20
-        or not start_token.isascii()
-        or not start_token.isdecimal()
-        or start_token.startswith("0")
-    ):
-        raise ValidationError("invalid Athena pagination token")
-    else:
-        offset = int(start_token)
-        if offset >= len(rows):
-            raise ValidationError("invalid Athena pagination token")
-    page = list(rows[offset : offset + page_size])
-    next_offset = offset + page_size
-    return page, str(next_offset) if next_offset < len(rows) else None
 
 
 def _started_output_location(

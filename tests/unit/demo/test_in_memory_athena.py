@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -18,7 +19,13 @@ from aws_tui.domain.filesystem import (
     ValidationError,
 )
 from aws_tui.domain.iceberg import IcebergInspector
-from aws_tui.domain.query import QueryContext, QueryState, ResultColumn
+from aws_tui.domain.query import (
+    NamedQuery,
+    PreparedStatement,
+    QueryContext,
+    QueryState,
+    ResultColumn,
+)
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 from aws_tui.infra.crash_dump import CrashDump
@@ -30,6 +37,20 @@ DEV_CONTEXT = QueryContext(
     "DevDataCatalog",
     "dev_events",
 )
+VALID_REQUEST_TOKEN = "t" * 32
+PAGINATED_LIST_ENDPOINTS = (
+    "workgroups",
+    "catalogs",
+    "databases",
+    "tables",
+    "query-executions",
+    "named-queries",
+    "prepared-statements",
+)
+
+
+def _request_token(label: str) -> str:
+    return label.ljust(32, "-")
 
 
 async def _read_bytes(fake, path: PathRef) -> bytes:  # type: ignore[no-untyped-def]
@@ -44,6 +65,120 @@ async def _advance_to_success(fake: InMemoryAthena, execution_id: str) -> None:
 
 async def _no_sleep(_: float) -> None:
     return None
+
+
+def _pagination_fake() -> InMemoryAthena:
+    fake = seeded_demo_athena("demo-dev")
+    fake.add_database("dev-analytics", "DevDataCatalog", "dev_extra")
+    fake.add_table(
+        "dev-analytics",
+        "DevDataCatalog",
+        "dev_events",
+        "dev_events_extra",
+    )
+    fake.add_named_query(
+        NamedQuery(
+            "nq-dev-events-extra",
+            "Extra dev events",
+            None,
+            "dev_events",
+            "SELECT * FROM events LIMIT 10",
+            "dev-analytics",
+        )
+    )
+    fake.add_prepared_statement(
+        PreparedStatement(
+            "ps-dev-event-extra",
+            "SELECT * FROM events WHERE event_type = ?",
+            "dev-analytics",
+            None,
+            datetime(2026, 7, 26, 12, 0, tzinfo=UTC),
+        )
+    )
+    return fake
+
+
+async def _list_page(
+    fake: InMemoryAthena,
+    endpoint: str,
+    *,
+    start_token: Any = None,
+    alternate_context: bool = False,
+) -> tuple[list[object], str | None]:
+    if endpoint == "workgroups":
+        return await fake.list_workgroups_page(start_token=start_token)
+    if endpoint == "catalogs":
+        return await fake.list_catalogs_page(
+            workgroup="dev-empty" if alternate_context else "dev-analytics",
+            start_token=start_token,
+        )
+    if endpoint == "databases":
+        return await fake.list_databases_page(
+            "AwsDataCatalog" if alternate_context else "DevDataCatalog",
+            workgroup="dev-analytics",
+            start_token=start_token,
+        )
+    if endpoint == "tables":
+        return await fake.list_tables_page(
+            "DevDataCatalog",
+            "dev_extra" if alternate_context else "dev_events",
+            workgroup="dev-analytics",
+            start_token=start_token,
+        )
+    if endpoint == "query-executions":
+        return await fake.list_query_executions_page(
+            "dev-empty" if alternate_context else "dev-analytics",
+            start_token=start_token,
+        )
+    if endpoint == "named-queries":
+        return await fake.list_named_queries_page(
+            "dev-empty" if alternate_context else "dev-analytics",
+            start_token=start_token,
+        )
+    if endpoint == "prepared-statements":
+        return await fake.list_prepared_statements_page(
+            "dev-empty" if alternate_context else "dev-analytics",
+            start_token=start_token,
+        )
+    raise AssertionError(f"unknown test endpoint: {endpoint}")
+
+
+def _truncate_endpoint(fake: InMemoryAthena, endpoint: str) -> None:
+    if endpoint == "workgroups":
+        del fake.workgroups[1:]
+    elif endpoint == "catalogs":
+        del fake.catalogs["dev-analytics"][1:]
+    elif endpoint == "databases":
+        del fake.databases[("dev-analytics", "DevDataCatalog")][1:]
+    elif endpoint == "tables":
+        del fake.tables[("dev-analytics", "DevDataCatalog", "dev_events")][1:]
+    elif endpoint == "query-executions":
+        del fake.history["dev-analytics"][1:]
+    elif endpoint == "named-queries":
+        del fake.named_query_ids["dev-analytics"][1:]
+    elif endpoint == "prepared-statements":
+        del fake.prepared_names["dev-analytics"][1:]
+    else:
+        raise AssertionError(f"unknown test endpoint: {endpoint}")
+
+
+def _query_state(fake: InMemoryAthena) -> tuple[object, ...]:
+    result_tree = None
+    if fake._result_store is not None:
+        result_tree = tuple(  # type: ignore[attr-defined]
+            sorted(path.as_posix() for path in fake._result_store._tree)
+        )
+    return (
+        tuple(fake.query_executions),
+        tuple(fake.result_pages),
+        tuple((key, tuple(value)) for key, value in fake.history.items()),
+        tuple(fake._list_tokens._records.items()),
+        tuple(fake._request_tokens),
+        tuple(fake._started_state_indexes.items()),
+        tuple(fake._active_app_started),
+        fake._next_execution_number,
+        result_tree,
+    )
 
 
 @pytest.mark.asyncio
@@ -88,7 +223,11 @@ async def test_seeded_demo_athena_returns_fresh_profile_local_instances() -> Non
     first = seeded_demo_athena("demo-dev")
     second = seeded_demo_athena("demo-dev")
 
-    await first.start_query("SELECT 1", DEV_CONTEXT, request_token="token-one")
+    await first.start_query(
+        "SELECT 1",
+        DEV_CONTEXT,
+        request_token=_request_token("token-one"),
+    )
 
     first_history, _ = await first.list_query_executions_page("dev-analytics")
     second_history, _ = await second.list_query_executions_page("dev-analytics")
@@ -105,7 +244,7 @@ async def test_demo_query_walks_to_success_deterministically() -> None:
     ref = await fake.start_query(
         "SELECT 1",
         DEV_CONTEXT,
-        request_token="deterministic-token",
+        request_token=_request_token("deterministic-token"),
     )
     states = [(await fake.get_query_execution(ref.execution_id)).summary.state for _ in range(3)]
 
@@ -124,12 +263,12 @@ async def test_only_app_started_queries_advance_and_tokens_are_idempotent() -> N
     first = await fake.start_query(
         "SELECT 1",
         DEV_CONTEXT,
-        request_token="same-token",
+        request_token=_request_token("same-token"),
     )
     second = await fake.start_query(
         "SELECT 1",
         DEV_CONTEXT,
-        request_token="same-token",
+        request_token=_request_token("same-token"),
     )
 
     assert historical_before == historical_after
@@ -168,7 +307,7 @@ async def test_request_token_reuse_rejects_any_changed_request_parameter_safely(
     output_location: str | None,
 ) -> None:
     fake = seeded_demo_athena("demo-dev")
-    token = "TOKEN_SECRET"
+    token = _request_token("TOKEN_SECRET")
     await fake.start_query(
         "SELECT 1",
         DEV_CONTEXT,
@@ -199,7 +338,7 @@ async def test_start_query_rejects_unsafe_sql_before_creating_execution() -> Non
         await fake.start_query(
             "DROP TABLE sensitive_events",
             DEV_CONTEXT,
-            request_token="unsafe-token",
+            request_token=_request_token("unsafe-token"),
         )
 
     assert set(fake.query_executions) == before
@@ -212,7 +351,7 @@ async def test_enforced_workgroup_output_cannot_be_overridden_by_caller() -> Non
     ref = await fake.start_query(
         "SELECT 1",
         DEV_CONTEXT,
-        request_token="enforced-output",
+        request_token=_request_token("enforced-output"),
         output_location="s3://caller-results/OUTPUT_SECRET/",
     )
     detail = fake.query_executions[ref.execution_id]
@@ -242,7 +381,7 @@ async def test_non_enforced_workgroup_accepts_caller_output_configuration() -> N
     ref = await fake.start_query(
         "SELECT 1",
         context,
-        request_token="caller-output",
+        request_token=_request_token("caller-output"),
         output_location="s3://caller-results/explicit/",
     )
 
@@ -349,7 +488,7 @@ async def test_seeded_iceberg_time_travel_query_returns_exact_profile_rows(
     ref = await fake.start_query(
         sql,
         context,
-        request_token="iceberg-time-travel",
+        request_token=_request_token("iceberg-time-travel"),
     )
     for _ in range(3):
         detail = await fake.get_query_execution(ref.execution_id)
@@ -384,7 +523,11 @@ async def test_success_artifact_serializes_every_result_page_as_exact_csv() -> N
     )
     fake.add_query_result(sql, DEV_CONTEXT, columns=columns, rows=rows)
 
-    ref = await fake.start_query(sql, DEV_CONTEXT, request_token="artifact-pages")
+    ref = await fake.start_query(
+        sql,
+        DEV_CONTEXT,
+        request_token=_request_token("artifact-pages"),
+    )
     await _advance_to_success(fake, ref.execution_id)
     first = await fake.get_results_page(ref.execution_id)
     assert first.rows == rows[:1]
@@ -464,12 +607,12 @@ async def test_result_tokens_are_exact_bounded_and_execution_owned() -> None:
     first_ref = await fake.start_query(
         "SELECT value FROM token_fixture_one",
         DEV_CONTEXT,
-        request_token="token-owner-one",
+        request_token=_request_token("token-owner-one"),
     )
     second_ref = await fake.start_query(
         "SELECT value FROM token_fixture_two",
         DEV_CONTEXT,
-        request_token="token-owner-two",
+        request_token=_request_token("token-owner-two"),
     )
     first_page = await fake.get_results_page(first_ref.execution_id)
     second_page = await fake.get_results_page(second_ref.execution_id)
@@ -502,6 +645,228 @@ async def test_result_tokens_are_exact_bounded_and_execution_owned() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", PAGINATED_LIST_ENDPOINTS)
+async def test_list_tokens_preserve_exact_multi_page_traversal(endpoint: str) -> None:
+    fake = _pagination_fake()
+    expected, expected_token = await _list_page(fake, endpoint)
+    fake.page_size = 1
+    _, repeated_token = await _list_page(fake, endpoint)
+    _, same_repeated_token = await _list_page(fake, endpoint)
+    assert repeated_token == same_repeated_token
+
+    actual: list[object] = []
+    start_token = None
+    seen_tokens: set[str] = set()
+    while True:
+        page, next_token = await _list_page(
+            fake,
+            endpoint,
+            start_token=start_token,
+        )
+        actual.extend(page)
+        if next_token is None:
+            break
+        assert len(next_token) == 64
+        assert next_token == next_token.lower()
+        assert all(char in "0123456789abcdef" for char in next_token)
+        assert next_token not in seen_tokens
+        seen_tokens.add(next_token)
+        start_token = next_token
+
+    assert expected_token is None
+    assert actual == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_endpoint", "target_endpoint"),
+    [
+        (source, target)
+        for source in PAGINATED_LIST_ENDPOINTS
+        for target in PAGINATED_LIST_ENDPOINTS
+        if source != target
+    ],
+)
+async def test_list_tokens_are_bound_to_exact_operation(
+    source_endpoint: str,
+    target_endpoint: str,
+) -> None:
+    fake = _pagination_fake()
+    fake.page_size = 1
+    _, token = await _list_page(fake, source_endpoint)
+    assert token is not None
+    before = _query_state(fake)
+
+    with pytest.raises(ValidationError, match="pagination token"):
+        await _list_page(fake, target_endpoint, start_token=token)
+
+    assert _query_state(fake) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", PAGINATED_LIST_ENDPOINTS)
+async def test_list_tokens_are_bound_to_context_and_instance(endpoint: str) -> None:
+    source = _pagination_fake()
+    source.page_size = 1
+    _, token = await _list_page(source, endpoint)
+    assert token is not None
+
+    if endpoint != "workgroups":
+        before = _query_state(source)
+        with pytest.raises(ValidationError, match="pagination token"):
+            await _list_page(
+                source,
+                endpoint,
+                start_token=token,
+                alternate_context=True,
+            )
+        assert _query_state(source) == before
+
+    other = _pagination_fake()
+    other.page_size = 1
+    before = _query_state(other)
+    with pytest.raises(ValidationError, match="pagination token"):
+        await _list_page(other, endpoint, start_token=token)
+    assert _query_state(other) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", PAGINATED_LIST_ENDPOINTS)
+async def test_list_tokens_reject_malformed_tampered_and_stale_offsets(
+    endpoint: str,
+) -> None:
+    fake = _pagination_fake()
+    fake.page_size = 1
+    _, token = await _list_page(fake, endpoint)
+    assert token is not None
+    tampered = f"{'0' if token[0] != '0' else '1'}{token[1:]}"
+
+    for invalid in (
+        "",
+        "0",
+        "-1",
+        "9" * 500,
+        tampered,
+        True,
+        object(),
+    ):
+        before = _query_state(fake)
+        with pytest.raises(ValidationError, match="pagination token"):
+            await _list_page(fake, endpoint, start_token=invalid)
+        assert _query_state(fake) == before
+
+    _truncate_endpoint(fake, endpoint)
+    before = _query_state(fake)
+    with pytest.raises(ValidationError, match="pagination token"):
+        await _list_page(fake, endpoint, start_token=token)
+    assert _query_state(fake) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_token",
+    [
+        "a" * 31,
+        "a" * 129,
+        ("a" * 31) + "\n",
+        cast(str, True),
+        cast(str, object()),
+    ],
+)
+async def test_start_query_rejects_invalid_request_token_before_mutation(
+    request_token: str,
+) -> None:
+    store = seeded_demo_fs("demo-dev")
+    fake = seeded_demo_athena("demo-dev", result_store=store)
+    before = _query_state(fake)
+
+    with pytest.raises(ValidationError, match="request token"):
+        await fake.start_query(
+            "SELECT 1",
+            DEV_CONTEXT,
+            request_token=request_token,
+        )
+
+    assert _query_state(fake) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("length", [32, 128])
+async def test_start_query_accepts_exact_request_token_boundaries(length: int) -> None:
+    fake = seeded_demo_athena("demo-dev")
+    token = "a" * length
+
+    first = await fake.start_query("SELECT 1", DEV_CONTEXT, request_token=token)
+    replay = await fake.start_query("SELECT 1", DEV_CONTEXT, request_token=token)
+
+    assert replay == first
+    assert sum(ref == first.execution_id for ref in fake.history[DEV_CONTEXT.workgroup]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "output_location",
+    [
+        "",
+        "not-an-s3-uri",
+        "https://valid-bucket/results/",
+        "s3://valid-bucket",
+        "s3://valid-bucket/",
+        "s3://valid-bucket//",
+        "S3://valid-bucket/results/",
+        "s3://user@valid-bucket/results/",
+        "s3://valid-bucket/results/?secret=value",
+        "s3://valid-bucket/results/#secret",
+        "s3://Invalid-Bucket/results/",
+        "s3://valid-bucket/bad\nkey",
+        cast(str, True),
+        cast(str, object()),
+    ],
+)
+async def test_start_query_rejects_invalid_output_location_before_mutation(
+    output_location: str,
+) -> None:
+    store = seeded_demo_fs("demo-dev")
+    fake = seeded_demo_athena("demo-dev", result_store=store)
+    before = _query_state(fake)
+
+    with pytest.raises(ValidationError, match="output location") as captured:
+        await fake.start_query(
+            "SELECT 1",
+            DEV_CONTEXT,
+            request_token=VALID_REQUEST_TOKEN,
+            output_location=output_location,
+        )
+
+    assert _query_state(fake) == before
+    if type(output_location) is str and output_location:
+        assert output_location not in repr(captured.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "output_location",
+    [
+        "s3://caller-results/result.csv",
+        "s3://caller-results/results/",
+    ],
+)
+async def test_start_query_accepts_valid_s3_object_and_prefix_locations(
+    output_location: str,
+) -> None:
+    fake = seeded_demo_athena("demo-dev")
+
+    ref = await fake.start_query(
+        "SELECT 1",
+        DEV_CONTEXT,
+        request_token=VALID_REQUEST_TOKEN,
+        output_location=output_location,
+    )
+
+    assert ref.execution_id in fake.query_executions
+
+
+@pytest.mark.asyncio
 async def test_start_query_rejects_non_string_sql_without_python_type_error() -> None:
     fake = seeded_demo_athena("demo-dev")
     before = set(fake.query_executions)
@@ -510,7 +875,7 @@ async def test_start_query_rejects_non_string_sql_without_python_type_error() ->
         await fake.start_query(
             cast(str, object()),
             DEV_CONTEXT,
-            request_token="malformed-sql",
+            request_token=_request_token("malformed-sql"),
         )
 
     assert set(fake.query_executions) == before
@@ -554,7 +919,7 @@ async def test_unknown_query_context_fails_closed_without_execution_or_artifact(
         await fake.start_query(
             sql,
             context,
-            request_token="PRIVATE_REQUEST_TOKEN",
+            request_token=_request_token("PRIVATE_REQUEST_TOKEN"),
         )
 
     assert set(fake.query_executions) == before_executions
@@ -699,7 +1064,11 @@ async def test_empty_workgroup_has_no_history_or_saved_queries() -> None:
 @pytest.mark.asyncio
 async def test_stop_is_limited_to_active_app_started_queries() -> None:
     fake = seeded_demo_athena("demo-dev")
-    ref = await fake.start_query("SELECT 1", DEV_CONTEXT, request_token="stop-token")
+    ref = await fake.start_query(
+        "SELECT 1",
+        DEV_CONTEXT,
+        request_token=_request_token("stop-token"),
+    )
 
     await fake.stop_query(ref.execution_id)
 
@@ -715,7 +1084,7 @@ async def test_stop_is_limited_to_active_app_started_queries() -> None:
 async def test_fake_records_all_calls_without_repr_leaking_sql_results_or_tokens() -> None:
     fake = seeded_demo_athena("demo-dev")
     sql_secret = "SELECT 'SQL_SECRET'"
-    token_secret = "TOKEN_SECRET"
+    token_secret = _request_token("TOKEN_SECRET")
 
     with pytest.raises(ValidationError):
         await fake.start_query(
@@ -744,7 +1113,11 @@ async def test_fake_creates_no_background_tasks() -> None:
     current = asyncio.current_task()
     before = {task for task in asyncio.all_tasks() if task is not current}
 
-    ref = await fake.start_query("SELECT 1", DEV_CONTEXT, request_token="task-check")
+    ref = await fake.start_query(
+        "SELECT 1",
+        DEV_CONTEXT,
+        request_token=_request_token("task-check"),
+    )
     await fake.get_query_execution(ref.execution_id)
     await fake.get_results_page("q-dev-succeeded")
 

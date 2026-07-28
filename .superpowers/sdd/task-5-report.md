@@ -88,22 +88,39 @@ same-profile S3 handoff.
 - Journey 9 now opens and reads the generated S3 result object and asserts its
   exact Iceberg headers and profile rows, with explicit guards against the old
   generic `_col0/1` fallback.
+- Replaced reusable decimal list offsets with fixed-length, lowercase opaque
+  tokens issued by an instance-owned HMAC registry. Tokens are bound to the
+  exact list operation, workgroup/catalog/database context, page size, and
+  offset. Cross-operation, cross-context, cross-instance, malformed, tampered,
+  and stale-offset replay now fails with a value-free typed provider error.
+- Tightened demo `start_query()` inputs to Athena's installed
+  `ClientRequestToken` bounds of 32 through 128 characters, rejecting exact
+  non-string values and control characters before query state mutation.
+- Validated caller result locations through the shared S3 URI parser and an
+  exact canonical `s3://bucket/key-or-prefix` boundary. Object-like keys and
+  trailing-slash prefixes remain supported; missing keys, noncanonical
+  schemes, credentials, query strings, fragments, unsafe characters, and
+  invalid buckets fail before execution or artifact mutation.
+- Updated direct fake-client integration fixtures to use API-valid request
+  tokens. VM-generated and Iceberg-runner tokens already met the Athena model.
 
 ## Verification
 
 ```text
-Focused Athena fake boundary tests:             38 passed
+Focused Athena fake unit/boundary tests:        124 passed
+Table-driven scoped list-token cases:            63 passed
+Request/output argument boundary cases:          23 passed
 Focused rollback/artifact/Journey 9 tests:       5 passed
-Warning-strict Task 3-5 regression matrix:     537 passed
+Warning-strict demo/navigation/S3 matrix:       317 passed
+Warning-strict Athena/S3 provider units:        231 passed
+Warning-strict Glue/Athena/S3 E2E journeys:       3 passed
+Full Task 5 E2E journeys:                         9 passed
 Repeated Journey 9 executions:                   2 passed
-Full Task 5 E2E journeys:                       9 passed
 Demo snapshot/content suite:                   52 passed
 Snapshot baselines compared:                   28 passed
-Focused demo coverage run:                    131 passed
-Demo package coverage:                         81.83%
-  seeds.py:                                    99%
-  in_memory_athena.py:                         82%
-  in_memory_glue.py:                           79%
+Focused demo coverage run:                    163 passed
+Demo package coverage:                         74.38%
+  in_memory_athena.py:                         86%
 Ruff lint and format:                          passed
 Mypy (configured source tree, 157 files):       passed
 Layer rules:                                   passed
@@ -114,6 +131,9 @@ git diff --check:                              passed
 
 Snapshot commands explicitly removed inherited color-disabling environment
 variables and used `TERM=xterm-256color`.
+
+The final provider-boundary change did not alter rendered output, so snapshots
+were not regenerated. Existing Task 5 snapshot evidence remains unchanged.
 
 ## Residual Risks
 
