@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol, TypeAlias, cast
 
 import reactivex as rx
@@ -136,6 +136,7 @@ class _MetadataPane:
     stable_state: PaneState = PaneState.EMPTY
     stable_error_text: str | None = None
     stable_loaded: bool = False
+    stable_selected_snapshot_id: int | None = None
 
     @property
     def visible_rows(self) -> tuple[IcebergRow, ...]:
@@ -217,6 +218,21 @@ class GlueIcebergVM:
     @property
     def selected_snapshot_id(self) -> int | None:
         return self._selected_snapshot_id
+
+    @property
+    def can_time_travel_in_athena(self) -> bool:
+        pane = self._panes["snapshots"]
+        snapshot_id = self._selected_snapshot_id
+        return (
+            self.available
+            and self._active_view == "snapshots"
+            and pane.state is PaneState.IDLE
+            and type(snapshot_id) is int
+            and any(
+                row.snapshot_id == snapshot_id
+                for row in cast(tuple[IcebergSnapshot, ...], pane.visible_rows)
+            )
+        )
 
     @property
     def snapshots(self) -> tuple[IcebergSnapshot, ...]:
@@ -301,14 +317,14 @@ class GlueIcebergVM:
         self._binding_generation += 1
         self._table_ref = table_ref
         self._selected_snapshot_id = None
-        for pane in self._panes.values():
+        for view, pane in self._panes.items():
             pane.generation += 1
             pane.rows = ()
             pane.visible_count = 0
             pane.state = PaneState.EMPTY
             pane.error_text = None
             pane.loaded = False
-            self._remember_stable(pane)
+            self._remember_stable(view, pane)
         self._notify_all()
 
     async def select_view(self, view: IcebergView) -> bool:
@@ -318,6 +334,10 @@ class GlueIcebergVM:
         changed = view != self._active_view
         self._active_view = view
         if changed:
+            if view != "snapshots" and self._selected_snapshot_id is not None:
+                self._selected_snapshot_id = None
+                self._remember_stable("snapshots", self._panes["snapshots"])
+                self._notify("selected_snapshot_id")
             self._notify("active_view")
             self._notify_active()
         if pane.loaded:
@@ -336,32 +356,31 @@ class GlueIcebergVM:
         if not pane.has_more or pane.state not in {PaneState.IDLE, PaneState.EMPTY}:
             return False
         pane.visible_count = min(len(pane.rows), pane.visible_count + self._page_size)
+        self._remember_stable(self._active_view, pane)
         self._notify_view(self._active_view)
         return True
 
     def select_snapshot(self, snapshot_id: int) -> bool:
-        snapshots = cast(tuple[IcebergSnapshot, ...], self._panes["snapshots"].rows)
+        pane = self._panes["snapshots"]
+        snapshots = cast(tuple[IcebergSnapshot, ...], pane.visible_rows)
         if (
             not self.available
+            or self._active_view != "snapshots"
+            or pane.state is not PaneState.IDLE
             or type(snapshot_id) is not int
             or not any(row.snapshot_id == snapshot_id for row in snapshots)
         ):
             return False
         if self._selected_snapshot_id != snapshot_id:
             self._selected_snapshot_id = snapshot_id
+            self._remember_stable("snapshots", pane)
             self._notify("selected_snapshot_id")
         return True
 
     def time_travel_in_athena(self) -> bool:
         table_ref = self._table_ref
         snapshot_id = self._selected_snapshot_id
-        snapshots = cast(tuple[IcebergSnapshot, ...], self._panes["snapshots"].rows)
-        if (
-            not self.available
-            or table_ref is None
-            or type(snapshot_id) is not int
-            or not any(row.snapshot_id == snapshot_id for row in snapshots)
-        ):
+        if not self.can_time_travel_in_athena or table_ref is None or type(snapshot_id) is not int:
             return False
         send_value_free(
             self._hub,
@@ -377,21 +396,20 @@ class GlueIcebergVM:
         pane.generation += 1
         request_generation = pane.generation
         binding_generation = self._binding_generation
-        pane.state = PaneState.LOADING
-        pane.error_text = None
-        self._notify_view(view)
         caller_task = asyncio.current_task()
         try:
+            pane.state = PaneState.LOADING
+            pane.error_text = None
+            self._notify_view(view)
             rows = await self._loader(view)(table_ref)
             if caller_task is not None and caller_task.cancelling():
-                if self._is_current(view, request_generation, binding_generation, table_ref):
-                    self._restore_stable(pane)
-                    self._notify_view(view)
                 raise asyncio.CancelledError
             normalized = self._normalize_rows(view, rows)
         except asyncio.CancelledError:
             if self._is_current(view, request_generation, binding_generation, table_ref):
-                self._restore_stable(pane)
+                selection_changed = self._restore_stable(view, pane)
+                if selection_changed:
+                    self._notify("selected_snapshot_id")
                 self._notify_view(view)
             raise
         except ProviderError as exc:
@@ -399,7 +417,7 @@ class GlueIcebergVM:
                 return False
             pane.state, pane.error_text = _map_iceberg_provider_error(exc)
             pane.loaded = False
-            self._remember_stable(pane)
+            self._remember_stable(view, pane)
             self._notify_view(view)
             return False
         except Exception as exc:
@@ -409,7 +427,7 @@ class GlueIcebergVM:
             pane.state = PaneState.ERROR
             pane.error_text = "Iceberg metadata request failed"
             pane.loaded = False
-            self._remember_stable(pane)
+            self._remember_stable(view, pane)
             self._notify_view(view)
             return False
         if not self._is_current(view, request_generation, binding_generation, table_ref):
@@ -419,18 +437,20 @@ class GlueIcebergVM:
         pane.state = PaneState.IDLE if normalized else PaneState.EMPTY
         pane.error_text = None
         pane.loaded = True
-        self._remember_stable(pane)
-        snapshots = cast(tuple[IcebergSnapshot, ...], normalized)
+        snapshots = cast(tuple[IcebergSnapshot, ...], pane.visible_rows)
+        selection_changed = False
         if view == "snapshots" and not any(
             row.snapshot_id == self._selected_snapshot_id for row in snapshots
         ):
+            selection_changed = self._selected_snapshot_id is not None
             self._selected_snapshot_id = None
+        self._remember_stable(view, pane)
+        if selection_changed:
             self._notify("selected_snapshot_id")
         self._notify_view(view)
         return True
 
-    @staticmethod
-    def _remember_stable(pane: _MetadataPane) -> None:
+    def _remember_stable(self, view: IcebergView, pane: _MetadataPane) -> None:
         if pane.state is PaneState.LOADING:
             return
         pane.stable_rows = pane.rows
@@ -438,14 +458,20 @@ class GlueIcebergVM:
         pane.stable_state = pane.state
         pane.stable_error_text = pane.error_text
         pane.stable_loaded = pane.loaded
+        if view == "snapshots":
+            pane.stable_selected_snapshot_id = self._selected_snapshot_id
 
-    @staticmethod
-    def _restore_stable(pane: _MetadataPane) -> None:
+    def _restore_stable(self, view: IcebergView, pane: _MetadataPane) -> bool:
         pane.rows = pane.stable_rows
         pane.visible_count = pane.stable_visible_count
         pane.state = pane.stable_state
         pane.error_text = pane.stable_error_text
         pane.loaded = pane.stable_loaded
+        if view != "snapshots":
+            return False
+        changed = self._selected_snapshot_id != pane.stable_selected_snapshot_id
+        self._selected_snapshot_id = pane.stable_selected_snapshot_id
+        return changed
 
     def _loader(self, view: IcebergView) -> Any:
         return getattr(self._inspector, f"list_{view}")
@@ -572,8 +598,20 @@ def _valid_int(value: object, *, optional: bool = False) -> bool:
     return (optional and value is None) or (type(value) is int and value >= 0)
 
 
+def _valid_positive_int(value: object, *, optional: bool = False) -> bool:
+    return (optional and value is None) or (type(value) is int and value > 0)
+
+
 def _valid_datetime(value: object, *, optional: bool = False) -> bool:
-    return (optional and value is None) or type(value) is datetime
+    if optional and value is None:
+        return True
+    if type(value) is not datetime:
+        return False
+    try:
+        offset = value.utcoffset()
+    except Exception:
+        return False
+    return type(offset) is timedelta and -timedelta(days=1) < offset < timedelta(days=1)
 
 
 def _valid_pairs(
@@ -654,14 +692,19 @@ def _valid_row(view: IcebergView, row: IcebergRow) -> bool:
             and _valid_int(partition.last_updated_snapshot_id, optional=True)
         )
     reference = cast(IcebergReference, row)
-    return (
+    common_valid = (
         _valid_string(reference.name)
         and reference.ref_type in {"BRANCH", "TAG"}
         and _valid_int(reference.snapshot_id)
-        and _valid_int(reference.max_reference_age_in_ms, optional=True)
-        and _valid_int(reference.min_snapshots_to_keep, optional=True)
-        and _valid_int(reference.max_snapshot_age_in_ms, optional=True)
+        and _valid_positive_int(reference.max_reference_age_in_ms, optional=True)
     )
+    if not common_valid:
+        return False
+    if reference.ref_type == "TAG":
+        return reference.min_snapshots_to_keep is None and reference.max_snapshot_age_in_ms is None
+    return _valid_positive_int(
+        reference.min_snapshots_to_keep, optional=True
+    ) and _valid_positive_int(reference.max_snapshot_age_in_ms, optional=True)
 
 
 def _row_identity(view: IcebergView, row: IcebergRow) -> object:

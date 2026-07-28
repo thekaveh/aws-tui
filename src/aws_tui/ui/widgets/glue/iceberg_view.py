@@ -283,23 +283,13 @@ class GlueIcebergView(Widget):
             PaneState.ERROR,
         }
         retry.disabled = self._vm.state is PaneState.LOADING
-        time_travel.disabled = self._vm.selected_snapshot_id is None
+        time_travel.disabled = not self._vm.can_time_travel_in_athena
 
     def _enable_highlight(self) -> None:
         self._suppress_highlight = False
 
     def _time_travel_selected(self) -> None:
-        try:
-            table = self.query_one("#glue-iceberg-table", DataTable)
-        except Exception:
-            return
-        if (
-            self._vm.active_view != "snapshots"
-            or table.cursor_row < 0
-            or table.cursor_row >= len(self._vm.snapshots)
-        ):
-            return
-        if self._vm.select_snapshot(self._vm.snapshots[table.cursor_row].snapshot_id):
+        if self._vm.can_time_travel_in_athena:
             self._vm.time_travel_in_athena()
 
 

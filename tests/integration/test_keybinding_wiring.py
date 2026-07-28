@@ -8,9 +8,17 @@ retain priority routing.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
+from vmx import NULL_DISPATCHER, MessageHub
+from vmx.messages.protocols import Message
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.domain.data_catalog import TableFormat
+from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM
+from aws_tui.vm.messages import OpenAthenaTableRequest
+from tests.unit.vm.glue.test_iceberg_vm import ICEBERG_REF, RecordingInspector
 
 # The full set the App must install under the default keymap: our
 # resolver-materialized bindings (dispatch form, Textual key names) plus
@@ -88,6 +96,53 @@ def test_dispatch_invokes_registered_handler(app_context_factory) -> None:  # ty
     app._actions.register("pane.copy", lambda: calls.append("copy"))
     app.action_dispatch("pane.copy")
     assert calls == ["copy"]
+
+
+@pytest.mark.asyncio
+async def test_global_v_dispatch_uses_active_snapshot_action_guard(
+    app_context_factory,  # type: ignore[no-untyped-def]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = app_context_factory()
+    hub: MessageHub[Message] = MessageHub()
+    inspector = RecordingInspector()
+    iceberg = GlueIcebergVM(
+        inspector=inspector,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    iceberg.construct()
+    await iceberg.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await iceberg.select_view("snapshots")
+    assert iceberg.select_snapshot(43)
+    page = SimpleNamespace(vm=SimpleNamespace(catalog=SimpleNamespace(iceberg=iceberg)))
+    received: list[OpenAthenaTableRequest] = []
+    subscription = hub.messages.subscribe(
+        on_next=lambda message: (
+            received.append(message) if isinstance(message, OpenAthenaTableRequest) else None
+        )
+    )
+    app = AwsTuiApp(ctx)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        monkeypatch.setattr(app, "_glue_page", lambda: page)
+        assert ("V", "dispatch('glue.time_travel_in_athena')", False, False) in _installed(app)
+
+        await pilot.press("V")
+        await pilot.pause()
+        assert received == [OpenAthenaTableRequest(table_ref=ICEBERG_REF, snapshot_id=43)]
+
+        await iceberg.select_view("history")
+        await pilot.press("V")
+        await pilot.pause()
+
+        assert received == [OpenAthenaTableRequest(table_ref=ICEBERG_REF, snapshot_id=43)]
+        assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
+            "glue-athena-snapshot-unavailable"
+        )
+
+    subscription.dispose()
+    iceberg.dispose()
 
 
 def test_overlay_remaps_a_handled_action() -> None:

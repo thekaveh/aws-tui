@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import Any, cast
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
+from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.data_catalog import TableFormat, TableRef
@@ -284,6 +285,34 @@ async def test_cancelled_retry_never_restores_ownerless_loading_state() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("subscriber_kind", ["property", "hub"])
+async def test_cancelled_loading_notification_restores_before_provider_call(
+    subscriber_kind: str,
+) -> None:
+    vm, inspector, hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+
+    def cancel_notification(_value: object) -> None:
+        raise asyncio.CancelledError
+
+    subscription = (
+        vm.on_property_changed.subscribe(on_next=cancel_notification)
+        if subscriber_kind == "property"
+        else hub.messages.subscribe(on_next=cancel_notification)
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await vm.select_view("snapshots")
+
+    assert inspector.calls == []
+    assert vm.state is PaneState.EMPTY
+    assert vm.snapshots == ()
+    subscription.dispose()
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
 async def test_retry_supersedes_retry_and_only_latest_completion_can_publish() -> None:
     vm, inspector, _hub = make_vm()
     await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
@@ -339,6 +368,61 @@ async def test_selected_snapshot_sends_exact_time_travel_request_without_provide
     assert tuple(inspector.calls) == calls_before
     assert received == [OpenAthenaTableRequest(table_ref=ICEBERG_REF, snapshot_id=43)]
     subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_retry_restores_expanded_snapshot_page_and_selection() -> None:
+    vm, inspector, _hub = make_vm(page_size=1)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("snapshots")
+    await vm.load_more()
+    assert vm.select_snapshot(42)
+    started = inspector.block("snapshots")
+
+    retry = asyncio.create_task(vm.retry())
+    await started.wait()
+    retry.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await retry
+
+    assert [row.snapshot_id for row in vm.snapshots] == [43, 42]
+    assert vm.selected_snapshot_id == 42
+    assert vm.can_time_travel_in_athena
+
+
+@pytest.mark.asyncio
+async def test_failed_retry_preserves_expanded_rows_but_disables_time_travel() -> None:
+    vm, inspector, _hub = make_vm(page_size=1)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("snapshots")
+    await vm.load_more()
+    assert vm.select_snapshot(42)
+    inspector.errors["snapshots"] = PermissionDeniedError("denied")
+
+    assert not await vm.retry()
+
+    assert [row.snapshot_id for row in vm.snapshots] == [43, 42]
+    assert vm.selected_snapshot_id == 42
+    assert vm.state is PaneState.FORBIDDEN
+    assert not vm.can_time_travel_in_athena
+    assert not vm.time_travel_in_athena()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_selection_requires_visible_active_stable_snapshot_pane() -> None:
+    vm, _inspector, _hub = make_vm(page_size=1)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("snapshots")
+
+    assert not vm.select_snapshot(42)
+    assert vm.select_snapshot(43)
+    assert vm.can_time_travel_in_athena
+
+    await vm.select_view("history")
+
+    assert vm.selected_snapshot_id is None
+    assert not vm.can_time_travel_in_athena
+    assert not vm.time_travel_in_athena()
 
 
 @pytest.mark.asyncio
@@ -421,6 +505,116 @@ async def test_malformed_exact_metadata_records_are_rejected_before_publish(
 
     assert not vm.available
     assert not vm.time_travel_in_athena()
+
+
+class _InvalidOffset(tzinfo):
+    def utcoffset(self, _dt: datetime | None) -> timedelta:
+        return timedelta(hours=24)
+
+    def dst(self, _dt: datetime | None) -> timedelta:
+        return timedelta(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view", "rows"),
+    [
+        ("snapshots", (replace(_snapshot(43), committed_at=datetime(2026, 7, 28, 12)),)),
+        (
+            "history",
+            (IcebergHistoryEntry(datetime(2026, 7, 28, 12), 43, 42, True),),
+        ),
+        (
+            "partitions",
+            (
+                IcebergPartition(
+                    (("day", "2026-07-28"),),
+                    1,
+                    1,
+                    1,
+                    None,
+                    None,
+                    None,
+                    None,
+                    datetime(2026, 7, 28, 12, tzinfo=_InvalidOffset()),
+                    43,
+                ),
+            ),
+        ),
+    ],
+)
+async def test_metadata_rejects_naive_or_invalid_offset_datetimes_atomically(
+    view: str,
+    rows: tuple[object, ...],
+) -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view(cast(Any, view))
+    previous = vm.items
+    setattr(inspector, view, rows)
+
+    assert not await vm.retry()
+
+    assert vm.items == previous
+    assert vm.state is PaneState.ERROR
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reference",
+    [
+        IcebergReference("tag", "TAG", 43, None, 1, None),
+        IcebergReference("tag", "TAG", 43, None, None, 1),
+        IcebergReference("branch", "BRANCH", 43, 0, None, None),
+        IcebergReference("branch", "BRANCH", 43, None, -1, None),
+        IcebergReference("branch", "BRANCH", 43, None, True, None),
+        IcebergReference("branch", "BRANCH", 43, None, None, 0),
+    ],
+)
+async def test_metadata_rejects_invalid_reference_retention_atomically(
+    reference: IcebergReference,
+) -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("refs")
+    previous = vm.refs
+    inspector.refs = (reference,)
+
+    assert not await vm.retry()
+
+    assert vm.refs == previous
+    assert vm.state is PaneState.ERROR
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reference",
+    [
+        IcebergReference("tag", "TAG", 43, 86_400_000, None, None),
+        IcebergReference("branch", "BRANCH", 43, None, None, None),
+        IcebergReference("branch", "BRANCH", 43, 1, 1, 1),
+    ],
+)
+async def test_metadata_accepts_spec_valid_reference_retention(
+    reference: IcebergReference,
+) -> None:
+    vm, inspector, _hub = make_vm()
+    inspector.refs = (reference,)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+
+    assert await vm.select_view("refs")
+    assert vm.refs == (reference,)
+
+
+@pytest.mark.asyncio
+async def test_metadata_accepts_aware_datetime_with_non_utc_offset() -> None:
+    vm, inspector, _hub = make_vm()
+    aware = datetime(2026, 7, 28, 12, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    inspector.snapshots = (replace(_snapshot(43), committed_at=aware),)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+
+    assert await vm.select_view("snapshots")
+    assert vm.snapshots[0].committed_at is aware
 
 
 @pytest.mark.asyncio

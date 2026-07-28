@@ -140,6 +140,25 @@ async def test_switching_metadata_tabs_preserves_loaded_pane_and_focus_targets()
 
 
 @pytest.mark.asyncio
+async def test_switching_from_snapshots_disables_time_travel_control() -> None:
+    vm, _inspector = _build_vm()
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await pilot.pause()
+        button = pilot.app.query_one("#glue-iceberg-time-travel", Button)
+        assert not button.disabled
+
+        await pilot.click("#glue-iceberg-tab-history")
+        await pilot.pause()
+
+        assert vm.catalog.iceberg.selected_snapshot_id is None
+        assert not vm.catalog.iceberg.can_time_travel_in_athena
+        assert button.disabled
+
+
+@pytest.mark.asyncio
 async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel() -> None:
     vm, _inspector = _build_vm()
     await vm.setup()

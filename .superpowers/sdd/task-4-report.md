@@ -4,7 +4,7 @@
 
 Implemented Iceberg integration plan Task 4 on
 `codex/aws-service-expansion-study`, including the complete first-review
-correction pass.
+correction pass and the final lifecycle/action-guard closure.
 
 ## Review Corrections
 
@@ -31,6 +31,24 @@ correction pass.
   direct action/focus coverage, and an inspected 80x24 baseline.
 - The `.gitattributes` exception remains necessary because Textual's generated
   `.raw` SVG snapshots contain intentional trailing spaces.
+
+### Final Closure
+
+- Iceberg load transactions now enter their cancellation guard before
+  publishing `LOADING`. Property and MessageHub cancellation therefore
+  restores the last stable pane before propagating and never reaches the
+  provider or leaves an ownerless loading state.
+- Successful local pagination advances the complete rollback checkpoint,
+  including visible rows and snapshot selection. Cancelled retries restore the
+  expanded page, while rebinding, row removal, and metadata-view changes
+  validate or clear stale selections.
+- `can_time_travel_in_athena` is the single action predicate used by the VM,
+  Textual button, and global `V` dispatch. It requires the active snapshots
+  view, an idle pane, and an exact visible selected snapshot.
+- Metadata timestamps require exact timezone-aware `datetime` values with a
+  valid UTC offset. Iceberg reference retention follows the specification:
+  tags permit only optional positive reference age; branches permit optional
+  positive reference age, minimum snapshot count, and snapshot age.
 
 ## Implementation
 
@@ -116,6 +134,19 @@ missing retry action and truncated 80-column tab labels
 All review-correction tests failed for those intended reasons before the
 production changes and now pass.
 
+Final-closure RED:
+
+```text
+property and MessageHub cancellation left the pane LOADING
+cancelled retry discarded locally paginated rows
+hidden snapshots remained selectable and actionable from History
+global V published a stale time-travel request
+naive datetimes and invalid tag/branch retention were accepted
+14 failed, 43 passed
+```
+
+All final-closure tests pass after the production changes.
+
 ## Verification
 
 ```text
@@ -165,6 +196,23 @@ passes and one unrelated existing failure:
 `test_s3_fs_with_moto.py::test_write_then_read_16mb` promotes aiohttp's
 large-raw-body `ResourceWarning` to an HTTP client error. The same test passes
 normally (`1 passed`), and no Task 4 code is on that path.
+
+Final-closure verification:
+
+```text
+Focused VM/UI/production-key dispatch: 57 passed
+  GlueIcebergVM: 88%
+  GlueIcebergView: 93%
+Warning-strict domain/Athena/Glue/navigation matrix: 1,203 passed
+Iceberg visual suite: 17 passed, 16 snapshot comparisons
+Known S3 warning-strict exception, normal mode: 1 passed
+Ruff: all checks passed; 396 files formatted
+mypy: 157 source files passed
+Layer rules: clean
+uv build: sdist and wheel passed
+pre-commit: all 15 hooks passed across all files
+git diff --check: passed
+```
 
 ## Changed Surface
 
