@@ -987,6 +987,47 @@ async def test_list_job_runs_page_filters_locally_without_explicit_states_capabi
     glue.get_job_runs.assert_awaited_once_with(JobName="daily-etl", MaxResults=200)
 
 
+async def test_list_job_runs_page_filters_locally_when_membership_probe_raises() -> None:
+    class HostileMembers(dict[str, object]):
+        def __contains__(self, key: object) -> bool:
+            del key
+            raise RuntimeError("malformed shape membership")
+
+    client, glue, _, _ = _client()
+    glue.meta = SimpleNamespace(
+        service_model=SimpleNamespace(
+            operation_model=lambda _name: SimpleNamespace(
+                input_shape=SimpleNamespace(
+                    members=HostileMembers(
+                        {
+                            "JobName": object(),
+                            "NextToken": object(),
+                            "MaxResults": object(),
+                        }
+                    )
+                )
+            )
+        )
+    )
+    glue.get_job_runs.return_value = {
+        "JobRuns": [
+            {
+                "Id": "running",
+                "JobRunState": "RUNNING",
+            },
+            {
+                "Id": "failed",
+                "JobRunState": "FAILED",
+            },
+        ]
+    }
+
+    rows, _ = await client.list_job_runs_page("daily-etl", states=("RUNNING",))
+
+    assert [row.run_id for row in rows] == ["running"]
+    glue.get_job_runs.assert_awaited_once_with(JobName="daily-etl", MaxResults=200)
+
+
 async def test_list_job_runs_page_filters_locally_when_model_lacks_states() -> None:
     client, glue, _, _ = _client()
     glue.meta = SimpleNamespace(

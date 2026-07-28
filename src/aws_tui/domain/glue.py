@@ -905,11 +905,11 @@ def _supports_request_parameter(
         operation = client.meta.service_model.operation_model(operation_name)  # type: ignore[attr-defined]
         input_shape = operation.input_shape
         members = input_shape.members
+        if not isinstance(members, Mapping):
+            return False
+        return parameter_name in members
     except Exception:
         return False
-    if not isinstance(members, Mapping):
-        return False
-    return parameter_name in members
 
 
 def _response_items(response: object, field: str) -> list[Mapping[str, Any]]:
