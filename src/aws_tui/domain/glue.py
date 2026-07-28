@@ -737,7 +737,7 @@ class GlueClient:
         payload = _required_mapping(statistics_data, payload_key)
         return ColumnStatistics(
             column_name=_required_string(item, "ColumnName"),
-            type_name=_required_string(item, "ColumnType"),
+            type_name=_required_string_allow_empty(item, "ColumnType"),
             analyzed_at=_required_datetime(item, "AnalyzedTime"),
             values=tuple((str(key), _statistics_value(value)) for key, value in payload.items()),
         )
@@ -900,15 +900,15 @@ def _supports_request_parameter(
     operation_name: str,
     parameter_name: str,
 ) -> bool:
-    """Default to the planned request shape when a test double has no model."""
+    """Require an explicit modeled member before sending an optional parameter."""
     try:
         operation = client.meta.service_model.operation_model(operation_name)  # type: ignore[attr-defined]
         input_shape = operation.input_shape
         members = input_shape.members
-    except (AttributeError, KeyError, TypeError):
-        return True
+    except Exception:
+        return False
     if not isinstance(members, Mapping):
-        return True
+        return False
     return parameter_name in members
 
 
@@ -1075,6 +1075,15 @@ def _required_string(mapping: Mapping[str, Any], field: str) -> str:
     value = mapping[field]
     if not isinstance(value, str) or not value:
         raise _GlueResponseError(field, "is not a non-empty string")
+    return value
+
+
+def _required_string_allow_empty(mapping: Mapping[str, Any], field: str) -> str:
+    if field not in mapping:
+        raise _GlueResponseError(field, "is missing")
+    value = mapping[field]
+    if not isinstance(value, str):
+        raise _GlueResponseError(field, "is not a string")
     return value
 
 

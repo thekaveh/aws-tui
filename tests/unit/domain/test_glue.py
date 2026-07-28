@@ -649,6 +649,156 @@ async def test_get_column_statistics_with_no_columns_makes_no_request() -> None:
     glue.get_column_statistics_for_table.assert_not_awaited()
 
 
+async def test_get_column_statistics_accepts_empty_glue_column_type() -> None:
+    client, glue, _, _ = _client()
+    ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+    glue.get_column_statistics_for_table.return_value = {
+        "ColumnStatisticsList": [
+            {
+                "ColumnName": "untyped",
+                "ColumnType": "",
+                "AnalyzedTime": NOW,
+                "StatisticsData": {
+                    "Type": "STRING",
+                    "StringColumnStatisticsData": {
+                        "NumberOfNulls": 0,
+                    },
+                },
+            }
+        ],
+    }
+
+    result = await client.get_column_statistics(ref, ("untyped",))
+
+    assert result == (
+        ColumnStatistics(
+            "untyped",
+            "",
+            NOW,
+            (("NumberOfNulls", "0"),),
+        ),
+    )
+
+
+@pytest.mark.parametrize("column_type", [None, 1, False, object()])
+async def test_get_column_statistics_rejects_missing_or_non_string_column_type(
+    column_type: object,
+) -> None:
+    client, glue, _, _ = _client()
+    ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+    item: dict[str, object] = {
+        "ColumnName": "invalid",
+        "AnalyzedTime": NOW,
+        "StatisticsData": {
+            "Type": "STRING",
+            "StringColumnStatisticsData": {},
+        },
+    }
+    if column_type is not None:
+        item["ColumnType"] = column_type
+    glue.get_column_statistics_for_table.return_value = {
+        "ColumnStatisticsList": [item],
+    }
+
+    with pytest.raises(ValidationError):
+        await client.get_column_statistics(ref, ("invalid",))
+
+
+@pytest.mark.parametrize(
+    ("statistics_type", "payload_key", "payload", "expected_values"),
+    [
+        (
+            "BINARY",
+            "BinaryColumnStatisticsData",
+            {"MaximumLength": 8, "AverageLength": 2.5, "NumberOfNulls": 1},
+            (
+                ("AverageLength", "2.5"),
+                ("MaximumLength", "8"),
+                ("NumberOfNulls", "1"),
+            ),
+        ),
+        (
+            "DATE",
+            "DateColumnStatisticsData",
+            {"MaximumValue": NOW, "MinimumValue": NOW, "NumberOfNulls": 0},
+            (
+                ("MaximumValue", NOW.isoformat()),
+                ("MinimumValue", NOW.isoformat()),
+                ("NumberOfNulls", "0"),
+            ),
+        ),
+        (
+            "DECIMAL",
+            "DecimalColumnStatisticsData",
+            {
+                "MaximumValue": {"UnscaledValue": b"\x7b", "Scale": 2},
+                "MinimumValue": {"UnscaledValue": b"\x01", "Scale": 2},
+            },
+            (
+                ("MaximumValue", """{"Scale":2,"UnscaledValue":"b'{'"}"""),
+                ("MinimumValue", r"""{"Scale":2,"UnscaledValue":"b'\\x01'"}"""),
+            ),
+        ),
+        (
+            "DOUBLE",
+            "DoubleColumnStatisticsData",
+            {"MaximumValue": 9.5, "MinimumValue": -1.25, "NumberOfNulls": 2},
+            (
+                ("MaximumValue", "9.5"),
+                ("MinimumValue", "-1.25"),
+                ("NumberOfNulls", "2"),
+            ),
+        ),
+        (
+            "STRING",
+            "StringColumnStatisticsData",
+            {
+                "MaximumLength": 12,
+                "AverageLength": 4.25,
+                "NumberOfDistinctValues": 7,
+            },
+            (
+                ("AverageLength", "4.25"),
+                ("MaximumLength", "12"),
+                ("NumberOfDistinctValues", "7"),
+            ),
+        ),
+    ],
+)
+async def test_get_column_statistics_maps_supported_payload_variants(
+    statistics_type: str,
+    payload_key: str,
+    payload: dict[str, object],
+    expected_values: tuple[tuple[str, str], ...],
+) -> None:
+    client, glue, _, _ = _client()
+    ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+    glue.get_column_statistics_for_table.return_value = {
+        "ColumnStatisticsList": [
+            {
+                "ColumnName": "value",
+                "ColumnType": "source-type",
+                "AnalyzedTime": NOW,
+                "StatisticsData": {
+                    "Type": statistics_type,
+                    payload_key: payload,
+                },
+            }
+        ],
+    }
+
+    result = await client.get_column_statistics(ref, ("value",))
+
+    assert result == (
+        ColumnStatistics(
+            "value",
+            "source-type",
+            NOW,
+            expected_values,
+        ),
+    )
+
+
 async def test_get_column_statistics_surfaces_redacted_per_column_errors() -> None:
     client, glue, _, _ = _client()
     ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
@@ -768,6 +918,20 @@ async def test_list_job_runs_page_maps_states_and_omits_empty_filter() -> None:
 
 async def test_list_job_runs_page_passes_token_and_non_empty_states() -> None:
     client, glue, _, _ = _client()
+    glue.meta = SimpleNamespace(
+        service_model=SimpleNamespace(
+            operation_model=lambda _name: SimpleNamespace(
+                input_shape=SimpleNamespace(
+                    members={
+                        "JobName": object(),
+                        "NextToken": object(),
+                        "MaxResults": object(),
+                        "States": object(),
+                    }
+                )
+            )
+        )
+    )
     glue.get_job_runs.return_value = {"JobRuns": []}
 
     await client.list_job_runs_page(
@@ -782,6 +946,45 @@ async def test_list_job_runs_page_passes_token_and_non_empty_states() -> None:
         NextToken="opaque",
         States=["RUNNING", "FAILED"],
     )
+
+
+def _raise_malformed_service_model(_operation_name: str) -> object:
+    raise ValueError("malformed service model")
+
+
+@pytest.mark.parametrize(
+    "service_model",
+    [
+        None,
+        SimpleNamespace(
+            operation_model=lambda _name: SimpleNamespace(input_shape=SimpleNamespace(members=None))
+        ),
+        SimpleNamespace(operation_model=_raise_malformed_service_model),
+    ],
+)
+async def test_list_job_runs_page_filters_locally_without_explicit_states_capability(
+    service_model: object | None,
+) -> None:
+    client, glue, _, _ = _client()
+    if service_model is not None:
+        glue.meta = SimpleNamespace(service_model=service_model)
+    glue.get_job_runs.return_value = {
+        "JobRuns": [
+            {
+                "Id": "running",
+                "JobRunState": "RUNNING",
+            },
+            {
+                "Id": "failed",
+                "JobRunState": "FAILED",
+            },
+        ]
+    }
+
+    rows, _ = await client.list_job_runs_page("daily-etl", states=("RUNNING",))
+
+    assert [row.run_id for row in rows] == ["running"]
+    glue.get_job_runs.assert_awaited_once_with(JobName="daily-etl", MaxResults=200)
 
 
 async def test_list_job_runs_page_filters_locally_when_model_lacks_states() -> None:
