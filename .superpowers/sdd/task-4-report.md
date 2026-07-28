@@ -49,6 +49,11 @@ correction pass and the final lifecycle/action-guard closure.
   valid UTC offset. Iceberg reference retention follows the specification:
   tags permit only optional positive reference age; branches permit optional
   positive reference age, minimum snapshot count, and snapshot age.
+- Terminal property delivery now isolates callback-injected asyncio and active
+  AnyIO cancellation without clearing ambient task cancellation or swallowing
+  process-control exceptions. Iceberg disposal uses idempotent nested cleanup
+  so its subject and underlying VM are disposed even when a terminal callback
+  raises.
 
 ## Implementation
 
@@ -147,6 +152,18 @@ naive datetimes and invalid tag/branch retention were accepted
 
 All final-closure tests pass after the production changes.
 
+Terminal-disposal RED:
+
+```text
+cancelled first/middle completion observer escaped terminal delivery
+remaining completion observers were skipped
+Iceberg inner VM remained CONSTRUCTED after callback interruption
+5 failed, 3 passed
+```
+
+All terminal-disposal tests pass after the shared observer-boundary and
+Iceberg cleanup-order changes.
+
 ## Verification
 
 ```text
@@ -207,6 +224,20 @@ Warning-strict domain/Athena/Glue/navigation matrix: 1,203 passed
 Iceberg visual suite: 17 passed, 16 snapshot comparisons
 Known S3 warning-strict exception, normal mode: 1 passed
 Ruff: all checks passed; 396 files formatted
+mypy: 157 source files passed
+Layer rules: clean
+uv build: sdist and wheel passed
+pre-commit: all 15 hooks passed across all files
+git diff --check: passed
+```
+
+Terminal-disposal closure verification:
+
+```text
+Focused ObserverSafeSubject and GlueIcebergVM warning-strict: 54 passed
+Athena/Glue/Iceberg VM, domain, and integration warning-strict: 751 passed
+Hard process alarm: 420 seconds; suite completed in 115.04 seconds
+Ruff and formatting: all source and tests passed
 mypy: 157 source files passed
 Layer rules: clean
 uv build: sdist and wheel passed

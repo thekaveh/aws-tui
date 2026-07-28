@@ -688,6 +688,56 @@ async def test_throwing_property_observer_cannot_interrupt_binding_loading_or_di
     assert "refs" in received
 
 
+@pytest.mark.parametrize("position", ["first", "middle"])
+def test_dispose_isolates_cancelled_completion_observers_and_cleans_up(
+    caplog: pytest.LogCaptureFixture,
+    position: str,
+) -> None:
+    vm, _inspector, _hub = make_vm()
+    completed: list[str] = []
+    marker = "HOSTILE_ICEBERG_COMPLETION_CANCELLATION"
+
+    def cancel() -> None:
+        raise asyncio.CancelledError(marker)
+
+    def fail() -> None:
+        raise RuntimeError("HOSTILE_ICEBERG_COMPLETION_EXCEPTION")
+
+    callbacks = (
+        (cancel, fail, lambda: completed.append("remaining"))
+        if position == "first"
+        else (fail, cancel, lambda: completed.append("remaining"))
+    )
+    for callback in callbacks:
+        vm.on_property_changed.subscribe(on_completed=callback)
+
+    vm.dispose()
+    vm.dispose()
+
+    assert completed == ["remaining"]
+    assert vm.status is ConstructionStatus.DISPOSED
+    assert vm._on_property_changed._subject.is_disposed  # type: ignore[attr-defined]
+    assert marker not in caplog.text
+    assert "HOSTILE_ICEBERG_COMPLETION_EXCEPTION" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_dispose_propagates_process_control_after_terminal_cleanup() -> None:
+    vm, _inspector, _hub = make_vm()
+
+    def interrupt() -> None:
+        raise KeyboardInterrupt
+
+    vm.on_property_changed.subscribe(on_completed=interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        vm.dispose()
+    vm.dispose()
+
+    assert vm.status is ConstructionStatus.DISPOSED
+    assert vm._on_property_changed._subject.is_disposed  # type: ignore[attr-defined]
+
+
 @pytest.mark.asyncio
 async def test_hostile_hub_subscriber_is_value_free_and_does_not_interrupt_state(
     caplog: pytest.LogCaptureFixture,

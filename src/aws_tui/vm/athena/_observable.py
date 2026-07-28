@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextvars import ContextVar
 from typing import Generic, TypeVar
 
+import anyio
 import reactivex as rx
 from reactivex import abc
 from reactivex.subject import Subject
@@ -34,6 +36,16 @@ class _ValueFreeHubFilter(logging.Filter):
 
 
 _vmx_hub_logger.addFilter(_ValueFreeHubFilter())
+
+
+def _is_callback_cancellation(error: BaseException) -> bool:
+    if isinstance(error, asyncio.CancelledError):
+        return True
+    try:
+        cancellation_type = anyio.get_cancelled_exc_class()
+    except anyio.NoEventLoopError:
+        return False
+    return isinstance(error, cancellation_type)
 
 
 class ObserverSafeSubject(rx.Observable[T], Generic[T]):
@@ -68,6 +80,10 @@ class ObserverSafeSubject(rx.Observable[T], Generic[T]):
             try:
                 observer.on_completed()
             except Exception:
+                _logger.error("Athena property observer raised; subscriber isolated")
+            except BaseException as error:
+                if not _is_callback_cancellation(error):
+                    raise
                 _logger.error("Athena property observer raised; subscriber isolated")
 
         return self._subject.subscribe(

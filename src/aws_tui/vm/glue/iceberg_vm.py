@@ -285,9 +285,13 @@ class GlueIcebergVM:
             pane.state = PaneState.EMPTY
             pane.error_text = None
             pane.loaded = False
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
+        try:
+            self._on_property_changed.on_completed()
+        finally:
+            try:
+                self._on_property_changed.dispose()
+            finally:
+                self._inner.dispose()
 
     async def bind_table(
         self,
