@@ -7,7 +7,6 @@ from typing import Any, Generic, Literal, TypeAlias, TypeVar
 
 import anyio
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
@@ -24,7 +23,17 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy, select_starter_sql
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm.athena._domain_validation import (
+    valid_athena_catalog_summary,
+    valid_athena_workgroup_detail,
+    valid_athena_workgroup_summary,
+    valid_database_summary,
+    valid_query_context,
+    valid_table_ref,
+)
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.athena._observable import ObserverSafeSubject
+from aws_tui.vm.athena._pager_compat import seed_token_pager
 from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
 from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
@@ -51,6 +60,7 @@ _DISCOVERY_EMPTY_PAGE_LIMIT = 3
 @dataclass(frozen=True, slots=True)
 class AthenaPageSnapshot:
     context: QueryContext = field(repr=False)
+    context_state: _SnapshotContextStage = field(repr=False)
     active_view: AthenaView = field(repr=False)
     query: AthenaQuerySnapshot = field(repr=False)
     history_execution_id: str | None = field(repr=False)
@@ -143,7 +153,7 @@ class AthenaPageVM:
         self._is_loading_more_workgroups = False
         self._is_loading_more_catalogs = False
         self._is_loading_more_databases = False
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -282,7 +292,7 @@ class AthenaPageVM:
 
     @property
     def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed
+        return self._on_property_changed.observable
 
     def construct(self) -> None:
         if not self._is_alive():
@@ -358,8 +368,21 @@ class AthenaPageVM:
     def export_snapshot(self) -> AthenaPageSnapshot:
         if not self._is_alive():
             raise ValueError("Athena page is unavailable")
+        detail = self._workgroup_detail
+        if detail is None:
+            raise ValueError("Athena snapshot is invalid")
         snapshot = AthenaPageSnapshot(
             context=self._context,
+            context_state=_SnapshotContextStage(
+                context=self._context,
+                workgroups=self.workgroups,
+                workgroups_token=self._workgroup_pager.current_token,
+                workgroup_detail=detail,
+                catalogs=self.catalogs,
+                catalogs_token=self._catalog_pager.current_token,
+                databases=self.databases,
+                databases_token=self._database_pager.current_token,
+            ),
             active_view=self._active_view,
             query=self.query.export_snapshot(),
             history_execution_id=self.history.selected_execution_id,
@@ -425,6 +448,7 @@ class AthenaPageVM:
         return not (
             type(snapshot) is not AthenaPageSnapshot
             or type(snapshot.context) is not QueryContext
+            or not _snapshot_context_stage_is_valid(snapshot.context_state, snapshot.context)
             or type(snapshot.active_view) is not str
             or snapshot.active_view not in _VIEWS
             or not all(
@@ -491,42 +515,18 @@ class AthenaPageVM:
     ) -> _SnapshotContextStage | None:
         context = snapshot.context
         if context == self._context:
-            if (
-                self._workgroup_detail is None
-                or self._workgroup_detail.summary.name != context.workgroup
-                or not any(row.name == context.workgroup for row in self.workgroups)
-                or not any(row.name == context.catalog for row in self.catalogs)
-                or not any(
-                    row.ref.connection_name == context.connection_name
-                    and row.ref.region == context.region
-                    and row.ref.catalog_name == context.catalog
-                    and row.ref.database_name == context.database
-                    for row in self.databases
-                )
-            ):
-                return None
-            return _SnapshotContextStage(
-                context=context,
-                workgroups=self.workgroups,
-                workgroups_token=self._workgroup_pager.current_token,
-                workgroup_detail=self._workgroup_detail,
-                catalogs=self.catalogs,
-                catalogs_token=self._catalog_pager.current_token,
-                databases=self.databases,
-                databases_token=self._database_pager.current_token,
-            )
+            return snapshot.context_state
         try:
             workgroup_page = await self._collect_snapshot_pages(
                 lambda token: self._client.list_workgroups_page(start_token=token),
-                valid=lambda row: type(row) is AthenaWorkgroupSummary and type(row.name) is str,
+                valid=valid_athena_workgroup_summary,
                 matches=lambda row: row.name == context.workgroup,
             )
             if workgroup_page is None:
                 return None
             detail = await self._client.get_workgroup(context.workgroup)
             if (
-                type(detail) is not AthenaWorkgroupDetail
-                or type(detail.summary) is not AthenaWorkgroupSummary
+                not valid_athena_workgroup_detail(detail)
                 or detail.summary.name != context.workgroup
             ):
                 return None
@@ -535,7 +535,7 @@ class AthenaPageVM:
                     workgroup=context.workgroup,
                     start_token=token,
                 ),
-                valid=lambda row: type(row) is AthenaCatalogSummary and type(row.name) is str,
+                valid=valid_athena_catalog_summary,
                 matches=lambda row: row.name == context.catalog,
             )
             if catalog_page is None:
@@ -547,7 +547,7 @@ class AthenaPageVM:
                     start_token=token,
                 ),
                 valid=lambda row: (
-                    type(row) is DatabaseSummary
+                    valid_database_summary(row)
                     and row.ref.connection_name == context.connection_name
                     and row.ref.region == context.region
                     and row.ref.catalog_name == context.catalog
@@ -624,6 +624,8 @@ class AthenaPageVM:
                 ):
                     return None
             return history.export_snapshot(), saved.export_snapshot()
+        except Exception:
+            return None
         finally:
             history.dispose()
             saved.dispose()
@@ -684,24 +686,24 @@ class AthenaPageVM:
             context.context.workgroup,
             context.context.catalog,
         )
-        _seed_page_pager(
+        seed_token_pager(
             workgroup_worker.pager,
             context.workgroups,
             context.workgroups_token,
         )
-        _seed_page_pager(
+        seed_token_pager(
             catalog_worker.pager,
             context.catalogs,
             context.catalogs_token,
         )
-        _seed_page_pager(
+        seed_token_pager(
             database_worker.pager,
             context.databases,
             context.databases_token,
         )
         self.query._install_snapshot(snapshot.query)
-        self.history.restore_snapshot(stage.history)
-        self.saved.restore_snapshot(stage.saved)
+        self.history._install_snapshot(stage.history)
+        self.saved._install_snapshot(stage.saved)
         self._workgroups_state = PaneState.IDLE if context.workgroups else PaneState.EMPTY
         self._catalogs_state = PaneState.IDLE if context.catalogs else PaneState.EMPTY
         self._databases_state = PaneState.IDLE if context.databases else PaneState.EMPTY
@@ -720,6 +722,9 @@ class AthenaPageVM:
                 self._selection_store.discard(self._selection_scope, key)
             else:
                 self._selection_store.set(self._selection_scope, key, value)
+        self.query._notify_snapshot_restored()
+        self.history._notify_snapshot_restored()
+        self.saved._notify_snapshot_restored()
         self._notify("context")
         self._notify("active_view")
         self._notify_context_lists()
@@ -826,6 +831,7 @@ class AthenaPageVM:
         """Prefill one exact table in the editor without executing it."""
         if (
             not self._is_alive()
+            or not valid_table_ref(table_ref)
             or table_ref.connection_name != self._connection.name
             or table_ref.region != self._connection.region
             or not self._context.workgroup
@@ -1779,16 +1785,7 @@ def _prepare_page_snapshot(
     if type(value) is not AthenaPageSnapshot:
         return None, "invalid"
     context = value.context
-    if type(context) is not QueryContext or not all(
-        type(part) is str
-        for part in (
-            context.connection_name,
-            context.region,
-            context.workgroup,
-            context.catalog,
-            context.database,
-        )
-    ):
+    if not valid_query_context(context):
         return None, "invalid"
     if context.connection_name != connection_name or context.region != region:
         return None, "source"
@@ -1801,14 +1798,39 @@ def _optional_exact_string(value: object) -> bool:
     return value is None or type(value) is str
 
 
-def _seed_page_pager(
-    pager: TokenPagedComposition[T, str],
-    items: tuple[T, ...],
-    next_token: str | None,
-) -> None:
-    pager._items = list(items)
-    pager._current_token = next_token
-    pager._loaded_once = True
+def _snapshot_context_stage_is_valid(
+    value: object,
+    expected_context: QueryContext,
+) -> bool:
+    if (
+        type(value) is not _SnapshotContextStage
+        or not valid_query_context(value.context)
+        or value.context != expected_context
+        or type(value.workgroups) is not tuple
+        or type(value.catalogs) is not tuple
+        or type(value.databases) is not tuple
+        or not _optional_exact_string(value.workgroups_token)
+        or not _optional_exact_string(value.catalogs_token)
+        or not _optional_exact_string(value.databases_token)
+        or type(value.workgroup_detail) is not AthenaWorkgroupDetail
+        or not valid_athena_workgroup_detail(value.workgroup_detail)
+        or not all(valid_athena_workgroup_summary(row) for row in value.workgroups)
+        or not all(valid_athena_catalog_summary(row) for row in value.catalogs)
+        or not all(valid_database_summary(row) for row in value.databases)
+    ):
+        return False
+    return (
+        value.workgroup_detail.summary.name == expected_context.workgroup
+        and any(row.name == expected_context.workgroup for row in value.workgroups)
+        and any(row.name == expected_context.catalog for row in value.catalogs)
+        and any(
+            row.ref.connection_name == expected_context.connection_name
+            and row.ref.region == expected_context.region
+            and row.ref.catalog_name == expected_context.catalog
+            and row.ref.database_name == expected_context.database
+            for row in value.databases
+        )
+    )
 
 
 __all__ = ["AthenaPageSnapshot", "AthenaPageVM", "AthenaView"]

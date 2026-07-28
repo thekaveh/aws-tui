@@ -93,6 +93,7 @@ class PageClient:
         self.workgroup_detail_error: ProviderError | None = None
         self.catalog_error: ProviderError | None = None
         self.database_error: ProviderError | None = None
+        self.database_row_override: DatabaseSummary | None = None
         self.catalog_started = asyncio.Event()
         self.release_catalog = asyncio.Event()
         self.block_workgroup_detail_for: str | None = None
@@ -204,6 +205,8 @@ class PageClient:
             )
             for name in self.databases[(workgroup, catalog)]
         ]
+        if self.database_row_override is not None:
+            rows = [self.database_row_override]
         return rows, None
 
     async def list_query_executions_page(
@@ -1059,6 +1062,163 @@ async def test_page_snapshot_rejects_forged_cross_component_state_without_leakin
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "record_kind",
+    [
+        "context_workgroup",
+        "history",
+        "saved_named",
+        "saved_prepared",
+    ],
+)
+async def test_page_snapshot_rejects_recursively_malformed_exact_records_atomically(
+    record_kind: str,
+) -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    await source.select_view("history")
+    await source.select_history_execution("history-analysts")
+    await source.select_view("saved")
+    await source.select_named_query("named-1")
+    snapshot = source.export_snapshot()
+
+    if record_kind == "context_workgroup":
+        bad_row = replace(snapshot.context_state.workgroups[-1], state=object())
+        hostile = replace(
+            snapshot,
+            context_state=replace(
+                snapshot.context_state,
+                workgroups=(*snapshot.context_state.workgroups[:-1], bad_row),
+            ),
+        )
+    elif record_kind == "history":
+        bad_summary = replace(snapshot.history.items[0], state="SUCCEEDED")
+        hostile = replace(
+            snapshot,
+            history=replace(
+                snapshot.history,
+                items=(bad_summary,),
+                details=(replace(snapshot.history.details[0], summary=bad_summary),),
+            ),
+        )
+    elif record_kind == "saved_named":
+        bad_named = replace(snapshot.saved.named_query_details[0], description=object())
+        bad_summary = replace(snapshot.saved.named_queries[0], description=object())
+        hostile = replace(
+            snapshot,
+            saved=replace(
+                snapshot.saved,
+                named_queries=(bad_summary,),
+                named_query_details=(bad_named,),
+                selected_named_query=bad_named,
+            ),
+        )
+    else:
+        bad_prepared = replace(
+            snapshot.saved.prepared_statements[0],
+            last_modified_at=object(),
+        )
+        hostile = replace(
+            snapshot,
+            saved=replace(
+                snapshot.saved,
+                prepared_statements=(bad_prepared,),
+            ),
+        )
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    before = _page_restore_state(destination, store)
+    calls_before = _provider_call_counts(client)
+
+    with pytest.raises(ValueError, match=r"^Athena snapshot is invalid$"):
+        await destination.restore_snapshot(hostile)
+
+    assert _provider_call_counts(client) == calls_before
+    assert _page_restore_state(destination, store) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "record_kind",
+    [
+        "workgroup",
+        "workgroup_detail",
+        "catalog",
+        "database",
+        "history",
+        "named_query",
+        "prepared_statement",
+    ],
+)
+async def test_different_context_staging_rejects_recursively_malformed_provider_records(
+    record_kind: str,
+) -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    await source.select_view("history")
+    await source.select_history_execution("history-analysts")
+    await source.select_view("saved")
+    await source.select_named_query("named-1")
+    snapshot = source.export_snapshot()
+
+    if record_kind == "workgroup":
+        client.workgroups[1] = replace(client.workgroups[1], state=object())
+    elif record_kind == "workgroup_detail":
+        client.workgroup_details["analysts"] = replace(
+            client.workgroup_details["analysts"],
+            engine_version=object(),
+        )
+    elif record_kind == "catalog":
+        client.catalogs["analysts"][0] = replace(
+            client.catalogs["analysts"][0],
+            catalog_type=object(),
+        )
+    elif record_kind == "database":
+        client.database_row_override = DatabaseSummary(
+            DatabaseRef(
+                "AwsDataCatalog",
+                "events",
+                "analytics",
+                "us-west-2",
+            ),
+            None,
+            None,
+            object(),
+        )
+    elif record_kind == "history":
+        original_get = client.get_query_execution
+
+        async def malformed_history(execution_id: str) -> QueryExecutionDetail:
+            detail = await original_get(execution_id)
+            return replace(
+                detail,
+                summary=replace(detail.summary, state="SUCCEEDED"),
+            )
+
+        client.get_query_execution = malformed_history  # type: ignore[method-assign]
+    elif record_kind == "named_query":
+        client.named = replace(client.named, description=object())
+    else:
+        client.prepared = replace(client.prepared, last_modified_at=object())
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    before = _page_restore_state(destination, store)
+
+    with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+        await destination.restore_snapshot(snapshot)
+
+    assert _page_restore_state(destination, store) == before
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("missing_level", ["workgroup", "catalog", "database"])
 async def test_page_snapshot_restore_preflights_context_without_any_mutation(
     missing_level: str,
@@ -1140,6 +1300,90 @@ async def test_same_context_snapshot_restore_is_fully_local() -> None:
 
     assert _provider_call_counts(client) == calls_before
     assert _page_restore_state(page, store) == expected
+
+
+@pytest.mark.asyncio
+async def test_same_context_snapshot_restores_after_failed_context_refresh_without_calls() -> None:
+    client = PageClient()
+    store = ServiceSelectionStore()
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    await page.select_workgroup("analysts")
+    await page.select_view("history")
+    await page.select_history_execution("history-analysts")
+    snapshot = page.export_snapshot()
+    expected = _page_restore_state(page, store)
+
+    client.workgroup_error = ProviderError("provider outage")
+    await page.refresh_workgroups()
+    assert page.workgroups == ()
+    assert page.workgroups_state is PaneState.ERROR
+    calls_before = _provider_call_counts(client)
+
+    await page.restore_snapshot(snapshot)
+
+    assert _provider_call_counts(client) == calls_before
+    assert _page_restore_state(page, store) == expected
+
+
+@pytest.mark.asyncio
+async def test_snapshot_publication_is_coherent_and_isolates_all_observer_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = PageClient()
+    source_store = ServiceSelectionStore()
+    source = make_page_vm(client, selection_store=source_store)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    await source.select_view("history")
+    await source.select_history_execution("history-analysts")
+    await source.select_view("saved")
+    await source.select_named_query("named-1")
+    snapshot = source.export_snapshot()
+    expected = _page_restore_state(source, source_store)
+
+    destination_store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=destination_store)
+    await destination.setup()
+    destination.query.set_sql("UNCHANGED_DESTINATION_SQL")
+    observed: dict[str, list[bool]] = {
+        "page": [],
+        "query": [],
+        "results": [],
+        "history": [],
+        "saved": [],
+    }
+    subscriptions = []
+
+    marker = "OBSERVER_PAYLOAD_SECRET"
+
+    def raising_observer(_: str) -> None:
+        raise RuntimeError(marker)
+
+    def coherence_observer(owner: str) -> object:
+        return lambda _: observed[owner].append(
+            _page_restore_state(destination, destination_store) == expected
+        )
+
+    for owner, vm in (
+        ("page", destination),
+        ("query", destination.query),
+        ("results", destination.results),
+        ("history", destination.history),
+        ("saved", destination.saved),
+    ):
+        subscriptions.append(vm.on_property_changed.subscribe(raising_observer))
+        subscriptions.append(vm.on_property_changed.subscribe(coherence_observer(owner)))
+
+    try:
+        await destination.restore_snapshot(snapshot)
+    finally:
+        for subscription in subscriptions:
+            subscription.dispose()
+
+    assert _page_restore_state(destination, destination_store) == expected
+    assert all(values and all(values) for values in observed.values())
+    assert marker not in caplog.text
 
 
 @pytest.mark.asyncio

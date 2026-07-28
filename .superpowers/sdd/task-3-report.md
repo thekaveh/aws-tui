@@ -1113,3 +1113,92 @@ Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
 No pytest or `uv run pytest` process remained after verification.
 `.superpowers/sdd/progress.md` was not modified. This correction is the single
 focused commit immediately following `14a6997`.
+
+## Final Transaction-Boundary Closure: 2026-07-28
+
+### Root Cause And Implementation
+
+- Page snapshots carried query/history/saved state but not the context pager and
+  workgroup-detail graph. Same-context rollback therefore depended on damaged
+  live state after a provider outage. The snapshot now embeds an exact,
+  value-free context stage and restores it with zero provider calls.
+- Snapshot installation mixed mutation with child notifications. Results,
+  query, history, and saved VMs now install silently; the page commits all live
+  fields and selection-store values before publishing any child or page
+  notification. Per-subscriber isolation ensures throwing observers neither
+  interrupt publication nor leak their exception payloads into logs.
+- Provider and snapshot checks validated outer dataclass types but not every
+  nested field. One shared Athena domain-validation module now enforces exact
+  runtime types and invariants for workgroups, catalogs, databases/table refs,
+  query history/detail/statistics/errors, saved queries, prepared statements,
+  contexts, execution refs, and result columns.
+- Direct writes to VMx token-pager internals are centralized in one compatibility
+  adapter. Its VMx 3.x contract checks item copying, token/has-more behavior,
+  loaded state, no fetch during seed, and loud failure when expected internals
+  change.
+- Pytest now explicitly preserves function-scoped async fixtures, removing the
+  repository's pytest-asyncio configuration deprecation.
+
+### TDD Evidence
+
+Initial outage, observer, and pager probes failed as expected:
+
+```text
+2 failed: same-context outage restore and observer-isolated publication
+1 collection error: missing Athena VMx pager compatibility adapter
+```
+
+Recursive exact-record and staged-provider probes then exposed ten accepted
+malformed paths:
+
+```text
+10 failed, 1 passed
+```
+
+A final observer privacy probe failed because subscriber exception text was
+present in captured logs. After the value-free logging correction, all focused
+probes passed.
+
+### Verification
+
+```text
+191 Athena VM tests passed with warnings as errors
+917 expanded Athena/Glue/Iceberg/navigation tests passed with warnings as errors
+1561 domain and VM tests passed
+229 privacy/crash/Athena tests passed with warnings as errors
+219 integration tests passed, 9 external-service tests deselected
+185 Athena/Glue snapshot tests passed; 163 visual snapshots matched
+Athena VM coverage: 84.96% (70% required)
+```
+
+The full warning-strict domain/VM run reached 1,561 cases; 1,560 passed and the
+unrelated 16 MiB S3 multipart test promoted an aiohttp `ResourceWarning` to an
+HTTP client failure. The same complete behavioral suite passed normally, while
+all 917 affected tests and all 229 privacy tests passed with warnings promoted.
+The visual tier was run in its required color-enabled environment because
+`pytest-textual-snapshot` itself uses deprecated `datetime.utcnow()`.
+
+```text
+uv run mypy src/aws_tui
+Success: no issues found in 155 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+391 files already formatted
+
+scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+clean
+
+uv build --no-build-isolation
+Successfully built dist/aws_tui-0.8.0.tar.gz
+Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
+```
+
+No verification process remained running. The implementation preserved child VM
+instances and subscriptions, and `.superpowers/sdd/progress.md` remained
+untouched.

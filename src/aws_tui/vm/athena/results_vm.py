@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import (
     AsyncRelayCommand,
     ComponentVMOf,
@@ -26,7 +25,10 @@ from aws_tui.domain.query import (
     ResultPage,
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
+from aws_tui.vm.athena._domain_validation import valid_result_column
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.athena._observable import ObserverSafeSubject
+from aws_tui.vm.athena._pager_compat import seed_token_pager
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
 
@@ -94,7 +96,7 @@ class AthenaResultsVM:
         self._disposed = False
         self._shutdown_started = False
         self._shutdown_complete = False
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -164,7 +166,7 @@ class AthenaResultsVM:
 
     @property
     def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed
+        return self._on_property_changed.observable
 
     def construct(self) -> None:
         self._inner.construct()
@@ -244,6 +246,7 @@ class AthenaResultsVM:
         if prepared is None:
             raise ValueError(_SNAPSHOT_ERROR)
         self._install_snapshot(prepared)
+        self._notify_snapshot_restored()
 
     def _install_snapshot(self, snapshot: AthenaResultsSnapshot) -> None:
         self._generation += 1
@@ -255,12 +258,12 @@ class AthenaResultsVM:
             generation,
         )
         worker.columns = snapshot.columns
-        worker.pager._items = list(snapshot.rows)
-        worker.pager._current_token = snapshot.next_token
-        worker.pager._loaded_once = True
+        seed_token_pager(worker.pager, snapshot.rows, snapshot.next_token)
         self._state = snapshot.state
         self._error_text = snapshot.error_text
         self._is_loading_more = snapshot.is_loading_more
+
+    def _notify_snapshot_restored(self) -> None:
         self._notify_all()
         self._notify("is_loading_more")
 
@@ -280,7 +283,7 @@ class AthenaResultsVM:
             or not _optional_exact_string(snapshot.execution_id)
             or not _optional_exact_string(snapshot.next_token)
             or not _optional_exact_string(snapshot.error_text)
-            or not all(_valid_result_column(column) for column in snapshot.columns)
+            or not all(valid_result_column(column) for column in snapshot.columns)
             or not all(
                 type(row) is tuple
                 and len(row) == len(snapshot.columns)
@@ -624,12 +627,3 @@ def _prepare_results_snapshot(value: object) -> AthenaResultsSnapshot | None:
 
 def _optional_exact_string(value: object) -> bool:
     return value is None or type(value) is str
-
-
-def _valid_result_column(value: object) -> bool:
-    return (
-        type(value) is ResultColumn
-        and type(value.name) is str
-        and type(value.type_name) is str
-        and type(value.nullable) is str
-    )

@@ -6,7 +6,6 @@ from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import (
     AsyncRelayCommand,
     ComponentVMOf,
@@ -25,7 +24,15 @@ from aws_tui.domain.query import (
     PreparedStatement,
     PreparedStatementSummary,
 )
+from aws_tui.vm.athena._domain_validation import (
+    valid_named_query,
+    valid_named_query_summary,
+    valid_prepared_statement,
+    valid_prepared_statement_summary,
+)
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.athena._observable import ObserverSafeSubject
+from aws_tui.vm.athena._pager_compat import seed_token_pager
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 _SAVED_ERROR = "Athena saved query request failed"
@@ -105,7 +112,7 @@ class AthenaSavedVM:
         self._is_loading_more_named_queries = False
         self._is_loading_more_prepared_statements = False
         self._detail_tasks: set[asyncio.Task[Any]] = set()
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -202,7 +209,7 @@ class AthenaSavedVM:
 
     @property
     def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed
+        return self._on_property_changed.observable
 
     def construct(self) -> None:
         self._inner.construct()
@@ -393,6 +400,10 @@ class AthenaSavedVM:
             raise ValueError("Athena saved queries are unavailable")
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena saved query snapshot is invalid")
+        self._install_snapshot(snapshot)
+        self._notify_snapshot_restored()
+
+    def _install_snapshot(self, snapshot: AthenaSavedSnapshot) -> None:
         self._context_generation += 1
         self._named_generation += 1
         self._prepared_generation += 1
@@ -403,8 +414,8 @@ class AthenaSavedVM:
         named.named_query_details.update(
             {detail.query_id: detail for detail in snapshot.named_query_details}
         )
-        _seed_pager(named.pager, snapshot.named_queries, snapshot.named_next_token)
-        _seed_pager(
+        seed_token_pager(named.pager, snapshot.named_queries, snapshot.named_next_token)
+        seed_token_pager(
             prepared.pager,
             snapshot.prepared_statements,
             snapshot.prepared_next_token,
@@ -421,6 +432,8 @@ class AthenaSavedVM:
         self._detail_error_text = snapshot.detail_error_text
         self._is_loading_more_named_queries = False
         self._is_loading_more_prepared_statements = False
+
+    def _notify_snapshot_restored(self) -> None:
         self._notify_all()
 
     @staticmethod
@@ -454,10 +467,10 @@ class AthenaSavedVM:
                     snapshot.detail_error_text,
                 )
             )
-            or not all(type(row) is NamedQuerySummary for row in snapshot.named_queries)
-            or not all(type(row) is NamedQuery for row in snapshot.named_query_details)
+            or not all(valid_named_query_summary(row) for row in snapshot.named_queries)
+            or not all(valid_named_query(row) for row in snapshot.named_query_details)
             or not all(
-                type(row) is PreparedStatementSummary for row in snapshot.prepared_statements
+                valid_prepared_statement_summary(row) for row in snapshot.prepared_statements
             )
         ):
             return False
@@ -480,6 +493,7 @@ class AthenaSavedVM:
             named_detail = snapshot.selected_named_query
             if (
                 type(named_detail) is not NamedQuery
+                or not valid_named_query(named_detail)
                 or named_detail.query_id != snapshot.selected_query_id
                 or details.get(named_detail.query_id) != named_detail
                 or snapshot.selected_prepared_statement is not None
@@ -495,6 +509,7 @@ class AthenaSavedVM:
             if snapshot.detail_state is PaneState.IDLE:
                 if (
                     type(prepared_detail) is not PreparedStatement
+                    or not valid_prepared_statement(prepared_detail)
                     or prepared_detail.name != snapshot.selected_query_id
                     or prepared_detail.workgroup != snapshot.workgroup
                 ):
@@ -962,13 +977,3 @@ __all__ = ["AthenaSavedSnapshot", "AthenaSavedVM", "SavedQueryKind"]
 
 def _optional_string(value: object) -> bool:
     return value is None or type(value) is str
-
-
-def _seed_pager(
-    pager: TokenPagedComposition[T, str],
-    items: tuple[T, ...],
-    next_token: str | None,
-) -> None:
-    pager._items = list(items)
-    pager._current_token = next_token
-    pager._loaded_once = True

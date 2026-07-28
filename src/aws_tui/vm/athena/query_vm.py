@@ -10,7 +10,6 @@ from uuid import uuid4
 
 import anyio
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import (
     AsyncRelayCommand,
     ComponentVMOf,
@@ -32,7 +31,14 @@ from aws_tui.domain.query import (
     QueryStatistics,
 )
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
+from aws_tui.vm.athena._domain_validation import (
+    valid_athena_query_error,
+    valid_query_context,
+    valid_query_execution_ref,
+    valid_query_statistics,
+)
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.athena._observable import ObserverSafeSubject
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -97,7 +103,7 @@ class AthenaQueryVM:
         self._shutdown_complete = False
         self._lifecycle_transition = False
         self._lifecycle_lock = asyncio.Lock()
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -228,7 +234,7 @@ class AthenaQueryVM:
 
     @property
     def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed
+        return self._on_property_changed.observable
 
     def construct(self) -> None:
         self._inner.construct()
@@ -278,6 +284,7 @@ class AthenaQueryVM:
         generation = self._generation
         async with self.snapshot_restore_guard(generation):
             self._install_snapshot(prepared)
+            self._notify_snapshot_restored()
 
     @property
     def snapshot_generation(self) -> int:
@@ -312,6 +319,9 @@ class AthenaQueryVM:
         self._owns_active_query = False
         self._busy = False
         self._is_submitting = False
+
+    def _notify_snapshot_restored(self) -> None:
+        self._results._notify_snapshot_restored()
         self._notify("sql")
         self._notify("validation_error")
         self._notify_execution()
@@ -330,8 +340,8 @@ class AthenaQueryVM:
         expected_context: QueryContext,
     ) -> bool:
         if (
-            not _valid_query_context(expected_context)
-            or not _valid_query_context(snapshot.context)
+            not valid_query_context(expected_context)
+            or not valid_query_context(snapshot.context)
             or snapshot.context != expected_context
             or type(snapshot.sql) is not str
             or not _optional_exact_string(snapshot.validation_error)
@@ -340,13 +350,13 @@ class AthenaQueryVM:
             or not _optional_exact_string(snapshot.engine_version)
             or not _optional_exact_string(snapshot.error_text)
             or type(snapshot.pane_state) is not PaneState
-            or not _valid_query_statistics(snapshot.statistics)
-            or not _valid_query_error(snapshot.query_error)
+            or not valid_query_statistics(snapshot.statistics)
+            or not valid_athena_query_error(snapshot.query_error)
             or not AthenaResultsVM.snapshot_is_valid(snapshot.results)
         ):
             return False
         if snapshot.execution_ref is not None and (
-            not _valid_execution_ref(snapshot.execution_ref)
+            not valid_query_execution_ref(snapshot.execution_ref)
             or not AthenaQueryVM._ref_matches_context(
                 snapshot.execution_ref,
                 snapshot.context,
@@ -845,58 +855,6 @@ def _prepare_query_snapshot(
 
 def _optional_exact_string(value: object) -> bool:
     return value is None or type(value) is str
-
-
-def _valid_query_context(value: object) -> bool:
-    return type(value) is QueryContext and all(
-        type(part) is str
-        for part in (
-            value.connection_name,
-            value.region,
-            value.workgroup,
-            value.catalog,
-            value.database,
-        )
-    )
-
-
-def _valid_execution_ref(value: object) -> bool:
-    return type(value) is QueryExecutionRef and all(
-        type(part) is str
-        for part in (
-            value.execution_id,
-            value.connection_name,
-            value.region,
-            value.workgroup,
-        )
-    )
-
-
-def _valid_query_statistics(value: object) -> bool:
-    if type(value) is not QueryStatistics or type(value.reused_previous_result) is not bool:
-        return False
-    return all(
-        item is None or (type(item) is int and item >= 0)
-        for item in (
-            value.engine_ms,
-            value.queue_ms,
-            value.planning_ms,
-            value.service_ms,
-            value.bytes_scanned,
-        )
-    )
-
-
-def _valid_query_error(value: object) -> bool:
-    if value is None:
-        return True
-    return (
-        type(value) is AthenaQueryError
-        and (value.category is None or type(value.category) is int)
-        and (value.error_type is None or type(value.error_type) is int)
-        and type(value.retryable) is bool
-        and type(value.message) is str
-    )
 
 
 def _request_token(context: QueryContext) -> str:

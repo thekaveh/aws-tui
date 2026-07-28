@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import (
     AsyncRelayCommand,
     ComponentVMOf,
@@ -26,7 +25,14 @@ from aws_tui.domain.query import (
     QueryState,
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
+from aws_tui.vm.athena._domain_validation import (
+    valid_query_context,
+    valid_query_execution_detail,
+    valid_query_execution_summary,
+)
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.athena._observable import ObserverSafeSubject
+from aws_tui.vm.athena._pager_compat import seed_token_pager
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
 
@@ -80,7 +86,7 @@ class AthenaHistoryVM:
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
         self._is_loading_more = False
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -135,7 +141,7 @@ class AthenaHistoryVM:
 
     @property
     def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed
+        return self._on_property_changed.observable
 
     def construct(self) -> None:
         self._inner.construct()
@@ -217,6 +223,10 @@ class AthenaHistoryVM:
             raise ValueError("Athena history is unavailable")
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena history snapshot is invalid")
+        self._install_snapshot(snapshot)
+        self._notify_snapshot_restored()
+
+    def _install_snapshot(self, snapshot: AthenaHistorySnapshot) -> None:
         self._generation += 1
         self._context = snapshot.context
         self._workgroup = snapshot.context.workgroup
@@ -224,7 +234,7 @@ class AthenaHistoryVM:
         worker.details.update(
             {detail.summary.ref.execution_id: detail for detail in snapshot.details}
         )
-        _seed_pager(worker.pager, snapshot.items, snapshot.next_token)
+        seed_token_pager(worker.pager, snapshot.items, snapshot.next_token)
         self._selected_execution_id = snapshot.selected_execution_id
         self._detail = (
             None
@@ -234,6 +244,8 @@ class AthenaHistoryVM:
         self._state = snapshot.state
         self._error_text = snapshot.error_text
         self._is_loading_more = False
+
+    def _notify_snapshot_restored(self) -> None:
         self._notify_all()
         self._notify("is_loading_more")
 
@@ -241,7 +253,7 @@ class AthenaHistoryVM:
     def snapshot_is_valid(snapshot: object) -> bool:
         if (
             type(snapshot) is not AthenaHistorySnapshot
-            or type(snapshot.context) is not QueryContext
+            or not valid_query_context(snapshot.context)
             or type(snapshot.items) is not tuple
             or type(snapshot.details) is not tuple
             or (snapshot.next_token is not None and type(snapshot.next_token) is not str)
@@ -252,8 +264,8 @@ class AthenaHistoryVM:
             or type(snapshot.state) is not PaneState
             or snapshot.state is PaneState.LOADING
             or (snapshot.error_text is not None and type(snapshot.error_text) is not str)
-            or not all(type(item) is QueryExecutionSummary for item in snapshot.items)
-            or not all(type(detail) is QueryExecutionDetail for detail in snapshot.details)
+            or not all(valid_query_execution_summary(item) for item in snapshot.items)
+            or not all(valid_query_execution_detail(detail) for detail in snapshot.details)
         ):
             return False
         details = {detail.summary.ref.execution_id: detail for detail in snapshot.details}
@@ -576,13 +588,3 @@ def _execution_identity_belongs_to(
         and ref.workgroup == detail.context.workgroup
         and detail.context == expected
     )
-
-
-def _seed_pager(
-    pager: TokenPagedComposition[QueryExecutionSummary, str],
-    items: tuple[QueryExecutionSummary, ...],
-    next_token: str | None,
-) -> None:
-    pager._items = list(items)
-    pager._current_token = next_token
-    pager._loaded_once = True
