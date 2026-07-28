@@ -39,6 +39,26 @@ class SavedQueryKind(StrEnum):
     PREPARED = "prepared"
 
 
+@dataclass(frozen=True, slots=True)
+class AthenaSavedSnapshot:
+    workgroup: str = field(repr=False)
+    named_queries: tuple[NamedQuerySummary, ...] = field(repr=False)
+    named_query_details: tuple[NamedQuery, ...] = field(repr=False)
+    named_next_token: str | None = field(repr=False)
+    prepared_statements: tuple[PreparedStatementSummary, ...] = field(repr=False)
+    prepared_next_token: str | None = field(repr=False)
+    selected_kind: SavedQueryKind | None = field(repr=False)
+    selected_query_id: str | None = field(repr=False)
+    selected_named_query: NamedQuery | None = field(repr=False)
+    selected_prepared_statement: PreparedStatement | None = field(repr=False)
+    named_state: PaneState = field(repr=False)
+    prepared_state: PaneState = field(repr=False)
+    detail_state: PaneState = field(repr=False)
+    named_error_text: str | None = field(repr=False)
+    prepared_error_text: str | None = field(repr=False)
+    detail_error_text: str | None = field(repr=False)
+
+
 @dataclass(eq=False)
 class _SavedWorker(Generic[T]):
     generation: int
@@ -327,6 +347,192 @@ class AthenaSavedVM:
             statement = self._selected_prepared_statement
             return None if statement is None else statement.query_statement
         return None
+
+    def export_snapshot(self) -> AthenaSavedSnapshot:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._named_state is PaneState.LOADING
+            or self._prepared_state is PaneState.LOADING
+            or self._detail_state is PaneState.LOADING
+            or self._is_loading_more_named_queries
+            or self._is_loading_more_prepared_statements
+            or self._detail_tasks
+            or any(not task.done() for worker in self._workers for task in worker.tasks)
+        ):
+            raise ValueError("Athena saved queries are busy")
+        details = tuple(
+            self._named_worker.named_query_details[row.query_id]
+            for row in self.named_queries
+            if row.query_id in self._named_worker.named_query_details
+        )
+        snapshot = AthenaSavedSnapshot(
+            workgroup=self._workgroup,
+            named_queries=self.named_queries,
+            named_query_details=details,
+            named_next_token=self._named_pager.current_token,
+            prepared_statements=self.prepared_statements,
+            prepared_next_token=self._prepared_pager.current_token,
+            selected_kind=self._selected_kind,
+            selected_query_id=self._selected_query_id,
+            selected_named_query=self._selected_named_query,
+            selected_prepared_statement=self._selected_prepared_statement,
+            named_state=self._named_state,
+            prepared_state=self._prepared_state,
+            detail_state=self._detail_state,
+            named_error_text=self._named_error_text,
+            prepared_error_text=self._prepared_error_text,
+            detail_error_text=self._detail_error_text,
+        )
+        if not self.snapshot_is_valid(snapshot):
+            raise ValueError("Athena saved query snapshot is invalid")
+        return snapshot
+
+    def restore_snapshot(self, snapshot: AthenaSavedSnapshot) -> None:
+        if self._disposed or self._shutdown_started:
+            raise ValueError("Athena saved queries are unavailable")
+        if not self.snapshot_is_valid(snapshot):
+            raise ValueError("Athena saved query snapshot is invalid")
+        self._context_generation += 1
+        self._named_generation += 1
+        self._prepared_generation += 1
+        self._detail_generation += 1
+        self._workgroup = snapshot.workgroup
+        named = self._replace_named_worker()
+        prepared = self._replace_prepared_worker()
+        named.named_query_details.update(
+            {detail.query_id: detail for detail in snapshot.named_query_details}
+        )
+        _seed_pager(named.pager, snapshot.named_queries, snapshot.named_next_token)
+        _seed_pager(
+            prepared.pager,
+            snapshot.prepared_statements,
+            snapshot.prepared_next_token,
+        )
+        self._selected_kind = snapshot.selected_kind
+        self._selected_query_id = snapshot.selected_query_id
+        self._selected_named_query = snapshot.selected_named_query
+        self._selected_prepared_statement = snapshot.selected_prepared_statement
+        self._named_state = snapshot.named_state
+        self._prepared_state = snapshot.prepared_state
+        self._detail_state = snapshot.detail_state
+        self._named_error_text = snapshot.named_error_text
+        self._prepared_error_text = snapshot.prepared_error_text
+        self._detail_error_text = snapshot.detail_error_text
+        self._is_loading_more_named_queries = False
+        self._is_loading_more_prepared_statements = False
+        self._notify_all()
+
+    @staticmethod
+    def snapshot_is_valid(snapshot: object) -> bool:
+        if (
+            type(snapshot) is not AthenaSavedSnapshot
+            or type(snapshot.workgroup) is not str
+            or type(snapshot.named_queries) is not tuple
+            or type(snapshot.named_query_details) is not tuple
+            or type(snapshot.prepared_statements) is not tuple
+            or not _optional_string(snapshot.named_next_token)
+            or not _optional_string(snapshot.prepared_next_token)
+            or (
+                snapshot.selected_kind is not None
+                and type(snapshot.selected_kind) is not SavedQueryKind
+            )
+            or not _optional_string(snapshot.selected_query_id)
+            or not all(
+                type(state) is PaneState and state is not PaneState.LOADING
+                for state in (
+                    snapshot.named_state,
+                    snapshot.prepared_state,
+                    snapshot.detail_state,
+                )
+            )
+            or not all(
+                _optional_string(value)
+                for value in (
+                    snapshot.named_error_text,
+                    snapshot.prepared_error_text,
+                    snapshot.detail_error_text,
+                )
+            )
+            or not all(type(row) is NamedQuerySummary for row in snapshot.named_queries)
+            or not all(type(row) is NamedQuery for row in snapshot.named_query_details)
+            or not all(
+                type(row) is PreparedStatementSummary for row in snapshot.prepared_statements
+            )
+        ):
+            return False
+        details = {detail.query_id: detail for detail in snapshot.named_query_details}
+        if len(details) != len(snapshot.named_query_details) or len(details) != len(
+            snapshot.named_queries
+        ):
+            return False
+        if any(
+            detail.workgroup != snapshot.workgroup or _named_query_summary(detail) != row
+            for row in snapshot.named_queries
+            if (detail := details.get(row.query_id)) is not None
+        ) or any(row.query_id not in details for row in snapshot.named_queries):
+            return False
+        if any(row.name == "" for row in snapshot.prepared_statements):
+            return False
+        if (snapshot.selected_kind is None) != (snapshot.selected_query_id is None):
+            return False
+        if snapshot.selected_kind is SavedQueryKind.NAMED:
+            named_detail = snapshot.selected_named_query
+            if (
+                type(named_detail) is not NamedQuery
+                or named_detail.query_id != snapshot.selected_query_id
+                or details.get(named_detail.query_id) != named_detail
+                or snapshot.selected_prepared_statement is not None
+                or snapshot.detail_state is not PaneState.IDLE
+            ):
+                return False
+        elif snapshot.selected_kind is SavedQueryKind.PREPARED:
+            prepared_detail = snapshot.selected_prepared_statement
+            if snapshot.selected_named_query is not None or not any(
+                row.name == snapshot.selected_query_id for row in snapshot.prepared_statements
+            ):
+                return False
+            if snapshot.detail_state is PaneState.IDLE:
+                if (
+                    type(prepared_detail) is not PreparedStatement
+                    or prepared_detail.name != snapshot.selected_query_id
+                    or prepared_detail.workgroup != snapshot.workgroup
+                ):
+                    return False
+            elif (
+                snapshot.detail_state
+                not in {
+                    PaneState.AUTH_REQUIRED,
+                    PaneState.FORBIDDEN,
+                    PaneState.UNREACHABLE,
+                    PaneState.ERROR,
+                }
+                or prepared_detail is not None
+            ):
+                return False
+        elif (
+            snapshot.selected_named_query is not None
+            or snapshot.selected_prepared_statement is not None
+            or snapshot.detail_state is not PaneState.EMPTY
+            or snapshot.detail_error_text is not None
+        ):
+            return False
+        for state, error in (
+            (snapshot.named_state, snapshot.named_error_text),
+            (snapshot.prepared_state, snapshot.prepared_error_text),
+            (snapshot.detail_state, snapshot.detail_error_text),
+        ):
+            if state in {
+                PaneState.AUTH_REQUIRED,
+                PaneState.FORBIDDEN,
+                PaneState.UNREACHABLE,
+                PaneState.ERROR,
+            }:
+                if not error:
+                    return False
+            elif error is not None:
+                return False
+        return True
 
     def replace_workgroup(self, workgroup: str) -> None:
         if self._disposed or self._shutdown_started:
@@ -751,4 +957,18 @@ def _named_query_summary(query: NamedQuery) -> NamedQuerySummary:
     )
 
 
-__all__ = ["AthenaSavedVM", "SavedQueryKind"]
+__all__ = ["AthenaSavedSnapshot", "AthenaSavedVM", "SavedQueryKind"]
+
+
+def _optional_string(value: object) -> bool:
+    return value is None or type(value) is str
+
+
+def _seed_pager(
+    pager: TokenPagedComposition[T, str],
+    items: tuple[T, ...],
+    next_token: str | None,
+) -> None:
+    pager._items = list(items)
+    pager._current_token = next_token
+    pager._loaded_once = True

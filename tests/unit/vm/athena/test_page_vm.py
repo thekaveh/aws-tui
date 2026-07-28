@@ -79,6 +79,10 @@ class PageClient:
         self.catalog_calls: list[tuple[str, str | None]] = []
         self.database_calls: list[tuple[str, str, str | None]] = []
         self.history_calls: list[tuple[str, str | None]] = []
+        self.history_error: ProviderError | None = None
+        self.block_history_for: str | None = None
+        self.history_started = asyncio.Event()
+        self.release_history = asyncio.Event()
         self.named_calls: list[tuple[str, str | None]] = []
         self.prepared_calls: list[tuple[str, str | None]] = []
         self.start_calls: list[tuple[str, QueryContext, str]] = []
@@ -100,6 +104,7 @@ class PageClient:
         self.results_cancelled = asyncio.Event()
         self.release_results = asyncio.Event()
         self.block_prepared_detail = False
+        self.prepared_detail_error: ProviderError | None = None
         self.ignore_prepared_detail_cancellation = False
         self.prepared_detail_started = asyncio.Event()
         self.prepared_detail_cancelled = asyncio.Event()
@@ -208,6 +213,11 @@ class PageClient:
         start_token: str | None = None,
     ) -> tuple[list[QueryExecutionRef], str | None]:
         self.history_calls.append((workgroup, start_token))
+        if self.history_error is not None:
+            raise self.history_error
+        if workgroup == self.block_history_for:
+            self.history_started.set()
+            await self.release_history.wait()
         return [
             QueryExecutionRef(
                 f"history-{workgroup}",
@@ -280,6 +290,8 @@ class PageClient:
     ) -> PreparedStatement:
         assert (name, workgroup) == (self.prepared.name, self.prepared.workgroup)
         self.prepared_detail_started.set()
+        if self.prepared_detail_error is not None:
+            raise self.prepared_detail_error
         if self.block_prepared_detail:
             try:
                 await self.release_prepared_detail.wait()
@@ -398,12 +410,40 @@ def _page_restore_state(
         page.results.execution_id,
         page.results.columns,
         page.results.rows,
+        page.results.state,
+        page.results.error_text,
+        page.results.has_more,
         page.history.selected_execution_id,
+        page.history.items,
+        page.history.detail,
+        page.history.state,
+        page.history.error_text,
+        page.history.has_more,
         page.saved.selected_kind,
         page.saved.selected_query_id,
+        page.saved.named_queries,
+        page.saved.prepared_statements,
+        page.saved.selected_named_query,
+        page.saved.selected_prepared_statement,
+        page.saved.named_state,
+        page.saved.prepared_state,
+        page.saved.detail_state,
+        page.saved.named_error_text,
+        page.saved.prepared_error_text,
+        page.saved.detail_error_text,
         tuple(page.workgroups),
         tuple(page.catalogs),
         tuple(page.databases),
+        page.workgroup_detail,
+        page.workgroup_detail_state,
+        page.workgroups_state,
+        page.catalogs_state,
+        page.databases_state,
+        page.workgroups_error_text,
+        page.catalogs_error_text,
+        page.databases_error_text,
+        frozenset(page._loaded_views),  # type: ignore[attr-defined]
+        dict(store._values),  # type: ignore[attr-defined]
         tuple(
             (key, store.get(scope, key))
             for key in (
@@ -415,6 +455,20 @@ def _page_restore_state(
                 "saved_query_id",
             )
         ),
+    )
+
+
+def _provider_call_counts(client: PageClient) -> tuple[int, ...]:
+    return (
+        len(client.workgroup_calls),
+        len(client.workgroup_detail_calls),
+        len(client.catalog_calls),
+        len(client.database_calls),
+        len(client.history_calls),
+        len(client.named_calls),
+        len(client.prepared_calls),
+        len(client.start_calls),
+        len(client.result_calls),
     )
 
 
@@ -895,6 +949,8 @@ async def test_page_snapshot_rejects_forged_cross_component_state_without_leakin
     marker = "FORGED_SNAPSHOT_PAYLOAD_SECRET"
 
     class SensitiveCell:
+        __hash__ = None
+
         def __repr__(self) -> str:
             return marker
 
@@ -962,6 +1018,9 @@ async def test_page_snapshot_rejects_forged_cross_component_state_without_leakin
                 results=object(),  # type: ignore[arg-type]
             ),
         ),
+        replace(snapshot, loaded_views=(SensitiveCell(),)),  # type: ignore[arg-type]
+        replace(snapshot, history=object()),  # type: ignore[arg-type]
+        replace(snapshot, saved=object()),  # type: ignore[arg-type]
         replace(snapshot, saved_kind=SavedQueryKind.NAMED, saved_query_id=None),
         replace(snapshot, saved_kind=None, saved_query_id=marker),
     )
@@ -1056,6 +1115,141 @@ async def test_page_snapshot_preflight_provider_failures_are_atomic(
 
     with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
         await destination.restore_snapshot(snapshot)
+
+    assert _page_restore_state(destination, store) == before
+
+
+@pytest.mark.asyncio
+async def test_same_context_snapshot_restore_is_fully_local() -> None:
+    client = PageClient()
+    store = ServiceSelectionStore()
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    await page.select_workgroup("analysts")
+    await page.select_view("history")
+    await page.select_history_execution("history-analysts")
+    await page.select_view("saved")
+    await page.select_named_query("named-1")
+    snapshot = page.export_snapshot()
+    expected = _page_restore_state(page, store)
+    page.query.set_sql("SELECT 'temporary'")
+    await page.select_view("query")
+    calls_before = _provider_call_counts(client)
+
+    await page.restore_snapshot(snapshot)
+
+    assert _provider_call_counts(client) == calls_before
+    assert _page_restore_state(page, store) == expected
+
+
+@pytest.mark.asyncio
+async def test_history_restore_cancellation_is_atomic() -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    await source.select_view("history")
+    await source.select_history_execution("history-analysts")
+    snapshot = source.export_snapshot()
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    before = _page_restore_state(destination, store)
+    client.block_history_for = "analysts"
+    restoring = asyncio.create_task(destination.restore_snapshot(snapshot))
+    await client.history_started.wait()
+
+    restoring.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await restoring
+
+    assert _page_restore_state(destination, store) == before
+
+
+@pytest.mark.asyncio
+async def test_history_restore_provider_failure_is_atomic() -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    await source.select_view("history")
+    await source.select_history_execution("history-analysts")
+    snapshot = source.export_snapshot()
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    before = _page_restore_state(destination, store)
+    client.history_error = ProviderError("HISTORY_RESTORE_SECRET")
+
+    with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+        await destination.restore_snapshot(snapshot)
+
+    assert _page_restore_state(destination, store) == before
+
+
+@pytest.mark.asyncio
+async def test_query_becoming_active_rejects_snapshot_restore_atomically() -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    await source.select_view("history")
+    await source.select_history_execution("history-analysts")
+    snapshot = source.export_snapshot()
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    client.block_history_for = "analysts"
+    restoring = asyncio.create_task(destination.restore_snapshot(snapshot))
+    await client.history_started.wait()
+    client.block_results = True
+    destination.query.set_sql("SELECT 1")
+    execution = asyncio.create_task(destination.query.execute())
+    await client.results_started.wait()
+    before = _page_restore_state(destination, store)
+    client.release_history.set()
+    try:
+        with pytest.raises(ValueError, match=r"^Athena snapshot restore is unavailable$"):
+            await restoring
+        assert _page_restore_state(destination, store) == before
+    finally:
+        client.release_results.set()
+        await execution
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["cancel", "provider"])
+async def test_saved_restore_failure_is_atomic(failure: str) -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    await source.select_view("saved")
+    await source.select_prepared_statement("prepared-1")
+    snapshot = source.export_snapshot()
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    before = _page_restore_state(destination, store)
+    if failure == "cancel":
+        client.block_prepared_detail = True
+    else:
+        client.prepared_detail_error = ProviderError("SAVED_RESTORE_SECRET")
+    client.prepared_detail_started.clear()
+    restoring = asyncio.create_task(destination.restore_snapshot(snapshot))
+    await client.prepared_detail_started.wait()
+
+    if failure == "cancel":
+        restoring.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await restoring
+    else:
+        with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+            await restoring
 
     assert _page_restore_state(destination, store) == before
 

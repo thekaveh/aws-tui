@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -275,16 +275,28 @@ class AthenaQueryVM:
             raise ValueError(_SNAPSHOT_ERROR)
         if prepared.context != self._context:
             raise ValueError("Athena query snapshot does not match the active context")
-        if (
-            self._execution_task is not None
-            or self._submission_task is not None
-            or self._busy
-            or self._is_submitting
-            or self._owns_active_query
-        ):
-            raise ValueError("Athena query is busy")
+        generation = self._generation
+        async with self.snapshot_restore_guard(generation):
+            self._install_snapshot(prepared)
 
-        await self._results.restore_snapshot(prepared.results)
+    @property
+    def snapshot_generation(self) -> int:
+        return self._generation
+
+    @asynccontextmanager
+    async def snapshot_restore_guard(self, expected_generation: int) -> AsyncIterator[None]:
+        async with self._lifecycle_lock:
+            if expected_generation != self._generation or self._snapshot_export_is_busy():
+                raise ValueError("Athena snapshot restore is unavailable")
+            yield
+
+    def _install_snapshot(self, snapshot: AthenaQuerySnapshot) -> None:
+        prepared = _prepare_query_snapshot(snapshot, snapshot.context)
+        if prepared is None:
+            raise ValueError(_SNAPSHOT_ERROR)
+        self._context = prepared.context
+        self._results.set_context(prepared.context)
+        self._results._install_snapshot(prepared.results)
         self._generation += 1
         self._sql = prepared.sql
         self._validation_error = prepared.validation_error

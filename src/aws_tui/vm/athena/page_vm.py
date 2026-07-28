@@ -25,10 +25,10 @@ from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy, select_starter_sql
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena.history_vm import AthenaHistoryVM
+from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
 from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
-from aws_tui.vm.athena.saved_vm import AthenaSavedVM, SavedQueryKind
+from aws_tui.vm.athena.saved_vm import AthenaSavedSnapshot, AthenaSavedVM, SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenGlueTableRequest
 from aws_tui.vm.service_source_vm import (
@@ -56,6 +56,9 @@ class AthenaPageSnapshot:
     history_execution_id: str | None = field(repr=False)
     saved_kind: SavedQueryKind | None = field(repr=False)
     saved_query_id: str | None = field(repr=False)
+    loaded_views: tuple[AthenaView, ...] = field(repr=False)
+    history: AthenaHistorySnapshot = field(repr=False)
+    saved: AthenaSavedSnapshot = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +71,13 @@ class _SnapshotContextStage:
     catalogs_token: str | None = field(repr=False)
     databases: tuple[DatabaseSummary, ...] = field(repr=False)
     databases_token: str | None = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _SnapshotRestoreStage:
+    context: _SnapshotContextStage = field(repr=False)
+    history: AthenaHistorySnapshot = field(repr=False)
+    saved: AthenaSavedSnapshot = field(repr=False)
 
 
 @dataclass(eq=False)
@@ -93,6 +103,7 @@ class AthenaPageVM:
         self._policy = policy
         self._connection = connection
         self._hub = hub
+        self._dispatcher = dispatcher
         self._source = ServiceSourceContext.from_connection(connection)
         self._selection_scope = SelectionScope(
             "athena",
@@ -354,6 +365,9 @@ class AthenaPageVM:
             history_execution_id=self.history.selected_execution_id,
             saved_kind=self.saved.selected_kind,
             saved_query_id=self.saved.selected_query_id,
+            loaded_views=tuple(sorted(self._loaded_views)),
+            history=self.history.export_snapshot(),
+            saved=self.saved.export_snapshot(),
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena snapshot is invalid")
@@ -373,28 +387,41 @@ class AthenaPageVM:
         if prepared is None:
             raise ValueError("Athena snapshot is invalid")
         try:
-            self.query.export_snapshot()
+            query_before = self.query.export_snapshot()
+            history_before = self.history.export_snapshot()
+            saved_before = self.saved.export_snapshot()
         except ValueError:
             raise ValueError("Athena snapshot restore is unavailable") from None
-        stage = await self._preflight_snapshot_context(prepared)
+        page_before = self._snapshot_restore_token()
+        query_generation = self.query.snapshot_generation
+        stage = await self._preflight_snapshot(prepared)
         if stage is None:
             raise ValueError("Athena snapshot context is unavailable")
 
-        await self._install_snapshot_context(stage)
-        await self.query.restore_snapshot(prepared.query)
-        for key, value in (
-            ("workgroup", prepared.context.workgroup),
-            ("catalog", prepared.context.catalog),
-            ("database", prepared.context.database),
-        ):
-            self._selection_store.set(self._selection_scope, key, value)
-        self._restore_snapshot_selection_keys(prepared)
-        await self._restore_snapshot_history_selection(prepared)
-        await self._restore_snapshot_saved_selection(prepared)
-        await self.select_view(prepared.active_view)
+        async with self.query.snapshot_restore_guard(query_generation):
+            try:
+                unchanged = (
+                    self._is_alive()
+                    and self._snapshot_restore_token() == page_before
+                    and self.query.export_snapshot() == query_before
+                    and self.history.export_snapshot() == history_before
+                    and self.saved.export_snapshot() == saved_before
+                )
+            except ValueError:
+                unchanged = False
+            if not unchanged:
+                raise ValueError("Athena snapshot restore is unavailable")
+            self._install_snapshot(prepared, stage)
 
     @staticmethod
     def snapshot_is_valid(snapshot: object) -> bool:
+        try:
+            return AthenaPageVM._snapshot_is_valid(snapshot)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _snapshot_is_valid(snapshot: object) -> bool:
         return not (
             type(snapshot) is not AthenaPageSnapshot
             or type(snapshot.context) is not QueryContext
@@ -418,6 +445,44 @@ class AthenaPageVM:
             or (snapshot.saved_kind is not None and type(snapshot.saved_kind) is not SavedQueryKind)
             or not _optional_exact_string(snapshot.saved_query_id)
             or ((snapshot.saved_kind is None) != (snapshot.saved_query_id is None))
+            or type(snapshot.loaded_views) is not tuple
+            or not all(
+                type(view) is str and view in {"history", "saved"} for view in snapshot.loaded_views
+            )
+            or len(set(snapshot.loaded_views)) != len(snapshot.loaded_views)
+            or not AthenaHistoryVM.snapshot_is_valid(snapshot.history)
+            or snapshot.history.context != snapshot.context
+            or snapshot.history.selected_execution_id != snapshot.history_execution_id
+            or not AthenaSavedVM.snapshot_is_valid(snapshot.saved)
+            or snapshot.saved.workgroup != snapshot.context.workgroup
+            or snapshot.saved.selected_kind != snapshot.saved_kind
+            or snapshot.saved.selected_query_id != snapshot.saved_query_id
+            or (
+                snapshot.history_execution_id is not None and "history" not in snapshot.loaded_views
+            )
+            or (snapshot.saved_query_id is not None and "saved" not in snapshot.loaded_views)
+        )
+
+    async def _preflight_snapshot(
+        self,
+        snapshot: AthenaPageSnapshot,
+    ) -> _SnapshotRestoreStage | None:
+        context_stage = await self._preflight_snapshot_context(snapshot)
+        if context_stage is None:
+            return None
+        if snapshot.context == self._context:
+            return _SnapshotRestoreStage(
+                context=context_stage,
+                history=snapshot.history,
+                saved=snapshot.saved,
+            )
+        children = await self._preflight_snapshot_children(snapshot)
+        if children is None:
+            return None
+        return _SnapshotRestoreStage(
+            context=context_stage,
+            history=children[0],
+            saved=children[1],
         )
 
     async def _preflight_snapshot_context(
@@ -425,6 +490,31 @@ class AthenaPageVM:
         snapshot: AthenaPageSnapshot,
     ) -> _SnapshotContextStage | None:
         context = snapshot.context
+        if context == self._context:
+            if (
+                self._workgroup_detail is None
+                or self._workgroup_detail.summary.name != context.workgroup
+                or not any(row.name == context.workgroup for row in self.workgroups)
+                or not any(row.name == context.catalog for row in self.catalogs)
+                or not any(
+                    row.ref.connection_name == context.connection_name
+                    and row.ref.region == context.region
+                    and row.ref.catalog_name == context.catalog
+                    and row.ref.database_name == context.database
+                    for row in self.databases
+                )
+            ):
+                return None
+            return _SnapshotContextStage(
+                context=context,
+                workgroups=self.workgroups,
+                workgroups_token=self._workgroup_pager.current_token,
+                workgroup_detail=self._workgroup_detail,
+                catalogs=self.catalogs,
+                catalogs_token=self._catalog_pager.current_token,
+                databases=self.databases,
+                databases_token=self._database_pager.current_token,
+            )
         try:
             workgroup_page = await self._collect_snapshot_pages(
                 lambda token: self._client.list_workgroups_page(start_token=token),
@@ -479,6 +569,65 @@ class AthenaPageVM:
             databases_token=database_page[1],
         )
 
+    async def _preflight_snapshot_children(
+        self,
+        snapshot: AthenaPageSnapshot,
+    ) -> tuple[AthenaHistorySnapshot, AthenaSavedSnapshot] | None:
+        staging_hub: MessageHub[Message] = MessageHub()
+        history = AthenaHistoryVM(
+            client=self._client,
+            context=snapshot.context,
+            hub=staging_hub,
+            dispatcher=self._dispatcher,
+        )
+        saved = AthenaSavedVM(
+            client=self._client,
+            workgroup=snapshot.context.workgroup,
+            hub=staging_hub,
+            dispatcher=self._dispatcher,
+        )
+        history.construct()
+        saved.construct()
+        try:
+            if "history" in snapshot.loaded_views:
+                await history.setup()
+                if history.state not in {PaneState.IDLE, PaneState.EMPTY}:
+                    return None
+                if snapshot.history_execution_id is not None:
+                    await history.select_execution(snapshot.history_execution_id)
+                    if history.selected_execution_id != snapshot.history_execution_id:
+                        return None
+            if "saved" in snapshot.loaded_views:
+                await saved.setup()
+                if saved.named_state not in {
+                    PaneState.IDLE,
+                    PaneState.EMPTY,
+                } or saved.prepared_state not in {PaneState.IDLE, PaneState.EMPTY}:
+                    return None
+                if (
+                    snapshot.saved_kind is SavedQueryKind.NAMED
+                    and snapshot.saved_query_id is not None
+                ):
+                    await saved.select_named_query(snapshot.saved_query_id)
+                elif (
+                    snapshot.saved_kind is SavedQueryKind.PREPARED
+                    and snapshot.saved_query_id is not None
+                ):
+                    await saved.select_prepared_statement(snapshot.saved_query_id)
+                if (
+                    saved.selected_kind != snapshot.saved_kind
+                    or saved.selected_query_id != snapshot.saved_query_id
+                    or (
+                        snapshot.saved_query_id is not None
+                        and saved.detail_state is not PaneState.IDLE
+                    )
+                ):
+                    return None
+            return history.export_snapshot(), saved.export_snapshot()
+        finally:
+            history.dispose()
+            saved.dispose()
+
     async def _collect_snapshot_pages(
         self,
         fetch: Callable[[str | None], Awaitable[tuple[list[T], str | None]]],
@@ -511,45 +660,114 @@ class AthenaPageVM:
             token = next_token
         return None
 
-    async def _install_snapshot_context(self, stage: _SnapshotContextStage) -> None:
+    def _install_snapshot(
+        self,
+        snapshot: AthenaPageSnapshot,
+        stage: _SnapshotRestoreStage,
+    ) -> None:
+        context = stage.context
         self._context_generation += 1
         self._workgroup_generation += 1
         self._catalog_generation += 1
         self._database_generation += 1
-        self._context = stage.context
-        self._loaded_views.clear()
-        self._workgroup_detail = stage.workgroup_detail
+        self._context = context.context
+        self._loaded_views = set(snapshot.loaded_views)
+        self._active_view = snapshot.active_view
+        self._workgroup_detail = context.workgroup_detail
         self._workgroup_detail_state = PaneState.IDLE
         self._workgroup_detail_error_text = None
-        workgroup_worker = self._replace_workgroup_worker(
-            restored_page=(stage.workgroups, stage.workgroups_token)
-        )
+        workgroup_worker = self._replace_workgroup_worker()
         catalog_worker = self._replace_catalog_worker(
-            stage.context.workgroup,
-            restored_page=(stage.catalogs, stage.catalogs_token),
+            context.context.workgroup,
         )
         database_worker = self._replace_database_worker(
-            stage.context.workgroup,
-            stage.context.catalog,
-            restored_page=(stage.databases, stage.databases_token),
+            context.context.workgroup,
+            context.context.catalog,
         )
-        await self.query.set_context(stage.context)
-        self.history.replace_context(stage.context)
-        self.saved.replace_workgroup(stage.context.workgroup)
-        await asyncio.gather(
-            workgroup_worker.pager.refresh_command.execute_async(),
-            catalog_worker.pager.refresh_command.execute_async(),
-            database_worker.pager.refresh_command.execute_async(),
+        _seed_page_pager(
+            workgroup_worker.pager,
+            context.workgroups,
+            context.workgroups_token,
         )
-        self._workgroups_state = PaneState.IDLE if stage.workgroups else PaneState.EMPTY
-        self._catalogs_state = PaneState.IDLE if stage.catalogs else PaneState.EMPTY
-        self._databases_state = PaneState.IDLE if stage.databases else PaneState.EMPTY
+        _seed_page_pager(
+            catalog_worker.pager,
+            context.catalogs,
+            context.catalogs_token,
+        )
+        _seed_page_pager(
+            database_worker.pager,
+            context.databases,
+            context.databases_token,
+        )
+        self.query._install_snapshot(snapshot.query)
+        self.history.restore_snapshot(stage.history)
+        self.saved.restore_snapshot(stage.saved)
+        self._workgroups_state = PaneState.IDLE if context.workgroups else PaneState.EMPTY
+        self._catalogs_state = PaneState.IDLE if context.catalogs else PaneState.EMPTY
+        self._databases_state = PaneState.IDLE if context.databases else PaneState.EMPTY
         self._workgroups_error_text = None
         self._catalogs_error_text = None
         self._databases_error_text = None
+        for key, value in (
+            ("workgroup", snapshot.context.workgroup),
+            ("catalog", snapshot.context.catalog),
+            ("database", snapshot.context.database),
+            ("active_view", snapshot.active_view),
+            ("history_execution_id", snapshot.history_execution_id),
+            ("saved_query_id", snapshot.saved_query_id),
+        ):
+            if value is None:
+                self._selection_store.discard(self._selection_scope, key)
+            else:
+                self._selection_store.set(self._selection_scope, key, value)
         self._notify("context")
+        self._notify("active_view")
         self._notify_context_lists()
         self._notify_workgroup_detail()
+
+    def _snapshot_restore_token(self) -> tuple[object, ...]:
+        return (
+            self._context,
+            self._active_view,
+            frozenset(self._loaded_views),
+            self._lifecycle_generation,
+            self._context_generation,
+            self._workgroup_generation,
+            self._catalog_generation,
+            self._database_generation,
+            self._workgroup_worker,
+            self._catalog_worker,
+            self._database_worker,
+            self.workgroups,
+            self.catalogs,
+            self.databases,
+            self._workgroup_pager.current_token,
+            self._catalog_pager.current_token,
+            self._database_pager.current_token,
+            self._workgroup_detail,
+            self._workgroups_state,
+            self._catalogs_state,
+            self._databases_state,
+            self._workgroup_detail_state,
+            self._workgroups_error_text,
+            self._catalogs_error_text,
+            self._databases_error_text,
+            self._workgroup_detail_error_text,
+            self._is_loading_more_workgroups,
+            self._is_loading_more_catalogs,
+            self._is_loading_more_databases,
+            tuple(
+                self._selection_store.get(self._selection_scope, key)
+                for key in (
+                    "workgroup",
+                    "catalog",
+                    "database",
+                    "active_view",
+                    "history_execution_id",
+                    "saved_query_id",
+                )
+            ),
+        )
 
     async def select_workgroup(self, workgroup: str) -> None:
         if not self._is_alive():
@@ -1581,6 +1799,16 @@ def _prepare_page_snapshot(
 
 def _optional_exact_string(value: object) -> bool:
     return value is None or type(value) is str
+
+
+def _seed_page_pager(
+    pager: TokenPagedComposition[T, str],
+    items: tuple[T, ...],
+    next_token: str | None,
+) -> None:
+    pager._items = list(items)
+    pager._current_token = next_token
+    pager._loaded_once = True
 
 
 __all__ = ["AthenaPageSnapshot", "AthenaPageVM", "AthenaView"]

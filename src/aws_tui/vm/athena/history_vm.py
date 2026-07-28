@@ -33,6 +33,17 @@ from aws_tui.vm.messages import OpenS3LocationRequest
 _HISTORY_ERROR = "Athena history request failed"
 
 
+@dataclass(frozen=True, slots=True)
+class AthenaHistorySnapshot:
+    context: QueryContext = field(repr=False)
+    items: tuple[QueryExecutionSummary, ...] = field(repr=False)
+    details: tuple[QueryExecutionDetail, ...] = field(repr=False)
+    next_token: str | None = field(repr=False)
+    selected_execution_id: str | None = field(repr=False)
+    state: PaneState = field(repr=False)
+    error_text: str | None = field(repr=False)
+
+
 @dataclass(eq=False)
 class _HistoryWorker:
     generation: int
@@ -173,6 +184,104 @@ class AthenaHistoryVM:
         self._detail = detail
         self._notify("selected_execution_id")
         self._notify("detail")
+
+    def export_snapshot(self) -> AthenaHistorySnapshot:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._state is PaneState.LOADING
+            or self._is_loading_more
+            or any(not task.done() for worker in self._workers for task in worker.tasks)
+        ):
+            raise ValueError("Athena history is busy")
+        details = tuple(
+            self._worker.details[row.ref.execution_id]
+            for row in self.items
+            if row.ref.execution_id in self._worker.details
+        )
+        snapshot = AthenaHistorySnapshot(
+            context=self._context,
+            items=self.items,
+            details=details,
+            next_token=self._pager.current_token,
+            selected_execution_id=self._selected_execution_id,
+            state=self._state,
+            error_text=self._error_text,
+        )
+        if not self.snapshot_is_valid(snapshot):
+            raise ValueError("Athena history snapshot is invalid")
+        return snapshot
+
+    def restore_snapshot(self, snapshot: AthenaHistorySnapshot) -> None:
+        if self._disposed or self._shutdown_started:
+            raise ValueError("Athena history is unavailable")
+        if not self.snapshot_is_valid(snapshot):
+            raise ValueError("Athena history snapshot is invalid")
+        self._generation += 1
+        self._context = snapshot.context
+        self._workgroup = snapshot.context.workgroup
+        worker = self._replace_worker(self._workgroup, self._generation)
+        worker.details.update(
+            {detail.summary.ref.execution_id: detail for detail in snapshot.details}
+        )
+        _seed_pager(worker.pager, snapshot.items, snapshot.next_token)
+        self._selected_execution_id = snapshot.selected_execution_id
+        self._detail = (
+            None
+            if snapshot.selected_execution_id is None
+            else worker.details[snapshot.selected_execution_id]
+        )
+        self._state = snapshot.state
+        self._error_text = snapshot.error_text
+        self._is_loading_more = False
+        self._notify_all()
+        self._notify("is_loading_more")
+
+    @staticmethod
+    def snapshot_is_valid(snapshot: object) -> bool:
+        if (
+            type(snapshot) is not AthenaHistorySnapshot
+            or type(snapshot.context) is not QueryContext
+            or type(snapshot.items) is not tuple
+            or type(snapshot.details) is not tuple
+            or (snapshot.next_token is not None and type(snapshot.next_token) is not str)
+            or (
+                snapshot.selected_execution_id is not None
+                and type(snapshot.selected_execution_id) is not str
+            )
+            or type(snapshot.state) is not PaneState
+            or snapshot.state is PaneState.LOADING
+            or (snapshot.error_text is not None and type(snapshot.error_text) is not str)
+            or not all(type(item) is QueryExecutionSummary for item in snapshot.items)
+            or not all(type(detail) is QueryExecutionDetail for detail in snapshot.details)
+        ):
+            return False
+        details = {detail.summary.ref.execution_id: detail for detail in snapshot.details}
+        if len(details) != len(snapshot.details) or len(snapshot.items) != len(snapshot.details):
+            return False
+        for item in snapshot.items:
+            detail = details.get(item.ref.execution_id)
+            if (
+                detail is None
+                or detail.summary != item
+                or item.ref.connection_name != snapshot.context.connection_name
+                or item.ref.region != snapshot.context.region
+                or item.ref.workgroup != snapshot.context.workgroup
+            ):
+                return False
+        if (
+            snapshot.selected_execution_id is not None
+            and snapshot.selected_execution_id not in details
+        ):
+            return False
+        if snapshot.state in {
+            PaneState.AUTH_REQUIRED,
+            PaneState.FORBIDDEN,
+            PaneState.UNREACHABLE,
+            PaneState.ERROR,
+        }:
+            return bool(snapshot.error_text)
+        return snapshot.error_text is None
 
     def open_s3_location(
         self,
@@ -453,7 +562,7 @@ class AthenaHistoryVM:
         self._on_property_changed.on_next(property_name)
 
 
-__all__ = ["AthenaHistoryVM"]
+__all__ = ["AthenaHistorySnapshot", "AthenaHistoryVM"]
 
 
 def _execution_identity_belongs_to(
@@ -467,3 +576,13 @@ def _execution_identity_belongs_to(
         and ref.workgroup == detail.context.workgroup
         and detail.context == expected
     )
+
+
+def _seed_pager(
+    pager: TokenPagedComposition[QueryExecutionSummary, str],
+    items: tuple[QueryExecutionSummary, ...],
+    next_token: str | None,
+) -> None:
+    pager._items = list(items)
+    pager._current_token = next_token
+    pager._loaded_once = True
