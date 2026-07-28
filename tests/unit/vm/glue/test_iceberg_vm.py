@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import Any, cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
@@ -309,6 +310,119 @@ async def test_shutdown_cancels_and_drains_metadata_load_idempotently() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("termination_order", ["dispose-first", "concurrent"])
+async def test_shutdown_durably_drains_after_dispose_without_notifications(
+    termination_order: str,
+) -> None:
+    vm, inspector, hub = make_vm()
+    inspector.ignore_cancellation_for = "snapshots"
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    started = inspector.block("snapshots")
+    loading = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+    terminal_messages: list[Message] = []
+    subscription = hub.messages.subscribe(on_next=terminal_messages.append)
+
+    if termination_order == "dispose-first":
+        vm.dispose()
+        shutdown = asyncio.create_task(vm.shutdown())
+    else:
+        shutdown = asyncio.create_task(vm.shutdown())
+        vm.dispose()
+    await inspector.cancellation_seen.wait()
+    shutdown_returned_before_provider = shutdown.done()
+    inspector.release("snapshots")
+    await shutdown
+    assert not await loading
+
+    await vm.shutdown()
+    vm.dispose()
+
+    assert not shutdown_returned_before_provider
+    assert not any(isinstance(message, PropertyChangedMessage) for message in terminal_messages)
+    assert vm.table_ref is None
+    assert vm.snapshots == ()
+    assert not vm._metadata_tasks  # type: ignore[attr-defined]
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_clear_table_is_a_synchronous_immediate_invalidation_entry_point() -> None:
+    vm, _inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("snapshots")
+
+    result = vm.clear_table()
+    if inspect.iscoroutine(result):
+        result.close()
+
+    assert result is None
+    assert vm.table_ref is None
+    assert vm.snapshots == ()
+    assert not vm.available
+
+
+@pytest.mark.asyncio
+async def test_clear_table_and_drain_waits_for_cancellation_resistant_provider() -> None:
+    vm, inspector, _hub = make_vm()
+    inspector.ignore_cancellation_for = "snapshots"
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    started = inspector.block("snapshots")
+    loading = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+    drain_method = getattr(vm, "clear_table_and_drain", None)
+    if drain_method is None:
+        vm.dispose()
+        await inspector.cancellation_seen.wait()
+        inspector.release("snapshots")
+        await loading
+        pytest.fail("GlueIcebergVM.clear_table_and_drain is missing")
+
+    result = vm.clear_table()
+    if inspect.iscoroutine(result):
+        result.close()
+    draining = asyncio.create_task(drain_method())
+    await inspector.cancellation_seen.wait()
+    drain_returned_before_provider = draining.done()
+
+    assert vm.table_ref is None
+    assert vm.snapshots == ()
+
+    inspector.release("snapshots")
+    await draining
+
+    assert not drain_returned_before_provider
+    assert not await loading
+    assert not vm._metadata_tasks  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_synchronous_clear_supersedes_inflight_rebind() -> None:
+    vm, inspector, _hub = make_vm()
+    inspector.ignore_cancellation_for = "snapshots"
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    started = inspector.block("snapshots")
+    loading = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+
+    rebinding = asyncio.create_task(vm.bind_table(OTHER_REF, table_format=TableFormat.ICEBERG))
+    await inspector.cancellation_seen.wait()
+    result = vm.clear_table()
+    if inspect.iscoroutine(result):
+        result.close()
+
+    assert vm.table_ref is None
+    assert vm.snapshots == ()
+
+    inspector.release("snapshots")
+    await rebinding
+
+    assert not await loading
+    assert vm.table_ref is None
+    assert vm.snapshots == ()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_load_rolls_back_without_stranding_loading_state() -> None:
     vm, inspector, _hub = make_vm()
     await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
@@ -372,6 +486,25 @@ async def test_cancelled_loading_notification_restores_before_provider_call(
     subscription.dispose()
     vm.dispose()
     assert vm.status is ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_dispose_from_loading_notification_prevents_provider_task_creation() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+
+    def dispose_on_loading(property_name: str) -> None:
+        if property_name == "state" and vm.state is PaneState.LOADING:
+            vm.dispose()
+
+    subscription = vm.on_property_changed.subscribe(on_next=dispose_on_loading)
+
+    assert not await vm.select_view("snapshots")
+    assert inspector.calls == []
+    assert vm.snapshots == ()
+    assert not vm._metadata_tasks  # type: ignore[attr-defined]
+    assert vm.status is ConstructionStatus.DISPOSED
+    subscription.dispose()
 
 
 @pytest.mark.asyncio

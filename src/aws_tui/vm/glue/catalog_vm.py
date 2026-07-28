@@ -271,7 +271,7 @@ class GlueCatalogVM:
         generation = self._table_generation
         self._selected_database_name = database_name
         self._selected_table_name = None
-        await self.iceberg.clear_table()
+        await self.iceberg.clear_table_and_drain()
         self._table_detail = None
         self._column_statistics = ()
         self._detail_generation += 1
@@ -346,7 +346,7 @@ class GlueCatalogVM:
         self._selected_table_name = table_name
         self._table_detail = None
         self._column_statistics = ()
-        await self.iceberg.clear_table()
+        await self.iceberg.clear_table_and_drain()
         self._replace_partition_pager(summary.ref)
         self._detail_error_text = None
         self._partitions_error_text = None
@@ -659,7 +659,7 @@ class GlueCatalogVM:
         self._detail_generation += 1
         self._selected_database_name = None
         self._selected_table_name = None
-        await self.iceberg.clear_table()
+        await self.iceberg.clear_table_and_drain()
         self._table_detail = None
         self._column_statistics = ()
         self._replace_table_pager(None)

@@ -45,6 +45,7 @@ class GluePageVM:
         self._active_view: GlueView = "catalog"
         self._loaded_views: set[GlueView] = set()
         self._disposed = False
+        self._shutdown_started = False
         self._shutdown_complete = False
         self._shutdown_lock = asyncio.Lock()
         self._lifecycle_generation = 0
@@ -90,6 +91,8 @@ class GluePageVM:
         return self._active_view
 
     def construct(self) -> None:
+        if not self._is_alive():
+            return
         self._inner.construct()
         self.catalog.construct()
         self.jobs.construct()
@@ -107,14 +110,15 @@ class GluePageVM:
 
     async def shutdown(self) -> None:
         async with self._shutdown_lock:
-            if self._disposed or self._shutdown_complete:
+            if self._shutdown_complete:
                 return
+            self._shutdown_started = True
             self._lifecycle_generation += 1
             await self.catalog.shutdown()
             self._shutdown_complete = True
 
     async def setup(self) -> None:
-        if self._disposed:
+        if not self._is_alive():
             return
         generation = self._lifecycle_generation
         stored_view = self._selection_store.get(self._selection_scope, "active_view")
@@ -127,7 +131,7 @@ class GluePageVM:
     async def select_view(self, view: GlueView) -> None:
         if view not in _VIEWS:
             raise ValueError(f"unknown Glue view: {view}")
-        if self._disposed:
+        if not self._is_alive():
             return
         generation = self._lifecycle_generation
         changed = view != self._active_view
@@ -138,6 +142,8 @@ class GluePageVM:
         await self._setup_view(view, generation)
 
     async def select_database(self, database_name: str) -> None:
+        if not self._is_alive():
+            return
         generation = self._lifecycle_generation
         await self._select_database(
             database_name,
@@ -146,13 +152,15 @@ class GluePageVM:
         )
 
     async def select_table(self, table_name: str) -> None:
+        if not self._is_alive():
+            return
         generation = self._lifecycle_generation
         await self._select_table(table_name, generation)
 
     async def open_table(self, table_ref: TableRef) -> None:
         """Open an exact table and persist its destination selection."""
         if (
-            self._disposed
+            not self._is_alive()
             or table_ref.connection_name != self._connection.name
             or table_ref.region != self._connection.region
         ):
@@ -183,6 +191,8 @@ class GluePageVM:
             self._selection_store.set(self._selection_scope, "table_name", table_name)
 
     async def select_job(self, job_name: str) -> None:
+        if not self._is_alive():
+            return
         generation = self._lifecycle_generation
         await self._select_job(job_name, generation)
 
@@ -194,6 +204,8 @@ class GluePageVM:
             self._selection_store.set(self._selection_scope, "job_name", job_name)
 
     async def set_job_run_states(self, states: frozenset[str]) -> None:
+        if not self._is_alive():
+            return
         generation = self._lifecycle_generation
         await self.jobs.set_run_state_filter(states)
         if not self._is_current(generation):
@@ -205,6 +217,8 @@ class GluePageVM:
         )
 
     async def select_crawler(self, name: str) -> None:
+        if not self._is_alive():
+            return
         generation = self._lifecycle_generation
         await self._select_crawler(name, generation)
 
@@ -216,6 +230,8 @@ class GluePageVM:
             self._selection_store.set(self._selection_scope, "crawler_name", name)
 
     async def set_crawler_state(self, state: str | None) -> None:
+        if not self._is_alive():
+            return
         generation = self._lifecycle_generation
         await self.crawlers.set_state_filter(state)
         if not self._is_current(generation):
@@ -235,7 +251,7 @@ class GluePageVM:
         await self._select_crawler(selected, generation)
 
     async def refresh_active(self) -> None:
-        if self._disposed:
+        if not self._is_alive():
             return
         generation = self._lifecycle_generation
         if self._active_view == "catalog":
@@ -350,7 +366,10 @@ class GluePageVM:
         await self._select_crawler(crawler_name, generation)
 
     def _is_current(self, generation: int) -> bool:
-        return not self._disposed and generation == self._lifecycle_generation
+        return generation == self._lifecycle_generation and self._is_alive()
+
+    def _is_alive(self) -> bool:
+        return not self._disposed and not self._shutdown_started
 
     def _notify(self, property_name: str) -> None:
         if self._disposed:

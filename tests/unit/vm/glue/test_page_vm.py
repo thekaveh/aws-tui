@@ -372,6 +372,159 @@ async def test_page_dispose_prevents_blocked_setup_from_mutating_page_or_store()
     assert store.get(scope, "table_name") is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("termination_order", ["dispose-first", "concurrent"])
+async def test_page_shutdown_still_drains_catalog_after_dispose(
+    monkeypatch: pytest.MonkeyPatch,
+    termination_order: str,
+) -> None:
+    page = make_page_vm(seeded_glue())
+    drain_started = asyncio.Event()
+    drain_release = asyncio.Event()
+    drain_calls = 0
+
+    async def drain_catalog() -> None:
+        nonlocal drain_calls
+        drain_calls += 1
+        drain_started.set()
+        await drain_release.wait()
+
+    monkeypatch.setattr(page.catalog, "shutdown", drain_catalog)
+
+    if termination_order == "dispose-first":
+        page.dispose()
+        shutdown = asyncio.create_task(page.shutdown())
+    else:
+        shutdown = asyncio.create_task(page.shutdown())
+        page.dispose()
+    await asyncio.sleep(0)
+    started_before_release = drain_started.is_set()
+    drain_release.set()
+    await shutdown
+
+    await page.shutdown()
+    page.dispose()
+
+    assert started_before_release
+    assert drain_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_setup_during_and_after_shutdown_cannot_resurrect_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = seeded_glue()
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(fake, selection_store=store)
+    shutdown_started = asyncio.Event()
+    shutdown_release = asyncio.Event()
+    original_shutdown = page.catalog.shutdown
+
+    async def blocked_shutdown() -> None:
+        shutdown_started.set()
+        await shutdown_release.wait()
+        await original_shutdown()
+
+    monkeypatch.setattr(page.catalog, "shutdown", blocked_shutdown)
+    shutdown = asyncio.create_task(page.shutdown())
+    await shutdown_started.wait()
+
+    await page.setup()
+    calls_during_shutdown = (
+        tuple(fake.database_tokens),
+        tuple(fake.table_requests),
+        tuple(fake.table_detail_requests),
+    )
+    shutdown_release.set()
+    await shutdown
+    await page.setup()
+
+    assert calls_during_shutdown == ((), (), ())
+    assert fake.database_tokens == []
+    assert fake.table_requests == []
+    assert fake.table_detail_requests == []
+    assert page.catalog.databases == ()
+    assert page._loaded_views == set()  # type: ignore[attr-defined]
+    assert store.get(scope, "database_name") is None
+    assert store.get(scope, "table_name") is None
+
+
+@pytest.mark.asyncio
+async def test_public_page_actions_are_terminal_after_shutdown() -> None:
+    fake = seeded_glue()
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(fake, selection_store=store)
+    await page.setup()
+    await page.shutdown()
+    ref = fake.tables["analytics"][1].ref
+    active_view = page.active_view
+    loaded_views = set(page._loaded_views)  # type: ignore[attr-defined]
+    selected_database = page.catalog.selected_database_name
+    selected_table = page.catalog.selected_table_name
+    stored = {
+        key: store.get(scope, key)
+        for key in (
+            "active_view",
+            "database_name",
+            "table_name",
+            "job_name",
+            "job_run_states",
+            "crawler_name",
+            "crawler_state",
+        )
+    }
+    call_counts = (
+        len(fake.database_tokens),
+        len(fake.table_requests),
+        len(fake.table_detail_requests),
+        len(fake.job_tokens),
+        len(fake.run_requests),
+        len(fake.crawler_requests),
+        len(fake.crawler_detail_requests),
+    )
+
+    await page.setup()
+    await page.select_view("jobs")
+    await page.refresh_active()
+    await page.select_database("analytics")
+    await page.select_table("sessions")
+    await page.select_job("nightly")
+    await page.set_job_run_states(frozenset({"FAILED"}))
+    await page.select_crawler("ready-crawler")
+    await page.set_crawler_state("READY")
+    with pytest.raises(ValueError, match="table"):
+        await page.open_table(ref)
+    await page.shutdown()
+
+    assert page.active_view == active_view
+    assert page._loaded_views == loaded_views  # type: ignore[attr-defined]
+    assert page.catalog.selected_database_name == selected_database
+    assert page.catalog.selected_table_name == selected_table
+    assert {
+        key: store.get(scope, key)
+        for key in (
+            "active_view",
+            "database_name",
+            "table_name",
+            "job_name",
+            "job_run_states",
+            "crawler_name",
+            "crawler_state",
+        )
+    } == stored
+    assert (
+        len(fake.database_tokens),
+        len(fake.table_requests),
+        len(fake.table_detail_requests),
+        len(fake.job_tokens),
+        len(fake.run_requests),
+        len(fake.crawler_requests),
+        len(fake.crawler_detail_requests),
+    ) == call_counts
+
+
 def test_dispose_cascades_once_without_disposing_service_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

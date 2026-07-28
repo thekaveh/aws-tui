@@ -309,17 +309,29 @@ class GlueIcebergVM:
             return
         await self._replace_table(None)
 
-    async def clear_table(self) -> None:
-        """Invalidate metadata and drain provider work during a parent reset."""
-        if not self._disposed and not self._shutdown_started:
-            await self._replace_table(None)
+    def clear_table(self) -> None:
+        """Synchronously invalidate metadata during a parent selection reset."""
+        if self._disposed or self._shutdown_started:
+            return
+        self._invalidate_binding()
+        self._cancel_metadata_tasks()
+
+    async def clear_table_and_drain(self) -> None:
+        """Invalidate metadata and durably drain provider work."""
+        async with self._lifecycle_lock:
+            if self._shutdown_complete:
+                return
+            if not self._disposed and not self._shutdown_started:
+                self._invalidate_binding()
+            await self._cancel_and_drain_metadata_tasks()
 
     async def shutdown(self) -> None:
         async with self._lifecycle_lock:
-            if self._disposed or self._shutdown_complete:
+            if self._shutdown_complete:
                 return
             self._shutdown_started = True
-            self._invalidate_binding()
+            if not self._disposed:
+                self._invalidate_binding()
             await self._cancel_and_drain_metadata_tasks()
             self._shutdown_complete = True
 
@@ -328,8 +340,13 @@ class GlueIcebergVM:
             if self._disposed or self._shutdown_started:
                 return
             self._invalidate_binding()
+            binding_generation = self._binding_generation
             await self._cancel_and_drain_metadata_tasks()
-            if self._disposed or self._shutdown_started:
+            if (
+                self._disposed
+                or self._shutdown_started
+                or self._binding_generation != binding_generation
+            ):
                 return
             self._table_ref = table_ref
             self._notify_all()
@@ -371,9 +388,11 @@ class GlueIcebergVM:
                         cancelled = True
                         cancellation_count = current_count
             if task.cancelled():
+                self._metadata_tasks.discard(task)
                 continue
             with contextlib.suppress(Exception):
                 task.result()
+            self._metadata_tasks.discard(task)
         if cancelled:
             raise asyncio.CancelledError
 
@@ -451,6 +470,13 @@ class GlueIcebergVM:
             pane.state = PaneState.LOADING
             pane.error_text = None
             self._notify_view(view)
+            if not self._is_current(
+                view,
+                request_generation,
+                binding_generation,
+                table_ref,
+            ):
+                return False
             metadata_task = asyncio.create_task(self._loader(view)(table_ref))
             self._metadata_tasks.add(metadata_task)
             metadata_task.add_done_callback(self._metadata_task_done)
@@ -581,6 +607,7 @@ class GlueIcebergVM:
     ) -> bool:
         return (
             not self._disposed
+            and not self._shutdown_started
             and self._binding_generation == binding_generation
             and self._table_ref == table_ref
             and self._panes[view].generation == request_generation
