@@ -432,3 +432,45 @@ async def test_history_rejects_coherent_detail_owned_by_another_profile() -> Non
         assert "PROFILE_SECRET" not in repr(vm)
     finally:
         subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_history_snapshot_relational_invariants_reject_atomically_without_calls() -> None:
+    client = _seeded_client()
+    vm = make_history_vm(client)
+    await vm.setup()
+    await vm.select_execution("q-2")
+    snapshot = vm.export_snapshot()
+    before_calls = (tuple(client.list_calls), tuple(client.detail_calls))
+    duplicate_summary = snapshot.items[0]
+    duplicate_detail = snapshot.details[0]
+    empty = replace(
+        snapshot,
+        items=(),
+        details=(),
+        next_token=None,
+        selected_execution_id=None,
+        state=PaneState.EMPTY,
+        error_text=None,
+    )
+    invalid = (
+        replace(snapshot, next_token=""),
+        replace(
+            snapshot,
+            items=(duplicate_summary, duplicate_summary),
+            details=(duplicate_detail, duplicate_detail),
+        ),
+        replace(snapshot, details=()),
+        replace(snapshot, state=PaneState.EMPTY),
+        replace(empty, next_token="next"),
+        replace(empty, state=PaneState.IDLE),
+        replace(snapshot, state=PaneState.ERROR, error_text=None),
+        replace(snapshot, error_text="unexpected"),
+    )
+
+    for candidate in invalid:
+        with pytest.raises(ValueError, match=r"^Athena history snapshot is invalid$"):
+            vm.restore_snapshot(candidate)
+        assert vm.export_snapshot() == snapshot
+
+    assert (tuple(client.list_calls), tuple(client.detail_calls)) == before_calls

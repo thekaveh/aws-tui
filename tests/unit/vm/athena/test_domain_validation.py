@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
+
 from aws_tui.domain.athena import (
     AthenaCatalogSummary,
     AthenaWorkgroupDetail,
@@ -21,9 +23,11 @@ from aws_tui.domain.query import (
     QueryExecutionSummary,
     QueryState,
     QueryStatistics,
+    ResultColumn,
 )
 from aws_tui.vm.athena._domain_validation import (
     valid_athena_catalog_summary,
+    valid_athena_query_error,
     valid_athena_workgroup_detail,
     valid_athena_workgroup_summary,
     valid_database_summary,
@@ -33,6 +37,7 @@ from aws_tui.vm.athena._domain_validation import (
     valid_prepared_statement_summary,
     valid_query_execution_detail,
     valid_query_execution_summary,
+    valid_result_column,
     valid_table_ref,
 )
 
@@ -91,7 +96,7 @@ def test_workgroup_and_catalog_validators_reject_every_malformed_field() -> None
         "s3://results/",
         True,
         False,
-        100,
+        10_000_000,
         "Athena engine version 3",
         True,
     )
@@ -246,3 +251,85 @@ def test_saved_record_validators_reject_every_malformed_field() -> None:
             "last_modified_at": object(),
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("validator", "valid", "field_name", "invalid_values"),
+    [
+        (
+            valid_athena_query_error,
+            AthenaQueryError(1, 0, False, "message"),
+            "category",
+            (0, 4),
+        ),
+        (
+            valid_athena_query_error,
+            AthenaQueryError(1, 0, False, "message"),
+            "error_type",
+            (-1, 10_000),
+        ),
+        (
+            valid_athena_workgroup_summary,
+            AthenaWorkgroupSummary("analysts", "ENABLED", None, _NOW),
+            "state",
+            ("enabled", "UNKNOWN"),
+        ),
+        (
+            valid_athena_catalog_summary,
+            AthenaCatalogSummary("AwsDataCatalog", "GLUE", None),
+            "catalog_type",
+            ("", "CUSTOM"),
+        ),
+        (
+            valid_result_column,
+            ResultColumn("value", "varchar", "NULLABLE"),
+            "nullable",
+            ("nullable", "MAYBE"),
+        ),
+        (
+            valid_query_execution_summary,
+            _SUMMARY,
+            "statement_type",
+            ("SELECT", ""),
+        ),
+    ],
+)
+def test_athena_semantic_validators_reject_values_outside_the_service_contract(
+    validator: object,
+    valid: object,
+    field_name: str,
+    invalid_values: tuple[object, ...],
+) -> None:
+    assert validator(valid)  # type: ignore[operator]
+    for invalid in invalid_values:
+        assert not validator(replace(valid, **{field_name: invalid}))  # type: ignore[operator]
+
+
+def test_athena_semantic_validators_accept_contract_boundaries() -> None:
+    assert valid_athena_query_error(AthenaQueryError(1, 0, False, "message"))
+    assert valid_athena_query_error(AthenaQueryError(3, 9_999, True, "message"))
+    assert valid_athena_workgroup_summary(
+        AthenaWorkgroupSummary("analysts", "DISABLED", None, _NOW)
+    )
+    assert valid_athena_catalog_summary(AthenaCatalogSummary("catalog", "FEDERATED", None))
+    assert valid_result_column(ResultColumn("value", "varchar", "NOT_NULL"))
+    assert valid_result_column(ResultColumn("value", "varchar", "UNKNOWN"))
+    assert valid_query_execution_summary(replace(_SUMMARY, statement_type="DDL"))
+    assert valid_query_execution_summary(replace(_SUMMARY, statement_type="UTILITY"))
+
+
+def test_workgroup_cutoff_enforces_athena_minimum_without_rejecting_none() -> None:
+    summary = AthenaWorkgroupSummary("analysts", "ENABLED", None, _NOW)
+    valid = AthenaWorkgroupDetail(
+        summary,
+        None,
+        True,
+        False,
+        10_000_000,
+        None,
+        False,
+    )
+
+    assert valid_athena_workgroup_detail(valid)
+    assert valid_athena_workgroup_detail(replace(valid, bytes_scanned_cutoff=None))
+    assert not valid_athena_workgroup_detail(replace(valid, bytes_scanned_cutoff=9_999_999))

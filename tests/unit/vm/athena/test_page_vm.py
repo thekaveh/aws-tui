@@ -140,7 +140,7 @@ class PageClient:
                 None,
                 True,
                 False,
-                1_000_000,
+                10_000_000,
                 "Athena engine version 3",
                 True,
             ),
@@ -357,6 +357,7 @@ def make_page_vm(
     selection_store: ServiceSelectionStore | None = None,
     connection_name: str | None = None,
     region: str | None = None,
+    hub: MessageHub[Message] | None = None,
 ) -> AthenaPageVM:
     connection = Connection(
         name=connection_name or client.connection_name,
@@ -365,12 +366,12 @@ def make_page_vm(
         source="config",
         profile=connection_name or client.connection_name,
     )
-    hub: MessageHub[Message] = MessageHub()
+    resolved_hub: MessageHub[Message] = hub if hub is not None else MessageHub()
     page = AthenaPageVM(
         client=client,
         policy=ReadOnlySqlPolicy(),
         connection=connection,
-        hub=hub,
+        hub=resolved_hub,
         dispatcher=NULL_DISPATCHER,
         selection_store=selection_store,
     )
@@ -1387,6 +1388,71 @@ async def test_snapshot_publication_is_coherent_and_isolates_all_observer_failur
 
 
 @pytest.mark.asyncio
+async def test_snapshot_shared_hub_notification_is_value_free_and_bounded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    await source.select_view("history")
+    snapshot = source.export_snapshot()
+
+    hub: MessageHub[Message] = MessageHub()
+    destination = make_page_vm(client, hub=hub)
+    await destination.setup()
+    marker = "HOSTILE_SHARED_HUB_OBSERVER_MARKER"
+    delivered: list[Message] = []
+
+    def fail(_: Message) -> None:
+        raise RuntimeError(marker)
+
+    failing = hub.messages.subscribe(fail)
+    remaining = hub.messages.subscribe(delivered.append)
+    caplog.clear()
+    try:
+        await destination.restore_snapshot(snapshot)
+    finally:
+        failing.dispose()
+        remaining.dispose()
+
+    assert destination.export_snapshot() == snapshot
+    assert 1 <= len(delivered) <= 64
+    assert marker not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_page_disposal_completes_with_throwing_terminal_observers(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page = make_page_vm(PageClient())
+    marker = "HOSTILE_DISPOSAL_OBSERVER_MARKER"
+    completed: list[str] = []
+
+    def fail() -> None:
+        raise RuntimeError(marker)
+
+    for name, vm in (
+        ("page", page),
+        ("query", page.query),
+        ("results", page.results),
+        ("history", page.history),
+        ("saved", page.saved),
+    ):
+        vm.on_property_changed.subscribe(on_completed=fail)
+        vm.on_property_changed.subscribe(on_completed=lambda owner=name: completed.append(owner))
+
+    page.dispose()
+
+    assert completed == ["saved", "history", "results", "query", "page"]
+    assert all(
+        vm.status is ConstructionStatus.DISPOSED
+        for vm in (page, page.query, page.results, page.history, page.saved)
+    )
+    assert marker not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_history_restore_cancellation_is_atomic() -> None:
     client = PageClient()
     source = make_page_vm(client)
@@ -2067,6 +2133,31 @@ async def test_all_other_public_mutators_are_noops_after_page_termination(
         len(client.named_calls),
         len(client.prepared_calls),
     ) == call_counts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token_field",
+    ["workgroups_token", "catalogs_token", "databases_token"],
+)
+async def test_page_snapshot_rejects_empty_context_tokens_without_provider_calls(
+    token_field: str,
+) -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    await page.setup()
+    snapshot = page.export_snapshot()
+    hostile = replace(
+        snapshot,
+        context_state=replace(snapshot.context_state, **{token_field: ""}),
+    )
+    before = _provider_call_counts(client)
+
+    with pytest.raises(ValueError, match=r"^Athena snapshot is invalid$"):
+        await page.restore_snapshot(hostile)
+
+    assert _provider_call_counts(client) == before
+    assert page.export_snapshot() == snapshot
 
 
 @pytest.mark.asyncio

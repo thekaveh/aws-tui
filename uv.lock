@@ -332,7 +332,7 @@ dev = [
     { name = "pip-audit", specifier = ">=2.10.1" },
     { name = "pre-commit", specifier = ">=3.5" },
     { name = "pytest", specifier = ">=8" },
-    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-cov", specifier = ">=4" },
     { name = "pytest-rerunfailures", specifier = ">=14" },
     { name = "pytest-textual-snapshot", specifier = ">=1" },

@@ -23,9 +23,21 @@ from aws_tui.domain.query import (
     ResultColumn,
 )
 
+_ATHENA_ERROR_CATEGORIES = frozenset({1, 2, 3})
+_ATHENA_ERROR_TYPE_RANGE = range(0, 10_000)
+_ATHENA_WORKGROUP_STATES = frozenset({"ENABLED", "DISABLED"})
+_ATHENA_CATALOG_TYPES = frozenset({"LAMBDA", "GLUE", "HIVE", "FEDERATED"})
+_ATHENA_NULLABILITY = frozenset({"NOT_NULL", "NULLABLE", "UNKNOWN"})
+_ATHENA_STATEMENT_TYPES = frozenset({"DDL", "DML", "UTILITY"})
+_MIN_BYTES_SCANNED_CUTOFF = 10_000_000
+
 
 def optional_exact_string(value: object) -> bool:
     return value is None or type(value) is str
+
+
+def optional_non_empty_exact_string(value: object) -> bool:
+    return value is None or (type(value) is str and bool(value))
 
 
 def optional_exact_datetime(value: object) -> bool:
@@ -77,8 +89,14 @@ def valid_query_statistics(value: object) -> bool:
 def valid_athena_query_error(value: object) -> bool:
     return value is None or (
         type(value) is AthenaQueryError
-        and (value.category is None or type(value.category) is int)
-        and (value.error_type is None or type(value.error_type) is int)
+        and (
+            value.category is None
+            or (type(value.category) is int and value.category in _ATHENA_ERROR_CATEGORIES)
+        )
+        and (
+            value.error_type is None
+            or (type(value.error_type) is int and value.error_type in _ATHENA_ERROR_TYPE_RANGE)
+        )
         and type(value.retryable) is bool
         and type(value.message) is str
     )
@@ -89,6 +107,7 @@ def valid_athena_workgroup_summary(value: object) -> bool:
         type(value) is AthenaWorkgroupSummary
         and type(value.name) is str
         and type(value.state) is str
+        and value.state in _ATHENA_WORKGROUP_STATES
         and optional_exact_string(value.description)
         and optional_exact_datetime(value.created_at)
     )
@@ -103,7 +122,10 @@ def valid_athena_workgroup_detail(value: object) -> bool:
         and type(value.publish_cloudwatch_metrics) is bool
         and (
             value.bytes_scanned_cutoff is None
-            or (type(value.bytes_scanned_cutoff) is int and value.bytes_scanned_cutoff >= 0)
+            or (
+                type(value.bytes_scanned_cutoff) is int
+                and value.bytes_scanned_cutoff >= _MIN_BYTES_SCANNED_CUTOFF
+            )
         )
         and optional_exact_string(value.engine_version)
         and type(value.managed_query_results_enabled) is bool
@@ -115,6 +137,7 @@ def valid_athena_catalog_summary(value: object) -> bool:
         type(value) is AthenaCatalogSummary
         and type(value.name) is str
         and type(value.catalog_type) is str
+        and value.catalog_type in _ATHENA_CATALOG_TYPES
         and optional_exact_string(value.description)
     )
 
@@ -161,7 +184,13 @@ def valid_query_execution_summary(value: object) -> bool:
         and type(value.state) is QueryState
         and optional_exact_datetime(value.submitted_at)
         and optional_exact_datetime(value.completed_at)
-        and optional_exact_string(value.statement_type)
+        and (
+            value.statement_type is None
+            or (
+                type(value.statement_type) is str
+                and value.statement_type in _ATHENA_STATEMENT_TYPES
+            )
+        )
     )
 
 
@@ -184,6 +213,7 @@ def valid_result_column(value: object) -> bool:
         and type(value.name) is str
         and type(value.type_name) is str
         and type(value.nullable) is str
+        and value.nullable in _ATHENA_NULLABILITY
     )
 
 
@@ -232,6 +262,7 @@ def valid_prepared_statement(value: object) -> bool:
 __all__ = [
     "optional_exact_datetime",
     "optional_exact_string",
+    "optional_non_empty_exact_string",
     "valid_athena_catalog_summary",
     "valid_athena_query_error",
     "valid_athena_workgroup_detail",

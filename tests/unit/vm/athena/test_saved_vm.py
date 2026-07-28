@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -440,3 +441,57 @@ async def test_saved_shutdown_cancels_and_drains_prepared_detail_request() -> No
     assert vm._detail_tasks == set()  # type: ignore[attr-defined]
     assert vm.selected_prepared_statement is None
     assert vm.detail_state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
+async def test_saved_snapshot_relational_invariants_reject_atomically_without_calls() -> None:
+    client = _seeded_client()
+    vm = make_saved_vm(client)
+    await vm.setup()
+    snapshot = vm.export_snapshot()
+    before_calls = (
+        tuple(client.named_list_calls),
+        tuple(client.named_detail_calls),
+        tuple(client.prepared_list_calls),
+        tuple(client.prepared_detail_calls),
+    )
+    named_summary = snapshot.named_queries[0]
+    named_detail = snapshot.named_query_details[0]
+    prepared_summary = snapshot.prepared_statements[0]
+    invalid = (
+        replace(snapshot, named_next_token=""),
+        replace(snapshot, prepared_next_token=""),
+        replace(
+            snapshot,
+            named_queries=(named_summary, named_summary),
+            named_query_details=(named_detail, named_detail),
+        ),
+        replace(snapshot, named_query_details=()),
+        replace(
+            snapshot,
+            prepared_statements=(prepared_summary, prepared_summary),
+        ),
+        replace(snapshot, named_state=PaneState.EMPTY),
+        replace(snapshot, prepared_state=PaneState.EMPTY),
+        replace(
+            snapshot,
+            selected_kind=SavedQueryKind.NAMED,
+            selected_query_id="missing",
+            selected_named_query=named_detail,
+            detail_state=PaneState.IDLE,
+        ),
+        replace(snapshot, named_state=PaneState.ERROR, named_error_text=None),
+        replace(snapshot, named_error_text="unexpected"),
+    )
+
+    for candidate in invalid:
+        with pytest.raises(ValueError, match=r"^Athena saved query snapshot is invalid$"):
+            vm.restore_snapshot(candidate)
+        assert vm.export_snapshot() == snapshot
+
+    assert (
+        tuple(client.named_list_calls),
+        tuple(client.named_detail_calls),
+        tuple(client.prepared_list_calls),
+        tuple(client.prepared_detail_calls),
+    ) == before_calls

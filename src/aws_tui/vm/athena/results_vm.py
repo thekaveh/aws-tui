@@ -25,9 +25,13 @@ from aws_tui.domain.query import (
     ResultPage,
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
-from aws_tui.vm.athena._domain_validation import valid_result_column
+from aws_tui.vm.athena._domain_validation import (
+    optional_exact_string,
+    optional_non_empty_exact_string,
+    valid_result_column,
+)
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject
+from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._pager_compat import seed_token_pager
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
@@ -280,9 +284,9 @@ class AthenaResultsVM:
             or snapshot.is_loading_more
             or type(snapshot.state) is not PaneState
             or snapshot.state is PaneState.LOADING
-            or not _optional_exact_string(snapshot.execution_id)
-            or not _optional_exact_string(snapshot.next_token)
-            or not _optional_exact_string(snapshot.error_text)
+            or not optional_exact_string(snapshot.execution_id)
+            or not optional_non_empty_exact_string(snapshot.next_token)
+            or not optional_exact_string(snapshot.error_text)
             or not all(valid_result_column(column) for column in snapshot.columns)
             or not all(
                 type(row) is tuple
@@ -305,7 +309,7 @@ class AthenaResultsVM:
         if snapshot.state is PaneState.IDLE:
             return bool(snapshot.rows) and snapshot.error_text is None
         if snapshot.state is PaneState.EMPTY:
-            return not snapshot.rows and snapshot.error_text is None
+            return not snapshot.rows and snapshot.next_token is None and snapshot.error_text is None
         if snapshot.state in _SNAPSHOT_ERROR_STATES:
             return snapshot.error_text is not None and bool(snapshot.error_text)
         return False
@@ -591,12 +595,13 @@ class AthenaResultsVM:
     def _notify(self, property_name: str) -> None:
         if self._disposed:
             return
-        self._hub.send(
+        send_value_free(
+            self._hub,
             PropertyChangedMessage.create(
                 self,
                 "athena.results",
                 property_name,
-            )
+            ),
         )
         self._on_property_changed.on_next(property_name)
 
@@ -623,7 +628,3 @@ def _prepare_results_snapshot(value: object) -> AthenaResultsSnapshot | None:
     if not AthenaResultsVM._snapshot_structure_is_valid(value):
         return None
     return value
-
-
-def _optional_exact_string(value: object) -> bool:
-    return value is None or type(value) is str

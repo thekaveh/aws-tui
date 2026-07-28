@@ -26,12 +26,14 @@ from aws_tui.domain.query import (
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm.athena._domain_validation import (
+    optional_exact_string,
+    optional_non_empty_exact_string,
     valid_query_context,
     valid_query_execution_detail,
     valid_query_execution_summary,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject
+from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._pager_compat import seed_token_pager
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
@@ -256,20 +258,22 @@ class AthenaHistoryVM:
             or not valid_query_context(snapshot.context)
             or type(snapshot.items) is not tuple
             or type(snapshot.details) is not tuple
-            or (snapshot.next_token is not None and type(snapshot.next_token) is not str)
-            or (
-                snapshot.selected_execution_id is not None
-                and type(snapshot.selected_execution_id) is not str
-            )
+            or not optional_non_empty_exact_string(snapshot.next_token)
+            or not optional_exact_string(snapshot.selected_execution_id)
             or type(snapshot.state) is not PaneState
             or snapshot.state is PaneState.LOADING
-            or (snapshot.error_text is not None and type(snapshot.error_text) is not str)
+            or not optional_exact_string(snapshot.error_text)
             or not all(valid_query_execution_summary(item) for item in snapshot.items)
             or not all(valid_query_execution_detail(detail) for detail in snapshot.details)
         ):
             return False
+        item_ids = tuple(item.ref.execution_id for item in snapshot.items)
         details = {detail.summary.ref.execution_id: detail for detail in snapshot.details}
-        if len(details) != len(snapshot.details) or len(snapshot.items) != len(snapshot.details):
+        if (
+            len(set(item_ids)) != len(item_ids)
+            or len(details) != len(snapshot.details)
+            or set(item_ids) != set(details)
+        ):
             return False
         for item in snapshot.items:
             detail = details.get(item.ref.execution_id)
@@ -286,6 +290,16 @@ class AthenaHistoryVM:
             and snapshot.selected_execution_id not in details
         ):
             return False
+        if snapshot.state is PaneState.EMPTY:
+            return not (
+                snapshot.items
+                or snapshot.details
+                or snapshot.next_token is not None
+                or snapshot.selected_execution_id is not None
+                or snapshot.error_text is not None
+            )
+        if snapshot.state is PaneState.IDLE:
+            return bool(snapshot.items) and snapshot.error_text is None
         if snapshot.state in {
             PaneState.AUTH_REQUIRED,
             PaneState.FORBIDDEN,
@@ -293,7 +307,7 @@ class AthenaHistoryVM:
             PaneState.ERROR,
         }:
             return bool(snapshot.error_text)
-        return snapshot.error_text is None
+        return False
 
     def open_s3_location(
         self,
@@ -564,12 +578,13 @@ class AthenaHistoryVM:
     def _notify(self, property_name: str) -> None:
         if self._disposed:
             return
-        self._hub.send(
+        send_value_free(
+            self._hub,
             PropertyChangedMessage.create(
                 self,
                 "athena.history",
                 property_name,
-            )
+            ),
         )
         self._on_property_changed.on_next(property_name)
 

@@ -32,13 +32,14 @@ from aws_tui.domain.query import (
 )
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 from aws_tui.vm.athena._domain_validation import (
+    optional_exact_string,
     valid_athena_query_error,
     valid_query_context,
     valid_query_execution_ref,
     valid_query_statistics,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject
+from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -344,11 +345,11 @@ class AthenaQueryVM:
             or not valid_query_context(snapshot.context)
             or snapshot.context != expected_context
             or type(snapshot.sql) is not str
-            or not _optional_exact_string(snapshot.validation_error)
-            or not _optional_exact_string(snapshot.state_reason)
-            or not _optional_exact_string(snapshot.output_location)
-            or not _optional_exact_string(snapshot.engine_version)
-            or not _optional_exact_string(snapshot.error_text)
+            or not optional_exact_string(snapshot.validation_error)
+            or not optional_exact_string(snapshot.state_reason)
+            or not optional_exact_string(snapshot.output_location)
+            or not optional_exact_string(snapshot.engine_version)
+            or not optional_exact_string(snapshot.error_text)
             or type(snapshot.pane_state) is not PaneState
             or not valid_query_statistics(snapshot.statistics)
             or not valid_athena_query_error(snapshot.query_error)
@@ -832,12 +833,13 @@ class AthenaQueryVM:
     def _notify(self, property_name: str) -> None:
         if self._disposed:
             return
-        self._hub.send(
+        send_value_free(
+            self._hub,
             PropertyChangedMessage.create(
                 self,
                 "athena.query",
                 property_name,
-            )
+            ),
         )
         self._on_property_changed.on_next(property_name)
 
@@ -851,10 +853,6 @@ def _prepare_query_snapshot(
     if not AthenaQueryVM._snapshot_structure_is_valid(value, expected_context):
         return None
     return value
-
-
-def _optional_exact_string(value: object) -> bool:
-    return value is None or type(value) is str
 
 
 def _request_token(context: QueryContext) -> str:

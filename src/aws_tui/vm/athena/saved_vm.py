@@ -25,13 +25,15 @@ from aws_tui.domain.query import (
     PreparedStatementSummary,
 )
 from aws_tui.vm.athena._domain_validation import (
+    optional_exact_string,
+    optional_non_empty_exact_string,
     valid_named_query,
     valid_named_query_summary,
     valid_prepared_statement,
     valid_prepared_statement_summary,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject
+from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._pager_compat import seed_token_pager
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -444,13 +446,13 @@ class AthenaSavedVM:
             or type(snapshot.named_queries) is not tuple
             or type(snapshot.named_query_details) is not tuple
             or type(snapshot.prepared_statements) is not tuple
-            or not _optional_string(snapshot.named_next_token)
-            or not _optional_string(snapshot.prepared_next_token)
+            or not optional_non_empty_exact_string(snapshot.named_next_token)
+            or not optional_non_empty_exact_string(snapshot.prepared_next_token)
             or (
                 snapshot.selected_kind is not None
                 and type(snapshot.selected_kind) is not SavedQueryKind
             )
-            or not _optional_string(snapshot.selected_query_id)
+            or not optional_exact_string(snapshot.selected_query_id)
             or not all(
                 type(state) is PaneState and state is not PaneState.LOADING
                 for state in (
@@ -460,7 +462,7 @@ class AthenaSavedVM:
                 )
             )
             or not all(
-                _optional_string(value)
+                optional_exact_string(value)
                 for value in (
                     snapshot.named_error_text,
                     snapshot.prepared_error_text,
@@ -474,9 +476,14 @@ class AthenaSavedVM:
             )
         ):
             return False
+        named_ids = tuple(row.query_id for row in snapshot.named_queries)
+        prepared_ids = tuple(row.name for row in snapshot.prepared_statements)
         details = {detail.query_id: detail for detail in snapshot.named_query_details}
-        if len(details) != len(snapshot.named_query_details) or len(details) != len(
-            snapshot.named_queries
+        if (
+            len(set(named_ids)) != len(named_ids)
+            or len(set(prepared_ids)) != len(prepared_ids)
+            or len(details) != len(snapshot.named_query_details)
+            or set(named_ids) != set(details)
         ):
             return False
         if any(
@@ -547,7 +554,19 @@ class AthenaSavedVM:
                     return False
             elif error is not None:
                 return False
-        return True
+        if snapshot.named_state is PaneState.EMPTY and (
+            snapshot.named_queries
+            or snapshot.named_query_details
+            or snapshot.named_next_token is not None
+        ):
+            return False
+        if snapshot.named_state is PaneState.IDLE and not snapshot.named_queries:
+            return False
+        if snapshot.prepared_state is PaneState.EMPTY and (
+            snapshot.prepared_statements or snapshot.prepared_next_token is not None
+        ):
+            return False
+        return not (snapshot.prepared_state is PaneState.IDLE and not snapshot.prepared_statements)
 
     def replace_workgroup(self, workgroup: str) -> None:
         if self._disposed or self._shutdown_started:
@@ -952,12 +971,13 @@ class AthenaSavedVM:
     def _notify(self, property_name: str) -> None:
         if self._disposed:
             return
-        self._hub.send(
+        send_value_free(
+            self._hub,
             PropertyChangedMessage.create(
                 self,
                 "athena.saved",
                 property_name,
-            )
+            ),
         )
         self._on_property_changed.on_next(property_name)
 
@@ -973,7 +993,3 @@ def _named_query_summary(query: NamedQuery) -> NamedQuerySummary:
 
 
 __all__ = ["AthenaSavedSnapshot", "AthenaSavedVM", "SavedQueryKind"]
-
-
-def _optional_string(value: object) -> bool:
-    return value is None or type(value) is str

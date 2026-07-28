@@ -90,7 +90,7 @@ dev = [
   # versions when uv has already moved to them (e.g. mypy 2.x,
   # pytest 9.x, pre-commit 9.x in the resolved lock).
   "pytest>=8",
-  "pytest-asyncio>=0.23",
+  "pytest-asyncio>=0.24",
   "pytest-cov>=4",
   "pytest-xdist>=3",
   "pytest-rerunfailures>=14",

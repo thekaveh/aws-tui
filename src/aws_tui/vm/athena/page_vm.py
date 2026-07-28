@@ -24,6 +24,8 @@ from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy, select_starter_sql
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.athena._domain_validation import (
+    optional_exact_string,
+    optional_non_empty_exact_string,
     valid_athena_catalog_summary,
     valid_athena_workgroup_detail,
     valid_athena_workgroup_summary,
@@ -32,7 +34,7 @@ from aws_tui.vm.athena._domain_validation import (
     valid_table_ref,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject
+from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._pager_compat import seed_token_pager
 from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
 from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
@@ -465,9 +467,9 @@ class AthenaPageVM:
                 snapshot.query,
                 snapshot.context,
             )
-            or not _optional_exact_string(snapshot.history_execution_id)
+            or not optional_exact_string(snapshot.history_execution_id)
             or (snapshot.saved_kind is not None and type(snapshot.saved_kind) is not SavedQueryKind)
-            or not _optional_exact_string(snapshot.saved_query_id)
+            or not optional_exact_string(snapshot.saved_query_id)
             or ((snapshot.saved_kind is None) != (snapshot.saved_query_id is None))
             or type(snapshot.loaded_views) is not tuple
             or not all(
@@ -1414,45 +1416,6 @@ class AthenaPageVM:
                 selected_id,
             )
 
-    def _restore_snapshot_selection_keys(self, snapshot: AthenaPageSnapshot) -> None:
-        for key, value in (
-            ("history_execution_id", snapshot.history_execution_id),
-            ("saved_query_id", snapshot.saved_query_id),
-        ):
-            if value is None:
-                self._selection_store.discard(self._selection_scope, key)
-            else:
-                self._selection_store.set(self._selection_scope, key, value)
-
-    async def _restore_snapshot_history_selection(
-        self,
-        snapshot: AthenaPageSnapshot,
-    ) -> None:
-        if snapshot.history_execution_id is None:
-            return
-        if "history" not in self._loaded_views:
-            await self.history.setup()
-            if not self._is_alive():
-                return
-            self._loaded_views.add("history")
-        await self.history.select_execution(snapshot.history_execution_id)
-
-    async def _restore_snapshot_saved_selection(
-        self,
-        snapshot: AthenaPageSnapshot,
-    ) -> None:
-        if snapshot.saved_query_id is None or snapshot.saved_kind is None:
-            return
-        if "saved" not in self._loaded_views:
-            await self.saved.setup()
-            if not self._is_alive():
-                return
-            self._loaded_views.add("saved")
-        if snapshot.saved_kind is SavedQueryKind.NAMED:
-            await self.saved.select_named_query(snapshot.saved_query_id)
-        else:
-            await self.saved.select_prepared_statement(snapshot.saved_query_id)
-
     async def _run_page_command(
         self,
         command: Callable[[], Awaitable[None]],
@@ -1766,12 +1729,13 @@ class AthenaPageVM:
     def _notify(self, property_name: str) -> None:
         if self._disposed:
             return
-        self._hub.send(
+        send_value_free(
+            self._hub,
             PropertyChangedMessage.create(
                 self,
                 "athena.page",
                 property_name,
-            )
+            ),
         )
         self._on_property_changed.on_next(property_name)
 
@@ -1794,10 +1758,6 @@ def _prepare_page_snapshot(
     return value, None
 
 
-def _optional_exact_string(value: object) -> bool:
-    return value is None or type(value) is str
-
-
 def _snapshot_context_stage_is_valid(
     value: object,
     expected_context: QueryContext,
@@ -1809,9 +1769,9 @@ def _snapshot_context_stage_is_valid(
         or type(value.workgroups) is not tuple
         or type(value.catalogs) is not tuple
         or type(value.databases) is not tuple
-        or not _optional_exact_string(value.workgroups_token)
-        or not _optional_exact_string(value.catalogs_token)
-        or not _optional_exact_string(value.databases_token)
+        or not optional_non_empty_exact_string(value.workgroups_token)
+        or not optional_non_empty_exact_string(value.catalogs_token)
+        or not optional_non_empty_exact_string(value.databases_token)
         or type(value.workgroup_detail) is not AthenaWorkgroupDetail
         or not valid_athena_workgroup_detail(value.workgroup_detail)
         or not all(valid_athena_workgroup_summary(row) for row in value.workgroups)
