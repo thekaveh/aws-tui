@@ -10,8 +10,9 @@ Linux, and Windows. Powered by
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
 > **Status: v0.8.0 cut; PyPI publish pending** — install from Git
-> until the `aws-tui` project name is available on PyPI. Athena is Unreleased
-> feature work for the next v0.9.0 minor release; the package version remains
+> until the `aws-tui` project name is available on PyPI. Glue, Athena, and
+> their integrated Iceberg workflows are Unreleased feature work for the next
+> v0.9.0 minor release; the package version remains
 > `0.8.0` until a release is cut. The v0.8.0 headline remains EMR Serverless,
 > cross-platform packaging, and the public release pipeline. See
 > [`CHANGELOG.md`](CHANGELOG.md) for the full per-PR delta.
@@ -34,11 +35,14 @@ Linux, and Windows. Powered by
   column statistics, jobs and recent runs, and crawler status/detail.
   `1` / `2` / `3` select Catalog / Jobs / Crawlers, `r` refreshes the
   active view, and `Shift+S` rebuilds Glue under the next AWS profile.
-  From a selected Catalog table, open `:` and choose **Open table
-  location in S3** to mount the existing S3 page at that location.
-  The handoff resolves the exact Glue connection name and region; it
-  never substitutes another profile. Glue is AWS-only and does not
-  appear for S3-compatible connections.
+  From a selected Catalog table, the command palette can open its exact
+  location in S3 or prefill an Athena query. Iceberg tables add bounded,
+  on-demand Snapshots, History, Manifests, Files, Partitions, and References
+  views. Select a snapshot and press `V` to prepare a time-travel query.
+  Generated SQL is review-only and never runs automatically. Every handoff
+  preserves the exact Glue connection name and region; it never substitutes
+  another profile. Glue is AWS-only and does not appear for S3-compatible
+  connections.
 - **Amazon Athena read-only query console.** Pick **Athena** in the nav rail
   to choose a workgroup, catalog, and database; submit one allowed read-only
   statement; follow its lifecycle; page through Results; inspect History; and
@@ -49,12 +53,14 @@ Linux, and Windows. Powered by
   scanned and result reuse. Results contains paged result rows. A successful
   customer-S3 execution can hand off its concrete result artifact to the
   matching S3 connection; Athena-managed results have no customer S3 artifact
-  to hand off. This is standalone Athena support: it does not include Iceberg
-  metadata views or Glue-to-Athena navigation.
-- **One-key source switcher.** `Shift+S` cycles the focused pane
-  through **every available source** in order: `local` → each AWS
-  profile (`aws s3 · {profile} · {region}`) → each `s3-compatible`
-  connection (`s3-compatible · {name} · {endpoint}`) → wrap. With
+  to hand off. A query that resolves to one visible table can return to that
+  exact table in Glue. Glue table and Iceberg snapshot handoffs prefill
+  fully-qualified, bounded SQL in Athena without executing it.
+- **One-key source switcher.** `Shift+S` cycles the focused S3 pane
+  through **every available source** in resolver order: `local` → explicit
+  `[connections.*]` entries → non-colliding auto-discovered AWS profiles →
+  wrap. AWS sources render as `aws s3 · {profile} · {region}` and configured
+  endpoints as `s3-compatible · {name} · {endpoint}`. With
   multiple AWS profiles configured locally, this is the fastest way
   to jump between accounts: one keystroke per profile, the pane
   re-mounts in place — no `:` command palette, no modal. On EMR
@@ -130,8 +136,10 @@ Linux, and Windows. Powered by
   curated command list, including **Open table location in S3** on
   Glue and **Open Athena result in S3** for a validated successful Athena
   execution. Dynamic `connection switch <name>` / `theme switch <name>`
-  entries and consolidation with Textual's `Ctrl+P` palette remain
-  deferred.
+  entries and consolidation with Textual's `Ctrl+P` palette remain deferred.
+  Integrated commands include **Query table in Athena**, **Query Iceberg
+  snapshot in Athena**, and **Open query table in Glue**; each preserves the
+  active connection name and region.
 - **Layered architecture with enforced forbidden edges.** View ▸ ViewModel
   ▸ Service ▸ Domain ▸ Infra, with `app.py` / `composition.py` as trusted
   composition roots and services allowed to compose concrete VMs; enforced
@@ -175,7 +183,7 @@ AWS_TUI_DEMO=1 aws-tui
 aws-tui --demo
 ```
 
-You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs, profile-isolated Glue catalogs, jobs, runs, and crawlers, and standalone Athena workgroups, query histories, saved queries, and prepared statements. `demo-shared` demonstrates Glue and Athena access-denied states. The same-profile Glue-to-S3 and Athena-result-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
+You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs, profile-isolated Glue catalogs, jobs, runs, crawlers, and Iceberg metadata, plus Athena workgroups, query histories, results, saved queries, and prepared statements. `demo-shared` demonstrates scoped Glue and Athena access-denied states. The same-profile Glue-to-Athena table/snapshot flow and Glue/Athena-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
 
 To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 

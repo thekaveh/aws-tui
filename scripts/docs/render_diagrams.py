@@ -49,7 +49,9 @@ def render_all(
     png_dir.mkdir(parents=True, exist_ok=True)
     for d in manifest.diagrams:
         svg = extract_svg((repo_root / d.master).read_text(encoding="utf-8"))
-        (site_img_dir / f"{d.id}.svg").write_text(svg, encoding="utf-8")
+        svg_file = f"{svg}\n"
+        (site_img_dir / f"{d.id}.svg").write_text(svg_file, encoding="utf-8")
+        (png_dir / f"{d.id}.svg").write_text(svg_file, encoding="utf-8")
         svg_to_png(svg, png_dir / f"{d.id}.png")
 
 
@@ -59,8 +61,9 @@ def copy_assets(repo_root: str | Path, wiki_img_dir: str | Path) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     if not src.is_dir():
         return
-    for png in src.glob("*.png"):
-        shutil.copy2(png, dst / png.name)
+    for pattern in ("*.png", "*.svg"):
+        for asset in src.glob(pattern):
+            shutil.copy2(asset, dst / asset.name)
 
 
 def main(argv: list[str] | None = None) -> int:

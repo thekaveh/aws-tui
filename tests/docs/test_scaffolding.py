@@ -34,6 +34,29 @@ ATHENA_IAM_ACTIONS = {
     "".join(part.title() for part in operation.split("_")) for operation in ATHENA_BOTO_OPERATIONS
 }
 
+GLUE_BOTO_OPERATIONS = (
+    "get_databases",
+    "get_tables",
+    "get_table",
+    "get_partitions",
+    "get_column_statistics_for_table",
+    "get_jobs",
+    "get_job_runs",
+    "get_crawlers",
+    "get_crawler",
+    "get_crawler_metrics",
+    "get_tags",
+)
+
+ICEBERG_VIEWS = (
+    "Snapshots",
+    "History",
+    "Manifests",
+    "Files",
+    "Partitions",
+    "References",
+)
+
 
 def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8")
@@ -70,7 +93,7 @@ def test_pyyaml_available():
 
 
 def test_public_docs_cover_athena_read_only_contract() -> None:
-    """Keep standalone Athena behavior discoverable on every public surface."""
+    """Keep Athena's read-only and integrated behavior discoverable."""
     readme = _read("README.md")
     index = _read("docs/index.md")
     architecture = _read("docs/architecture.md")
@@ -83,7 +106,7 @@ def test_public_docs_cover_athena_read_only_contract() -> None:
     changelog = _read("CHANGELOG.md")
 
     assert "Athena" in readme
-    assert "standalone" in readme
+    assert "integrated Iceberg workflows" in readme
     assert "Amazon Athena read-only query console" in index
     assert "AthenaPageVM" in architecture
     assert "AthenaService" in services
@@ -195,8 +218,9 @@ def test_athena_permissions_and_output_modes_are_pinned_to_aws_contracts() -> No
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "start_query"
     ]
-    assert len(start_calls) == 1
-    assert {keyword.arg for keyword in start_calls[0].keywords} == {"request_token"}
+    assert len(start_calls) == 2
+    for call in start_calls:
+        assert {keyword.arg for keyword in call.keywords} == {"request_token"}
     query_vm_tree = ast.parse(query_vm_source)
     runner_calls = [
         node
@@ -305,11 +329,16 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
     normalized_releasing = _squash(releasing)
     version = _read("src/aws_tui/version.py")
 
-    assert "Athena is Unreleased feature work for the next v0.9.0 minor release" in _squash(readme)
-    assert "Athena targets v0.9.0" in _squash(changelog)
+    assert (
+        "Glue, Athena, and their integrated Iceberg workflows are Unreleased feature work "
+        "for the next v0.9.0 minor release"
+    ) in _squash(readme)
+    assert "Glue, Athena, and Iceberg integration target v0.9.0" in _squash(changelog)
     assert "not a v0.8.0 headline or a v0.8.1 patch candidate" in _squash(changelog)
     assert "will either ship as v0.8.1" not in changelog
-    assert "Athena is minor-version feature work" in normalized_releasing
+    assert "Glue, Athena, and Iceberg integration are minor-version feature work" in (
+        normalized_releasing
+    )
     for step in (
         "execute a valid bounded query",
         "reject an unsafe statement before dispatch",
@@ -355,9 +384,9 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
     alt_text = alt_match.group(1)
     for phrase in (
         "five-layer architecture",
-        "S3, EMR Serverless, AWS Glue, and Amazon Athena",
-        "awaited Athena shutdown before disposal",
-        "exact-profile S3 handoff",
+        "Glue and Athena VM trees",
+        "shared TableRef and QueryContext models",
+        "AWS Glue, Athena, S3, and Lake Formation boundary",
     ):
         assert phrase in alt_text
     assert "Athena shutdown is awaited before disposal" in _squash(architecture)
@@ -372,14 +401,13 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         "Infrastructure owns external I/O",
     ):
         assert inaccurate_claim not in f"{architecture}\n{diagram}"
-    assert "Iceberg" not in diagram
-    assert "Glue-to-Athena" not in diagram
-    for premature_claim in (
-        "Glue-to-Athena navigation inserts",
-        "Iceberg metadata views show",
-        "Query in Athena command opens",
+    for current_claim in (
+        "IcebergInspector",
+        "OpenAthenaTableRequest",
+        "OpenGlueTableRequest",
+        "generated SQL in the editor but does not execute it",
     ):
-        assert premature_claim not in public_docs
+        assert current_claim in _squash(public_docs)
 
 
 def test_glue_and_athena_palette_only_actions_are_not_default_bindings() -> None:
@@ -389,3 +417,93 @@ def test_glue_and_athena_palette_only_actions_are_not_default_bindings() -> None
     for action in ("glue.open_s3_location", "athena.open_result_location"):
         assert f"`{action}` is palette-only" in keybindings
         assert f'"{action}"' not in keymap.partition("DEFAULT_BINDINGS")[2].partition("}")[0]
+
+
+def test_public_docs_cover_integrated_iceberg_workflow() -> None:
+    """Keep the complete Glue-to-Athena-to-S3 workflow on public surfaces."""
+    readme = _read("README.md")
+    index = _read("docs/index.md")
+    architecture = _read("docs/architecture.md")
+    services = _read("docs/adding-a-service.md")
+    connections = _read("docs/connections.md")
+    cookbook = _read("docs/cookbook.md")
+    ledger = _read("docs/contract-ledger.md")
+    keybindings = _read("docs/keybindings.md")
+    releasing = _read("docs/RELEASING.md")
+    changelog = _read("CHANGELOG.md")
+    normalized_cookbook = _squash(cookbook)
+
+    for page in (readme, index, architecture, services, cookbook, changelog):
+        assert "Iceberg" in page
+    assert "resolver order" in connections
+    assert "connection name and region" in connections
+    assert "Glue → Athena" in cookbook
+    assert "FOR VERSION AS OF" in cookbook
+    assert "never executes generated queries automatically" in normalized_cookbook
+    assert "metadata-query costs" in normalized_cookbook
+    assert "read-only" in normalized_cookbook
+    assert "Lake Formation" in cookbook
+    assert "partial failure" in normalized_cookbook
+    assert "demo-dev" in cookbook
+    assert "demo-prod" in cookbook
+    assert "demo-shared" in cookbook
+    for view in ICEBERG_VIEWS:
+        assert view in cookbook
+    for action in (
+        "glue.query_in_athena",
+        "glue.time_travel_in_athena",
+        "athena.open_in_glue",
+        "athena.open_result_location",
+    ):
+        assert action in ledger
+        assert action in keybindings
+    for message in ("OpenAthenaTableRequest", "OpenGlueTableRequest"):
+        assert message in architecture
+        assert message in ledger
+    assert "IcebergInspector" in architecture
+    assert "Iceberg" in releasing
+
+
+def test_glue_operation_ledger_matches_domain_adapter_exactly() -> None:
+    ledger = _read("docs/contract-ledger.md")
+    glue_source = _read("src/aws_tui/domain/glue.py")
+
+    operation_block = _fenced_block_after(
+        ledger,
+        "Exact Glue boto operation ledger (11)",
+        "text",
+    )
+    assert tuple(operation_block.splitlines()) == GLUE_BOTO_OPERATIONS
+    assert set(re.findall(r"await client\.([a-z_]+)", glue_source)) == {
+        *GLUE_BOTO_OPERATIONS,
+        "get_caller_identity",
+    }
+    sts_block = _fenced_block_after(
+        ledger,
+        "Exact STS boto operation ledger (1)",
+        "text",
+    )
+    assert tuple(sts_block.splitlines()) == ("get_caller_identity",)
+
+
+def test_cross_service_action_and_message_ledgers_match_source() -> None:
+    ledger = _read("docs/contract-ledger.md")
+    app_source = _read("src/aws_tui/app.py")
+    message_source = _read("src/aws_tui/vm/messages.py")
+
+    actions = (
+        "glue.query_in_athena",
+        "glue.time_travel_in_athena",
+        "athena.open_in_glue",
+        "athena.open_result_location",
+    )
+    messages = ("OpenAthenaTableRequest", "OpenGlueTableRequest", "OpenS3LocationRequest")
+    for action in actions:
+        assert re.search(
+            rf"""self\._actions\.register\(\s*["']{re.escape(action)}["']""",
+            app_source,
+        )
+        assert f"`{action}`" in ledger
+    for message in messages:
+        assert f"class {message}" in message_source
+        assert message in ledger

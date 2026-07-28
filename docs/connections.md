@@ -175,11 +175,12 @@ boundaries. Use **`Shift+A`** to cycle EMR applications;
 
 Resolver order remains explicit `[connections.*]` entries first, followed by
 auto-discovered AWS profiles whose names do not collide. Source cycling follows
-that order. A Glue table's **Open table location in S3** handoff is stricter:
-it resolves the exact `connection_name` carried by the selected table and
-requires the resolved region to match. If that named connection is gone or its
-region changed, aws-tui shows an advisory and stays on Glue; it never picks the
-next profile as a substitute.
+that resolver order without alphabetical resorting. A Glue table's S3,
+Athena, or Iceberg handoff is stricter: its `TableRef` preserves catalog,
+database, table, connection name and region. The app resolves that exact
+`connection_name` and requires the resolved region to match. If that named
+connection is gone or its region changed, aws-tui shows an advisory and stays
+on the current service; it never picks the next profile as a substitute.
 
 Athena is AWS-only: it never participates in an S3-compatible source ring.
 Its workgroup, catalog, database, history row, and saved-query selections are
@@ -190,6 +191,15 @@ Athena page and mounts a fresh page. No old-profile rows are retained while
 the new source loads. Resolver order is
 unchanged: explicit `[connections.*]` entries first, then non-colliding
 auto-discovered AWS profiles, and `Shift+S` follows that order.
+
+Glue's Iceberg metadata requests use an Athena workgroup from the same
+connection name and region. A remembered workgroup is revalidated against the
+enabled workgroups visible to that profile; otherwise the first enabled
+workgroup in Athena's returned order is selected. Workgroup, catalog,
+database, table, snapshot, metadata rows, query history, results, and S3
+artifacts never cross a connection/region scope. `demo-dev`, `demo-prod`, and
+`demo-shared` intentionally contain disjoint Iceberg datasets to exercise this
+isolation.
 
 An access failure from a service API, such as EMR Serverless, Glue, or Athena
 `AccessDenied`, is

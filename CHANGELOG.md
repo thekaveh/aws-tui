@@ -11,22 +11,31 @@ These changes have landed on ``main`` since the v0.8.0 cut commit
 (``cd2c9e8``) but have not yet been packaged as a release. The v0.8.0
 PyPI publish is gated on
 [pypi/support#11264](https://github.com/pypi/support/issues/11264)
-(name-similarity exception for ``aws-tui`` vs ``awstui``). Athena targets
-v0.9.0: it is new minor-version feature work under SemVer, not a v0.8.0
+(name-similarity exception for ``aws-tui`` vs ``awstui``). Glue, Athena, and
+Iceberg integration target v0.9.0: they are new minor-version feature work
+under SemVer, not a v0.8.0
 headline or a v0.8.1 patch candidate. The package version remains ``0.8.0``
 until the release cut.
 
 ### 1.1.1. Added
 
-- **Standalone Amazon Athena service.** A fourth AWS-only nav service with
+- **Integrated Glue, Athena, and Iceberg workflow.** Glue tables can prefill
+  exact, fully-qualified Athena queries; Athena can return to one unambiguous
+  visible Glue table; and Iceberg tables expose bounded, on-demand Snapshots,
+  History, Manifests, Files, Partitions, and References views. Snapshot
+  selection generates `FOR VERSION AS OF` SQL, but no generated query
+  executes automatically. Cross-service messages preserve connection, region,
+  catalog, database, and table identity; successful customer-S3 result
+  artifacts retain the same identity through the final S3 handoff. Demo mode
+  provides disjoint dev, prod, and shared Iceberg datasets and the complete
+  Glue → Athena → explicit execution → S3 journey.
+- **Amazon Athena service.** A fourth AWS-only nav service with
   Query, History, Results, and Saved views; connection- and region-scoped
   workgroup/catalog/database selections; fail-closed one-statement read-only
   SQL validation; app-owned query cancellation; paginated results with bytes
   scanned/reuse statistics; named and prepared query inspection; and exact
   identity result-artifact handoff to S3. Demo mode supplies profile-isolated
-  dev/prod Athena state plus an access-denied shared profile. Iceberg metadata
-  views and Glue-to-Athena navigation are intentionally not part of this
-  standalone release.
+  dev/prod Athena state plus an access-denied shared profile.
 - **AWS Glue read-only service.** A third first-class nav service with
   Catalog, Jobs, and Crawlers views; database/table pagination,
   schema/storage detail, partitions and column statistics; job/run

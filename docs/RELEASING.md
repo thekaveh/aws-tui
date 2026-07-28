@@ -44,10 +44,11 @@ Review the PR like any other change. Merge when CI is green.
 
 ### 1.1.1. Pre-tag checklist
 
-- **Release classification.** Athena is minor-version feature work targeting
-  v0.9.0. It must remain in **Unreleased** until that cut and must not be
-  presented as a v0.8.0 headline or included in a v0.8.1 patch. Do not change
-  `src/aws_tui/version.py` while verifying Unreleased work.
+- **Release classification.** Glue, Athena, and Iceberg integration are
+  minor-version feature work targeting v0.9.0. They must remain in
+  **Unreleased** until that cut and must not be presented as a v0.8.0 headline
+  or included in a v0.8.1 patch. Do not change `src/aws_tui/version.py` while
+  verifying Unreleased work.
 - **Demo-mode smoke.** Run `AWS_TUI_DEMO=1 uv run aws-tui` from the release-PR
   branch. Verify the **DEMO MODE** chip appears in the banner, the four demo
   connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle
@@ -67,6 +68,19 @@ Review the PR like any other change. Merge when CI is green.
   connection and region at `s3://athena-results/dev/q-dev-succeeded.csv`.
   Confirm named and prepared query detail load, `demo-prod` is disjoint, and
   `demo-shared` remains a scoped access-denied state.
+- **Glue/Athena/Iceberg release smoke.** On `demo-dev`, open
+  `dev_analytics.dev_events_iceberg` in Glue. Inspect Snapshots, History,
+  Manifests, Files, Partitions, and References; exercise Load more and Retry;
+  and verify a failure in one tab leaves another successful tab intact.
+  Select snapshot `4201`, press `V`, and verify Athena is mounted under the
+  same connection and region with `FOR VERSION AS OF 4201 LIMIT 100` in the
+  editor and no execution started. Execute explicitly with `Ctrl+Enter`,
+  compare displayed rows with the downloaded CSV, and hand the artifact to S3.
+  Verify **Open query table in Glue** returns only for one unambiguous table.
+  Repeat enough of the flow on `demo-prod` to prove disjoint content, then
+  confirm `demo-shared` stays a scoped access state. Review bytes scanned and
+  remember that every metadata tab is an Athena query with metadata-query
+  costs; no create/edit/delete operation is in scope.
 
 If any smoke step breaks, fix forward; do **not** tag the release.
 

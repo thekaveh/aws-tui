@@ -67,7 +67,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Action | Default | Notes |
 |---|---|---|
 | Open Settings | `,` (comma) | Opens the in-app Settings nav page directly. Equivalent to arrow-keying down to the ⚙ Settings row in the rail and pressing `Enter`. |
-| Switch source | `Shift+S` (`S`) | On S3, cycles the focused pane through `local` → each AWS profile → each `s3-compatible` connection → wrap. On single-context AWS services such as EMR and Glue, rebuilds the current service under the next configured AWS profile. |
+| Switch source | `Shift+S` (`S`) | On S3, cycles the focused pane through `local` and resolver-ordered configured sources. On single-context AWS services such as EMR, Glue, and Athena, rebuilds the current service under the next supported AWS profile. |
 
 > **Nav-menu visibility:** the left rail is always visible at a single
 > fixed width and shows TEXT labels (Settings docked at the bottom as
@@ -136,6 +136,8 @@ and region for the whole page; S3-compatible connections are excluded.
 | Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
 | Switch AWS source | `Shift+S` | Rebuilds Glue under the next supported AWS profile and region. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
+| Query selected table in Athena | `:` / `Ctrl+K`, then **Query table in Athena** | `glue.query_in_athena` is palette-only. It prefills exact, bounded SQL in Athena and never executes it automatically. |
+| Query selected Iceberg snapshot in Athena | `V` or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It prefills `FOR VERSION AS OF` SQL without executing. |
 
 ### 1.1.10. Amazon Athena
 
@@ -150,6 +152,7 @@ S3-compatible connections.
 | Load more result rows | `l` | Runs `athena.load_more` when the selected result has another page. |
 | Switch AWS source | `Shift+S` | Rebuilds Athena under the next supported AWS profile and region. |
 | Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
+| Open query table in Glue | `:` / `Ctrl+K`, then **Open query table in Glue** | `athena.open_in_glue` is palette-only and works only when the current read-only SQL resolves to one visible table. |
 
 ## 1.2. Customizing
 
@@ -168,6 +171,7 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "glue.catalog" = "1"
 "glue.jobs" = "2"
 "glue.crawlers" = "3"
+"glue.time_travel_in_athena" = "V"
 "athena.query" = "1"
 "athena.history" = "2"
 "athena.results" = "3"
@@ -186,7 +190,7 @@ The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
 `Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
 `c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
-`1` / `2` / `3` / `4`, `Ctrl+Enter`, `Esc`, `l`,
+`1` / `2` / `3` / `4`, `V`, `Ctrl+Enter`, `Esc`, `l`,
 `Shift+↑`, and `Shift+↓`.
 
 ## 1.3. Action IDs
@@ -228,6 +232,8 @@ unbound until a handler ships.
 | `glue.jobs` | `2` | ✓ | Select the Glue Jobs view |
 | `glue.crawlers` | `3` | ✓ | Select the Glue Crawlers view |
 | `glue.open_s3_location` | none (command palette) | ✓ | Open the selected Glue table's S3 location under the exact source connection and region |
+| `glue.query_in_athena` | none (command palette) | ✓ | Prefill a bounded query for the selected Glue table in Athena |
+| `glue.time_travel_in_athena` | `V` | ✓ | Prefill a bounded Athena query for the selected visible Iceberg snapshot |
 | `athena.query` | `1` | ✓ | Select the Athena Query view |
 | `athena.history` | `2` | ✓ | Select the Athena History view |
 | `athena.results` | `3` | ✓ | Select the Athena Results view |
@@ -236,14 +242,16 @@ unbound until a handler ships.
 | `athena.cancel` | `escape` | ✓ | Stop an app-owned active Athena query |
 | `athena.load_more` | `l` | ✓ | Fetch the next available result page |
 | `athena.open_result_location` | none (command palette) | ✓ | Open a validated successful Athena result artifact in S3 under its exact source identity |
+| `athena.open_in_glue` | none (command palette) | ✓ | Open the one unambiguous visible query table in Glue |
 | `modal.cancel` | `escape` | ✓ | Cancel / close current overlay (modal-owned) |
 
 Rows with a default key are registered by
 `KeymapStore.DEFAULT_BINDINGS` and may be overlaid in
-`[keybindings]`. Both `glue.open_s3_location` and
-`athena.open_result_location` are palette-only, registered in
-`ActionRegistry`, and absent from `KeymapStore.DEFAULT_BINDINGS`; assigning
-either a key is not currently supported.
+`[keybindings]`. `glue.open_s3_location`, `glue.query_in_athena`,
+`athena.open_result_location`, and `athena.open_in_glue` are palette-only,
+registered in `ActionRegistry`, and absent from
+`KeymapStore.DEFAULT_BINDINGS`; assigning them a key is not currently
+supported.
 Any unknown overlay id is logged and causes the app to fall back to
 the default keymap.
 

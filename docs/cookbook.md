@@ -7,7 +7,9 @@
 2. [Switch the theme on the fly](#12-switch-the-theme-on-the-fly)
 3. [Customize a keybinding](#13-customize-a-keybinding)
 4. [Resume after a crash](#14-resume-after-a-crash)
-5. [Run standalone Athena queries safely](#16-run-standalone-athena-queries-safely)
+5. [Browse AWS Glue safely](#15-browse-aws-glue-safely)
+6. [Run Athena queries safely](#16-run-athena-queries-safely)
+7. [Inspect and query Glue tables through Athena](#17-inspect-and-query-glue-tables-through-athena)
 
 ---
 
@@ -515,9 +517,9 @@ profile isolation. `demo-shared` demonstrates a Glue access-denied
 state. The Catalog-to-S3 command uses the matching synthetic profile
 and never makes a real AWS call.
 
-## 1.6. Run standalone Athena queries safely
+## 1.6. Run Athena queries safely
 
-Athena is an AWS-only, standalone query service. Select **Athena** in the
+Athena is an AWS-only, read-only query service. Select **Athena** in the
 nav rail and choose a workgroup, catalog, and database in the page header.
 The four views are Query (`1`), History (`2`), Results (`3`), and Saved (`4`).
 `Shift+S` rebuilds the whole Athena page for the next supported AWS connection;
@@ -820,5 +822,112 @@ state. All of this is in-memory and resets on launch.
   output URI must be valid, match the active connection/region, and be readable
   through S3. Check `s3:ListBucket` / `s3:GetObject` on the result prefix.
 
-The standalone page intentionally does not expose Iceberg metadata tables or
-Glue-to-Athena navigation. Do not treat those as available workflows.
+## 1.7. Inspect and query Glue tables through Athena
+
+Glue → Athena navigation is an explicit, read-only handoff. It carries the
+selected table's catalog, database, table, connection name, and region in an
+immutable `TableRef`; it does not pass a client or reuse a different profile.
+
+1. Select **Glue**, then choose a Catalog database and table.
+2. Open `:` or `Ctrl+K` and choose **Query table in Athena**.
+3. Review the generated statement:
+
+    ```sql
+    SELECT * FROM "AwsDataCatalog"."database"."table" LIMIT 100
+    ```
+
+4. Edit it if needed, then press `Ctrl+Enter` to execute.
+
+aws-tui quotes each identifier independently, discovers the destination
+catalog/database through bounded pagination, and selects an enabled workgroup
+for the same source. It never executes generated queries automatically. If the
+handoff is cancelled, superseded, or cannot mount the destination, the
+composition root restores the prior Glue/Athena state instead of leaving a
+partially switched page.
+
+From an Athena Query view, **Open query table in Glue** is available through
+the command palette when the read-only SQL resolves to exactly one visible
+table. Queries with zero or multiple table references remain on Athena.
+
+### 1.7.1. Iceberg detection and metadata views
+
+Glue table detail classifies a table as Iceberg when normalized Glue
+parameters such as `table_type`, `tableType`, `classification`, `provider`, or
+`spark.sql.sources.provider`, or the Glue `TableType`, contains the exact
+`iceberg` marker. Only then does the Catalog detail surface show Iceberg
+metadata.
+
+The tabs are:
+
+- **Snapshots** — commit time, snapshot/parent IDs, operation, manifest list,
+  and summary; bounded to 100 rows.
+- **History** — current-snapshot ancestry; bounded to 100 rows.
+- **Manifests** — manifest paths, lengths, partition-spec IDs, and file
+  counts; bounded to 500 rows.
+- **Files** — data/delete file paths, format, partition, record count, and
+  bytes; bounded to 1,000 rows.
+- **Partitions** — partition values and aggregate file/record/delete metrics;
+  bounded to 500 rows.
+- **References** — branches/tags, snapshot IDs, and retention fields; bounded
+  to 100 rows.
+
+Each tab loads on demand through `IcebergInspector`, which submits a bounded
+read-only query to Athena metadata tables such as
+`"table$snapshots"` and `"table$files"`. The UI reveals 50 rows at a time;
+**Load more** exposes already-bounded rows without broadening the Athena query.
+**Retry** reruns only the active tab. A permission, throttling, shape, or
+network error is a partial failure of that metadata pane and does not erase
+successful sibling tabs.
+
+These are real Athena queries, not free Glue lookups. Account for
+metadata-query costs, workgroup limits, bytes scanned, result storage, and
+concurrency exactly as for other Athena statements. The selected profile needs
+the Glue read operations in §1.5.1, the Athena operations in §1.6.1, source
+data/catalog authorization where Athena requires it, and result-location
+permissions for its workgroup. Lake Formation-governed tables additionally
+need `lakeformation:GetDataAccess` plus the relevant `DESCRIBE`/`SELECT`
+grants. A denied metadata table is reported generically; raw SQL, table
+metadata values, and provider exception text are not written to UI errors or
+diagnostic logs.
+
+### 1.7.2. Snapshot time travel
+
+In **Snapshots**, highlight a visible snapshot and press `V`, click the
+time-travel control, or choose **Query Iceberg snapshot in Athena**. The
+destination editor receives:
+
+```sql
+SELECT * FROM "AwsDataCatalog"."database"."table"
+FOR VERSION AS OF 4201 LIMIT 100
+```
+
+The snapshot ID must be a non-negative integer present in the visible snapshot
+page. Switching to another metadata tab clears the actionable snapshot
+selection. As with an ordinary table handoff, generated SQL remains
+unexecuted until `Ctrl+Enter`; review the catalog, database, table, workgroup,
+snapshot ID, and expected scan before running it.
+
+After a successful customer-S3 execution, **Open Athena result in S3**
+authoritatively reloads the execution and reveals its exact CSV artifact under
+the same connection name and region. Athena managed results have no customer
+S3 artifact, so the command remains on Athena.
+
+### 1.7.3. Demo journey and limitations
+
+Launch `aws-tui --demo` and follow this no-network path:
+
+1. On `demo-dev`, open Glue table `dev_analytics.dev_events_iceberg`.
+2. Inspect its metadata tabs, choose snapshot `4201`, and press `V`.
+3. Confirm Athena contains `FOR VERSION AS OF 4201` and has not started an
+   execution.
+4. Press `Ctrl+Enter`, inspect the two profile-specific result rows, then open
+   the generated CSV in S3.
+5. Use `Shift+S` to compare the disjoint `demo-prod` data and the scoped
+   `demo-shared` access state.
+
+Current scope is read-only operational visibility. aws-tui does not create,
+alter, optimize, expire, rollback, branch, tag, or delete Iceberg resources;
+it does not create/edit/delete Glue or Athena resources; and it does not infer
+a write workflow from metadata. Large metadata tables remain bounded by the
+limits above, so the UI is an operational inspection surface rather than a
+complete metadata export tool.

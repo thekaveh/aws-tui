@@ -1,7 +1,7 @@
 # 1. Adding a new service
 
-> The current tree ships `s3`, `emr-serverless`, `glue`, and standalone
-> `athena`; EMR includes
+> The current tree ships `s3`, `emr-serverless`, `glue`, and `athena`;
+> Glue and Athena are linked by immutable table-navigation messages, and EMR includes
 > the read-only browser, job-run logs, and clone-job-run modal. This
 > doc is the pattern for the
 > next ones (EC2, IAM, Lambda, ...). For richer references than S3
@@ -121,10 +121,12 @@ needs a `construct → destruct → dispose` surface.
 For cross-service links, publish an immutable VM message carrying plain
 identifiers and source identity. The app composition root resolves the
 destination connection and owns `RootVM` switching plus Textual mounting.
-The Glue-to-S3 flow is the reference: `GlueCatalogVM` publishes
-`OpenS3LocationRequest`, while `app.py` rejects missing connections or
-region mismatches and reuses the registered S3 service factory. Do not
-pass clients, VMs, or widgets in cross-service messages.
+`OpenS3LocationRequest` carries connection, region, URI, pane, and reveal
+intent. `OpenAthenaTableRequest` and `OpenGlueTableRequest` carry a shared
+`TableRef`; the Athena request may add a non-negative snapshot ID. `app.py`
+rejects missing connections or region mismatches, serializes table handoffs,
+and reuses registered service factories. Do not pass clients, VMs, widgets,
+raw SDK responses, or credentials in cross-service messages.
 
 ## 1.3. Layer rules cheat-sheet for services
 A service module **may** import from:
@@ -234,16 +236,23 @@ the compact read-only page reference:
   databases/tables/partitions/statistics, jobs/runs, and crawlers.
   Raw boto responses never enter the VM or view layers.
 - `vm/glue/` separates Catalog, Jobs, and Crawlers behavior; the
-  Textual tree lives under `ui/widgets/glue/`.
+  Textual tree lives under `ui/widgets/glue/`. `GlueCatalogVM` additionally
+  owns `GlueIcebergVM`; it binds only when `TableDetail.table_format` is
+  `ICEBERG`.
 - `glue_client_factory` injects profile-keyed in-memory clients for
   tests and demo mode without changing production composition.
+- `_ContextualIcebergInspector` revalidates a remembered enabled Athena
+  workgroup in the same connection and region, then constructs
+  `IcebergInspector` with a matching `QueryContext`. Each metadata tab is
+  loaded independently, so one denied or malformed metadata table does not
+  erase successful siblings.
 - The selected table's S3 handoff is an immutable message, not a
   service-to-service import. Its app subscriber resolves the exact
   connection name, verifies the region, rebuilds S3 through `RootVM`,
   navigates the requested pane, and focuses it.
 
 ### 1.5.4. Amazon Athena
-`AthenaService` in `src/aws_tui/services/athena/service.py` is the standalone
+`AthenaService` in `src/aws_tui/services/athena/service.py` is the
 query-service reference:
 
 - `descriptor` declares `id = "athena"`; `supports()` accepts only AWS
@@ -264,5 +273,9 @@ query-service reference:
   Textual widget tree lives in `ui/widgets/athena/`. A result-to-S3 handoff is
   an `OpenS3LocationRequest` carrying the execution's exact connection and
   region, not an Athena-to-S3 import.
-- Athena deliberately has no Iceberg metadata surface and no Glue-to-Athena
-  navigation in this standalone service.
+- `AthenaPageVM.open_table(...)` discovers the exact catalog/database in
+  bounded pages, updates context, and inserts a quoted `SELECT * ... LIMIT
+  100` statement. A snapshot request adds `FOR VERSION AS OF <id>`. It never
+  executes the generated SQL. `open_table_in_glue()` publishes
+  `OpenGlueTableRequest` only when the current read-only SQL exposes one
+  unambiguous table reference.

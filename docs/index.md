@@ -2,7 +2,8 @@
 
 Cross-platform TUI for AWS and S3-compatible services — a
 Norton-Commander–style dual-pane file manager for S3 plus an EMR
-Serverless console and Unreleased AWS Glue and Amazon Athena service pages,
+Serverless console and Unreleased AWS Glue, Amazon Athena, and Iceberg
+inspection workflows,
 built on [Textual](https://textual.textualize.io/) and the VMx MVVM
 framework.
 
@@ -19,12 +20,15 @@ framework.
 - **Amazon Athena read-only query console** — Query, History, Results, and
   Saved views with fail-closed SQL validation, app-owned cancellation,
   paginated rows, and exact-profile customer-S3 result handoff.
+- **Integrated Iceberg operations** — bounded metadata views in Glue,
+  generated Glue → Athena table and snapshot queries with explicit execution,
+  Athena → Glue navigation for one unambiguous table, and S3 artifact handoff.
 - **Themable, keyboard-driven** — built-in themes and fully customizable
   keybindings.
 
-Glue and Athena are Unreleased minor-version feature work targeting v0.9.0.
-The current standalone Athena page does not include Iceberg metadata or
-Glue-to-Athena navigation.
+Glue, Athena, and Iceberg integration are Unreleased minor-version feature
+work targeting v0.9.0. They remain read-only: generated SQL is placed in the
+Athena editor for review and never executes automatically.
 
 ## 1.2. Where to start
 

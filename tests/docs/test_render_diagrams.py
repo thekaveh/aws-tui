@@ -63,6 +63,10 @@ def test_render_all_writes_svg_and_png(tmp_path):
     png_dir = tmp_path / "docs" / "diagrams" / "img"
     render_all(m, tmp_path, site_img, png_dir)
     assert (site_img / "system.svg").is_file()
+    assert (png_dir / "system.svg").is_file()
+    assert (png_dir / "system.svg").read_text(encoding="utf-8").startswith("<svg")
+    assert (png_dir / "system.svg").read_text(encoding="utf-8").endswith("\n")
+    assert (site_img / "system.svg").read_text(encoding="utf-8").endswith("\n")
     assert (png_dir / "system.png").read_bytes()[:4] == b"\x89PNG"
 
 
@@ -70,9 +74,11 @@ def test_copy_assets_copies_pngs(tmp_path):
     src = tmp_path / "docs" / "diagrams" / "img"
     src.mkdir(parents=True)
     (src / "system.png").write_bytes(b"\x89PNG\r\n\x1a\nDATA")
+    (src / "system.svg").write_text("<svg/>", encoding="utf-8")
     wiki_img = tmp_path / "generated" / "wiki" / "img"
     copy_assets(tmp_path, wiki_img)
     assert (wiki_img / "system.png").read_bytes().startswith(b"\x89PNG")
+    assert (wiki_img / "system.svg").read_text(encoding="utf-8") == "<svg/>"
 
 
 def test_architecture_diagram_is_landscape_and_current():
@@ -99,6 +105,19 @@ def test_architecture_diagram_is_landscape_and_current():
         "await Athena shutdown",
         "then dispose outgoing VM",
         "exact connection + region",
+        "GluePage",
+        "AthenaPage",
+        "GluePageVM",
+        "AthenaPageVM",
+        "ServiceSelectionStore",
+        "ConnectionResolver",
+        "QueryContext",
+        "TableRef",
+        "IcebergInspector",
+        "OpenAthenaTableRequest",
+        "OpenGlueTableRequest",
+        "OpenS3LocationRequest",
+        "Lake Formation",
     ):
         assert label in svg
     for inaccurate_claim in (
@@ -106,5 +125,6 @@ def test_architecture_diagram_is_landscape_and_current():
         "Infrastructure owns external I/O",
     ):
         assert inaccurate_claim not in master
-    assert "Iceberg" not in svg
-    assert "Glue-to-Athena" not in svg
+    assert "Glue-to-Athena" in svg
+    assert "Snapshot time travel" in svg
+    assert 'data-route="orthogonal"' in svg

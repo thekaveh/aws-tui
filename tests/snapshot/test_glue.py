@@ -120,7 +120,8 @@ def test_glue_snapshot_content_guards(theme: str) -> None:
     assert "events" not in empty
 
     snapshots = _snapshot("test_glue_iceberg_snapshots_snapshot", theme)
-    assert "snapshots" in snapshots
+    assert "Snaps" in snapshots
+    assert "Snapshot" in snapshots
     assert "43" in snapshots
     assert "append" in snapshots
 

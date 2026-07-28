@@ -21,7 +21,7 @@ durable map of the real upstream surfaces that mocks and adapters must track.
 | GitHub Actions CI/release/publish workflow | Immutable action SHAs resolved on 2026-07-01: `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5` (`v4`), `astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78` (`v7` peeled commit), `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` (`v7`), `actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131` (`v7`), `pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b` (`release/v1`), `peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c` (`v6`); `uv==0.11.19` | Checkout, pinned uv installation, CI/build artifact upload, release artifact download, Sigstore/OIDC PyPI publishing, TestPyPI rehearsal, GitHub Release asset upload, and Homebrew tap PR creation. | `git ls-remote` verification of each tag/branch before pinning; YAML parse plus workflow source review; release job uses `uv sync --frozen`, builds without isolation, requires manual PyPI dispatch from the matching tag, checks the release tag is reachable from `origin/main`, creates the GitHub Release through the REST API with `target_commitish` set to the resolved tag SHA instead of depending on the runner's preinstalled `gh` CLI, and hashes the built sdist for the Homebrew bump instead of fetching PyPI's CDN. |
 | Pre-commit hooks | Immutable refs resolved on 2026-07-01: `pre-commit-hooks@2c9f875913ee60ca25ce70243dc24d5b6415598c` (`v4.6.0`), `ruff-pre-commit@3b3f7c3f57fe9925356faf5fe6230835138be230` (`v0.15.17`), `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3` peeled commit); local `mypy` via locked env | Formatting, linting, type checking, TOML validation, trailing whitespace, EOF, and large-file hygiene. | `git ls-remote` verification of each tag before pinning; local equivalent checks were run from the pyenv `uv 0.11.19` shim, and CI uses setup-uv v7 with `uv sync --frozen`. |
 
-## 1.2. 2026-07-26 Athena standalone pass
+## 1.2. 2026-07-26 Athena service pass
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
@@ -48,7 +48,57 @@ list_prepared_statements
 get_prepared_statement
 ```
 
-## 1.3. Deferred contract checks
+## 1.3. 2026-07-28 Glue, Athena, and Iceberg integration pass
+
+| Integration point | Pinned version / ref | Consumed contract | Verification method |
+|---|---:|---|---|
+| AWS Glue client | `botocore==1.40.61` service model, Glue API `2017-03-31` | `GlueClient` uses exactly the 11 Glue boto operations below. `get_caller_identity` is the sole STS call and supplies the account ID used to construct a crawler ARN before `get_tags`. All pages preserve opaque continuation tokens and map raw SDK responses into immutable domain records. | `tests/unit/domain/test_glue.py`, Glue VM/service/integration tests, and documentation source comparison cover operations, mapping, pagination, tags, errors, and exact record shapes. |
+| Shared catalog/query records | Internal `domain.data_catalog` and `domain.query` contracts | `TableRef(catalog_name, database_name, table_name, connection_name, region)` is the complete cross-service table identity. `QueryContext(connection_name, region, workgroup, catalog, database)` is the Athena execution identity. `TableFormat` classifies Iceberg, Hive, Hudi, Delta, and Other from normalized Glue metadata. | Domain tests cover exact format markers, malformed values, quoting, scope equality, and foreign-context rejection. Navigation integration tests exercise exact and missing connection/region cases. |
+| Iceberg metadata inspection | Internal `IcebergInspector` over `AthenaQueryRunner`; Apache Iceberg metadata tables exposed by Athena | `IcebergInspector` reads `snapshots`, `history`, `manifests`, `files`, `partitions`, and `refs` with explicit projections/order and hard row limits of 100/100/500/1000/500/100. It uses the same public Athena operations already listed in §1.2; no private SDK API or extra boto operation is introduced. `GlueService` revalidates a remembered enabled workgroup in the same connection/region before constructing the `QueryContext`. | Iceberg domain, runner, Glue service/VM/UI, integration, demo, snapshot, and E2E tests cover shape validation, pagination, partial failure, retry, cancellation, profile isolation, time travel, and result artifacts. |
+| Cross-service messages | Internal immutable VM message contract | `OpenAthenaTableRequest(TableRef, snapshot_id?)`, `OpenGlueTableRequest(TableRef)`, and `OpenS3LocationRequest(connection_name, region, uri, preferred_pane, reveal_object)` are exact runtime-validated envelopes. The composition root serializes table handoffs, rejects missing/changed identities, and restores prior state when a mutation fails or is superseded. | Message unit tests plus Glue↔Athena and Athena/Glue→S3 integration tests cover runtime validation, bounded discovery, rollback, cancellation, shutdown, and stale request suppression. |
+| Public actions | Internal `ActionRegistry`, `KeymapStore`, and command palette contract | `glue.query_in_athena`, `glue.time_travel_in_athena`, `athena.open_in_glue`, and `athena.open_result_location` are registered actions. Only `glue.time_travel_in_athena` has a default key (`V`); the other three are command-palette-only. Generated SQL is quoted and bounded; actions never auto-execute it. | Keymap fidelity, command-palette, action-routing, Glue/Athena navigation, and E2E tests pin availability and no-auto-run behavior. |
+| Demo providers and journeys | Internal in-memory Glue/Athena/S3 contracts | `demo-dev`, `demo-prod`, and `demo-shared` expose disjoint Iceberg records and resolvable metadata/data/result S3 URIs. In-memory Athena validates exact contexts, request token bounds, canonical S3 output locations, opaque operation/context-bound pagination tokens, collection fingerprints, and UTF-8 before mutation. Result CSV bytes match the displayed `ResultPage`. | Demo provider boundary tests, three-profile content/snapshot guards, navigation tests, and Journey 9 verify Glue → Athena → explicit execution → S3 without network access. |
+
+Exact Glue boto operation ledger (11):
+
+```text
+get_databases
+get_tables
+get_table
+get_partitions
+get_column_statistics_for_table
+get_jobs
+get_job_runs
+get_crawlers
+get_crawler
+get_crawler_metrics
+get_tags
+```
+
+Exact STS boto operation ledger (1):
+
+```text
+get_caller_identity
+```
+
+Public cross-service action ledger:
+
+```text
+glue.query_in_athena
+glue.time_travel_in_athena
+athena.open_in_glue
+athena.open_result_location
+```
+
+Public cross-service message ledger:
+
+```text
+OpenAthenaTableRequest
+OpenGlueTableRequest
+OpenS3LocationRequest
+```
+
+## 1.4. Deferred contract checks
 
 - External upstream documentation was not exhaustively re-queried for every
   library API. The concrete code paths above were checked against the locked
