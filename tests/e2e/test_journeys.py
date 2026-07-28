@@ -467,6 +467,7 @@ async def test_journey_9_iceberg_snapshot_runs_only_on_explicit_execute(
             await app.action_execute_athena()
             assert athena.query.execution_ref is not None
             assert athena.query.execution_ref.connection_name == "demo-dev"
+            execution_id = athena.query.execution_ref.execution_id
             assert athena.results.rows == (
                 ("2026-07-24T12:00:00Z", "dev-checkout", "17"),
                 ("2026-07-24T12:05:00Z", "dev-search", "9"),
@@ -485,6 +486,20 @@ async def test_journey_9_iceberg_snapshot_runs_only_on_explicit_execute(
             pane = ctx.root_vm.content_host.current.left
             assert pane.current_connection_key == ("aws", "demo-dev")
             assert pane.path.as_posix() == "/athena-results/dev"
+            assert pane.selected_entry is not None
+            assert pane.selected_entry.entry.name == f"{execution_id}.csv"
+            assert isinstance(pane.provider, InMemoryFS)
+            chunks = await pane.provider.read_stream(
+                pane.path.join(pane.selected_entry.entry.name),
+            )
+            artifact = b"".join([chunk async for chunk in chunks])
+            assert artifact == (
+                b"dimension,name,value\r\n"
+                b"2026-07-24T12:00:00Z,dev-checkout,17\r\n"
+                b"2026-07-24T12:05:00Z,dev-search,9\r\n"
+            )
+            assert b"_col0" not in artifact
+            assert b"\r\n1\r\n" not in artifact
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -70,7 +72,7 @@ class _IdempotentQuery:
 
 @dataclass(frozen=True, slots=True)
 class _SeededQueryResult:
-    page: ResultPage = field(repr=False)
+    pages: tuple[ResultPage, ...] = field(repr=False)
 
 
 class InMemoryAthena:
@@ -81,10 +83,12 @@ class InMemoryAthena:
         *,
         connection_name: str,
         region: str,
+        storage_namespace: str | None = None,
         result_store: FileSystemProvider | None = None,
     ) -> None:
         self.connection_name = connection_name
         self.region = region
+        self.storage_namespace = storage_namespace or connection_name
         self._result_store = result_store
         self.page_size = 100
         self.calls: list[AthenaCall] = []
@@ -96,6 +100,7 @@ class InMemoryAthena:
         self.history: dict[str, list[str]] = {}
         self.query_executions: dict[str, QueryExecutionDetail] = {}
         self.result_pages: dict[tuple[str, str | None], ResultPage] = {}
+        self._result_page_order: dict[str, tuple[ResultPage, ...]] = {}
         self.result_errors: dict[str, Exception] = {}
         self.named_queries: dict[str, NamedQuery] = {}
         self.named_query_ids: dict[str, list[str]] = {}
@@ -165,7 +170,7 @@ class InMemoryAthena:
         database = DatabaseSummary(
             DatabaseRef(catalog, name, self.connection_name, self.region),
             f"{name} demo database",
-            f"s3://{self.connection_name}/{name}/",
+            f"s3://{self.storage_namespace}/{name}/",
             None,
         )
         self.databases.setdefault((workgroup, catalog), []).append(database)
@@ -215,10 +220,16 @@ class InMemoryAthena:
         normalized_sql = self._sql_policy.validate(sql)
         if not columns or any(len(row) != len(columns) for row in rows):
             raise ValueError("seeded query result shape is invalid")
+        if type(self.page_size) is not int or self.page_size <= 0:
+            raise ValueError("seeded query page size is invalid")
         key = (normalized_sql, context.cache_key)
         if key in self._seeded_query_results:
             raise ValueError("seeded query result already exists")
-        self._seeded_query_results[key] = _SeededQueryResult(ResultPage(columns, rows, None))
+        pages = tuple(
+            ResultPage(columns, rows[offset : offset + self.page_size], None)
+            for offset in range(0, max(len(rows), 1), self.page_size)
+        )
+        self._seeded_query_results[key] = _SeededQueryResult(pages)
 
     def add_query_execution(
         self,
@@ -240,13 +251,7 @@ class InMemoryAthena:
         self.history.setdefault(ref.workgroup, []).append(ref.execution_id)
         if result_error is not None:
             self.result_errors[ref.execution_id] = result_error
-        for index, page in enumerate(result_pages):
-            token = None if index == 0 else str(index)
-            next_token = str(index + 1) if index + 1 < len(result_pages) else None
-            self.result_pages[(ref.execution_id, token)] = replace(
-                page,
-                next_token=next_token,
-            )
+        self._install_result_pages(ref.execution_id, result_pages)
 
     def add_named_query(self, query: NamedQuery) -> None:
         self.named_queries[query.query_id] = query
@@ -339,6 +344,8 @@ class InMemoryAthena:
             raise NotFoundError("Athena query execution not found") from None
         state_index = self._started_state_indexes.get(execution_id)
         if state_index is None:
+            if detail.summary.state is QueryState.SUCCEEDED:
+                await self._publish_result_object(detail)
             return detail
         state = _STARTED_STATES[state_index]
         now = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
@@ -378,9 +385,17 @@ class InMemoryAthena:
     ) -> QueryExecutionRef:
         self._record("start_query", sql, context, request_token, output_location)
         self._raise_if_denied()
+        self._validate_start_arguments(
+            context,
+            request_token=request_token,
+            output_location=output_location,
+        )
+        if type(sql) is not str:
+            raise ValidationError("Athena SQL is invalid")
         normalized_sql = self._sql_policy.validate(sql)
-        if context.connection_name != self.connection_name or context.region != self.region:
-            raise ValidationError("query context does not match Athena connection")
+        seeded = self._seeded_query_results.get((normalized_sql, context.cache_key))
+        if seeded is None:
+            raise ValidationError("Athena demo query fixture is unavailable")
         token_fingerprint = _fingerprint(request_token)
         request_fingerprint = _fingerprint(
             normalized_sql,
@@ -394,9 +409,7 @@ class InMemoryAthena:
                     "Athena request token was reused with different query parameters"
                 )
             return self.query_executions[known.execution_id].summary.ref
-        workgroup = self.workgroup_details.get(context.workgroup)
-        if workgroup is None:
-            raise NotFoundError("Athena workgroup not found")
+        workgroup = self.workgroup_details[context.workgroup]
         result_root = (
             workgroup.output_location
             if workgroup.enforce_workgroup_configuration
@@ -427,18 +440,9 @@ class InMemoryAthena:
             "Athena engine version 3",
             None,
         )
-        seeded = self._seeded_query_results.get((normalized_sql, context.cache_key))
         self.query_executions[execution_id] = detail
         self.history.setdefault(context.workgroup, []).insert(0, execution_id)
-        self.result_pages[(execution_id, None)] = (
-            seeded.page
-            if seeded is not None
-            else ResultPage(
-                (ResultColumn("_col0", "integer", "NULLABLE"),),
-                (("1",),),
-                None,
-            )
-        )
+        self._install_result_pages(execution_id, seeded.pages)
         self._request_tokens[token_fingerprint] = _IdempotentQuery(
             request_fingerprint,
             execution_id,
@@ -473,6 +477,17 @@ class InMemoryAthena:
     ) -> ResultPage:
         self._record("get_results_page", execution_id, start_token)
         self._raise_if_denied()
+        if type(execution_id) is not str or not execution_id:
+            raise ValidationError("Athena query execution is invalid")
+        if execution_id not in self.query_executions:
+            raise NotFoundError("Athena query results not found")
+        if start_token is not None and (
+            type(start_token) is not str
+            or not start_token
+            or len(start_token) > 64
+            or (execution_id, start_token) not in self.result_pages
+        ):
+            raise ValidationError("invalid Athena result pagination token")
         error = self.result_errors.get(execution_id)
         if error is not None:
             raise error
@@ -557,7 +572,10 @@ class InMemoryAthena:
             return
         path = PathRef((location.bucket, *key.split("/")))
         await self._result_store.mkdir(path.parent())
-        body = b"_col0\n1\n"
+        pages = self._result_page_order.get(execution_id)
+        if not pages:
+            return
+        body = serialize_result_pages_csv(pages)
 
         async def chunks() -> AsyncIterator[bytes]:
             yield body
@@ -568,6 +586,63 @@ class InMemoryAthena:
             total_size=len(body),
         )
         self._published_result_ids.add(execution_id)
+
+    def _install_result_pages(
+        self,
+        execution_id: str,
+        pages: Sequence[ResultPage],
+    ) -> None:
+        normalized = tuple(pages)
+        if not normalized:
+            return
+        columns = normalized[0].columns
+        if any(page.columns != columns for page in normalized):
+            raise ValueError("query result pages have inconsistent columns")
+        installed: list[ResultPage] = []
+        for index, page in enumerate(normalized):
+            token = None if index == 0 else _result_token(execution_id, index)
+            next_token = (
+                _result_token(execution_id, index + 1) if index + 1 < len(normalized) else None
+            )
+            installed_page = replace(page, next_token=next_token)
+            self.result_pages[(execution_id, token)] = installed_page
+            installed.append(installed_page)
+        self._result_page_order[execution_id] = tuple(installed)
+
+    def _validate_start_arguments(
+        self,
+        context: QueryContext,
+        *,
+        request_token: str,
+        output_location: str | None,
+    ) -> None:
+        if type(context) is not QueryContext or any(
+            type(value) is not str or not value for value in context.cache_key
+        ):
+            raise ValidationError("Athena query context is invalid")
+        if context.connection_name != self.connection_name or context.region != self.region:
+            raise ValidationError("query context does not match Athena connection")
+        workgroup = self.workgroup_details.get(context.workgroup)
+        if workgroup is None or workgroup.summary.state != "ENABLED":
+            raise ValidationError("Athena query context is unavailable")
+        if not any(
+            catalog.name == context.catalog for catalog in self.catalogs.get(context.workgroup, ())
+        ):
+            raise ValidationError("Athena query context is unavailable")
+        if not any(
+            database.ref.database_name == context.database
+            for database in self.databases.get(
+                (context.workgroup, context.catalog),
+                (),
+            )
+        ):
+            raise ValidationError("Athena query context is unavailable")
+        if type(request_token) is not str or not request_token:
+            raise ValidationError("Athena request token is invalid")
+        if output_location is not None and (
+            type(output_location) is not str or not output_location
+        ):
+            raise ValidationError("Athena output location is invalid")
 
     def _raise_if_denied(self) -> None:
         if self.access_error is not None:
@@ -582,12 +657,23 @@ def _page(
     start_token: str | None,
     page_size: int,
 ) -> tuple[list[T], str | None]:
-    try:
-        offset = int(start_token or "0")
-    except ValueError:
-        raise ValidationError("invalid Athena pagination token") from None
-    if offset < 0:
+    if type(page_size) is not int or page_size <= 0:
+        raise ValidationError("invalid Athena page size")
+    if start_token is None:
+        offset = 0
+    elif (
+        type(start_token) is not str
+        or not start_token
+        or len(start_token) > 20
+        or not start_token.isascii()
+        or not start_token.isdecimal()
+        or start_token.startswith("0")
+    ):
         raise ValidationError("invalid Athena pagination token")
+    else:
+        offset = int(start_token)
+        if offset >= len(rows):
+            raise ValidationError("invalid Athena pagination token")
     page = list(rows[offset : offset + page_size])
     next_offset = offset + page_size
     return page, str(next_offset) if next_offset < len(rows) else None
@@ -612,4 +698,21 @@ def _fingerprint(*values: str | None) -> bytes:
     return digest.digest()
 
 
-__all__ = ["AthenaCall", "InMemoryAthena"]
+def _result_token(execution_id: str, page_index: int) -> str:
+    return sha256(f"{execution_id}\0{page_index}".encode()).hexdigest()
+
+
+def serialize_result_pages_csv(pages: Sequence[ResultPage]) -> bytes:
+    """Serialize complete Athena result pages as one deterministic CSV artifact."""
+    if not pages:
+        raise ValueError("Athena result pages are required")
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    writer.writerow(column.name for column in pages[0].columns)
+    for page in pages:
+        for row in page.rows:
+            writer.writerow("" if value is None else value for value in row)
+    return buffer.getvalue().encode("utf-8")
+
+
+__all__ = ["AthenaCall", "InMemoryAthena", "serialize_result_pages_csv"]

@@ -2,14 +2,26 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from aws_tui.demo.in_memory_athena import InMemoryAthena
-from aws_tui.demo.seeds import seeded_demo_athena
-from aws_tui.domain.filesystem import PermissionDeniedError, ValidationError
-from aws_tui.domain.query import QueryContext, QueryState
-from aws_tui.domain.sql_policy import QueryRejectedError
+from aws_tui.demo.seeds import seeded_demo_athena, seeded_demo_fs
+from aws_tui.domain.athena_runner import AthenaQueryRunner
+from aws_tui.domain.data_catalog import TableRef
+from aws_tui.domain.filesystem import (
+    NotFoundError,
+    PathRef,
+    PermissionDeniedError,
+    ValidationError,
+)
+from aws_tui.domain.iceberg import IcebergInspector
+from aws_tui.domain.query import QueryContext, QueryState, ResultColumn
+from aws_tui.domain.s3_uri import parse_s3_uri
+from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
+from aws_tui.infra.crash_dump import CrashDump
 
 DEV_CONTEXT = QueryContext(
     "demo-dev",
@@ -18,6 +30,20 @@ DEV_CONTEXT = QueryContext(
     "DevDataCatalog",
     "dev_events",
 )
+
+
+async def _read_bytes(fake, path: PathRef) -> bytes:  # type: ignore[no-untyped-def]
+    chunks = await fake.read_stream(path)
+    return b"".join([chunk async for chunk in chunks])
+
+
+async def _advance_to_success(fake: InMemoryAthena, execution_id: str) -> None:
+    states = [(await fake.get_query_execution(execution_id)).summary.state for _ in range(3)]
+    assert states == [QueryState.QUEUED, QueryState.RUNNING, QueryState.SUCCEEDED]
+
+
+async def _no_sleep(_: float) -> None:
+    return None
 
 
 @pytest.mark.asyncio
@@ -204,6 +230,14 @@ async def test_non_enforced_workgroup_accepts_caller_output_configuration() -> N
         enforce_workgroup_configuration=False,
     )
     context = replace(DEV_CONTEXT, workgroup="caller-configured")
+    fake.add_catalog("caller-configured", context.catalog)
+    fake.add_database("caller-configured", context.catalog, context.database)
+    fake.add_query_result(
+        "SELECT 1",
+        context,
+        columns=(ResultColumn("_col0", "integer", "NULLABLE"),),
+        rows=(("1",),),
+    )
 
     ref = await fake.start_query(
         "SELECT 1",
@@ -334,6 +368,322 @@ async def test_seeded_iceberg_time_travel_query_returns_exact_profile_rows(
 
 
 @pytest.mark.asyncio
+async def test_success_artifact_serializes_every_result_page_as_exact_csv() -> None:
+    store = seeded_demo_fs("demo-dev")
+    fake = seeded_demo_athena("demo-dev", result_store=store)
+    fake.page_size = 1
+    sql = "SELECT metric, metric, note FROM artifact_fixture"
+    columns = (
+        ResultColumn("metric", "varchar", "NULLABLE"),
+        ResultColumn("metric", "varchar", "NULLABLE"),
+        ResultColumn("note", "varchar", "NULLABLE"),
+    )
+    rows = (
+        ("alpha", None, 'comma, quote " and newline\nkept'),
+        ("beta", "", "plain"),
+    )
+    fake.add_query_result(sql, DEV_CONTEXT, columns=columns, rows=rows)
+
+    ref = await fake.start_query(sql, DEV_CONTEXT, request_token="artifact-pages")
+    await _advance_to_success(fake, ref.execution_id)
+    first = await fake.get_results_page(ref.execution_id)
+    assert first.rows == rows[:1]
+    assert first.next_token is not None
+    second = await fake.get_results_page(
+        ref.execution_id,
+        start_token=first.next_token,
+    )
+    assert second.rows == rows[1:]
+    assert second.next_token is None
+
+    path = PathRef.from_posix(
+        f"/athena-results/dev/{ref.execution_id}.csv",
+    )
+    assert await _read_bytes(store, path) == (
+        b'metric,metric,note\r\nalpha,,"comma, quote "" and newline\nkept"\r\nbeta,,plain\r\n'
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile", "execution_id", "path", "expected"),
+    [
+        (
+            "demo-dev",
+            "q-dev-succeeded",
+            "/athena-results/dev/q-dev-succeeded.csv",
+            b"value,metric\r\nAda,42\r\nLin,\r\n",
+        ),
+        (
+            "demo-dev",
+            "q-dev-empty",
+            "/athena-results/dev/q-dev-empty.csv",
+            b"value,metric\r\n",
+        ),
+        (
+            "demo-prod",
+            "q-prod-succeeded",
+            "/athena-results/prod/q-prod-succeeded.csv",
+            b"value,metric\r\n2026-07-25,1048576\r\n",
+        ),
+    ],
+)
+async def test_seeded_success_artifact_matches_historical_result_page(
+    profile: str,
+    execution_id: str,
+    path: str,
+    expected: bytes,
+) -> None:
+    store = seeded_demo_fs(profile)
+    fake = seeded_demo_athena(profile, result_store=store)
+    result_path = PathRef.from_posix(path)
+
+    assert await _read_bytes(store, result_path) == expected
+    detail = await fake.get_query_execution(execution_id)
+    assert detail.summary.state is QueryState.SUCCEEDED
+    assert await _read_bytes(store, result_path) == expected
+
+
+@pytest.mark.asyncio
+async def test_result_tokens_are_exact_bounded_and_execution_owned() -> None:
+    fake = seeded_demo_athena("demo-dev")
+    fake.page_size = 1
+    columns = (ResultColumn("value", "varchar", "NULLABLE"),)
+    fake.add_query_result(
+        "SELECT value FROM token_fixture_one",
+        DEV_CONTEXT,
+        columns=columns,
+        rows=(("one",), ("two",)),
+    )
+    fake.add_query_result(
+        "SELECT value FROM token_fixture_two",
+        DEV_CONTEXT,
+        columns=columns,
+        rows=(("three",), ("four",)),
+    )
+    first_ref = await fake.start_query(
+        "SELECT value FROM token_fixture_one",
+        DEV_CONTEXT,
+        request_token="token-owner-one",
+    )
+    second_ref = await fake.start_query(
+        "SELECT value FROM token_fixture_two",
+        DEV_CONTEXT,
+        request_token="token-owner-two",
+    )
+    first_page = await fake.get_results_page(first_ref.execution_id)
+    second_page = await fake.get_results_page(second_ref.execution_id)
+    assert first_page.next_token is not None
+    assert second_page.next_token is not None
+    assert first_page.next_token != second_page.next_token
+    assert (
+        await fake.get_results_page(
+            first_ref.execution_id,
+            start_token=first_page.next_token,
+        )
+    ).rows == (("two",),)
+
+    invalid_tokens = (
+        "",
+        "0",
+        "1",
+        "-1",
+        "9" * 500,
+        second_page.next_token,
+        cast(str, True),
+        cast(str, 1),
+        cast(str, object()),
+    )
+    for token in invalid_tokens:
+        with pytest.raises(ValidationError, match="pagination token"):
+            await fake.get_results_page(first_ref.execution_id, start_token=token)
+    with pytest.raises(ValidationError, match="execution"):
+        await fake.get_results_page(cast(str, []))
+
+
+@pytest.mark.asyncio
+async def test_start_query_rejects_non_string_sql_without_python_type_error() -> None:
+    fake = seeded_demo_athena("demo-dev")
+    before = set(fake.query_executions)
+
+    with pytest.raises(ValidationError, match="SQL"):
+        await fake.start_query(
+            cast(str, object()),
+            DEV_CONTEXT,
+            request_token="malformed-sql",
+        )
+
+    assert set(fake.query_executions) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sql", "context"),
+    [
+        ("SELECT 404", DEV_CONTEXT),
+        ("SELECT 1", replace(DEV_CONTEXT, workgroup="")),
+        ("SELECT 1", replace(DEV_CONTEXT, catalog="")),
+        ("SELECT 1", replace(DEV_CONTEXT, database="")),
+        ("SELECT 1", replace(DEV_CONTEXT, workgroup="dev-empty")),
+        ("SELECT 1", replace(DEV_CONTEXT, catalog="ProdDataCatalog")),
+        ("SELECT 1", replace(DEV_CONTEXT, database="prod_warehouse")),
+        (
+            'SELECT * FROM "AwsDataCatalog"."prod_warehouse"."prod_sales_iceberg" '
+            "FOR VERSION AS OF 7701 LIMIT 100",
+            replace(
+                DEV_CONTEXT,
+                catalog="AwsDataCatalog",
+                database="prod_warehouse",
+            ),
+        ),
+        ("SELECT 1", replace(DEV_CONTEXT, database=cast(str, object()))),
+    ],
+)
+async def test_unknown_query_context_fails_closed_without_execution_or_artifact(
+    tmp_path: Path,
+    sql: str,
+    context: QueryContext,
+) -> None:
+    store = seeded_demo_fs("demo-dev")
+    fake = seeded_demo_athena("demo-dev", result_store=store)
+    before_executions = set(fake.query_executions)
+    before_results = set(fake.result_pages)
+    before_tree = set(store._tree)
+
+    with pytest.raises((NotFoundError, ValidationError)) as captured:
+        await fake.start_query(
+            sql,
+            context,
+            request_token="PRIVATE_REQUEST_TOKEN",
+        )
+
+    assert set(fake.query_executions) == before_executions
+    assert set(fake.result_pages) == before_results
+    assert set(store._tree) == before_tree
+    rendered = f"{captured.value!r}\n{fake!r}"
+    assert "PRIVATE_REQUEST_TOKEN" not in rendered
+    assert sql not in rendered
+    crash_path = CrashDump(base_dir=tmp_path / "crash").write(exc=captured.value)
+    crash = crash_path.read_text(encoding="utf-8")
+    assert "PRIVATE_REQUEST_TOKEN" not in crash
+    assert sql not in crash
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "profile",
+        "alias",
+        "region",
+        "workgroup",
+        "database",
+        "table",
+        "profile_marker",
+    ),
+    [
+        (
+            "demo-dev",
+            "runtime-dev",
+            "us-east-1",
+            "dev-analytics",
+            "dev_analytics",
+            "dev_events_iceberg",
+            "demo-dev",
+        ),
+        (
+            "demo-shared",
+            "runtime-shared",
+            "us-west-2",
+            "shared-insights",
+            "shared_lake",
+            "shared_metrics_iceberg",
+            "demo-shared",
+        ),
+    ],
+)
+async def test_runtime_alias_keeps_runtime_identity_but_uses_seeded_storage_namespace(
+    profile: str,
+    alias: str,
+    region: str,
+    workgroup: str,
+    database: str,
+    table: str,
+    profile_marker: str,
+) -> None:
+    store = seeded_demo_fs(profile)
+    fake = seeded_demo_athena(
+        profile,
+        connection_name=alias,
+        region=region,
+        result_store=store,
+    )
+    context = QueryContext(
+        alias,
+        region,
+        workgroup,
+        "AwsDataCatalog",
+        database,
+    )
+    table_ref = TableRef(
+        "AwsDataCatalog",
+        database,
+        table,
+        alias,
+        region,
+    )
+    inspector = IcebergInspector(
+        runner=AthenaQueryRunner(
+            fake,
+            ReadOnlySqlPolicy(),
+            sleep=_no_sleep,
+        ),
+        context=context,
+    )
+
+    snapshots = await inspector.list_snapshots(table_ref)
+    manifests = await inspector.list_manifests(table_ref)
+    files = await inspector.list_files(table_ref)
+    storage_uris = (
+        *(snapshot.manifest_list for snapshot in snapshots),
+        *(manifest.path for manifest in manifests),
+        *(data_file.file_path for data_file in files),
+        *(
+            value
+            for seeded in fake._seeded_query_results.values()
+            for page in seeded.pages
+            for row in page.rows
+            for value in row
+            if value is not None and value.startswith("s3://")
+        ),
+    )
+    result_uris = (
+        *(
+            detail.output_location
+            for detail in fake.query_executions.values()
+            if detail.summary.ref.execution_id.startswith(f"{alias}-app-")
+            and detail.output_location is not None
+        ),
+    )
+    uris = (*storage_uris, *result_uris)
+
+    assert uris
+    assert result_uris
+    assert all(profile_marker in uri for uri in storage_uris)
+    assert all(alias not in uri for uri in storage_uris)
+    assert all(table_ref.connection_name == alias for _ in uris)
+    for uri in uris:
+        location = parse_s3_uri(uri)
+        assert location is not None
+        path = PathRef(
+            (
+                location.bucket,
+                *location.path.removeprefix("/").split("/"),
+            )
+        )
+        await store.stat(path)
+
+
+@pytest.mark.asyncio
 async def test_empty_workgroup_has_no_history_or_saved_queries() -> None:
     fake = seeded_demo_athena("demo-dev")
 
@@ -367,20 +717,19 @@ async def test_fake_records_all_calls_without_repr_leaking_sql_results_or_tokens
     sql_secret = "SELECT 'SQL_SECRET'"
     token_secret = "TOKEN_SECRET"
 
-    ref = await fake.start_query(
-        sql_secret,
-        DEV_CONTEXT,
-        request_token=token_secret,
-    )
-    await fake.get_query_execution(ref.execution_id)
+    with pytest.raises(ValidationError):
+        await fake.start_query(
+            sql_secret,
+            DEV_CONTEXT,
+            request_token=token_secret,
+        )
     await fake.get_results_page("q-dev-succeeded")
 
-    assert [call.method for call in fake.calls[-3:]] == [
+    assert [call.method for call in fake.calls[-2:]] == [
         "start_query",
-        "get_query_execution",
         "get_results_page",
     ]
-    start_call = fake.calls[-3]
+    start_call = fake.calls[-2]
     assert start_call.arguments[0] == sql_secret
     assert start_call.arguments[2] == token_secret
     rendered = repr(fake)

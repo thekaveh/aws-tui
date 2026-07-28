@@ -600,9 +600,9 @@ async def test_demo_query_artifacts_are_profile_local_replay_safe_and_distinct(
         prod_path = PathRef.from_posix(f"/athena-results/prod/{prod_ref.execution_id}.csv")
         assert replay == first
         assert first_path != second_path
-        assert await _read_bytes(dev_s3, first_path) == b"_col0\n1\n"
-        assert await _read_bytes(dev_s3, second_path) == b"_col0\n1\n"
-        assert await _read_bytes(prod_s3, prod_path) == b"_col0\n1\n"
+        assert await _read_bytes(dev_s3, first_path) == b"_col0\r\n1\r\n"
+        assert await _read_bytes(dev_s3, second_path) == b"_col0\r\n1\r\n"
+        assert await _read_bytes(prod_s3, prod_path) == b"_col0\r\n1\r\n"
         with pytest.raises(NotFoundError):
             await prod_s3.stat(first_path)
         with pytest.raises(NotFoundError):

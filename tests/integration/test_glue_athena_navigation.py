@@ -11,7 +11,7 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.domain.data_catalog import TableRef
-from aws_tui.domain.query import QueryState
+from aws_tui.domain.query import QueryState, ResultColumn
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
@@ -924,6 +924,14 @@ async def test_table_handoff_rollback_restores_complete_athena_result_state(
             await page.select_named_query("nq-dev-events")
             await page.select_view("history")
             await page.select_history_execution("q-dev-succeeded")
+            client = _athena_client(ctx, "demo-dev")
+            assert page.context is not None
+            client.add_query_result(
+                "SELECT 'TABLE_HANDOFF_SQL_SECRET'",
+                page.context,
+                columns=(ResultColumn("_col0", "integer", "NULLABLE"),),
+                rows=(("1",),),
+            )
             page.query.set_sql("SELECT 'TABLE_HANDOFF_SQL_SECRET'")
             await page.select_view("query")
             await page.query.execute()
@@ -953,7 +961,6 @@ async def test_table_handoff_rollback_restores_complete_athena_result_state(
             before_history_selection = page.history.selected_execution_id
             before_saved_kind = page.saved.selected_kind
             before_saved_selection = page.saved.selected_query_id
-            client = _athena_client(ctx, "demo-dev")
             start_count = sum(call.method == "start_query" for call in client.calls)
             history_before = tuple(client.history["dev-analytics"])
             open_started = asyncio.Event()

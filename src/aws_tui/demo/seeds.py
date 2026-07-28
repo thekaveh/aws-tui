@@ -11,7 +11,10 @@ from __future__ import annotations
 import zlib
 from datetime import UTC, datetime, timedelta
 
-from aws_tui.demo.in_memory_athena import InMemoryAthena
+from aws_tui.demo.in_memory_athena import (
+    InMemoryAthena,
+    serialize_result_pages_csv,
+)
 from aws_tui.demo.in_memory_emr import InMemoryEmr
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.demo.in_memory_glue import InMemoryGlue
@@ -43,6 +46,11 @@ from aws_tui.domain.query import (
 # write date so the seed reads as "recently active" forever — bumping
 # the anchor is a one-line change.
 _NOW: datetime = datetime(2026, 6, 28, 12, 0, 0, tzinfo=UTC)
+_DEV_SUCCESS_ROWS: tuple[tuple[str | None, ...], ...] = (
+    ("Ada", "42"),
+    ("Lin", ""),
+)
+_PROD_SUCCESS_ROWS: tuple[tuple[str | None, ...], ...] = (("2026-07-25", "1048576"),)
 
 
 # ── S3 seed data ────────────────────────────────────────────────────────────
@@ -149,10 +157,46 @@ _PROFILE_OBJECTS: dict[str, tuple[tuple[str, int], ...]] = {
     "demo-shared": _SHARED_OBJECTS,
 }
 
+_RESULT_COLUMNS = (
+    ResultColumn("value", "varchar", "NULLABLE"),
+    ResultColumn("metric", "varchar", "NULLABLE"),
+)
+_RESULT_ARTIFACTS: dict[str, dict[str, bytes]] = {
+    "demo-dev": {
+        "athena-results/dev/q-dev-succeeded.csv": serialize_result_pages_csv(
+            (
+                ResultPage(
+                    _RESULT_COLUMNS,
+                    _DEV_SUCCESS_ROWS,
+                    None,
+                ),
+            )
+        ),
+        "athena-results/dev/q-dev-empty.csv": serialize_result_pages_csv(
+            (ResultPage(_RESULT_COLUMNS, (), None),)
+        ),
+        "athena-results/dev/q-dev-access-denied.csv": serialize_result_pages_csv(
+            (ResultPage(_RESULT_COLUMNS, (), None),)
+        ),
+    },
+    "demo-prod": {
+        "athena-results/prod/q-prod-succeeded.csv": serialize_result_pages_csv(
+            (
+                ResultPage(
+                    _RESULT_COLUMNS,
+                    _PROD_SUCCESS_ROWS,
+                    None,
+                ),
+            )
+        ),
+    },
+}
+
 
 def seed_s3_data(fs: InMemoryFS, *, profile: str) -> None:
     """Populate ``fs`` with the per-profile showcase objects."""
     objects = _PROFILE_OBJECTS.get(profile, _DEFAULT_OBJECTS)
+    result_artifacts = _RESULT_ARTIFACTS.get(profile, {})
     for key, size in objects:
         path = PathRef(tuple(key.split("/")))
         # The fake stores file bytes as a bytes object; we don't
@@ -160,7 +204,7 @@ def seed_s3_data(fs: InMemoryFS, *, profile: str) -> None:
         # cares about the reported size, which comes from the
         # FileEntry.size property). Pad with NULs sized to the
         # smaller of (declared, 4 KiB) so memory stays bounded.
-        body = b"\x00" * min(size, 4096)
+        body = result_artifacts.get(key, b"\x00" * min(size, 4096))
         # Ensure parent dirs exist.
         for i in range(1, len(path.segments)):
             ancestor = PathRef(path.segments[:i])
@@ -359,6 +403,7 @@ def seeded_demo_athena(
     athena = InMemoryAthena(
         connection_name=connection_name or profile,
         region=region or regions.get(profile, "us-east-1"),
+        storage_namespace=profile,
         result_store=result_store,
     )
     if profile == "demo-dev":
@@ -410,13 +455,14 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
         "DevDataCatalog",
         "dev_events",
     )
+    _seed_select_one(athena, context)
     _add_demo_execution(
         athena,
         context,
         "q-dev-succeeded",
         QueryState.SUCCEEDED,
         output_location="s3://athena-results/dev/q-dev-succeeded.csv",
-        rows=(("Ada", "42"), ("Lin", "")),
+        rows=_DEV_SUCCESS_ROWS,
         reused=True,
     )
     _add_demo_execution(
@@ -530,13 +576,14 @@ def _seed_prod_athena(athena: InMemoryAthena) -> None:
         "ProdDataCatalog",
         "prod_sales",
     )
+    _seed_select_one(athena, context)
     _add_demo_execution(
         athena,
         context,
         "q-prod-succeeded",
         QueryState.SUCCEEDED,
         output_location="s3://athena-results/prod/q-prod-succeeded.csv",
-        rows=(("2026-07-25", "1048576"),),
+        rows=_PROD_SUCCESS_ROWS,
     )
     _add_demo_execution(
         athena,
@@ -603,6 +650,16 @@ def _seed_shared_athena(athena: InMemoryAthena) -> None:
         "shared_lake",
         "shared_metrics_iceberg",
     )
+    _seed_select_one(
+        athena,
+        QueryContext(
+            athena.connection_name,
+            athena.region,
+            "shared-insights",
+            "AwsDataCatalog",
+            "shared_lake",
+        ),
+    )
     _seed_iceberg_queries(
         athena,
         workgroup="shared-insights",
@@ -617,6 +674,18 @@ def _seed_shared_athena(athena: InMemoryAthena) -> None:
             ("platform", "query_latency_ms", "84.0"),
             ("platform", "freshness_minutes", "6.0"),
         ),
+    )
+
+
+def _seed_select_one(
+    athena: InMemoryAthena,
+    context: QueryContext,
+) -> None:
+    athena.add_query_result(
+        "SELECT 1",
+        context,
+        columns=(ResultColumn("_col0", "integer", "NULLABLE"),),
+        rows=(("1",),),
     )
 
 
@@ -641,7 +710,7 @@ def _seed_iceberg_queries(
         "AwsDataCatalog",
         database,
     )
-    root = f"s3://{athena.connection_name}/{database}/{table}"
+    root = f"s3://{athena.storage_namespace}/{database}/{table}"
     metadata = f'"AwsDataCatalog"."{database}"."{table}'
     nullable = "NULLABLE"
 
@@ -676,7 +745,7 @@ def _seed_iceberg_queries(
                 str(newest),
                 str(older),
                 "append",
-                f"{root}/metadata/{athena.connection_name}-snap-{newest}.avro",
+                f"{root}/metadata/{athena.storage_namespace}-snap-{newest}.avro",
                 "{added-records=17,total-records=26}",
             ),
             (
@@ -684,7 +753,7 @@ def _seed_iceberg_queries(
                 str(older),
                 None,
                 "append",
-                f"{root}/metadata/{athena.connection_name}-snap-{older}.avro",
+                f"{root}/metadata/{athena.storage_namespace}-snap-{older}.avro",
                 "{added-records=9,total-records=9}",
             ),
         ),
@@ -724,7 +793,7 @@ def _seed_iceberg_queries(
         ),
         (
             (
-                f"{root}/metadata/{athena.connection_name}-manifest-{newest}.avro",
+                f"{root}/metadata/{athena.storage_namespace}-manifest-{newest}.avro",
                 "2048",
                 "0",
                 str(newest),
