@@ -17,7 +17,6 @@ from aws_tui.domain.filesystem import (
     EntryKind,
     NotFoundError,
     PathRef,
-    PermissionDeniedError,
 )
 from aws_tui.domain.query import QueryContext, QueryState
 from aws_tui.infra.connection_resolver import Connection
@@ -785,8 +784,12 @@ async def test_demo_athena_and_s3_caches_are_isolated_between_app_contexts(
             profile="demo-shared",
         )
         shared_client = first_athena_factory(shared_alias)
-        with pytest.raises(PermissionDeniedError):
-            await shared_client.list_workgroups_page()
+        shared_workgroups, _ = await shared_client.list_workgroups_page()
+        assert shared_client.connection_name == "runtime-shared"
+        assert [(row.name, row.state) for row in shared_workgroups] == [
+            ("shared-retired", "DISABLED"),
+            ("shared-insights", "ENABLED"),
+        ]
     finally:
         with contextlib.suppress(Exception):
             first.root_vm.dispose()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import TypeVar
 
 from aws_tui.domain.data_catalog import (
@@ -105,6 +106,64 @@ class InMemoryGlue:
         self.partitions[summary.ref] = []
         self.statistics[summary.ref] = (
             ColumnStatistics("id", "string", None, (("NumberOfNulls", "0"),)),
+        )
+        return summary
+
+    def add_iceberg_table(
+        self,
+        database_name: str,
+        table_name: str,
+        *,
+        columns: tuple[Column, ...],
+        partition_columns: tuple[str, ...],
+        metadata_version: int,
+    ) -> TableSummary:
+        """Add one valid Iceberg table while preserving the generic table fixture."""
+        if type(metadata_version) is not int or metadata_version <= 0:
+            raise ValueError("Iceberg metadata version must be positive")
+        summary = self.add_table(database_name, table_name)
+        summary = replace(
+            summary,
+            description=f"{table_name} Apache Iceberg table",
+        )
+        table_rows = self.tables[database_name]
+        table_rows[table_rows.index(self.table_details[summary.ref].summary)] = summary
+        partition_names = frozenset(partition_columns)
+        normalized_columns = tuple(
+            replace(column, partition_key=column.name in partition_names) for column in columns
+        )
+        partition_keys = tuple(
+            column for column in normalized_columns if column.name in partition_names
+        )
+        location = f"s3://{self.connection_name}/{database_name}/{table_name}/"
+        self.table_details[summary.ref] = TableDetail(
+            summary,
+            normalized_columns,
+            partition_keys,
+            StorageDescriptor(
+                location,
+                "org.apache.iceberg.mr.hive.HiveIcebergInputFormat",
+                "org.apache.iceberg.mr.hive.HiveIcebergOutputFormat",
+                "org.apache.iceberg.mr.hive.HiveIcebergSerDe",
+                True,
+                0,
+            ),
+            "iceberg",
+            TableFormat.ICEBERG,
+            (
+                ("classification", "iceberg"),
+                ("table_type", "ICEBERG"),
+                (
+                    "metadata_location",
+                    f"{location}metadata/v{metadata_version}.metadata.json",
+                ),
+            ),
+        )
+        self.partitions[summary.ref] = []
+        self.statistics[summary.ref] = tuple(
+            ColumnStatistics(column.name, column.type_name, None, (("NumberOfNulls", "0"),))
+            for column in normalized_columns
+            if not column.partition_key
         )
         return summary
 

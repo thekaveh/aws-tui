@@ -68,6 +68,11 @@ class _IdempotentQuery:
     execution_id: str = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class _SeededQueryResult:
+    page: ResultPage = field(repr=False)
+
+
 class InMemoryAthena:
     """In-memory implementation of the paginated Athena client surface."""
 
@@ -102,6 +107,10 @@ class InMemoryAthena:
         self._started_state_indexes: dict[str, int] = {}
         self._active_app_started: set[str] = set()
         self._published_result_ids: set[str] = set()
+        self._seeded_query_results: dict[
+            tuple[str, tuple[str, str, str, str, str]],
+            _SeededQueryResult,
+        ] = {}
         self._next_execution_number = 1
 
     def add_workgroup(
@@ -111,10 +120,13 @@ class InMemoryAthena:
         output_location: str | None,
         managed_results: bool = False,
         enforce_workgroup_configuration: bool = True,
+        state: str = "ENABLED",
     ) -> AthenaWorkgroupDetail:
+        if state not in {"ENABLED", "DISABLED"}:
+            raise ValueError("invalid demo Athena workgroup state")
         summary = AthenaWorkgroupSummary(
             name,
-            "ENABLED",
+            state,
             f"{name} demo workgroup",
             None,
         )
@@ -182,6 +194,31 @@ class InMemoryAthena:
         )
         self.tables.setdefault((workgroup, catalog, database), []).append(table)
         return table
+
+    def add_query_result(
+        self,
+        sql: str,
+        context: QueryContext,
+        *,
+        columns: tuple[ResultColumn, ...],
+        rows: tuple[tuple[str | None, ...], ...],
+    ) -> None:
+        """Register one exact read-only query response for a profile-local context."""
+        if (
+            context.connection_name != self.connection_name
+            or context.region != self.region
+            or not context.workgroup
+            or not context.catalog
+            or not context.database
+        ):
+            raise ValueError("seeded query context does not match fake")
+        normalized_sql = self._sql_policy.validate(sql)
+        if not columns or any(len(row) != len(columns) for row in rows):
+            raise ValueError("seeded query result shape is invalid")
+        key = (normalized_sql, context.cache_key)
+        if key in self._seeded_query_results:
+            raise ValueError("seeded query result already exists")
+        self._seeded_query_results[key] = _SeededQueryResult(ResultPage(columns, rows, None))
 
     def add_query_execution(
         self,
@@ -390,12 +427,17 @@ class InMemoryAthena:
             "Athena engine version 3",
             None,
         )
+        seeded = self._seeded_query_results.get((normalized_sql, context.cache_key))
         self.query_executions[execution_id] = detail
         self.history.setdefault(context.workgroup, []).insert(0, execution_id)
-        self.result_pages[(execution_id, None)] = ResultPage(
-            (ResultColumn("_col0", "integer", "NULLABLE"),),
-            (("1",),),
-            None,
+        self.result_pages[(execution_id, None)] = (
+            seeded.page
+            if seeded is not None
+            else ResultPage(
+                (ResultColumn("_col0", "integer", "NULLABLE"),),
+                (("1",),),
+                None,
+            )
         )
         self._request_tokens[token_fingerprint] = _IdempotentQuery(
             request_fingerprint,

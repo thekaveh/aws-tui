@@ -15,6 +15,7 @@ from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.demo.in_memory_emr import InMemoryEmr
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.demo.in_memory_glue import InMemoryGlue
+from aws_tui.domain.data_catalog import Column
 from aws_tui.domain.emr_serverless import (
     ApplicationState,
     JobRunState,
@@ -52,6 +53,18 @@ _DEV_OBJECTS: tuple[tuple[str, int], ...] = (
     ("athena-results/dev/q-dev-empty.csv", 0),
     ("athena-results/dev/q-dev-access-denied.csv", 4_096),
     ("demo-dev/dev_analytics/dev_events/part-0000.parquet", 2_048),
+    ("demo-dev/dev_analytics/dev_events_iceberg/metadata/v2.metadata.json", 3_840),
+    ("demo-dev/dev_analytics/dev_events_iceberg/metadata/demo-dev-snap-4201.avro", 1_024),
+    ("demo-dev/dev_analytics/dev_events_iceberg/metadata/demo-dev-snap-4202.avro", 1_280),
+    (
+        "demo-dev/dev_analytics/dev_events_iceberg/metadata/demo-dev-manifest-4202.avro",
+        2_048,
+    ),
+    (
+        "demo-dev/dev_analytics/dev_events_iceberg/data/event_date=2026-07-24/"
+        "dev-events-0001.parquet",
+        8_192,
+    ),
     ("etl-input/raw/events/2026-06-25.json.gz", 2_140_000),
     ("etl-input/raw/events/2026-06-26.json.gz", 2_280_000),
     ("etl-input/raw/events/2026-06-27.json.gz", 2_310_000),
@@ -68,6 +81,24 @@ _DEV_OBJECTS: tuple[tuple[str, int], ...] = (
 _PROD_OBJECTS: tuple[tuple[str, int], ...] = (
     ("athena-results/prod/q-prod-succeeded.csv", 8_192),
     ("demo-prod/prod_warehouse/prod_sales/part-0000.parquet", 4_096),
+    ("demo-prod/prod_warehouse/prod_sales_iceberg/metadata/v8.metadata.json", 5_120),
+    (
+        "demo-prod/prod_warehouse/prod_sales_iceberg/metadata/demo-prod-snap-7701.avro",
+        2_048,
+    ),
+    (
+        "demo-prod/prod_warehouse/prod_sales_iceberg/metadata/demo-prod-snap-7702.avro",
+        2_560,
+    ),
+    (
+        "demo-prod/prod_warehouse/prod_sales_iceberg/metadata/demo-prod-manifest-7702.avro",
+        2_048,
+    ),
+    (
+        "demo-prod/prod_warehouse/prod_sales_iceberg/data/sales_date=2026-07-25/"
+        "prod-sales-0001.parquet",
+        16_384,
+    ),
     ("data-lake/silver/customers/year=2026/month=06/part-0000.parquet", 142_000_000),
     ("data-lake/silver/customers/year=2026/month=06/part-0001.parquet", 138_000_000),
     ("data-lake/silver/customers/year=2026/month=06/_SUCCESS", 0),
@@ -82,6 +113,24 @@ _PROD_OBJECTS: tuple[tuple[str, int], ...] = (
 
 
 _SHARED_OBJECTS: tuple[tuple[str, int], ...] = (
+    ("demo-shared/shared_lake/shared_metrics_iceberg/metadata/v3.metadata.json", 4_096),
+    (
+        "demo-shared/shared_lake/shared_metrics_iceberg/metadata/demo-shared-snap-9901.avro",
+        1_536,
+    ),
+    (
+        "demo-shared/shared_lake/shared_metrics_iceberg/metadata/demo-shared-snap-9902.avro",
+        1_792,
+    ),
+    (
+        "demo-shared/shared_lake/shared_metrics_iceberg/metadata/demo-shared-manifest-9902.avro",
+        2_048,
+    ),
+    (
+        "demo-shared/shared_lake/shared_metrics_iceberg/data/team=platform/"
+        "shared-metrics-0001.parquet",
+        12_288,
+    ),
     ("assets/logo.png", 84_000),
     ("assets/report-2026Q2.pdf", 4_200_000),
     ("assets/style-guide.md", 18_400),
@@ -230,6 +279,18 @@ def seeded_demo_glue() -> dict[str, InMemoryGlue]:
     """Build disjoint Glue catalogs for each AWS demo connection."""
     dev = InMemoryGlue(connection_name="demo-dev", region="us-east-1")
     dev_events = dev.add_table("dev_analytics", "dev_events")
+    dev.add_iceberg_table(
+        "dev_analytics",
+        "dev_events_iceberg",
+        columns=(
+            Column("event_id", "string", "Event identifier", False),
+            Column("event_name", "string", "Event name", False),
+            Column("event_ts", "timestamp", "Event timestamp", False),
+            Column("event_date", "date", "Event date", True),
+        ),
+        partition_columns=("event_date",),
+        metadata_version=2,
+    )
     dev.add_partition(dev_events.ref, "event_date=2026-07-24")
     dev.add_partition(dev_events.ref, "event_date=2026-07-25")
     dev.add_run("dev_daily_etl", "jr-dev-running", "RUNNING")
@@ -239,6 +300,18 @@ def seeded_demo_glue() -> dict[str, InMemoryGlue]:
 
     prod = InMemoryGlue(connection_name="demo-prod", region="us-east-1")
     prod_sales = prod.add_table("prod_warehouse", "prod_sales")
+    prod.add_iceberg_table(
+        "prod_warehouse",
+        "prod_sales_iceberg",
+        columns=(
+            Column("order_id", "bigint", "Order identifier", False),
+            Column("gross_total", "decimal(12,2)", "Gross sales", False),
+            Column("region", "string", "Sales region", False),
+            Column("sales_date", "date", "Sales date", True),
+        ),
+        partition_columns=("sales_date",),
+        metadata_version=8,
+    )
     prod.add_partition(prod_sales.ref, "event_date=2026-07-25")
     prod.add_run("prod_sales_etl", "jr-prod-succeeded", "SUCCEEDED")
     prod.add_run("prod_sales_etl", "jr-prod-failed", "FAILED")
@@ -246,6 +319,18 @@ def seeded_demo_glue() -> dict[str, InMemoryGlue]:
     prod.add_crawler("prod-failed", "FAILED", database_name="prod_warehouse")
 
     shared = InMemoryGlue(connection_name="demo-shared", region="us-west-2")
+    shared.add_iceberg_table(
+        "shared_lake",
+        "shared_metrics_iceberg",
+        columns=(
+            Column("metric_name", "string", "Metric name", False),
+            Column("metric_value", "double", "Metric value", False),
+            Column("observed_at", "timestamp", "Observation time", False),
+            Column("team", "string", "Owning team", True),
+        ),
+        partition_columns=("team",),
+        metadata_version=3,
+    )
     shared.crawlers_error = PermissionDeniedError("glue:GetCrawlers denied in demo-shared")
 
     return {
@@ -281,7 +366,7 @@ def seeded_demo_athena(
     elif profile == "demo-prod":
         _seed_prod_athena(athena)
     elif profile == "demo-shared":
-        athena.access_error = PermissionDeniedError("Athena access denied in demo-shared")
+        _seed_shared_athena(athena)
     return athena
 
 
@@ -295,6 +380,7 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
         output_location="s3://athena-results/dev-empty/",
     )
     athena.add_catalog("dev-analytics", "DevDataCatalog")
+    athena.add_catalog("dev-analytics", "AwsDataCatalog")
     athena.add_database(
         "dev-analytics",
         "DevDataCatalog",
@@ -305,6 +391,17 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
         "DevDataCatalog",
         "dev_events",
         "events",
+    )
+    athena.add_database(
+        "dev-analytics",
+        "AwsDataCatalog",
+        "dev_analytics",
+    )
+    athena.add_table(
+        "dev-analytics",
+        "AwsDataCatalog",
+        "dev_analytics",
+        "dev_events_iceberg",
     )
     context = QueryContext(
         athena.connection_name,
@@ -380,6 +477,21 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
             _NOW,
         )
     )
+    _seed_iceberg_queries(
+        athena,
+        workgroup="dev-analytics",
+        database="dev_analytics",
+        table="dev_events_iceberg",
+        snapshot_ids=(4202, 4201),
+        ref_name="dev-main",
+        partition_name="event_date",
+        partition_value="2026-07-24",
+        data_file="dev-events-0001.parquet",
+        time_travel_rows=(
+            ("2026-07-24T12:00:00Z", "dev-checkout", "17"),
+            ("2026-07-24T12:05:00Z", "dev-search", "9"),
+        ),
+    )
 
 
 def _seed_prod_athena(athena: InMemoryAthena) -> None:
@@ -388,6 +500,7 @@ def _seed_prod_athena(athena: InMemoryAthena) -> None:
         output_location="s3://athena-results/prod/",
     )
     athena.add_catalog("prod-reporting", "ProdDataCatalog")
+    athena.add_catalog("prod-reporting", "AwsDataCatalog")
     athena.add_database(
         "prod-reporting",
         "ProdDataCatalog",
@@ -398,6 +511,17 @@ def _seed_prod_athena(athena: InMemoryAthena) -> None:
         "ProdDataCatalog",
         "prod_sales",
         "daily_sales",
+    )
+    athena.add_database(
+        "prod-reporting",
+        "AwsDataCatalog",
+        "prod_warehouse",
+    )
+    athena.add_table(
+        "prod-reporting",
+        "AwsDataCatalog",
+        "prod_warehouse",
+        "prod_sales_iceberg",
     )
     context = QueryContext(
         athena.connection_name,
@@ -439,6 +563,267 @@ def _seed_prod_athena(athena: InMemoryAthena) -> None:
             "Production sales for one day",
             _NOW,
         )
+    )
+    _seed_iceberg_queries(
+        athena,
+        workgroup="prod-reporting",
+        database="prod_warehouse",
+        table="prod_sales_iceberg",
+        snapshot_ids=(7702, 7701),
+        ref_name="prod-main",
+        partition_name="sales_date",
+        partition_value="2026-07-25",
+        data_file="prod-sales-0001.parquet",
+        time_travel_rows=(
+            ("2026-07-25", "us-east-1", "1048576.25"),
+            ("2026-07-25", "eu-west-1", "524288.50"),
+        ),
+    )
+
+
+def _seed_shared_athena(athena: InMemoryAthena) -> None:
+    athena.add_workgroup(
+        "shared-retired",
+        output_location="s3://athena-results/shared-retired/",
+        state="DISABLED",
+    )
+    athena.add_workgroup(
+        "shared-insights",
+        output_location="s3://athena-results/shared/",
+    )
+    athena.add_catalog("shared-insights", "AwsDataCatalog")
+    athena.add_database(
+        "shared-insights",
+        "AwsDataCatalog",
+        "shared_lake",
+    )
+    athena.add_table(
+        "shared-insights",
+        "AwsDataCatalog",
+        "shared_lake",
+        "shared_metrics_iceberg",
+    )
+    _seed_iceberg_queries(
+        athena,
+        workgroup="shared-insights",
+        database="shared_lake",
+        table="shared_metrics_iceberg",
+        snapshot_ids=(9902, 9901),
+        ref_name="shared-main",
+        partition_name="team",
+        partition_value="platform",
+        data_file="shared-metrics-0001.parquet",
+        time_travel_rows=(
+            ("platform", "query_latency_ms", "84.0"),
+            ("platform", "freshness_minutes", "6.0"),
+        ),
+    )
+
+
+def _seed_iceberg_queries(
+    athena: InMemoryAthena,
+    *,
+    workgroup: str,
+    database: str,
+    table: str,
+    snapshot_ids: tuple[int, int],
+    ref_name: str,
+    partition_name: str,
+    partition_value: str,
+    data_file: str,
+    time_travel_rows: tuple[tuple[str, str, str], ...],
+) -> None:
+    newest, older = snapshot_ids
+    context = QueryContext(
+        athena.connection_name,
+        athena.region,
+        workgroup,
+        "AwsDataCatalog",
+        database,
+    )
+    root = f"s3://{athena.connection_name}/{database}/{table}"
+    metadata = f'"AwsDataCatalog"."{database}"."{table}'
+    nullable = "NULLABLE"
+
+    def add(
+        sql: str,
+        columns: tuple[tuple[str, str], ...],
+        rows: tuple[tuple[str | None, ...], ...],
+    ) -> None:
+        athena.add_query_result(
+            sql,
+            context,
+            columns=tuple(ResultColumn(name, type_name, nullable) for name, type_name in columns),
+            rows=rows,
+        )
+
+    add(
+        (
+            "SELECT committed_at, snapshot_id, parent_id, operation, manifest_list, summary "
+            f'FROM {metadata}$snapshots" ORDER BY committed_at DESC LIMIT 100'
+        ),
+        (
+            ("committed_at", "timestamp"),
+            ("snapshot_id", "bigint"),
+            ("parent_id", "bigint"),
+            ("operation", "varchar"),
+            ("manifest_list", "varchar"),
+            ("summary", "varchar"),
+        ),
+        (
+            (
+                "2026-07-25T12:00:00+00:00",
+                str(newest),
+                str(older),
+                "append",
+                f"{root}/metadata/{athena.connection_name}-snap-{newest}.avro",
+                "{added-records=17,total-records=26}",
+            ),
+            (
+                "2026-07-24T12:00:00+00:00",
+                str(older),
+                None,
+                "append",
+                f"{root}/metadata/{athena.connection_name}-snap-{older}.avro",
+                "{added-records=9,total-records=9}",
+            ),
+        ),
+    )
+    add(
+        (
+            "SELECT made_current_at, snapshot_id, parent_id, is_current_ancestor "
+            f'FROM {metadata}$history" ORDER BY made_current_at DESC LIMIT 100'
+        ),
+        (
+            ("made_current_at", "timestamp"),
+            ("snapshot_id", "bigint"),
+            ("parent_id", "bigint"),
+            ("is_current_ancestor", "boolean"),
+        ),
+        (
+            ("2026-07-25T12:00:00+00:00", str(newest), str(older), "true"),
+            ("2026-07-24T12:00:00+00:00", str(older), None, "true"),
+        ),
+    )
+    add(
+        (
+            "SELECT path, length, partition_spec_id, added_snapshot_id, "
+            "added_data_files_count, existing_data_files_count, "
+            f'deleted_data_files_count, partition_summaries FROM {metadata}$manifests" '
+            "ORDER BY added_snapshot_id DESC, path LIMIT 500"
+        ),
+        (
+            ("path", "varchar"),
+            ("length", "bigint"),
+            ("partition_spec_id", "integer"),
+            ("added_snapshot_id", "bigint"),
+            ("added_data_files_count", "integer"),
+            ("existing_data_files_count", "integer"),
+            ("deleted_data_files_count", "integer"),
+            ("partition_summaries", "varchar"),
+        ),
+        (
+            (
+                f"{root}/metadata/{athena.connection_name}-manifest-{newest}.avro",
+                "2048",
+                "0",
+                str(newest),
+                "1",
+                "0",
+                "0",
+                f"{{{partition_name}={partition_value}}}",
+            ),
+        ),
+    )
+    add(
+        (
+            "SELECT content, file_path, file_format, spec_id, partition, record_count, "
+            f'file_size_in_bytes, equality_ids, sort_order_id FROM {metadata}$files" '
+            "ORDER BY file_path LIMIT 1000"
+        ),
+        (
+            ("content", "integer"),
+            ("file_path", "varchar"),
+            ("file_format", "varchar"),
+            ("spec_id", "integer"),
+            ("partition", "varchar"),
+            ("record_count", "bigint"),
+            ("file_size_in_bytes", "bigint"),
+            ("equality_ids", "varchar"),
+            ("sort_order_id", "integer"),
+        ),
+        (
+            (
+                "0",
+                f"{root}/data/{partition_name}={partition_value}/{data_file}",
+                "PARQUET",
+                "0",
+                f"{{{partition_name}={partition_value}}}",
+                "26",
+                "8192",
+                None,
+                "0",
+            ),
+        ),
+    )
+    add(
+        f'SELECT * FROM {metadata}$partitions" LIMIT 500',
+        (
+            ("partition", f"row({partition_name} varchar)"),
+            ("spec_id", "integer"),
+            ("record_count", "bigint"),
+            ("file_count", "integer"),
+            ("total_data_file_size_in_bytes", "bigint"),
+            ("position_delete_record_count", "bigint"),
+            ("position_delete_file_count", "integer"),
+            ("equality_delete_record_count", "bigint"),
+            ("equality_delete_file_count", "integer"),
+            ("last_updated_at", "timestamp"),
+            ("last_updated_snapshot_id", "bigint"),
+        ),
+        (
+            (
+                f"{{{partition_name}={partition_value}}}",
+                "0",
+                "26",
+                "1",
+                "8192",
+                "0",
+                "0",
+                "0",
+                "0",
+                "2026-07-25T12:00:00+00:00",
+                str(newest),
+            ),
+        ),
+    )
+    add(
+        (
+            "SELECT name, type, snapshot_id, max_reference_age_in_ms, "
+            f'min_snapshots_to_keep, max_snapshot_age_in_ms FROM {metadata}$refs" '
+            "ORDER BY name LIMIT 100"
+        ),
+        (
+            ("name", "varchar"),
+            ("type", "varchar"),
+            ("snapshot_id", "bigint"),
+            ("max_reference_age_in_ms", "bigint"),
+            ("min_snapshots_to_keep", "integer"),
+            ("max_snapshot_age_in_ms", "bigint"),
+        ),
+        ((ref_name, "BRANCH", str(newest), None, "2", "604800000"),),
+    )
+    add(
+        (
+            f'SELECT * FROM "AwsDataCatalog"."{database}"."{table}" '
+            f"FOR VERSION AS OF {older} LIMIT 100"
+        ),
+        (
+            ("dimension", "varchar"),
+            ("name", "varchar"),
+            ("value", "varchar"),
+        ),
+        time_travel_rows,
     )
 
 

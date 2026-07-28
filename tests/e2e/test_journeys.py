@@ -21,6 +21,7 @@ import pytest
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import (
     FileSystemProvider,
     PathRef,
@@ -29,9 +30,11 @@ from aws_tui.domain.local_fs import LocalFS
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
+from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
+from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 from tests.unit.domain._in_memory_fs import InMemoryFS
 
@@ -407,6 +410,75 @@ async def test_journey_8_athena_result_opens_s3_under_same_profile(
                 await result
             await _await_service_mount(pilot, app)
 
+            assert ctx.root_vm.content_host.current_id == "s3"
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            pane = ctx.root_vm.content_host.current.left
+            assert pane.current_connection_key == ("aws", "demo-dev")
+            assert pane.path.as_posix() == "/athena-results/dev"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+# ── Journey 9: Iceberg snapshot -> Athena -> S3 ─────────────────────────────
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_journey_9_iceberg_snapshot_runs_only_on_explicit_execute(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_service_mount(pilot, app)
+            ctx.root_vm.services_menu.switch_service_command.execute("glue")
+            await _await_service_mount(pilot, app)
+            glue = ctx.root_vm.content_host.current
+            assert isinstance(glue, GluePageVM)
+            await glue.open_table(
+                TableRef(
+                    "AwsDataCatalog",
+                    "dev_analytics",
+                    "dev_events_iceberg",
+                    "demo-dev",
+                    "us-east-1",
+                )
+            )
+            await glue.catalog.iceberg.select_view("snapshots")
+            assert glue.catalog.iceberg.select_snapshot(4201)
+
+            result = app.action_dispatch("glue.time_travel_in_athena")
+            if inspect.isawaitable(result):
+                await result
+            await _await_service_mount(pilot, app)
+            athena = ctx.root_vm.content_host.current
+            assert isinstance(athena, AthenaPageVM)
+            assert athena.query.sql.endswith("FOR VERSION AS OF 4201 LIMIT 100")
+            assert athena.query.execution_ref is None
+            assert athena.results.rows == ()
+
+            await app.action_execute_athena()
+            assert athena.query.execution_ref is not None
+            assert athena.query.execution_ref.connection_name == "demo-dev"
+            assert athena.results.rows == (
+                ("2026-07-24T12:00:00Z", "dev-checkout", "17"),
+                ("2026-07-24T12:05:00Z", "dev-search", "9"),
+            )
+            assert athena.query.output_location is not None
+            assert athena.query.output_location.startswith("s3://athena-results/dev/")
+
+            await athena.select_view("results")
+            result = app.action_dispatch("athena.open_result_location")
+            if inspect.isawaitable(result):
+                await result
+            await _await_service_mount(pilot, app)
             assert ctx.root_vm.content_host.current_id == "s3"
             assert ctx.root_vm.active_connection is not None
             assert ctx.root_vm.active_connection.name == "demo-dev"

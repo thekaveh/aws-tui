@@ -46,8 +46,8 @@ async def test_demo_profiles_have_disjoint_athena_resources() -> None:
 
     assert {row.name for row in dev_workgroups} == {"dev-analytics", "dev-empty"}
     assert {row.name for row in prod_workgroups} == {"prod-reporting"}
-    assert {row.name for row in dev_catalogs} == {"DevDataCatalog"}
-    assert {row.name for row in prod_catalogs} == {"ProdDataCatalog"}
+    assert {row.name for row in dev_catalogs} == {"DevDataCatalog", "AwsDataCatalog"}
+    assert {row.name for row in prod_catalogs} == {"ProdDataCatalog", "AwsDataCatalog"}
     assert {row.ref.database_name for row in dev_databases} == {"dev_events"}
     assert {row.ref.database_name for row in prod_databases} == {"prod_sales"}
     assert {row.execution_id for row in dev_history}.isdisjoint(
@@ -241,8 +241,96 @@ async def test_fake_exposes_terminal_empty_denied_and_missing_output_scenarios()
     assert cancelled.summary.state is QueryState.CANCELLED
 
     shared = seeded_demo_athena("demo-shared")
-    with pytest.raises(PermissionDeniedError, match="Athena access denied"):
-        await shared.list_workgroups_page()
+    shared_workgroups, _ = await shared.list_workgroups_page()
+    assert [(row.name, row.state) for row in shared_workgroups] == [
+        ("shared-retired", "DISABLED"),
+        ("shared-insights", "ENABLED"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile", "region", "workgroup", "database", "table", "snapshot_id", "rows"),
+    [
+        (
+            "demo-dev",
+            "us-east-1",
+            "dev-analytics",
+            "dev_analytics",
+            "dev_events_iceberg",
+            4201,
+            (
+                ("2026-07-24T12:00:00Z", "dev-checkout", "17"),
+                ("2026-07-24T12:05:00Z", "dev-search", "9"),
+            ),
+        ),
+        (
+            "demo-prod",
+            "us-east-1",
+            "prod-reporting",
+            "prod_warehouse",
+            "prod_sales_iceberg",
+            7701,
+            (
+                ("2026-07-25", "us-east-1", "1048576.25"),
+                ("2026-07-25", "eu-west-1", "524288.50"),
+            ),
+        ),
+        (
+            "demo-shared",
+            "us-west-2",
+            "shared-insights",
+            "shared_lake",
+            "shared_metrics_iceberg",
+            9901,
+            (
+                ("platform", "query_latency_ms", "84.0"),
+                ("platform", "freshness_minutes", "6.0"),
+            ),
+        ),
+    ],
+)
+async def test_seeded_iceberg_time_travel_query_returns_exact_profile_rows(
+    profile: str,
+    region: str,
+    workgroup: str,
+    database: str,
+    table: str,
+    snapshot_id: int,
+    rows: tuple[tuple[str, str, str], ...],
+) -> None:
+    fake = seeded_demo_athena(profile)
+    context = QueryContext(
+        profile,
+        region,
+        workgroup,
+        "AwsDataCatalog",
+        database,
+    )
+    sql = (
+        f'SELECT * FROM "AwsDataCatalog"."{database}"."{table}" '
+        f"FOR VERSION AS OF {snapshot_id} LIMIT 100"
+    )
+
+    ref = await fake.start_query(
+        sql,
+        context,
+        request_token="iceberg-time-travel",
+    )
+    for _ in range(3):
+        detail = await fake.get_query_execution(ref.execution_id)
+    page = await fake.get_results_page(ref.execution_id)
+
+    assert detail.summary.state is QueryState.SUCCEEDED
+    assert page.rows == rows
+    assert detail.output_location is not None
+    assert detail.output_location.startswith(
+        {
+            "demo-dev": "s3://athena-results/dev/",
+            "demo-prod": "s3://athena-results/prod/",
+            "demo-shared": "s3://athena-results/shared/",
+        }[profile]
+    )
 
 
 @pytest.mark.asyncio
