@@ -379,6 +379,11 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
     assert "await Athena shutdown" in diagram
     assert "then dispose outgoing VM" in diagram
     assert "exact connection + region" in diagram
+    assert "DualPane" in diagram
+    assert "service_view_factory.py" in diagram
+    assert "S3Page" not in diagram
+    assert "S3 root is the code-backed `DualPane`" in architecture
+    assert "`ServiceSelectionStore` is a VM-layer type" in architecture
     alt_match = re.search(r"!\[([^\]]+)\]\(diagrams/img/architecture\.png\)", architecture)
     assert alt_match is not None
     alt_text = alt_match.group(1)
@@ -462,6 +467,16 @@ def test_public_docs_cover_integrated_iceberg_workflow() -> None:
         assert message in ledger
     assert "IcebergInspector" in architecture
     assert "Iceberg" in releasing
+    assert "exercise Load more and Retry" not in releasing
+    assert "verify a failure in one tab leaves another successful tab intact" not in releasing
+    for automated_test in (
+        "tests/integration/test_demo_mode.py",
+        "tests/unit/vm/glue/test_iceberg_vm.py",
+        "tests/unit/ui/glue/test_iceberg_view.py",
+    ):
+        assert automated_test in releasing
+    assert "`partitions` intentionally uses `SELECT *` with `LIMIT 500`" in ledger
+    assert "without `ORDER BY` because its metadata schema is dynamic" in ledger
 
 
 def test_glue_operation_ledger_matches_domain_adapter_exactly() -> None:

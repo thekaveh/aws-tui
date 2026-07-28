@@ -289,3 +289,131 @@ Every long-running gate used a hard timeout.
   verification uses deterministic providers and MinIO rather than live AWS.
 - Every shell invocation emits a pre-existing `.zshenv` warning for missing
   `/tmp/vmx-cargo-182/env`. It does not affect command exit status or results.
+
+## 9. Final Independent-Review Closure
+
+### 9.1. Changed Files
+
+- `.superpowers/sdd/task-6-report.md`
+- `docs/RELEASING.md`
+- `docs/architecture.md`
+- `docs/contract-ledger.md`
+- `docs/diagrams/architecture.html`
+- `docs/diagrams/img/architecture.png`
+- `docs/diagrams/img/architecture.svg`
+- `scripts/docs/build_docs.py`
+- `scripts/docs/render_diagrams.py`
+- `tests/docs/test_build_docs.py`
+- `tests/docs/test_render_diagrams.py`
+- `tests/docs/test_scaffolding.py`
+
+The release checklist now keeps stock-demo states manual and names the existing
+automated continuation, retry, and isolated-pane coverage. The architecture
+surfaces identify the S3 root as `DualPane` through `service_view_factory.py`
+and place `ServiceSelectionStore` in the VM layer. The contract ledger records
+the dynamic-schema partitions query exception.
+
+### 9.2. RED-GREEN Evidence
+
+Tests were added before renderer or documentation changes:
+
+```text
+env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib \
+  .venv/bin/python -m pytest \
+  tests/docs/test_render_diagrams.py \
+  tests/docs/test_build_docs.py \
+  tests/docs/test_scaffolding.py -q
+
+5 failed, 21 passed in 1.16s
+```
+
+The failures proved that unknown entities were accepted, `render_site()` lost
+the canonical terminal newline, the diagram still used `S3Page` and placed
+`ServiceSelectionStore` under Infrastructure, and the release/ledger text
+still contained the reviewed inaccuracies. The first entity fix exposed
+`html.unescape()` partial-prefix decoding; exact lookup in Python's HTML5 entity
+table then made the unknown-entity test pass.
+
+After the minimal implementation and documentation updates:
+
+```text
+env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib \
+  .venv/bin/python -m pytest \
+  tests/docs/test_render_diagrams.py \
+  tests/docs/test_build_docs.py \
+  tests/docs/test_scaffolding.py -q
+
+26 passed in 0.55s
+```
+
+The final atomic-write audit added a file-mode regression before changing the
+helper:
+
+```text
+pytest tests/docs/test_render_diagrams.py::test_render_all_writes_svg_and_png -q
+FAILED: 0600 != 0644
+
+pytest tests/docs/test_render_diagrams.py::test_render_all_writes_svg_and_png -q
+1 passed in 0.35s
+```
+
+`render_all()` and the real `render_site()` path now share `render_svg()` and
+`write_svg()`. Canonical SVG serialization has exactly one terminal newline;
+known non-XML HTML entities become Unicode, unknown names fail with the entity
+in the error, and SVG/PNG writes plus wiki copies use atomic replacement with
+normal `0644` documentation-asset modes.
+
+### 9.3. Verification and Regeneration
+
+```text
+tests/docs
+70 passed in 0.74s
+
+make docs-check
+check_docs: clean
+mkdocs build --strict: exit 0
+
+make docs-wiki
+render, wiki build, and push_wiki --check: exit 0
+
+full default suite
+3564 passed, 9 deselected in 557.34s
+471 snapshots passed
+
+integration marker
+9 passed, 3564 deselected in 5.01s
+
+ruff check .
+All checks passed
+
+ruff format --check .
+396 files already formatted
+
+mypy src
+Success: no issues found in 157 source files
+
+check-layers.sh
+layer rules clean
+
+uv lock --check
+Resolved 176 packages
+```
+
+The regenerated PNG is RGB 1600x900 and the SVG viewBox is `0 0 1600 900`.
+Canonical, generated-site, and generated-wiki SVGs are byte-identical:
+
+```text
+52362e77d14e8471758a1eb41f9358bd365d602fe7855ff81055d9291ed7ca2a
+```
+
+Original-resolution inspection found no clipped or overlapping labels, boxes,
+legend items, or boundaries. Structural inspection counted 23 orthogonal
+routes; the only three route/box interior intersections are at the connected
+`MessageHub` endpoint and are hidden by its opaque mask. No route crosses an
+unrelated component.
+
+### 9.4. Concerns
+
+No new concern remains. The pre-existing missing `/tmp/vmx-cargo-182/env`
+shell warning and the Material for MkDocs 2.0 advisory are non-blocking; strict
+build and all verification commands exited successfully.

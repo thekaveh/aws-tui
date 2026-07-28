@@ -70,17 +70,23 @@ Review the PR like any other change. Merge when CI is green.
   `demo-shared` remains a scoped access-denied state.
 - **Glue/Athena/Iceberg release smoke.** On `demo-dev`, open
   `dev_analytics.dev_events_iceberg` in Glue. Inspect Snapshots, History,
-  Manifests, Files, Partitions, and References; exercise Load more and Retry;
-  and verify a failure in one tab leaves another successful tab intact.
-  Select snapshot `4201`, press `V`, and verify Athena is mounted under the
-  same connection and region with `FOR VERSION AS OF 4201 LIMIT 100` in the
-  editor and no execution started. Execute explicitly with `Ctrl+Enter`,
-  compare displayed rows with the downloaded CSV, and hand the artifact to S3.
-  Verify **Open query table in Glue** returns only for one unambiguous table.
-  Repeat enough of the flow on `demo-prod` to prove disjoint content, then
-  confirm `demo-shared` stays a scoped access state. Review bytes scanned and
-  remember that every metadata tab is an Athena query with metadata-query
-  costs; no create/edit/delete operation is in scope.
+  Manifests, Files, Partitions, and References. Select snapshot `4201`, press
+  `V`, and verify Athena is mounted under the same connection and region with
+  `FOR VERSION AS OF 4201 LIMIT 100` in the editor and no execution started.
+  Execute explicitly with `Ctrl+Enter`, compare displayed rows with the
+  downloaded CSV, and hand the artifact to S3. Verify **Open query table in
+  Glue** returns only for one unambiguous table. Repeat enough of the flow on
+  `demo-prod` to prove disjoint content, then confirm `demo-shared` stays a
+  scoped access state. Review bytes scanned and remember that every metadata
+  tab is an Athena query with metadata-query costs; no create/edit/delete
+  operation is in scope.
+- **Automated-only Iceberg states.** Stock `demo-dev` does not seed metadata
+  continuation, retry, or isolated-tab-failure states, so they are not manual
+  smoke requirements. Keep them in automated release verification:
+  `tests/integration/test_demo_mode.py` covers metadata continuation and retry,
+  `tests/unit/vm/glue/test_iceberg_vm.py` covers pagination plus isolated pane
+  failure/recovery, and `tests/unit/ui/glue/test_iceberg_view.py` covers the
+  reachable Retry and Load more controls.
 
 If any smoke step breaks, fix forward; do **not** tag the release.
 

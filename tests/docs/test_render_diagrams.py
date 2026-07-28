@@ -1,3 +1,4 @@
+import stat
 import textwrap
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -28,6 +29,11 @@ def test_extract_svg_sanitizes_named_entities():
     assert "Σ" in out
     assert "&amp;" in out  # standard XML entity preserved
     assert "&#160;" in out  # numeric entity preserved
+
+
+def test_extract_svg_rejects_unknown_named_entities():
+    with pytest.raises(ValueError, match=r"unknown named HTML entity.*&notARealEntity;"):
+        extract_svg("<svg><text>&notARealEntity;</text></svg>")
 
 
 def test_extract_svg_raises_when_absent():
@@ -68,6 +74,8 @@ def test_render_all_writes_svg_and_png(tmp_path):
     assert (png_dir / "system.svg").read_text(encoding="utf-8").endswith("\n")
     assert (site_img / "system.svg").read_text(encoding="utf-8").endswith("\n")
     assert (png_dir / "system.png").read_bytes()[:4] == b"\x89PNG"
+    assert stat.S_IMODE((png_dir / "system.svg").stat().st_mode) == 0o644
+    assert stat.S_IMODE((png_dir / "system.png").stat().st_mode) == 0o644
 
 
 def test_copy_assets_copies_pngs(tmp_path):
@@ -128,3 +136,14 @@ def test_architecture_diagram_is_landscape_and_current():
     assert "Glue-to-Athena" in svg
     assert "Snapshot time travel" in svg
     assert 'data-route="orthogonal"' in svg
+
+    groups = {
+        group.attrib["id"]: " ".join(group.itertext())
+        for group in root.iter()
+        if group.tag.endswith("g") and "id" in group.attrib
+    }
+    assert "DualPane" in groups["textual-views"]
+    assert "service_view_factory.py" in groups["textual-views"]
+    assert "S3Page" not in groups["textual-views"]
+    assert "ServiceSelectionStore" in groups["viewmodels"]
+    assert "ServiceSelectionStore" not in groups["infrastructure"]

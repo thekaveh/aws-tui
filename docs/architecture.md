@@ -23,10 +23,14 @@ VMs to build service pages, but it cannot import Textual widgets.
   (`src/aws_tui/ui/`). Never touches `boto3`, `aioboto3`, or
   `botocore`. Talks to VMs via property reads + relay-command
   ``execute(...)``; subscribes to ``MessageHub`` for change
-  notifications.
+  notifications. The S3 root is the code-backed `DualPane` from
+  `src/aws_tui/ui/widgets/dual_pane.py`, mounted through
+  `src/aws_tui/ui/widgets/service_view_factory.py`; there is no `S3Page` class.
 - **ViewModel** — VMx-based viewmodels with reactive commands and
   property-changed messages (`src/aws_tui/vm/`). Never imports
-  Textual; tests run headless. Subtrees:
+  Textual; tests run headless. `ServiceSelectionStore` is a VM-layer type in
+  `src/aws_tui/vm/service_source_vm.py`, shared by the single-context service
+  VMs rather than owned by Infrastructure. Subtrees:
   - `vm/chrome/` — persistent shell state (hint legend, toasts,
     overlays like command palette / confirm / quick look / crash /
     resume / first-run, plus a retained `StatusBarVM` subscriber for
