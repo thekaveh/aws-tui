@@ -3,11 +3,12 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
-from textual.widgets import OptionList, Select
+from textual.widgets import OptionList, Select, Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
@@ -38,12 +39,16 @@ def _build_vm(fake: InMemoryGlue | None = None) -> tuple[GluePageVM, InMemoryGlu
 
 
 class _GlueApp(App[None]):
-    def __init__(self, vm: GluePageVM) -> None:
+    def __init__(self, vm: GluePageVM, *, keymap: KeymapStore | None = None) -> None:
         super().__init__()
         self._vm = vm
+        self._keymap = keymap
 
     def compose(self) -> ComposeResult:
-        yield GluePage(self._vm, hub=self._vm.hub)
+        if self._keymap is None:
+            yield GluePage(self._vm, hub=self._vm.hub)
+        else:
+            yield GluePage(self._vm, hub=self._vm.hub, keymap=self._keymap)
 
 
 @pytest.mark.asyncio
@@ -63,6 +68,42 @@ async def test_glue_page_composes_source_tabs_and_three_views() -> None:
         assert page.query_one(GlueCatalogView).display
         assert not page.query_one(GlueJobsView).display
         assert not page.query_one(GlueCrawlersView).display
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("keymap", "labels"),
+    [
+        (None, ("1 catalog", "2 jobs", "3 crawlers")),
+        (
+            KeymapStore(
+                overlay={
+                    "glue.catalog": "7",
+                    "glue.jobs": "8",
+                    "glue.crawlers": "9",
+                }
+            ),
+            ("7 catalog", "8 jobs", "9 crawlers"),
+        ),
+    ],
+)
+async def test_glue_tab_labels_resolve_active_keymap(
+    keymap: KeymapStore | None,
+    labels: tuple[str, str, str],
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm, keymap=keymap)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert (
+            tuple(
+                str(app.query_one(f"#glue-tab-{view}", Static).render())
+                for view in ("catalog", "jobs", "crawlers")
+            )
+            == labels
+        )
 
 
 @pytest.mark.asyncio

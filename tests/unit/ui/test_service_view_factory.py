@@ -9,6 +9,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.transfer_journal import TransferJournal
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
@@ -93,6 +94,24 @@ def test_factory_builds_glue_page() -> None:
 
     assert isinstance(view, GluePage)
     assert view.id == "content-glue-page"
+
+
+def test_factory_threads_keymap_to_glue_page() -> None:
+    glue_page_vm, _fake = _build_glue_vm()
+    hub = glue_page_vm.hub
+    focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    keymap = KeymapStore(overlay={"glue.jobs": "8"})
+
+    view = build_service_view(
+        "glue",
+        glue_page_vm,
+        hub=hub,
+        focus_coordinator=focus_coordinator,
+        keymap=keymap,
+    )
+
+    assert isinstance(view, GluePage)
+    assert view._keymap is keymap  # type: ignore[attr-defined]
 
 
 def test_factory_builds_athena_page() -> None:

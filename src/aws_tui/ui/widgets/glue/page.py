@@ -11,6 +11,7 @@ from textual.widget import Widget
 from textual.widgets import OptionList, Select, Static
 from vmx import Message, MessageHub
 
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
@@ -32,9 +33,9 @@ class _ViewTab(Static, can_focus=True):
             super().__init__()
             self.view = view
 
-    def __init__(self, view: GlueView, number: int) -> None:
+    def __init__(self, view: GlueView, key_label: str) -> None:
         super().__init__(
-            f"{number} {view}",
+            f"{key_label} {view}".strip(),
             id=f"glue-tab-{view}",
             classes="glue-view-tab",
             markup=False,
@@ -84,6 +85,7 @@ class GluePage(HubSubscriberMixin, Widget):
         vm: GluePageVM,
         *,
         hub: MessageHub[Message],
+        keymap: KeymapStore | None = None,
         focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
@@ -91,6 +93,7 @@ class GluePage(HubSubscriberMixin, Widget):
         super().__init__(id=id, classes=classes)
         self._vm = vm
         self._hub = hub
+        self._keymap = keymap or KeymapStore()
         self._focus_coordinator = focus_coordinator
 
     @property
@@ -100,8 +103,9 @@ class GluePage(HubSubscriberMixin, Widget):
     def compose(self) -> ComposeResult:
         yield ServiceSourceHeader(self._vm.source, id="glue-source-header")
         with Horizontal(id="glue-view-tabs"):
-            for number, view in enumerate(_VIEW_ORDER, start=1):
-                yield _ViewTab(view, number)
+            for view in _VIEW_ORDER:
+                keys = self._keymap.resolve(f"glue.{view}")
+                yield _ViewTab(view, keys[0] if keys else "")
         with Container(id="glue-view-host"):
             yield GlueCatalogView(self._vm, id="glue-catalog-view")
             yield GlueJobsView(self._vm, id="glue-jobs-view")

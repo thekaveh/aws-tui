@@ -45,6 +45,7 @@ def build_service_view(
         return glue_page_class(
             vm,
             hub=hub,
+            keymap=keymap,
             focus_coordinator=focus_coordinator,
             id="content-glue-page",
         )
