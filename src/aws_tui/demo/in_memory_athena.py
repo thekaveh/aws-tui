@@ -7,11 +7,12 @@ import hmac
 import io
 import secrets
 import unicodedata
-from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import AsyncIterator, Iterable, Sequence
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import UTC, datetime
+from enum import Enum
 from hashlib import sha256
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 from aws_tui.domain.athena import (
     AthenaCatalogSummary,
@@ -83,6 +84,11 @@ class _ListTokenRecord:
     scope: tuple[str | None, ...]
     offset: int
     page_size: int
+    collection_fingerprint: bytes = field(repr=False)
+
+
+class _Digest(Protocol):
+    def update(self, data: bytes, /) -> None: ...
 
 
 class _ListTokenCodec:
@@ -90,7 +96,6 @@ class _ListTokenCodec:
 
     def __init__(self) -> None:
         self._key = secrets.token_bytes(32)
-        self._records: dict[str, _ListTokenRecord] = {}
 
     def page(
         self,
@@ -99,26 +104,45 @@ class _ListTokenCodec:
         scope: tuple[str | None, ...],
         start_token: str | None,
         page_size: int,
+        fingerprint_rows: Iterable[object] | None = None,
     ) -> tuple[list[T], str | None]:
         if type(page_size) is not int or page_size <= 0:
             raise ValidationError("invalid Athena page size")
+        collection_fingerprint = _collection_fingerprint(
+            rows if fingerprint_rows is None else fingerprint_rows
+        )
         if start_token is None:
             offset = 0
         else:
-            record = self._record_for(start_token)
-            if record.scope != scope or record.page_size != page_size or record.offset >= len(rows):
+            offset = self._offset_for(
+                start_token,
+                scope=scope,
+                page_size=page_size,
+                collection_fingerprint=collection_fingerprint,
+            )
+            if offset >= len(rows):
                 raise ValidationError("invalid Athena pagination token")
-            offset = record.offset
         page = list(rows[offset : offset + page_size])
         next_offset = offset + page_size
         if next_offset >= len(rows):
             return page, None
-        record = _ListTokenRecord(scope, next_offset, page_size)
-        token = self._encode(record)
-        self._records[token] = record
-        return page, token
+        return page, self._encode(
+            _ListTokenRecord(
+                scope,
+                next_offset,
+                page_size,
+                collection_fingerprint,
+            )
+        )
 
-    def _record_for(self, token: str) -> _ListTokenRecord:
+    def _offset_for(
+        self,
+        token: str,
+        *,
+        scope: tuple[str | None, ...],
+        page_size: int,
+        collection_fingerprint: bytes,
+    ) -> int:
         if (
             type(token) is not str
             or len(token) != 64
@@ -127,18 +151,49 @@ class _ListTokenCodec:
             or any(char not in "0123456789abcdef" for char in token)
         ):
             raise ValidationError("invalid Athena pagination token")
-        record = self._records.get(token)
-        if record is None or not hmac.compare_digest(token, self._encode(record)):
+        token_bytes = bytes.fromhex(token)
+        masked_offset = token_bytes[:8]
+        record = _ListTokenRecord(
+            scope,
+            0,
+            page_size,
+            collection_fingerprint,
+        )
+        binding = self._binding(record)
+        expected_signature = hmac.digest(
+            self._key,
+            b"token" + binding + masked_offset,
+            "sha256",
+        )[:24]
+        if not hmac.compare_digest(token_bytes[8:], expected_signature):
             raise ValidationError("invalid Athena pagination token")
-        return record
+        mask = hmac.digest(self._key, b"offset" + binding, "sha256")[:8]
+        return int.from_bytes(
+            bytes(left ^ right for left, right in zip(masked_offset, mask, strict=True)),
+            "big",
+        )
 
     def _encode(self, record: _ListTokenRecord) -> str:
-        material = _fingerprint(
-            *record.scope,
-            str(record.offset),
-            str(record.page_size),
+        binding = self._binding(record)
+        offset = record.offset.to_bytes(8, "big")
+        mask = hmac.digest(self._key, b"offset" + binding, "sha256")[:8]
+        masked_offset = bytes(left ^ right for left, right in zip(offset, mask, strict=True))
+        signature = hmac.digest(
+            self._key,
+            b"token" + binding + masked_offset,
+            "sha256",
+        )[:24]
+        return (masked_offset + signature).hex()
+
+    @staticmethod
+    def _binding(record: _ListTokenRecord) -> bytes:
+        return (
+            _fingerprint(
+                *record.scope,
+                str(record.page_size),
+            )
+            + record.collection_fingerprint
         )
-        return hmac.digest(self._key, material, "sha256").hex()
 
 
 class InMemoryAthena:
@@ -334,6 +389,9 @@ class InMemoryAthena:
         *,
         start_token: str | None = None,
     ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
+        if not _valid_optional_text(start_token):
+            start_token = None
+            raise ValidationError("invalid Athena pagination token") from None
         self._record("list_workgroups_page", start_token)
         self._raise_if_denied()
         return self._list_tokens.page(
@@ -357,6 +415,14 @@ class InMemoryAthena:
         workgroup: str | None = None,
         start_token: str | None = None,
     ) -> tuple[list[AthenaCatalogSummary], str | None]:
+        if not _valid_optional_text(workgroup):
+            workgroup = None
+            start_token = None
+            raise ValidationError("invalid Athena list request") from None
+        if not _valid_optional_text(start_token):
+            workgroup = None
+            start_token = None
+            raise ValidationError("invalid Athena pagination token") from None
         self._record("list_catalogs_page", workgroup, start_token)
         self._raise_if_denied()
         rows = self.catalogs.get(workgroup or "", [])
@@ -374,6 +440,16 @@ class InMemoryAthena:
         workgroup: str | None = None,
         start_token: str | None = None,
     ) -> tuple[list[DatabaseSummary], str | None]:
+        if not _valid_required_text(catalog) or not _valid_optional_text(workgroup):
+            catalog = ""
+            workgroup = None
+            start_token = None
+            raise ValidationError("invalid Athena list request") from None
+        if not _valid_optional_text(start_token):
+            catalog = ""
+            workgroup = None
+            start_token = None
+            raise ValidationError("invalid Athena pagination token") from None
         self._record("list_databases_page", catalog, workgroup, start_token)
         self._raise_if_denied()
         rows = self.databases.get((workgroup or "", catalog), [])
@@ -392,6 +468,22 @@ class InMemoryAthena:
         workgroup: str | None = None,
         start_token: str | None = None,
     ) -> tuple[list[TableSummary], str | None]:
+        if (
+            not _valid_required_text(catalog)
+            or not _valid_required_text(database)
+            or not _valid_optional_text(workgroup)
+        ):
+            catalog = ""
+            database = ""
+            workgroup = None
+            start_token = None
+            raise ValidationError("invalid Athena list request") from None
+        if not _valid_optional_text(start_token):
+            catalog = ""
+            database = ""
+            workgroup = None
+            start_token = None
+            raise ValidationError("invalid Athena pagination token") from None
         self._record(
             "list_tables_page",
             catalog,
@@ -414,13 +506,25 @@ class InMemoryAthena:
         *,
         start_token: str | None = None,
     ) -> tuple[list[QueryExecutionRef], str | None]:
+        if not _valid_required_text(workgroup):
+            workgroup = ""
+            start_token = None
+            raise ValidationError("invalid Athena list request") from None
+        if not _valid_optional_text(start_token):
+            workgroup = ""
+            start_token = None
+            raise ValidationError("invalid Athena pagination token") from None
         self._record("list_query_executions_page", workgroup, start_token)
         self._raise_if_denied()
+        history = self.history.get(workgroup, [])
         ids, token = self._list_tokens.page(
-            self.history.get(workgroup, []),
+            history,
             scope=("list_query_executions_page", workgroup),
             start_token=start_token,
             page_size=self.page_size,
+            fingerprint_rows=(
+                self.query_executions[execution_id].summary for execution_id in history
+            ),
         )
         return [self.query_executions[execution_id].summary.ref for execution_id in ids], token
 
@@ -477,11 +581,16 @@ class InMemoryAthena:
     ) -> QueryExecutionRef:
         self._record("start_query", sql, context, request_token, output_location)
         self._raise_if_denied()
-        self._validate_start_arguments(
+        argument_error = self._start_argument_error(
             context,
             request_token=request_token,
             output_location=output_location,
         )
+        if argument_error is not None:
+            context = QueryContext("", "", "", "", "")
+            request_token = ""
+            output_location = None
+            raise ValidationError(argument_error) from None
         if type(sql) is not str:
             raise ValidationError("Athena SQL is invalid")
         normalized_sql = self._sql_policy.validate(sql)
@@ -594,6 +703,14 @@ class InMemoryAthena:
         *,
         start_token: str | None = None,
     ) -> tuple[list[str], str | None]:
+        if not _valid_required_text(workgroup):
+            workgroup = ""
+            start_token = None
+            raise ValidationError("invalid Athena list request") from None
+        if not _valid_optional_text(start_token):
+            workgroup = ""
+            start_token = None
+            raise ValidationError("invalid Athena pagination token") from None
         self._record("list_named_queries_page", workgroup, start_token)
         self._raise_if_denied()
         return self._list_tokens.page(
@@ -616,20 +733,36 @@ class InMemoryAthena:
         *,
         start_token: str | None = None,
     ) -> tuple[list[PreparedStatementSummary], str | None]:
+        if not _valid_required_text(workgroup):
+            workgroup = ""
+            start_token = None
+            raise ValidationError("invalid Athena list request") from None
+        if not _valid_optional_text(start_token):
+            workgroup = ""
+            start_token = None
+            raise ValidationError("invalid Athena pagination token") from None
         self._record("list_prepared_statements_page", workgroup, start_token)
         self._raise_if_denied()
-        names, token = self._list_tokens.page(
-            self.prepared_names.get(workgroup, []),
+        names = self.prepared_names.get(workgroup, [])
+        listed, token = self._list_tokens.page(
+            names,
             scope=("list_prepared_statements_page", workgroup),
             start_token=start_token,
             page_size=self.page_size,
+            fingerprint_rows=(
+                PreparedStatementSummary(
+                    name,
+                    self.prepared_statements[(workgroup, name)].last_modified_at,
+                )
+                for name in names
+            ),
         )
         return [
             PreparedStatementSummary(
                 name,
                 self.prepared_statements[(workgroup, name)].last_modified_at,
             )
-            for name in names
+            for name in listed
         ], token
 
     async def get_prepared_statement(
@@ -703,26 +836,26 @@ class InMemoryAthena:
             installed.append(installed_page)
         self._result_page_order[execution_id] = tuple(installed)
 
-    def _validate_start_arguments(
+    def _start_argument_error(
         self,
         context: QueryContext,
         *,
         request_token: str,
         output_location: str | None,
-    ) -> None:
+    ) -> str | None:
         if type(context) is not QueryContext or any(
-            type(value) is not str or not value for value in context.cache_key
+            not _valid_required_text(value) for value in context.cache_key
         ):
-            raise ValidationError("Athena query context is invalid")
+            return "Athena query context is invalid"
         if context.connection_name != self.connection_name or context.region != self.region:
-            raise ValidationError("query context does not match Athena connection")
+            return "query context does not match Athena connection"
         workgroup = self.workgroup_details.get(context.workgroup)
         if workgroup is None or workgroup.summary.state != "ENABLED":
-            raise ValidationError("Athena query context is unavailable")
+            return "Athena query context is unavailable"
         if not any(
             catalog.name == context.catalog for catalog in self.catalogs.get(context.workgroup, ())
         ):
-            raise ValidationError("Athena query context is unavailable")
+            return "Athena query context is unavailable"
         if not any(
             database.ref.database_name == context.database
             for database in self.databases.get(
@@ -730,17 +863,17 @@ class InMemoryAthena:
                 (),
             )
         ):
-            raise ValidationError("Athena query context is unavailable")
+            return "Athena query context is unavailable"
         if (
-            type(request_token) is not str
+            not _valid_required_text(request_token)
             or not 32 <= len(request_token) <= 128
             or any(unicodedata.category(char) == "Cc" for char in request_token)
         ):
-            raise ValidationError("Athena request token is invalid")
+            return "Athena request token is invalid"
         if output_location is not None:
             location = (
                 parse_s3_uri(output_location)
-                if type(output_location) is str and output_location.startswith("s3://")
+                if _valid_required_text(output_location) and output_location.startswith("s3://")
                 else None
             )
             if (
@@ -749,7 +882,8 @@ class InMemoryAthena:
                 or location.path.startswith("//")
                 or not location.path.strip("/")
             ):
-                raise ValidationError("Athena output location is invalid")
+                return "Athena output location is invalid"
+        return None
 
     def _raise_if_denied(self) -> None:
         if self.access_error is not None:
@@ -768,14 +902,102 @@ def _started_output_location(
     return f"{result_root.rstrip('/')}/{execution_id}.csv"
 
 
+def _valid_required_text(value: object) -> bool:
+    return type(value) is str and bool(value) and _strict_utf8(value) is not None
+
+
+def _valid_optional_text(value: object) -> bool:
+    return value is None or (type(value) is str and _strict_utf8(value) is not None)
+
+
+def _strict_utf8(value: str) -> bytes | None:
+    if any(_is_unicode_noncharacter(char) for char in value):
+        return None
+    try:
+        return value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        return None
+
+
+def _is_unicode_noncharacter(char: str) -> bool:
+    codepoint = ord(char)
+    return 0xFDD0 <= codepoint <= 0xFDEF or codepoint & 0xFFFF in {0xFFFE, 0xFFFF}
+
+
 def _fingerprint(*values: str | None) -> bytes:
     digest = sha256()
     for value in values:
-        encoded = b"" if value is None else value.encode("utf-8")
+        if value is None:
+            encoded = b""
+        else:
+            encoded_or_none = _strict_utf8(value)
+            if encoded_or_none is None:
+                value = None
+                values = ()
+                raise ValidationError("invalid Athena fingerprint input") from None
+            encoded = encoded_or_none
         digest.update(b"\x00" if value is None else b"\x01")
         digest.update(len(encoded).to_bytes(8, "big"))
         digest.update(encoded)
     return digest.digest()
+
+
+def _collection_fingerprint(rows: Iterable[object]) -> bytes:
+    digest = sha256()
+    digest.update(b"athena-list-v1")
+    count = 0
+    for row in rows:
+        if not _update_stable_digest(digest, row):
+            row = None
+            rows = ()
+            raise ValidationError("invalid Athena list data") from None
+        count += 1
+    digest.update(count.to_bytes(8, "big"))
+    return digest.digest()
+
+
+def _update_stable_digest(digest: _Digest, value: object) -> bool:
+    if value is None:
+        digest.update(b"n")
+        return True
+    if type(value) is bool:
+        digest.update(b"b1" if value else b"b0")
+        return True
+    if type(value) is int:
+        encoded = str(value).encode("ascii")
+        digest.update(b"i" + len(encoded).to_bytes(8, "big") + encoded)
+        return True
+    if type(value) is str:
+        text_encoded = _strict_utf8(value)
+        if text_encoded is None:
+            return False
+        digest.update(b"s" + len(text_encoded).to_bytes(8, "big") + text_encoded)
+        return True
+    if type(value) is datetime:
+        encoded = value.isoformat().encode("ascii")
+        digest.update(b"d" + len(encoded).to_bytes(8, "big") + encoded)
+        return True
+    if isinstance(value, Enum):
+        enum_name = f"{type(value).__module__}.{type(value).__qualname__}"
+        return _update_stable_digest(digest, ("enum", enum_name, value.value))
+    if is_dataclass(value) and not isinstance(value, type):
+        class_name = f"{type(value).__module__}.{type(value).__qualname__}"
+        digest.update(b"c")
+        if not _update_stable_digest(digest, class_name):
+            return False
+        dataclass_fields = fields(value)
+        digest.update(len(dataclass_fields).to_bytes(8, "big"))
+        for item in dataclass_fields:
+            if not _update_stable_digest(digest, item.name):
+                return False
+            if not _update_stable_digest(digest, getattr(value, item.name)):
+                return False
+        return True
+    if isinstance(value, (tuple, list)):
+        digest.update(b"t" if isinstance(value, tuple) else b"l")
+        digest.update(len(value).to_bytes(8, "big"))
+        return all(_update_stable_digest(digest, item) for item in value)
+    return False
 
 
 def _result_token(execution_id: str, page_index: int) -> str:

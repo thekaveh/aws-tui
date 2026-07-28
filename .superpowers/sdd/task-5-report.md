@@ -104,9 +104,45 @@ same-profile S3 handoff.
 - Updated direct fake-client integration fixtures to use API-valid request
   tokens. VM-generated and Iceberg-runner tokens already met the Athena model.
 
+## Final Closure Fixes
+
+- Replaced the list token registry with a stateless, fixed-length authenticated
+  cursor. The cursor masks its offset and binds its HMAC to the provider
+  instance, operation, context, page size, and a streamed deterministic
+  fingerprint of the exact ordered collection.
+- Collection fingerprints include complete list-row values. Query-history
+  fingerprints use current execution summaries, so front insertion, order
+  changes, and lifecycle state updates invalidate issued tokens. Prepared
+  statement fingerprints likewise include the returned modification time.
+- Fingerprinting streams existing collections without retaining snapshots or
+  per-token records. Identical collections produce deterministic cursors, while
+  membership, identity, order, or relevant value changes fail closed as stale.
+- Added strict UTF-8 preflight for caller-controlled list contexts, request
+  tokens, and output locations. Unpaired surrogates and Unicode noncharacters
+  are rejected with constant typed errors before query, idempotency, result, or
+  artifact mutation; valid astral request tokens and Unicode S3 keys remain
+  supported.
+- Sensitive boundary validation returns an error classification before raising,
+  allowing public provider frames to clear request values first. Hostile
+  markers are absent from logs, exception representations, production
+  tracebacks with captured locals, and crash dumps. Exact `str` subclasses are
+  rejected without invoking their methods.
+
+The closure tests followed a separate red-green cycle. The initial focused run
+reported `19 failed, 2 passed`: every collection mutation replayed, token state
+was retained, surrogates escaped as `UnicodeEncodeError`, noncharacters were
+accepted, and hostile values appeared in captured locals. The same focused
+matrix plus explicit order and complete high/low surrogate-position coverage
+passed all `25` cases after the implementation.
+
 ## Verification
 
 ```text
+Final stale-token/Unicode adversarial cases:     25 passed
+Full Athena fake boundary/provider file:        149 passed
+Athena domain, S3 URI, and fake matrix:          274 passed
+Demo/navigation/Athena-S3 integrations:          97 passed
+Relevant journeys 7-9 with warnings strict:       3 passed
 Focused Athena fake unit/boundary tests:        124 passed
 Table-driven scoped list-token cases:            63 passed
 Request/output argument boundary cases:          23 passed

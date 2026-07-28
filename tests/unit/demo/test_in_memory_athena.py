@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -162,6 +163,30 @@ def _truncate_endpoint(fake: InMemoryAthena, endpoint: str) -> None:
         raise AssertionError(f"unknown test endpoint: {endpoint}")
 
 
+def _mutate_endpoint_collection(fake: InMemoryAthena, endpoint: str) -> None:
+    if endpoint == "workgroups":
+        fake.workgroups[1] = replace(fake.workgroups[1], description="changed")
+    elif endpoint == "catalogs":
+        rows = fake.catalogs["dev-analytics"]
+        rows[1] = replace(rows[1], description="changed")
+    elif endpoint == "databases":
+        rows = fake.databases[("dev-analytics", "DevDataCatalog")]
+        rows[1] = replace(rows[1], description="changed")
+    elif endpoint == "tables":
+        rows = fake.tables[("dev-analytics", "DevDataCatalog", "dev_events")]
+        rows[1] = replace(rows[1], owner="changed")
+    elif endpoint == "named-queries":
+        fake.named_query_ids["dev-analytics"][1] = "nq-changed"
+    elif endpoint == "prepared-statements":
+        key = ("dev-analytics", fake.prepared_names["dev-analytics"][1])
+        fake.prepared_statements[key] = replace(
+            fake.prepared_statements[key],
+            last_modified_at=datetime(2026, 7, 27, 12, 0, tzinfo=UTC),
+        )
+    else:
+        raise AssertionError(f"unsupported mutable endpoint: {endpoint}")
+
+
 def _query_state(fake: InMemoryAthena) -> tuple[object, ...]:
     result_tree = None
     if fake._result_store is not None:
@@ -172,13 +197,75 @@ def _query_state(fake: InMemoryAthena) -> tuple[object, ...]:
         tuple(fake.query_executions),
         tuple(fake.result_pages),
         tuple((key, tuple(value)) for key, value in fake.history.items()),
-        tuple(fake._list_tokens._records.items()),
         tuple(fake._request_tokens),
         tuple(fake._started_state_indexes.items()),
         tuple(fake._active_app_started),
         fake._next_execution_number,
         result_tree,
     )
+
+
+async def _start_failure_artifacts(
+    fake: InMemoryAthena,
+    *,
+    request_token: str,
+    output_location: str | None,
+    crash_dir: Path,
+) -> tuple[BaseException, str, str]:
+    try:
+        await fake.start_query(
+            "SELECT 1",
+            DEV_CONTEXT,
+            request_token=request_token,
+            output_location=output_location,
+        )
+    except BaseException as error:
+        request_token = ""
+        output_location = None
+        production_traceback = error.__traceback__
+        while (
+            production_traceback is not None
+            and "/src/aws_tui/" not in production_traceback.tb_frame.f_code.co_filename
+        ):
+            production_traceback = production_traceback.tb_next
+        error = error.with_traceback(production_traceback)
+        rendered = "".join(
+            traceback.TracebackException.from_exception(
+                error,
+                capture_locals=True,
+            ).format()
+        )
+        crash_path = CrashDump(base_dir=crash_dir).write(exc=error)
+        return error, rendered, crash_path.read_text(encoding="utf-8")
+    raise AssertionError("hostile Athena inputs should fail closed")
+
+
+async def _list_failure_artifacts(
+    fake: InMemoryAthena,
+    *,
+    workgroup: str,
+    crash_dir: Path,
+) -> tuple[BaseException, str, str]:
+    try:
+        await fake.list_catalogs_page(workgroup=workgroup)
+    except BaseException as error:
+        workgroup = ""
+        production_traceback = error.__traceback__
+        while (
+            production_traceback is not None
+            and "/src/aws_tui/" not in production_traceback.tb_frame.f_code.co_filename
+        ):
+            production_traceback = production_traceback.tb_next
+        error = error.with_traceback(production_traceback)
+        rendered = "".join(
+            traceback.TracebackException.from_exception(
+                error,
+                capture_locals=True,
+            ).format()
+        )
+        crash_path = CrashDump(base_dir=crash_dir).write(exc=error)
+        return error, rendered, crash_path.read_text(encoding="utf-8")
+    raise AssertionError("hostile Athena list context should fail closed")
 
 
 @pytest.mark.asyncio
@@ -764,6 +851,89 @@ async def test_list_tokens_reject_malformed_tampered_and_stale_offsets(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "endpoint",
+    [
+        "workgroups",
+        "catalogs",
+        "databases",
+        "tables",
+        "named-queries",
+        "prepared-statements",
+    ],
+)
+async def test_list_tokens_reject_same_length_collection_value_changes(
+    endpoint: str,
+) -> None:
+    fake = _pagination_fake()
+    fake.page_size = 1
+    _, token = await _list_page(fake, endpoint)
+    assert token is not None
+
+    _mutate_endpoint_collection(fake, endpoint)
+
+    with pytest.raises(ValidationError, match="pagination token"):
+        await _list_page(fake, endpoint, start_token=token)
+
+
+@pytest.mark.asyncio
+async def test_list_tokens_reject_same_membership_in_a_different_order() -> None:
+    fake = _pagination_fake()
+    fake.page_size = 1
+    _, token = await fake.list_workgroups_page()
+    assert token is not None
+
+    fake.workgroups.reverse()
+
+    with pytest.raises(ValidationError, match="pagination token"):
+        await fake.list_workgroups_page(start_token=token)
+
+
+@pytest.mark.asyncio
+async def test_history_token_rejects_front_insertion_and_summary_state_changes() -> None:
+    fake = _pagination_fake()
+    fake.page_size = 1
+    _, insertion_token = await fake.list_query_executions_page("dev-analytics")
+    assert insertion_token is not None
+
+    started = await fake.start_query(
+        "SELECT 1",
+        DEV_CONTEXT,
+        request_token=_request_token("history-token-insertion"),
+    )
+    with pytest.raises(ValidationError, match="pagination token"):
+        await fake.list_query_executions_page(
+            "dev-analytics",
+            start_token=insertion_token,
+        )
+
+    _, state_token = await fake.list_query_executions_page("dev-analytics")
+    assert state_token is not None
+    await fake.get_query_execution(started.execution_id)
+    await fake.get_query_execution(started.execution_id)
+
+    with pytest.raises(ValidationError, match="pagination token"):
+        await fake.list_query_executions_page(
+            "dev-analytics",
+            start_token=state_token,
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_tokens_are_deterministic_without_retaining_token_records() -> None:
+    fake = _pagination_fake()
+    fake.page_size = 1
+
+    _, first = await fake.list_workgroups_page()
+    _, repeated = await fake.list_workgroups_page()
+
+    assert first == repeated
+    assert first is not None
+    assert not first.startswith("0000000000000001")
+    assert not hasattr(fake._list_tokens, "_records")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "request_token",
     [
         "a" * 31,
@@ -801,6 +971,107 @@ async def test_start_query_accepts_exact_request_token_boundaries(length: int) -
 
     assert replay == first
     assert sum(ref == first.execution_id for ref in fake.history[DEV_CONTEXT.workgroup]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "leading-high",
+        "leading-low",
+        "middle-high",
+        "middle-low",
+        "trailing-high",
+        "trailing-low",
+        "fdd0-noncharacter",
+        "plane-end-noncharacter",
+    ],
+)
+async def test_start_query_rejects_non_utf8_or_noncharacter_request_tokens_privately(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    case: str,
+) -> None:
+    position, invalid_char = {
+        "leading-high": (0, "\ud800"),
+        "leading-low": (0, "\udc00"),
+        "middle-high": (15, "\ud800"),
+        "middle-low": (15, "\udc00"),
+        "trailing-high": (31, "\ud800"),
+        "trailing-low": (31, "\udc00"),
+        "fdd0-noncharacter": (8, "\ufdd0"),
+        "plane-end-noncharacter": (24, "\U0010ffff"),
+    }[case]
+    marker = "UNICODE_SECRET"
+    token_chars = list((marker * 2).ljust(32, "x"))
+    token_chars[position] = invalid_char
+    hostile = "".join(token_chars)
+    fake = seeded_demo_athena(
+        "demo-dev",
+        result_store=seeded_demo_fs("demo-dev"),
+    )
+    before = _query_state(fake)
+
+    error, rendered, crash = await _start_failure_artifacts(
+        fake,
+        request_token=hostile,
+        output_location=None,
+        crash_dir=tmp_path / "crash",
+    )
+
+    assert type(error) is ValidationError
+    assert marker not in f"{error!r}\n{rendered}\n{crash}"
+    assert marker not in caplog.text
+    assert _query_state(fake) == before
+
+
+@pytest.mark.asyncio
+async def test_start_query_accepts_valid_astral_utf8_inputs() -> None:
+    fake = seeded_demo_athena("demo-dev")
+    token = "😀" * 32
+    output_location = "s3://caller-results/東京/😀/result.csv"
+
+    ref = await fake.start_query(
+        "SELECT 1",
+        DEV_CONTEXT,
+        request_token=token,
+        output_location=output_location,
+    )
+
+    assert ref.execution_id in fake.query_executions
+
+
+@pytest.mark.asyncio
+async def test_start_query_rejects_exact_string_subclasses_without_stringifying() -> None:
+    class HostileString(str):
+        calls = 0
+
+        def __str__(self) -> str:
+            type(self).calls += 1
+            return "STRING_SUBCLASS_SECRET"
+
+    fake = seeded_demo_athena("demo-dev")
+    before = _query_state(fake)
+
+    with pytest.raises(ValidationError, match="request token"):
+        await fake.start_query(
+            "SELECT 1",
+            DEV_CONTEXT,
+            request_token=cast(str, HostileString("x" * 32)),
+        )
+    with pytest.raises(ValidationError, match="output location"):
+        await fake.start_query(
+            "SELECT 1",
+            DEV_CONTEXT,
+            request_token=VALID_REQUEST_TOKEN,
+            output_location=cast(
+                str,
+                HostileString("s3://caller-results/result.csv"),
+            ),
+        )
+
+    assert HostileString.calls == 0
+    assert _query_state(fake) == before
 
 
 @pytest.mark.asyncio
@@ -864,6 +1135,64 @@ async def test_start_query_accepts_valid_s3_object_and_prefix_locations(
     )
 
     assert ref.execution_id in fake.query_executions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "output_location",
+    [
+        "s3://\ud800-bucket/results/OUTPUT_UNICODE_SECRET.csv",
+        "s3://valid-bucket/\udc00/OUTPUT_UNICODE_SECRET.csv",
+        "s3://valid-bucket/OUTPUT_UNICODE_SECRET/\ud800",
+        "s3://valid-bucket/\ufdd0/OUTPUT_UNICODE_SECRET.csv",
+        "s3://valid-bucket/\U0010ffff/OUTPUT_UNICODE_SECRET.csv",
+    ],
+)
+async def test_start_query_rejects_hostile_unicode_output_locations_privately(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    output_location: str,
+) -> None:
+    marker = "OUTPUT_UNICODE_SECRET"
+    fake = seeded_demo_athena(
+        "demo-dev",
+        result_store=seeded_demo_fs("demo-dev"),
+    )
+    before = _query_state(fake)
+
+    error, rendered, crash = await _start_failure_artifacts(
+        fake,
+        request_token=VALID_REQUEST_TOKEN,
+        output_location=output_location,
+        crash_dir=tmp_path / "crash",
+    )
+
+    assert type(error) is ValidationError
+    assert marker not in f"{error!r}\n{rendered}\n{crash}"
+    assert marker not in caplog.text
+    assert _query_state(fake) == before
+
+
+@pytest.mark.asyncio
+async def test_list_scope_rejects_hostile_unicode_without_fingerprint_leak(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    marker = "LIST_SCOPE_UNICODE_SECRET"
+    workgroup = f"{marker}\ud800"
+    fake = _pagination_fake()
+    before = _query_state(fake)
+
+    error, rendered, crash = await _list_failure_artifacts(
+        fake,
+        workgroup=workgroup,
+        crash_dir=tmp_path / "crash",
+    )
+
+    assert type(error) is ValidationError
+    assert marker not in f"{error!r}\n{rendered}\n{crash}"
+    assert marker not in caplog.text
+    assert _query_state(fake) == before
 
 
 @pytest.mark.asyncio
