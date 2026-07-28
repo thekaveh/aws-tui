@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol, TypeAlias, cast
@@ -164,6 +165,10 @@ class GlueIcebergVM:
         self._hub = hub
         self._page_size = page_size
         self._disposed = False
+        self._shutdown_started = False
+        self._shutdown_complete = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._metadata_tasks: set[asyncio.Task[tuple[Any, ...]]] = set()
         self._binding_generation = 0
         self._table_ref: TableRef | None = None
         self._active_view: IcebergView = "snapshots"
@@ -189,7 +194,7 @@ class GlueIcebergVM:
 
     @property
     def available(self) -> bool:
-        return not self._disposed and self._table_ref is not None
+        return not self._disposed and not self._shutdown_started and self._table_ref is not None
 
     @property
     def table_ref(self) -> TableRef | None:
@@ -275,16 +280,9 @@ class GlueIcebergVM:
         if self._disposed:
             return
         self._disposed = True
-        self._binding_generation += 1
-        self._table_ref = None
-        self._selected_snapshot_id = None
-        for pane in self._panes.values():
-            pane.generation += 1
-            pane.rows = ()
-            pane.visible_count = 0
-            pane.state = PaneState.EMPTY
-            pane.error_text = None
-            pane.loaded = False
+        self._shutdown_started = True
+        self._invalidate_binding(notify=False)
+        self._cancel_metadata_tasks()
         try:
             self._on_property_changed.on_completed()
         finally:
@@ -300,26 +298,45 @@ class GlueIcebergVM:
         table_format: TableFormat | None = None,
     ) -> None:
         """Replace the table and clear every pane without issuing provider calls."""
-        if self._disposed:
+        if self._disposed or self._shutdown_started:
             return
         if (
             table_ref is not None
             and table_format is TableFormat.ICEBERG
             and _valid_table_ref(table_ref)
         ):
-            self._replace_table(table_ref)
+            await self._replace_table(table_ref)
             return
-        table_ref = None
-        self._replace_table(table_ref)
+        await self._replace_table(None)
 
-    def clear_table(self) -> None:
-        """Synchronously invalidate metadata during a parent selection reset."""
-        if not self._disposed:
-            self._replace_table(None)
+    async def clear_table(self) -> None:
+        """Invalidate metadata and drain provider work during a parent reset."""
+        if not self._disposed and not self._shutdown_started:
+            await self._replace_table(None)
 
-    def _replace_table(self, table_ref: TableRef | None) -> None:
+    async def shutdown(self) -> None:
+        async with self._lifecycle_lock:
+            if self._disposed or self._shutdown_complete:
+                return
+            self._shutdown_started = True
+            self._invalidate_binding()
+            await self._cancel_and_drain_metadata_tasks()
+            self._shutdown_complete = True
+
+    async def _replace_table(self, table_ref: TableRef | None) -> None:
+        async with self._lifecycle_lock:
+            if self._disposed or self._shutdown_started:
+                return
+            self._invalidate_binding()
+            await self._cancel_and_drain_metadata_tasks()
+            if self._disposed or self._shutdown_started:
+                return
+            self._table_ref = table_ref
+            self._notify_all()
+
+    def _invalidate_binding(self, *, notify: bool = True) -> None:
         self._binding_generation += 1
-        self._table_ref = table_ref
+        self._table_ref = None
         self._selected_snapshot_id = None
         for view, pane in self._panes.items():
             pane.generation += 1
@@ -329,7 +346,36 @@ class GlueIcebergVM:
             pane.error_text = None
             pane.loaded = False
             self._remember_stable(view, pane)
-        self._notify_all()
+        if notify:
+            self._notify_all()
+
+    def _cancel_metadata_tasks(self) -> tuple[asyncio.Task[tuple[Any, ...]], ...]:
+        tasks = tuple(self._metadata_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        return tasks
+
+    async def _cancel_and_drain_metadata_tasks(self) -> None:
+        tasks = self._cancel_metadata_tasks()
+        current_task = asyncio.current_task()
+        cancellation_count = current_task.cancelling() if current_task is not None else 0
+        cancelled = False
+        for task in tasks:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    current_count = current_task.cancelling() if current_task is not None else 0
+                    if current_count > cancellation_count:
+                        cancelled = True
+                        cancellation_count = current_count
+            if task.cancelled():
+                continue
+            with contextlib.suppress(Exception):
+                task.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def select_view(self, view: IcebergView) -> bool:
         pane = self._pane(view)
@@ -405,7 +451,10 @@ class GlueIcebergVM:
             pane.state = PaneState.LOADING
             pane.error_text = None
             self._notify_view(view)
-            rows = await self._loader(view)(table_ref)
+            metadata_task = asyncio.create_task(self._loader(view)(table_ref))
+            self._metadata_tasks.add(metadata_task)
+            metadata_task.add_done_callback(self._metadata_task_done)
+            rows = await metadata_task
             if caller_task is not None and caller_task.cancelling():
                 raise asyncio.CancelledError
             normalized = self._normalize_rows(view, rows)
@@ -415,7 +464,9 @@ class GlueIcebergVM:
                 if selection_changed:
                     self._notify("selected_snapshot_id")
                 self._notify_view(view)
-            raise
+            if caller_task is not None and caller_task.cancelling():
+                raise
+            return False
         except ProviderError as exc:
             if not self._is_current(view, request_generation, binding_generation, table_ref):
                 return False
@@ -453,6 +504,13 @@ class GlueIcebergVM:
             self._notify("selected_snapshot_id")
         self._notify_view(view)
         return True
+
+    def _metadata_task_done(self, task: asyncio.Task[tuple[Any, ...]]) -> None:
+        self._metadata_tasks.discard(task)
+        if task.cancelled():
+            return
+        with contextlib.suppress(Exception):
+            task.exception()
 
     def _remember_stable(self, view: IcebergView, pane: _MetadataPane) -> None:
         if pane.state is PaneState.LOADING:

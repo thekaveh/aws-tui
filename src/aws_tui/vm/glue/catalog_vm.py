@@ -201,6 +201,9 @@ class GlueCatalogVM:
         self._on_property_changed.dispose()
         self._inner.dispose()
 
+    async def shutdown(self) -> None:
+        await self.iceberg.shutdown()
+
     async def setup(self) -> None:
         await self.refresh_databases()
 
@@ -232,7 +235,7 @@ class GlueCatalogVM:
         self._notify("databases")
         self._notify("has_more_databases")
         if not self.databases:
-            self._clear_database_selection()
+            await self._clear_database_selection()
         self._set_state(
             "_databases_state",
             PaneState.IDLE if self.databases else PaneState.EMPTY,
@@ -268,7 +271,7 @@ class GlueCatalogVM:
         generation = self._table_generation
         self._selected_database_name = database_name
         self._selected_table_name = None
-        self.iceberg.clear_table()
+        await self.iceberg.clear_table()
         self._table_detail = None
         self._column_statistics = ()
         self._detail_generation += 1
@@ -343,7 +346,7 @@ class GlueCatalogVM:
         self._selected_table_name = table_name
         self._table_detail = None
         self._column_statistics = ()
-        self.iceberg.clear_table()
+        await self.iceberg.clear_table()
         self._replace_partition_pager(summary.ref)
         self._detail_error_text = None
         self._partitions_error_text = None
@@ -651,12 +654,12 @@ class GlueCatalogVM:
         self._partition_pager = self._make_partition_pager(ref)
         old_pager.dispose()
 
-    def _clear_database_selection(self) -> None:
+    async def _clear_database_selection(self) -> None:
         self._table_generation += 1
         self._detail_generation += 1
         self._selected_database_name = None
         self._selected_table_name = None
-        self.iceberg.clear_table()
+        await self.iceberg.clear_table()
         self._table_detail = None
         self._column_statistics = ()
         self._replace_table_pager(None)

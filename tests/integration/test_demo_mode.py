@@ -595,6 +595,7 @@ async def test_demo_source_switch_suppresses_stale_metadata_load(
     client.start_query = blocked_start_query  # type: ignore[method-assign]
     app = AwsTuiApp(ctx)
     load_task: asyncio.Task[bool] | None = None
+    swap_task: asyncio.Task[None] | None = None
     try:
         async with app.run_test(size=(120, 40)) as pilot:
             await _open_service(ctx, pilot, "glue")
@@ -612,7 +613,11 @@ async def test_demo_source_switch_suppresses_stale_metadata_load(
             load_task = asyncio.create_task(old_page.catalog.iceberg.select_view("snapshots"))
             await asyncio.wait_for(started.wait(), timeout=5)
 
-            await app.action_swap_source()
+            swap_task = asyncio.create_task(app.action_swap_source())
+            await asyncio.sleep(0)
+            assert not swap_task.done()
+            release.set()
+            await asyncio.wait_for(swap_task, timeout=5)
             await _wait_for_service_setup(ctx, pilot)
             new_page = ctx.root_vm.content_host.current
             assert isinstance(new_page, GluePageVM)
@@ -622,12 +627,15 @@ async def test_demo_source_switch_suppresses_stale_metadata_load(
             assert "4201" not in app.export_screenshot()
             assert "4202" not in app.export_screenshot()
 
-            release.set()
             assert not await asyncio.wait_for(load_task, timeout=5)
             assert old_page.catalog.iceberg.snapshots == ()
             assert new_page.catalog.iceberg.snapshots == ()
     finally:
         release.set()
+        if swap_task is not None and not swap_task.done():
+            swap_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await swap_task
         if load_task is not None and not load_task.done():
             load_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

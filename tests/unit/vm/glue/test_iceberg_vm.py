@@ -112,9 +112,9 @@ class RecordingInspector:
             try:
                 await release.wait()
             except asyncio.CancelledError:
+                self.cancellation_seen.set()
                 if self.ignore_cancellation_for != view:
                     raise
-                self.cancellation_seen.set()
                 await release.wait()
         if view in self.errors:
             raise self.errors[view]
@@ -237,13 +237,75 @@ async def test_rebinding_discards_late_metadata_and_clears_snapshot_selection() 
     await started.wait()
 
     await vm.bind_table(OTHER_REF, table_format=TableFormat.ICEBERG)
-    inspector.release("snapshots")
-    await loading
 
+    cancelled_before_release = inspector.cancellation_seen.is_set()
+    if not cancelled_before_release:
+        inspector.release("snapshots")
+    assert not await loading
+    assert cancelled_before_release
     assert vm.table_ref == OTHER_REF
     assert vm.snapshots == ()
     assert vm.selected_snapshot_id is None
     assert vm.state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
+async def test_parent_database_change_cancels_and_drains_active_metadata_load() -> None:
+    fake = InMemoryGlue()
+    iceberg = fake.add_table("analytics", "events")
+    fake.add_table("archive", "events")
+    fake.table_details[iceberg.ref] = replace(
+        fake.table_details[iceberg.ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    inspector = RecordingInspector()
+    hub: MessageHub[Message] = MessageHub()
+    catalog = GlueCatalogVM(
+        client=fake,
+        iceberg_inspector=inspector,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    catalog.construct()
+    await catalog.setup()
+    await catalog.select_database("analytics")
+    await catalog.select_table("events")
+    started = inspector.block("snapshots")
+    loading = asyncio.create_task(catalog.iceberg.select_view("snapshots"))
+    await started.wait()
+
+    await catalog.select_database("archive")
+
+    cancelled_before_release = inspector.cancellation_seen.is_set()
+    if not cancelled_before_release:
+        inspector.release("snapshots")
+    assert not await loading
+    assert cancelled_before_release
+    assert catalog.iceberg.table_ref is None
+    assert catalog.iceberg.snapshots == ()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_and_drains_metadata_load_idempotently() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    started = inspector.block("snapshots")
+    loading = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+
+    shutdown = getattr(vm, "shutdown", None)
+    if shutdown is None:
+        inspector.release("snapshots")
+        await loading
+        pytest.fail("GlueIcebergVM.shutdown is missing")
+    await shutdown()
+    await vm.shutdown()
+
+    assert inspector.cancellation_seen.is_set()
+    assert not await loading
+    assert vm.table_ref is None
+    assert vm.snapshots == ()
+    assert not vm.available
 
 
 @pytest.mark.asyncio

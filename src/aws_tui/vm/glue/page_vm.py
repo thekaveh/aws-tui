@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal, TypeAlias
 
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
@@ -44,6 +45,8 @@ class GluePageVM:
         self._active_view: GlueView = "catalog"
         self._loaded_views: set[GlueView] = set()
         self._disposed = False
+        self._shutdown_complete = False
+        self._shutdown_lock = asyncio.Lock()
         self._lifecycle_generation = 0
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -101,6 +104,14 @@ class GluePageVM:
         self.jobs.dispose()
         self.catalog.dispose()
         self._inner.dispose()
+
+    async def shutdown(self) -> None:
+        async with self._shutdown_lock:
+            if self._disposed or self._shutdown_complete:
+                return
+            self._lifecycle_generation += 1
+            await self.catalog.shutdown()
+            self._shutdown_complete = True
 
     async def setup(self) -> None:
         if self._disposed:
