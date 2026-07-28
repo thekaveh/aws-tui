@@ -263,6 +263,15 @@ async def test_results_snapshot_rejects_unowned_loading_state() -> None:
             error_text="unexpected",
             is_loading_more=False,
         ),
+        AthenaResultsSnapshot(
+            execution_id="q-1",
+            columns=(_ID,),
+            rows=(),
+            next_token="next",
+            state=PaneState.ERROR,
+            error_text="request failed",
+            is_loading_more=False,
+        ),
     ],
 )
 async def test_results_snapshot_rejects_structurally_incoherent_data(
@@ -275,6 +284,27 @@ async def test_results_snapshot_rejects_structurally_incoherent_data(
 
     assert destination.execution_id is None
     assert destination.rows == ()
+
+
+@pytest.mark.asyncio
+async def test_results_snapshot_preserves_retryable_error_with_owned_rows() -> None:
+    snapshot = AthenaResultsSnapshot(
+        execution_id="q-1",
+        columns=(_ID,),
+        rows=(("one",),),
+        next_token="next",
+        state=PaneState.ERROR,
+        error_text="request failed",
+        is_loading_more=False,
+    )
+    destination_client = ResultClient({})
+    destination = make_results_vm(destination_client)
+
+    await destination.restore_snapshot(snapshot)
+
+    assert destination.export_snapshot() == snapshot
+    assert destination.has_more
+    assert destination_client.calls == []
 
 
 @pytest.mark.asyncio

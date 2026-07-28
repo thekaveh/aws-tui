@@ -2161,6 +2161,119 @@ async def test_page_snapshot_rejects_empty_context_tokens_without_provider_calls
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "violation",
+    [
+        "duplicate_workgroup",
+        "mismatched_workgroup_detail",
+        "duplicate_catalog",
+        "duplicate_database",
+        "foreign_database_profile",
+        "foreign_database_region",
+        "foreign_database_catalog",
+    ],
+)
+async def test_page_snapshot_rejects_incoherent_context_identity_without_calls(
+    violation: str,
+) -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    await page.setup()
+    snapshot = page.export_snapshot()
+    context_state = snapshot.context_state
+
+    if violation == "duplicate_workgroup":
+        context_state = replace(
+            context_state,
+            workgroups=(context_state.workgroups[0], *context_state.workgroups),
+        )
+    elif violation == "mismatched_workgroup_detail":
+        context_state = replace(
+            context_state,
+            workgroup_detail=replace(
+                context_state.workgroup_detail,
+                summary=replace(
+                    context_state.workgroup_detail.summary,
+                    description="different summary",
+                ),
+            ),
+        )
+    elif violation == "duplicate_catalog":
+        context_state = replace(
+            context_state,
+            catalogs=(context_state.catalogs[0], *context_state.catalogs),
+        )
+    elif violation == "duplicate_database":
+        context_state = replace(
+            context_state,
+            databases=(context_state.databases[0], *context_state.databases),
+        )
+    else:
+        field = {
+            "foreign_database_profile": "connection_name",
+            "foreign_database_region": "region",
+            "foreign_database_catalog": "catalog_name",
+        }[violation]
+        context_state = replace(
+            context_state,
+            databases=(
+                *context_state.databases,
+                replace(
+                    context_state.databases[0],
+                    ref=replace(
+                        context_state.databases[0].ref,
+                        **{field: "FOREIGN_PROFILE_SECRET"},
+                    ),
+                ),
+            ),
+        )
+
+    hostile = replace(snapshot, context_state=context_state)
+    before = _provider_call_counts(client)
+
+    with pytest.raises(ValueError, match=r"^Athena snapshot is invalid$"):
+        await page.restore_snapshot(hostile)
+
+    assert _provider_call_counts(client) == before
+    assert page.export_snapshot() == snapshot
+    assert "FOREIGN_PROFILE_SECRET" not in repr(hostile)
+
+
+@pytest.mark.asyncio
+async def test_page_snapshot_foreign_context_rejection_is_value_free(
+    tmp_path: Path,
+) -> None:
+    marker = "FOREIGN_CONTEXT_SNAPSHOT_SECRET"
+    page = make_page_vm(PageClient())
+    await page.setup()
+    snapshot = page.export_snapshot()
+    database = snapshot.context_state.databases[0]
+    hostile = replace(
+        snapshot,
+        context_state=replace(
+            snapshot.context_state,
+            databases=(
+                database,
+                replace(
+                    database,
+                    ref=replace(database.ref, connection_name=marker),
+                ),
+            ),
+        ),
+    )
+
+    error_text, trace, crash = await _snapshot_failure_artifacts(
+        page,
+        hostile,
+        tmp_path / "crash",
+    )
+
+    assert error_text == "Athena snapshot is invalid"
+    assert marker not in trace
+    assert marker not in crash
+
+
+@pytest.mark.asyncio
 async def test_shutdown_and_dispose_cascade_once_without_owning_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

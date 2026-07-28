@@ -1779,18 +1779,28 @@ def _snapshot_context_stage_is_valid(
         or not all(valid_database_summary(row) for row in value.databases)
     ):
         return False
-    return (
-        value.workgroup_detail.summary.name == expected_context.workgroup
-        and any(row.name == expected_context.workgroup for row in value.workgroups)
-        and any(row.name == expected_context.catalog for row in value.catalogs)
-        and any(
-            row.ref.connection_name == expected_context.connection_name
-            and row.ref.region == expected_context.region
-            and row.ref.catalog_name == expected_context.catalog
-            and row.ref.database_name == expected_context.database
+    workgroup_names = tuple(row.name for row in value.workgroups)
+    catalog_names = tuple(row.name for row in value.catalogs)
+    database_refs = tuple(row.ref for row in value.databases)
+    selected_workgroups = tuple(
+        row for row in value.workgroups if row.name == expected_context.workgroup
+    )
+    if (
+        len(set(workgroup_names)) != len(workgroup_names)
+        or len(set(catalog_names)) != len(catalog_names)
+        or len(set(database_refs)) != len(database_refs)
+        or len(selected_workgroups) != 1
+        or value.workgroup_detail.summary != selected_workgroups[0]
+        or catalog_names.count(expected_context.catalog) != 1
+        or any(
+            row.ref.connection_name != expected_context.connection_name
+            or row.ref.region != expected_context.region
+            or row.ref.catalog_name != expected_context.catalog
             for row in value.databases
         )
-    )
+    ):
+        return False
+    return sum(row.ref.database_name == expected_context.database for row in value.databases) == 1
 
 
 __all__ = ["AthenaPageSnapshot", "AthenaPageVM", "AthenaView"]

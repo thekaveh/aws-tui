@@ -458,6 +458,24 @@ async def test_saved_snapshot_relational_invariants_reject_atomically_without_ca
     named_summary = snapshot.named_queries[0]
     named_detail = snapshot.named_query_details[0]
     prepared_summary = snapshot.prepared_statements[0]
+    empty = replace(
+        snapshot,
+        named_queries=(),
+        named_query_details=(),
+        prepared_statements=(),
+        named_next_token=None,
+        prepared_next_token=None,
+        selected_kind=None,
+        selected_query_id=None,
+        selected_named_query=None,
+        selected_prepared_statement=None,
+        named_state=PaneState.EMPTY,
+        prepared_state=PaneState.EMPTY,
+        detail_state=PaneState.EMPTY,
+        named_error_text=None,
+        prepared_error_text=None,
+        detail_error_text=None,
+    )
     invalid = (
         replace(snapshot, named_next_token=""),
         replace(snapshot, prepared_next_token=""),
@@ -482,6 +500,18 @@ async def test_saved_snapshot_relational_invariants_reject_atomically_without_ca
         ),
         replace(snapshot, named_state=PaneState.ERROR, named_error_text=None),
         replace(snapshot, named_error_text="unexpected"),
+        replace(
+            empty,
+            named_next_token="next",
+            named_state=PaneState.ERROR,
+            named_error_text="request failed",
+        ),
+        replace(
+            empty,
+            prepared_next_token="next",
+            prepared_state=PaneState.FORBIDDEN,
+            prepared_error_text="request failed",
+        ),
     )
 
     for candidate in invalid:
@@ -495,3 +525,12 @@ async def test_saved_snapshot_relational_invariants_reject_atomically_without_ca
         tuple(client.prepared_list_calls),
         tuple(client.prepared_detail_calls),
     ) == before_calls
+
+    retryable = replace(
+        snapshot,
+        named_state=PaneState.ERROR,
+        named_error_text="request failed",
+    )
+    vm.restore_snapshot(retryable)
+    assert vm.export_snapshot() == retryable
+    assert vm.has_more_named_queries

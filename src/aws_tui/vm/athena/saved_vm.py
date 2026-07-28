@@ -494,6 +494,10 @@ class AthenaSavedVM:
             return False
         if any(row.name == "" for row in snapshot.prepared_statements):
             return False
+        if snapshot.named_next_token is not None and not snapshot.named_queries:
+            return False
+        if snapshot.prepared_next_token is not None and not snapshot.prepared_statements:
+            return False
         if (snapshot.selected_kind is None) != (snapshot.selected_query_id is None):
             return False
         if snapshot.selected_kind is SavedQueryKind.NAMED:

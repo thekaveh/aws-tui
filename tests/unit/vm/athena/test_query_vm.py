@@ -1204,7 +1204,6 @@ async def test_query_snapshot_restore_rejects_unowned_active_state(
             },
         ),
         (QueryState.SUCCEEDED, {"error_text": "terminal error"}),
-        (QueryState.SUCCEEDED, {"validation_error": "stale validation"}),
         (QueryState.FAILED, {"pane_state": PaneState.LOADING}),
         (QueryState.FAILED, {"error_text": "ownerless error"}),
         (QueryState.CANCELLED, {"pane_state": PaneState.ERROR}),
@@ -1300,6 +1299,85 @@ async def test_query_snapshot_preserves_valid_terminal_states(
     assert destination.error_text is None
     expected_rows = (("row",),) if state is QueryState.SUCCEEDED else ()
     assert destination.results.rows == expected_rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal_state",
+    [QueryState.SUCCEEDED, QueryState.FAILED, QueryState.CANCELLED],
+)
+async def test_query_snapshot_preserves_terminal_result_with_new_editor_validation_error(
+    terminal_state: QueryState,
+) -> None:
+    source_client = InMemoryAthena(
+        executions=((_detail("q-app-1", terminal_state),),),
+        result_pages={
+            ("q-app-1", None): ResultPage((_COLUMN,), (("row",),), None),
+        },
+    )
+    source = make_query_vm(source_client)
+    source.set_sql("SELECT 1")
+    await source.execute()
+    source.set_sql("DELETE FROM sales")
+    await source.execute()
+
+    assert source.validation_error is not None
+    assert source.state is terminal_state
+    expected_rows = (("row",),) if terminal_state is QueryState.SUCCEEDED else ()
+    assert source.results.rows == expected_rows
+    snapshot = source.export_snapshot()
+
+    destination_client = InMemoryAthena()
+    destination = make_query_vm(destination_client)
+    destination.set_sql("SELECT 'temporary'")
+    await destination.restore_snapshot(snapshot)
+
+    assert destination.export_snapshot() == snapshot
+    assert destination.validation_error == source.validation_error
+    assert destination.state is terminal_state
+    assert destination.results.rows == expected_rows
+    assert destination.pane_state is PaneState.IDLE
+    assert not destination.is_executing
+    assert not destination.is_submitting
+    assert destination_client.calls == []
+    assert destination_client.start_calls == []
+    assert destination_client.result_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("statistics", _STATS),
+        (
+            "query_error",
+            AthenaQueryError(
+                category=1,
+                error_type=2,
+                retryable=False,
+                message="stale error",
+            ),
+        ),
+        ("state_reason", "stale reason"),
+        ("output_location", "s3://stale/output"),
+        ("engine_version", "stale engine"),
+    ],
+)
+async def test_query_snapshot_without_execution_rejects_execution_only_state(
+    field: str,
+    value: object,
+) -> None:
+    vm = make_query_vm(InMemoryAthena())
+    vm.set_sql("DELETE FROM sales")
+    await vm.execute()
+    snapshot = vm.export_snapshot()
+    assert snapshot.validation_error is not None
+    hostile = replace(snapshot, **{field: value})
+
+    with pytest.raises(ValueError, match=r"^Athena query snapshot is invalid$"):
+        await vm.restore_snapshot(hostile)
+
+    assert vm.export_snapshot() == snapshot
 
 
 @pytest.mark.asyncio

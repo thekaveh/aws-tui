@@ -306,6 +306,8 @@ class AthenaResultsVM:
             )
         if (snapshot.rows or snapshot.next_token is not None) and not snapshot.columns:
             return False
+        if snapshot.next_token is not None and not snapshot.rows:
+            return False
         if snapshot.state is PaneState.IDLE:
             return bool(snapshot.rows) and snapshot.error_text is None
         if snapshot.state is PaneState.EMPTY:

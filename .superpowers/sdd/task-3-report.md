@@ -1202,3 +1202,65 @@ Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
 No verification process remained running. The implementation preserved child VM
 instances and subscriptions, and `.superpowers/sdd/progress.md` remained
 untouched.
+
+## Final Relational-Invariant Closure: 2026-07-28
+
+### TDD Evidence
+
+The final review probes were converted into focused regression tests before the
+validators changed. The RED run demonstrated all three remaining gaps:
+
+```text
+14 failed, 8 passed in 0.76s
+```
+
+The failures covered duplicate and foreign context rows, a selected workgroup
+detail that did not equal its summary row, a terminal execution paired with a
+new editor validation error, stale execution-only fields without an execution,
+and ownerless continuation tokens on empty error panes.
+
+### Implementation
+
+- Self-contained page context snapshots now require unique workgroup and
+  catalog names, unique database identities, exactly one selected row at each
+  level, exact selected workgroup-detail equality, and source-consistent
+  connection, region, and catalog values for every database row.
+- Query snapshots treat local SQL validation as editor state. A new validation
+  error may coexist with an otherwise coherent succeeded, failed, or cancelled
+  execution, while active query states and stale statistics/error/reason/output/
+  engine fields without an execution remain invalid.
+- History, named-query, prepared-statement, and result snapshots reject
+  continuation tokens unless the corresponding pane owns at least one row.
+  Existing rows plus a retryable token remain supported.
+- Every rejection remains local, atomic, provider-call-free, and value-free.
+
+### Verification
+
+```text
+Focused final invariant probes:        28 passed
+Warning-strict snapshot/privacy:      266 passed
+Cross-service Task 3 matrix:          940 passed
+Athena VM coverage:                   228 passed, 86.98%
+
+uv run mypy src/aws_tui
+Success: no issues found in 155 source files
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+392 files already formatted
+
+scripts/check-layers.sh
+layer rules clean
+
+git diff --check
+clean
+
+uv build --no-build-isolation
+Successfully built dist/aws_tui-0.8.0.tar.gz
+Successfully built dist/aws_tui-0.8.0-py3-none-any.whl
+```
+
+All pytest commands used hard timeouts. No provider-backed or test process
+remained running, and `.superpowers/sdd/progress.md` was not modified.

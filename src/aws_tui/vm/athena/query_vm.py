@@ -369,7 +369,15 @@ class AthenaQueryVM:
         if snapshot.state in {QueryState.QUEUED, QueryState.RUNNING}:
             return False
         if snapshot.execution_ref is None:
-            if snapshot.state is not None or snapshot.results.execution_id is not None:
+            if (
+                snapshot.state is not None
+                or snapshot.statistics != _EMPTY_STATISTICS
+                or snapshot.query_error is not None
+                or snapshot.state_reason is not None
+                or snapshot.output_location is not None
+                or snapshot.engine_version is not None
+                or snapshot.results.execution_id is not None
+            ):
                 return False
             if snapshot.pane_state is PaneState.LOADING:
                 return False
@@ -383,11 +391,7 @@ class AthenaQueryVM:
             return snapshot.error_text is None
         if snapshot.state not in _TERMINAL_QUERY_STATES:
             return False
-        if (
-            snapshot.validation_error is not None
-            or snapshot.pane_state is not PaneState.IDLE
-            or snapshot.error_text is not None
-        ):
+        if snapshot.pane_state is not PaneState.IDLE or snapshot.error_text is not None:
             return False
         if snapshot.state is QueryState.SUCCEEDED:
             return (

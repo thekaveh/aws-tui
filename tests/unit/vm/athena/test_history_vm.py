@@ -463,6 +463,12 @@ async def test_history_snapshot_relational_invariants_reject_atomically_without_
         replace(snapshot, details=()),
         replace(snapshot, state=PaneState.EMPTY),
         replace(empty, next_token="next"),
+        replace(
+            empty,
+            next_token="next",
+            state=PaneState.ERROR,
+            error_text="request failed",
+        ),
         replace(empty, state=PaneState.IDLE),
         replace(snapshot, state=PaneState.ERROR, error_text=None),
         replace(snapshot, error_text="unexpected"),
@@ -474,3 +480,12 @@ async def test_history_snapshot_relational_invariants_reject_atomically_without_
         assert vm.export_snapshot() == snapshot
 
     assert (tuple(client.list_calls), tuple(client.detail_calls)) == before_calls
+
+    retryable = replace(
+        snapshot,
+        state=PaneState.ERROR,
+        error_text="request failed",
+    )
+    vm.restore_snapshot(retryable)
+    assert vm.export_snapshot() == retryable
+    assert vm.has_more

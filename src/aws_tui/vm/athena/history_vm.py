@@ -290,6 +290,8 @@ class AthenaHistoryVM:
             and snapshot.selected_execution_id not in details
         ):
             return False
+        if snapshot.next_token is not None and not snapshot.items:
+            return False
         if snapshot.state is PaneState.EMPTY:
             return not (
                 snapshot.items
