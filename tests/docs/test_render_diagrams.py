@@ -1,3 +1,4 @@
+import os
 import stat
 import textwrap
 import xml.etree.ElementTree as ET
@@ -29,6 +30,24 @@ def test_extract_svg_sanitizes_named_entities():
     assert "Σ" in out
     assert "&amp;" in out  # standard XML entity preserved
     assert "&#160;" in out  # numeric entity preserved
+
+
+def test_extract_svg_escapes_xml_significant_html_aliases():
+    html = (
+        "<svg><text data-amp='&AMP;' data-lt='&LT;' data-quote='&QUOT;'>"
+        "&AMP;&LT;&QUOT;</text></svg>"
+    )
+
+    out = extract_svg(html)
+    root = ET.fromstring(out)
+    text = root.find("text")
+
+    assert "&amp;" in out
+    assert "&lt;" in out
+    assert "&quot;" in out
+    assert text is not None
+    assert text.attrib == {"data-amp": "&", "data-lt": "<", "data-quote": '"'}
+    assert text.text == '&<"'
 
 
 def test_extract_svg_rejects_unknown_named_entities():
@@ -74,8 +93,12 @@ def test_render_all_writes_svg_and_png(tmp_path):
     assert (png_dir / "system.svg").read_text(encoding="utf-8").endswith("\n")
     assert (site_img / "system.svg").read_text(encoding="utf-8").endswith("\n")
     assert (png_dir / "system.png").read_bytes()[:4] == b"\x89PNG"
-    assert stat.S_IMODE((png_dir / "system.svg").stat().st_mode) == 0o644
-    assert stat.S_IMODE((png_dir / "system.png").stat().st_mode) == 0o644
+    for asset in (png_dir / "system.svg", png_dir / "system.png"):
+        if os.name == "nt":
+            assert not asset.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+            assert os.access(asset, os.W_OK)
+        else:
+            assert stat.S_IMODE(asset.stat().st_mode) == 0o644
 
 
 def test_copy_assets_copies_pngs(tmp_path):

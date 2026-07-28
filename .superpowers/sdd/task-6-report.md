@@ -417,3 +417,31 @@ unrelated component.
 No new concern remains. The pre-existing missing `/tmp/vmx-cargo-182/env`
 shell warning and the Material for MkDocs 2.0 advisory are non-blocking; strict
 build and all verification commands exited successfully.
+
+## 10. Re-review Fix: SVG Entities and Asset Modes
+
+RED:
+
+```text
+env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib \
+  .venv/bin/python -m pytest \
+  tests/docs/test_render_diagrams.py::test_extract_svg_escapes_xml_significant_html_aliases -q
+
+FAILED: ElementTree rejected raw `&`, `<`, and `"` produced by `&AMP;`,
+`&LT;`, and `&QUOT;`.
+1 failed in 0.06s
+```
+
+GREEN:
+
+```text
+env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib \
+  .venv/bin/python -m pytest tests/docs/test_render_diagrams.py -q
+
+9 passed in 0.18s
+```
+
+Known HTML aliases now escape XML-significant replacement characters before
+serialization, while non-XML aliases still resolve to Unicode and unknown
+names still raise `ValueError`. Asset-mode tests retain exact `0644` checks on
+POSIX and assert writable, non-read-only generated files on Windows.

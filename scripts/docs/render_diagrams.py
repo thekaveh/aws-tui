@@ -14,6 +14,13 @@ _SVG_RE = re.compile(r"<svg[\s\S]*?</svg>", re.IGNORECASE)
 # Named entities that are NOT valid in standalone XML (exclude the 5 XML
 # built-ins and numeric entities).
 _ENTITY_RE = re.compile(r"&(?!amp;|lt;|gt;|quot;|apos;|#)[a-zA-Z][a-zA-Z0-9]*;")
+_XML_ENTITY_ESCAPES = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&apos;",
+}
 
 
 def _replace_named_entity(match: re.Match[str]) -> str:
@@ -21,7 +28,7 @@ def _replace_named_entity(match: re.Match[str]) -> str:
     entity_name = entity[1:]
     if entity_name not in html5:
         raise ValueError(f"unknown named HTML entity in SVG: {entity}")
-    return html5[entity_name]
+    return "".join(_XML_ENTITY_ESCAPES.get(char, char) for char in html5[entity_name])
 
 
 def extract_svg(html_text: str) -> str:
