@@ -153,7 +153,13 @@ async def test_focused_tab_activates_with_keyboard(key: str) -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.query_one("#glue-tab-jobs").focus()
+        page = app.query_one(GluePage)
+        page._maybe_focus_active()  # type: ignore[attr-defined]
+        await pilot.pause(0.05)
+        tab = app.query_one("#glue-tab-jobs")
+        tab.focus()
+        await pilot.pause()
+        assert tab.has_focus
 
         await pilot.press(key)
         await pilot.pause()

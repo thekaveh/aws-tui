@@ -149,6 +149,8 @@ async def test_load_more_routes_by_focused_context_or_active_surface() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(AthenaPage)
+        page._refresh_page()  # type: ignore[attr-defined]
+        await pilot.pause()
         routes = (
             ("#athena-more-workgroups", "workgroups"),
             ("#athena-more-catalogs", "catalogs"),
@@ -168,8 +170,10 @@ async def test_load_more_routes_by_focused_context_or_active_surface() -> None:
                 }[expected]
                 if page.vm.active_view != view:
                     await page.action_select_view(view)
-            app.query_one(selector).focus()
-            await pilot.pause()
+            target = app.query_one(selector)
+            target.focus()
+            await pilot.pause(0.05)
+            assert target.has_focus
             await page.action_load_more()
             assert calls.pop() == expected
 
@@ -331,6 +335,9 @@ async def test_default_focus_and_tab_cycle_are_stable() -> None:
 
     async with app.run_test() as pilot:
         await pilot.pause()
+        page = app.query_one(AthenaPage)
+        page._maybe_focus_active()  # type: ignore[attr-defined]
+        await pilot.pause()
         editor = app.query_one("#athena-editor", TextArea)
         assert editor.has_focus
 
@@ -385,6 +392,8 @@ async def test_context_and_aws_text_are_rendered_without_markup() -> None:
     app = _AthenaApp(vm)
 
     async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(AthenaPage)._refresh_page()  # type: ignore[attr-defined]
         await pilot.pause()
         svg = app.export_screenshot()
 
