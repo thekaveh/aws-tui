@@ -37,6 +37,7 @@ ICEBERG_REF = TableRef(
     "us-east-1",
 )
 OTHER_REF = replace(ICEBERG_REF, table_name="sessions")
+THIRD_REF = replace(ICEBERG_REF, table_name="accounts")
 
 
 def _snapshot(snapshot_id: int, *, age: int = 0) -> IcebergSnapshot:
@@ -420,6 +421,80 @@ async def test_synchronous_clear_supersedes_inflight_rebind() -> None:
     assert not await loading
     assert vm.table_ref is None
     assert vm.snapshots == ()
+
+
+@pytest.mark.asyncio
+async def test_clear_from_invalidation_notification_supersedes_outer_bind() -> None:
+    vm, _inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    cleared = False
+
+    def clear_reentrantly(property_name: str) -> None:
+        nonlocal cleared
+        if property_name == "available" and vm.table_ref is None and not cleared:
+            cleared = True
+            vm.clear_table()
+
+    subscription = vm.on_property_changed.subscribe(on_next=clear_reentrantly)
+
+    await vm.bind_table(OTHER_REF, table_format=TableFormat.ICEBERG)
+
+    assert cleared
+    assert vm.table_ref is None
+    assert not vm.available
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bind_from_invalidation_notification_prevents_outer_bind_publish() -> None:
+    vm, _inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    rebound: asyncio.Task[None] | None = None
+    published_refs: list[TableRef | None] = []
+
+    def bind_reentrantly(property_name: str) -> None:
+        nonlocal rebound
+        if property_name == "available" and vm.table_ref is None and rebound is None:
+            rebound = asyncio.create_task(
+                vm.bind_table(THIRD_REF, table_format=TableFormat.ICEBERG)
+            )
+        if property_name == "table_ref":
+            published_refs.append(vm.table_ref)
+
+    subscription = vm.on_property_changed.subscribe(on_next=bind_reentrantly)
+
+    await vm.bind_table(OTHER_REF, table_format=TableFormat.ICEBERG)
+    assert rebound is not None
+    await rebound
+
+    assert vm.table_ref == THIRD_REF
+    assert OTHER_REF not in published_refs
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_from_invalidation_notification_prevents_outer_bind_publish() -> None:
+    vm, _inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    shutdown: asyncio.Task[None] | None = None
+    published_refs: list[TableRef | None] = []
+
+    def shutdown_reentrantly(property_name: str) -> None:
+        nonlocal shutdown
+        if property_name == "available" and vm.table_ref is None and shutdown is None:
+            shutdown = asyncio.create_task(vm.shutdown())
+        if property_name == "table_ref":
+            published_refs.append(vm.table_ref)
+
+    subscription = vm.on_property_changed.subscribe(on_next=shutdown_reentrantly)
+
+    await vm.bind_table(OTHER_REF, table_format=TableFormat.ICEBERG)
+    assert shutdown is not None
+    await shutdown
+
+    assert vm.table_ref is None
+    assert OTHER_REF not in published_refs
+    subscription.dispose()
 
 
 @pytest.mark.asyncio

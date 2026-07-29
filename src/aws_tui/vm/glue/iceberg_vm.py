@@ -169,6 +169,7 @@ class GlueIcebergVM:
         self._shutdown_complete = False
         self._lifecycle_lock = asyncio.Lock()
         self._metadata_tasks: set[asyncio.Task[tuple[Any, ...]]] = set()
+        self._mutation_epoch = 0
         self._binding_generation = 0
         self._table_ref: TableRef | None = None
         self._active_view: IcebergView = "snapshots"
@@ -281,6 +282,7 @@ class GlueIcebergVM:
             return
         self._disposed = True
         self._shutdown_started = True
+        self._mutation_epoch += 1
         self._invalidate_binding(notify=False)
         self._cancel_metadata_tasks()
         try:
@@ -300,59 +302,95 @@ class GlueIcebergVM:
         """Replace the table and clear every pane without issuing provider calls."""
         if self._disposed or self._shutdown_started:
             return
+        self._mutation_epoch += 1
+        mutation_epoch = self._mutation_epoch
         if (
             table_ref is not None
             and table_format is TableFormat.ICEBERG
             and _valid_table_ref(table_ref)
         ):
-            await self._replace_table(table_ref)
+            await self._replace_table(table_ref, mutation_epoch)
             return
-        await self._replace_table(None)
+        await self._replace_table(None, mutation_epoch)
 
     def clear_table(self) -> None:
         """Synchronously invalidate metadata during a parent selection reset."""
         if self._disposed or self._shutdown_started:
             return
+        self._mutation_epoch += 1
         self._invalidate_binding()
         self._cancel_metadata_tasks()
 
     async def clear_table_and_drain(self) -> None:
         """Invalidate metadata and durably drain provider work."""
+        if not self._disposed and not self._shutdown_started:
+            self._mutation_epoch += 1
+            mutation_epoch = self._mutation_epoch
+        else:
+            mutation_epoch = None
         async with self._lifecycle_lock:
             if self._shutdown_complete:
                 return
-            if not self._disposed and not self._shutdown_started:
+            if (
+                mutation_epoch is not None
+                and mutation_epoch == self._mutation_epoch
+                and not self._disposed
+                and not self._shutdown_started
+            ):
                 self._invalidate_binding()
             await self._cancel_and_drain_metadata_tasks()
 
+    def begin_shutdown(self) -> None:
+        if self._shutdown_started or self._shutdown_complete:
+            return
+        self._shutdown_started = True
+        self._mutation_epoch += 1
+        if not self._disposed:
+            self._invalidate_binding()
+        self._cancel_metadata_tasks()
+
     async def shutdown(self) -> None:
+        self.begin_shutdown()
         async with self._lifecycle_lock:
             if self._shutdown_complete:
                 return
-            self._shutdown_started = True
-            if not self._disposed:
-                self._invalidate_binding()
             await self._cancel_and_drain_metadata_tasks()
             self._shutdown_complete = True
 
-    async def _replace_table(self, table_ref: TableRef | None) -> None:
+    async def _replace_table(
+        self,
+        table_ref: TableRef | None,
+        mutation_epoch: int,
+    ) -> None:
         async with self._lifecycle_lock:
-            if self._disposed or self._shutdown_started:
+            if self._disposed or self._shutdown_started or self._mutation_epoch != mutation_epoch:
                 return
-            self._invalidate_binding()
-            binding_generation = self._binding_generation
-            await self._cancel_and_drain_metadata_tasks()
+            binding_generation = self._invalidate_binding()
+            self._cancel_metadata_tasks()
+            cancelled = False
+            try:
+                await asyncio.sleep(0)
+            except asyncio.CancelledError:
+                cancelled = True
+            try:
+                await self._cancel_and_drain_metadata_tasks()
+            except asyncio.CancelledError:
+                cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
             if (
                 self._disposed
                 or self._shutdown_started
+                or self._mutation_epoch != mutation_epoch
                 or self._binding_generation != binding_generation
             ):
                 return
             self._table_ref = table_ref
             self._notify_all()
 
-    def _invalidate_binding(self, *, notify: bool = True) -> None:
+    def _invalidate_binding(self, *, notify: bool = True) -> int:
         self._binding_generation += 1
+        binding_generation = self._binding_generation
         self._table_ref = None
         self._selected_snapshot_id = None
         for view, pane in self._panes.items():
@@ -365,6 +403,7 @@ class GlueIcebergVM:
             self._remember_stable(view, pane)
         if notify:
             self._notify_all()
+        return binding_generation
 
     def _cancel_metadata_tasks(self) -> tuple[asyncio.Task[tuple[Any, ...]], ...]:
         tasks = tuple(self._metadata_tasks)
