@@ -104,6 +104,10 @@ class GluePageVM:
     def active_view(self) -> GlueView:
         return self._active_view
 
+    @property
+    def actions_available(self) -> bool:
+        return self._is_alive()
+
     def construct(self) -> None:
         if not self._is_alive():
             return

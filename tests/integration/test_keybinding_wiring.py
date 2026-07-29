@@ -115,7 +115,12 @@ async def test_global_v_dispatch_uses_active_snapshot_action_guard(
     await iceberg.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
     await iceberg.select_view("snapshots")
     assert iceberg.select_snapshot(43)
-    page = SimpleNamespace(vm=SimpleNamespace(time_travel_in_athena=iceberg.time_travel_in_athena))
+    page = SimpleNamespace(
+        vm=SimpleNamespace(
+            actions_available=True,
+            time_travel_in_athena=iceberg.time_travel_in_athena,
+        )
+    )
     received: list[OpenAthenaTableRequest] = []
     subscription = hub.messages.subscribe(
         on_next=lambda message: (

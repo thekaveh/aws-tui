@@ -2350,6 +2350,8 @@ class AwsTuiApp(App[None]):
         page = self._glue_page()
         if page is None:
             return
+        if not page.vm.actions_available:
+            return
         if page.vm.open_s3_location():
             return
         notifications.advise(
@@ -2362,6 +2364,8 @@ class AwsTuiApp(App[None]):
     async def action_query_glue_table_in_athena(self) -> None:
         self.record_action("glue.query_in_athena")
         page = self._glue_page()
+        if page is not None and not page.vm.actions_available:
+            return
         if page is not None and page.vm.query_in_athena():
             return
         notifications.advise(
@@ -2374,6 +2378,8 @@ class AwsTuiApp(App[None]):
     async def action_time_travel_glue_table_in_athena(self) -> None:
         self.record_action("glue.time_travel_in_athena")
         page = self._glue_page()
+        if page is not None and not page.vm.actions_available:
+            return
         if page is not None and page.vm.time_travel_in_athena():
             return
         notifications.advise(

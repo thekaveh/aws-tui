@@ -158,9 +158,10 @@ async def test_glue_to_athena_preserves_identity_and_prefills_without_running(
     [
         ("glue.open_s3_location", OpenS3LocationRequest),
         ("glue.query_in_athena", OpenAthenaTableRequest),
+        ("glue.time_travel_in_athena", OpenAthenaTableRequest),
     ],
 )
-async def test_glue_app_handoffs_are_terminal_after_page_shutdown(
+async def test_glue_app_actions_are_silent_after_page_shutdown(
     tmp_path: Path,
     action_id: str,
     request_type: type[object],
@@ -182,14 +183,60 @@ async def test_glue_app_handoffs_are_terminal_after_page_shutdown(
                     requests.append(message) if isinstance(message, request_type) else None
                 )
             )
+            toasts_before = tuple(toast.model.id for toast in ctx.root_vm.chrome.toast_stack.toasts)
 
             await _invoke(app, action_id)
             await _wait_for_service_setup(ctx, app, pilot)
 
             assert requests == []
+            assert (
+                tuple(toast.model.id for toast in ctx.root_vm.chrome.toast_stack.toasts)
+                == toasts_before
+            )
             assert ctx.root_vm.content_host.current is glue
             assert ctx.root_vm.content_host.current_id == "glue"
             subscription.dispose()
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action_id", "toast_id"),
+    [
+        ("glue.open_s3_location", "glue-s3-location-invalid"),
+        ("glue.query_in_athena", "glue-athena-table-unavailable"),
+        ("glue.time_travel_in_athena", "glue-athena-snapshot-unavailable"),
+    ],
+)
+async def test_live_glue_invalid_selection_actions_retain_advisory_toast(
+    tmp_path: Path,
+    action_id: str,
+    toast_id: str,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+            if action_id == "glue.open_s3_location":
+                glue.catalog._table_detail = None  # type: ignore[attr-defined]
+            elif action_id == "glue.query_in_athena":
+                glue.catalog._selected_table_name = None  # type: ignore[attr-defined]
+            toast_count = len(ctx.root_vm.chrome.toast_stack.toasts)
+
+            await _invoke(app, action_id)
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            assert len(ctx.root_vm.chrome.toast_stack.toasts) == toast_count + 1
+            assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == toast_id
+            assert ctx.root_vm.content_host.current is glue
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

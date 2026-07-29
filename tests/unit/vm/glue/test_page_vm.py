@@ -930,6 +930,21 @@ async def test_public_page_actions_are_terminal_after_shutdown() -> None:
     ) == call_counts
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("termination", ["shutdown", "dispose"])
+async def test_actions_available_tracks_page_terminal_lifecycle(termination: str) -> None:
+    page = make_page_vm(seeded_glue())
+
+    assert page.actions_available
+
+    if termination == "shutdown":
+        await page.shutdown()
+    else:
+        page.dispose()
+
+    assert not page.actions_available
+
+
 def test_dispose_cascades_once_without_disposing_service_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
