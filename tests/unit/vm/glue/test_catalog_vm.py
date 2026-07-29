@@ -168,6 +168,104 @@ async def test_catalog_select_table_discards_stale_detail_and_partitions() -> No
 
 
 @pytest.mark.asyncio
+async def test_empty_refresh_does_not_clear_newer_database_result_after_iceberg_drain() -> None:
+    fake = seeded_glue()
+    events = next(row for row in fake.tables["analytics"] if row.ref.table_name == "events")
+    fake.table_details[events.ref] = replace(
+        fake.table_details[events.ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    inspector = CancellationResistantInspector()
+    vm = make_catalog_vm(fake, iceberg_inspector=inspector)
+    await vm.setup()
+    await vm.select_database("analytics")
+    await vm.select_table("events")
+    metadata_load = asyncio.create_task(vm.iceberg.select_view("snapshots"))
+    await inspector.started.wait()
+
+    databases = tuple(fake.databases)
+    fake.databases.clear()
+    empty_refresh = asyncio.create_task(vm.refresh_databases())
+    await inspector.cancellation_seen.wait()
+
+    fake.databases.extend(databases)
+    await vm.refresh_databases()
+    state_after_newer_refresh = _catalog_state(vm)
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+
+    inspector.release.set()
+    results = await asyncio.gather(empty_refresh, metadata_load, return_exceptions=True)
+
+    assert results == [None, False]
+    assert _catalog_state(vm) == state_after_newer_refresh
+    assert notifications == []
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_table_selection_stays_superseded_by_database_selection_after_iceberg_drain() -> None:
+    fake = seeded_glue()
+    fake.add_table("archive", "old-events")
+    events = next(row for row in fake.tables["analytics"] if row.ref.table_name == "events")
+    fake.table_details[events.ref] = replace(
+        fake.table_details[events.ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    inspector = CancellationResistantInspector()
+    vm = make_catalog_vm(fake, iceberg_inspector=inspector)
+    await vm.setup()
+    await vm.select_database("analytics")
+    await vm.select_table("events")
+    fake.table_detail_requests.clear()
+    metadata_load = asyncio.create_task(vm.iceberg.select_view("snapshots"))
+    await inspector.started.wait()
+
+    bindings: list[TableRef | None] = []
+    bind_table = vm.iceberg.bind_table
+
+    async def record_binding(
+        table_ref: TableRef | None,
+        *,
+        table_format: TableFormat | None = None,
+    ) -> None:
+        bindings.append(table_ref)
+        await bind_table(table_ref, table_format=table_format)
+
+    vm.iceberg.bind_table = record_binding  # type: ignore[method-assign]
+    stale_selection = asyncio.create_task(vm.select_table("events"))
+    await inspector.cancellation_seen.wait()
+    archive_tables_started = fake.block_tables("archive")
+    newer_selection = asyncio.create_task(vm.select_database("archive"))
+    await asyncio.sleep(0)
+    assert vm.selected_database_name == "archive"
+
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+    inspector.release.set()
+    await stale_selection
+    await archive_tables_started.wait()
+
+    assert fake.table_detail_requests == []
+    assert bindings == []
+    assert vm.selected_database_name == "archive"
+    assert vm.selected_table_name is None
+    assert vm.table_detail is None
+    assert vm.partitions == ()
+    assert notifications.count("selected_table_name") == 1
+    assert notifications.count("table_detail") == 1
+    assert notifications.count("partitions") == 1
+    assert notifications.count("detail_state") == 1
+    assert notifications.count("partitions_state") == 1
+
+    fake.release_tables("archive")
+    results = await asyncio.gather(newer_selection, metadata_load, return_exceptions=True)
+
+    assert results == [None, False]
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "selection",
     ["database", "table", "empty-database-refresh"],
