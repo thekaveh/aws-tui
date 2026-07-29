@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import reactivex as rx
@@ -13,6 +14,7 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueCrawlerDetail, GlueCrawlerSummary
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
 
 
 class GlueCrawlersVM:
@@ -22,10 +24,16 @@ class GlueCrawlersVM:
         client: Any,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
+        _operations: GlueOperationOwner | None = None,
     ) -> None:
         self._client = client
         self._hub = hub
         self._disposed = False
+        self._shutdown_started = False
+        self._shutdown_complete = False
+        self._shutdown_lock = asyncio.Lock()
+        self._operations = _operations or GlueOperationOwner()
+        self._owns_operations = _operations is None
         self._on_property_changed: Subject[str] = Subject()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -91,35 +99,50 @@ class GlueCrawlersVM:
         return self._on_property_changed
 
     def construct(self) -> None:
+        if not self._is_alive():
+            return
         self._inner.construct()
 
     def dispose(self) -> None:
         if self._disposed:
             return
         self._disposed = True
-        self._crawler_generation += 1
-        self._detail_generation += 1
+        self._operations.close()
+        self._invalidate_operations()
         self._crawler_pager.dispose()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
 
+    async def shutdown(self) -> None:
+        self._begin_shutdown()
+        async with self._shutdown_lock:
+            if self._shutdown_complete:
+                return
+            if self._owns_operations:
+                await self._operations.cancel_and_drain()
+            self._shutdown_complete = True
+
     async def setup(self) -> None:
+        if not self._is_alive():
+            return
         await self._reload_crawlers()
 
     async def set_state_filter(self, state: str | None) -> None:
-        if state == self._state_filter:
+        if not self._is_alive() or state == self._state_filter:
             return
         self._state_filter = state
         self._notify("state_filter")
         await self._reload_crawlers()
 
     async def load_more_crawlers(self) -> None:
-        if not self.has_more_crawlers:
+        if not self._is_alive() or not self.has_more_crawlers:
             return
         generation = self._crawler_generation
         try:
             await self._crawler_pager.load_more_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._crawler_generation:
                 return
@@ -137,7 +160,7 @@ class GlueCrawlersVM:
             self._notify("has_more_crawlers")
 
     async def select_crawler(self, name: str) -> None:
-        if not any(crawler.name == name for crawler in self.crawlers):
+        if not self._is_alive() or not any(crawler.name == name for crawler in self.crawlers):
             return
         self._detail_generation += 1
         generation = self._detail_generation
@@ -148,7 +171,9 @@ class GlueCrawlersVM:
         self._notify("crawler_detail")
         self._set_detail_state(PaneState.LOADING)
         try:
-            detail = await self._client.get_crawler(name)
+            detail = await self._operations.run(lambda: self._client.get_crawler(name))
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._detail_generation:
                 return
@@ -185,6 +210,8 @@ class GlueCrawlersVM:
         self._set_state(PaneState.LOADING)
         try:
             await self._crawler_pager.refresh_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._crawler_generation:
                 return
@@ -208,9 +235,11 @@ class GlueCrawlersVM:
         state_filter = self._state_filter
 
         async def fetch(token: str | None) -> tuple[list[GlueCrawlerSummary], str | None]:
-            rows, next_token = await self._client.list_crawlers_page(
-                start_token=token,
-                state=state_filter,
+            rows, next_token = await self._operations.run(
+                lambda: self._client.list_crawlers_page(
+                    start_token=token,
+                    state=state_filter,
+                )
             )
             if generation != self._crawler_generation:
                 return [], None
@@ -230,8 +259,22 @@ class GlueCrawlersVM:
         self._detail_state = state
         self._notify("detail_state")
 
+    def _begin_shutdown(self) -> None:
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        self._operations.close()
+        self._invalidate_operations()
+
+    def _invalidate_operations(self) -> None:
+        self._crawler_generation += 1
+        self._detail_generation += 1
+
+    def _is_alive(self) -> bool:
+        return not self._disposed and not self._shutdown_started and self._operations.accepting
+
     def _notify(self, property_name: str) -> None:
-        if self._disposed:
+        if not self._is_alive():
             return
         self._hub.send(PropertyChangedMessage.create(self, "glue.crawlers", property_name))
         self._on_property_changed.on_next(property_name)

@@ -9,6 +9,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue._lifecycle import GlueOperationOwner
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
 from aws_tui.vm.glue.crawlers_vm import GlueCrawlersVM
 from aws_tui.vm.glue.iceberg_vm import IcebergInspectorProtocol
@@ -49,6 +50,8 @@ class GluePageVM:
         self._shutdown_complete = False
         self._shutdown_lock = asyncio.Lock()
         self._lifecycle_generation = 0
+        self._operations = GlueOperationOwner()
+        self._provider_tasks = self._operations.tasks
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -62,9 +65,20 @@ class GluePageVM:
             iceberg_inspector=iceberg_inspector,
             hub=hub,
             dispatcher=dispatcher,
+            _operations=self._operations,
         )
-        self.jobs = GlueJobsVM(client=client, hub=hub, dispatcher=dispatcher)
-        self.crawlers = GlueCrawlersVM(client=client, hub=hub, dispatcher=dispatcher)
+        self.jobs = GlueJobsVM(
+            client=client,
+            hub=hub,
+            dispatcher=dispatcher,
+            _operations=self._operations,
+        )
+        self.crawlers = GlueCrawlersVM(
+            client=client,
+            hub=hub,
+            dispatcher=dispatcher,
+            _operations=self._operations,
+        )
 
     @property
     def connection(self) -> Connection:
@@ -101,6 +115,7 @@ class GluePageVM:
     def dispose(self) -> None:
         if self._disposed:
             return
+        self._operations.close()
         self._disposed = True
         self._lifecycle_generation += 1
         self.crawlers.dispose()
@@ -109,12 +124,14 @@ class GluePageVM:
         self._inner.dispose()
 
     async def shutdown(self) -> None:
+        self._begin_shutdown()
         async with self._shutdown_lock:
             if self._shutdown_complete:
                 return
-            self._shutdown_started = True
-            self._lifecycle_generation += 1
             await self.catalog.shutdown()
+            await self.jobs.shutdown()
+            await self.crawlers.shutdown()
+            await self._operations.cancel_and_drain()
             self._shutdown_complete = True
 
     async def setup(self) -> None:
@@ -216,6 +233,11 @@ class GluePageVM:
             ",".join(sorted(states)),
         )
 
+    def select_job_run(self, run_id: str) -> None:
+        if not self._is_alive():
+            return
+        self.jobs.select_run(run_id)
+
     async def select_crawler(self, name: str) -> None:
         if not self._is_alive():
             return
@@ -261,6 +283,25 @@ class GluePageVM:
         else:
             self._loaded_views.discard("crawlers")
         await self._setup_view(self._active_view, generation)
+
+    def open_s3_location(
+        self,
+        *,
+        preferred_pane: Literal["left", "right"] = "left",
+    ) -> bool:
+        if not self._is_alive():
+            return False
+        return self.catalog.open_s3_location(preferred_pane=preferred_pane)
+
+    def query_in_athena(self) -> bool:
+        if not self._is_alive():
+            return False
+        return self.catalog.query_in_athena()
+
+    def time_travel_in_athena(self) -> bool:
+        if not self._is_alive():
+            return False
+        return self.catalog.iceberg.time_travel_in_athena()
 
     async def _setup_view(self, view: GlueView, generation: int) -> None:
         if not self._is_current(generation) or view in self._loaded_views:
@@ -369,10 +410,20 @@ class GluePageVM:
         return generation == self._lifecycle_generation and self._is_alive()
 
     def _is_alive(self) -> bool:
-        return not self._disposed and not self._shutdown_started
+        return not self._disposed and not self._shutdown_started and self._operations.accepting
+
+    def _begin_shutdown(self) -> None:
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        self._lifecycle_generation += 1
+        self._operations.close()
+        self.catalog._begin_shutdown()
+        self.jobs._begin_shutdown()
+        self.crawlers._begin_shutdown()
 
     def _notify(self, property_name: str) -> None:
-        if self._disposed:
+        if not self._is_alive():
             return
         self._hub.send(PropertyChangedMessage.create(self, "glue.page", property_name))
 

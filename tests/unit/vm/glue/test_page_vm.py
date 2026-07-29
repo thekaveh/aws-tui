@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
@@ -12,9 +13,15 @@ from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
-from aws_tui.vm.messages import OpenAthenaTableRequest
+from aws_tui.vm.messages import OpenAthenaTableRequest, OpenS3LocationRequest
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
-from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
+from tests.unit.vm.glue._fake_glue import (
+    CancellationResistantGlue,
+    InMemoryGlue,
+    ProviderCallBlock,
+    seeded_cancellation_resistant_glue,
+    seeded_glue,
+)
 
 
 class OwnedSelectionStore(ServiceSelectionStore):
@@ -49,6 +56,56 @@ def make_page_vm(
     )
     page.construct()
     return page
+
+
+def _child_state(page: GluePageVM) -> tuple[object, ...]:
+    return (
+        page.catalog.selected_database_name,
+        page.catalog.selected_table_name,
+        page.catalog.table_detail,
+        page.catalog.partitions,
+        page.catalog.column_statistics,
+        page.catalog.databases_state,
+        page.catalog.tables_state,
+        page.catalog.detail_state,
+        page.catalog.partitions_state,
+        page.catalog.statistics_state,
+        page.jobs.selected_job_name,
+        page.jobs.selected_run_id,
+        page.jobs.jobs,
+        page.jobs.runs,
+        page.jobs.jobs_state,
+        page.jobs.runs_state,
+        page.crawlers.selected_crawler_name,
+        page.crawlers.crawler_detail,
+        page.crawlers.crawlers,
+        page.crawlers.state,
+        page.crawlers.detail_state,
+    )
+
+
+async def _blocked_operation(
+    page: GluePageVM,
+    fake: CancellationResistantGlue,
+    method: str,
+) -> tuple[ProviderCallBlock, asyncio.Task[None]]:
+    if method == "get_crawler":
+        await page.select_view("crawlers")
+    block = fake.block_provider(method)
+    if method in {
+        "get_table",
+        "list_partitions_page",
+        "get_column_statistics",
+    }:
+        operation = asyncio.create_task(page.select_table("sessions"))
+    elif method in {"list_jobs_page", "list_job_runs_page"}:
+        operation = asyncio.create_task(page.select_view("jobs"))
+    elif method == "list_crawlers_page":
+        operation = asyncio.create_task(page.select_view("crawlers"))
+    else:
+        operation = asyncio.create_task(page.select_crawler("running-crawler"))
+    await block.started.wait()
+    return block, operation
 
 
 @pytest.mark.asyncio
@@ -143,6 +200,37 @@ async def test_catalog_query_in_athena_sends_selected_table_identity() -> None:
         ]
     finally:
         subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_page_handoffs_preserve_selected_table_identity() -> None:
+    page = make_page_vm(seeded_glue())
+    await page.setup()
+    messages: list[Message] = []
+    subscription = page.hub.messages.subscribe(on_next=messages.append)
+
+    try:
+        assert page.open_s3_location(preferred_pane="right")
+        assert page.query_in_athena()
+    finally:
+        subscription.dispose()
+
+    ref = TableRef(
+        "AwsDataCatalog",
+        "analytics",
+        "events",
+        "dev",
+        "us-east-1",
+    )
+    assert messages == [
+        OpenS3LocationRequest(
+            connection_name="dev",
+            region="us-east-1",
+            uri="s3://warehouse/analytics/events/",
+            preferred_pane="right",
+        ),
+        OpenAthenaTableRequest(ref),
+    ]
 
 
 @pytest.mark.asyncio
@@ -370,6 +458,208 @@ async def test_page_dispose_prevents_blocked_setup_from_mutating_page_or_store()
     assert page._loaded_views == set()  # type: ignore[attr-defined]
     assert store.get(scope, "database_name") is None
     assert store.get(scope, "table_name") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method",
+    [
+        "get_table",
+        "list_partitions_page",
+        "get_column_statistics",
+        "list_jobs_page",
+        "list_job_runs_page",
+        "list_crawlers_page",
+        "get_crawler",
+    ],
+)
+async def test_shutdown_cancels_drains_and_suppresses_every_child_provider_path(
+    method: str,
+) -> None:
+    fake = seeded_cancellation_resistant_glue()
+    page = make_page_vm(fake)
+    await page.setup()
+    block, operation = await _blocked_operation(page, fake, method)
+    state_at_shutdown = _child_state(page)
+    messages: list[Message] = []
+    subscription = page.hub.messages.subscribe(on_next=messages.append)
+
+    shutdown = asyncio.create_task(page.shutdown())
+    cancellation = asyncio.create_task(block.cancellation_seen.wait())
+    await asyncio.wait(
+        {shutdown, cancellation},
+        timeout=1,
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    cancelled_provider = block.cancellation_seen.is_set()
+    returned_before_release = shutdown.done()
+    messages.clear()
+    block.release.set()
+    results = await asyncio.gather(shutdown, operation, return_exceptions=True)
+    cancellation.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await cancellation
+
+    assert results == [None, None]
+    assert cancelled_provider
+    assert not returned_before_release
+    assert _child_state(page) == state_at_shutdown
+    assert not any(isinstance(message, PropertyChangedMessage) for message in messages)
+    assert getattr(page, "_provider_tasks", None) == set()
+    assert page._shutdown_complete  # type: ignore[attr-defined]
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("termination_order", ["dispose-first", "concurrent"])
+async def test_dispose_shutdown_race_durably_drains_shared_provider_owner(
+    termination_order: str,
+) -> None:
+    fake = seeded_cancellation_resistant_glue()
+    page = make_page_vm(fake)
+    await page.setup()
+    block = fake.block_provider("get_table")
+    selection = asyncio.create_task(page.select_table("sessions"))
+    await block.started.wait()
+    messages: list[Message] = []
+    subscription = page.hub.messages.subscribe(on_next=messages.append)
+
+    if termination_order == "dispose-first":
+        page.dispose()
+        shutdown = asyncio.create_task(page.shutdown())
+    else:
+        shutdown = asyncio.create_task(page.shutdown())
+        await block.cancellation_seen.wait()
+        page.dispose()
+    await block.cancellation_seen.wait()
+    returned_before_release = shutdown.done()
+    messages.clear()
+    block.release.set()
+    results = await asyncio.gather(shutdown, selection, return_exceptions=True)
+
+    await page.shutdown()
+    page.dispose()
+
+    assert results == [None, None]
+    assert not returned_before_release
+    assert not any(isinstance(message, PropertyChangedMessage) for message in messages)
+    assert page._provider_tasks == set()  # type: ignore[attr-defined]
+    assert page._shutdown_complete  # type: ignore[attr-defined]
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_caller_remains_cancelled_after_resistant_provider_releases() -> None:
+    fake = seeded_cancellation_resistant_glue()
+    page = make_page_vm(fake)
+    await page.setup()
+    block = fake.block_provider("get_table")
+    selection = asyncio.create_task(page.select_table("sessions"))
+    await block.started.wait()
+
+    selection.cancel()
+    await block.cancellation_seen.wait()
+    block.release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await selection
+    assert getattr(page, "_provider_tasks", None) == set()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_shutdown_is_retryable_after_durable_provider_drain() -> None:
+    fake = seeded_cancellation_resistant_glue()
+    page = make_page_vm(fake)
+    await page.setup()
+    block = fake.block_provider("get_table")
+    selection = asyncio.create_task(page.select_table("sessions"))
+    await block.started.wait()
+    shutdown = asyncio.create_task(page.shutdown())
+    cancellation = asyncio.create_task(block.cancellation_seen.wait())
+    await asyncio.wait(
+        {shutdown, cancellation},
+        timeout=1,
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    cancelled_provider = block.cancellation_seen.is_set()
+
+    shutdown.cancel()
+    block.release.set()
+    first_result = await asyncio.gather(shutdown, return_exceptions=True)
+    await asyncio.gather(selection, return_exceptions=True)
+    completed_after_interruption = page._shutdown_complete  # type: ignore[attr-defined]
+    await page.shutdown()
+    cancellation.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await cancellation
+
+    assert cancelled_provider
+    assert len(first_result) == 1
+    assert isinstance(first_result[0], asyncio.CancelledError)
+    assert not completed_after_interruption
+    assert page._shutdown_complete  # type: ignore[attr-defined]
+    assert getattr(page, "_provider_tasks", None) == set()
+
+
+@pytest.mark.asyncio
+async def test_actions_and_direct_children_fail_closed_during_terminal_drain() -> None:
+    fake = seeded_cancellation_resistant_glue()
+    page = make_page_vm(fake)
+    await page.setup()
+    await page.select_view("jobs")
+    await page.select_view("crawlers")
+    block = fake.block_provider("get_crawler")
+    selection = asyncio.create_task(page.select_crawler("running-crawler"))
+    await block.started.wait()
+    selected_run = page.jobs.selected_run_id
+    selected_table = page.catalog.selected_table_name
+    selected_crawler = page.crawlers.selected_crawler_name
+    shutdown = asyncio.create_task(page.shutdown())
+    cancellation = asyncio.create_task(block.cancellation_seen.wait())
+    await asyncio.wait(
+        {shutdown, cancellation},
+        timeout=1,
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    calls_before = tuple(fake.provider_calls)
+    handoffs: list[Message] = []
+    subscription = page.hub.messages.subscribe(on_next=handoffs.append)
+
+    page_open_s3 = getattr(page, "open_s3_location", page.catalog.open_s3_location)
+    page_query = getattr(page, "query_in_athena", page.catalog.query_in_athena)
+    page_select_run = getattr(page, "select_job_run", page.jobs.select_run)
+    open_result = page_open_s3()
+    query_result = page_query()
+    direct_open_result = page.catalog.open_s3_location()
+    direct_query_result = page.catalog.query_in_athena()
+    page_select_run("jr-2")
+    page.jobs.select_run("jr-2")
+    await page.catalog.select_table("events")
+    await page.jobs.select_job("hourly")
+    calls_during_drain = tuple(fake.provider_calls)
+
+    block.release.set()
+    await asyncio.gather(shutdown, selection, return_exceptions=True)
+    await page.crawlers.select_crawler("ready-crawler")
+    post_shutdown_open = page_open_s3()
+    post_shutdown_query = page_query()
+    page_select_run("jr-2")
+    cancellation.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await cancellation
+
+    assert not open_result
+    assert not query_result
+    assert not direct_open_result
+    assert not direct_query_result
+    assert not post_shutdown_open
+    assert not post_shutdown_query
+    assert handoffs == []
+    assert calls_during_drain == calls_before
+    assert page.catalog.selected_table_name == selected_table
+    assert page.jobs.selected_run_id == selected_run
+    assert page.crawlers.selected_crawler_name == selected_crawler
+    subscription.dispose()
 
 
 @pytest.mark.asyncio

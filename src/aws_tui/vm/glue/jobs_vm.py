@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import reactivex as rx
@@ -13,6 +14,7 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueJobRunSummary, GlueJobSummary
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
 
 
 class GlueJobsVM:
@@ -22,10 +24,16 @@ class GlueJobsVM:
         client: Any,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
+        _operations: GlueOperationOwner | None = None,
     ) -> None:
         self._client = client
         self._hub = hub
         self._disposed = False
+        self._shutdown_started = False
+        self._shutdown_complete = False
+        self._shutdown_lock = asyncio.Lock()
+        self._operations = _operations or GlueOperationOwner()
+        self._owns_operations = _operations is None
         self._on_property_changed: Subject[str] = Subject()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -116,24 +124,39 @@ class GlueJobsVM:
         return self._on_property_changed
 
     def construct(self) -> None:
+        if not self._is_alive():
+            return
         self._inner.construct()
 
     def dispose(self) -> None:
         if self._disposed:
             return
         self._disposed = True
-        self._job_generation += 1
-        self._run_generation += 1
+        self._operations.close()
+        self._invalidate_operations()
         self._run_pager.dispose()
         self._job_pager.dispose()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
 
+    async def shutdown(self) -> None:
+        self._begin_shutdown()
+        async with self._shutdown_lock:
+            if self._shutdown_complete:
+                return
+            if self._owns_operations:
+                await self._operations.cancel_and_drain()
+            self._shutdown_complete = True
+
     async def setup(self) -> None:
+        if not self._is_alive():
+            return
         await self.refresh_jobs()
 
     async def refresh_jobs(self) -> None:
+        if not self._is_alive():
+            return
         self._job_generation += 1
         old_pager = self._job_pager
         self._job_pager = self._make_job_pager()
@@ -143,6 +166,8 @@ class GlueJobsVM:
         self._set_state("_jobs_state", PaneState.LOADING, "state")
         try:
             await self._job_pager.refresh_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._job_generation:
                 return
@@ -168,11 +193,13 @@ class GlueJobsVM:
         )
 
     async def load_more_jobs(self) -> None:
-        if not self.has_more_jobs:
+        if not self._is_alive() or not self.has_more_jobs:
             return
         generation = self._job_generation
         try:
             await self._job_pager.load_more_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._job_generation:
                 return
@@ -190,7 +217,7 @@ class GlueJobsVM:
             self._notify("has_more_jobs")
 
     async def select_job(self, job_name: str) -> None:
-        if not any(job.name == job_name for job in self.jobs):
+        if not self._is_alive() or not any(job.name == job_name for job in self.jobs):
             return
         self._selected_job_name = job_name
         self._selected_run_id = None
@@ -199,7 +226,7 @@ class GlueJobsVM:
         await self._reload_runs()
 
     def select_run(self, run_id: str) -> None:
-        if not any(run.run_id == run_id for run in self.runs):
+        if not self._is_alive() or not any(run.run_id == run_id for run in self.runs):
             return
         if self._selected_run_id == run_id:
             return
@@ -207,18 +234,20 @@ class GlueJobsVM:
         self._notify("selected_run_id")
 
     async def set_run_state_filter(self, states: frozenset[str]) -> None:
-        if states == self._run_state_filter:
+        if not self._is_alive() or states == self._run_state_filter:
             return
         self._run_state_filter = frozenset(states)
         self._notify("run_state_filter")
         await self._reload_runs()
 
     async def load_more_runs(self) -> None:
-        if not self.has_more_runs:
+        if not self._is_alive() or not self.has_more_runs:
             return
         generation = self._run_generation
         try:
             await self._run_pager.load_more_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._run_generation:
                 return
@@ -251,6 +280,8 @@ class GlueJobsVM:
         self._set_state("_runs_state", PaneState.LOADING, "runs_state")
         try:
             await self._run_pager.refresh_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._run_generation:
                 return
@@ -280,7 +311,9 @@ class GlueJobsVM:
         generation = self._job_generation
 
         async def fetch(token: str | None) -> tuple[list[GlueJobSummary], str | None]:
-            rows, next_token = await self._client.list_jobs_page(start_token=token)
+            rows, next_token = await self._operations.run(
+                lambda: self._client.list_jobs_page(start_token=token)
+            )
             if generation != self._job_generation:
                 return [], None
             return rows, next_token
@@ -311,10 +344,12 @@ class GlueJobsVM:
         async def fetch(token: str | None) -> tuple[list[GlueJobRunSummary], str | None]:
             if job_name is None:
                 return [], None
-            rows, next_token = await self._client.list_job_runs_page(
-                job_name,
-                start_token=token,
-                states=states,
+            rows, next_token = await self._operations.run(
+                lambda: self._client.list_job_runs_page(
+                    job_name,
+                    start_token=token,
+                    states=states,
+                )
             )
             if generation != self._run_generation:
                 return [], None
@@ -328,8 +363,22 @@ class GlueJobsVM:
         setattr(self, field, state)
         self._notify(property_name)
 
+    def _begin_shutdown(self) -> None:
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        self._operations.close()
+        self._invalidate_operations()
+
+    def _invalidate_operations(self) -> None:
+        self._job_generation += 1
+        self._run_generation += 1
+
+    def _is_alive(self) -> bool:
+        return not self._disposed and not self._shutdown_started and self._operations.accepting
+
     def _notify(self, property_name: str) -> None:
-        if self._disposed:
+        if not self._is_alive():
             return
         self._hub.send(PropertyChangedMessage.create(self, "glue.jobs", property_name))
         self._on_property_changed.on_next(property_name)

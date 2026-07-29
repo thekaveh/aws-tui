@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, cast
 
@@ -23,6 +24,7 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
 from aws_tui.vm.glue.iceberg_vm import (
     GlueIcebergVM,
     IcebergInspectorProtocol,
@@ -42,10 +44,16 @@ class GlueCatalogVM:
         iceberg_inspector: IcebergInspectorProtocol | None = None,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
+        _operations: GlueOperationOwner | None = None,
     ) -> None:
         self._client = client
         self._hub = hub
         self._disposed = False
+        self._shutdown_started = False
+        self._shutdown_complete = False
+        self._shutdown_lock = asyncio.Lock()
+        self._operations = _operations or GlueOperationOwner()
+        self._owns_operations = _operations is None
         self._on_property_changed: Subject[str] = Subject()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -182,6 +190,8 @@ class GlueCatalogVM:
         return self._on_property_changed
 
     def construct(self) -> None:
+        if not self._is_alive():
+            return
         self._inner.construct()
         self.iceberg.construct()
 
@@ -189,10 +199,8 @@ class GlueCatalogVM:
         if self._disposed:
             return
         self._disposed = True
-        self._database_generation += 1
-        self._table_generation += 1
-        self._detail_generation += 1
-        self._partition_generation += 1
+        self._operations.close()
+        self._invalidate_operations()
         self._partition_pager.dispose()
         self._table_pager.dispose()
         self._database_pager.dispose()
@@ -202,12 +210,23 @@ class GlueCatalogVM:
         self._inner.dispose()
 
     async def shutdown(self) -> None:
-        await self.iceberg.shutdown()
+        self._begin_shutdown()
+        async with self._shutdown_lock:
+            if self._shutdown_complete:
+                return
+            await self.iceberg.shutdown()
+            if self._owns_operations:
+                await self._operations.cancel_and_drain()
+            self._shutdown_complete = True
 
     async def setup(self) -> None:
+        if not self._is_alive():
+            return
         await self.refresh_databases()
 
     async def refresh_databases(self) -> None:
+        if not self._is_alive():
+            return
         self._database_generation += 1
         old_pager = self._database_pager
         self._database_pager = self._make_database_pager()
@@ -218,6 +237,8 @@ class GlueCatalogVM:
         self._set_state("_databases_state", PaneState.LOADING, "state")
         try:
             await self._database_pager.refresh_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._database_generation:
                 return
@@ -243,11 +264,13 @@ class GlueCatalogVM:
         )
 
     async def load_more_databases(self) -> None:
-        if not self.has_more_databases:
+        if not self._is_alive() or not self.has_more_databases:
             return
         generation = self._database_generation
         try:
             await self._database_pager.load_more_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._database_generation:
                 return
@@ -265,7 +288,9 @@ class GlueCatalogVM:
             self._notify("has_more_databases")
 
     async def select_database(self, database_name: str) -> None:
-        if not any(row.ref.database_name == database_name for row in self.databases):
+        if not self._is_alive() or not any(
+            row.ref.database_name == database_name for row in self.databases
+        ):
             return
         self._table_generation += 1
         generation = self._table_generation
@@ -290,6 +315,8 @@ class GlueCatalogVM:
         self._notify("column_statistics")
         try:
             await self._table_pager.refresh_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._table_generation:
                 return
@@ -313,11 +340,13 @@ class GlueCatalogVM:
         )
 
     async def load_more_tables(self) -> None:
-        if not self.has_more_tables:
+        if not self._is_alive() or not self.has_more_tables:
             return
         generation = self._table_generation
         try:
             await self._table_pager.load_more_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._table_generation:
                 return
@@ -335,6 +364,8 @@ class GlueCatalogVM:
             self._notify("has_more_tables")
 
     async def select_table(self, table_name: str) -> None:
+        if not self._is_alive():
+            return
         summary = next(
             (row for row in self.tables if row.ref.table_name == table_name),
             None,
@@ -384,7 +415,7 @@ class GlueCatalogVM:
 
     async def open_table(self, ref: TableRef) -> None:
         """Select one exact table without substituting source identity."""
-        if self._disposed:
+        if not self._is_alive():
             raise ValueError("table cannot be opened")
 
         def database_available() -> bool:
@@ -441,7 +472,7 @@ class GlueCatalogVM:
         seen_tokens: set[str] = set()
         empty_pages = 0
         request_count = 0
-        while not available() and has_more():
+        while self._is_alive() and not available() and has_more():
             token = current_token()
             if token is None or token in seen_tokens or request_count >= _DISCOVERY_PAGE_LIMIT:
                 return None
@@ -461,11 +492,11 @@ class GlueCatalogVM:
             next_token = current_token()
             if next_token is not None and next_token in seen_tokens:
                 return None
-        return available()
+        return self._is_alive() and available()
 
     def query_in_athena(self, snapshot_id: int | None = None) -> bool:
         """Publish the selected table identity for Athena composition."""
-        if self._disposed or self._selected_table_name is None:
+        if not self._is_alive() or self._selected_table_name is None:
             return False
         summary = next(
             (row for row in self.tables if row.ref.table_name == self._selected_table_name),
@@ -482,11 +513,13 @@ class GlueCatalogVM:
         return True
 
     async def load_more_partitions(self) -> None:
-        if not self.has_more_partitions:
+        if not self._is_alive() or not self.has_more_partitions:
             return
         generation = self._detail_generation
         try:
             await self._partition_pager.load_more_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._detail_generation:
                 return
@@ -510,7 +543,7 @@ class GlueCatalogVM:
     ) -> bool:
         """Publish a same-identity S3 request for the selected table."""
         detail = self._table_detail
-        if self._disposed or detail is None:
+        if not self._is_alive() or detail is None:
             return False
         location = detail.storage.location
         if location is None or parse_s3_uri(location) is None:
@@ -528,7 +561,12 @@ class GlueCatalogVM:
 
     async def _load_detail(self, ref: TableRef, generation: int) -> TableDetail | None:
         try:
-            return cast(TableDetail, await self._client.get_table(ref))
+            return cast(
+                TableDetail,
+                await self._operations.run(lambda: self._client.get_table(ref)),
+            )
+        except GlueOperationSuperseded:
+            return None
         except ProviderError as exc:
             if generation != self._detail_generation:
                 return None
@@ -544,6 +582,8 @@ class GlueCatalogVM:
     async def _load_partitions(self, generation: int) -> None:
         try:
             await self._partition_pager.refresh_command.execute_async()
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._detail_generation:
                 return
@@ -568,10 +608,14 @@ class GlueCatalogVM:
 
     async def _load_statistics(self, detail: TableDetail, generation: int) -> None:
         try:
-            rows = await self._client.get_column_statistics(
-                detail.summary.ref,
-                tuple(column.name for column in detail.columns),
+            rows = await self._operations.run(
+                lambda: self._client.get_column_statistics(
+                    detail.summary.ref,
+                    tuple(column.name for column in detail.columns),
+                )
             )
+        except GlueOperationSuperseded:
+            return
         except ProviderError as exc:
             if generation != self._detail_generation:
                 return
@@ -598,7 +642,9 @@ class GlueCatalogVM:
         generation = self._database_generation
 
         async def fetch(token: str | None) -> tuple[list[DatabaseSummary], str | None]:
-            rows, next_token = await self._client.list_databases_page(start_token=token)
+            rows, next_token = await self._operations.run(
+                lambda: self._client.list_databases_page(start_token=token)
+            )
             if generation != self._database_generation:
                 return [], None
             return rows, next_token
@@ -614,9 +660,11 @@ class GlueCatalogVM:
         async def fetch(token: str | None) -> tuple[list[TableSummary], str | None]:
             if database_name is None:
                 return [], None
-            rows, next_token = await self._client.list_tables_page(
-                database_name,
-                start_token=token,
+            rows, next_token = await self._operations.run(
+                lambda: self._client.list_tables_page(
+                    database_name,
+                    start_token=token,
+                )
             )
             if generation != self._table_generation:
                 return [], None
@@ -633,9 +681,11 @@ class GlueCatalogVM:
         async def fetch(token: str | None) -> tuple[list[PartitionSummary], str | None]:
             if ref is None:
                 return [], None
-            rows, next_token = await self._client.list_partitions_page(
-                ref,
-                start_token=token,
+            rows, next_token = await self._operations.run(
+                lambda: self._client.list_partitions_page(
+                    ref,
+                    start_token=token,
+                )
             )
             if generation != self._partition_generation:
                 return [], None
@@ -687,8 +737,25 @@ class GlueCatalogVM:
         setattr(self, field, state)
         self._notify(property_name)
 
+    def _begin_shutdown(self) -> None:
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        self._operations.close()
+        self._invalidate_operations()
+        self.iceberg.begin_shutdown()
+
+    def _invalidate_operations(self) -> None:
+        self._database_generation += 1
+        self._table_generation += 1
+        self._detail_generation += 1
+        self._partition_generation += 1
+
+    def _is_alive(self) -> bool:
+        return not self._disposed and not self._shutdown_started and self._operations.accepting
+
     def _notify(self, property_name: str) -> None:
-        if self._disposed:
+        if not self._is_alive():
             return
         self._hub.send(PropertyChangedMessage.create(self, "glue.catalog", property_name))
         self._on_property_changed.on_next(property_name)

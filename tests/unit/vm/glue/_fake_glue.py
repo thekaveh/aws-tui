@@ -325,6 +325,120 @@ class InMemoryGlue:
         return replace(self.crawler_details[name])
 
 
+class ProviderCallBlock:
+    def __init__(self, method: str) -> None:
+        self.method = method
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancellation_seen = asyncio.Event()
+
+    async def wait(self) -> None:
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancellation_seen.set()
+            await self.release.wait()
+
+
+class CancellationResistantGlue(InMemoryGlue):
+    """Test provider that can hold one call through task cancellation."""
+
+    def __init__(
+        self,
+        *,
+        connection_name: str = "dev",
+        region: str = "us-east-1",
+    ) -> None:
+        super().__init__(connection_name=connection_name, region=region)
+        self.provider_calls: list[str] = []
+        self._provider_block: ProviderCallBlock | None = None
+
+    def block_provider(self, method: str) -> ProviderCallBlock:
+        block = ProviderCallBlock(method)
+        self._provider_block = block
+        return block
+
+    async def _before_provider_call(self, method: str) -> None:
+        self.provider_calls.append(method)
+        block = self._provider_block
+        if block is not None and block.method == method:
+            await block.wait()
+
+    async def list_databases_page(
+        self,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[DatabaseSummary], str | None]:
+        await self._before_provider_call("list_databases_page")
+        return await super().list_databases_page(start_token=start_token)
+
+    async def list_tables_page(
+        self,
+        database: str,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[TableSummary], str | None]:
+        await self._before_provider_call("list_tables_page")
+        return await super().list_tables_page(database, start_token=start_token)
+
+    async def get_table(self, ref: TableRef) -> TableDetail:
+        await self._before_provider_call("get_table")
+        return await super().get_table(ref)
+
+    async def list_partitions_page(
+        self,
+        ref: TableRef,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[PartitionSummary], str | None]:
+        await self._before_provider_call("list_partitions_page")
+        return await super().list_partitions_page(ref, start_token=start_token)
+
+    async def get_column_statistics(
+        self,
+        ref: TableRef,
+        columns: Sequence[str],
+    ) -> tuple[ColumnStatistics, ...]:
+        await self._before_provider_call("get_column_statistics")
+        return await super().get_column_statistics(ref, columns)
+
+    async def list_jobs_page(
+        self,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[GlueJobSummary], str | None]:
+        await self._before_provider_call("list_jobs_page")
+        return await super().list_jobs_page(start_token=start_token)
+
+    async def list_job_runs_page(
+        self,
+        job_name: str,
+        *,
+        start_token: str | None = None,
+        states: Sequence[str] = (),
+    ) -> tuple[list[GlueJobRunSummary], str | None]:
+        await self._before_provider_call("list_job_runs_page")
+        return await super().list_job_runs_page(
+            job_name,
+            start_token=start_token,
+            states=states,
+        )
+
+    async def list_crawlers_page(
+        self,
+        *,
+        start_token: str | None = None,
+        state: str | None = None,
+    ) -> tuple[list[GlueCrawlerSummary], str | None]:
+        await self._before_provider_call("list_crawlers_page")
+        return await super().list_crawlers_page(start_token=start_token, state=state)
+
+    async def get_crawler(self, name: str) -> GlueCrawlerDetail:
+        await self._before_provider_call("get_crawler")
+        return await super().get_crawler(name)
+
+
 async def _wait_for_block(block: tuple[asyncio.Event, asyncio.Event] | None) -> None:
     if block is None:
         return
@@ -345,7 +459,14 @@ def _page(
 
 
 def seeded_glue() -> InMemoryGlue:
-    fake = InMemoryGlue()
+    return _seed_glue(InMemoryGlue())
+
+
+def seeded_cancellation_resistant_glue() -> CancellationResistantGlue:
+    return _seed_glue(CancellationResistantGlue())
+
+
+def _seed_glue(fake: T) -> T:
     first = fake.add_table("analytics", "events")
     fake.add_table("analytics", "sessions")
     fake.add_partition(first.ref, "2026-07-24")
