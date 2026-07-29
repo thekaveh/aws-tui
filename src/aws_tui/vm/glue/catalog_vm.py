@@ -38,24 +38,12 @@ _DISCOVERY_EMPTY_PAGE_LIMIT = 3
 
 
 @dataclass(frozen=True, slots=True)
-class _CatalogOperationGeneration:
-    database: int
-    table: int
-    detail: int
-
-
-@dataclass(frozen=True, slots=True)
-class _TablePagerIdentity:
-    table: int
-    database_name: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class _PartitionPagerIdentity:
+class _CatalogOperationToken:
+    selection_request: int
     table: int
     detail: int
     partition: int
-    ref: TableRef | None
+    database_refresh: int | None = None
 
 
 class GlueCatalogVM:
@@ -92,6 +80,7 @@ class GlueCatalogVM:
         )
 
         self._database_generation = 0
+        self._selection_request_epoch = 0
         self._table_generation = 0
         self._detail_generation = 0
         self._partition_generation = 0
@@ -279,7 +268,7 @@ class GlueCatalogVM:
         self._notify("databases")
         self._notify("has_more_databases")
         if not self.databases:
-            await self._clear_database_selection()
+            await self._clear_database_selection(generation)
             if not self._is_alive() or generation != self._database_generation:
                 return
         self._set_state(
@@ -317,12 +306,12 @@ class GlueCatalogVM:
             row.ref.database_name == database_name for row in self.databases
         ):
             return
+        transition = self._begin_selection_transition()
+        await self.iceberg.cancel_metadata_loads_and_drain_silently()
+        if not self._is_catalog_operation_current(transition):
+            return
         self._table_generation += 1
         self._detail_generation += 1
-        generation = self._operation_generation()
-        await self.iceberg.clear_table_and_drain()
-        if not self._is_alive() or not self._is_operation_current(generation):
-            return
         self._selected_database_name = database_name
         self._selected_table_name = None
         self._table_detail = None
@@ -339,6 +328,10 @@ class GlueCatalogVM:
             ("_partitions_state", PaneState.EMPTY, "partitions_state"),
             ("_statistics_state", PaneState.EMPTY, "statistics_state"),
         )
+        operation = self._catalog_operation_token()
+        self.iceberg.clear_table()
+        if not self._is_catalog_operation_current(operation):
+            return
         self._notify_each(state_notifications)
         self._notify("selected_database_name")
         self._notify("selected_table_name")
@@ -351,18 +344,18 @@ class GlueCatalogVM:
         except GlueOperationSuperseded:
             return
         except ProviderError as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_catalog_operation_current(operation):
                 return
             state, self._tables_error_text = map_provider_error(exc)
             self._set_state("_tables_state", state, "tables_state")
             return
         except Exception as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_catalog_operation_current(operation):
                 return
             state, self._tables_error_text = map_unexpected_error(exc)
             self._set_state("_tables_state", state, "tables_state")
             return
-        if not self._is_operation_current(generation):
+        if not self._is_catalog_operation_current(operation):
             return
         self._notify("tables")
         self._notify("has_more_tables")
@@ -375,24 +368,24 @@ class GlueCatalogVM:
     async def load_more_tables(self) -> None:
         if not self._is_alive() or not self.has_more_tables:
             return
-        generation = self._operation_generation()
+        generation = self._table_generation
         try:
             await self._table_pager.load_more_command.execute_async()
         except GlueOperationSuperseded:
             return
         except ProviderError as exc:
-            if not self._is_table_operation_current(generation):
+            if not self._is_table_identity_current(generation):
                 return
             state, self._tables_error_text = map_provider_error(exc)
             self._set_state("_tables_state", state, "tables_state")
             return
         except Exception as exc:
-            if not self._is_table_operation_current(generation):
+            if not self._is_table_identity_current(generation):
                 return
             state, self._tables_error_text = map_unexpected_error(exc)
             self._set_state("_tables_state", state, "tables_state")
             return
-        if self._is_table_operation_current(generation):
+        if self._is_table_identity_current(generation):
             self._notify("tables")
             self._notify("has_more_tables")
 
@@ -405,11 +398,11 @@ class GlueCatalogVM:
         )
         if summary is None:
             return
-        self._detail_generation += 1
-        generation = self._operation_generation()
-        await self.iceberg.clear_table_and_drain()
-        if not self._is_alive() or not self._is_operation_current(generation):
+        transition = self._begin_selection_transition()
+        await self.iceberg.cancel_metadata_loads_and_drain_silently()
+        if not self._is_catalog_operation_current(transition):
             return
+        self._detail_generation += 1
         self._selected_table_name = table_name
         self._table_detail = None
         self._column_statistics = ()
@@ -422,14 +415,18 @@ class GlueCatalogVM:
             ("_partitions_state", PaneState.LOADING, "partitions_state"),
             ("_statistics_state", PaneState.LOADING, "statistics_state"),
         )
+        operation = self._catalog_operation_token()
+        self.iceberg.clear_table()
+        if not self._is_catalog_operation_current(operation):
+            return
         self._notify_each(state_notifications)
         self._notify("selected_table_name")
         self._notify("table_detail")
         self._notify("partitions")
         self._notify("column_statistics")
 
-        detail = await self._load_detail(summary.ref, generation)
-        if not self._is_operation_current(generation):
+        detail = await self._load_detail(summary.ref, operation)
+        if not self._is_catalog_operation_current(operation):
             return
         if detail is not None:
             self._table_detail = detail
@@ -440,16 +437,16 @@ class GlueCatalogVM:
                     detail.summary.ref,
                     table_format=detail.table_format,
                 )
-                if not self._is_alive() or not self._is_operation_current(generation):
+                if not self._is_catalog_operation_current(operation):
                     return
 
-        await self._load_partitions(generation)
-        if not self._is_operation_current(generation):
+        await self._load_partitions(operation)
+        if not self._is_catalog_operation_current(operation):
             return
         if detail is None:
             self._set_state("_statistics_state", PaneState.EMPTY, "statistics_state")
             return
-        await self._load_statistics(detail, generation)
+        await self._load_statistics(detail, operation)
 
     async def open_table(self, ref: TableRef) -> None:
         """Select one exact table without substituting source identity."""
@@ -553,24 +550,24 @@ class GlueCatalogVM:
     async def load_more_partitions(self) -> None:
         if not self._is_alive() or not self.has_more_partitions:
             return
-        generation = self._operation_generation()
+        generation = self._partition_generation
         try:
             await self._partition_pager.load_more_command.execute_async()
         except GlueOperationSuperseded:
             return
         except ProviderError as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_partition_identity_current(generation):
                 return
             state, self._partitions_error_text = map_provider_error(exc)
             self._set_state("_partitions_state", state, "partitions_state")
             return
         except Exception as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_partition_identity_current(generation):
                 return
             state, self._partitions_error_text = map_unexpected_error(exc)
             self._set_state("_partitions_state", state, "partitions_state")
             return
-        if self._is_operation_current(generation):
+        if self._is_partition_identity_current(generation):
             self._notify("partitions")
             self._notify("has_more_partitions")
 
@@ -600,7 +597,7 @@ class GlueCatalogVM:
     async def _load_detail(
         self,
         ref: TableRef,
-        generation: _CatalogOperationGeneration,
+        operation: _CatalogOperationToken,
     ) -> TableDetail | None:
         try:
             return cast(
@@ -610,35 +607,35 @@ class GlueCatalogVM:
         except GlueOperationSuperseded:
             return None
         except ProviderError as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_catalog_operation_current(operation):
                 return None
             state, self._detail_error_text = map_provider_error(exc)
             self._set_state("_detail_state", state, "detail_state")
         except Exception as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_catalog_operation_current(operation):
                 return None
             state, self._detail_error_text = map_unexpected_error(exc)
             self._set_state("_detail_state", state, "detail_state")
         return None
 
-    async def _load_partitions(self, generation: _CatalogOperationGeneration) -> None:
+    async def _load_partitions(self, operation: _CatalogOperationToken) -> None:
         try:
             await self._partition_pager.refresh_command.execute_async()
         except GlueOperationSuperseded:
             return
         except ProviderError as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_catalog_operation_current(operation):
                 return
             state, self._partitions_error_text = map_provider_error(exc)
             self._set_state("_partitions_state", state, "partitions_state")
             return
         except Exception as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_catalog_operation_current(operation):
                 return
             state, self._partitions_error_text = map_unexpected_error(exc)
             self._set_state("_partitions_state", state, "partitions_state")
             return
-        if not self._is_operation_current(generation):
+        if not self._is_catalog_operation_current(operation):
             return
         self._notify("partitions")
         self._notify("has_more_partitions")
@@ -651,7 +648,7 @@ class GlueCatalogVM:
     async def _load_statistics(
         self,
         detail: TableDetail,
-        generation: _CatalogOperationGeneration,
+        operation: _CatalogOperationToken,
     ) -> None:
         try:
             rows = await self._operations.run(
@@ -663,18 +660,18 @@ class GlueCatalogVM:
         except GlueOperationSuperseded:
             return
         except ProviderError as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_catalog_operation_current(operation):
                 return
             state, self._statistics_error_text = map_provider_error(exc)
             self._set_state("_statistics_state", state, "statistics_state")
             return
         except Exception as exc:
-            if not self._is_operation_current(generation):
+            if not self._is_catalog_operation_current(operation):
                 return
             state, self._statistics_error_text = map_unexpected_error(exc)
             self._set_state("_statistics_state", state, "statistics_state")
             return
-        if not self._is_operation_current(generation):
+        if not self._is_catalog_operation_current(operation):
             return
         self._column_statistics = tuple(rows)
         self._notify("column_statistics")
@@ -701,10 +698,7 @@ class GlueCatalogVM:
         self,
         database_name: str | None,
     ) -> TokenPagedComposition[TableSummary, str]:
-        identity = _TablePagerIdentity(
-            table=self._table_generation,
-            database_name=database_name,
-        )
+        generation = self._table_generation
 
         async def fetch(token: str | None) -> tuple[list[TableSummary], str | None]:
             if database_name is None:
@@ -715,7 +709,7 @@ class GlueCatalogVM:
                     start_token=token,
                 )
             )
-            if not self._is_table_pager_current(identity):
+            if not self._is_table_identity_current(generation):
                 return [], None
             return rows, next_token
 
@@ -725,12 +719,7 @@ class GlueCatalogVM:
         self,
         ref: TableRef | None,
     ) -> TokenPagedComposition[PartitionSummary, str]:
-        identity = _PartitionPagerIdentity(
-            table=self._table_generation,
-            detail=self._detail_generation,
-            partition=self._partition_generation,
-            ref=ref,
-        )
+        generation = self._partition_generation
 
         async def fetch(token: str | None) -> tuple[list[PartitionSummary], str | None]:
             if ref is None:
@@ -741,7 +730,7 @@ class GlueCatalogVM:
                     start_token=token,
                 )
             )
-            if not self._is_partition_pager_current(identity):
+            if not self._is_partition_identity_current(generation):
                 return [], None
             return rows, next_token
 
@@ -758,13 +747,15 @@ class GlueCatalogVM:
         self._partition_pager = self._make_partition_pager(ref)
         old_pager.dispose()
 
-    async def _clear_database_selection(self) -> None:
+    async def _clear_database_selection(self, database_generation: int) -> None:
+        transition = self._begin_selection_transition(
+            database_refresh=database_generation,
+        )
+        await self.iceberg.cancel_metadata_loads_and_drain_silently()
+        if not self._is_catalog_operation_current(transition):
+            return
         self._table_generation += 1
         self._detail_generation += 1
-        generation = self._operation_generation()
-        await self.iceberg.clear_table_and_drain()
-        if not self._is_alive() or not self._is_operation_current(generation):
-            return
         self._selected_database_name = None
         self._selected_table_name = None
         self._table_detail = None
@@ -781,6 +772,12 @@ class GlueCatalogVM:
             ("_partitions_state", PaneState.EMPTY, "partitions_state"),
             ("_statistics_state", PaneState.EMPTY, "statistics_state"),
         )
+        operation = self._catalog_operation_token(
+            database_refresh=database_generation,
+        )
+        self.iceberg.clear_table()
+        if not self._is_catalog_operation_current(operation):
+            return
         self._notify_each(state_notifications)
         self._notify("selected_database_name")
         self._notify("selected_table_name")
@@ -823,47 +820,53 @@ class GlueCatalogVM:
 
     def _invalidate_operations(self) -> None:
         self._database_generation += 1
+        self._selection_request_epoch += 1
         self._table_generation += 1
         self._detail_generation += 1
         self._partition_generation += 1
 
-    def _operation_generation(self) -> _CatalogOperationGeneration:
-        return _CatalogOperationGeneration(
-            database=self._database_generation,
+    def _begin_selection_transition(
+        self,
+        *,
+        database_refresh: int | None = None,
+    ) -> _CatalogOperationToken:
+        self._selection_request_epoch += 1
+        return self._catalog_operation_token(database_refresh=database_refresh)
+
+    def _catalog_operation_token(
+        self,
+        *,
+        database_refresh: int | None = None,
+    ) -> _CatalogOperationToken:
+        return _CatalogOperationToken(
+            selection_request=self._selection_request_epoch,
             table=self._table_generation,
             detail=self._detail_generation,
+            partition=self._partition_generation,
+            database_refresh=database_refresh,
         )
 
-    def _is_operation_current(self, generation: _CatalogOperationGeneration) -> bool:
-        return generation == self._operation_generation()
-
-    def _is_table_operation_current(
+    def _is_catalog_operation_current(
         self,
-        generation: _CatalogOperationGeneration,
+        operation: _CatalogOperationToken,
     ) -> bool:
         return (
-            generation.database == self._database_generation
-            and generation.table == self._table_generation
+            self._is_alive()
+            and operation.selection_request == self._selection_request_epoch
+            and operation.table == self._table_generation
+            and operation.detail == self._detail_generation
+            and operation.partition == self._partition_generation
+            and (
+                operation.database_refresh is None
+                or operation.database_refresh == self._database_generation
+            )
         )
 
-    def _is_table_pager_current(self, identity: _TablePagerIdentity) -> bool:
-        return (
-            self._is_alive()
-            and identity.table == self._table_generation
-            and identity.database_name == self._selected_database_name
-        )
+    def _is_table_identity_current(self, generation: int) -> bool:
+        return self._is_alive() and generation == self._table_generation
 
-    def _is_partition_pager_current(self, identity: _PartitionPagerIdentity) -> bool:
-        ref = identity.ref
-        return (
-            self._is_alive()
-            and ref is not None
-            and identity.table == self._table_generation
-            and identity.detail == self._detail_generation
-            and identity.partition == self._partition_generation
-            and ref.database_name == self._selected_database_name
-            and ref.table_name == self._selected_table_name
-        )
+    def _is_partition_identity_current(self, generation: int) -> bool:
+        return self._is_alive() and generation == self._partition_generation
 
     def _is_alive(self) -> bool:
         return not self._disposed and not self._shutdown_started and self._operations.accepting
