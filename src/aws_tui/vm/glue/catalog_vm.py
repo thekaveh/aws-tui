@@ -46,6 +46,22 @@ class _CatalogOperationToken:
     database_refresh: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _CommittedSelectionIdentity:
+    database_name: str | None
+    table_name: str | None
+    table: int
+    detail: int
+    partition: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingEmptyDatabaseClear:
+    database_refresh: int
+    selection_request: int
+    committed_identity: _CommittedSelectionIdentity
+
+
 class GlueCatalogVM:
     def __init__(
         self,
@@ -599,11 +615,13 @@ class GlueCatalogVM:
         ref: TableRef,
         operation: _CatalogOperationToken,
     ) -> TableDetail | None:
+        async def get_detail() -> TableDetail:
+            if not self._is_catalog_operation_current(operation):
+                raise GlueOperationSuperseded
+            return cast(TableDetail, await self._client.get_table(ref))
+
         try:
-            return cast(
-                TableDetail,
-                await self._operations.run(lambda: self._client.get_table(ref)),
-            )
+            return await self._operations.run(get_detail)
         except GlueOperationSuperseded:
             return None
         except ProviderError as exc:
@@ -650,13 +668,19 @@ class GlueCatalogVM:
         detail: TableDetail,
         operation: _CatalogOperationToken,
     ) -> None:
-        try:
-            rows = await self._operations.run(
-                lambda: self._client.get_column_statistics(
+        async def get_statistics() -> tuple[ColumnStatistics, ...]:
+            if not self._is_catalog_operation_current(operation):
+                raise GlueOperationSuperseded
+            return cast(
+                tuple[ColumnStatistics, ...],
+                await self._client.get_column_statistics(
                     detail.summary.ref,
                     tuple(column.name for column in detail.columns),
-                )
+                ),
             )
+
+        try:
+            rows = await self._operations.run(get_statistics)
         except GlueOperationSuperseded:
             return
         except ProviderError as exc:
@@ -685,9 +709,15 @@ class GlueCatalogVM:
         generation = self._database_generation
 
         async def fetch(token: str | None) -> tuple[list[DatabaseSummary], str | None]:
-            rows, next_token = await self._operations.run(
-                lambda: self._client.list_databases_page(start_token=token)
-            )
+            async def list_page() -> tuple[list[DatabaseSummary], str | None]:
+                if not self._is_database_identity_current(generation):
+                    raise GlueOperationSuperseded
+                return cast(
+                    tuple[list[DatabaseSummary], str | None],
+                    await self._client.list_databases_page(start_token=token),
+                )
+
+            rows, next_token = await self._operations.run(list_page)
             if generation != self._database_generation:
                 return [], None
             return rows, next_token
@@ -703,12 +733,19 @@ class GlueCatalogVM:
         async def fetch(token: str | None) -> tuple[list[TableSummary], str | None]:
             if database_name is None:
                 return [], None
-            rows, next_token = await self._operations.run(
-                lambda: self._client.list_tables_page(
-                    database_name,
-                    start_token=token,
+
+            async def list_page() -> tuple[list[TableSummary], str | None]:
+                if not self._is_table_identity_current(generation):
+                    raise GlueOperationSuperseded
+                return cast(
+                    tuple[list[TableSummary], str | None],
+                    await self._client.list_tables_page(
+                        database_name,
+                        start_token=token,
+                    ),
                 )
-            )
+
+            rows, next_token = await self._operations.run(list_page)
             if not self._is_table_identity_current(generation):
                 return [], None
             return rows, next_token
@@ -724,12 +761,19 @@ class GlueCatalogVM:
         async def fetch(token: str | None) -> tuple[list[PartitionSummary], str | None]:
             if ref is None:
                 return [], None
-            rows, next_token = await self._operations.run(
-                lambda: self._client.list_partitions_page(
-                    ref,
-                    start_token=token,
+
+            async def list_page() -> tuple[list[PartitionSummary], str | None]:
+                if not self._is_partition_identity_current(generation):
+                    raise GlueOperationSuperseded
+                return cast(
+                    tuple[list[PartitionSummary], str | None],
+                    await self._client.list_partitions_page(
+                        ref,
+                        start_token=token,
+                    ),
                 )
-            )
+
+            rows, next_token = await self._operations.run(list_page)
             if not self._is_partition_identity_current(generation):
                 return [], None
             return rows, next_token
@@ -748,12 +792,15 @@ class GlueCatalogVM:
         old_pager.dispose()
 
     async def _clear_database_selection(self, database_generation: int) -> None:
-        transition = self._begin_selection_transition(
+        pending_clear = _PendingEmptyDatabaseClear(
             database_refresh=database_generation,
+            selection_request=self._selection_request_epoch,
+            committed_identity=self._committed_selection_identity(),
         )
         await self.iceberg.cancel_metadata_loads_and_drain_silently()
-        if not self._is_catalog_operation_current(transition):
+        if not self._is_pending_empty_clear_current(pending_clear):
             return
+        self._selection_request_epoch += 1
         self._table_generation += 1
         self._detail_generation += 1
         self._selected_database_name = None
@@ -865,8 +912,31 @@ class GlueCatalogVM:
     def _is_table_identity_current(self, generation: int) -> bool:
         return self._is_alive() and generation == self._table_generation
 
+    def _is_database_identity_current(self, generation: int) -> bool:
+        return self._is_alive() and generation == self._database_generation
+
     def _is_partition_identity_current(self, generation: int) -> bool:
         return self._is_alive() and generation == self._partition_generation
+
+    def _committed_selection_identity(self) -> _CommittedSelectionIdentity:
+        return _CommittedSelectionIdentity(
+            database_name=self._selected_database_name,
+            table_name=self._selected_table_name,
+            table=self._table_generation,
+            detail=self._detail_generation,
+            partition=self._partition_generation,
+        )
+
+    def _is_pending_empty_clear_current(
+        self,
+        pending_clear: _PendingEmptyDatabaseClear,
+    ) -> bool:
+        return (
+            self._is_alive()
+            and pending_clear.database_refresh == self._database_generation
+            and pending_clear.selection_request == self._selection_request_epoch
+            and pending_clear.committed_identity == self._committed_selection_identity()
+        )
 
     def _is_alive(self) -> bool:
         return not self._disposed and not self._shutdown_started and self._operations.accepting

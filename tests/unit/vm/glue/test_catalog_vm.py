@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import traceback
+from collections.abc import Callable, Coroutine
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any, TypeVar
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
@@ -13,9 +15,16 @@ from aws_tui.domain.data_catalog import TableFormat, TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
 from aws_tui.domain.iceberg import IcebergSnapshot
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue._lifecycle import GlueOperationOwner
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
 from aws_tui.vm.messages import OpenS3LocationRequest
-from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
+from tests.unit.vm.glue._fake_glue import (
+    InMemoryGlue,
+    seeded_cancellation_resistant_glue,
+    seeded_glue,
+)
+
+T = TypeVar("T")
 
 
 class CancellationResistantInspector:
@@ -69,6 +78,7 @@ def make_catalog_vm(
     fake: InMemoryGlue,
     *,
     iceberg_inspector: object | None = None,
+    operations: GlueOperationOwner | None = None,
 ) -> GlueCatalogVM:
     hub: MessageHub[Message] = MessageHub()
     vm = GlueCatalogVM(
@@ -76,9 +86,39 @@ def make_catalog_vm(
         iceberg_inspector=iceberg_inspector,  # type: ignore[arg-type]
         hub=hub,
         dispatcher=NULL_DISPATCHER,
+        _operations=operations,
     )
     vm.construct()
     return vm
+
+
+class QueuedGlueOperationOwner(GlueOperationOwner):
+    def __init__(self) -> None:
+        super().__init__()
+        self._next_gate: tuple[asyncio.Event, asyncio.Event] | None = None
+
+    def gate_next_run(self) -> tuple[asyncio.Event, asyncio.Event]:
+        assert self._next_gate is None
+        self._next_gate = (asyncio.Event(), asyncio.Event())
+        return self._next_gate
+
+    async def run(self, operation: Callable[[], Coroutine[Any, Any, T]]) -> T:
+        gate = self._next_gate
+        if gate is not None:
+            self._next_gate = None
+            started, release = gate
+
+            async def queued_operation() -> T:
+                started.set()
+                while not release.is_set():
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        continue
+                return await operation()
+
+            return await super().run(queued_operation)
+        return await super().run(operation)
 
 
 def _catalog_state(vm: GlueCatalogVM) -> tuple[object, ...]:
@@ -364,6 +404,173 @@ async def test_empty_refresh_does_not_clear_newer_database_result_after_iceberg_
 
 
 @pytest.mark.asyncio
+async def test_empty_clear_does_not_supersede_transition_that_commits_during_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = seeded_glue()
+    fake.add_table("archive", "old-events")
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    await vm.select_database("analytics")
+    await vm.select_table("events")
+    drain_started = (asyncio.Event(), asyncio.Event())
+    drain_release = (asyncio.Event(), asyncio.Event())
+    drain_calls = 0
+
+    async def controlled_silent_drain() -> None:
+        nonlocal drain_calls
+        call = drain_calls
+        drain_calls += 1
+        drain_started[call].set()
+        await drain_release[call].wait()
+
+    monkeypatch.setattr(
+        vm.iceberg,
+        "cancel_metadata_loads_and_drain_silently",
+        controlled_silent_drain,
+    )
+
+    transition = asyncio.create_task(vm.select_database("archive"))
+    await drain_started[0].wait()
+    transition_epoch = vm._selection_request_epoch  # type: ignore[attr-defined]
+    fake.databases.clear()
+    empty_refresh = asyncio.create_task(vm.refresh_databases())
+    await drain_started[1].wait()
+    pending_epoch = vm._selection_request_epoch  # type: ignore[attr-defined]
+
+    try:
+        drain_release[0].set()
+        await transition
+        state_after_transition = _catalog_selection_state(vm)
+    finally:
+        drain_release[0].set()
+        drain_release[1].set()
+    await empty_refresh
+
+    assert pending_epoch == transition_epoch
+    assert state_after_transition == _catalog_selection_state(vm)
+    assert vm.selected_database_name == "archive"
+    assert vm.selected_table_name is None
+    assert [row.ref.table_name for row in vm.tables] == ["old-events"]
+    assert vm.tables_state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_method",
+    [
+        "get_table",
+        "list_partitions_page",
+        "get_column_statistics",
+    ],
+)
+async def test_newer_nonempty_refresh_preserves_inflight_selection_during_pending_clear(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_method: str,
+) -> None:
+    fake = seeded_cancellation_resistant_glue()
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    await vm.select_database("analytics")
+    sessions = next(row for row in fake.tables["analytics"] if row.ref.table_name == "sessions")
+    provider_block = fake.block_provider(provider_method)
+    selection = asyncio.create_task(vm.select_table("sessions"))
+    await provider_block.started.wait()
+    drain_started = asyncio.Event()
+    drain_release = asyncio.Event()
+
+    async def controlled_silent_drain() -> None:
+        drain_started.set()
+        await drain_release.wait()
+
+    monkeypatch.setattr(
+        vm.iceberg,
+        "cancel_metadata_loads_and_drain_silently",
+        controlled_silent_drain,
+    )
+    databases = tuple(fake.databases)
+    fake.databases.clear()
+    selection_epoch = vm._selection_request_epoch  # type: ignore[attr-defined]
+    empty_refresh = asyncio.create_task(vm.refresh_databases())
+    await drain_started.wait()
+    pending_epoch = vm._selection_request_epoch  # type: ignore[attr-defined]
+
+    try:
+        fake.databases.extend(databases)
+        await vm.refresh_databases()
+        provider_block.release.set()
+        await selection
+        state_after_selection = _catalog_selection_state(vm)
+    finally:
+        provider_block.release.set()
+        drain_release.set()
+    await empty_refresh
+
+    assert pending_epoch == selection_epoch
+    assert state_after_selection == _catalog_selection_state(vm)
+    assert vm.selected_database_name == "analytics"
+    assert vm.selected_table_name == "sessions"
+    assert vm.table_detail == fake.table_details[sessions.ref]
+    assert vm.partitions == ()
+    assert vm.column_statistics == fake.statistics[sessions.ref]
+    assert vm.detail_state is PaneState.IDLE
+    assert vm.partitions_state is PaneState.EMPTY
+    assert vm.statistics_state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_queued_table_selection_starts_no_provider_work_after_database_selection_wins() -> (
+    None
+):
+    fake = seeded_cancellation_resistant_glue()
+    fake.add_table("archive", "old-events")
+    events = next(row for row in fake.tables["analytics"] if row.ref.table_name == "events")
+    fake.table_details[events.ref] = replace(
+        fake.table_details[events.ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    await vm.select_database("analytics")
+    fake.provider_calls.clear()
+    fake.table_detail_requests.clear()
+    fake.partition_requests.clear()
+    bindings: list[TableRef | None] = []
+    bind_table = vm.iceberg.bind_table
+
+    async def record_binding(
+        table_ref: TableRef | None,
+        *,
+        table_format: TableFormat | None = None,
+    ) -> None:
+        bindings.append(table_ref)
+        await bind_table(table_ref, table_format=table_format)
+
+    vm.iceberg.bind_table = record_binding  # type: ignore[method-assign]
+
+    stale_selection = asyncio.create_task(vm.select_table("events"))
+    await asyncio.sleep(0)
+    assert fake.provider_calls == []
+
+    await vm.select_database("archive")
+    await stale_selection
+
+    assert fake.provider_calls == ["list_tables_page"]
+    assert fake.table_detail_requests == []
+    assert fake.partition_requests == []
+    assert bindings == []
+    assert vm.selected_database_name == "archive"
+    assert vm.selected_table_name is None
+    assert [row.ref.table_name for row in vm.tables] == ["old-events"]
+    assert vm.table_detail is None
+    assert vm.column_statistics == ()
+    assert vm.partitions == ()
+    assert vm.detail_state is PaneState.EMPTY
+    assert vm.partitions_state is PaneState.EMPTY
+    assert vm.statistics_state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
 async def test_nonempty_refresh_does_not_supersede_blocked_table_list_selection() -> None:
     fake = seeded_glue()
     tables_started = fake.block_tables("analytics")
@@ -577,6 +784,103 @@ async def test_database_refresh_preserves_valid_table_and_partition_pagers() -> 
     ]
     assert partition_pager.current_token is None
     assert not vm.has_more_partitions
+
+
+@pytest.mark.asyncio
+async def test_queued_stale_table_detail_does_not_start_provider_call() -> None:
+    fake = seeded_glue()
+    owner = QueuedGlueOperationOwner()
+    vm = make_catalog_vm(fake, operations=owner)
+    await vm.setup()
+    await vm.select_database("analytics")
+    events, sessions = fake.tables["analytics"]
+    fake.table_detail_requests.clear()
+    queued, release = owner.gate_next_run()
+
+    stale_selection = asyncio.create_task(vm.select_table("events"))
+    await queued.wait()
+    await vm.select_table("sessions")
+    calls_before_release = tuple(fake.table_detail_requests)
+    release.set()
+    await stale_selection
+
+    assert calls_before_release == (sessions.ref,)
+    assert tuple(fake.table_detail_requests) == calls_before_release
+    assert events.ref not in fake.table_detail_requests
+
+
+@pytest.mark.asyncio
+async def test_queued_stale_column_statistics_does_not_start_provider_call() -> None:
+    fake = seeded_cancellation_resistant_glue()
+    owner = QueuedGlueOperationOwner()
+    vm = make_catalog_vm(fake, operations=owner)
+    await vm.setup()
+    await vm.select_database("analytics")
+    partition_block = fake.block_provider("list_partitions_page")
+    stale_selection = asyncio.create_task(vm.select_table("events"))
+    await partition_block.started.wait()
+    queued, release = owner.gate_next_run()
+    partition_block.release.set()
+    await queued.wait()
+
+    await vm.select_table("sessions")
+    calls_before_release = fake.provider_calls.count("get_column_statistics")
+    release.set()
+    await stale_selection
+
+    assert calls_before_release == 1
+    assert fake.provider_calls.count("get_column_statistics") == calls_before_release
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pager_kind", ["database", "table", "partition"])
+async def test_queued_stale_catalog_pager_does_not_start_provider_call(
+    pager_kind: str,
+) -> None:
+    fake = seeded_glue()
+    fake.add_table("archive", "old-events")
+    fake.table_page_size = 1
+    fake.partition_page_size = 1
+    owner = QueuedGlueOperationOwner()
+    vm = make_catalog_vm(fake, operations=owner)
+    await vm.setup()
+
+    if pager_kind == "database":
+        fake.database_tokens.clear()
+        stale_call: object = object()
+        requests = fake.database_tokens
+        queued, release = owner.gate_next_run()
+        stale_page = asyncio.create_task(vm.refresh_databases())
+        await queued.wait()
+        await vm.refresh_databases()
+    elif pager_kind == "table":
+        await vm.select_database("analytics")
+        fake.table_requests.clear()
+        stale_call = ("analytics", "1")
+        requests = fake.table_requests
+        queued, release = owner.gate_next_run()
+        stale_page = asyncio.create_task(vm.load_more_tables())
+        await queued.wait()
+        await vm.select_database("archive")
+    else:
+        await vm.select_database("analytics")
+        await vm.load_more_tables()
+        await vm.select_table("events")
+        events = fake.tables["analytics"][0]
+        fake.partition_requests.clear()
+        stale_call = (events.ref, "1")
+        requests = fake.partition_requests
+        queued, release = owner.gate_next_run()
+        stale_page = asyncio.create_task(vm.load_more_partitions())
+        await queued.wait()
+        await vm.select_table("sessions")
+
+    calls_before_release = tuple(requests)
+    release.set()
+    await stale_page
+
+    assert stale_call not in requests
+    assert tuple(requests) == calls_before_release
 
 
 @pytest.mark.asyncio
