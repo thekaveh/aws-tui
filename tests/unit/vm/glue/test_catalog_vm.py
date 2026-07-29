@@ -69,6 +69,31 @@ def _catalog_state(vm: GlueCatalogVM) -> tuple[object, ...]:
     )
 
 
+def _catalog_selection_state(vm: GlueCatalogVM) -> tuple[object, ...]:
+    return (
+        vm.selected_database_name,
+        vm.selected_table_name,
+        vm.table_detail,
+        vm.column_statistics,
+        vm.tables,
+        vm._table_pager.current_token,  # type: ignore[attr-defined]
+        vm.has_more_tables,
+        vm.partitions,
+        vm._partition_pager.current_token,  # type: ignore[attr-defined]
+        vm.has_more_partitions,
+        vm.tables_state,
+        vm.detail_state,
+        vm.partitions_state,
+        vm.statistics_state,
+        vm.tables_error_text,
+        vm.detail_error_text,
+        vm.partitions_error_text,
+        vm.statistics_error_text,
+        id(vm._table_pager),  # type: ignore[attr-defined]
+        id(vm._partition_pager),  # type: ignore[attr-defined]
+    )
+
+
 @pytest.mark.asyncio
 async def test_catalog_uses_token_pagers_and_loads_more_at_each_level() -> None:
     fake = seeded_glue()
@@ -180,6 +205,15 @@ async def test_empty_refresh_does_not_clear_newer_database_result_after_iceberg_
     await vm.setup()
     await vm.select_database("analytics")
     await vm.select_table("events")
+    baseline = _catalog_selection_state(vm)
+    notifications: list[str] = []
+    observed_states: list[tuple[object, ...]] = []
+
+    def record_notification(property_name: str) -> None:
+        notifications.append(property_name)
+        observed_states.append(_catalog_selection_state(vm))
+
+    subscription = vm.on_property_changed.subscribe(on_next=record_notification)
     metadata_load = asyncio.create_task(vm.iceberg.select_view("snapshots"))
     await inspector.started.wait()
 
@@ -188,18 +222,23 @@ async def test_empty_refresh_does_not_clear_newer_database_result_after_iceberg_
     empty_refresh = asyncio.create_task(vm.refresh_databases())
     await inspector.cancellation_seen.wait()
 
+    assert _catalog_selection_state(vm) == baseline
+
     fake.databases.extend(databases)
     await vm.refresh_databases()
-    state_after_newer_refresh = _catalog_state(vm)
-    notifications: list[str] = []
-    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+    notifications_after_newer_refresh = tuple(notifications)
+
+    assert _catalog_selection_state(vm) == baseline
+    assert all(state == baseline for state in observed_states)
+    assert set(notifications) <= {"databases", "has_more_databases", "state"}
 
     inspector.release.set()
     results = await asyncio.gather(empty_refresh, metadata_load, return_exceptions=True)
 
     assert results == [None, False]
-    assert _catalog_state(vm) == state_after_newer_refresh
-    assert notifications == []
+    assert _catalog_selection_state(vm) == baseline
+    assert tuple(notifications) == notifications_after_newer_refresh
+    assert all(state == baseline for state in observed_states)
     subscription.dispose()
 
 
@@ -220,6 +259,9 @@ async def test_table_selection_stays_superseded_by_database_selection_after_iceb
     fake.table_detail_requests.clear()
     metadata_load = asyncio.create_task(vm.iceberg.select_view("snapshots"))
     await inspector.started.wait()
+    baseline = _catalog_selection_state(vm)
+    notifications: list[str] = []
+    observed_states: list[tuple[object, ...]] = []
 
     bindings: list[TableRef | None] = []
     bind_table = vm.iceberg.bind_table
@@ -233,35 +275,208 @@ async def test_table_selection_stays_superseded_by_database_selection_after_iceb
         await bind_table(table_ref, table_format=table_format)
 
     vm.iceberg.bind_table = record_binding  # type: ignore[method-assign]
+
+    def record_notification(property_name: str) -> None:
+        notifications.append(property_name)
+        observed_states.append(_catalog_selection_state(vm))
+
+    subscription = vm.on_property_changed.subscribe(on_next=record_notification)
     stale_selection = asyncio.create_task(vm.select_table("events"))
     await inspector.cancellation_seen.wait()
+
+    assert _catalog_selection_state(vm) == baseline
+    assert notifications == []
+
     archive_tables_started = fake.block_tables("archive")
     newer_selection = asyncio.create_task(vm.select_database("archive"))
     await asyncio.sleep(0)
-    assert vm.selected_database_name == "archive"
 
-    notifications: list[str] = []
-    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+    assert _catalog_selection_state(vm) == baseline
+    assert notifications == []
+
     inspector.release.set()
     await stale_selection
     await archive_tables_started.wait()
 
+    committed_state = _catalog_selection_state(vm)
     assert fake.table_detail_requests == []
     assert bindings == []
     assert vm.selected_database_name == "archive"
     assert vm.selected_table_name is None
     assert vm.table_detail is None
+    assert vm.column_statistics == ()
+    assert vm.tables == ()
     assert vm.partitions == ()
-    assert notifications.count("selected_table_name") == 1
-    assert notifications.count("table_detail") == 1
-    assert notifications.count("partitions") == 1
-    assert notifications.count("detail_state") == 1
-    assert notifications.count("partitions_state") == 1
+    assert not vm.has_more_tables
+    assert not vm.has_more_partitions
+    assert vm.tables_state is PaneState.LOADING
+    assert vm.detail_state is PaneState.EMPTY
+    assert vm.partitions_state is PaneState.EMPTY
+    assert vm.statistics_state is PaneState.EMPTY
+    assert vm.tables_error_text is None
+    assert vm.detail_error_text is None
+    assert vm.partitions_error_text is None
+    assert vm.statistics_error_text is None
+    assert notifications == [
+        "tables_state",
+        "detail_state",
+        "partitions_state",
+        "statistics_state",
+        "selected_database_name",
+        "selected_table_name",
+        "tables",
+        "table_detail",
+        "partitions",
+        "column_statistics",
+    ]
+    assert all(state == committed_state for state in observed_states)
 
     fake.release_tables("archive")
     results = await asyncio.gather(newer_selection, metadata_load, return_exceptions=True)
 
     assert results == [None, False]
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_database_refresh_preserves_valid_table_and_partition_pagers() -> None:
+    fake = seeded_glue()
+    events = fake.tables["analytics"][0]
+    fake.add_table("analytics", "third")
+    fake.add_partition(events.ref, "2026-07-26")
+    fake.table_page_size = 1
+    fake.partition_page_size = 1
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    await vm.select_database("analytics")
+    await vm.select_table("events")
+
+    table_pager = vm._table_pager  # type: ignore[attr-defined]
+    partition_pager = vm._partition_pager  # type: ignore[attr-defined]
+    await vm.refresh_databases()
+
+    assert vm._table_pager is table_pager  # type: ignore[attr-defined]
+    assert vm._partition_pager is partition_pager  # type: ignore[attr-defined]
+    assert table_pager.current_token == "1"
+    assert partition_pager.current_token == "1"
+
+    await vm.load_more_tables()
+    await vm.load_more_partitions()
+
+    assert [row.ref.table_name for row in vm.tables] == ["events", "sessions"]
+    assert table_pager.current_token == "2"
+    assert vm.has_more_tables
+    assert [row.values for row in vm.partitions] == [
+        ("2026-07-24",),
+        ("2026-07-25",),
+    ]
+    assert partition_pager.current_token == "2"
+    assert vm.has_more_partitions
+
+    await vm.load_more_tables()
+    await vm.load_more_partitions()
+
+    assert [row.ref.table_name for row in vm.tables] == [
+        "events",
+        "sessions",
+        "third",
+    ]
+    assert table_pager.current_token is None
+    assert not vm.has_more_tables
+    assert [row.values for row in vm.partitions] == [
+        ("2026-07-24",),
+        ("2026-07-25",),
+        ("2026-07-26",),
+    ]
+    assert partition_pager.current_token is None
+    assert not vm.has_more_partitions
+
+
+@pytest.mark.asyncio
+async def test_database_selection_invalidates_blocked_table_page() -> None:
+    class BlockingTables(InMemoryGlue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.next_page_started = asyncio.Event()
+            self.release_next_page = asyncio.Event()
+
+        async def list_tables_page(  # type: ignore[override]
+            self,
+            database: str,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            if database == "analytics" and start_token == "1":
+                self.next_page_started.set()
+                await self.release_next_page.wait()
+            return await super().list_tables_page(database, start_token=start_token)
+
+    fake = BlockingTables()
+    fake.add_table("analytics", "events")
+    fake.add_table("analytics", "sessions")
+    fake.add_table("archive", "old-events")
+    fake.table_page_size = 1
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    await vm.select_database("analytics")
+
+    stale_page = asyncio.create_task(vm.load_more_tables())
+    await fake.next_page_started.wait()
+    await vm.select_database("archive")
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+
+    fake.release_next_page.set()
+    await stale_page
+
+    assert vm.selected_database_name == "archive"
+    assert [row.ref.table_name for row in vm.tables] == ["old-events"]
+    assert notifications == []
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_table_selection_invalidates_blocked_partition_page() -> None:
+    class BlockingPartitions(InMemoryGlue):
+        def __init__(self) -> None:
+            super().__init__()
+            self.next_page_started = asyncio.Event()
+            self.release_next_page = asyncio.Event()
+
+        async def list_partitions_page(  # type: ignore[override]
+            self,
+            ref: TableRef,
+            *,
+            start_token: str | None = None,
+        ) -> tuple[list, str | None]:
+            if ref.table_name == "events" and start_token == "1":
+                self.next_page_started.set()
+                await self.release_next_page.wait()
+            return await super().list_partitions_page(ref, start_token=start_token)
+
+    fake = BlockingPartitions()
+    events = fake.add_table("analytics", "events")
+    fake.add_table("analytics", "sessions")
+    fake.add_partition(events.ref, "2026-07-24")
+    fake.add_partition(events.ref, "2026-07-25")
+    fake.partition_page_size = 1
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    await vm.select_database("analytics")
+    await vm.select_table("events")
+
+    stale_page = asyncio.create_task(vm.load_more_partitions())
+    await fake.next_page_started.wait()
+    await vm.select_table("sessions")
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+
+    fake.release_next_page.set()
+    await stale_page
+
+    assert vm.selected_table_name == "sessions"
+    assert vm.partitions == ()
+    assert notifications == []
     subscription.dispose()
 
 
