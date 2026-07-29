@@ -55,11 +55,11 @@ class RetryCancellationResistantInspector:
         if self.calls == 1:
             return (_snapshot(43), _snapshot(42))
         self.started.set()
-        try:
-            await self.release.wait()
-        except asyncio.CancelledError:
-            self.cancellation_seen.set()
-            await self.release.wait()
+        while not self.release.is_set():
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancellation_seen.set()
         return (_snapshot(99),)
 
 
@@ -401,6 +401,74 @@ async def test_empty_refresh_does_not_clear_newer_database_result_after_iceberg_
     assert _iceberg_state(vm) == iceberg_baseline
     catalog_subscription.dispose()
     iceberg_subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_revoked_empty_refresh_preserves_inflight_iceberg_rebind() -> None:
+    fake = seeded_glue()
+    events = next(row for row in fake.tables["analytics"] if row.ref.table_name == "events")
+    fake.table_details[events.ref] = replace(
+        fake.table_details[events.ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    inspector = RetryCancellationResistantInspector()
+    vm = make_catalog_vm(fake, iceberg_inspector=inspector)
+    await vm.setup()
+    await vm.select_database("analytics")
+    await vm.select_table("events")
+    assert await vm.iceberg.select_view("snapshots")
+    assert vm.iceberg.select_snapshot(43)
+
+    metadata_load = asyncio.create_task(vm.iceberg.retry())
+    await inspector.started.wait()
+    rebind = asyncio.create_task(
+        vm.iceberg.bind_table(events.ref, table_format=TableFormat.ICEBERG)
+    )
+    await inspector.cancellation_seen.wait()
+    databases = tuple(fake.databases)
+    fake.databases.clear()
+    empty_refresh = asyncio.create_task(vm.refresh_databases())
+
+    async def wait_for_silent_drain_lease() -> None:
+        while vm.iceberg._metadata_load_drain_count == 0:
+            await asyncio.sleep(0)
+
+    try:
+        await asyncio.wait_for(wait_for_silent_drain_lease(), timeout=1)
+        lease_count_during_rebind = vm.iceberg._metadata_load_drain_count
+        rebind_waiting_in_drain = not rebind.done() and vm.iceberg.table_ref is None
+        empty_refresh_waiting_in_drain = not empty_refresh.done()
+        fake.databases.extend(databases)
+        await vm.refresh_databases()
+    finally:
+        inspector.release.set()
+    results = await asyncio.gather(rebind, empty_refresh, metadata_load)
+
+    assert lease_count_during_rebind == 1
+    assert rebind_waiting_in_drain
+    assert empty_refresh_waiting_in_drain
+    assert results == [None, None, False]
+    assert vm.selected_database_name == "analytics"
+    assert vm.selected_table_name == "events"
+    assert vm.table_detail == fake.table_details[events.ref]
+    assert vm.iceberg.table_ref == events.ref
+    assert vm.iceberg.available
+
+    assert await vm.iceberg.select_view("snapshots")
+    assert vm.iceberg.snapshots == (_snapshot(99),)
+    assert vm.iceberg.select_snapshot(99)
+    fake.databases.clear()
+
+    await vm.refresh_databases()
+
+    assert vm.selected_database_name is None
+    assert vm.selected_table_name is None
+    assert vm.table_detail is None
+    assert vm.iceberg.table_ref is None
+    assert vm.iceberg.snapshots == ()
+    assert vm.iceberg.selected_snapshot_id is None
+    assert not vm.iceberg.available
+    assert not vm.iceberg._metadata_tasks
 
 
 @pytest.mark.asyncio

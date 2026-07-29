@@ -489,6 +489,72 @@ async def test_silent_metadata_drain_rejects_retry_until_owned_load_is_drained()
 
 
 @pytest.mark.asyncio
+async def test_unloaded_view_selection_is_noop_while_silent_metadata_drain_is_held() -> None:
+    vm, inspector, hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    assert await vm.select_view("snapshots")
+    assert vm.select_snapshot(43)
+    inspector.ignore_cancellation_for = "snapshots"
+    started = inspector.block("snapshots")
+    retry = asyncio.create_task(vm.retry())
+    await started.wait()
+    draining = asyncio.create_task(vm.cancel_metadata_loads_and_drain_silently())
+    await inspector.cancellation_seen.wait()
+    property_notifications: list[str] = []
+    messages: list[Message] = []
+    property_subscription = vm.on_property_changed.subscribe(on_next=property_notifications.append)
+    message_subscription = hub.messages.subscribe(on_next=messages.append)
+    baseline = (
+        vm.active_view,
+        vm.selected_snapshot_id,
+        vm.state,
+        vm.error_text,
+        vm.items,
+        vm.has_more,
+    )
+    calls_before_selection = tuple(inspector.calls)
+
+    try:
+        result = await vm.select_view("refs")
+        state_during_drain = (
+            vm.active_view,
+            vm.selected_snapshot_id,
+            vm.state,
+            vm.error_text,
+            vm.items,
+            vm.has_more,
+        )
+        calls_during_drain = tuple(inspector.calls)
+        property_notifications_during_drain = tuple(property_notifications)
+        messages_during_drain = tuple(messages)
+        drain_was_held = not draining.done()
+    finally:
+        inspector.release("snapshots")
+    drain_result, retry_result = await asyncio.gather(draining, retry)
+
+    assert not result
+    assert drain_was_held
+    assert state_during_drain == baseline
+    assert calls_during_drain == calls_before_selection
+    assert property_notifications_during_drain == ()
+    assert messages_during_drain == ()
+    assert drain_result is None
+    assert not retry_result
+    assert (
+        vm.active_view,
+        vm.selected_snapshot_id,
+        vm.state,
+        vm.error_text,
+        vm.items,
+        vm.has_more,
+    ) == baseline
+    assert property_notifications == []
+    assert messages == []
+    property_subscription.dispose()
+    message_subscription.dispose()
+
+
+@pytest.mark.asyncio
 async def test_metadata_barrier_rechecks_before_entering_loading(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

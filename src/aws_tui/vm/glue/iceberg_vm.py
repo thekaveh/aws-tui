@@ -170,7 +170,7 @@ class GlueIcebergVM:
         self._lifecycle_lock = asyncio.Lock()
         self._metadata_tasks: set[asyncio.Task[tuple[Any, ...]]] = set()
         self._metadata_load_drain_count = 0
-        self._mutation_epoch = 0
+        self._binding_mutation_epoch = 0
         self._binding_generation = 0
         self._table_ref: TableRef | None = None
         self._active_view: IcebergView = "snapshots"
@@ -283,7 +283,7 @@ class GlueIcebergVM:
             return
         self._disposed = True
         self._shutdown_started = True
-        self._mutation_epoch += 1
+        self._binding_mutation_epoch += 1
         self._invalidate_binding(notify=False)
         self._cancel_metadata_tasks()
         try:
@@ -303,38 +303,38 @@ class GlueIcebergVM:
         """Replace the table and clear every pane without issuing provider calls."""
         if self._disposed or self._shutdown_started:
             return
-        self._mutation_epoch += 1
-        mutation_epoch = self._mutation_epoch
+        self._binding_mutation_epoch += 1
+        binding_mutation_epoch = self._binding_mutation_epoch
         if (
             table_ref is not None
             and table_format is TableFormat.ICEBERG
             and _valid_table_ref(table_ref)
         ):
-            await self._replace_table(table_ref, mutation_epoch)
+            await self._replace_table(table_ref, binding_mutation_epoch)
             return
-        await self._replace_table(None, mutation_epoch)
+        await self._replace_table(None, binding_mutation_epoch)
 
     def clear_table(self) -> None:
         """Synchronously invalidate metadata during a parent selection reset."""
         if self._disposed or self._shutdown_started:
             return
-        self._mutation_epoch += 1
+        self._binding_mutation_epoch += 1
         self._invalidate_binding()
         self._cancel_metadata_tasks()
 
     async def clear_table_and_drain(self) -> None:
         """Invalidate metadata and durably drain provider work."""
         if not self._disposed and not self._shutdown_started:
-            self._mutation_epoch += 1
-            mutation_epoch = self._mutation_epoch
+            self._binding_mutation_epoch += 1
+            binding_mutation_epoch = self._binding_mutation_epoch
         else:
-            mutation_epoch = None
+            binding_mutation_epoch = None
         async with self._lifecycle_lock:
             if self._shutdown_complete:
                 return
             if (
-                mutation_epoch is not None
-                and mutation_epoch == self._mutation_epoch
+                binding_mutation_epoch is not None
+                and binding_mutation_epoch == self._binding_mutation_epoch
                 and not self._disposed
                 and not self._shutdown_started
             ):
@@ -346,7 +346,6 @@ class GlueIcebergVM:
         has_drain_lease = not self._disposed and not self._shutdown_started
         if has_drain_lease:
             self._metadata_load_drain_count += 1
-            self._mutation_epoch += 1
             self._invalidate_metadata_loads_silently()
         try:
             async with self._lifecycle_lock:
@@ -361,7 +360,7 @@ class GlueIcebergVM:
         if self._shutdown_started or self._shutdown_complete:
             return
         self._shutdown_started = True
-        self._mutation_epoch += 1
+        self._binding_mutation_epoch += 1
         if not self._disposed:
             self._invalidate_binding()
         self._cancel_metadata_tasks()
@@ -377,10 +376,14 @@ class GlueIcebergVM:
     async def _replace_table(
         self,
         table_ref: TableRef | None,
-        mutation_epoch: int,
+        binding_mutation_epoch: int,
     ) -> None:
         async with self._lifecycle_lock:
-            if self._disposed or self._shutdown_started or self._mutation_epoch != mutation_epoch:
+            if (
+                self._disposed
+                or self._shutdown_started
+                or self._binding_mutation_epoch != binding_mutation_epoch
+            ):
                 return
             binding_generation = self._invalidate_binding()
             self._cancel_metadata_tasks()
@@ -398,7 +401,7 @@ class GlueIcebergVM:
             if (
                 self._disposed
                 or self._shutdown_started
-                or self._mutation_epoch != mutation_epoch
+                or self._binding_mutation_epoch != binding_mutation_epoch
                 or self._binding_generation != binding_generation
             ):
                 return
@@ -464,6 +467,8 @@ class GlueIcebergVM:
     async def select_view(self, view: IcebergView) -> bool:
         pane = self._pane(view)
         if not self.available:
+            return False
+        if not pane.loaded and not self._metadata_load_is_admitted():
             return False
         changed = view != self._active_view
         self._active_view = view
