@@ -118,6 +118,8 @@ async def test_live_page_context_query_errors_are_not_masked(
 
         with pytest.raises(RuntimeError, match="live context query failed"):
             page._sync_context()  # type: ignore[attr-defined]
+        monkeypatch.undo()
+        await pilot.pause()
 
 
 @pytest.mark.asyncio

@@ -365,6 +365,8 @@ async def test_selected_job_detail_is_retained_when_filter_has_no_matching_runs(
         jobs = page.query_one(GlueJobsView)
         jobs.query_one("#glue-run-state-filter", Select).value = "FAILED"
         await pilot.pause()
+        await jobs.workers.wait_for_complete()
+        await pilot.pause()
 
         detail = app.query_one("#glue-job-detail-pane", DetailRows)
         runs = app.query_one("#glue-runs-pane", ResourceListPane)

@@ -99,6 +99,18 @@ async def test_pane_setup_lists_root() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pane_dispose_clears_filtered_projection_before_entries() -> None:
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    assert pane.filtered_entries
+
+    pane.dispose()
+
+    assert pane.entries == ()
+    assert pane.filtered_entries == ()
+
+
+@pytest.mark.asyncio
 async def test_pane_placeholder_redacts_endpoint_secrets() -> None:
     pane = PaneVM(
         provider=_EndpointSecretFailureFS(),
