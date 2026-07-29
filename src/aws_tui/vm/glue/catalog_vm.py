@@ -257,6 +257,8 @@ class GlueCatalogVM:
         self._notify("has_more_databases")
         if not self.databases:
             await self._clear_database_selection()
+            if not self._is_alive() or generation != self._database_generation:
+                return
         self._set_state(
             "_databases_state",
             PaneState.IDLE if self.databases else PaneState.EMPTY,
@@ -297,6 +299,8 @@ class GlueCatalogVM:
         self._selected_database_name = database_name
         self._selected_table_name = None
         await self.iceberg.clear_table_and_drain()
+        if not self._is_alive() or generation != self._table_generation:
+            return
         self._table_detail = None
         self._column_statistics = ()
         self._detail_generation += 1
@@ -378,6 +382,8 @@ class GlueCatalogVM:
         self._table_detail = None
         self._column_statistics = ()
         await self.iceberg.clear_table_and_drain()
+        if not self._is_alive() or generation != self._detail_generation:
+            return
         self._replace_partition_pager(summary.ref)
         self._detail_error_text = None
         self._partitions_error_text = None
@@ -402,7 +408,7 @@ class GlueCatalogVM:
                     detail.summary.ref,
                     table_format=detail.table_format,
                 )
-                if generation != self._detail_generation:
+                if not self._is_alive() or generation != self._detail_generation:
                     return
 
         await self._load_partitions(generation)
@@ -707,9 +713,17 @@ class GlueCatalogVM:
     async def _clear_database_selection(self) -> None:
         self._table_generation += 1
         self._detail_generation += 1
+        table_generation = self._table_generation
+        detail_generation = self._detail_generation
         self._selected_database_name = None
         self._selected_table_name = None
         await self.iceberg.clear_table_and_drain()
+        if (
+            not self._is_alive()
+            or table_generation != self._table_generation
+            or detail_generation != self._detail_generation
+        ):
+            return
         self._table_detail = None
         self._column_statistics = ()
         self._replace_table_pager(None)

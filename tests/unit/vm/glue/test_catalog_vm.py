@@ -8,7 +8,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.data_catalog import TableRef
+from aws_tui.domain.data_catalog import TableFormat, TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
@@ -16,11 +16,57 @@ from aws_tui.vm.messages import OpenS3LocationRequest
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
-def make_catalog_vm(fake: InMemoryGlue) -> GlueCatalogVM:
+class CancellationResistantInspector:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancellation_seen = asyncio.Event()
+
+    async def list_snapshots(self, _ref: TableRef) -> tuple[object, ...]:
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancellation_seen.set()
+            await self.release.wait()
+        return ()
+
+
+def make_catalog_vm(
+    fake: InMemoryGlue,
+    *,
+    iceberg_inspector: object | None = None,
+) -> GlueCatalogVM:
     hub: MessageHub[Message] = MessageHub()
-    vm = GlueCatalogVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm = GlueCatalogVM(
+        client=fake,
+        iceberg_inspector=iceberg_inspector,  # type: ignore[arg-type]
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
     vm.construct()
     return vm
+
+
+def _catalog_state(vm: GlueCatalogVM) -> tuple[object, ...]:
+    return (
+        vm.selected_database_name,
+        vm.selected_table_name,
+        vm.table_detail,
+        vm.column_statistics,
+        vm.tables,
+        vm.partitions,
+        vm.databases_state,
+        vm.tables_state,
+        vm.detail_state,
+        vm.partitions_state,
+        vm.statistics_state,
+        id(vm._table_pager),  # type: ignore[attr-defined]
+        id(vm._partition_pager),  # type: ignore[attr-defined]
+        vm.iceberg.table_ref,
+        vm.iceberg.snapshots,
+        vm.iceberg.state,
+    )
 
 
 @pytest.mark.asyncio
@@ -119,6 +165,65 @@ async def test_catalog_select_table_discards_stale_detail_and_partitions() -> No
     assert vm.table_detail is not None
     assert vm.table_detail.summary.ref.table_name == "sessions"
     assert vm.partitions == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selection",
+    ["database", "table", "empty-database-refresh"],
+)
+async def test_shutdown_during_iceberg_drain_freezes_catalog_terminal_state(
+    selection: str,
+) -> None:
+    fake = seeded_glue()
+    fake.add_table("archive", "old-events")
+    events = next(row for row in fake.tables["analytics"] if row.ref.table_name == "events")
+    fake.table_details[events.ref] = replace(
+        fake.table_details[events.ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    inspector = CancellationResistantInspector()
+    vm = make_catalog_vm(fake, iceberg_inspector=inspector)
+    await vm.setup()
+    await vm.select_database("analytics")
+    await vm.select_table("events")
+    metadata_load = asyncio.create_task(vm.iceberg.select_view("snapshots"))
+    await inspector.started.wait()
+    catalog_notifications: list[str] = []
+    iceberg_notifications: list[str] = []
+    catalog_subscription = vm.on_property_changed.subscribe(on_next=catalog_notifications.append)
+    iceberg_subscription = vm.iceberg.on_property_changed.subscribe(
+        on_next=iceberg_notifications.append
+    )
+
+    if selection == "database":
+        operation = asyncio.create_task(vm.select_database("archive"))
+    elif selection == "table":
+        operation = asyncio.create_task(vm.select_table("sessions"))
+    else:
+        fake.databases.clear()
+        operation = asyncio.create_task(vm.refresh_databases())
+    await inspector.cancellation_seen.wait()
+
+    shutdown = asyncio.create_task(vm.shutdown())
+    await asyncio.sleep(0)
+    state_at_shutdown = _catalog_state(vm)
+    catalog_notifications.clear()
+    iceberg_notifications.clear()
+    inspector.release.set()
+    results = await asyncio.gather(
+        operation,
+        metadata_load,
+        shutdown,
+        return_exceptions=True,
+    )
+
+    assert results == [None, False, None]
+    assert _catalog_state(vm) == state_at_shutdown
+    assert catalog_notifications == []
+    assert iceberg_notifications == []
+    catalog_subscription.dispose()
+    iceberg_subscription.dispose()
 
 
 @pytest.mark.asyncio
