@@ -30,6 +30,15 @@ def test_binding_action_uses_dispatch_form() -> None:
     assert copy.action == "dispatch('pane.copy')"
 
 
+def test_source_and_emr_application_bindings_have_distinct_descriptions() -> None:
+    actions = _registry("app.swap_source", "emr.next_application")
+    resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
+    by_key = {binding.key: binding for binding in resolver.to_textual_bindings()}
+
+    assert by_key["S"].description == "Switch source"
+    assert by_key["A"].description == "Next EMR application"
+
+
 def test_priority_true_except_quit() -> None:
     actions = _registry("app.quit", "pane.switch_focus")
     resolver = BindingResolver(keymap=KeymapStore(), actions=actions)

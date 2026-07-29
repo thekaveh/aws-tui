@@ -2,6 +2,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import scripts.docs.render_diagrams as render_diagrams
 from scripts.docs.build_docs import (
     _assert_dirs_equal,
     build,
@@ -10,6 +11,7 @@ from scripts.docs.build_docs import (
     render_wiki,
 )
 from scripts.docs.manifest import parse_manifest
+from scripts.docs.render_diagrams import render_all
 
 
 def _fixture(tmp_path: Path):
@@ -26,6 +28,10 @@ def _fixture(tmp_path: Path):
     (docs / "javascripts" / "mathjax.js").write_text("window.MathJax = {};\n")
     (docs / "diagrams" / "img").mkdir(parents=True)
     (docs / "diagrams" / "img" / "architecture.png").write_bytes(b"\x89PNG\r\n\x1a\nX")
+    (docs / "diagrams" / "architecture.html").write_text(
+        "<html><svg xmlns='http://www.w3.org/2000/svg' "
+        "viewBox='0 0 16 9'><text>Architecture &middot; layers</text></svg></html>"
+    )
     m = parse_manifest(
         textwrap.dedent(
             """
@@ -38,7 +44,8 @@ def _fixture(tmp_path: Path):
                 children:
                   - { id: architecture, title: Architecture, source: docs/architecture.md }
                   - { id: keybindings, title: Keybindings, source: docs/keybindings.md }
-            diagrams: []
+            diagrams:
+              - { id: architecture, master: docs/diagrams/architecture.html }
             """
         )
     )
@@ -77,6 +84,27 @@ def test_render_wiki_emits_special_pages_and_images(tmp_path):
     assert "[Architecture](Architecture)" in sidebar
 
 
+def test_three_surface_build_keeps_svg_assets_byte_identical(tmp_path, monkeypatch):
+    m, root = _fixture(tmp_path)
+    canonical_dir = root / "docs" / "diagrams" / "img"
+    site_dir = root / "generated" / "site"
+    wiki_dir = root / "generated" / "wiki"
+
+    def write_test_png(_svg, out_path, *, width=1600):
+        del width
+        Path(out_path).write_bytes(b"\x89PNG\r\n\x1a\nTEST")
+
+    monkeypatch.setattr(render_diagrams, "svg_to_png", write_test_png)
+    render_all(m, root, site_dir / "assets" / "img", canonical_dir)
+    render_site(m, root, site_dir)
+    render_wiki(m, root, wiki_dir)
+
+    canonical = (canonical_dir / "architecture.svg").read_bytes()
+    site = (site_dir / "assets" / "img" / "architecture.svg").read_bytes()
+    wiki = (wiki_dir / "img" / "architecture.svg").read_bytes()
+    assert canonical == site == wiki
+
+
 def test_render_mkdocs_yml_has_nav_and_no_repo_url(tmp_path):
     m, _ = _fixture(tmp_path)
     text = render_mkdocs_yml(m)
@@ -107,7 +135,8 @@ def _manifest_yaml() -> str:
             children:
               - { id: architecture, title: Architecture, source: docs/architecture.md }
               - { id: keybindings, title: Keybindings, source: docs/keybindings.md }
-        diagrams: []
+        diagrams:
+          - { id: architecture, master: docs/diagrams/architecture.html }
         """
     )
 

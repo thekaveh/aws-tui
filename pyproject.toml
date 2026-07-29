@@ -51,6 +51,7 @@ dependencies = [
   "tomli-w>=1.0,<2",
   "keyring>=24,<26",
   "platformdirs>=4,<5",
+  "sqlglot>=30.13.0,<31",
 ]
 dynamic = ["version"]
 
@@ -89,7 +90,7 @@ dev = [
   # versions when uv has already moved to them (e.g. mypy 2.x,
   # pytest 9.x, pre-commit 9.x in the resolved lock).
   "pytest>=8",
-  "pytest-asyncio>=0.23",
+  "pytest-asyncio>=0.24",
   "pytest-cov>=4",
   "pytest-xdist>=3",
   "pytest-rerunfailures>=14",
@@ -115,6 +116,7 @@ docs = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "-ra --strict-markers --strict-config -m 'not integration'"

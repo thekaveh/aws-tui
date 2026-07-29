@@ -35,7 +35,7 @@ from aws_tui.vm.file_manager.pane_vm import PaneState
 #: Single source of truth for the user-facing application order.
 #: STARTED first, then transitional (STARTING / STOPPING), then
 #: non-active (CREATING / CREATED / STOPPED), then terminal
-#: (TERMINATED). The picker dropdown and the Shift+S cycle both
+#: (TERMINATED). The picker dropdown and the Shift+A cycle both
 #: consume :attr:`ApplicationsVM.sorted_applications` so the order
 #: the user sees in the dropdown is the same order they cycle
 #: through with the keybinding.
@@ -144,7 +144,7 @@ class ApplicationsVM:
         Single source of truth for the user-facing application order:
         STARTED first, then transitional / idle / terminated groups,
         alphabetical within each group. The picker dropdown and the
-        Shift+S cycle both consume this property — listing and
+        Shift+A cycle both consume this property — listing and
         cycling stay in lockstep.
         """
         return tuple(

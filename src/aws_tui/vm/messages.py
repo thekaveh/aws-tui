@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 
@@ -207,6 +208,77 @@ class FocusChangedMessage:
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class OpenS3LocationRequest:
+    """Request composition-root navigation to one S3 location.
+
+    The source connection identity is explicit so cross-service navigation
+    cannot silently fall back to another profile or region.
+    """
+
+    connection_name: str
+    region: str
+    uri: str
+    preferred_pane: Literal["left", "right"] = "left"
+    reveal_object: bool = False
+    sender_name: str = "service_navigation"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAthenaTableRequest:
+    """Request Athena navigation for one exact Glue table identity."""
+
+    table_ref: TableRef
+    snapshot_id: int | None = None
+    sender_name: str = "service_navigation"
+
+    def __post_init__(self) -> None:
+        _validate_table_ref(self.table_ref)
+        if self.snapshot_id is not None and (
+            type(self.snapshot_id) is not int or self.snapshot_id < 0
+        ):
+            raise ValueError("snapshot ID is invalid")
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class OpenGlueTableRequest:
+    """Request Glue navigation for one exact Athena table identity."""
+
+    table_ref: TableRef
+    sender_name: str = "service_navigation"
+
+    def __post_init__(self) -> None:
+        _validate_table_ref(self.table_ref)
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+def _validate_table_ref(value: object) -> None:
+    if not isinstance(value, TableRef) or type(value) is not TableRef:
+        raise ValueError("table reference is invalid")
+    if not all(
+        type(part) is str and bool(part.strip())
+        for part in (
+            value.catalog_name,
+            value.database_name,
+            value.table_name,
+            value.connection_name,
+            value.region,
+        )
+    ):
+        raise ValueError("table reference is invalid")
+
+
 __all__ = [
     "AuthExpiredMessage",
     "AuthExpiredReason",
@@ -214,6 +286,9 @@ __all__ = [
     "ConnectionListChangedMessage",
     "FocusChangedMessage",
     "KeymapChangedMessage",
+    "OpenAthenaTableRequest",
+    "OpenGlueTableRequest",
+    "OpenS3LocationRequest",
     "ThemeChangedMessage",
     "TransferCancelRequestedMessage",
     "TransferProgressMessage",

@@ -11,3 +11,5 @@
 *.jpg    binary
 *.gif    binary
 *.svg    text
+
+tests/snapshot/__snapshots__/**/*.raw whitespace=-trailing-space

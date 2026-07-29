@@ -1,6 +1,6 @@
 # 1. Architecture
 
-![aws-tui layered MVVM architecture — View over ViewModel over Domain, wired by a composition root, with a startup→mount→dispose lifecycle.](diagrams/img/architecture.png)
+![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue, and Athena views; Glue and Athena VM trees; service plugins; shared TableRef and QueryContext models; IcebergInspector; source selection and connection resolution; immutable Glue, Athena, and S3 navigation messages; and the AWS Glue, Athena, S3, and Lake Formation boundary.](diagrams/img/architecture.png)
 
 > Human-readable mirror of §2 of [the design spec](superpowers/specs/2026-06-13-aws-tui-design.md).
 > For the deep dive (VM tree, lifecycle invariants, capability matrix,
@@ -23,10 +23,14 @@ VMs to build service pages, but it cannot import Textual widgets.
   (`src/aws_tui/ui/`). Never touches `boto3`, `aioboto3`, or
   `botocore`. Talks to VMs via property reads + relay-command
   ``execute(...)``; subscribes to ``MessageHub`` for change
-  notifications.
+  notifications. The S3 root is the code-backed `DualPane` from
+  `src/aws_tui/ui/widgets/dual_pane.py`, mounted through
+  `src/aws_tui/ui/widgets/service_view_factory.py`; there is no `S3Page` class.
 - **ViewModel** — VMx-based viewmodels with reactive commands and
   property-changed messages (`src/aws_tui/vm/`). Never imports
-  Textual; tests run headless. Subtrees:
+  Textual; tests run headless. `ServiceSelectionStore` is a VM-layer type in
+  `src/aws_tui/vm/service_source_vm.py`, shared by the single-context service
+  VMs rather than owned by Infrastructure. Subtrees:
   - `vm/chrome/` — persistent shell state (hint legend, toasts,
     overlays like command palette / confirm / quick look / crash /
     resume / first-run, plus a retained `StatusBarVM` subscriber for
@@ -36,9 +40,33 @@ VMs to build service pages, but it cannot import Textual widgets.
   - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
     `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
     (added post-tag by PR #76 and extended by PR #84; the read-only EMR Serverless browser with logs streaming).
+    Its immutable `ServiceSourceContext` carries the active connection name,
+    optional distinct AWS profile, and region to the service view; the shared
+    `ServiceSourceHeader` renders that identity above the EMR application picker.
+    `ServiceSelectionStore` scopes remembered service selections by
+    `(service_id, connection_name, region)`.
     `JobRunCloneVM` (PR #83) backs the clone-job-run modal — a
     sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
     per modal-mount with the focused run as the source.
+  - `vm/glue/` — `GluePageVM` with independent Catalog, Jobs, and
+    Crawlers child VMs. `GlueCatalogVM` owns a `GlueIcebergVM` child that
+    appears only for tables classified as Iceberg and loads Snapshots,
+    History, Manifests, Files, Partitions, and References independently.
+    The page shares `ServiceSourceContext` and
+    connection/region-scoped selection memory with the other
+    single-context AWS services. `GlueCatalogVM` emits the immutable
+    service-neutral `OpenS3LocationRequest` and
+    `OpenAthenaTableRequest`; it never mounts a Textual view or constructs a
+    destination service itself.
+  - `vm/athena/` — `AthenaPageVM` with Query, History, Results, and Saved
+    child VMs. Its context and remembered selections are scoped by connection
+    name and region; changing workgroup, catalog, or database invalidates the
+    query context. Query work stays in the VM layer, while `domain/athena.py`
+    owns boto mapping and `domain/sql_policy.py` fails closed before dispatch.
+    `AthenaPageVM.open_table(...)` sets exact catalog/database context and
+    prefills bounded starter SQL. `open_table_in_glue()` publishes
+    `OpenGlueTableRequest` only when the current SQL resolves to one visible
+    table.
   - `vm/settings/` — `SettingsVM` (built per-mount when the user
     selects the Settings nav peer) and `S3ConnectionsVM` (singleton
     on `AppContext`, drives the in-app Connections CRUD).
@@ -46,21 +74,36 @@ VMs to build service pages, but it cannot import Textual widgets.
     `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias),
     `vm/content_host_vm.py`, `vm/root_vm.py`.
 - **Service plugins** — One folder per top-level service
-  (`src/aws_tui/services/`). v0.8.0 ships `s3` and
+  (`src/aws_tui/services/`). The current tree ships `s3`,
   `emr-serverless` (read-only browser + clone-job-run plus job-run
   logs — applications listing, job-runs master-detail, state-filter
   chips, clone-and-edit modal via `c`; cancel / vanilla submit are
-  still deferred).
+  still deferred), `glue` (read-only Catalog, Jobs, and Crawlers), and
+  `athena` (read-only query, history, results, and saved-query views).
+  `GlueService` composes both `GlueClient` and an Athena-backed
+  `IcebergInspector`; `AthenaService` composes the query page.
   Each service implements the `Service` protocol (declared in
   `vm/services_protocol.py`, re-exported from `services/__init__.py`).
 - **Domain** — `FileSystemProvider` protocol with `LocalFS` and `S3FS`
   implementations + the cross-FS copy/move engine + the transfer
   journal (`src/aws_tui/domain/`). The Norton-Commander unifier; the
-  pane VMs treat both sides as the same protocol.
-- **Infrastructure** — `AwsSession`, `ConnectionResolver`,
-  `ConfigStore`, `ThemeStore`, `KeymapStore`, `LogSink`, `CrashDump`,
-  `KeychainBackend`. The only layer that touches the OS, AWS APIs,
-  the file system, or the macOS keychain.
+  pane VMs treat both sides as the same protocol. Domain adapters perform the
+  runtime AWS and filesystem I/O: `LocalFS` and `TransferJournal` access host
+  storage, while `S3FS`, `EmrServerlessClient`, `GlueClient`, and
+  `AthenaClient` issue service operations and map external responses/errors
+  into domain values. `TableRef` and `QueryContext` carry immutable table and
+  execution identity. `IcebergInspector` uses `AthenaQueryRunner` to read
+  bounded Iceberg metadata tables; `ReadOnlySqlPolicy` validates both user and
+  generated SQL. Raw AWS responses remain below VMs.
+- **Infrastructure** — Infrastructure owns sessions, credentials,
+  configuration, SDK client construction, and OS-backed stores.
+  `AwsSession` and `ConnectionResolver` provide configured AWS identities and
+  client contexts to the domain adapters. `ServiceSelectionStore` scopes
+  workgroup and resource selections by service, connection name, and region;
+  resolver order drives `Shift+S`. `ConfigStore`, `ThemeStore`,
+  `KeymapStore`, `LogSink`, `CrashDump`, and `KeychainBackend` persist
+  application and platform state. Infrastructure prepares those boundaries;
+  domain adapters perform the provider operations.
 
 ## 1.2. Composition root
 The two top-level files `src/aws_tui/composition.py` and
@@ -84,7 +127,10 @@ handlers.
 VMs implement `construct → run → destruct → dispose` (VMx convention).
 The `RootVM` constructs the chrome and content-host children
 depth-first; `ContentHostVM.set_content(new)` disposes the previous
-content via the same cascade. App shutdown awaits the in-flight
+content via the same cascade. When outgoing content exposes `shutdown`,
+`ContentHostVM.set_content(...)` awaits it before calling `dispose`; Athena
+shutdown is awaited before disposal so its app-owned query cancellation and
+worker drains complete in order. App shutdown awaits the in-flight
 transfers cancel + closes every aioboto3 client before disposing the
 VM tree (spec §5.4).
 
@@ -96,7 +142,21 @@ All cross-VM communication goes through the session's single
 - `ConnectionChangedMessage`, `ThemeChangedMessage`,
   `AuthExpiredMessage`, `TransferProgressMessage`,
   `KeymapChangedMessage`, `FocusChangedMessage`,
-  `TransferCancelRequestedMessage`, `ConnectionListChangedMessage`.
+  `TransferCancelRequestedMessage`, `ConnectionListChangedMessage`,
+  `OpenS3LocationRequest`, `OpenAthenaTableRequest`,
+  `OpenGlueTableRequest`.
+
+Cross-service navigation stays service-neutral. `OpenAthenaTableRequest` and
+`OpenGlueTableRequest` carry a `TableRef` containing catalog, database, table,
+connection name, and region; the Athena request may add a validated snapshot
+ID. `app.py` serializes table handoffs, resolves the exact connection, rejects
+region drift, snapshots the outgoing Glue/Athena state for rollback, and
+mounts the destination through `RootVM`. Athena receives generated SQL in the
+editor but does not execute it. For S3, `OpenS3LocationRequest` carries the
+exact connection, region, URI, pane, and reveal-object intent. The Results VM
+reloads an execution and publishes only when it succeeded, belongs to the
+active context, and has a valid `s3://` output location. Missing, malformed,
+ambiguous, or stale identities stop at an advisory; VMs never import UI code.
 
 VMs subscribe via `hub.messages.subscribe(on_next=callback)` (an
 `reactivex.Observable` under the hood); filtering happens inside the
@@ -136,16 +196,25 @@ at `src/aws_tui/` top-level so the check never inspects them.
 3. `src/aws_tui/vm/file_manager/dual_pane_vm.py` — the first concrete
    page VM (S3 service hosts it).
    `src/aws_tui/vm/emr_serverless/page_vm.py::EmrServerlessPageVM` —
-   the second concrete page VM (post-tag, PR #76); a richer pattern
+   another concrete page VM; a richer pattern
    that orchestrates three child VMs (`ApplicationsVM`,
    `JobRunsVM`, `JobRunDetailVM`) and runs three independent
    pollers.
 4. `src/aws_tui/services/s3/service.py` — the first concrete service
    in v0.7.0; pattern for future ones.
-   `src/aws_tui/services/emr_serverless/service.py` — the second
-   shipped service (post-tag), using the richer per-service
+   `src/aws_tui/services/emr_serverless/service.py` uses the richer per-service
    subtree pattern (dedicated domain client + VM subtree + UI
    widget tree).
+   `src/aws_tui/services/glue/service.py` follows the same factory
+   lifecycle for an AWS-only, read-only three-view page and retains
+   validated selection identifiers per connection name and region.
+   S3 owns independent sources for each pane, while single-context AWS services
+   use `RootVM`'s active connection and are rebuilt as a whole when their source
+   changes.
+   `src/aws_tui/services/athena/service.py` is the corresponding query-service
+   reference: it composes an Athena client, read-only SQL policy, and a fresh
+   `AthenaPageVM` per AWS connection. Glue composes its own contextual Athena
+   client for `IcebergInspector`; it does not reuse the mounted Athena VM.
 5. `src/aws_tui/domain/cross_fs.py` — the engine that moves bytes
    between any pair of `FileSystemProvider`s.
 6. `src/aws_tui/ui/widgets/` — pure Textual widgets; per-VM smoke

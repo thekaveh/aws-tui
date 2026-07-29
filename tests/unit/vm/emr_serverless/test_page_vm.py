@@ -6,15 +6,28 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG, ApplicationState, JobRunState
+from aws_tui.domain.emr_serverless import (
+    EMR_BOTO_CONFIG,
+    ApplicationState,
+    ApplicationSummary,
+    JobRunState,
+)
+from aws_tui.domain.filesystem import ProviderUnreachableError
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
+from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
-def _make() -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
-    fake = _InMemoryEmr()
+def _make(
+    *,
+    fake: _InMemoryEmr | None = None,
+    selection_store: ServiceSelectionStore | None = None,
+) -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
+    fake = fake or _InMemoryEmr()
     hub: MessageHub[Message] = MessageHub()
     page = EmrServerlessPageVM(
         client=fake,
@@ -24,6 +37,7 @@ def _make() -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
         connection=Connection(
             name="dev", kind="aws", region="us-east-1", source="config", profile="dev"
         ),
+        selection_store=selection_store,
     )
     page.construct()
     return page, fake
@@ -31,6 +45,8 @@ def _make() -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
 
 def test_page_vm_threads_emr_boto_config_into_logs_client() -> None:
     page, _ = _make()
+    assert page.source.connection_key == ("dev", "us-east-1")
+    assert page.source.label == "dev \u00b7 us-east-1"
     assert page.job_run_logs._client.boto_config is EMR_BOTO_CONFIG  # type: ignore[attr-defined]
 
 
@@ -46,6 +62,35 @@ async def test_setup_loads_applications_and_auto_selects_first() -> None:
 
 
 @pytest.mark.asyncio
+async def test_setup_handles_empty_initial_application_list() -> None:
+    page, _ = _make()
+
+    await page.setup()
+
+    assert page.applications.state is PaneState.EMPTY
+    assert page.applications.selected_id is None
+    assert page.job_runs.application_id is None
+
+
+@pytest.mark.asyncio
+async def test_setup_handles_failed_initial_application_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, fake = _make()
+
+    async def fail_list_applications() -> list[ApplicationSummary]:
+        raise ProviderUnreachableError("network blip")
+
+    monkeypatch.setattr(fake, "list_applications", fail_list_applications)
+
+    await page.setup()
+
+    assert page.applications.state is PaneState.UNREACHABLE
+    assert page.applications.selected_id is None
+    assert page.job_runs.application_id is None
+
+
+@pytest.mark.asyncio
 async def test_select_application_propagates_to_job_runs() -> None:
     page, fake = _make()
     fake.add_application(app_id="a1", name="etl")
@@ -57,6 +102,75 @@ async def test_select_application_propagates_to_job_runs() -> None:
     assert page.applications.selected_id == "a2"
     assert page.job_runs.application_id == "a2"
     assert {r.job_run_id for r in page.job_runs.runs} == {"r9"}
+
+
+@pytest.mark.asyncio
+async def test_successful_application_selection_is_stored_for_the_connection() -> None:
+    store = ServiceSelectionStore()
+    page, fake = _make(selection_store=store)
+    fake.add_application(app_id="a1", name="alpha")
+    fake.add_application(app_id="a2", name="beta")
+
+    await page.setup()
+    await page.select_application("a2")
+
+    assert store.get(SelectionScope("emr-serverless", "dev", "us-east-1"), "application_id") == "a2"
+
+
+@pytest.mark.asyncio
+async def test_setup_restores_stored_application_when_it_still_exists() -> None:
+    store = ServiceSelectionStore()
+    page, fake = _make(selection_store=store)
+    fake.add_application(app_id="a1", name="alpha")
+    fake.add_application(app_id="a2", name="beta")
+    await page.setup()
+    await page.select_application("a2")
+    page.dispose()
+
+    replacement, _ = _make(fake=fake, selection_store=store)
+    await replacement.setup()
+
+    assert replacement.applications.selected_id == "a2"
+
+
+@pytest.mark.asyncio
+async def test_service_reuses_selection_store_across_replacement_pages() -> None:
+    fake = _InMemoryEmr()
+    hub: MessageHub[Message] = MessageHub()
+    service = EmrServerlessService(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        emr_client_factory=lambda _connection: fake,
+        emr_logs_client_factory=lambda _connection: fake.make_logs_client(),
+    )
+    connection = Connection(
+        name="dev", kind="aws", region="us-east-1", source="config", profile="dev"
+    )
+    first = service.build_vm(connection)
+    first.construct()
+    fake.add_application(app_id="a1", name="alpha")
+    fake.add_application(app_id="a2", name="beta")
+    await first.setup()
+    await first.select_application("a2")
+    first.dispose()
+
+    replacement = service.build_vm(connection)
+    replacement.construct()
+    await replacement.setup()
+
+    assert replacement.applications.selected_id == "a2"
+
+
+@pytest.mark.asyncio
+async def test_setup_ignores_stored_application_that_is_no_longer_available() -> None:
+    store = ServiceSelectionStore()
+    page, fake = _make(selection_store=store)
+    fake.add_application(app_id="a1", name="alpha")
+    store.set(SelectionScope("emr-serverless", "dev", "us-east-1"), "application_id", "vanished")
+
+    await page.setup()
+
+    assert page.applications.selected_id == "a1"
 
 
 @pytest.mark.asyncio
@@ -97,7 +211,7 @@ async def test_dispose_cascades_to_children() -> None:
 
 @pytest.mark.asyncio
 async def test_cycle_application_wraps_at_end_and_cascades() -> None:
-    """Pin Shift+S behaviour: ``cycle_application(1)`` selects the
+    """Pin Shift+A behaviour: ``cycle_application(1)`` selects the
     next app and wraps at the end. The full ``select_application``
     cascade runs so JobRuns + Detail panes refresh in lockstep —
     user feedback: "shift + s … doesn't result in an actual app

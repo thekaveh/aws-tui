@@ -1,23 +1,19 @@
 # 1. Keybindings
 
 > Mirror of spec §4.2. `[keybindings]` entries in
-> `<config-dir>/config.toml` parse and validate today, but runtime
-> dispatch still uses `AwsTuiApp.BINDINGS` until the input-router
-> wiring lands. See the v0.8.x status note at the end of §1 and the
-> **Deferred / v0.9 roadmap** block in the `[0.8.0]` section of
-> `CHANGELOG.md`.
+> `<config-dir>/config.toml` are validated by `KeymapStore` and
+> installed at runtime through `BindingResolver`. Only action IDs with
+> registered handlers receive live Textual bindings.
 
 The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 (terminals intercept it). Letter-driven, with the command palette
 (`:` or `Ctrl+K`) as the universal escape hatch.
 
-> **v0.8.x wiring status:** rows below tagged `(deferred)` are
+> **Wiring status:** rows below tagged `(deferred)` are
 > declared in `KeymapStore.DEFAULT_BINDINGS` but the matching
 > `action_*` handler has not yet been added to `AwsTuiApp`. They
-> remain valid action IDs (your `[keybindings]` overlay can rebind
-> them ahead of time; the binding takes effect once the deferred wiring
-> ships). See the **Deferred / v0.9 roadmap** block in the `[0.8.0]`
-> section of `CHANGELOG.md` for the full list.
+> remain valid action IDs, but `BindingResolver` leaves them unbound
+> until the matching handler ships.
 
 ## 1.1. Default bindings
 
@@ -58,10 +54,10 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 
 | Action | Default | Notes |
 |---|---|---|
-| Quick Look | `pane.quick_look` action — *(deferred)* | Spec'd on `Space`; preview handler not wired in v0.8.x |
+| Quick Look | `Space` | Streams the first 64 KB of the selected file |
 | Fuzzy find | `pane.fuzzy_find` action — *(deferred)* | Spec'd on `Ctrl+P`; not wired |
 | Filter pane | `pane.filter` action — *(deferred)* | Spec'd on `/`; not wired |
-| Command palette | `app.command_palette` action — *(deferred)* | Spec'd on `:` / `Ctrl+K`; in v0.8.x `:` opens the help overlay (placeholder) and `Ctrl+K` is unbound |
+| Command palette | `:` / `Ctrl+K` | Opens the fuzzy app-command palette |
 | Theme picker (modal) | `t` | |
 | Cycle to next theme (no modal) | `Shift+T` (`T`) | |
 | Help overlay | `?` | |
@@ -71,22 +67,24 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Action | Default | Notes |
 |---|---|---|
 | Open Settings | `,` (comma) | Opens the in-app Settings nav page directly. Equivalent to arrow-keying down to the ⚙ Settings row in the rail and pressing `Enter`. |
-| Cycle focused pane source | `Shift+S` (`S`) | Steps through `local` → each AWS profile (`aws s3 · {profile} · {region}`) → each `s3-compatible` connection (`s3-compatible · {name} · {endpoint}`) → wrap. The fastest way to jump between AWS accounts or s3-compatible endpoints — one keystroke per source, no command-palette modal. New connections added via the in-app Settings page (or `<config-dir>/config.toml`) join the cycle automatically. Either pane can be on any of the four `{S3-class, local}` combinations independently. |
+| Switch source | `Shift+S` (`S`) | On S3, cycles the focused pane through `local` and resolver-ordered configured sources. On single-context AWS services such as EMR, Glue, and Athena, rebuilds the current service under the next supported AWS profile. |
 
 > **Nav-menu visibility:** the left rail is always visible at a single
 > fixed width and shows TEXT labels (Settings docked at the bottom as
 > the ⚙ glyph). The pre-PR-#94 `m`-key collapse/expand toggle was
 > dropped because there is no longer a collapsed mode to toggle into;
-> live `AwsTuiApp.BINDINGS` does not bind `m` in v0.8.x, while the
-> keymap default reserves `m` for the deferred `pane.move` action
-> (§1.3) when its router wiring lands.
+> `BindingResolver` does not emit `m` because the deferred `pane.move`
+> action has no registered handler (§1.3).
 
 ### 1.1.6. Connection / auth
 
 | Action | Default | Notes |
 |---|---|---|
 | Authenticate (when auth toast active) | `auth.authenticate` action — *(deferred)* | Spec'd on `a`; handler not wired in v0.8.x |
-| Connection switcher | `app.command_palette` action — *(deferred)* | Spec'd as `:` then `connection switch <name>`; the palette open binding is deferred |
+| Connection switcher | no shipped command — *(deferred)* | Dynamic `connection switch <name>` palette entries are not registered. |
+
+The command palette opens today with `:` or `Ctrl+K`; only the dynamic
+connection-switch entries in the row above remain deferred.
 
 ### 1.1.7. App
 
@@ -107,7 +105,7 @@ App-level `priority=True` and short-circuit through
 | Action | Default | Notes |
 |---|---|---|
 | Open application picker | `a` | Opens the applications dropdown above the LEFT pane. |
-| Cycle next application | `Shift+S` | Cycles to the next EMR application without opening the picker. On S3 the same app-level action cycles pane sources; on EMR `AwsTuiApp.action_swap_source` short-circuits to the page's next-application behavior and the Commands chip labels it as "switch app". |
+| Cycle next application | `Shift+A` | Cycles to the next EMR application without opening the picker. `Shift+S` remains available to switch the EMR page to the next configured AWS profile. |
 | State filter chips | `1` `2` `3` `4` `5` | Multi-select toggles, one chip per state in this key order: `SUCCESS` / `RUNNING` / `PENDING` / `FAILED` / `CANCELLED`. Source of truth: ``_KEY_TO_STATE`` in ``ui/widgets/emr_serverless/job_runs_pane.py``. The transient pre-terminal states `SUBMITTED` / `SCHEDULED` / `QUEUED` / `CANCELLING` are NOT chip-filterable — they always render (they're members of the initial all-on default filter set and have no toggle key). |
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the LEFT-pane row cursor; master-detail follows the cursor (the RIGHT pane re-loads on every cursor move, not only on `Enter`). |
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
@@ -125,6 +123,37 @@ App-level `priority=True` and short-circuit through
 > right-side surface: detail focus reloads the selected job-run detail;
 > logs focus re-fetches logs from S3.
 
+### 1.1.9. AWS Glue
+
+Glue is a single-context AWS service. It keeps one active connection
+and region for the whole page; S3-compatible connections are excluded.
+
+| Action | Default | Notes |
+|---|---|---|
+| Catalog / Jobs / Crawlers | `1` / `2` / `3` | Selects the corresponding Glue view. |
+| Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the focused resource list or scrolls detail. |
+| Cycle focus | `Tab` / `Shift+Tab` | Walks Glue tabs, lists, filters, and detail controls. |
+| Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
+| Switch AWS source | `Shift+S` | Rebuilds Glue under the next supported AWS profile and region. |
+| Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
+| Query selected table in Athena | `:` / `Ctrl+K`, then **Query table in Athena** | `glue.query_in_athena` is palette-only. It prefills exact, bounded SQL in Athena and never executes it automatically. |
+| Query selected Iceberg snapshot in Athena | `V` or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It prefills `FOR VERSION AS OF` SQL without executing. |
+
+### 1.1.10. Amazon Athena
+
+Athena is a single-context AWS service; its controls do not appear for
+S3-compatible connections.
+
+| Action | Default | Notes |
+|---|---|---|
+| Query / History / Results / Saved | `1` / `2` / `3` / `4` | Selects the matching Athena view. |
+| Execute editor SQL | `Ctrl+Enter` | Runs `athena.execute` only after the local read-only SQL validation succeeds. |
+| Cancel active query | `Esc` | Runs `athena.cancel`; it can stop only an app-owned active execution. |
+| Load more result rows | `l` | Runs `athena.load_more` when the selected result has another page. |
+| Switch AWS source | `Shift+S` | Rebuilds Athena under the next supported AWS profile and region. |
+| Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
+| Open query table in Glue | `:` / `Ctrl+K`, then **Open query table in Glue** | `athena.open_in_glue` is palette-only and works only when the current read-only SQL resolves to one visible table. |
+
 ## 1.2. Customizing
 
 A binding can be a single keystroke or a list of fallback keystrokes:
@@ -138,50 +167,53 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "app.themes" = "t"
 "app.cycle_theme" = "T"
 "app.swap_source" = "S"
+"emr.next_application" = "A"
+"glue.catalog" = "1"
+"glue.jobs" = "2"
+"glue.crawlers" = "3"
+"glue.time_travel_in_athena" = "V"
+"athena.query" = "1"
+"athena.history" = "2"
+"athena.results" = "3"
+"athena.saved" = "4"
+"athena.execute" = "ctrl+enter"
+"athena.cancel" = "escape"
+"athena.load_more" = "l"
 ```
 
 The default map is declared in `infra/keymap_store.py`. At composition
-time, aws-tui validates your overlay by constructing a temporary
-`KeymapStore(overlay=...)`; the runtime-visible keymap then stays on
-defaults until the input-router handoff lands. Unknown action ids are
-logged and the app continues with the default keymap so a typo does not
-crash startup.
+time, aws-tui validates the overlay and `BindingResolver` installs keys
+only for registered actions. Unknown action IDs are logged and the app
+continues with the default keymap so a typo does not crash startup.
 
-**v0.8.x status**: the `[keybindings]` table is parsed and validated
-through `KeymapStore`, so unknown action IDs are caught and the
-Commands strip and future router share the action-id vocabulary.
-Runtime dispatch and visible command chips still go through the
-hard-coded v0.8.x defaults; user overrides do not change which
-keystrokes fire actions until the post-v0.8 input-router handoff
-tracked in `CHANGELOG.md`.
-
-The bindings that **are** wired today (in v0.8.x) and routed straight
-through `AwsTuiApp.BINDINGS` rather than the keymap store: `q`,
+The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
 `Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
-`c`, `d`, `S` (Shift+S), `Shift+↑`, `Shift+↓`.
+`c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
+`1` / `2` / `3` / `4`, `V`, `Ctrl+Enter`, `Esc`, `l`,
+`Shift+↑`, and `Shift+↓`.
 
 ## 1.3. Action IDs
 
-The `wired?` column marks whether `AwsTuiApp` currently has a matching
-`action_*` handler. `(deferred)` rows are valid action IDs you can
-overlay ahead of time; the binding takes effect once the input-router wiring
-lands (see the §1 status note).
+The `wired?` column marks whether `AwsTuiApp` currently registers a
+matching `ActionRegistry` handler. `(deferred)` rows are valid action
+IDs you can overlay ahead of time; `BindingResolver` leaves them
+unbound until a handler ships.
 
 | Action ID | Default key | Wired? | What it does |
 |---|---|---|---|
 | `app.quit` | `q` / `ctrl+c` | ✓ | Graceful shutdown |
-| `app.command_palette` | `:` / `ctrl+k` | *(deferred)* | Open palette (today `:` falls back to the help overlay) |
+| `app.command_palette` | `:` / `ctrl+k` | ✓ | Open the command palette |
 | `app.help` | `?` | ✓ | Help overlay |
 | `app.themes` | `t` | ✓ | Open theme picker modal |
 | `app.cycle_theme` | `T` (`shift+t`) | ✓ | Cycle to next theme without opening the modal |
-| `app.swap_source` | `S` (`shift+s`) | ✓ | Cycle the focused pane: `local` → each AWS profile → each `s3-compatible` connection → wrap |
+| `app.swap_source` | `S` (`shift+s`) | ✓ | Switch the focused S3 pane source, or rebuild the current single-context AWS service under the next profile |
 | `pane.move_up` / `pane.move_down` | `↑` / `↓` (also `k` / `j`) | ✓ | Move cursor |
 | `pane.descend` | `enter` | ✓ | Descend into folder / bucket |
 | `pane.ascend` | `backspace` / `←` | ✓ | Parent path |
 | `pane.switch_focus` | `tab` | ✓ | Cycle the active page's focus ring |
 | `pane.switch_focus_back` | `shift+tab` | ✓ | Cycle the active page's focus ring in reverse |
-| `pane.quick_look` | `space` (normal mode) | *(deferred)* | Stream first 64 KB |
+| `pane.quick_look` | `space` (normal mode) | ✓ | Stream first 64 KB |
 | `pane.filter` | `/` | *(deferred)* | Local pane filter |
 | `pane.fuzzy_find` | `ctrl+p` | *(deferred)* | Fuzzy find paths / buckets |
 | `pane.enter_multiselect` | `v` | *(deferred)* | Enter multi-select mode |
@@ -193,17 +225,39 @@ lands (see the §1 status note).
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
 | `pane.refresh` | `r` | ✓ | Re-run `provider.list()` |
 | `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Shell-out to `aws sso login` |
+| `emr.next_application` | `A` (`shift+a`) | ✓ | Cycle to the next EMR application |
 | `emr.clone` | `c` (when EMR page mounted) | ✓ | Open the EMR clone-job-run modal pre-filled from the focused run (PR #83) |
 | `emr.logs.filter` | `f` (when EMR logs pane focused) | widget-scoped | Open the EMR logs filter modal |
+| `glue.catalog` | `1` | ✓ | Select the Glue Catalog view |
+| `glue.jobs` | `2` | ✓ | Select the Glue Jobs view |
+| `glue.crawlers` | `3` | ✓ | Select the Glue Crawlers view |
+| `glue.open_s3_location` | none (command palette) | ✓ | Open the selected Glue table's S3 location under the exact source connection and region |
+| `glue.query_in_athena` | none (command palette) | ✓ | Prefill a bounded query for the selected Glue table in Athena |
+| `glue.time_travel_in_athena` | `V` | ✓ | Prefill a bounded Athena query for the selected visible Iceberg snapshot |
+| `athena.query` | `1` | ✓ | Select the Athena Query view |
+| `athena.history` | `2` | ✓ | Select the Athena History view |
+| `athena.results` | `3` | ✓ | Select the Athena Results view |
+| `athena.saved` | `4` | ✓ | Select the Athena Saved view |
+| `athena.execute` | `ctrl+enter` | ✓ | Submit validated, read-only editor SQL |
+| `athena.cancel` | `escape` | ✓ | Stop an app-owned active Athena query |
+| `athena.load_more` | `l` | ✓ | Fetch the next available result page |
+| `athena.open_result_location` | none (command palette) | ✓ | Open a validated successful Athena result artifact in S3 under its exact source identity |
+| `athena.open_in_glue` | none (command palette) | ✓ | Open the one unambiguous visible query table in Glue |
 | `modal.cancel` | `escape` | ✓ | Cancel / close current overlay (modal-owned) |
 
-These are the action IDs `KeymapStore.DEFAULT_BINDINGS` actually
-registers. Overlay any of them in your `[keybindings]` table; any other
-id is logged and causes the app to fall back to the default keymap.
+Rows with a default key are registered by
+`KeymapStore.DEFAULT_BINDINGS` and may be overlaid in
+`[keybindings]`. `glue.open_s3_location`, `glue.query_in_athena`,
+`athena.open_result_location`, and `athena.open_in_glue` are palette-only,
+registered in `ActionRegistry`, and absent from
+`KeymapStore.DEFAULT_BINDINGS`; assigning them a key is not currently
+supported.
+Any unknown overlay id is logged and causes the app to fall back to
+the default keymap.
 
-`Shift+↑` / `Shift+↓` (extend-selection) are wired directly in
-`AwsTuiApp.BINDINGS` rather than the keymap store, because they're
-modifier combinations. They are not currently rebindable through
+All live App-level bindings are installed through `BindingResolver`,
+including `Shift+↑` / `Shift+↓` for extend-selection. Their
+`pane.mark_up` / `pane.mark_down` entries may be rebound through
 `[keybindings]`.
 
 > **Commands strip layout (PR #83)** — the bottom legend is now ONE
@@ -233,11 +287,9 @@ the dual-pane cursor.
 
 ## 1.5. Layer separation
 
-The target architecture is action-registry dispatch: views should route
-through action IDs and `BindingResolver` so rebinding can be purely
-config-driven. v0.8.x is not there yet; the live app still has a
-hard-coded `AwsTuiApp.BINDINGS` table for the wired keys listed in
-[§1.2](#12-customizing),
-with direct forwarding into VM commands. Keep new action IDs registered
-in `KeymapStore` / `ActionRegistry` now so the later router handoff is a
-mechanical swap rather than a vocabulary migration.
+Views route through action IDs and `BindingResolver`; service-neutral
+VM messages handle cross-service requests. Keep new keyed actions in
+`KeymapStore` and `ActionRegistry` together. Palette-only commands such
+as `glue.open_s3_location` belong in `ActionRegistry` and the curated
+palette, but do not need a default key. The same rule applies to
+`athena.open_result_location`.

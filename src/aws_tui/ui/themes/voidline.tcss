@@ -653,6 +653,12 @@ EmrServerlessPage {
     color: $text;
 }
 
+ServiceSourceHeader {
+    background: $bg-elev;
+    color: $text-muted;
+    border-left: solid $rule-dim;
+}
+
 EmrServerlessPage > .emr-left-column > .emr-app-box {
     background: $bg;
     color: $text;
@@ -787,3 +793,120 @@ JobRunLogsPane > .logs-status {
     background: $bg-elev;
     color: $text-muted;
 }
+
+/* ── AWS Glue ──────────────────────────────────────────────────────────── */
+GluePage { background: $bg; color: $text; }
+GluePage > #glue-view-tabs { background: $bg-elev; color: $text-muted; }
+GluePage .glue-view-tab { border-left: solid $rule-dim; }
+GluePage .glue-view-tab.-active { background: $bg-sel; color: $accent; text-style: bold; }
+GluePage .glue-view-tab:focus { background: $bg-sel; color: $accent-soft; }
+GluePage ResourceListPane,
+GluePage DetailRows {
+    background: $bg; color: $text; border: solid $rule-dim;
+    border-title-color: $text;
+}
+GluePage ResourceListPane:focus-within,
+GluePage DetailRows:focus-within {
+    border: solid $accent; border-title-color: $accent;
+}
+GluePage OptionList { background: $bg; color: $text; }
+GluePage OptionList > .option-list--option-highlighted { background: $bg-sel; color: $text; }
+GluePage Select,
+GluePage SelectCurrent,
+GluePage SelectOverlay { background: $bg-elev; color: $text; }
+GluePage Select:focus > SelectCurrent,
+GluePage SelectOverlay > .option-list--option-highlighted { background: $bg-sel; color: $accent; }
+GluePage SelectCurrent Static#label,
+GluePage SelectCurrent.-has-value Static#label,
+GluePage SelectCurrent .arrow { color: $text; }
+GluePage .glue-list-footer,
+GluePage .glue-detail-placeholder { background: $bg-elev; color: $text-muted; }
+GluePage .glue-detail-row { background: $bg; color: $text; }
+GluePage OptionList.-warning > .option-list--option-disabled { color: $warning; }
+GluePage OptionList.-error > .option-list--option-disabled { color: $danger; }
+GluePage .glue-detail-placeholder.-warning,
+GluePage .glue-detail-row.-warning { color: $warning; }
+GluePage .glue-detail-placeholder.-error,
+GluePage .glue-detail-row.-state-failed,
+GluePage .glue-detail-row.-state-stopped,
+GluePage .glue-detail-row.-state-timeout { color: $danger; }
+GluePage .glue-detail-row.-state-running { color: $accent; }
+GluePage .glue-detail-row.-state-succeeded,
+GluePage .glue-detail-row.-state-ready { color: $success; }
+
+/* ── AWS Athena ────────────────────────────────────────────────────────── */
+AthenaPage { background: $bg; color: $text; }
+AthenaPage > #athena-context-header,
+AthenaPage > #athena-view-tabs,
+AthenaPage #athena-query-controls,
+AthenaPage #athena-results-status,
+AthenaPage #athena-results-footer {
+    background: $bg-elev; color: $text-muted;
+}
+AthenaPage .athena-view-tab { border-left: solid $rule-dim; }
+AthenaPage .athena-view-tab.-active {
+    background: $bg-sel; color: $accent; text-style: bold;
+}
+AthenaPage .athena-view-tab:focus {
+    background: $bg-sel; color: $text;
+}
+AthenaPage ResourceListPane,
+AthenaPage DetailRows {
+    background: $bg; color: $text; border: solid $rule-dim;
+    border-title-color: $text;
+}
+AthenaPage ResourceListPane:focus-within,
+AthenaPage DetailRows:focus-within,
+AthenaPage TextArea:focus,
+AthenaPage DataTable:focus {
+    border: solid $accent; border-title-color: $accent;
+}
+AthenaPage OptionList,
+AthenaPage TextArea,
+AthenaPage DataTable {
+    background: $bg; color: $text;
+}
+AthenaPage OptionList > .option-list--option-highlighted,
+AthenaPage DataTable > .datatable--cursor {
+    background: $bg-sel; color: $text;
+}
+AthenaPage DataTable > .datatable--header {
+    background: $bg-elev; color: $accent; text-style: bold;
+}
+AthenaPage Select,
+AthenaPage SelectCurrent,
+AthenaPage SelectOverlay {
+    background: $bg-elev; color: $text;
+}
+AthenaPage Select:focus > SelectCurrent,
+AthenaPage SelectOverlay > .option-list--option-highlighted {
+    background: $bg-sel; color: $accent;
+}
+AthenaPage SelectCurrent Static#label,
+AthenaPage SelectCurrent.-has-value Static#label,
+AthenaPage SelectCurrent .arrow { color: $text; }
+AthenaPage Button {
+    background: $bg; color: $text; border: solid $rule-dim;
+}
+AthenaPage Button:focus,
+AthenaPage Button:hover {
+    background: $bg-sel; color: $accent; border: solid $accent;
+}
+AthenaPage Button.-danger { color: $danger; }
+AthenaPage .glue-list-footer,
+AthenaPage .glue-detail-placeholder,
+AthenaPage #athena-query-detail {
+    background: $bg; color: $text-muted;
+}
+AthenaPage .glue-detail-row { background: $bg; color: $text; }
+AthenaPage OptionList.-warning > .option-list--option-disabled,
+AthenaPage Select.-warning,
+AthenaPage .-warning { color: $warning; }
+AthenaPage OptionList.-error > .option-list--option-disabled,
+AthenaPage Select.-error,
+AthenaPage .-error,
+AthenaPage .glue-detail-row.-state-failed,
+AthenaPage .glue-detail-row.-state-cancelled { color: $danger; }
+AthenaPage .glue-detail-row.-state-running,
+AthenaPage .glue-detail-row.-state-queued { color: $accent; }
+AthenaPage .glue-detail-row.-state-succeeded { color: $success; }

@@ -6,6 +6,7 @@ unit/, integration/, snapshot/, and e2e/.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import runpy
@@ -220,6 +221,126 @@ def test_bound_action_records_action_id(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert app.last_action_id == "pane.switch_focus"
     assert str(app._action_ring[-1]).endswith(" pane.switch_focus")  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> None:
+    from aws_tui import app as app_module
+
+    events: list[str] = []
+
+    class _ContentHost:
+        async def shutdown(self) -> None:
+            events.append("content.shutdown")
+
+    class _RootVM:
+        content_host = _ContentHost()
+
+        def dispose(self) -> None:
+            events.append("root.dispose")
+
+    class _Disposable:
+        def dispose(self) -> None:
+            pass
+
+    async def close_clients() -> None:
+        events.append("clients.close")
+
+    app = object.__new__(app_module.AwsTuiApp)
+    app._pane_state_sub = None  # type: ignore[attr-defined]
+    app._connection_list_sub = None  # type: ignore[attr-defined]
+    app._nav_selection_sub = None  # type: ignore[attr-defined]
+    app._cursor_sub = None  # type: ignore[attr-defined]
+    app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
+        transfers_vm=SimpleNamespace(
+            cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
+        ),
+        aws_session=SimpleNamespace(aclose_all_clients=close_clients),
+        log_sink=SimpleNamespace(
+            flush=lambda: events.append("logs.flush"),
+            close=lambda: events.append("logs.close"),
+        ),
+        s3_connections_vm=_Disposable(),
+        command_palette_vm=_Disposable(),
+        quick_look_vm=_Disposable(),
+        confirm_vm=_Disposable(),
+        root_vm=_RootVM(),
+        focus_coordinator=_Disposable(),
+        demo_emr=None,
+    )
+
+    await app._aws_tui_shutdown()
+
+    assert events == [
+        "content.shutdown",
+        "clients.close",
+        "logs.flush",
+        "logs.close",
+        "root.dispose",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
+    from aws_tui import app as app_module
+
+    events: list[str] = []
+    shutdown_started = asyncio.Event()
+    finish_shutdown = asyncio.Event()
+
+    class _ContentHost:
+        async def shutdown(self) -> None:
+            events.append("content.shutdown.started")
+            shutdown_started.set()
+            await finish_shutdown.wait()
+            events.append("content.shutdown.finished")
+
+    class _RootVM:
+        content_host = _ContentHost()
+
+        def dispose(self) -> None:
+            events.append("root.dispose")
+
+    class _Disposable:
+        def dispose(self) -> None:
+            pass
+
+    app = object.__new__(app_module.AwsTuiApp)
+    app._pane_state_sub = None  # type: ignore[attr-defined]
+    app._connection_list_sub = None  # type: ignore[attr-defined]
+    app._nav_selection_sub = None  # type: ignore[attr-defined]
+    app._cursor_sub = None  # type: ignore[attr-defined]
+    app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
+        transfers_vm=SimpleNamespace(
+            cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
+        ),
+        aws_session=SimpleNamespace(aclose_all_clients=lambda: _complete()),
+        log_sink=SimpleNamespace(flush=lambda: None, close=lambda: None),
+        s3_connections_vm=_Disposable(),
+        command_palette_vm=_Disposable(),
+        quick_look_vm=_Disposable(),
+        confirm_vm=_Disposable(),
+        root_vm=_RootVM(),
+        focus_coordinator=_Disposable(),
+        demo_emr=None,
+    )
+
+    shutdown_task = asyncio.create_task(app._aws_tui_shutdown())
+    await asyncio.wait_for(shutdown_started.wait(), timeout=1.0)
+    shutdown_task.cancel()
+    await asyncio.sleep(0)
+
+    assert events == ["content.shutdown.started"]
+    assert not shutdown_task.done()
+
+    finish_shutdown.set()
+    await shutdown_task
+
+    assert events == ["content.shutdown.started", "content.shutdown.finished", "root.dispose"]
+
+
+async def _complete() -> None:
+    return None
 
 
 def test_build_crash_report_writes_crash_log_event(tmp_path: Path) -> None:

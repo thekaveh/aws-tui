@@ -7,6 +7,9 @@
 2. [Switch the theme on the fly](#12-switch-the-theme-on-the-fly)
 3. [Customize a keybinding](#13-customize-a-keybinding)
 4. [Resume after a crash](#14-resume-after-a-crash)
+5. [Browse AWS Glue safely](#15-browse-aws-glue-safely)
+6. [Run Athena queries safely](#16-run-athena-queries-safely)
+7. [Inspect and query Glue tables through Athena](#17-inspect-and-query-glue-tables-through-athena)
 
 ---
 
@@ -301,14 +304,12 @@ Footer { background: #050505; }
 
 ## 1.3. Customize a keybinding
 
-> **v0.8.x status:** the composition root reads `[keybindings]`,
-> validates action ids through `KeymapStore`, and logs/falls back to
-> defaults when an overlay is invalid. Runtime dispatch still uses
-> `AwsTuiApp.BINDINGS`, so user overrides are future-ready config and
-> do not change command chips or live keys until the post-v0.8
-> input-router work lands.
+> **Runtime status:** The composition root installs handled overrides
+> on the live Textual keymap through `BindingResolver`. It validates
+> action ids through `KeymapStore` and logs/falls back to defaults when
+> an overlay is invalid. Handlerless deferred actions remain unbound.
 
-Future-ready example: rebind copy (`pane.copy`) from `c` to `y` (vim yank).
+Rebind copy (`pane.copy`) from `c` to `y` (vim yank):
 
 ```toml
 # <config-dir>/config.toml
@@ -331,10 +332,8 @@ Set the action to an empty list:
 "pane.delete" = []   # nope, no quick delete
 ```
 
-When the input router lands, an empty `[keybindings]` value will remove
-the keybinding until you edit the config back. In v0.8.x the table is
-validated but does not change live dispatch, so `d` still follows
-`AwsTuiApp.BINDINGS`.
+On the next launch, an empty `[keybindings]` value removes the live
+keybinding until you edit the config back.
 
 ### 1.3.2. See the active map
 The full list of action IDs lives in
@@ -435,3 +434,500 @@ The planned `continue` button is enabled only when the last user action was
 **read-only** (navigation, refresh, filter, palette open). Writes
 (delete, copy, move, rename) disable it — you can't safely continue a
 write that may have partially executed.
+
+## 1.5. Browse AWS Glue safely
+
+Glue is an AWS-only, read-only service in aws-tui. Select **Glue** in
+the nav rail, then use:
+
+- `1` for Catalog databases, tables, schema/storage detail,
+  partitions, and column statistics;
+- `2` for job definitions and recent runs;
+- `3` for crawler status, configuration, metrics, and latest crawl;
+- `r` to refresh the active view;
+- `Shift+S` to rebuild Glue under the next configured AWS connection.
+
+The source header shows the configured connection name, distinct
+profile name when present, and region. Switching profiles clears the
+old page before the replacement VM loads, and remembered selections
+are isolated by connection name and region.
+
+### 1.5.1. Least-privilege Glue permissions
+
+Grant only the read operations needed by the views you use. A complete
+policy for the shipped Glue page may include:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabases",
+        "glue:GetTables",
+        "glue:GetTable",
+        "glue:GetPartitions",
+        "glue:GetColumnStatisticsForTable",
+        "glue:GetJobs",
+        "glue:GetJobRuns",
+        "glue:GetCrawlers",
+        "glue:GetCrawler",
+        "glue:GetCrawlerMetrics",
+        "glue:GetTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+AWS IAM and Lake Formation policies remain authoritative. An
+`AccessDenied` response is shown only in the affected Glue pane; it
+does not mark the connection unreachable or remove that profile from
+other services.
+
+### 1.5.2. Open a table location in S3
+
+1. In Catalog, select the database and table.
+2. Open the command palette with `:` or `Ctrl+K`.
+3. Choose **Open table location in S3**.
+
+aws-tui validates that the selected table has an `s3://` location,
+resolves the exact Glue connection name, verifies its region still
+matches, rebuilds S3 through the normal service factory, and navigates
+the left pane to `/<bucket>/<prefix>`. Missing/malformed locations,
+removed connections, and region mismatches produce an advisory and do
+not navigate. The advisory and logs omit the full URI.
+
+Browsing the destination normally needs `s3:ListAllMyBuckets` for the
+initial S3 root load and `s3:ListBucket` for the target bucket/prefix;
+reading an object also needs `s3:GetObject`.
+
+### 1.5.3. Exercise Glue in demo mode
+
+Launch `aws-tui --demo`. `demo-dev` and `demo-prod` expose disjoint
+catalog, job/run, and crawler names, so `Shift+S` visibly proves
+profile isolation. `demo-shared` demonstrates a Glue access-denied
+state. The Catalog-to-S3 command uses the matching synthetic profile
+and never makes a real AWS call.
+
+## 1.6. Run Athena queries safely
+
+Athena is an AWS-only, read-only query service. Select **Athena** in the
+nav rail and choose a workgroup, catalog, and database in the page header.
+The four views are Query (`1`), History (`2`), Results (`3`), and Saved (`4`).
+`Shift+S` rebuilds the whole Athena page for the next supported AWS connection;
+the old page is disposed, so rows, selections, loaders, result fetches, and any
+app-owned active query do not cross profiles or regions. Selections may be
+remembered only within the same connection name and region and are revalidated
+when the page returns.
+
+### 1.6.1. Minimum Athena and data permissions
+
+Start with the least privilege required for the views in use. The
+[AWS Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_athena.html)
+defines each Athena action and its resource types. This is the minimum Athena
+API policy used by aws-tui; scope workgroup and data-catalog resources where
+the action supports resource-level permissions:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "athena:ListWorkGroups",
+      "athena:GetWorkGroup",
+      "athena:ListDataCatalogs",
+      "athena:ListDatabases",
+      "athena:ListTableMetadata",
+      "athena:ListQueryExecutions",
+      "athena:GetQueryExecution",
+      "athena:GetQueryRuntimeStatistics",
+      "athena:StartQueryExecution",
+      "athena:StopQueryExecution",
+      "athena:GetQueryResults",
+      "athena:ListNamedQueries",
+      "athena:BatchGetNamedQuery",
+      "athena:ListPreparedStatements",
+      "athena:GetPreparedStatement"
+    ],
+    "Resource": "*"
+  }]
+}
+```
+
+The query principal also needs access to catalog metadata and source data.
+For ordinary IAM-controlled S3 tables, grant `s3:ListBucket` on the source
+bucket/prefix and `s3:GetObject` on every underlying source-data object.
+Cross-account source buckets also need a permitting bucket policy. AWS
+documents this pass-through model in
+[Control access to Amazon S3 from Athena](https://docs.aws.amazon.com/athena/latest/ug/s3-permissions.html).
+
+For Lake Formation-governed data, grant the required Lake Formation
+`DESCRIBE` and `SELECT` permissions and IAM
+`lakeformation:GetDataAccess`. Lake Formation uses that IAM action to vend
+temporary credentials to Athena. `DATA_LOCATION_ACCESS` permits creating or
+altering Data Catalog resources that point at a registered location; it is not
+a query permission and is not required merely to read an existing table. See
+[Manage Lake Formation and Athena user permissions](https://docs.aws.amazon.com/athena/latest/ug/lf-athena-user-permissions.html)
+and
+[Underlying data access control](https://docs.aws.amazon.com/lake-formation/latest/dg/access-control-underlying-data.html).
+
+Source data encrypted with a customer managed KMS key requires `kms:Decrypt`
+for the source key in IAM and in the key policy. For customer-managed S3
+results, require `kms:GenerateDataKey` and `kms:Decrypt` for the result key. An
+encrypted Glue Data Catalog additionally requires `kms:GenerateDataKey`,
+`kms:Decrypt`, and `kms:Encrypt`. AWS lists these separate source, result, and
+catalog requirements in
+[Encryption at rest](https://docs.aws.amazon.com/athena/latest/ug/encryption.html).
+
+### 1.6.2. Customer S3 output versus managed results
+
+The shipped Query view sends the selected workgroup and query execution
+context without a caller-side `ResultConfiguration`; its
+`AthenaQueryVM` runner does not pass `output_location` to the domain client.
+The lower-level `AthenaClient.start_query(...)` contract is broader: callers
+may pass an optional `output_location`, in which case the client sends exactly
+`ResultConfiguration.OutputLocation`. The shipped query path intentionally
+omits it and therefore requires the workgroup to use one of two distinct output
+modes:
+
+- **Customer S3 output.** A workgroup-enforced customer S3 output location is
+  authoritative when `EnforceWorkGroupConfiguration` is enabled. Grant
+  `s3:GetBucketLocation`, `s3:ListBucket`, and
+  `s3:ListBucketMultipartUploads` on the result bucket, plus `s3:PutObject`,
+  `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts`, and
+  `s3:GetObject` on the result prefix. Athena uses multipart uploads for query
+  results, including partial failed or cancelled output. `s3:GetObject` is
+  also required to retrieve output and to browse the artifact through S3.
+  See
+  [Work with query results and recent queries](https://docs.aws.amazon.com/athena/latest/ug/querying.html)
+  and the AWS
+  [S3 API permission mapping](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html).
+- **Athena managed results.** Managed results do not create a customer S3
+  result artifact. They remain available through Athena for 24 hours and
+  managed results do not support result reuse. aws-tui continues to page rows
+  with `GetQueryResults`; no S3 output location is required. If the workgroup
+  uses a customer managed KMS key, both the query principal and the managed
+  results key policy need the documented KMS access, including
+  `kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey`. See
+  [Managed query results](https://docs.aws.amazon.com/athena/latest/ug/managed-results.html).
+
+The Query view labels the workgroup mode as managed results or S3 output. If
+neither mode is configured, aws-tui shows the typed result-configuration error
+instead of choosing a bucket. With managed results, **Open Athena result in
+S3** remains on Athena and shows an advisory because there is no customer S3
+artifact. Workgroup-enforced customer S3 and managed output are never treated
+as interchangeable.
+
+### 1.6.3. Exact read-only SQL grammar
+
+Press `Ctrl+Enter` only after setting workgroup, catalog, and database. The
+local `sqlglot` Athena-dialect parser fails closed and permits exactly one
+statement from the following implemented grammar.
+
+**SELECT, set operations, and VALUES**
+
+A root `SELECT` may contain a `VALUES` relation, read-only common table
+expressions, and read-only subqueries. A root set operation may use `SELECT` or
+`VALUES` operands with `UNION`, `INTERSECT`, or `EXCEPT`, including the
+parser-supported `ALL` or `DISTINCT` qualifier (or the default `DISTINCT`).
+For each `operation` (`UNION`, `INTERSECT`, or `EXCEPT`), the matching forms
+accepted by the current parser are:
+
+- `operation [ALL|DISTINCT] BY NAME [ON (column-list)]`
+- `operation [ALL|DISTINCT] [STRICT] CORRESPONDING [(ON|BY) (column-list)]`
+
+`ALL` or `DISTINCT` must appear immediately after the operation and before the
+matching modifier; forms such as `UNION BY NAME ALL` and `UNION CORRESPONDING
+DISTINCT` are rejected. The local policy does not resolve or validate matching
+column names, compare them to either operand, or impose extra semantic rules on
+the parser-accepted parenthesized column list. A standalone `VALUES` root is
+rejected; it becomes allowed only below a `SELECT` or a root set operation.
+Nested DDL, DML, commands, `INTO`, locks, analysis, execution, or transaction
+nodes are rejected.
+
+**SHOW**
+
+These are the complete accepted forms. A `catalog`, `database`, and `table` may
+be a regular or backtick-quoted identifier; patterns are string literals. A
+`SHOW TBLPROPERTIES` property selector is a string literal only, not a regular
+or backtick-quoted identifier.
+
+- `SHOW DATABASES|SCHEMAS [IN catalog] [LIKE 'pattern']`
+- `SHOW TABLES [IN [catalog.]database] ['pattern']`
+- `SHOW COLUMNS FROM|IN table`, where `table` may have one, two, or three
+  parts. A one-part table may additionally use `FROM|IN [catalog.]database`;
+  that second scope is rejected after a multi-part table.
+- `SHOW PARTITIONS table`, where `table` has one, two, or three parts.
+- `SHOW TBLPROPERTIES table [('property')]`, where `table` has one, two, or
+  three parts.
+- `SHOW VIEWS [IN [catalog.]database] [LIKE 'pattern']`
+
+`SHOW CREATE TABLE`, `SHOW CREATE VIEW`, unknown verbs, missing required
+targets, extra clauses, and write text appended to an otherwise allowed form
+are rejected. `SHOW TABLES` uses its optional bare string pattern; `LIKE` in
+that position is not accepted by this policy.
+
+**DESCRIBE**
+
+`DESCRIBE [EXTENDED|FORMATTED] [database.]table` accepts a one- or two-part
+table name, not a three-part catalog/database/table name. It may then contain,
+in this order:
+
+1. `PARTITION (key = value [, ...])`, with one or more identifier keys and
+   each value restricted to literal string or number equality; and
+2. one root column identifier followed only by dotted identifier fields or
+   the exact complex selectors `'$elem$'`, `'$key$'`, or `'$value$'`.
+
+The partition and column selector are independently optional. Operators other
+than `=`, booleans, column references, calls, subqueries, empty or trailing
+partition entries, unknown dollar selectors, array indexing, expressions, and
+trailing identifiers are rejected.
+
+**EXPLAIN**
+
+`EXPLAIN` accepts another statement that independently satisfies this
+allowlist. Its optional parenthesized choices are
+`FORMAT GRAPHVIZ|JSON|TEXT` and `TYPE DISTRIBUTED|IO|LOGICAL|VALIDATE`, at most
+once each, in either order when comma-separated. `EXPLAIN ANALYZE`, unknown or
+quoted option names, unknown option values, duplicate options, and an unsafe
+or missing body are rejected.
+
+Accepted examples (one statement per line):
+
+```sql
+SELECT orderkey FROM analytics.orders LIMIT 10
+SELECT * FROM (VALUES (1), (2)) AS samples(value)
+SELECT 1 UNION ALL VALUES (2)
+SELECT a, b FROM left_relation UNION BY NAME SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION ALL BY NAME ON (a, b) SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION DISTINCT BY NAME ON (a, b) SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION CORRESPONDING SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION ALL CORRESPONDING ON (a, b) SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION DISTINCT CORRESPONDING BY (a, b) SELECT a, b FROM right_relation
+SELECT a, b FROM left_relation UNION STRICT CORRESPONDING ON (a, b) SELECT a, b FROM right_relation
+VALUES (1) INTERSECT SELECT 1
+VALUES (1) EXCEPT VALUES (2)
+SHOW DATABASES IN AwsDataCatalog LIKE 'analytics*'
+SHOW SCHEMAS
+SHOW TABLES IN AwsDataCatalog.analytics '*logs'
+SHOW COLUMNS FROM AwsDataCatalog.analytics.orders
+SHOW COLUMNS FROM orders FROM AwsDataCatalog.analytics
+SHOW PARTITIONS AwsDataCatalog.analytics.orders
+SHOW TBLPROPERTIES analytics.orders('comment')
+SHOW TBLPROPERTIES `orders table`('comment')
+SHOW VIEWS IN AwsDataCatalog.analytics LIKE 'orders*'
+DESCRIBE FORMATTED analytics.orders
+DESCRIBE analytics.orders PARTITION (`event date` = '2026-07-25', shard = 7) payload.'$elem$'.field
+EXPLAIN (TYPE VALIDATE, FORMAT GRAPHVIZ) SELECT 1
+EXPLAIN (TYPE IO, FORMAT TEXT) DESCRIBE analytics.orders payload.'$key$'.'$value$'
+```
+
+Rejected examples (one statement per line):
+
+```sql
+VALUES (1), (2)
+SELECT 1; SELECT 2
+SHOW CREATE TABLE analytics.orders
+SHOW COLUMNS
+SHOW TABLES IN analytics LIKE 'orders*'
+SHOW TBLPROPERTIES analytics.orders(comment)
+SHOW TBLPROPERTIES analytics.orders(`comment`)
+SELECT a FROM left_relation UNION BY NAME ALL SELECT a FROM right_relation
+SELECT a FROM left_relation UNION CORRESPONDING DISTINCT SELECT a FROM right_relation
+DESCRIBE AwsDataCatalog.analytics.orders
+DESCRIBE orders PARTITION (shard > 1)
+DESCRIBE orders payload.'$unknown$'
+EXPLAIN ANALYZE SELECT 1
+EXPLAIN (FORMAT YAML) SELECT 1
+EXPLAIN (TYPE IO, TYPE LOGICAL) SELECT 1
+CREATE TABLE copy AS SELECT * FROM analytics.orders
+INSERT INTO archive SELECT * FROM analytics.orders
+UNLOAD (SELECT 1) TO 's3://example/results/'
+CALL system.runtime.kill_query()
+```
+
+Empty or unparsable input, multiple statements, all other DDL and DML, CTAS,
+and every form outside the grammar above are also rejected before any
+`start_query_execution` call. The editor retains the rejection as validation
+feedback and does not dispatch the SQL. IAM, Lake Formation, workgroup, S3,
+bucket, and KMS policies remain the authorization boundary.
+
+### 1.6.4. Execution, History, Results, and result artifacts
+
+After submission, Query records an app-owned execution identity and polls its
+detail through queued, running, and terminal states. On `SUCCEEDED`, it loads
+the first Results page; `FAILED` and `CANCELLED` retain terminal detail. `Esc`
+can call `stop_query_execution` only for a still-active query started by this
+page. Switching context or source requests cancellation and awaits Athena
+shutdown before disposal; History rows are never assumed safe to stop.
+
+Results are fetched one page at a time and never fully materialized. `l` loads
+the next page only when Athena returns a continuation token; each domain
+request asks for at most 1,000 rows. Query execution detail reports bytes
+scanned. History hydrated detail reports bytes scanned and whether Athena
+reused a previous result. Results is the authoritative paged row surface, not
+the cost-statistics surface.
+
+History lists execution IDs for the selected workgroup and hydrates the
+selected execution's detail. Choose a successful execution and open Results to
+fetch its rows. The Saved view separately pages named queries and prepared
+statements; selecting a prepared statement calls `GetPreparedStatement` for
+its SQL. **Open in query editor** copies SQL without executing or bypassing the
+read-only policy.
+
+For customer S3 output, choose **Open Athena result in S3** from the command
+palette. The Results VM does not trust History hydrated detail for navigation:
+it performs an authoritative reload with `GetQueryExecution`, requires a
+succeeded execution, exact execution ID, active connection, region and query
+context, and a valid `s3://` output location. It then rebuilds S3 under the
+exact connection and region, reveals that result artifact, and selects it.
+Missing, managed, malformed, non-S3, foreign-context, or unsucceeded output
+leaves the user on Athena with a redacted advisory; no fallback profile is
+substituted.
+
+Treat bytes scanned as the cost signal before broad queries. aws-tui does not
+calculate a currency price, and a workgroup bytes-scanned cutoff can reject or
+limit work.
+
+### 1.6.5. Exercise Athena in demo mode and troubleshoot
+
+Launch `aws-tui --demo`, select **Athena**, and begin on `demo-dev`. Its
+`dev-analytics` workgroup has succeeded, running, failed, empty, missing-output,
+and result-access-denied history scenarios, plus one named query and one prepared
+statement. The successful `q-dev-succeeded` artifact opens at
+`s3://athena-results/dev/q-dev-succeeded.csv`. `demo-prod` has different
+workgroup, catalog, database, history, saved SQL, and a result artifact under
+`s3://athena-results/prod/`; `demo-shared` returns a scoped Athena access-denied
+state. All of this is in-memory and resets on launch.
+
+- **Athena access is forbidden.** Verify the selected AWS profile, the Athena
+  actions above, and the Lake Formation grants. The failure stays scoped to
+  Athena and does not remove the profile from the source ring.
+- **Result configuration is required.** Set an output location or managed
+  query-results configuration on the selected workgroup. aws-tui will not
+  silently send results to another bucket.
+- **No rows or cannot load more.** A successful query can return no rows; `l`
+  only works when Athena supplied another page token. Check the query state and
+  execution detail in History.
+- **Cannot open an artifact in S3.** The execution must be successful and its
+  output URI must be valid, match the active connection/region, and be readable
+  through S3. Check `s3:ListBucket` / `s3:GetObject` on the result prefix.
+
+## 1.7. Inspect and query Glue tables through Athena
+
+Glue → Athena navigation is an explicit, read-only handoff. It carries the
+selected table's catalog, database, table, connection name, and region in an
+immutable `TableRef`; it does not pass a client or reuse a different profile.
+
+1. Select **Glue**, then choose a Catalog database and table.
+2. Open `:` or `Ctrl+K` and choose **Query table in Athena**.
+3. Review the generated statement:
+
+    ```sql
+    SELECT * FROM "AwsDataCatalog"."database"."table" LIMIT 100
+    ```
+
+4. Edit it if needed, then press `Ctrl+Enter` to execute.
+
+aws-tui quotes each identifier independently, discovers the destination
+catalog/database through bounded pagination, and selects an enabled workgroup
+for the same source. It never executes generated queries automatically. If the
+handoff is cancelled, superseded, or cannot mount the destination, the
+composition root restores the prior Glue/Athena state instead of leaving a
+partially switched page.
+
+From an Athena Query view, **Open query table in Glue** is available through
+the command palette when the read-only SQL resolves to exactly one visible
+table. Queries with zero or multiple table references remain on Athena.
+
+### 1.7.1. Iceberg detection and metadata views
+
+Glue table detail classifies a table as Iceberg when normalized Glue
+parameters such as `table_type`, `tableType`, `classification`, `provider`, or
+`spark.sql.sources.provider`, or the Glue `TableType`, contains the exact
+`iceberg` marker. Only then does the Catalog detail surface show Iceberg
+metadata.
+
+The tabs are:
+
+- **Snapshots** — commit time, snapshot/parent IDs, operation, manifest list,
+  and summary; bounded to 100 rows.
+- **History** — current-snapshot ancestry; bounded to 100 rows.
+- **Manifests** — manifest paths, lengths, partition-spec IDs, and file
+  counts; bounded to 500 rows.
+- **Files** — data/delete file paths, format, partition, record count, and
+  bytes; bounded to 1,000 rows.
+- **Partitions** — partition values and aggregate file/record/delete metrics;
+  bounded to 500 rows.
+- **References** — branches/tags, snapshot IDs, and retention fields; bounded
+  to 100 rows.
+
+Each tab loads on demand through `IcebergInspector`, which submits a bounded
+read-only query to Athena metadata tables such as
+`"table$snapshots"` and `"table$files"`. The UI reveals 50 rows at a time;
+**Load more** exposes already-bounded rows without broadening the Athena query.
+**Retry** reruns only the active tab. A permission, throttling, shape, or
+network error is a partial failure of that metadata pane and does not erase
+successful sibling tabs.
+
+These are real Athena queries, not free Glue lookups. Account for
+metadata-query costs, workgroup limits, bytes scanned, result storage, and
+concurrency exactly as for other Athena statements. The selected profile needs
+the Glue read operations in §1.5.1, the Athena operations in §1.6.1, source
+data/catalog authorization where Athena requires it, and result-location
+permissions for its workgroup. Lake Formation-governed tables additionally
+need `lakeformation:GetDataAccess` plus the relevant `DESCRIBE`/`SELECT`
+grants. A denied metadata table is reported generically; raw SQL, table
+metadata values, and provider exception text are not written to UI errors or
+diagnostic logs.
+
+### 1.7.2. Snapshot time travel
+
+In **Snapshots**, highlight a visible snapshot and press `V`, click the
+time-travel control, or choose **Query Iceberg snapshot in Athena**. The
+destination editor receives:
+
+```sql
+SELECT * FROM "AwsDataCatalog"."database"."table"
+FOR VERSION AS OF 4201 LIMIT 100
+```
+
+The snapshot ID must be a non-negative integer present in the visible snapshot
+page. Switching to another metadata tab clears the actionable snapshot
+selection. As with an ordinary table handoff, generated SQL remains
+unexecuted until `Ctrl+Enter`; review the catalog, database, table, workgroup,
+snapshot ID, and expected scan before running it.
+
+After a successful customer-S3 execution, **Open Athena result in S3**
+authoritatively reloads the execution and reveals its exact CSV artifact under
+the same connection name and region. Athena managed results have no customer
+S3 artifact, so the command remains on Athena.
+
+### 1.7.3. Demo journey and limitations
+
+Launch `aws-tui --demo` and follow this no-network path:
+
+1. On `demo-dev`, open Glue table `dev_analytics.dev_events_iceberg`.
+2. Inspect its metadata tabs, choose snapshot `4201`, and press `V`.
+3. Confirm Athena contains `FOR VERSION AS OF 4201` and has not started an
+   execution.
+4. Press `Ctrl+Enter`, inspect the two profile-specific result rows, then open
+   the generated CSV in S3.
+5. Use `Shift+S` to compare the disjoint `demo-prod` data and the scoped
+   `demo-shared` access state.
+
+Current scope is read-only operational visibility. aws-tui does not create,
+alter, optimize, expire, rollback, branch, tag, or delete Iceberg resources;
+it does not create/edit/delete Glue or Athena resources; and it does not infer
+a write workflow from metadata. Large metadata tables remain bounded by the
+limits above, so the UI is an operational inspection surface rather than a
+complete metadata export tool.

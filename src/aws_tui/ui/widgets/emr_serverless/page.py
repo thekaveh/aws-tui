@@ -28,6 +28,7 @@ from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
 from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 
@@ -119,6 +120,7 @@ class EmrServerlessPage(Widget):
         # containing detail (top, 1fr) + logs (bottom, 1fr) in a
         # 50/50 vertical split.
         with Vertical(classes="emr-left-column"):
+            yield ServiceSourceHeader(self._vm.source, id="emr-source-header")
             with Horizontal(classes="emr-app-box", id="emr-app-box"):
                 yield self._picker
             yield self._left
@@ -221,6 +223,10 @@ class EmrServerlessPage(Widget):
     # ── Public accessors ────────────────────────────────────────────────────
 
     @property
+    def vm(self) -> EmrServerlessPageVM:
+        return self._vm
+
+    @property
     def left_pane(self) -> JobRunsPane | None:
         """LEFT pane (job runs list). Public so ``AwsTuiApp``'s
         global priority key handlers can forward Up/Down/Enter/r to
@@ -279,19 +285,6 @@ class EmrServerlessPage(Widget):
     def action_open_application_picker(self) -> None:
         if self._picker is not None:
             self._picker.toggle_open()
-
-    def action_cycle_application_forward(self) -> None:
-        """Select the next application in the picker's list
-        (wraps at the end). Drives the ``Shift+S`` "switch app"
-        affordance — user feedback: the keypress should ACTUALLY
-        switch, not just open the picker. The picker is still
-        opened explicitly with ``a``.
-        """
-        self.run_worker(
-            self._vm.cycle_application(1),
-            exclusive=True,
-            group="emr-cycle-app",
-        )
 
     def on_application_picker_application_committed(
         self, event: ApplicationPicker.ApplicationCommitted

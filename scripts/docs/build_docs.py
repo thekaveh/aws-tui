@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 from scripts.docs.manifest import Manifest, Section, load_manifest
-from scripts.docs.render_diagrams import copy_assets, extract_svg
+from scripts.docs.render_diagrams import copy_assets, render_svg, write_svg
 from scripts.docs.transforms import (
     build_source_map,
     output_name,
@@ -58,8 +58,8 @@ def render_site(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
     img_dir = out_dir / "assets" / "img"
     img_dir.mkdir(parents=True, exist_ok=True)
     for d in manifest.diagrams:
-        svg = extract_svg((repo_root / d.master).read_text(encoding="utf-8"))
-        (img_dir / f"{d.id}.svg").write_text(svg, encoding="utf-8")
+        svg = render_svg(repo_root / d.master)
+        write_svg(img_dir / f"{d.id}.svg", svg)
 
 
 def render_wiki(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) -> None:

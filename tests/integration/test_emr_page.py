@@ -9,8 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from aws_tui import app as app_module
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.infra.aws_session import TokenState
+from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
@@ -57,6 +60,19 @@ _AWS_TOML = (
     'connection = "dev"\n'
 )
 
+_MULTI_PROFILE_AWS_TOML = (
+    "[connections.dev]\n"
+    'kind = "aws"\n'
+    'profile = "dev"\n'
+    'region = "us-east-1"\n'
+    "[connections.prod]\n"
+    'kind = "aws"\n'
+    'profile = "prod"\n'
+    'region = "us-west-2"\n'
+    "[defaults]\n"
+    'connection = "dev"\n'
+)
+
 _S3COMPAT_TOML = (
     "[connections.minio]\n"
     'kind = "s3-compatible"\n'
@@ -70,9 +86,20 @@ _S3COMPAT_TOML = (
 
 
 @pytest.mark.asyncio
-async def test_emr_page_mounts_on_aws_connection(tmp_path: Path) -> None:
+async def test_emr_page_mounts_on_aws_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    factory_calls: list[str] = []
+    original_factory = app_module.build_service_view
+
+    def recording_factory(service_id: str, vm: object, **kwargs: object) -> object:
+        factory_calls.append(service_id)
+        return original_factory(service_id, vm, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(app_module, "build_service_view", recording_factory)
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
@@ -85,6 +112,7 @@ async def test_emr_page_mounts_on_aws_connection(tmp_path: Path) -> None:
             assert len(host.query(EmrServerlessPage)) == 1, (
                 "expected EmrServerlessPage mounted in #content-host"
             )
+            assert "emr-serverless" in factory_calls
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
@@ -472,15 +500,10 @@ async def test_emr_picker_commit_cascades_to_runs_pane(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
-    """``Shift+S`` on the EMR page cycles to the next application
-    (wraps at the end). User feedback: pre-fix it just opened the
-    picker; user expected an actual app switch.
-
-    The keystroke routes through ``AwsTuiApp.action_swap_source``
-    which short-circuits to ``EmrServerlessPage.action_cycle_application_forward``
-    when the EMR page is mounted.
-    """
+async def test_emr_shift_s_rebuilds_under_current_profile_when_only_one_exists(
+    tmp_path: Path,
+) -> None:
+    """``Shift+S`` remounts EMR without cycling its application selection."""
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
     fake.add_application(app_id="00other", name="ad-hoc")
@@ -503,13 +526,66 @@ async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
 
-            # Selection moved off the initial app.
-            assert page_vm.applications.selected_id != initial_app_id, (
-                "Shift+S should actually switch the application — pre-fix "
-                "it only opened the picker, which the user reported as a bug."
-            )
-            # Cascade ran: runs pane is bound to the new app.
-            assert page_vm.job_runs.application_id == page_vm.applications.selected_id
+            replacement = ctx.root_vm.content_host.current
+            assert replacement is not page_vm
+            assert replacement.source.connection_key == ("dev", "us-east-1")
+            assert replacement.applications.selected_id == initial_app_id
+            assert replacement.job_runs.application_id == initial_app_id
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_shift_s_switches_profile_and_shift_a_cycles_application(
+    tmp_path: Path,
+) -> None:
+    config_dir = _prep(tmp_path, _MULTI_PROFILE_AWS_TOML)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    dev = ctx.connection_resolver.resolve("dev")
+    prod = ctx.connection_resolver.resolve("prod")
+    ctx.connection_resolver.list = lambda: [dev, prod]  # type: ignore[method-assign]
+
+    def build_client(connection: Connection) -> _InMemoryEmr:
+        fake = _InMemoryEmr()
+        if connection == dev:
+            fake.add_application(app_id="dev-app", name="development")
+        else:
+            fake.add_application(app_id="prod-app-a", name="analytics")
+            fake.add_application(app_id="prod-app-b", name="reporting")
+        return fake
+
+    for service in ctx.root_vm._registry.all():  # type: ignore[attr-defined]
+        if isinstance(service, EmrServerlessService):
+            service._client_factory = build_client  # type: ignore[assignment]
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            await ctx.root_vm.switch_connection_with(dev, TokenState.CONNECTED)
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            page = ctx.root_vm.content_host.current
+            initial_source = page.source.connection_key
+            initial_application = page.applications.selected_id
+            assert initial_application == "dev-app"
+
+            await pilot.press("S")
+            await _await_emr_mount(pilot, app)
+
+            page = ctx.root_vm.content_host.current
+            assert page.source.connection_key != initial_source
+            assert page.applications.selected_id != initial_application
+            selected_after_source_switch = page.applications.selected_id
+
+            await pilot.press("A")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            assert page.applications.selected_id != selected_after_source_switch
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

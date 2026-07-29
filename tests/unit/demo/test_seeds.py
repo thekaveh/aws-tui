@@ -11,7 +11,7 @@ from aws_tui.demo.seeds import (
     seeded_demo_fs,
 )
 from aws_tui.domain.emr_serverless import JobRunState
-from aws_tui.domain.filesystem import PathRef
+from aws_tui.domain.filesystem import NotFoundError, PathRef
 
 
 def test_seeded_demo_fs_dev_profile_has_etl_input_bucket() -> None:
@@ -36,6 +36,61 @@ def test_seeded_demo_fs_unknown_profile_returns_minimal_default() -> None:
     # Minimal default: at least ONE bucket so the pane isn't empty.
     result = asyncio.run(fs.list(PathRef(())))
     assert len(result) >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile", "paths", "foreign_path"),
+    [
+        (
+            "demo-dev",
+            (
+                "demo-dev/dev_analytics/dev_events_iceberg/metadata/v2.metadata.json",
+                "demo-dev/dev_analytics/dev_events_iceberg/metadata/demo-dev-snap-4201.avro",
+                "demo-dev/dev_analytics/dev_events_iceberg/metadata/demo-dev-manifest-4202.avro",
+                "demo-dev/dev_analytics/dev_events_iceberg/data/event_date=2026-07-24/"
+                "dev-events-0001.parquet",
+            ),
+            "demo-prod/prod_warehouse/prod_sales_iceberg/metadata/v8.metadata.json",
+        ),
+        (
+            "demo-prod",
+            (
+                "demo-prod/prod_warehouse/prod_sales_iceberg/metadata/v8.metadata.json",
+                "demo-prod/prod_warehouse/prod_sales_iceberg/metadata/demo-prod-snap-7701.avro",
+                "demo-prod/prod_warehouse/prod_sales_iceberg/metadata/demo-prod-manifest-7702.avro",
+                "demo-prod/prod_warehouse/prod_sales_iceberg/data/sales_date=2026-07-25/"
+                "prod-sales-0001.parquet",
+            ),
+            "demo-shared/shared_lake/shared_metrics_iceberg/metadata/v3.metadata.json",
+        ),
+        (
+            "demo-shared",
+            (
+                "demo-shared/shared_lake/shared_metrics_iceberg/metadata/v3.metadata.json",
+                "demo-shared/shared_lake/shared_metrics_iceberg/metadata/"
+                "demo-shared-snap-9901.avro",
+                "demo-shared/shared_lake/shared_metrics_iceberg/metadata/"
+                "demo-shared-manifest-9902.avro",
+                "demo-shared/shared_lake/shared_metrics_iceberg/data/team=platform/"
+                "shared-metrics-0001.parquet",
+            ),
+            "demo-dev/dev_analytics/dev_events_iceberg/metadata/v2.metadata.json",
+        ),
+    ],
+)
+async def test_seeded_demo_fs_contains_profile_local_iceberg_artifacts(
+    profile: str,
+    paths: tuple[str, ...],
+    foreign_path: str,
+) -> None:
+    fs = seeded_demo_fs(profile)
+
+    entries = [await fs.stat(PathRef(tuple(path.split("/")))) for path in paths]
+
+    assert all(entry.size is not None and entry.size > 0 for entry in entries)
+    with pytest.raises(NotFoundError):
+        await fs.stat(PathRef(tuple(foreign_path.split("/"))))
 
 
 @pytest.mark.asyncio

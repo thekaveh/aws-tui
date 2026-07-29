@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
+from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 from aws_tui.infra.crash_dump import CrashDump
 
 
@@ -78,6 +83,29 @@ def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
         assert leaked not in text
     assert "example.com" in text
     assert "[REDACTED]" in text
+
+
+def test_rejected_sql_is_absent_from_exception_chains_logs_and_crash_dump(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "redaction_fixture"
+    sql = f"SELECT '{secret}_TAIL_WITHOUT_QUOTE"
+    caplog.set_level(logging.WARNING, logger="sqlglot")
+
+    with pytest.raises(QueryRejectedError) as captured:
+        ReadOnlySqlPolicy().validate(sql)
+
+    exc = captured.value
+    formatted = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    short = CrashDump.short_traceback(exc, max_lines=100)
+    path = CrashDump(base_dir=tmp_path / "crash").write(exc=exc)
+    crash_text = path.read_text(encoding="utf-8")
+
+    assert secret not in formatted
+    assert secret not in short
+    assert secret not in caplog.text
+    assert secret not in crash_text
 
 
 def test_write_appends_log_tail(tmp_path: Path) -> None:

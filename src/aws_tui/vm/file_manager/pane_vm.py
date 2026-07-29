@@ -584,6 +584,7 @@ class PaneVM:
         self._filtered_composite.dispose()
         for child in self._entries:
             child.dispose()
+        self._filtered = ()
         self._entries.clear()
         self._inner.dispose()
 

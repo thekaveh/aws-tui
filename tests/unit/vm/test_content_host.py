@@ -49,6 +49,61 @@ async def test_set_content_disposes_old_vm() -> None:
     host.dispose()
 
 
+async def test_set_content_awaits_shutdown_before_dispose() -> None:
+    events: list[str] = []
+
+    class _LifecycleVM:
+        def __init__(self, name: str) -> None:
+            self._name = name
+            self.status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        def dispose(self) -> None:
+            events.append(f"{self._name}.dispose")
+            self.status = ConstructionStatus.DISPOSED
+
+    class _AsyncShutdownVM(_LifecycleVM):
+        async def shutdown(self) -> None:
+            events.append(f"{self._name}.shutdown")
+
+    host = _build()
+    old = _AsyncShutdownVM("old")
+    new = _LifecycleVM("new")
+    await host.set_content(cast("ComponentVM", old), service_id="old")
+    await host.set_content(cast("ComponentVM", new), service_id="new")
+
+    assert events.index("old.shutdown") < events.index("old.dispose")
+    host.dispose()
+
+
+async def test_shutdown_awaits_current_vm_before_sync_dispose() -> None:
+    events: list[str] = []
+
+    class _AsyncShutdownVM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def shutdown(self) -> None:
+            events.append("shutdown")
+
+        def dispose(self) -> None:
+            events.append("dispose")
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    current = _AsyncShutdownVM()
+    await host.set_content(cast("ComponentVM", current), service_id="current")
+
+    await host.shutdown()
+    host.dispose()
+
+    assert events == ["shutdown", "dispose"]
+
+
 async def test_set_content_same_service_is_noop() -> None:
     host = _build()
     first = _component()

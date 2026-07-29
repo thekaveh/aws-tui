@@ -38,7 +38,9 @@ from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
 from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
+from aws_tui.services.athena.service import AthenaService
 from aws_tui.services.emr_serverless.service import EmrServerlessService
+from aws_tui.services.glue.service import GlueService
 from aws_tui.services.s3.service import S3Service
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
@@ -48,6 +50,7 @@ from aws_tui.vm.chrome.quick_look_vm import QuickLookVM
 from aws_tui.vm.chrome.resume_vm import ResumeAction
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
+from aws_tui.vm.service_source_vm import ServiceSelectionStore
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM, entry_from_s3_form
 
@@ -213,31 +216,66 @@ def build_app_context(
     )
     if demo:
         from aws_tui.demo.connections import DemoConnectionResolver
-        from aws_tui.demo.seeds import seeded_demo_emr, seeded_demo_fs
+        from aws_tui.demo.in_memory_athena import InMemoryAthena
+        from aws_tui.demo.in_memory_fs import InMemoryFS
+        from aws_tui.demo.seeds import (
+            seeded_demo_athena,
+            seeded_demo_emr,
+            seeded_demo_fs,
+            seeded_demo_glue,
+        )
 
         # DemoConnectionResolver is a structural subtype — typed as the
         # production class so all downstream call sites remain compatible.
         connection_resolver: ConnectionResolver = DemoConnectionResolver()  # type: ignore[assignment]
         _demo_emr: InMemoryEmr = seeded_demo_emr()
+        demo_glue_clients = seeded_demo_glue()
+        demo_s3_filesystems: dict[str, InMemoryFS] = {}
+        demo_athena_clients: dict[str, InMemoryAthena] = {}
+
+        def demo_s3_fs(connection: Connection) -> InMemoryFS:
+            filesystem = demo_s3_filesystems.get(connection.name)
+            if filesystem is None:
+                filesystem = seeded_demo_fs(connection.profile or "demo-default")
+                demo_s3_filesystems[connection.name] = filesystem
+            return filesystem
+
+        def demo_athena(connection: Connection) -> InMemoryAthena:
+            client = demo_athena_clients.get(connection.name)
+            if client is None:
+                client = seeded_demo_athena(
+                    connection.profile or "demo-default",
+                    connection_name=connection.name,
+                    region=connection.region,
+                    result_store=demo_s3_fs(connection),
+                )
+                demo_athena_clients[connection.name] = client
+            return client
+
         demo_emr_ref: InMemoryEmr | None = _demo_emr
-        s3_fs_factory = lambda c: seeded_demo_fs(c.profile or "demo-default")  # noqa: E731
+        s3_fs_factory = demo_s3_fs
         # Captured by the lambda so every emr_client_factory(connection)
         # call within this AppContext returns the SAME InMemoryEmr —
         # switching demo profiles in the picker preserves in-flight clone
         # state.  A second build_app_context() call (rare; mostly in tests)
         # gets its own _demo_emr; we don't share at module scope.
         emr_client_factory = lambda c: _demo_emr  # noqa: E731
+        glue_client_factory = lambda c: demo_glue_clients[c.name]  # noqa: E731
+        athena_client_factory = demo_athena
     else:
         connection_resolver = ConnectionResolver(config_store=config_store)
         demo_emr_ref = None
         s3_fs_factory = None
         emr_client_factory = None
+        glue_client_factory = None
+        athena_client_factory = None
     aws_session = AwsSession()
     transfer_journal = TransferJournal(base_dir=cache_dir / "transfers")
 
     # ── Hub + dispatcher ───────────────────────────────────────────────────
     hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
+    service_selections = ServiceSelectionStore()
 
     # ── Registry ───────────────────────────────────────────────────────────
     registry = ServiceRegistry()
@@ -257,6 +295,25 @@ def build_app_context(
         emr_client_factory=emr_client_factory,
     )
     registry.register(cast("Service", emr_service))
+
+    glue_service = GlueService(
+        hub=hub,
+        dispatcher=dispatcher,
+        aws_session=aws_session,
+        glue_client_factory=glue_client_factory,
+        athena_client_factory=athena_client_factory,
+        selection_store=service_selections,
+    )
+    registry.register(cast("Service", glue_service))
+
+    athena_service = AthenaService(
+        hub=hub,
+        dispatcher=dispatcher,
+        aws_session=aws_session,
+        athena_client_factory=athena_client_factory,
+        selection_store=service_selections,
+    )
+    registry.register(cast("Service", athena_service))
 
     # ── Root VM ───────────────────────────────────────────────────────────
     root_vm = RootVM(

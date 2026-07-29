@@ -1,12 +1,15 @@
 # 1. Adding a new service
 
-> v0.8.0 ships the `s3` and `emr-serverless` services; EMR includes
+> The current tree ships `s3`, `emr-serverless`, `glue`, and `athena`;
+> Glue and Athena are linked by immutable table-navigation messages, and EMR includes
 > the read-only browser, job-run logs, and clone-job-run modal. This
 > doc is the pattern for the
-> next ones (EC2, IAM, Lambda, ...). For a richer reference than S3
+> next ones (EC2, IAM, Lambda, ...). For richer references than S3
 > (dedicated domain client + per-service VM subtree + per-service
 > UI widget tree + service-specific modal), read
-> `src/aws_tui/services/emr_serverless/` alongside `s3/`.
+> `src/aws_tui/services/emr_serverless/`,
+> `src/aws_tui/services/glue/`, and `src/aws_tui/services/athena/` alongside
+> `s3/`.
 
 aws-tui's service-plugin spine keeps service construction additive: a
 new folder under `src/aws_tui/services/<name>/` and one registration
@@ -84,9 +87,10 @@ needs a `construct → destruct → dispose` surface.
     ```
 
 4. **Add app-shell view routing** if the service does not return a
-   `DualPaneVM`. `AwsTuiApp` currently maps `emr-serverless` to
-   `EmrServerlessPage` and wraps every other service VM in `DualPane`.
-   Add the matching widget factory branch alongside that EMR route.
+   `DualPaneVM`. `build_service_view(...)` currently maps
+   `emr-serverless` to `EmrServerlessPage`, `glue` to `GluePage`, `athena` to
+   `AthenaPage`, and `s3` to `DualPane`. Add the matching widget factory branch and pass
+   it from both app mount paths.
 
 5. **Reuse existing VM families** where possible:
     - For storage-like services (lists with hierarchy): the file-
@@ -112,7 +116,17 @@ needs a `construct → destruct → dispose` surface.
     container.
 
 8. **Update docs.** Add any vendor / API quirks to
-    `docs/connections.md`. Update the README's features list.
+   `docs/connections.md`. Update the README's features list.
+
+For cross-service links, publish an immutable VM message carrying plain
+identifiers and source identity. The app composition root resolves the
+destination connection and owns `RootVM` switching plus Textual mounting.
+`OpenS3LocationRequest` carries connection, region, URI, pane, and reveal
+intent. `OpenAthenaTableRequest` and `OpenGlueTableRequest` carry a shared
+`TableRef`; the Athena request may add a non-negative snapshot ID. `app.py`
+rejects missing connections or region mismatches, serializes table handoffs,
+and reuses registered service factories. Do not pass clients, VMs, widgets,
+raw SDK responses, or credentials in cross-service messages.
 
 ## 1.3. Layer rules cheat-sheet for services
 A service module **may** import from:
@@ -208,3 +222,60 @@ shipped service and demonstrates the richer per-service pattern:
   a human label in the Commands strip. Future services with
   their own actions follow the same three-touch-point pattern:
   default binding + service-actions tuple + action label.
+
+### 1.5.3. AWS Glue
+`src/aws_tui/services/glue/service.py` is the third shipped service and
+the compact read-only page reference:
+
+- `descriptor` declares `id = "glue"` and `supports()` accepts only
+  AWS connections.
+- Every `build_vm(connection)` returns a fresh `GluePageVM`; the
+  long-lived service retains only `ServiceSelectionStore`, keyed by
+  service id, connection name, and region.
+- `domain/glue.py` owns boto response mapping and pagination for
+  databases/tables/partitions/statistics, jobs/runs, and crawlers.
+  Raw boto responses never enter the VM or view layers.
+- `vm/glue/` separates Catalog, Jobs, and Crawlers behavior; the
+  Textual tree lives under `ui/widgets/glue/`. `GlueCatalogVM` additionally
+  owns `GlueIcebergVM`; it binds only when `TableDetail.table_format` is
+  `ICEBERG`.
+- `glue_client_factory` injects profile-keyed in-memory clients for
+  tests and demo mode without changing production composition.
+- `_ContextualIcebergInspector` revalidates a remembered enabled Athena
+  workgroup in the same connection and region, then constructs
+  `IcebergInspector` with a matching `QueryContext`. Each metadata tab is
+  loaded independently, so one denied or malformed metadata table does not
+  erase successful siblings.
+- The selected table's S3 handoff is an immutable message, not a
+  service-to-service import. Its app subscriber resolves the exact
+  connection name, verifies the region, rebuilds S3 through `RootVM`,
+  navigates the requested pane, and focuses it.
+
+### 1.5.4. Amazon Athena
+`AthenaService` in `src/aws_tui/services/athena/service.py` is the
+query-service reference:
+
+- `descriptor` declares `id = "athena"`; `supports()` accepts only AWS
+  connections. A `build_vm(connection)` call makes a fresh `AthenaPageVM`,
+  while `ServiceSelectionStore` retains only connection- and region-scoped
+  UI selections.
+- `domain/athena.py` performs one paginated AWS request at a time and maps
+  workgroups, catalogs, databases, tables, query history/detail, runtime
+  statistics, result pages, named queries, and prepared statements. It owns
+  the `start_query_execution` / `stop_query_execution` boundary; views and
+  VMs never receive raw boto responses.
+- `domain/sql_policy.py` parses one Athena-dialect statement before dispatch.
+  It accepts `SELECT` roots and set operations (including `VALUES` operands),
+  the implemented bounded `SHOW` and `DESCRIBE` forms, and non-`ANALYZE`
+  `EXPLAIN` of an allowed statement. Standalone `VALUES` is rejected. The
+  parser is defense in depth, not an authorization system.
+- `vm/athena/` separates Query, History, Results, and Saved behavior; the
+  Textual widget tree lives in `ui/widgets/athena/`. A result-to-S3 handoff is
+  an `OpenS3LocationRequest` carrying the execution's exact connection and
+  region, not an Athena-to-S3 import.
+- `AthenaPageVM.open_table(...)` discovers the exact catalog/database in
+  bounded pages, updates context, and inserts a quoted `SELECT * ... LIMIT
+  100` statement. A snapshot request adds `FOR VERSION AS OF <id>`. It never
+  executes the generated SQL. `open_table_in_glue()` publishes
+  `OpenGlueTableRequest` only when the current read-only SQL exposes one
+  unambiguous table reference.

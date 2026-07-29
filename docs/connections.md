@@ -146,11 +146,66 @@ AWS profiles are read-only from aws-tui's perspective — manage those
 through the standard `~/.aws/` tooling.
 
 `Shift+S` filters out connections that have been observed unreachable
-during the session (e.g. a stopped MinIO container). A one-line info
-toast names what was skipped on the first press. Selecting S3 from the
-nav after a local-only fallback retries the initial connection and
-clears that connection's unreachable mark; pressing `r` on an
+during the session in S3 panes (e.g. a stopped MinIO container). A
+one-line info toast names what was skipped on the first press. Selecting
+S3 from the nav after a local-only fallback retries the initial connection
+and clears that connection's unreachable mark; pressing `r` on an
 unreachable pane and recovering it also clears the mark.
+
+### Source scopes and service identity
+
+aws-tui has two source scopes. S3 keeps an independent source in each file
+pane, so the left and right panes can intentionally point at different
+connections or local storage. Single-context AWS services use the one active
+AWS connection owned by `RootVM`; `Shift+S` rebuilds that service under the
+next supported AWS profile and region.
+Single-context AWS services, including EMR Serverless and Glue,
+intentionally do not consult or mutate the S3 pane reachability set. Athena
+follows the same rule.
+Authentication and service API failures remain visible in the mounted service
+instead of filtering or removing the connection from that source ring.
+
+The compact source header on EMR, Glue, and Athena pages identifies that rebuilt context as
+`connection-name · profile · region`, omitting `profile` when it matches the
+connection name. EMR application selection plus Glue and Athena view/resource selections
+are scoped to service, connection name, and region, so switching back may
+restore a still-valid identifier without crossing account or regional
+boundaries. Use **`Shift+A`** to cycle EMR applications;
+**`Shift+S`** always switches the service source.
+
+Resolver order remains explicit `[connections.*]` entries first, followed by
+auto-discovered AWS profiles whose names do not collide. Source cycling follows
+that resolver order without alphabetical resorting. A Glue table's S3,
+Athena, or Iceberg handoff is stricter: its `TableRef` preserves catalog,
+database, table, connection name and region. The app resolves that exact
+`connection_name` and requires the resolved region to match. If that named
+connection is gone or its region changed, aws-tui shows an advisory and stays
+on the current service; it never picks the next profile as a substitute.
+
+Athena is AWS-only: it never participates in an S3-compatible source ring.
+Its workgroup, catalog, database, history row, and saved-query selections are
+scoped to the active connection name and region. Switching source cancels
+local loaders and result fetches, requests cancellation for any app-owned
+active Athena query, awaits the page shutdown, and only then disposes the old
+Athena page and mounts a fresh page. No old-profile rows are retained while
+the new source loads. Resolver order is
+unchanged: explicit `[connections.*]` entries first, then non-colliding
+auto-discovered AWS profiles, and `Shift+S` follows that order.
+
+Glue's Iceberg metadata requests use an Athena workgroup from the same
+connection name and region. A remembered workgroup is revalidated against the
+enabled workgroups visible to that profile; otherwise the first enabled
+workgroup in Athena's returned order is selected. Workgroup, catalog,
+database, table, snapshot, metadata rows, query history, results, and S3
+artifacts never cross a connection/region scope. `demo-dev`, `demo-prod`, and
+`demo-shared` intentionally contain disjoint Iceberg datasets to exercise this
+isolation.
+
+An access failure from a service API, such as EMR Serverless, Glue, or Athena
+`AccessDenied`, is
+service-scoped: it remains visible in that service page and does not mark the
+connection unreachable or remove it from the source cycle. A connection is
+only marked unreachable by connection-level S3 pane failures.
 
 ## 1.5. Vendor quirks (manual checklist)
 - **Cloudflare R2** — no bucket versioning, no replication;

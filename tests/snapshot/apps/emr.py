@@ -74,7 +74,11 @@ def _build_page_vm(client: _InMemoryEmr) -> EmrServerlessPageVM:
         hub=hub,
         dispatcher=NULL_DISPATCHER,
         connection=Connection(
-            name="dev", kind="aws", region="us-east-1", source="config", profile="dev"
+            name="demo-prod",
+            kind="aws",
+            region="us-east-1",
+            source="config",
+            profile="demo-prod",
         ),
     )
     page.construct()

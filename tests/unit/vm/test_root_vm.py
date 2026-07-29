@@ -156,6 +156,49 @@ async def test_switch_connection_disposes_active_service_content() -> None:
     root.dispose()
 
 
+async def test_switch_connection_and_service_rebuilds_same_service() -> None:
+    emr = _FakeService("emr-serverless", accepts_s3=False)
+    root = _build_root(emr)
+    dev = _aws_conn("dev")
+    prod = _aws_conn("prod")
+
+    await root.switch_connection_with(dev, TokenState.CONNECTED)
+    await root.switch_service("emr-serverless")
+    old_vm = root.content_host.current
+
+    await root.switch_connection_and_service(
+        prod,
+        TokenState.CONNECTED,
+        "emr-serverless",
+    )
+
+    assert old_vm is not None
+    assert old_vm.status == ConstructionStatus.DISPOSED
+    assert root.active_connection == prod
+    assert root.active_auth_state is TokenState.CONNECTED
+    assert root.content_host.current_id == "emr-serverless"
+    assert len(emr.constructed) == 2
+    root.dispose()
+
+
+async def test_atomic_switch_rejects_unsupported_connection_before_disposal() -> None:
+    emr = _FakeService("emr-serverless", accepts_s3=False)
+    root = _build_root(emr)
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+    await root.switch_service("emr-serverless")
+    old_vm = root.content_host.current
+
+    with pytest.raises(RuntimeError, match="does not support"):
+        await root.switch_connection_and_service(
+            _minio_conn(),
+            TokenState.CONNECTED,
+            "emr-serverless",
+        )
+
+    assert root.content_host.current is old_vm
+    root.dispose()
+
+
 async def test_switch_service_unknown_id_raises() -> None:
     from aws_tui.vm.services_protocol import ServiceNotFound
 

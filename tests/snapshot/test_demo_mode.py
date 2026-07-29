@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html as html_lib
+from functools import partial
 from pathlib import Path
 
 import pytest
 
+from aws_tui.domain.data_catalog import TableRef
+from aws_tui.infra.aws_session import TokenState
 from aws_tui.ui.widgets.pane import Pane
+from aws_tui.vm.glue.iceberg_vm import IcebergView
+from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.snapshot.apps.demo_mode import DemoModeApp
 from tests.snapshot.conftest import THEMES
 
@@ -93,12 +98,131 @@ async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
     await pilot.wait_for_scheduled_animations()
 
 
+async def _show_demo_iceberg(pilot, view: IcebergView = "snapshots") -> None:  # type: ignore[no-untyped-def]
+    await _show_profile_iceberg(
+        pilot,
+        profile="demo-dev",
+        region="us-east-1",
+        database="dev_analytics",
+        table="dev_events_iceberg",
+        view=view,
+    )
+
+
+async def _show_profile_iceberg(  # type: ignore[no-untyped-def]
+    pilot,
+    *,
+    profile: str,
+    region: str,
+    database: str,
+    table: str,
+    view: IcebergView,
+) -> None:
+    await _drain_workers(pilot)
+    app = pilot.app
+    ctx = app.app_ctx
+    connection = ctx.connection_resolver.resolve(profile)
+    await ctx.root_vm.switch_connection_and_service(
+        connection,
+        TokenState.CONNECTED,
+        "glue",
+    )
+    await _drain_workers(pilot)
+    page = ctx.root_vm.content_host.current
+    assert isinstance(page, GluePageVM)
+    await page.open_table(
+        TableRef(
+            "AwsDataCatalog",
+            database,
+            table,
+            profile,
+            region,
+        )
+    )
+    await page.catalog.iceberg.select_view(view)
+    await pilot.pause()
+    await pilot.pause()
+    await pilot.wait_for_scheduled_animations()
+
+
 @pytest.mark.parametrize("theme", THEMES)
 def test_demo_mode_snapshot(theme: str, snap_compare) -> None:  # type: ignore[no-untyped-def]
     assert snap_compare(
         DemoModeApp(theme=theme),
         terminal_size=TERMINAL_SIZE,
         run_before=_drain_workers,
+    )
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_demo_iceberg_snapshot(theme: str, snap_compare) -> None:  # type: ignore[no-untyped-def]
+    assert snap_compare(
+        DemoModeApp(theme=theme),
+        terminal_size=(120, 40),
+        run_before=_show_demo_iceberg,
+    )
+
+
+@pytest.mark.parametrize(
+    "iceberg_view",
+    ["history", "manifests", "files", "partitions", "refs"],
+)
+def test_demo_iceberg_metadata_snapshot(
+    iceberg_view: IcebergView,
+    snap_compare,
+) -> None:  # type: ignore[no-untyped-def]
+    assert snap_compare(
+        DemoModeApp(theme="carbon"),
+        terminal_size=(120, 40),
+        run_before=partial(_show_demo_iceberg, view=iceberg_view),
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "region", "database", "table", "iceberg_view"),
+    [
+        (
+            "demo-prod",
+            "us-east-1",
+            "prod_warehouse",
+            "prod_sales_iceberg",
+            "snapshots",
+        ),
+        (
+            "demo-prod",
+            "us-east-1",
+            "prod_warehouse",
+            "prod_sales_iceberg",
+            "files",
+        ),
+        (
+            "demo-shared",
+            "us-west-2",
+            "shared_lake",
+            "shared_metrics_iceberg",
+            "refs",
+        ),
+    ],
+)
+def test_demo_iceberg_profile_snapshot(
+    profile: str,
+    region: str,
+    database: str,
+    table: str,
+    iceberg_view: IcebergView,
+    snap_compare,
+) -> None:  # type: ignore[no-untyped-def]
+    assert snap_compare(
+        DemoModeApp(theme="carbon"),
+        terminal_size=(100, 30),
+        run_before=partial(
+            _show_profile_iceberg,
+            profile=profile,
+            region=region,
+            database=database,
+            table=table,
+            view=iceberg_view,
+        ),
     )
 
 
@@ -131,4 +255,73 @@ def test_demo_mode_renders_chip_and_seed_data(theme: str) -> None:
         f"no DEMO affordance visible in {theme}"
     )
     assert "etl-input/" in svg_plain, f"no demo seed artifact rendered in {theme}"
-    assert "2 obj" in svg_plain, f"no settled demo pane summary rendered in {theme}"
+    assert "athena-results/" in svg_plain, f"no Athena result bucket rendered in {theme}"
+    assert "Athena" in svg_plain, f"no Athena service row rendered in {theme}"
+    assert "4 obj" in svg_plain, f"no settled demo pane summary rendered in {theme}"
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_demo_iceberg_snapshot_content(theme: str) -> None:
+    path = (
+        Path(__file__).parent
+        / "__snapshots__"
+        / "test_demo_mode"
+        / f"test_demo_iceberg_snapshot[{theme}].raw"
+    )
+    svg = html_lib.unescape(path.read_text()).replace("\xa0", " ")
+    assert "dev_events_iceberg" in svg
+    assert "4202" in svg
+    assert "4201" in svg
+    assert "append" in svg
+
+
+def test_demo_iceberg_metadata_snapshot_content() -> None:
+    root = Path(__file__).parent / "__snapshots__" / "test_demo_mode"
+
+    def read(view: str) -> str:
+        path = root / f"test_demo_iceberg_metadata_snapshot[{view}].raw"
+        return html_lib.unescape(path.read_text()).replace("\xa0", " ")
+
+    assert "4201" in read("history")
+    assert "dev/dev_analytics/dev_events_iceberg/metada" in read("manifests")
+    assert "dev/dev_analytics/dev_events_iceberg/data/e" in read("files")
+    assert "event_date=2026-07-24" in read("partitions")
+    assert "dev-main" in read("refs")
+
+
+@pytest.mark.parametrize(
+    ("profile", "view", "required"),
+    [
+        ("demo-prod", "snapshots", ("prod_sales_iceberg", "7702", "7701")),
+        (
+            "demo-prod",
+            "files",
+            (
+                "prod_sales_iceberg",
+                "s3://demo-prod/prod_warehouse/prod_sales_ic",
+            ),
+        ),
+        (
+            "demo-shared",
+            "refs",
+            ("shared_metrics_iceberg", "shared-main", "9902"),
+        ),
+    ],
+)
+def test_demo_iceberg_profile_snapshot_content(
+    profile: str,
+    view: str,
+    required: tuple[str, ...],
+) -> None:
+    root = Path(__file__).parent / "__snapshots__" / "test_demo_mode"
+    matches = tuple(root.glob(f"test_demo_iceberg_profile_snapshot[[]{profile}-*-{view}].raw"))
+    assert len(matches) == 1
+    path = matches[0]
+    svg = html_lib.unescape(path.read_text()).replace("\xa0", " ")
+
+    assert "dev_events_iceberg" not in svg
+    assert "dev-main" not in svg
+    assert "4201" not in svg
+    assert "4202" not in svg
+    for marker in required:
+        assert marker in svg

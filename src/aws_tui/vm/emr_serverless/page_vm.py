@@ -19,6 +19,11 @@ from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
+from aws_tui.vm.service_source_vm import (
+    SelectionScope,
+    ServiceSelectionStore,
+    ServiceSourceContext,
+)
 
 
 class EmrServerlessPageVM:
@@ -30,11 +35,17 @@ class EmrServerlessPageVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         connection: Connection,
+        selection_store: ServiceSelectionStore | None = None,
     ) -> None:
         self._client = client
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._connection: Connection = connection
+        self._source = ServiceSourceContext.from_connection(connection)
+        self._selection_scope = SelectionScope(
+            "emr-serverless", self._source.connection_name, self._source.region
+        )
+        self._selection_store = selection_store or ServiceSelectionStore()
         self._disposed: bool = False
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -60,6 +71,10 @@ class EmrServerlessPageVM:
     @property
     def connection(self) -> Connection:
         return self._connection
+
+    @property
+    def source(self) -> ServiceSourceContext:
+        return self._source
 
     @property
     def client(self) -> Any:
@@ -103,15 +118,12 @@ class EmrServerlessPageVM:
     # ── Public surface ──────────────────────────────────────────────────────
 
     async def setup(self) -> None:
-        """Initial load — fetch applications and auto-select the
-        first one (per the user-facing sorted order, so the picker
-        dropdown, Shift+S cycle, and the auto-selection all share
-        one source of truth — STARTED apps come first) so the LEFT
-        pane has something to populate."""
+        """Initial load — fetch applications and restore the stored
+        selection when available, otherwise select the first one in
+        user-facing sorted order so the LEFT pane has something to
+        populate."""
         await self.applications.refresh()
-        sorted_apps = self.applications.sorted_applications
-        if sorted_apps and self.applications.selected_id is None:
-            await self.select_application(sorted_apps[0].id)
+        await self._select_after_applications_load()
 
     async def refresh_applications(self) -> None:
         """Refresh applications and reconcile dependent page state.
@@ -129,9 +141,8 @@ class EmrServerlessPageVM:
                 await self.select_application(selected)
             return
 
-        sorted_apps = self.applications.sorted_applications
-        if sorted_apps:
-            await self.select_application(sorted_apps[0].id)
+        if self.applications.sorted_applications:
+            await self._select_after_applications_load()
             return
 
         if previous_selected is not None or self.job_runs.application_id is not None:
@@ -141,6 +152,8 @@ class EmrServerlessPageVM:
 
     async def select_application(self, app_id: str) -> None:
         self.applications.select(app_id)
+        if self.applications.selected_id == app_id:
+            self._selection_store.set(self._selection_scope, "application_id", app_id)
         self.job_runs.set_application(app_id)
         await self.job_runs.refresh()
         # Detail + logs follow the first run (if any) on application
@@ -159,14 +172,14 @@ class EmrServerlessPageVM:
         """Select the next (``direction=1``) or previous
         (``direction=-1``) application in the picker's user-facing
         order, wrapping at either end. Used by the EMR page's
-        ``Shift+S`` binding ("switch app") so the keypress visibly
+        ``Shift+A`` binding ("switch app") so the keypress visibly
         moves to the next app — the explicit picker (``a``) stays
         around for long-list lookup. No-op if fewer than 2 apps
         exist.
 
         Cycle source = :attr:`ApplicationsVM.sorted_applications`,
         not the raw boto order. This keeps the dropdown listing and
-        the Shift+S ring in lockstep — STARTED apps come first, then
+        the Shift+A ring in lockstep — STARTED apps come first, then
         transitional / idle / terminated, alphabetical within each
         group. User feedback: "make sure this newly ordered list of
         applications is the source of truth through which switch app
@@ -206,6 +219,18 @@ class EmrServerlessPageVM:
             await self.job_runs.refresh()
         else:
             await self.job_run_detail.refresh()
+
+    async def _select_after_applications_load(self) -> None:
+        if self.applications.selected_id is not None:
+            return
+        apps = self.applications.sorted_applications
+        if not apps:
+            return
+        stored_id = self._selection_store.get(self._selection_scope, "application_id")
+        if stored_id is not None and any(app.id == stored_id for app in apps):
+            await self.select_application(stored_id)
+            return
+        await self.select_application(apps[0].id)
 
 
 __all__ = ["EmrServerlessPageVM"]

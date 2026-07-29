@@ -65,7 +65,7 @@ async def test_sorted_applications_is_started_first_then_alphabetical() -> None:
     user-facing application order: STARTED first, then transitional
     (STARTING / STOPPING), then non-active (CREATING / CREATED /
     STOPPED), then terminal (TERMINATED); alphabetical within each
-    state group. The picker dropdown AND the Shift+S cycle consume
+    state group. The picker dropdown AND the Shift+A cycle consume
     this property — pinning it pins both consumers."""
     vm, fake = _make()
     # Deliberately shuffled — confirms the sort, not insertion order, drives.

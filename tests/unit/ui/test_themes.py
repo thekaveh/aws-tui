@@ -172,6 +172,24 @@ def test_selected_state_blocks_use_readable_text_token(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
+def test_focused_athena_tab_uses_contrast_safe_tokens(name: str) -> None:
+    content = ThemeStore().load(name)
+    tokens = _theme_tokens(content)
+    focused = re.search(
+        r"AthenaPage\s+\.athena-view-tab:focus\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+
+    assert focused is not None
+    body = focused.group(1)
+    assert "background: $bg-sel;" in body
+    assert "color: $text;" in body
+    ratio = _contrast_ratio(tokens["$text"], tokens["$bg-sel"])
+    assert ratio >= 4.5, f"theme {name}: focused Athena tab contrast is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
 def test_command_palette_selectors_match_nested_widget_tree(name: str) -> None:
     content = ThemeStore().load(name)
 
@@ -188,6 +206,52 @@ def test_emr_logs_placeholder_selectors_match_nested_widget_tree(name: str) -> N
 
     assert "JobRunLogsPane > .logs-placeholder" not in content
     assert "JobRunLogsPane .logs-placeholder" in content
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_glue_pane_titles_use_readable_theme_tokens(name: str) -> None:
+    content = ThemeStore().load(name)
+
+    inactive = re.search(
+        r"GluePage\s+ResourceListPane,\s*"
+        r"GluePage\s+DetailRows\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+    focused = re.search(
+        r"GluePage\s+ResourceListPane:focus-within,\s*"
+        r"GluePage\s+DetailRows:focus-within\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+
+    assert inactive is not None
+    assert "border-title-color: $text;" in inactive.group(1)
+    assert focused is not None
+    assert "border-title-color: $accent;" in focused.group(1)
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_glue_list_placeholders_use_semantic_theme_tokens(name: str) -> None:
+    content = ThemeStore().load(name)
+
+    warning = re.search(
+        r"GluePage\s+OptionList\.-warning\s*>\s*"
+        r"\.option-list--option-disabled\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+    error = re.search(
+        r"GluePage\s+OptionList\.-error\s*>\s*"
+        r"\.option-list--option-disabled\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+
+    assert warning is not None
+    assert "color: $warning;" in warning.group(1)
+    assert error is not None
+    assert "color: $danger;" in error.group(1)
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)

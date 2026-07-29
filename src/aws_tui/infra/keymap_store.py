@@ -54,6 +54,7 @@ class KeymapStore:
         "app.themes": ("t",),
         "app.cycle_theme": ("T",),
         "app.swap_source": ("S",),
+        "emr.next_application": ("A",),
         "auth.authenticate": ("a",),
         "modal.cancel": ("escape",),
         # EMR-page-only — bound on ``EmrServerlessPage`` widget scope
@@ -62,6 +63,17 @@ class KeymapStore:
         # focus context).
         "emr.clone": ("c",),
         "emr.logs.filter": ("f",),
+        "glue.catalog": ("1",),
+        "glue.jobs": ("2",),
+        "glue.crawlers": ("3",),
+        "glue.time_travel_in_athena": ("V",),
+        "athena.query": ("1",),
+        "athena.history": ("2",),
+        "athena.results": ("3",),
+        "athena.saved": ("4",),
+        "athena.execute": ("ctrl+enter",),
+        "athena.cancel": ("escape",),
+        "athena.load_more": ("l",),
     }
 
     def __init__(self, *, overlay: dict[str, str | list[str]] | None = None) -> None:

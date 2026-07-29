@@ -10,15 +10,11 @@ Linux, and Windows. Powered by
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
 > **Status: v0.8.0 cut; PyPI publish pending** — install from Git
-> until the `aws-tui` project name is available on PyPI. Headline
-> change from v0.7.0: **EMR Serverless as a
-> second first-class service** alongside S3 — application picker,
-> job-runs master-detail with state-filter chips, columnized run
-> rows with colored state indicators, on-demand log streaming with
-> a grep filter + LRU cache, clone-and-edit modal for re-running
-> a finished job, and a 4-slot Tab cycle through NavMenu → LEFT →
-> DETAIL → LOGS. The nav rail is now a regular focusable pane
-> with text labels (no collapse mode, no icon emojis). See
+> until the `aws-tui` project name is available on PyPI. Glue, Athena, and
+> their integrated Iceberg workflows are Unreleased feature work for the next
+> v0.9.0 minor release; the package version remains
+> `0.8.0` until a release is cut. The v0.8.0 headline remains EMR Serverless,
+> cross-platform packaging, and the public release pipeline. See
 > [`CHANGELOG.md`](CHANGELOG.md) for the full per-PR delta.
 
 ## 1.1. Features
@@ -34,14 +30,43 @@ Linux, and Windows. Powered by
   and [action IDs](docs/keybindings.md#13-action-ids), plus the
   `Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
   `CHANGELOG.md`.
-- **One-key source switcher.** `Shift+S` cycles the focused pane
-  through **every available source** in order: `local` → each AWS
-  profile (`aws s3 · {profile} · {region}`) → each `s3-compatible`
-  connection (`s3-compatible · {name} · {endpoint}`) → wrap. With
+- **AWS Glue read-only operations console.** Pick **Glue** in the nav
+  rail to browse databases, tables, schema/storage detail, partitions,
+  column statistics, jobs and recent runs, and crawler status/detail.
+  `1` / `2` / `3` select Catalog / Jobs / Crawlers, `r` refreshes the
+  active view, and `Shift+S` rebuilds Glue under the next AWS profile.
+  From a selected Catalog table, the command palette can open its exact
+  location in S3 or prefill an Athena query. Iceberg tables add bounded,
+  on-demand Snapshots, History, Manifests, Files, Partitions, and References
+  views. Select a snapshot and press `V` to prepare a time-travel query.
+  Generated SQL is review-only and never runs automatically. Every handoff
+  preserves the exact Glue connection name and region; it never substitutes
+  another profile. Glue is AWS-only and does not appear for S3-compatible
+  connections.
+- **Amazon Athena read-only query console.** Pick **Athena** in the nav rail
+  to choose a workgroup, catalog, and database; submit one allowed read-only
+  statement; follow its lifecycle; page through Results; inspect History; and
+  open named or prepared queries in the editor.
+  Athena is AWS-only. The local parser fails closed before dispatch, while AWS
+  IAM, Lake Formation, workgroup, and S3 policies remain authoritative. The
+  Query execution detail shows bytes scanned; History detail shows bytes
+  scanned and result reuse. Results contains paged result rows. A successful
+  customer-S3 execution can hand off its concrete result artifact to the
+  matching S3 connection; Athena-managed results have no customer S3 artifact
+  to hand off. A query that resolves to one visible table can return to that
+  exact table in Glue. Glue table and Iceberg snapshot handoffs prefill
+  fully-qualified, bounded SQL in Athena without executing it.
+- **One-key source switcher.** `Shift+S` cycles the focused S3 pane
+  through **every available source** in resolver order: `local` → explicit
+  `[connections.*]` entries → non-colliding auto-discovered AWS profiles →
+  wrap. AWS sources render as `aws s3 · {profile} · {region}` and configured
+  endpoints as `s3-compatible · {name} · {endpoint}`. With
   multiple AWS profiles configured locally, this is the fastest way
   to jump between accounts: one keystroke per profile, the pane
-  re-mounts in place — no `:` command palette, no modal. The
-  s3-compatible side is open-ended: add as many MinIO / R2 / B2 /
+  re-mounts in place — no `:` command palette, no modal. On EMR
+  Serverless, Glue, and Athena, the same key switches the whole single-context
+  service to the next supported AWS connection. The s3-compatible side
+  is open-ended: add as many MinIO / R2 / B2 /
   Wasabi / Ceph endpoints as you like via the in-app **Settings**
   nav page (or by hand in `<config-dir>/config.toml`) and they
   join the cycle automatically. The four combos `{S3, local} ×
@@ -97,23 +122,24 @@ Linux, and Windows. Powered by
   affected panes immediately; Delete prompts for confirmation).
   Keyboard: `,` selects Settings. No more hand-editing
   `<config-dir>/config.toml` for routine endpoint changes.
-- **Keymap schema ready; runtime rebinding deferred.** Action ↔
-  keystroke IDs are defined and validated, but `AwsTuiApp` still routes
-  the wired v0.8.x bindings directly. See
+- **Runtime-configurable keymap.** `BindingResolver` installs handled
+  `[keybindings]` overrides at runtime, so remapping an action changes
+  the live Textual keymap on the next launch. Handlerless deferred
+  action IDs remain unbound. See
   [`docs/keybindings.md` customizing](docs/keybindings.md#12-customizing)
-  and [action IDs](docs/keybindings.md#13-action-ids) for the current
-  wired list and the v0.9 input-router plan.
-- **Streaming Quick Look (deferred).** Spec'd on `Space` to stream the
-  first 64 KB with a syntax tint, plus a full-file `$PAGER` shell-out.
-  The `pane.quick_look` action handler isn't wired in v0.8.x — tracked
-  under `[Unreleased] Deferred` in `CHANGELOG.md` and
-  [`docs/keybindings.md` overlays](docs/keybindings.md#114-overlays).
-- **Command palette (deferred).** Spec'd on `:` or `Ctrl+K` as a
-  fuzzy-filterable list of every action — including dynamic ones like
-  `connection switch <name>` and `theme switch <name>`. In v0.8.x `:`
-  opens the help overlay as a placeholder and `Ctrl+K` is unbound; the
-  full palette ships post-v0.8. See `[Unreleased] Deferred` in
-  `CHANGELOG.md` and [`keybindings.md` overlays](docs/keybindings.md#114-overlays).
+  and [action IDs](docs/keybindings.md#13-action-ids).
+- **Streaming Quick Look.** Press `Space` on a file to open the built-in
+  preview modal and stream its first 64 KB. Directories, the `..` row,
+  and empty panes are ignored. The full-file `$PAGER` shell-out remains
+  deferred.
+- **Command palette.** Press `:` or `Ctrl+K` for the fuzzy-filterable
+  curated command list, including **Open table location in S3** on
+  Glue and **Open Athena result in S3** for a validated successful Athena
+  execution. Dynamic `connection switch <name>` / `theme switch <name>`
+  entries and consolidation with Textual's `Ctrl+P` palette remain deferred.
+  Integrated commands include **Query table in Athena**, **Query Iceberg
+  snapshot in Athena**, and **Open query table in Glue**; each preserves the
+  active connection name and region.
 - **Layered architecture with enforced forbidden edges.** View ▸ ViewModel
   ▸ Service ▸ Domain ▸ Infra, with `app.py` / `composition.py` as trusted
   composition roots and services allowed to compose concrete VMs; enforced
@@ -157,7 +183,7 @@ AWS_TUI_DEMO=1 aws-tui
 aws-tui --demo
 ```
 
-You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs across multiple states, and working clone / copy / delete operations. AWS/S3/EMR demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
+You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs, profile-isolated Glue catalogs, jobs, runs, crawlers, and Iceberg metadata, plus Athena workgroups, query histories, results, saved queries, and prepared statements. `demo-shared` demonstrates scoped Glue and Athena access-denied states. The same-profile Glue-to-Athena table/snapshot flow and Glue/Athena-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
 
 To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 
@@ -173,12 +199,13 @@ round-trip just to render the UI). Otherwise the picker shows the
 connection in `login needed` state — the `auth.authenticate` action is
 spec'd as `a` in
 [`docs/keybindings.md` connection/auth](docs/keybindings.md#116-connection-auth) but its
-runtime wiring is deferred to v0.9 (the `BindingResolver`
-work — see the `Deferred / v0.9 roadmap` block in `CHANGELOG.md`).
-Today, run `aws sso login --profile <name>` in your shell and
-relaunch. Non-SSO profiles are attempted directly through boto3; debug
-shared credentials, `credential_process`, env, or role-backed profiles
-with `aws sts get-caller-identity --profile <name>`.
+handler is deferred to v0.9. `BindingResolver` already installs handled
+overrides on the live keymap. Handlerless action IDs, including
+`auth.authenticate`, remain unbound. Today, run
+`aws sso login --profile <name>` in your shell and relaunch. Non-SSO
+profiles are attempted directly through boto3; debug shared credentials,
+`credential_process`, env, or role-backed profiles with
+`aws sts get-caller-identity --profile <name>`.
 
 If `aws s3 ls` works on your shell but `aws-tui` shows
 `access denied` on the left pane, the most common cause is that
@@ -210,7 +237,7 @@ Numbered hierarchically for navigation.
 
 1. **User-facing**
    1. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
-   2. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and the pending `[keybindings]` overlay contract.
+   2. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and shipped `[keybindings]` overlay behavior.
    3. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
    4. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to MinIO, switch theme on the fly, prepare keybinding overlays, resume after a crash).
    5. [Supported platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
