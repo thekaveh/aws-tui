@@ -50,7 +50,7 @@ dependencies = [
   "aiofiles>=23,<26",
   "tomli-w>=1.0,<2",
   "keyring>=24,<26",
-  "platformdirs>=4,<5",
+  "platformdirs>=4.11.0,<5",
   "sqlglot>=30.13.0,<31",
 ]
 dynamic = ["version"]
