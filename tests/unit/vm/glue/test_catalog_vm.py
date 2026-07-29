@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import traceback
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, TypeVar
@@ -432,11 +432,11 @@ async def test_empty_clear_does_not_supersede_transition_that_commits_during_dra
 
     transition = asyncio.create_task(vm.select_database("archive"))
     await drain_started[0].wait()
-    transition_epoch = vm._selection_request_epoch  # type: ignore[attr-defined]
+    transition_epoch = vm._selection_request_epoch
     fake.databases.clear()
     empty_refresh = asyncio.create_task(vm.refresh_databases())
     await drain_started[1].wait()
-    pending_epoch = vm._selection_request_epoch  # type: ignore[attr-defined]
+    pending_epoch = vm._selection_request_epoch
 
     try:
         drain_release[0].set()
@@ -490,10 +490,10 @@ async def test_newer_nonempty_refresh_preserves_inflight_selection_during_pendin
     )
     databases = tuple(fake.databases)
     fake.databases.clear()
-    selection_epoch = vm._selection_request_epoch  # type: ignore[attr-defined]
+    selection_epoch = vm._selection_request_epoch
     empty_refresh = asyncio.create_task(vm.refresh_databases())
     await drain_started.wait()
-    pending_epoch = vm._selection_request_epoch  # type: ignore[attr-defined]
+    pending_epoch = vm._selection_request_epoch
 
     try:
         fake.databases.extend(databases)
@@ -844,6 +844,7 @@ async def test_queued_stale_catalog_pager_does_not_start_provider_call(
     owner = QueuedGlueOperationOwner()
     vm = make_catalog_vm(fake, operations=owner)
     await vm.setup()
+    requests: Sequence[object]
 
     if pager_kind == "database":
         fake.database_tokens.clear()

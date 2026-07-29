@@ -523,8 +523,8 @@ async def test_concurrent_silent_drains_hold_admission_until_last_lease(
     started = inspector.block("snapshots")
     original_load = asyncio.create_task(vm.select_view("snapshots"))
     await started.wait()
-    original_drain = vm._cancel_and_drain_metadata_tasks  # type: ignore[attr-defined]
-    original_invalidate = vm._invalidate_metadata_loads_silently  # type: ignore[attr-defined]
+    original_drain = vm._cancel_and_drain_metadata_tasks
+    original_invalidate = vm._invalidate_metadata_loads_silently
     second_lease_acquired = asyncio.Event()
     second_drain_entered = asyncio.Event()
     second_drain_release = asyncio.Event()
@@ -561,11 +561,14 @@ async def test_concurrent_silent_drains_hold_admission_until_last_lease(
     assert tuple(inspector.calls) == calls_before_retry
 
     second_drain_release.set()
-    assert await asyncio.gather(first_drain, second_drain, original_load) == [
-        None,
-        None,
-        False,
-    ]
+    first_result, second_result, load_result = await asyncio.gather(
+        first_drain,
+        second_drain,
+        original_load,
+    )
+    assert first_result is None
+    assert second_result is None
+    assert not load_result
     assert await vm.retry()
     assert tuple(inspector.calls) == (
         ("snapshots", ICEBERG_REF),
