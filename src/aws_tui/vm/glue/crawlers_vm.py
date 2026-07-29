@@ -107,7 +107,8 @@ class GlueCrawlersVM:
         if self._disposed:
             return
         self._disposed = True
-        self._operations.close()
+        if self._owns_operations:
+            self._operations.close()
         self._invalidate_operations()
         self._crawler_pager.dispose()
         self._on_property_changed.on_completed()
@@ -263,7 +264,8 @@ class GlueCrawlersVM:
         if self._shutdown_started:
             return
         self._shutdown_started = True
-        self._operations.close()
+        if self._owns_operations:
+            self._operations.close()
         self._invalidate_operations()
 
     def _invalidate_operations(self) -> None:

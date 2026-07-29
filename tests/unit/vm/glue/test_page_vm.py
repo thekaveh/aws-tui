@@ -12,6 +12,9 @@ from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
+from aws_tui.vm.glue.crawlers_vm import GlueCrawlersVM
+from aws_tui.vm.glue.jobs_vm import GlueJobsVM
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.messages import OpenAthenaTableRequest, OpenS3LocationRequest
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
@@ -508,6 +511,118 @@ async def test_shutdown_cancels_drains_and_suppresses_every_child_provider_path(
     assert getattr(page, "_provider_tasks", None) == set()
     assert page._shutdown_complete  # type: ignore[attr-defined]
     subscription.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("termination", ["shutdown", "dispose"])
+@pytest.mark.parametrize("method", ["list_jobs_page", "list_crawlers_page"])
+async def test_catalog_child_termination_preserves_shared_sibling_operations(
+    termination: str,
+    method: str,
+) -> None:
+    fake = seeded_cancellation_resistant_glue()
+    page = make_page_vm(fake)
+    await page.setup()
+    block, operation = await _blocked_operation(page, fake, method)
+
+    if termination == "shutdown":
+        await page.catalog.shutdown()
+    else:
+        page.catalog.dispose()
+
+    assert page._is_alive()  # type: ignore[attr-defined]
+    assert page._operations.accepting  # type: ignore[attr-defined]
+    assert not block.cancellation_seen.is_set()
+    assert not operation.done()
+
+    shutdown = asyncio.create_task(page.shutdown())
+    await block.cancellation_seen.wait()
+    returned_before_release = shutdown.done()
+    block.release.set()
+    results = await asyncio.gather(shutdown, operation, return_exceptions=True)
+
+    assert results == [None, None]
+    assert not returned_before_release
+    assert page._provider_tasks == set()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("child_name", "termination", "method"),
+    [
+        ("jobs", "shutdown", "list_crawlers_page"),
+        ("crawlers", "dispose", "list_jobs_page"),
+    ],
+)
+async def test_jobs_and_crawlers_child_termination_preserves_shared_owner(
+    child_name: str,
+    termination: str,
+    method: str,
+) -> None:
+    fake = seeded_cancellation_resistant_glue()
+    page = make_page_vm(fake)
+    await page.setup()
+    block, operation = await _blocked_operation(page, fake, method)
+    child = getattr(page, child_name)
+
+    if termination == "shutdown":
+        await child.shutdown()
+    else:
+        child.dispose()
+
+    assert page._is_alive()  # type: ignore[attr-defined]
+    assert page._operations.accepting  # type: ignore[attr-defined]
+    assert not block.cancellation_seen.is_set()
+    assert not operation.done()
+
+    shutdown = asyncio.create_task(page.shutdown())
+    await block.cancellation_seen.wait()
+    returned_before_release = shutdown.done()
+    block.release.set()
+    results = await asyncio.gather(shutdown, operation, return_exceptions=True)
+
+    assert results == [None, None]
+    assert not returned_before_release
+    assert page._provider_tasks == set()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("child_name", "method"),
+    [
+        ("catalog", "list_databases_page"),
+        ("jobs", "list_jobs_page"),
+        ("crawlers", "list_crawlers_page"),
+    ],
+)
+async def test_standalone_child_dispose_closes_and_durably_drains_private_owner(
+    child_name: str,
+    method: str,
+) -> None:
+    fake = seeded_cancellation_resistant_glue()
+    hub: MessageHub[Message] = MessageHub()
+    if child_name == "catalog":
+        child = GlueCatalogVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    elif child_name == "jobs":
+        child = GlueJobsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    else:
+        child = GlueCrawlersVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    child.construct()
+    block = fake.block_provider(method)
+    operation = asyncio.create_task(child.setup())
+    await block.started.wait()
+
+    child.dispose()
+    shutdown = asyncio.create_task(child.shutdown())
+    await block.cancellation_seen.wait()
+    returned_before_release = shutdown.done()
+    block.release.set()
+    results = await asyncio.gather(shutdown, operation, return_exceptions=True)
+
+    assert results == [None, None]
+    assert not returned_before_release
+    assert not child._operations.accepting  # type: ignore[attr-defined]
+    assert child._operations.tasks == set()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
