@@ -398,6 +398,61 @@ async def test_clear_table_and_drain_waits_for_cancellation_resistant_provider()
 
 
 @pytest.mark.asyncio
+async def test_silent_metadata_drain_preserves_stable_binding_and_pane() -> None:
+    vm, inspector, _hub = make_vm(page_size=1)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("snapshots")
+    await vm.load_more()
+    assert vm.select_snapshot(42)
+    baseline = (
+        vm.table_ref,
+        vm.snapshots,
+        vm.state,
+        vm.selected_snapshot_id,
+        vm.can_time_travel_in_athena,
+    )
+    inspector.snapshots = (_snapshot(99),)
+    inspector.ignore_cancellation_for = "snapshots"
+    started = inspector.block("snapshots")
+    retry = asyncio.create_task(vm.retry())
+    await started.wait()
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+    drain_method = getattr(vm, "cancel_metadata_loads_and_drain_silently", None)
+    if drain_method is None:
+        inspector.release("snapshots")
+        await retry
+        pytest.fail("GlueIcebergVM.cancel_metadata_loads_and_drain_silently is missing")
+
+    draining = asyncio.create_task(drain_method())
+    await inspector.cancellation_seen.wait()
+
+    assert not draining.done()
+    assert (
+        vm.table_ref,
+        vm.snapshots,
+        vm.state,
+        vm.selected_snapshot_id,
+        vm.can_time_travel_in_athena,
+    ) == baseline
+    assert notifications == []
+
+    inspector.release("snapshots")
+    assert await asyncio.gather(draining, retry) == [None, False]
+
+    assert (
+        vm.table_ref,
+        vm.snapshots,
+        vm.state,
+        vm.selected_snapshot_id,
+        vm.can_time_travel_in_athena,
+    ) == baseline
+    assert notifications == []
+    assert not vm._metadata_tasks  # type: ignore[attr-defined]
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
 async def test_synchronous_clear_supersedes_inflight_rebind() -> None:
     vm, inspector, _hub = make_vm()
     inspector.ignore_cancellation_for = "snapshots"

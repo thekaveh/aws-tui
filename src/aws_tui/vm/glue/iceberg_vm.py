@@ -340,6 +340,16 @@ class GlueIcebergVM:
                 self._invalidate_binding()
             await self._cancel_and_drain_metadata_tasks()
 
+    async def cancel_metadata_loads_and_drain_silently(self) -> None:
+        """Supersede provider loads without changing or publishing the binding."""
+        if not self._disposed and not self._shutdown_started:
+            self._mutation_epoch += 1
+            self._invalidate_metadata_loads_silently()
+        async with self._lifecycle_lock:
+            if self._shutdown_complete:
+                return
+            await self._cancel_and_drain_metadata_tasks()
+
     def begin_shutdown(self) -> None:
         if self._shutdown_started or self._shutdown_complete:
             return
@@ -404,6 +414,12 @@ class GlueIcebergVM:
         if notify:
             self._notify_all()
         return binding_generation
+
+    def _invalidate_metadata_loads_silently(self) -> None:
+        for view, pane in self._panes.items():
+            pane.generation += 1
+            if pane.state is PaneState.LOADING:
+                self._restore_stable(view, pane)
 
     def _cancel_metadata_tasks(self) -> tuple[asyncio.Task[tuple[Any, ...]], ...]:
         tasks = tuple(self._metadata_tasks)
