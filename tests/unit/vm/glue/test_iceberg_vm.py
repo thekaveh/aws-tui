@@ -453,6 +453,158 @@ async def test_silent_metadata_drain_preserves_stable_binding_and_pane() -> None
 
 
 @pytest.mark.asyncio
+async def test_silent_metadata_drain_rejects_retry_until_owned_load_is_drained() -> None:
+    vm, inspector, _hub = make_vm()
+    inspector.ignore_cancellation_for = "snapshots"
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    started = inspector.block("snapshots")
+    original = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+
+    draining = asyncio.create_task(vm.cancel_metadata_loads_and_drain_silently())
+    await inspector.cancellation_seen.wait()
+    retry = asyncio.create_task(vm.retry())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    retry_completed_during_drain = retry.done()
+    calls_during_drain = tuple(inspector.calls)
+    notifications_during_drain = tuple(notifications)
+    drain_returned_before_provider = draining.done()
+
+    inspector.release("snapshots")
+    results = await asyncio.gather(draining, original, retry)
+
+    assert retry_completed_during_drain
+    assert calls_during_drain == (("snapshots", ICEBERG_REF),)
+    assert notifications_during_drain == ()
+    assert not drain_returned_before_provider
+    assert results == [None, False, False]
+    assert vm.state is PaneState.EMPTY
+    assert vm.snapshots == ()
+    assert not vm._metadata_tasks  # type: ignore[attr-defined]
+    assert notifications == []
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_metadata_barrier_rechecks_before_entering_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    states_at_admission_check: list[PaneState] = []
+
+    def close_barrier_after_entry() -> bool:
+        states_at_admission_check.append(vm.state)
+        return len(states_at_admission_check) == 1
+
+    monkeypatch.setattr(vm, "_metadata_load_is_admitted", close_barrier_after_entry)
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+
+    assert not await vm.retry()
+
+    assert states_at_admission_check == [PaneState.EMPTY, PaneState.EMPTY]
+    assert vm.state is PaneState.EMPTY
+    assert inspector.calls == []
+    assert notifications == []
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_silent_drains_hold_admission_until_last_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, inspector, _hub = make_vm()
+    inspector.ignore_cancellation_for = "snapshots"
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    started = inspector.block("snapshots")
+    original_load = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+    original_drain = vm._cancel_and_drain_metadata_tasks  # type: ignore[attr-defined]
+    original_invalidate = vm._invalidate_metadata_loads_silently  # type: ignore[attr-defined]
+    second_lease_acquired = asyncio.Event()
+    second_drain_entered = asyncio.Event()
+    second_drain_release = asyncio.Event()
+    invalidations = 0
+    drains = 0
+
+    def record_invalidation() -> None:
+        nonlocal invalidations
+        invalidations += 1
+        original_invalidate()
+        if invalidations == 2:
+            second_lease_acquired.set()
+
+    async def control_second_drain() -> None:
+        nonlocal drains
+        drains += 1
+        if drains == 2:
+            second_drain_entered.set()
+            await second_drain_release.wait()
+        await original_drain()
+
+    monkeypatch.setattr(vm, "_invalidate_metadata_loads_silently", record_invalidation)
+    monkeypatch.setattr(vm, "_cancel_and_drain_metadata_tasks", control_second_drain)
+
+    first_drain = asyncio.create_task(vm.cancel_metadata_loads_and_drain_silently())
+    await inspector.cancellation_seen.wait()
+    second_drain = asyncio.create_task(vm.cancel_metadata_loads_and_drain_silently())
+    await second_lease_acquired.wait()
+    inspector.release("snapshots")
+    await second_drain_entered.wait()
+
+    calls_before_retry = tuple(inspector.calls)
+    assert not await vm.retry()
+    assert tuple(inspector.calls) == calls_before_retry
+
+    second_drain_release.set()
+    assert await asyncio.gather(first_drain, second_drain, original_load) == [
+        None,
+        None,
+        False,
+    ]
+    assert await vm.retry()
+    assert tuple(inspector.calls) == (
+        ("snapshots", ICEBERG_REF),
+        ("snapshots", ICEBERG_REF),
+    )
+
+
+@pytest.mark.asyncio
+async def test_silent_snapshot_restore_preserves_selection_cleared_by_view_switch() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("snapshots")
+    assert vm.select_snapshot(43)
+    inspector.ignore_cancellation_for = "snapshots"
+    started = inspector.block("snapshots")
+    retry = asyncio.create_task(vm.retry())
+    await started.wait()
+
+    assert await vm.select_view("history")
+    assert vm.selected_snapshot_id is None
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=notifications.append)
+    draining = asyncio.create_task(vm.cancel_metadata_loads_and_drain_silently())
+    await inspector.cancellation_seen.wait()
+    selection_during_drain = vm.selected_snapshot_id
+    notifications_during_drain = tuple(notifications)
+
+    inspector.release("snapshots")
+    results = await asyncio.gather(draining, retry)
+
+    assert results == [None, False]
+    assert selection_during_drain is None
+    assert vm.selected_snapshot_id is None
+    assert notifications_during_drain == ()
+    assert notifications == []
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
 async def test_synchronous_clear_supersedes_inflight_rebind() -> None:
     vm, inspector, _hub = make_vm()
     inspector.ignore_cancellation_for = "snapshots"

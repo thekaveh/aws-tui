@@ -169,6 +169,7 @@ class GlueIcebergVM:
         self._shutdown_complete = False
         self._lifecycle_lock = asyncio.Lock()
         self._metadata_tasks: set[asyncio.Task[tuple[Any, ...]]] = set()
+        self._metadata_load_drain_count = 0
         self._mutation_epoch = 0
         self._binding_generation = 0
         self._table_ref: TableRef | None = None
@@ -342,13 +343,19 @@ class GlueIcebergVM:
 
     async def cancel_metadata_loads_and_drain_silently(self) -> None:
         """Supersede provider loads without changing or publishing the binding."""
-        if not self._disposed and not self._shutdown_started:
+        has_drain_lease = not self._disposed and not self._shutdown_started
+        if has_drain_lease:
+            self._metadata_load_drain_count += 1
             self._mutation_epoch += 1
             self._invalidate_metadata_loads_silently()
-        async with self._lifecycle_lock:
-            if self._shutdown_complete:
-                return
-            await self._cancel_and_drain_metadata_tasks()
+        try:
+            async with self._lifecycle_lock:
+                if self._shutdown_complete:
+                    return
+                await self._cancel_and_drain_metadata_tasks()
+        finally:
+            if has_drain_lease:
+                self._metadata_load_drain_count -= 1
 
     def begin_shutdown(self) -> None:
         if self._shutdown_started or self._shutdown_complete:
@@ -416,10 +423,13 @@ class GlueIcebergVM:
         return binding_generation
 
     def _invalidate_metadata_loads_silently(self) -> None:
+        selected_snapshot_id = self._selected_snapshot_id
         for view, pane in self._panes.items():
             pane.generation += 1
             if pane.state is PaneState.LOADING:
                 self._restore_stable(view, pane)
+        self._selected_snapshot_id = selected_snapshot_id
+        self._panes["snapshots"].stable_selected_snapshot_id = selected_snapshot_id
 
     def _cancel_metadata_tasks(self) -> tuple[asyncio.Task[tuple[Any, ...]], ...]:
         tasks = tuple(self._metadata_tasks)
@@ -514,7 +524,7 @@ class GlueIcebergVM:
 
     async def _load(self, view: IcebergView) -> bool:
         table_ref = self._table_ref
-        if self._disposed or table_ref is None:
+        if not self._metadata_load_is_admitted() or table_ref is None:
             return False
         pane = self._panes[view]
         pane.generation += 1
@@ -522,10 +532,12 @@ class GlueIcebergVM:
         binding_generation = self._binding_generation
         caller_task = asyncio.current_task()
         try:
+            if not self._metadata_load_is_admitted():
+                return False
             pane.state = PaneState.LOADING
             pane.error_text = None
             self._notify_view(view)
-            if not self._is_current(
+            if not self._metadata_load_is_admitted() or not self._is_current(
                 view,
                 request_generation,
                 binding_generation,
@@ -666,6 +678,13 @@ class GlueIcebergVM:
             and self._binding_generation == binding_generation
             and self._table_ref == table_ref
             and self._panes[view].generation == request_generation
+        )
+
+    def _metadata_load_is_admitted(self) -> bool:
+        return (
+            not self._disposed
+            and not self._shutdown_started
+            and self._metadata_load_drain_count == 0
         )
 
     def _pane(self, view: IcebergView) -> _MetadataPane:
