@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -7,6 +9,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import OptionList, Select
+from textual.worker import Worker
 
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
@@ -89,9 +92,8 @@ class GlueCrawlersView(Widget):
             event.option_list.id == "glue-crawlers-pane-options"
             and option_id != self._vm.selected_crawler_name
         ):
-            self.run_worker(
-                self._page_vm.select_crawler(option_id),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._page_vm.select_crawler, option_id),
                 group="glue-select-crawler",
             )
 
@@ -100,11 +102,21 @@ class GlueCrawlersView(Widget):
             return
         state = None if event.value == "ALL" else str(event.value)
         if state != self._vm.state_filter:
-            self.run_worker(
-                self._page_vm.set_crawler_state(state),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._page_vm.set_crawler_state, state),
                 group="glue-filter-crawlers",
             )
+
+    def _run_lifecycle_worker(
+        self,
+        work: Callable[[], Awaitable[None]],
+        *,
+        group: str,
+    ) -> Worker[None]:
+        async def deferred() -> None:
+            await work()
+
+        return self.run_worker(deferred, exclusive=True, group=group)
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh_all)

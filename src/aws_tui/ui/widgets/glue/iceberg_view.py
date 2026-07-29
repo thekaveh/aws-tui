@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import ClassVar, cast
 
 from reactivex.abc import DisposableBase
@@ -11,6 +13,7 @@ from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Static
+from textual.worker import Worker
 
 from aws_tui.domain.iceberg import (
     IcebergDataFile,
@@ -177,9 +180,8 @@ class GlueIcebergView(Widget):
             self._sub = None
 
     def on__iceberg_tab_selected(self, event: _IcebergTab.Selected) -> None:
-        self.run_worker(
-            self._vm.select_view(event.view),
-            exclusive=True,
+        self._run_lifecycle_worker(
+            partial(self._vm.select_view, event.view),
             group="glue-iceberg-select-view",
         )
 
@@ -195,19 +197,28 @@ class GlueIcebergView(Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "glue-iceberg-more":
-            self.run_worker(
-                self._vm.load_more(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.load_more,
                 group="glue-iceberg-load-more",
             )
         elif event.button.id == "glue-iceberg-retry":
-            self.run_worker(
-                self._vm.retry(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.retry,
                 group="glue-iceberg-retry",
             )
         elif event.button.id == "glue-iceberg-time-travel":
             self._time_travel_selected()
+
+    def _run_lifecycle_worker(
+        self,
+        work: Callable[[], Awaitable[bool]],
+        *,
+        group: str,
+    ) -> Worker[bool]:
+        async def deferred() -> bool:
+            return await work()
+
+        return self.run_worker(deferred, exclusive=True, group=group)
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh)

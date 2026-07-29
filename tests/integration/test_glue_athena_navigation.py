@@ -17,7 +17,11 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.glue.page_vm import GluePageVM
-from aws_tui.vm.messages import OpenAthenaTableRequest, OpenGlueTableRequest
+from aws_tui.vm.messages import (
+    OpenAthenaTableRequest,
+    OpenGlueTableRequest,
+    OpenS3LocationRequest,
+)
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 
@@ -143,6 +147,49 @@ async def test_glue_to_athena_preserves_identity_and_prefills_without_running(
             )
             assert page.query.execution_ref is None
             assert not any(call.method == "start_query" for call in client.calls)
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action_id", "request_type"),
+    [
+        ("glue.open_s3_location", OpenS3LocationRequest),
+        ("glue.query_in_athena", OpenAthenaTableRequest),
+    ],
+)
+async def test_glue_app_handoffs_are_terminal_after_page_shutdown(
+    tmp_path: Path,
+    action_id: str,
+    request_type: type[object],
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+            await glue.shutdown()
+            requests: list[object] = []
+            subscription = glue.hub.messages.subscribe(
+                on_next=lambda message: (
+                    requests.append(message) if isinstance(message, request_type) else None
+                )
+            )
+
+            await _invoke(app, action_id)
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            assert requests == []
+            assert ctx.root_vm.content_host.current is glue
+            assert ctx.root_vm.content_host.current_id == "glue"
+            subscription.dispose()
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

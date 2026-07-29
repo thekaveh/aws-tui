@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -8,6 +10,7 @@ from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList
+from textual.worker import Worker
 
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
@@ -81,20 +84,29 @@ class GlueCatalogView(Widget):
             return
         if event.option_list.id == "glue-databases-pane-options":
             if option_id != self._vm.selected_database_name:
-                self.run_worker(
-                    self._page_vm.select_database(option_id),
-                    exclusive=True,
+                self._run_lifecycle_worker(
+                    partial(self._page_vm.select_database, option_id),
                     group="glue-select-database",
                 )
         elif (
             event.option_list.id == "glue-tables-pane-options"
             and option_id != self._vm.selected_table_name
         ):
-            self.run_worker(
-                self._page_vm.select_table(option_id),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._page_vm.select_table, option_id),
                 group="glue-select-table",
             )
+
+    def _run_lifecycle_worker(
+        self,
+        work: Callable[[], Awaitable[None]],
+        *,
+        group: str,
+    ) -> Worker[None]:
+        async def deferred() -> None:
+            await work()
+
+        return self.run_worker(deferred, exclusive=True, group=group)
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh_all)

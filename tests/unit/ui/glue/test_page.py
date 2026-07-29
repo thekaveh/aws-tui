@@ -275,6 +275,50 @@ async def test_jobs_and_crawlers_use_select_filters() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_highlight_routes_through_page_selection_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    await vm.select_view("jobs")
+    selected = vm.jobs.selected_run_id
+    calls: list[str] = []
+
+    def select_job_run(run_id: str) -> None:
+        calls.append(run_id)
+
+    monkeypatch.setattr(vm, "select_job_run", select_job_run)
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        runs = app.query_one("#glue-runs-pane", ResourceListPane)
+        runs.option_list.highlighted = 1
+        await pilot.pause()
+
+    assert calls == ["jr-2"]
+    assert vm.jobs.selected_run_id == selected
+
+
+@pytest.mark.asyncio
+async def test_run_highlight_cannot_change_selection_after_shutdown() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    await vm.select_view("jobs")
+    selected = vm.jobs.selected_run_id
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await vm.shutdown()
+        runs = app.query_one("#glue-runs-pane", ResourceListPane)
+        runs.option_list.highlighted = 1
+        await pilot.pause()
+
+    assert vm.jobs.selected_run_id == selected
+
+
+@pytest.mark.asyncio
 async def test_selected_job_detail_is_retained_when_the_job_has_no_runs() -> None:
     fake = InMemoryGlue()
     fake.add_job("idle-job")

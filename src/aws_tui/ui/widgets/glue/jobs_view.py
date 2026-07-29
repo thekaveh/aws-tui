@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -7,6 +9,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import OptionList, Select
+from textual.worker import Worker
 
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
@@ -91,16 +94,15 @@ class GlueJobsView(Widget):
             return
         if event.option_list.id == "glue-jobs-pane-options":
             if option_id != self._vm.selected_job_name:
-                self.run_worker(
-                    self._page_vm.select_job(option_id),
-                    exclusive=True,
+                self._run_lifecycle_worker(
+                    partial(self._page_vm.select_job, option_id),
                     group="glue-select-job",
                 )
         elif (
             event.option_list.id == "glue-runs-pane-options"
             and option_id != self._vm.selected_run_id
         ):
-            self._vm.select_run(option_id)
+            self._page_vm.select_job_run(option_id)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id != "glue-run-state-filter":
@@ -108,14 +110,24 @@ class GlueJobsView(Widget):
         value = str(event.value)
         states = frozenset() if value == "ALL" else frozenset({value})
         if states != self._vm.run_state_filter:
-            self.run_worker(
-                self._page_vm.set_job_run_states(states),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._page_vm.set_job_run_states, states),
                 group="glue-filter-runs",
             )
 
+    def _run_lifecycle_worker(
+        self,
+        work: Callable[[], Awaitable[None]],
+        *,
+        group: str,
+    ) -> Worker[None]:
+        async def deferred() -> None:
+            await work()
+
+        return self.run_worker(deferred, exclusive=True, group=group)
+
     def _on_vm_changed(self, _property_name: str) -> None:
-        self.call_after_refresh(self._refresh_all)
+        self._refresh_all()
 
     def _refresh_all(self) -> None:
         try:
