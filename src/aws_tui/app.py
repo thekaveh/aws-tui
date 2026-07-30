@@ -2275,11 +2275,13 @@ class AwsTuiApp(App[None]):
         async with self._service_navigation_lock:
             if not self._service_navigation_is_owned_by("external", generation):
                 return
-            await self._switch_single_context_source_to(
+            accepted = await self._switch_single_context_source_to(
                 service_id,
                 event.connection_name,
                 event.region,
             )
+            if not accepted:
+                event.header.restore_source()
 
     async def _swap_source_transaction(self) -> None:
         ctx = self._app_ctx
@@ -2607,7 +2609,7 @@ class AwsTuiApp(App[None]):
         service_id: str,
         connection_name: str,
         region: str,
-    ) -> None:
+    ) -> bool:
         """Rebuild a non-S3 service under one explicit supported source."""
         ctx = self._app_ctx
         target = next(
@@ -2624,13 +2626,13 @@ class AwsTuiApp(App[None]):
                 subject="Source",
                 message="selected AWS profile is no longer available",
             )
-            return
+            return False
         active = ctx.root_vm.active_connection
         if active is not None and (active.name, active.region) == (
             target.name,
             target.region,
         ):
-            return
+            return True
         try:
             auth_state = ctx.aws_session.probe_token(target).state
         except Exception as exc:
@@ -2643,6 +2645,7 @@ class AwsTuiApp(App[None]):
             auth_state = TokenState.MISSING
         await ctx.root_vm.switch_connection_and_service(target, auth_state, service_id)
         await self._mount_service_view(service_id)
+        return True
 
     def _make_s3_provider_for_connection(self, conn: Connection) -> FileSystemProvider:
         """Build the S3 pane provider through the registered S3 service.

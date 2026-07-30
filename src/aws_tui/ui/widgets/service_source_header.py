@@ -50,8 +50,14 @@ class ServiceSourceHeader(Widget, can_focus=True):
     class SourceSelected(Message):
         """Posted with the stable identity of the committed AWS source."""
 
-        def __init__(self, connection_name: str, region: str) -> None:
+        def __init__(
+            self,
+            header: ServiceSourceHeader,
+            connection_name: str,
+            region: str,
+        ) -> None:
             super().__init__()
+            self.header = header
             self.connection_name = connection_name
             self.region = region
 
@@ -78,6 +84,22 @@ class ServiceSourceHeader(Widget, can_focus=True):
     def picker(self) -> ContextPicker:
         return self.query_one(ContextPicker)
 
+    def _picker_options(self) -> tuple[ContextOption, ...]:
+        return tuple(
+            ContextOption(candidate.label.replace(" · ", "·"), value)
+            for value, candidate in self._candidate_values.items()
+        )
+
+    def _active_value(self) -> str | None:
+        return next(
+            (
+                value
+                for value, candidate in self._candidate_values.items()
+                if candidate.connection_key == self._source.connection_key
+            ),
+            None,
+        )
+
     def compose(self) -> ComposeResult:
         if not self._selectable:
             yield Static(
@@ -87,21 +109,10 @@ class ServiceSourceHeader(Widget, can_focus=True):
                 markup=False,
             )
             return
-        selected = next(
-            (
-                value
-                for value, candidate in self._candidate_values.items()
-                if candidate.connection_key == self._source.connection_key
-            ),
-            None,
-        )
         yield ContextPicker(
             "AWS source",
-            tuple(
-                ContextOption(candidate.label.replace(" · ", "·"), value)
-                for value, candidate in self._candidate_values.items()
-            ),
-            selected=selected,
+            self._picker_options(),
+            selected=self._active_value(),
             id=f"{self.id}-picker" if self.id is not None else None,
         )
 
@@ -113,12 +124,26 @@ class ServiceSourceHeader(Widget, can_focus=True):
             return
         self.picker.open()
 
+    def restore_source(self) -> None:
+        """Restore the picker to the source that still owns this page."""
+
+        self.picker.set_options(
+            self._picker_options(),
+            selected=self._active_value(),
+        )
+
     def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:
         event.stop()
         candidate = self._candidate_values.get(event.value)
         if candidate is None:
             return
-        self.post_message(self.SourceSelected(candidate.connection_name, candidate.region))
+        self.post_message(
+            self.SourceSelected(
+                self,
+                candidate.connection_name,
+                candidate.region,
+            )
+        )
 
 
 __all__ = ["ServiceSourceHeader"]

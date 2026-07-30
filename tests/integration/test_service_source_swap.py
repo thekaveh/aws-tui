@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from pathlib import Path
 from typing import cast
 
 import pytest
+from textual.widgets import Static
 
 from aws_tui.app import AwsTuiApp, _next_service_source, _service_source_candidates
 from aws_tui.composition import AppContext, build_app_context
@@ -252,6 +254,67 @@ async def test_glue_source_picker_event_rebuilds_exact_selected_target(
             assert current.source.connection_key == ("dev", "us-east-1")
             assert probed == [("dev", "us-east-1")]
             assert calls == ["prod-west", "dev"]
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_glue_source_picker_restores_active_source_when_target_disappears(
+    tmp_path: Path,
+) -> None:
+    ctx, calls = _multi_profile_glue_context(tmp_path)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("glue")
+            await _await_service_mount(pilot, app)
+            page = app.query_one("#content-glue-page", GluePage)
+            picker = page.query_one("#glue-source-header-picker", ContextPicker)
+            current = ctx.root_vm.content_host.current
+            assert current is not None
+            assert current.source.connection_key == ("prod-west", "us-west-2")
+            assert picker.value == "0"
+
+            _dev, prod = _aws_connections()
+            ctx.connection_resolver.list = lambda: [prod]  # type: ignore[method-assign]
+            assert _service_source_candidates(ctx, "glue") == (prod,)
+            switch_to = app._switch_single_context_source_to
+            handled = asyncio.Event()
+            accepted: list[tuple[str, str, bool]] = []
+
+            async def recording_switch_to(
+                service_id: str,
+                connection_name: str,
+                region: str,
+            ) -> bool:
+                result = await switch_to(service_id, connection_name, region)
+                accepted.append((connection_name, region, result))
+                handled.set()
+                return result
+
+            app._switch_single_context_source_to = recording_switch_to  # type: ignore[method-assign]
+            picker.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("down", "enter")
+            await asyncio.wait_for(handled.wait(), timeout=1)
+            await pilot.pause()
+
+            assert accepted == [("dev", "us-east-1", False)]
+            assert picker.value == "0"
+            assert str(
+                picker.query_one(".context-picker-value", Static).render()
+            ) == current.source.label.replace(" · ", "·")
+            assert ctx.root_vm.active_connection is not None
+            assert (
+                ctx.root_vm.active_connection.name,
+                ctx.root_vm.active_connection.region,
+            ) == ("prod-west", "us-west-2")
+            assert ctx.root_vm.content_host.current is current
+            assert calls == ["prod-west"]
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
