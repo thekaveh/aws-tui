@@ -5,7 +5,7 @@
 - Branch: `codex/glue-athena-interaction-polish`
 - Exact branch point: `b92ad89f68dd19ca61cd567ce0f82b5379fb0499`
 - Integration target: `develop` only; `main` remains out of scope.
-- Final production/test state verified at `2f42a6ebff7d70d18e39d4ec7d977df5b0e57f9f`
+- Final production/test state verified at `177e47f77756b4c7f56c3ead52af899bc54c45cd`
   before the documentation-only commit.
 
 ## Verification
@@ -17,21 +17,20 @@
 | Glue/Athena/nav UI suites | 81 passed |
 | Shared context picker, source header, and service tab strip | 19 passed |
 | Focused lifecycle, navigation, clipboard, source-swap, routing, hints, keybinding, and S3 handoff integration matrix | 152 passed |
-| Documentation tests | 71 passed |
+| Documentation tests | 73 passed |
 | Mypy | Clean across 161 source files |
 | Ruff check | Clean |
-| Ruff format | 405 files already formatted |
+| Ruff format | 407 files already formatted |
 | Architecture layers | Clean |
-| Full unit and integration suite | 2976 passed, 9 deselected, 2 rerun |
-| Full-suite coverage | 85.75% |
-| Full snapshot suite | 800 passed; 478 snapshot comparisons |
+| Full unit and integration suite | 2977 passed, 9 deselected |
+| Full-suite coverage | 85.74% |
+| Full snapshot suite | 806 passed; 481 snapshot comparisons |
+| Hostile snapshot environment probe | 7 passed; 4 snapshot comparisons |
 | Diff whitespace | `git diff --check` clean |
 
 The exact detached baseline is 2789 passed, 9 deselected at 85.67%. The final
-delta is +187 passing tests and +0.08 percentage points.
-
-The two reruns were transient recoveries in existing Glue/S3 integration
-coverage; the final suite had no failures. They are reported rather than hidden.
+delta is +188 passing tests and +0.07 percentage points. The final full run
+needed no reruns.
 
 ## LOC
 
@@ -43,8 +42,8 @@ is counted as UI/view production.
 | VM production | 253 | 1 | +252 |
 | UI/view production | 2061 | 379 | +1682 |
 | Other production | 102 | 7 | +95 |
-| Non-generated tests | 2673 | 60 | +2613 |
-| Generated snapshots, excluded (478 files) | 45980 | 44659 | +1321 |
+| Non-generated tests | 2812 | 71 | +2741 |
+| Generated snapshots, excluded (237 changed files) | 24265 | 22489 | +1776 |
 
 No file-level rename or move is detected from the exact branch point. Internal
 replacement churn is treated as neutral, and measured deletion savings are
@@ -55,11 +54,42 @@ observable clipboard storage, an untyped copy callback, duplicate Athena
 quoting, and custom command lifecycle/disposal. These are avoided mechanisms,
 not deleted LOC.
 
-Task 7's dedicated snapshot refresh is commit `2f42a6e`: 282 generated files
-with 26062 additions and 25936 deletions, plus one authored snapshot harness
-file with 12 additions and 5 deletions. The harness synchronizes a settled
-Iceberg VM to Textual before capture and updates width-dependent content
-guards; it is not included in generated LOC.
+Task 7's initial snapshot refresh is commit `2f42a6e`: 282 generated files with
+26062 additions and 25936 deletions, plus one authored snapshot harness file
+with 12 additions and 5 deletions. Review correction `177e47f` canonicalizes
+color rendering and reactive capture; that commit changes 371 generated files
+with 34528 additions and 34073 deletions and five authored test/harness files
+with 116 additions and 18 deletions. Because later regeneration can reverse
+earlier branch-local churn, the final branch-point table above remains the
+authoritative LOC result.
+
+The final snapshot suite owns 481 comparisons. Of those, 237 generated files
+differ from the branch point; comparison count and changed-file count are not
+interchangeable.
+
+## Review Remediation
+
+- `67ffc54` adds an immediate rapid Glue view-switch regression. It failed RED
+  when synchronous focus projection was replaced with
+  `call_after_refresh(...)`, then passed with the production synchronous path;
+  the full Glue page unit module passed 24 tests.
+- `177e47f` introduces a shared autouse snapshot environment fixture using
+  pytest `monkeypatch`. It removes `NO_COLOR`, `CLICOLOR`, and
+  `CLICOLOR_FORCE`, sets `TERM=xterm-256color`, and removes Athena-only setup.
+  Three hostile caller environments failed before that fixture and now produce
+  byte-identical representative output.
+- The demo Iceberg harness no longer calls `GlueIcebergView._refresh()`.
+  It selects through the public VM action and waits for public VM state, table
+  row count, and active-tab rendering. A policy test prevents a direct private
+  refresh call from returning.
+- A canonical update regenerated all affected goldens. The canonical no-update
+  run passed all 806 snapshot tests and all 481 comparisons. A separate
+  no-update probe under `NO_COLOR=1 CLICOLOR=0 CLICOLOR_FORCE=0 TERM=dumb`
+  passed 7 tests and 4 comparisons.
+- Rendered PNGs were visually inspected for all ten Athena themes, Athena and
+  Glue narrow layouts, both open context pickers, and the EMR page. Theme color,
+  borders, picker bounds, text legibility, and compact source-header layout
+  were intact without clipping or overlap.
 
 ## Defects Found
 
@@ -76,7 +106,10 @@ the clean full run reached the final result above.
 The initial app-wide snapshot run had 282 expected mismatches because the wider
 service rail changed shared chrome and the EMR source header had inherited an
 unintended tall picker. After the EMR correction and explicit regeneration,
-the no-update full snapshot suite is green.
+the first no-update full snapshot suite passed. Review then exposed inherited
+terminal-color sensitivity and a private refresh call in the harness; the
+canonical regeneration and public reactive wait above supersede that first
+refresh.
 
 ## Documentation
 
@@ -88,13 +121,13 @@ the no-update full snapshot suite is green.
   statement.
 - The approved plan has all completed steps checked and its stale nonexistent
   clipboard test path replaced with the actual focused integration matrix.
-- `CHANGELOG.md` records the interaction polish under Unreleased.
+- `CHANGELOG.md` records the interaction polish under Unreleased and now states
+  that entries may reside on `develop` before promotion to `main`.
 
 ## Concerns
 
-- The final full suite required two transient reruns. No failure remained, but
-  the existing Glue/S3 integration timing should continue to be watched in CI.
 - Snapshot churn is intentionally large because the service rail width is
-  app-wide. It is generated evidence, not authored implementation LOC.
+  app-wide and color output is now canonical. It is generated evidence, not
+  authored implementation LOC.
 - OS clipboard delivery remains terminal-dependent and best effort by design;
   the VMx-backed typed in-app clipboard is authoritative.

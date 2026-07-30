@@ -392,7 +392,7 @@ Each implementation task records:
 | VM LOC | 84 added, 0 deleted, net +84 for `src/aws_tui/vm/table_clipboard_vm.py`. |
 | View LOC | 2 added, 0 deleted in `src/aws_tui/app.py` for app-lifetime disposal. |
 | Test LOC | 251 added, 0 deleted, net +251 across the two clipboard commits. |
-| Coverage | The final branch suite is 2976 passed, 9 deselected at 85.75%, versus 2789 passed, 9 deselected at 85.67% on the exact branch point. The full-suite delta is +187 passing tests and +0.08 percentage points; it is a branch-wide result and is not attributed solely to this responsibility. |
+| Coverage | The final branch suite is 2977 passed, 9 deselected at 85.74%, versus 2789 passed, 9 deselected at 85.67% on the exact branch point. The full-suite delta is +188 passing tests and +0.07 percentage points; it is a branch-wide result and is not attributed solely to this responsibility. |
 
 ### `vmx31-glue-athena-focus-rings-review-fix`
 
@@ -438,8 +438,8 @@ reported separately so the table reconciles without hiding implementation.
 | VM production (`src/aws_tui/vm`) | 253 | 1 | +252 |
 | UI/view production (`src/aws_tui/ui` plus `src/aws_tui/app.py`) | 2061 | 379 | +1682 |
 | Other production (`composition.py`, `domain/sql_policy.py`, `infra/keymap_store.py`) | 102 | 7 | +95 |
-| Non-generated tests | 2673 | 60 | +2613 |
-| Generated snapshots, excluded from authored LOC (478 files) | 45980 | 44659 | +1321 |
+| Non-generated tests | 2812 | 71 | +2741 |
+| Generated snapshots, excluded from authored LOC (237 changed files) | 24265 | 22489 | +1776 |
 
 Git detects no file-level rename or move in this range. Code replacement within
 changed files is therefore treated as neutral deletion churn, not as savings.
@@ -451,9 +451,10 @@ quoting, and custom command lifecycle/disposal. Those are concrete mechanisms
 avoided, not LOC claimed as removed.
 
 The exact detached baseline is 2789 passed, 9 deselected at 85.67%. The final
-unit and integration suite is 2976 passed, 9 deselected, 2 transient reruns at
-85.75%: +187 passing tests and +0.08 percentage points. The full snapshot suite
-is 800 passed with 478 snapshot comparisons.
+unit and integration suite is 2977 passed, 9 deselected at 85.74%: +188 passing
+tests and +0.07 percentage points. The full snapshot suite is 806 passed with
+481 snapshot comparisons; 237 generated snapshot files differ from the branch
+point.
 
 # 7. Testing and acceptance
 
