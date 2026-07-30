@@ -2598,11 +2598,7 @@ class AwsTuiApp(App[None]):
                 message="no AWS profiles configured",
             )
             return
-        await self._switch_single_context_source_to(
-            service_id,
-            target.name,
-            target.region,
-        )
+        await self._rebuild_single_context_source(service_id, target)
 
     async def _switch_single_context_source_to(
         self,
@@ -2633,6 +2629,17 @@ class AwsTuiApp(App[None]):
             target.region,
         ):
             return True
+        await self._rebuild_single_context_source(service_id, target)
+        return True
+
+    async def _rebuild_single_context_source(
+        self,
+        service_id: str,
+        target: Connection,
+    ) -> None:
+        """Rebuild a service under an already validated AWS connection."""
+
+        ctx = self._app_ctx
         try:
             auth_state = ctx.aws_session.probe_token(target).state
         except Exception as exc:
@@ -2645,7 +2652,6 @@ class AwsTuiApp(App[None]):
             auth_state = TokenState.MISSING
         await ctx.root_vm.switch_connection_and_service(target, auth_state, service_id)
         await self._mount_service_view(service_id)
-        return True
 
     def _make_s3_provider_for_connection(self, conn: Connection) -> FileSystemProvider:
         """Build the S3 pane provider through the registered S3 service.

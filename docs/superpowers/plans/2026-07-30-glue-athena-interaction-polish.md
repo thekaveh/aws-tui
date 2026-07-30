@@ -736,7 +736,7 @@ git commit -m "docs: record Glue and Athena interaction polish"
 metrics are recorded separately from the 237 generated snapshot files changed
 from that point. No file-level move or rename was detected and measured
 deletion savings are zero. The final unit/integration run is 2979 passed, 9
-deselected at 85.77% (baseline: 2789 passed, 9 deselected at 85.67%). The full
+deselected at 85.76% (baseline: 2789 passed, 9 deselected at 85.67%). The full
 snapshot run is 806 passed with 481 snapshot comparisons. Mypy, Ruff
 check/format, architecture checks, all 9 E2E journeys, focused suites, and
 `git diff --check` are green.

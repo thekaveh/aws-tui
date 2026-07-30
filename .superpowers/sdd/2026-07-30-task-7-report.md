@@ -23,13 +23,13 @@
 | Ruff format | 407 files already formatted |
 | Architecture layers | Clean |
 | Full unit and integration suite | 2979 passed, 9 deselected |
-| Full-suite coverage | 85.77% |
+| Full-suite coverage | 85.76% |
 | Full snapshot suite | 806 passed; 481 snapshot comparisons |
 | Hostile snapshot environment probe | 7 passed; 4 snapshot comparisons |
 | Diff whitespace | `git diff --check` clean |
 
 The exact detached baseline is 2789 passed, 9 deselected at 85.67%. The final
-delta is +190 passing tests and +0.10 percentage points. The final full run
+delta is +190 passing tests and +0.09 percentage points. The final full run
 needed no reruns.
 
 ## LOC
@@ -40,9 +40,9 @@ is counted as UI/view production.
 | Category | Additions | Deletions | Net |
 |---|---:|---:|---:|
 | VM production | 253 | 1 | +252 |
-| UI/view production | 2091 | 379 | +1712 |
+| UI/view production | 2097 | 379 | +1718 |
 | Other production | 102 | 7 | +95 |
-| Non-generated tests | 2902 | 75 | +2827 |
+| Non-generated tests | 2906 | 78 | +2828 |
 | Generated snapshots, excluded (237 changed files) | 24265 | 22489 | +1776 |
 
 No file-level rename or move is detected from the exact branch point. Internal
@@ -86,6 +86,12 @@ interchangeable.
   the `ServiceSourceHeader` container directly after `9277a6a` changed EMR to
   the compact passive header. The journey now queries the visible
   `.service-source-value` child; all nine E2E journeys pass locally.
+- The refreshed cross-platform matrix exposed that routing `Shift+S` through
+  the exact-picker transaction had lost the established one-profile remount
+  behavior. A shared validated rebuild transaction now keeps direct selection
+  idempotent while `Shift+S` still refreshes the current service. The regression
+  now fixes its candidate set, activates `dev` explicitly, and awaits the app
+  action, so it is independent of caller AWS profiles and event-loop timing.
 - `177e47f` introduces a shared autouse snapshot environment fixture using
   pytest `monkeypatch`. It removes `NO_COLOR`, `CLICOLOR`, and
   `CLICOLOR_FORCE`, sets `TERM=xterm-256color`, and removes Athena-only setup.
@@ -106,13 +112,14 @@ interchangeable.
 
 ## Defects Found
 
-Verification exposed four production defects and one stale E2E assertion, all
+Verification exposed five production defects and one stale E2E assertion, all
 fixed before merge:
 
 - `5a89d14 fix(ui): settle Glue focus during view switches`
 - `9277a6a fix(ui): preserve compact EMR source identity`
 - `7ff0b1b fix(ui): ignore empty teardown focus rings`
 - `3691ec0 fix(ui): restore rejected source selections`
+- `fix(ui): preserve one-profile source rebuilds`
 - `test(e2e): read compact EMR source identity`
 
 The first full coverage attempt exposed the EMR regression and ended with 1

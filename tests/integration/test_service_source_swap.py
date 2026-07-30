@@ -155,17 +155,16 @@ async def test_shift_s_rebuilds_emr_under_next_profile(tmp_path: Path) -> None:
             await _await_service_mount(pilot, app)
             before = ctx.root_vm.content_host.current
             selected: list[tuple[str, str, str]] = []
-            switch_to = app._switch_single_context_source_to
+            rebuild = app._rebuild_single_context_source
 
-            async def recording_switch_to(
+            async def recording_rebuild(
                 service_id: str,
-                connection_name: str,
-                region: str,
+                target: Connection,
             ) -> None:
-                selected.append((service_id, connection_name, region))
-                await switch_to(service_id, connection_name, region)
+                selected.append((service_id, target.name, target.region))
+                await rebuild(service_id, target)
 
-            app._switch_single_context_source_to = recording_switch_to  # type: ignore[method-assign]
+            app._rebuild_single_context_source = recording_rebuild  # type: ignore[method-assign]
 
             await app.action_swap_source()
             await _await_service_mount(pilot, app)
