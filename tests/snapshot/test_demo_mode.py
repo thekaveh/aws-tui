@@ -9,13 +9,13 @@ from functools import partial
 from pathlib import Path
 
 import pytest
+from textual.widgets import DataTable
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
-from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.pane import Pane
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.glue.iceberg_vm import IcebergView
+from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.snapshot.apps.demo_mode import DemoModeApp
 from tests.snapshot.conftest import THEMES
@@ -111,6 +111,31 @@ async def _show_demo_iceberg(pilot, view: IcebergView = "snapshots") -> None:  #
     )
 
 
+async def _wait_for_rendered_iceberg(
+    pilot,
+    vm: GlueIcebergVM,
+    view: IcebergView,
+) -> None:  # type: ignore[no-untyped-def]
+    """Wait until the public VM state has reached the rendered widget tree."""
+    table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+    tab = pilot.app.query_one(f"#glue-iceberg-tab-{view}")
+    for _ in range(100):
+        expected_rows = len(vm.items)
+        if (
+            vm.active_view == view
+            and vm.state in {PaneState.IDLE, PaneState.EMPTY}
+            and expected_rows > 0
+            and table.row_count == expected_rows
+            and tab.has_class("-active")
+        ):
+            return
+        await pilot.pause(0.01)
+    raise AssertionError(
+        f"Iceberg {view!r} did not reactively render "
+        f"(state={vm.state}, items={len(vm.items)}, rows={table.row_count})"
+    )
+
+
 async def _show_profile_iceberg(  # type: ignore[no-untyped-def]
     pilot,
     *,
@@ -141,14 +166,8 @@ async def _show_profile_iceberg(  # type: ignore[no-untyped-def]
             region,
         )
     )
-    selected = await page.catalog.iceberg.select_view(view)
-    assert selected
-    assert page.catalog.iceberg.active_view == view
-    assert page.catalog.iceberg.state in {PaneState.IDLE, PaneState.EMPTY}
-    iceberg_view = app.query_one(GlueIcebergView)
-    iceberg_view._refresh()
-    await pilot.pause()
-    await pilot.pause()
+    assert await page.catalog.iceberg.select_view(view)
+    await _wait_for_rendered_iceberg(pilot, page.catalog.iceberg, view)
     await pilot.wait_for_scheduled_animations()
 
 

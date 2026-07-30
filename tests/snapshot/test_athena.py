@@ -24,14 +24,6 @@ FIXTURES: tuple[AthenaFixture, ...] = (
 )
 
 
-@pytest.fixture(autouse=True)
-def _color_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.delenv("CLICOLOR", raising=False)
-    monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
-    monkeypatch.setenv("TERM", "xterm-256color")
-
-
 @pytest.mark.parametrize(
     ("fixture", "theme"),
     [
