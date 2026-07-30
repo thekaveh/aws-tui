@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import reactivex as rx
 from vmx import ComponentVMOf, Message, MessageHub, RelayCommandOf
+from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.data_catalog import TableRef
@@ -36,14 +37,14 @@ class TableClipboardVM:
         self._copy_command: RelayCommandOf[TableRef] = (
             RelayCommandOf[TableRef]
             .builder()
-            .predicate(lambda ref: ref is not None)
+            .predicate(lambda ref: isinstance(ref, TableRef))
             .task(self._copy)
             .build()
         )
 
     @property
-    def inner(self) -> ComponentVMOf[CopiedTableReference | None]:
-        return self._inner
+    def status(self) -> ConstructionStatus:
+        return self._inner.status
 
     @property
     def copied_table(self) -> CopiedTableReference | None:
@@ -61,11 +62,18 @@ class TableClipboardVM:
         self._inner.construct()
 
     def dispose(self) -> None:
-        self._copy_command.dispose()
-        self._inner.dispose()
+        first_error: BaseException | None = None
+        for dispose in (self._copy_command.dispose, self._inner.dispose):
+            try:
+                dispose()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     def _copy(self, table_ref: TableRef | None) -> None:
-        if table_ref is None:
+        if not isinstance(table_ref, TableRef):
             return
         self._inner.model = CopiedTableReference(
             table_ref=table_ref,

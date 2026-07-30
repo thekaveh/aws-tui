@@ -615,6 +615,11 @@ async def test_initial_service_mount_awaits_content_host_operations(
         ),
         hub=object(),
         focus_coordinator=object(),
+        registry=SimpleNamespace(
+            get=lambda _service_id: SimpleNamespace(supports=lambda _connection: True)
+        ),
+        connection_resolver=SimpleNamespace(list=lambda: ()),
+        unreachable_connections=set(),
         log_sink=FakeLogSink(),
     )
 

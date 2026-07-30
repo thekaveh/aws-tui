@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
+import pytest
 from vmx import NULL_DISPATCHER, ComponentVMOf, MessageHub, RelayCommandOf
 from vmx.lifecycle.status import ConstructionStatus
 
@@ -55,6 +58,28 @@ def test_equal_copy_is_a_notification_no_op() -> None:
         vm.dispose()
 
 
+def test_equal_but_distinct_table_ref_copy_is_a_notification_no_op() -> None:
+    vm = _make_vm()
+    first = _ref()
+    equal_copy = _ref()
+    assert equal_copy == first
+    assert equal_copy is not first
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(notifications.append)
+    try:
+        vm.copy_command.execute(first)
+        notifications.clear()
+
+        vm.copy_command.execute(equal_copy)
+
+        assert notifications == []
+        assert vm.copied_table is not None
+        assert vm.copied_table.table_ref is first
+    finally:
+        subscription.dispose()
+        vm.dispose()
+
+
 def test_replacement_copy_emits_one_model_notification() -> None:
     vm = _make_vm()
     notifications: list[str] = []
@@ -77,9 +102,11 @@ def test_replacement_copy_emits_one_model_notification() -> None:
 def test_public_shape_uses_vmx_modeled_component_and_typed_relay_command() -> None:
     vm = _make_vm()
     try:
-        assert isinstance(vm.inner, ComponentVMOf)
+        assert not hasattr(vm, "inner")
+        inner = vars(vm)["_inner"]
+        assert isinstance(inner, ComponentVMOf)
         assert isinstance(vm.copy_command, RelayCommandOf)
-        assert vm.inner.model is None
+        assert inner.model is None
         assert vm.on_property_changed is not None
     finally:
         vm.dispose()
@@ -93,6 +120,33 @@ def test_dispose_is_idempotent_and_makes_command_inert() -> None:
     vm.dispose()
     command.execute(_ref())
 
-    assert vm.inner.status is ConstructionStatus.DISPOSED
+    assert vm.status is ConstructionStatus.DISPOSED
     assert command.can_execute(_ref()) is False
     assert vm.copied_table is None
+
+
+def test_dispose_finishes_component_cleanup_when_command_observer_raises() -> None:
+    vm = _make_vm()
+
+    def fail(_value: None) -> None:
+        raise RuntimeError("observer failed")
+
+    vm.copy_command.can_execute_changed.subscribe(fail)
+
+    with pytest.raises(RuntimeError, match="observer failed"):
+        vm.dispose()
+
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+def test_copy_command_rejects_runtime_non_table_ref_without_mutation() -> None:
+    vm = _make_vm()
+    hostile = cast(Any, object())
+    try:
+        assert vm.copy_command.can_execute(hostile) is False
+
+        vm.copy_command.execute(hostile)
+
+        assert vm.copied_table is None
+    finally:
+        vm.dispose()
