@@ -4165,6 +4165,8 @@ class AwsTuiApp(App[None]):
         with contextlib.suppress(Exception):
             ctx.transfers_vm.dispose()
         with contextlib.suppress(Exception):
+            ctx.table_clipboard_vm.dispose()
+        with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
         with contextlib.suppress(Exception):
             # FocusCoordinatorVM lives on the AppContext top-level,

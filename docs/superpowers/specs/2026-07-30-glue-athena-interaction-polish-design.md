@@ -376,6 +376,24 @@ Each implementation task records:
 | Test LOC | 333 added, 6 deleted, net +327. |
 | Coverage | The specified focused suite increased from 50 to 64 tests and from 32.10% to 32.56% whole-package coverage, +0.45 percentage points. The changed focus coordinator remained at 95%; Glue page coverage increased from 63% to 66% and Athena page coverage from 57% to 60%. |
 
+### `vmx31-table-clipboard`
+
+| Field | Evidence |
+|---|---|
+| Change ID | `vmx31-table-clipboard` |
+| Required behavior | Retain one immutable, replaceable table-reference payload for the application lifetime, expose typed synchronous copy intent, suppress equal-copy notifications, and dispose both responsibilities idempotently. |
+| VMx candidates | `ComponentVMOf[CopiedTableReference \| None]`, `RelayCommandOf[TableRef]`, `DiscriminatorVM`, `CompositeVM`, `DerivedProperty`, and messages alone. |
+| Selected primitive | `ComponentVMOf[CopiedTableReference \| None]` using its public `model` and `property_changed` APIs, composed with `RelayCommandOf[TableRef]`. |
+| Rejected candidates | `DiscriminatorVM` selects among keyed identities rather than retaining one payload; `CompositeVM` owns child VM membership rather than one modeled value; `DerivedProperty` computes dependent state and is not mutable storage; messages alone provide transient delivery without a retained authoritative value. |
+| Bespoke code retained | A thin `TableClipboardVM` facade creates the immutable payload with the canonical SQL identifier and owns coordinated disposal. VMx does not define the application-specific table-reference payload or Athena quoting policy. |
+| VM files | Added `src/aws_tui/vm/table_clipboard_vm.py`; changed `src/aws_tui/composition.py` and `src/aws_tui/app.py` for app-lifetime construction and disposal. |
+| View files | None. |
+| Tests | Added domain quoting/delegation, payload preservation, equal/replacement notification, public composition shape, command disposal, AppContext construction, and top-level shutdown disposal coverage. |
+| VM LOC | To be finalized with Task 7 metrics. |
+| View LOC | 0 added, 0 deleted. |
+| Test LOC | To be finalized with Task 7 metrics. |
+| Coverage | To be finalized with Task 7 full-suite coverage. |
+
 ### `vmx31-glue-athena-focus-rings-review-fix`
 
 | Field | Evidence |
