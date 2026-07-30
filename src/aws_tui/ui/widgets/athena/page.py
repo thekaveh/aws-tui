@@ -664,7 +664,11 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self._sync_context(context_controls)
         self._sync_view(view_controls)
         cast(AthenaQueryView, view_controls[0][0]).refresh_from_vm()
-        if reference is not None and reference not in dict(self._focus_targets()):
+        try:
+            focus_targets = dict(self._focus_targets())
+        except NoMatches:
+            return
+        if reference is not None and reference not in focus_targets:
             self.call_after_refresh(partial(self._maybe_focus_active, reference))
 
     def _context_controls(self) -> _ContextControls | None:

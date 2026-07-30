@@ -515,6 +515,7 @@ class AwsTuiApp(App[None]):
         self._nav_selection_sub: DisposableBase | None = None
         self._cursor_sub: DisposableBase | None = None
         self._service_navigation_sub: DisposableBase | None = None
+        self._table_clipboard_sub: DisposableBase | None = None
         self._service_navigation_closed = False
         self._table_navigation_generation = 0
         self._service_navigation_owner: tuple[str, int] | None = None
@@ -627,6 +628,9 @@ class AwsTuiApp(App[None]):
         self._service_navigation_sub = ctx.hub.messages.subscribe(
             on_next=self._on_service_navigation_message
         )
+        self._table_clipboard_sub = ctx.table_clipboard_vm.on_property_changed.subscribe(
+            on_next=self._on_table_clipboard_changed
+        )
 
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
@@ -687,6 +691,16 @@ class AwsTuiApp(App[None]):
             # it runs AFTER Textual's first focus pass instead of being
             # silently undone by it.
             self.call_after_refresh(lambda: self.set_focus(None))
+
+    def on_unmount(self) -> None:
+        self._dispose_table_clipboard_subscription()
+
+    def _dispose_table_clipboard_subscription(self) -> None:
+        subscription = self._table_clipboard_sub
+        if subscription is None:
+            return
+        subscription.dispose()
+        self._table_clipboard_sub = None
 
     async def _initial_mount_worker(
         self, *, initial_conn: Connection, auth_state: TokenState
@@ -1266,7 +1280,7 @@ class AwsTuiApp(App[None]):
                         athena_page_class=AthenaPage,
                     )
                 )
-                if _svc_id == "athena":
+                if _svc_id in {"glue", "athena"}:
                     self._recompute_hint_disables()
         except Exception as exc:
             ctx.log_sink.error(
@@ -3684,6 +3698,13 @@ class AwsTuiApp(App[None]):
 
         if not isinstance(msg, PropertyChangedMessage):
             return
+        glue_page = self._glue_page()
+        if glue_page is not None and msg.sender_object in {
+            glue_page.vm,
+            glue_page.vm.catalog,
+        }:
+            self._recompute_hint_disables()
+            return
         athena_page = self._athena_page()
         if athena_page is not None and msg.sender_object in {
             athena_page.vm,
@@ -3698,6 +3719,9 @@ class AwsTuiApp(App[None]):
             return
         if not isinstance(msg.sender_object, PaneVM):
             return
+        self._recompute_hint_disables()
+
+    def _on_table_clipboard_changed(self, _property_name: str) -> None:
         self._recompute_hint_disables()
 
     def _recompute_hint_disables(self) -> None:
@@ -3715,7 +3739,30 @@ class AwsTuiApp(App[None]):
                 disabled.add("athena.cancel")
             if not athena_page.can_load_more():
                 disabled.add("athena.load_more")
+            copied = self._app_ctx.table_clipboard_vm.copied_table
+            active_source = (
+                athena_page.vm.context.connection_name,
+                athena_page.vm.context.region,
+            )
+            if (
+                copied is None
+                or (
+                    copied.table_ref.connection_name,
+                    copied.table_ref.region,
+                )
+                != active_source
+            ):
+                disabled.add("athena.insert_table_ref")
             self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset(disabled))
+            return
+        glue_page = self._glue_page()
+        if glue_page is not None:
+            glue_disabled = (
+                frozenset()
+                if glue_page.vm.can_copy_table_reference
+                else frozenset({"glue.copy_table_ref"})
+            )
+            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(glue_disabled)
             return
         dual = self._dual_pane()
         if dual is None:
@@ -4003,7 +4050,7 @@ class AwsTuiApp(App[None]):
                     athena_page_class=AthenaPage,
                 )
             )
-            if service_id == "athena":
+            if service_id in {"glue", "athena"}:
                 self._recompute_hint_disables()
         except Exception as exc:
             ctx.log_sink.error(
@@ -4236,6 +4283,8 @@ class AwsTuiApp(App[None]):
             if self._service_navigation_sub is not None:
                 self._service_navigation_sub.dispose()
                 self._service_navigation_sub = None
+        with contextlib.suppress(Exception):
+            self._dispose_table_clipboard_subscription()
         with contextlib.suppress(Exception):
             # Currently-hosted SettingsVM (if any) is disposed by the
             # ContentHostVM tree teardown via ``root_vm.shutdown()``.

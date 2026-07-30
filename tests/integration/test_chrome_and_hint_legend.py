@@ -64,6 +64,19 @@ async def test_chrome_has_banner_no_statusbar(
 
 
 @pytest.mark.asyncio
+async def test_app_unmount_disposes_table_clipboard_subscription(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    app = AwsTuiApp(app_context_factory())
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app._table_clipboard_sub is not None
+
+    assert app._table_clipboard_sub is None
+
+
+@pytest.mark.asyncio
 async def test_hint_legend_contains_all_expected_action_chips(
     app_context_factory: AppContextBuilder,
 ) -> None:

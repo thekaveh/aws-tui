@@ -567,9 +567,17 @@ class GlueCatalogVM:
         )
         return True
 
+    @property
+    def can_copy_table_reference(self) -> bool:
+        return (
+            self._is_alive()
+            and self._selected_table_name is not None
+            and any(row.ref.table_name == self._selected_table_name for row in self.tables)
+        )
+
     def copy_table_reference(self) -> bool:
         """Publish the currently selected table for the app clipboard."""
-        if not self._is_alive() or self._selected_table_name is None:
+        if not self.can_copy_table_reference:
             return False
         summary = next(
             (row for row in self.tables if row.ref.table_name == self._selected_table_name),

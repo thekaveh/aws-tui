@@ -664,6 +664,30 @@ async def test_query_view_replaces_active_selection_and_preserves_surrounding_te
 
 
 @pytest.mark.asyncio
+async def test_query_view_replaces_reversed_multiline_selection_and_syncs_vm() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        editor = app.query_one("#athena-editor", TextArea)
+        editor.text = "SELECT\n  old_catalog.\n  old_table\nWHERE enabled"
+        editor.selection = type(editor.selection)((2, 11), (1, 2))
+        await pilot.pause()
+
+        inserted = app.query_one(AthenaQueryView).insert_table_reference(
+            '"AwsDataCatalog"."analytics"."events"'
+        )
+        await pilot.pause()
+
+        expected = 'SELECT\n  "AwsDataCatalog"."analytics"."events"\nWHERE enabled'
+        assert inserted is True
+        assert editor.text == expected
+        assert vm.query.sql == expected
+        assert client.start_calls == []
+
+
+@pytest.mark.asyncio
 async def test_query_view_rejects_empty_identifier_without_mutation() -> None:
     vm, client = _build_vm()
     await vm.setup()
@@ -701,6 +725,20 @@ async def test_page_selects_query_view_before_inserting_table_reference() -> Non
         assert app.query_one(AthenaQueryView).display is True
         assert vm.query.sql == '"AwsDataCatalog"."analytics"."events"'
         assert client.start_calls == []
+
+
+@pytest.mark.asyncio
+async def test_page_refresh_tolerates_query_controls_unmounting() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        page = app.query_one(AthenaPage)
+        await app.query_one("#athena-cancel", Button).remove()
+        await pilot.pause()
+
+        page._refresh_page()
 
 
 @pytest.mark.asyncio

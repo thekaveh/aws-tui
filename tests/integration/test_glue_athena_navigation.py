@@ -306,6 +306,8 @@ async def test_athena_insert_matching_source_switches_view_and_never_executes(
             editor = app.query_one("#athena-editor", TextArea)
             editor.text = "SELECT  LIMIT 10"
             editor.selection = type(editor.selection).cursor((0, 7))
+            await pilot.pause()
+            assert page.query.sql == "SELECT  LIMIT 10"
             await page.select_view("history")
             await pilot.pause()
             client.calls.clear()
@@ -381,6 +383,7 @@ async def test_glue_app_actions_are_silent_after_page_shutdown(
     ("action_id", "toast_id"),
     [
         ("glue.open_s3_location", "glue-s3-location-invalid"),
+        ("glue.copy_table_ref", "glue-table-reference-unavailable"),
         ("glue.query_in_athena", "glue-athena-table-unavailable"),
         ("glue.time_travel_in_athena", "glue-athena-snapshot-unavailable"),
     ],
@@ -402,7 +405,10 @@ async def test_live_glue_invalid_selection_actions_retain_advisory_toast(
             assert isinstance(glue, GluePageVM)
             if action_id == "glue.open_s3_location":
                 glue.catalog._table_detail = None  # type: ignore[attr-defined]
-            elif action_id == "glue.query_in_athena":
+            elif action_id in {
+                "glue.copy_table_ref",
+                "glue.query_in_athena",
+            }:
                 glue.catalog._selected_table_name = None  # type: ignore[attr-defined]
             toast_count = len(ctx.root_vm.chrome.toast_stack.toasts)
 

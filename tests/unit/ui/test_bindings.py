@@ -91,6 +91,18 @@ def test_resolve_action_id_roundtrip() -> None:
     assert resolver.resolve_action_id("nope-no-such-key") is None
 
 
+def test_duplicate_overlay_key_resolution_is_first_declared_and_stable() -> None:
+    keymap = KeymapStore(overlay={"pane.copy": "y"})
+    actions = _registry("pane.copy", "glue.copy_table_ref")
+    resolver = BindingResolver(keymap=keymap, actions=actions)
+
+    assert resolver.resolve_action_id("y") == "pane.copy"
+    assert [binding.action for binding in resolver.to_textual_bindings() if binding.key == "y"] == [
+        "dispatch('pane.copy')",
+        "dispatch('glue.copy_table_ref')",
+    ]
+
+
 def test_keys_for_returns_tuple() -> None:
     resolver = BindingResolver(keymap=KeymapStore(), actions=ActionRegistry())
     assert resolver.keys_for("app.quit") == ("q", "ctrl+c")

@@ -302,8 +302,16 @@ class GluePageVM:
             return False
         return self.catalog.query_in_athena()
 
+    @property
+    def can_copy_table_reference(self) -> bool:
+        return (
+            self._is_alive()
+            and self._active_view == "catalog"
+            and self.catalog.can_copy_table_reference
+        )
+
     def copy_table_reference(self) -> bool:
-        if not self._is_alive():
+        if not self.can_copy_table_reference:
             return False
         return self.catalog.copy_table_reference()
 

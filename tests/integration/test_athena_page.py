@@ -11,6 +11,7 @@ from textual.widgets import Button, DataTable, Static, TextArea
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryExecutionRef, QueryState, ResultColumn, ResultPage
 from aws_tui.infra.keymap_store import KeymapStore
@@ -321,6 +322,46 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         vm._set_loading_more("workgroups", True)  # type: ignore[attr-defined]
         await pilot.pause()
         assert not hint_enabled("athena.load_more")
+
+
+@pytest.mark.asyncio
+async def test_athena_insert_hint_tracks_typed_clipboard_and_source(
+    tmp_path: Path,
+) -> None:
+    async with _mounted_athena_app(tmp_path) as (_app, ctx, vm, _client, pilot):
+
+        def insert_enabled() -> bool:
+            return next(
+                hint.enabled
+                for hint in ctx.root_vm.chrome.hint_legend.actions
+                if hint.action_id == "athena.insert_table_ref"
+            )
+
+        assert not insert_enabled()
+
+        ctx.table_clipboard_vm.copy_command.execute(
+            TableRef(
+                "AwsDataCatalog",
+                "events",
+                "sessions",
+                vm.context.connection_name,
+                vm.context.region,
+            )
+        )
+        await pilot.pause()
+        assert insert_enabled()
+
+        ctx.table_clipboard_vm.copy_command.execute(
+            TableRef(
+                "AwsDataCatalog",
+                "events",
+                "sessions",
+                "another-profile",
+                "us-west-2",
+            )
+        )
+        await pilot.pause()
+        assert not insert_enabled()
 
 
 @pytest.mark.asyncio
