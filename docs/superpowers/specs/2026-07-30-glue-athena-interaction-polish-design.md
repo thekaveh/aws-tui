@@ -387,12 +387,12 @@ Each implementation task records:
 | Rejected candidates | `DiscriminatorVM` selects among keyed identities rather than retaining one payload; `CompositeVM` owns child VM membership rather than one modeled value; `DerivedProperty` computes dependent state and is not mutable storage; messages alone provide transient delivery without a retained authoritative value. |
 | Bespoke code retained | A thin `TableClipboardVM` facade creates the immutable payload with the canonical SQL identifier and owns coordinated disposal. VMx does not define the application-specific table-reference payload or Athena quoting policy. |
 | VM files | Added `src/aws_tui/vm/table_clipboard_vm.py`; changed `src/aws_tui/composition.py` and `src/aws_tui/app.py` for app-lifetime construction and disposal. |
-| View files | None. |
+| View files | Changed `src/aws_tui/app.py` for top-level disposal. |
 | Tests | Added domain quoting/delegation, payload preservation, equal/replacement notification, public composition shape, command disposal, AppContext construction, and top-level shutdown disposal coverage. |
-| VM LOC | To be finalized with Task 7 metrics. |
-| View LOC | 0 added, 0 deleted. |
-| Test LOC | To be finalized with Task 7 metrics. |
-| Coverage | To be finalized with Task 7 full-suite coverage. |
+| VM LOC | 84 added, 0 deleted, net +84 for `src/aws_tui/vm/table_clipboard_vm.py`. |
+| View LOC | 2 added, 0 deleted in `src/aws_tui/app.py` for app-lifetime disposal. |
+| Test LOC | 251 added, 0 deleted, net +251 across the two clipboard commits. |
+| Coverage | The final branch suite is 2976 passed, 9 deselected at 85.75%, versus 2789 passed, 9 deselected at 85.67% on the exact branch point. The full-suite delta is +187 passing tests and +0.08 percentage points; it is a branch-wide result and is not attributed solely to this responsibility. |
 
 ### `vmx31-glue-athena-focus-rings-review-fix`
 
@@ -411,6 +411,49 @@ Each implementation task records:
 | View LOC | 290 added, 40 deleted, net +250. |
 | Test LOC | 428 added, 19 deleted, net +409. |
 | Coverage | Review RED run: 20 failed and 53 passed for the intended missing behavior; the final context-refresh regression also failed RED in isolation. Final combined unit and production integration suite: 112 passed. |
+
+## 6.4. Final responsibility ledger
+
+This ledger closes the initial candidate matrix against VMx 3.1.0's public
+surface. No implementation on this branch accesses a private VMx member.
+
+| Responsibility | Credible public candidates | Selected public API | Rejected alternatives | Bespoke code retained and why | Verification |
+|---|---|---|---|---|---|
+| App-wide logical focus identity | `DiscriminatorVM[FocusSlot]`, a service-local `DiscriminatorVM`, `FilteredCompositeVM`, `GroupVM`, `HierarchicalVM` | The existing sole `DiscriminatorVM[FocusSlot]` through `active_key`, `active_changed`, `is_active()`, and `set_active_key()`, wrapped by `FocusCoordinatorVM.cycle_focus_ring()` and `select_nearest_focus_slot()` | A second discriminator or widget index would create parallel authority; filtered/group composites model membership or a component cursor; a hierarchy models recursive ownership rather than a flat dynamic ring | Glue/Athena views map typed slots to mounted, visible, enabled Textual widgets and call `App.set_focus()` because VMx does not own the Textual DOM | `tests/unit/vm/chrome`, `tests/unit/ui/glue/test_page.py`, `tests/unit/ui/athena/test_page.py`, `tests/unit/ui/glue/test_iceberg_view.py`, and production routing/focus integration tests |
+| One retained copied-table payload | `ComponentVMOf[CopiedTableReference \| None]`, `DiscriminatorVM`, `CompositeVMOf`, `DerivedProperty`, messages alone | `ComponentVMOf` public `model` and `property_changed` APIs | A discriminator selects keys; a composite owns child VMs; a derived property is not mutable storage; messages do not retain authoritative state | `CopiedTableReference` and a thin `TableClipboardVM` preserve the application-specific `TableRef` and canonical Athena identifier and coordinate disposal | `tests/unit/vm/test_table_clipboard_vm.py`, `tests/unit/test_composition_table_clipboard.py`, quoting tests, and clipboard navigation integration tests |
+| Typed synchronous copy intent | `RelayCommandOf[TableRef]`, untyped `RelayCommand`, callback, message-only intent | `RelayCommandOf[TableRef]` public `execute()` and `dispose()` APIs | Untyped command/callback loses the parameter contract; a message alone does not compose intent with retained state | The facade creates the immutable payload and suppresses equal replacements because those are aws-tui clipboard semantics | Clipboard VM, composition, app shutdown, equal-copy, and command-disposal tests |
+| Source and context selection | `AsyncRelayCommand`, `DiscriminatorVM`, `CompositeVMOf`, `FilteredCompositeVM`, `GroupVM`, `TokenPagedComposition`, existing facade coroutines | Existing lifecycle-safe Glue/Athena selection coroutines and pagers; no new VMx primitive | VMx 3.1.0 has no parameterized async relay command for arbitrary selected values; another discriminator would duplicate existing page selection; option tuples are immutable view projections, not child-VM collections; existing pagers already own continuation state | `ContextPicker`, `ServiceSourceHeader`, and source reconstruction stay in Textual/app code; the app transaction owns credentials, cancellation, page rebuilding, and stale-data prevention | Picker unit tests, selector command/wiring tests, Glue/Athena page tests, source-swap integration tests, and snapshots |
+| Dependent command availability | `DerivedProperty`, relay-command `can_execute`, facade properties, duplicate booleans | Existing VM command `can_execute()` and facade capability properties, projected into `HintLegendVM` | A new derived property would duplicate already authoritative command/page state and still could not model Textual focus-dependent load-more routing | The app combines active Textual focus with VM capabilities to dim context-sensitive hints | Hint-legend, Glue routing, Athena page, clipboard mismatch, and keybinding tests |
+| Editor insertion and system clipboard delivery | `DialogService`, `ModalVM`, VM messages, no matching VMx primitive | No VMx primitive; Textual public `TextArea` editing APIs and `App.copy_to_clipboard()` | No confirmation or modal state exists, so `DialogService`/`ModalVM` do not fit; VM messages cannot own cursor coordinates or terminal clipboard support | Cursor/selection replacement and best-effort OSC 52 delivery remain view concerns. The typed in-app clipboard remains authoritative when OS delivery fails | Query-view selection/cursor tests, OS clipboard success/failure tests, empty/mismatched clipboard tests, and Glue-to-Athena integration tests |
+
+## 6.5. Exact branch metrics
+
+Metrics use branch point `b92ad89f68dd19ca61cd567ce0f82b5379fb0499`.
+Generated `.raw` snapshots are excluded from authored LOC. `src/aws_tui/app.py`
+is counted with UI/view production; the remaining non-VM production files are
+reported separately so the table reconciles without hiding implementation.
+
+| Category | Additions | Deletions | Net |
+|---|---:|---:|---:|
+| VM production (`src/aws_tui/vm`) | 253 | 1 | +252 |
+| UI/view production (`src/aws_tui/ui` plus `src/aws_tui/app.py`) | 2061 | 379 | +1682 |
+| Other production (`composition.py`, `domain/sql_policy.py`, `infra/keymap_store.py`) | 102 | 7 | +95 |
+| Non-generated tests | 2673 | 60 | +2613 |
+| Generated snapshots, excluded from authored LOC (478 files) | 45980 | 44659 | +1321 |
+
+Git detects no file-level rename or move in this range. Code replacement within
+changed files is therefore treated as neutral deletion churn, not as savings.
+This branch adds a feature and reports **zero measured deletion savings**.
+VMx composition avoided, but did not delete a pre-existing branch
+implementation of, a second focus discriminator/widget index, bespoke
+observable clipboard storage, an untyped copy callback, duplicate Athena
+quoting, and custom command lifecycle/disposal. Those are concrete mechanisms
+avoided, not LOC claimed as removed.
+
+The exact detached baseline is 2789 passed, 9 deselected at 85.67%. The final
+unit and integration suite is 2976 passed, 9 deselected, 2 transient reruns at
+85.75%: +187 passing tests and +0.08 percentage points. The full snapshot suite
+is 800 passed with 478 snapshot comparisons.
 
 # 7. Testing and acceptance
 

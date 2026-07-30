@@ -19,6 +19,16 @@ until the release cut.
 
 ### 1.1.1. Added
 
+- **Glue and Athena interaction polish.** Bordered, keyboard-focusable AWS
+  context selectors now expose source, Glue state filters, and Athena
+  workgroup/catalog/database choices with named commands and complete
+  forward/reverse focus rings. Glue can copy a selected table's canonical,
+  fully quoted identifier to an authoritative VMx-backed in-app clipboard
+  (`y`) and best-effort OS clipboard, while Athena can insert that value at
+  the editor cursor (`i`) or replace a selection. Cross-source insertion is
+  refused without mutating the editor or switching profiles; the existing
+  source-preserving **Query table in Athena** workflow remains available.
+  The service rail is wider and centers all service names, including Athena.
 - **Integrated Glue, Athena, and Iceberg workflow.** Glue tables can prefill
   exact, fully-qualified Athena queries; Athena can return to one unambiguous
   visible Glue table; and Iceberg tables expose bounded, on-demand Snapshots,

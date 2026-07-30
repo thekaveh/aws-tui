@@ -98,7 +98,7 @@ class ServiceTabStrip(Widget):
 - `ServiceTabStrip` is one Textual focus target; left/right changes the active
   tab and emits `Changed`; Enter/Space selects the highlighted tab.
 
-- [ ] **Step 1: Write failing picker behavior tests**
+- [x] **Step 1: Write failing picker behavior tests**
 
 Cover initial label/value, open/close, up/down, Enter commit, Escape restore,
 mouse selection, empty/disabled/loading/warning/error states, and stable widget
@@ -121,7 +121,7 @@ async def test_context_picker_commits_keyboard_selection() -> None:
         assert picker.is_open is False
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -132,13 +132,13 @@ uv run pytest tests/unit/ui/test_context_picker.py \
 
 Expected: collection fails because the new modules do not exist.
 
-- [ ] **Step 3: Implement the minimal shared widgets**
+- [x] **Step 3: Implement the minimal shared widgets**
 
 Port the proven inline trigger/list interaction from EMR without copying
 service-specific application state. Use Textual messages for committed values
 and keep labels, open state, and styles local to the widgets.
 
-- [ ] **Step 4: Verify GREEN and refactor**
+- [x] **Step 4: Verify GREEN and refactor**
 
 Run the focused command from Step 2 plus:
 
@@ -148,7 +148,7 @@ uv run mypy
 uv run ruff check
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/aws_tui/ui/widgets/context_picker.py \
@@ -210,7 +210,7 @@ def cycle_focus_ring(
 - Glue/Athena pages expose `_focus_targets() -> tuple[(FocusSlot, Widget), ...]`
   and project the active logical slot to the current view's concrete widget.
 
-- [ ] **Step 1: Write failing VM focus tests**
+- [x] **Step 1: Write failing VM focus tests**
 
 Test ring entry, wraparound, reverse inversion, hidden-slot omission performed by
 the caller, modal restore, and composition shape:
@@ -223,14 +223,14 @@ def test_service_ring_uses_vmx_discriminator() -> None:
     assert vm.focused_slot is FocusSlot.GLUE_SOURCE
 ```
 
-- [ ] **Step 2: Write failing complete page-ring tests**
+- [x] **Step 2: Write failing complete page-ring tests**
 
 For every Glue view and Athena view, collect visited widget IDs by repeatedly
 calling `cycle_focus(reverse=False)` until the first ID repeats. Assert the
 expected ordered IDs, then repeat with reverse traversal and assert the exact
 inverse. Verify disabled load-more controls and hidden panes are omitted.
 
-- [ ] **Step 3: Run focused tests and verify RED**
+- [x] **Step 3: Run focused tests and verify RED**
 
 ```bash
 uv run pytest tests/unit/vm/chrome/test_focus_coordinator_vm.py \
@@ -241,14 +241,14 @@ uv run pytest tests/unit/vm/chrome/test_focus_coordinator_vm.py \
 Expected: new slots/methods are missing and current raw DOM traversal produces
 the wrong order.
 
-- [ ] **Step 4: Implement VMx focus-ring ownership and view projection**
+- [x] **Step 4: Implement VMx focus-ring ownership and view projection**
 
 Replace both page implementations of `app.action_focus_next/previous()` with
 logical ring construction plus `FocusCoordinatorVM.cycle_focus_ring()`. Use the
 shared one-stop `ServiceTabStrip`. Retain runtime Textual focus as the final
 widget projection.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run Step 3 plus:
 
@@ -260,7 +260,7 @@ uv run mypy
 uv run ruff check
 ```
 
-- [ ] **Step 6: Record VMx decision and commit**
+- [x] **Step 6: Record VMx decision and commit**
 
 Append the `vmx31-glue-athena-focus-rings` entry to the design's evidence ledger
 with `DiscriminatorVM` selected and `FilteredCompositeVM`, `GroupVM`, and
@@ -328,14 +328,14 @@ async def _switch_single_context_source_to(
 - Add action IDs from design section 3.3. Selector actions focus and open the
   named picker; they do not cycle values.
 
-- [ ] **Step 1: Write failing source-picker and action-wiring tests**
+- [x] **Step 1: Write failing source-picker and action-wiring tests**
 
 Assert that source candidates are filtered by `service.supports`, the active
 source is selected, choosing a target probes and mounts exactly that connection,
 `Shift+S` still cycles, selector actions appear in the palette/hints, and no new
 printable selector binding steals input from `TextArea`.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 ```bash
 uv run pytest tests/unit/ui/test_service_source_header.py \
@@ -346,7 +346,7 @@ uv run pytest tests/unit/ui/test_service_source_header.py \
   tests/integration/test_chrome_and_hint_legend.py -q
 ```
 
-- [ ] **Step 3: Implement source projection and named commands**
+- [x] **Step 3: Implement source projection and named commands**
 
 Pass supported source contexts from `AwsTuiApp` through
 `build_service_view()` into Glue/Athena pages. Route picker changes through the
@@ -354,7 +354,7 @@ existing cancellation/rebuild transaction. Register all selector actions in
 `ActionRegistry`, `_PALETTE_ACTIONS`, binding descriptions, hint labels, and
 service action sets.
 
-- [ ] **Step 4: Verify GREEN and regress source handoffs**
+- [x] **Step 4: Verify GREEN and regress source handoffs**
 
 Run Step 2 plus:
 
@@ -365,7 +365,7 @@ uv run mypy
 uv run ruff check
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/aws_tui/app.py src/aws_tui/infra/keymap_store.py \
@@ -416,17 +416,17 @@ git commit -m "feat(ui): expose service context commands"
 - Resource and detail borders use existing theme variables and
   `border-title-color: $accent` under `:focus-within`.
 
-- [ ] **Step 1: Add failing layout and theme assertions**
+- [x] **Step 1: Add failing layout and theme assertions**
 
 Assert centered service labels, stable rail width, matching theme selectors,
 context border titles, query-editor/result borders, and focus accents.
 
-- [ ] **Step 2: Add failing snapshot cases**
+- [x] **Step 2: Add failing snapshot cases**
 
 Add standard and narrow fixtures showing Glue Catalog/Jobs/Crawlers, Athena
 Query with all context controls, an open picker, and the full service rail.
 
-- [ ] **Step 3: Run focused tests and verify RED**
+- [x] **Step 3: Run focused tests and verify RED**
 
 ```bash
 uv run pytest tests/unit/ui/test_nav_menu.py tests/unit/ui/test_themes.py \
@@ -434,19 +434,19 @@ uv run pytest tests/unit/ui/test_nav_menu.py tests/unit/ui/test_themes.py \
   tests/snapshot/test_nav_menu.py -q
 ```
 
-- [ ] **Step 4: Implement borders, sizing, and centering**
+- [x] **Step 4: Implement borders, sizing, and centering**
 
 Apply the approved pane hierarchy without nesting decorative cards. Keep stable
 row heights in closed state and enough open-picker height for meaningful
 iteration.
 
-- [ ] **Step 5: Update snapshots and inspect rendered SVGs**
+- [x] **Step 5: Update snapshots and inspect rendered SVGs**
 
 Use the repository snapshot update command for only the affected files. Render
 or open every changed SVG and check text fit, border continuity, focus
 visibility, overlap, and narrow-layout clipping.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ```bash
 uv run pytest tests/unit/ui/test_nav_menu.py tests/unit/ui/test_themes.py \
@@ -499,13 +499,13 @@ class TableClipboardVM:
   `quote_athena_table_ref()`.
 - `AppContext.table_clipboard_vm` is constructed and disposed with the app.
 
-- [ ] **Step 1: Write failing quote and clipboard tests**
+- [x] **Step 1: Write failing quote and clipboard tests**
 
 Cover embedded double quotes in all three identifier segments, exact
 `TableRef` preservation, equal-copy no-op notification, replacement copy,
 command disposal, and VMx composition shape.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 ```bash
 uv run pytest tests/unit/domain/test_sql_policy.py \
@@ -514,13 +514,13 @@ uv run pytest tests/unit/domain/test_sql_policy.py \
   tests/unit/vm/test_round3_compliance.py -q
 ```
 
-- [ ] **Step 3: Implement the minimal domain helper and VM**
+- [x] **Step 3: Implement the minimal domain helper and VM**
 
 Use only public `ComponentVMOf.model`, `on_property_changed`, and
 `RelayCommandOf` APIs. Do not add a custom subject when the modeled component's
 observable already provides the required signal.
 
-- [ ] **Step 4: Verify GREEN and lifecycle integration**
+- [x] **Step 4: Verify GREEN and lifecycle integration**
 
 Run Step 2 plus:
 
@@ -532,7 +532,7 @@ uv run mypy
 uv run ruff check
 ```
 
-- [ ] **Step 5: Record VMx decision and commit**
+- [x] **Step 5: Record VMx decision and commit**
 
 Record `vmx31-table-clipboard` with `ComponentVMOf` and `RelayCommandOf`
 selected; record that `DiscriminatorVM`, `CompositeVM`, `DerivedProperty`, and
@@ -594,18 +594,18 @@ def insert_table_reference(self, identifier: str) -> bool: ...
 - Source mismatch refuses insertion without changing clipboard or editor.
 - Insertion does not execute SQL.
 
-- [ ] **Step 1: Write failing VM/message tests**
+- [x] **Step 1: Write failing VM/message tests**
 
 Assert hostile `TableRef` validation, selected-table request identity, no
 selection no-op, and page delegation.
 
-- [ ] **Step 2: Write failing editor and integration tests**
+- [x] **Step 2: Write failing editor and integration tests**
 
 Cover cursor insertion, selection replacement, VM synchronization, palette
 actions, best-effort system copy call, empty clipboard, source mismatch,
 matching-source insertion, query-view activation, and no execution.
 
-- [ ] **Step 3: Run focused tests and verify RED**
+- [x] **Step 3: Run focused tests and verify RED**
 
 ```bash
 uv run pytest tests/unit/vm/test_messages.py \
@@ -618,12 +618,12 @@ uv run pytest tests/unit/vm/test_messages.py \
   tests/integration/test_glue_athena_navigation.py -q
 ```
 
-- [ ] **Step 4: Implement copy and insert paths**
+- [x] **Step 4: Implement copy and insert paths**
 
 Keep the existing `OpenAthenaTableRequest` transaction unchanged. Add the copy
 request as a parallel non-navigating path and use existing toast infrastructure.
 
-- [ ] **Step 5: Verify GREEN and regression behavior**
+- [x] **Step 5: Verify GREEN and regression behavior**
 
 Run Step 3 plus:
 
@@ -635,7 +635,7 @@ uv run mypy
 uv run ruff check
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/aws_tui/app.py src/aws_tui/infra/keymap_store.py \
@@ -666,39 +666,46 @@ git commit -m "feat(glue): copy table references into Athena"
 - Metrics use the branch point:
 
 ```bash
-BASE=$(git merge-base develop HEAD)
+BASE=b92ad89f68dd19ca61cd567ce0f82b5379fb0499
 git diff --numstat "$BASE"...HEAD -- src/aws_tui/vm src/aws_tui/ui tests
 ```
 
-- [ ] **Step 1: Update user-facing documentation**
+- [x] **Step 1: Update user-facing documentation**
 
 Document full Glue/Athena focus order, selector commands, `Shift+S`, copy,
 insert, direct query handoff, source-mismatch behavior, and editor-safe
 keybinding priority.
 
-- [ ] **Step 2: Calculate LOC and coverage metrics**
+- [x] **Step 2: Calculate LOC and coverage metrics**
 
 Record VM deleted/added/saved, view deleted/added/saved, test delta, net
 implementation savings, suite count, and before/after coverage. Treat moved
 code as neutral.
 
-- [ ] **Step 3: Run focused and architecture verification**
+- [x] **Step 3: Run focused and architecture verification**
 
 ```bash
 uv run pytest tests/unit/vm/test_vmx_smoke.py -q
 uv run pytest tests/unit/vm/glue tests/unit/vm/athena \
   tests/unit/vm/chrome -q
 uv run pytest tests/unit/ui/glue tests/unit/ui/athena \
-  tests/unit/ui/test_nav_menu.py -q
+  tests/unit/ui/test_nav_menu.py tests/unit/ui/test_context_picker.py \
+  tests/unit/ui/test_service_tab_strip.py \
+  tests/unit/ui/test_service_source_header.py -q
 uv run pytest tests/integration/test_glue_iceberg_lifecycle.py \
   tests/integration/test_glue_athena_navigation.py \
-  tests/integration/test_glue_athena_clipboard.py \
-  tests/integration/test_service_source_swap.py -q
+  tests/integration/test_service_source_swap.py \
+  tests/integration/test_glue_page_routing.py \
+  tests/integration/test_athena_page.py \
+  tests/integration/test_chrome_and_hint_legend.py \
+  tests/integration/test_keybinding_wiring.py \
+  tests/integration/test_glue_s3_handoff.py \
+  tests/integration/test_athena_s3_handoff.py -q
 uv run mypy
 uv run ruff check
 ```
 
-- [ ] **Step 4: Run full suite and snapshots**
+- [x] **Step 4: Run full suite and snapshots**
 
 ```bash
 uv run pytest tests/unit tests/integration \
@@ -706,7 +713,7 @@ uv run pytest tests/unit tests/integration \
 uv run pytest tests/snapshot -q
 ```
 
-- [ ] **Step 5: Inspect final diff and repository state**
+- [x] **Step 5: Inspect final diff and repository state**
 
 ```bash
 git diff --check
@@ -714,7 +721,7 @@ git status --short
 git diff "$(git merge-base develop HEAD)"...HEAD --stat
 ```
 
-- [ ] **Step 6: Commit final documentation**
+- [x] **Step 6: Commit final documentation**
 
 ```bash
 git add docs/keybindings.md \
@@ -723,3 +730,12 @@ git add docs/keybindings.md \
   CHANGELOG.md
 git commit -m "docs: record Glue and Athena interaction polish"
 ```
+
+**Completion record:** All seven tasks are complete. Against exact branch point
+`b92ad89f68dd19ca61cd567ce0f82b5379fb0499`, authored production and test
+metrics are recorded separately from 478 generated snapshot files. No
+file-level move or rename was detected and measured deletion savings are zero.
+The final unit/integration run is 2976 passed, 9 deselected, 2 rerun at 85.75%
+(baseline: 2789 passed, 9 deselected at 85.67%). The full snapshot run is 800
+passed with 478 snapshot comparisons. Mypy, Ruff check/format, architecture
+checks, focused suites, and `git diff --check` are green.
