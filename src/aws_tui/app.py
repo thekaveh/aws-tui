@@ -335,9 +335,9 @@ class AwsTuiApp(App[None]):
     # ``#main-area`` and ``#content-host`` need explicit ``1fr`` sizing
     # so the Horizontal layout allocates the remaining width to the
     # content host after the always-visible NavMenu takes its fixed
-    # 10-cell width (post-PR-#94 / #97 — single mode, no
-    # collapse/expand, sized to fit the longest 3-letter service
-    # label + the ``▌`` ribbon + per-row padding + borders). Without
+    # width (single mode, no collapse/expand, sized by
+    # ``nav_menu.NAV_MENU_WIDTH`` to center the longest service label
+    # alongside the ``▌`` ribbon). Without
     # this, the DualPane mounted inside renders at zero width and the
     # user sees a blank screen at startup. The pre-#94 standalone
     # ServicesHamburger widget + the toggle/collapse modes were both

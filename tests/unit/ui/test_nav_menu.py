@@ -13,11 +13,13 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from rich.cells import cell_len
 from textual.app import App, ComposeResult
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.ui.widgets import nav_menu as nav_menu_module
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.nav_row import NavRow
 from aws_tui.vm.messages import ConnectionListChangedMessage
@@ -58,17 +60,72 @@ class _EmrStub:
         return object()
 
 
+class _GlueStub:
+    descriptor = ServiceDescriptor(id="glue", label="Glue", icon="")
+
+    def supports(self, conn: object) -> bool:
+        return True
+
+    def build_vm(self, conn: object) -> object:
+        return object()
+
+
+class _AthenaStub:
+    descriptor = ServiceDescriptor(id="athena", label="Athena", icon="")
+
+    def supports(self, conn: object) -> bool:
+        return True
+
+    def build_vm(self, conn: object) -> object:
+        return object()
+
+
 def _vm_with_services() -> tuple[NavMenuVM, MessageHub[Message]]:
     hub = _hub()
     registry = ServiceRegistry()
     registry.register(_S3Stub())
     registry.register(_EmrStub())
+    registry.register(_GlueStub())
+    registry.register(_AthenaStub())
     vm = NavMenuVM(registry=registry, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     vm.update_connection(
         Connection(name="dev", kind="aws", region="us-east-1", source="config", profile="dev")
     )
     return vm, hub
+
+
+def test_navigation_width_has_one_shared_constant() -> None:
+    assert getattr(nav_menu_module, "NAV_MENU_WIDTH", None) == 12
+    assert f"width: {nav_menu_module.NAV_MENU_WIDTH};" in NavMenu.DEFAULT_CSS
+
+
+@pytest.mark.asyncio
+async def test_navigation_rows_center_every_label_at_stable_width() -> None:
+    vm, hub = _vm_with_services()
+    nav = NavMenu(vm=vm, hub=hub)
+    app = _Host(nav)
+    try:
+        async with app.run_test(size=(40, 20)) as pilot:
+            await pilot.pause()
+
+            rows = list(nav.query(NavRow))
+            assert {row.descriptor_id for row in rows} >= {
+                "s3",
+                "emr-serverless",
+                "glue",
+                "athena",
+                "settings",
+            }
+            assert {row.size.width for row in rows} == {nav.content_size.width}
+            for row in rows:
+                rendered = str(row.render())
+                label = row._label  # type: ignore[attr-defined]
+                expected_start = (row.size.width - len(label)) // 2
+                assert rendered.index(label) == expected_start
+                assert cell_len(rendered) == row.size.width
+    finally:
+        vm.dispose()
 
 
 class _Host(App[None]):

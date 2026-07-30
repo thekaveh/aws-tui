@@ -6,12 +6,11 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import OptionList
 from textual.worker import Worker
 
-from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
     DetailValue,
@@ -21,15 +20,6 @@ from aws_tui.ui.widgets.glue.detail_rows import (
 )
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
-
-_RUN_FILTERS = (
-    ("All states", "ALL"),
-    ("Running", "RUNNING"),
-    ("Succeeded", "SUCCEEDED"),
-    ("Failed", "FAILED"),
-    ("Stopped", "STOPPED"),
-    ("Timed out", "TIMEOUT"),
-)
 
 
 class GlueJobsView(Widget):
@@ -42,16 +32,6 @@ class GlueJobsView(Widget):
         grid-rows: 1fr;
         grid-gutter: 0;
     }
-    GlueJobsView > .glue-filtered-list {
-        height: 1fr;
-        layout: vertical;
-    }
-    GlueJobsView > .glue-filtered-list > ContextPicker {
-        height: 3;
-    }
-    GlueJobsView > .glue-filtered-list > ResourceListPane {
-        height: 1fr;
-    }
     """
 
     def __init__(self, vm: GluePageVM, *, id: str | None = None) -> None:
@@ -62,18 +42,11 @@ class GlueJobsView(Widget):
 
     def compose(self) -> ComposeResult:
         yield ResourceListPane("jobs", id="glue-jobs-pane", empty_text="no jobs")
-        with Vertical(classes="glue-filtered-list"):
-            yield ContextPicker(
-                "Run state",
-                tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
-                selected=self._filter_value(),
-                id="glue-run-state-filter",
-            )
-            yield ResourceListPane(
-                "runs",
-                id="glue-runs-pane",
-                empty_text="no runs",
-            )
+        yield ResourceListPane(
+            "runs",
+            id="glue-runs-pane",
+            empty_text="no runs",
+        )
         yield DetailRows("job and run detail", id="glue-job-detail-pane")
 
     def on_mount(self) -> None:
@@ -88,7 +61,6 @@ class GlueJobsView(Widget):
     def focus_targets(self) -> tuple[Widget, ...]:
         """Return the ordered, concrete targets for the Jobs focus ring."""
         return (
-            self.query_one("#glue-run-state-filter", ContextPicker),
             self.query_one("#glue-jobs-pane", ResourceListPane).option_list,
             self.query_one("#glue-runs-pane", ResourceListPane).option_list,
             self.query_one("#glue-job-detail-pane", DetailRows).query_one(VerticalScroll),
@@ -113,17 +85,6 @@ class GlueJobsView(Widget):
         ):
             self._page_vm.select_job_run(option_id)
 
-    def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:
-        if event.control.id != "glue-run-state-filter":
-            return
-        value = event.value
-        states = frozenset() if value == "ALL" else frozenset({value})
-        if states != self._vm.run_state_filter:
-            self._run_lifecycle_worker(
-                partial(self._page_vm.set_job_run_states, states),
-                group="glue-filter-runs",
-            )
-
     def _run_lifecycle_worker(
         self,
         work: Callable[[], Awaitable[None]],
@@ -143,13 +104,8 @@ class GlueJobsView(Widget):
             jobs = self.query_one("#glue-jobs-pane", ResourceListPane)
             runs = self.query_one("#glue-runs-pane", ResourceListPane)
             detail = self.query_one("#glue-job-detail-pane", DetailRows)
-            run_filter = self.query_one("#glue-run-state-filter", ContextPicker)
         except Exception:
             return
-        run_filter.set_options(
-            tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
-            selected=self._filter_value(),
-        )
         jobs.replace(
             tuple((row.name, f"{row.name}  {row.command_name}") for row in self._vm.jobs),
             selected_id=self._vm.selected_job_name,
@@ -180,9 +136,6 @@ class GlueJobsView(Widget):
             error_text=self._vm.runs_error_text,
             empty_text="select a job and run",
         )
-
-    def _filter_value(self) -> str:
-        return next(iter(sorted(self._vm.run_state_filter)), "ALL")
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         job = self._vm.selected_job

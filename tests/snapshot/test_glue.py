@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from aws_tui.vm.glue.page_vm import GlueView
 from tests.snapshot.apps.glue import GluePageApp
 from tests.snapshot.conftest import THEMES
 
@@ -73,6 +74,25 @@ def test_glue_iceberg_narrow_snapshot(snap_compare) -> None:
     )
 
 
+@pytest.mark.parametrize("view", ["catalog", "jobs", "crawlers"])
+def test_glue_service_narrow_snapshot(view: GlueView, snap_compare) -> None:
+    assert snap_compare(
+        GluePageApp(theme="carbon", view=view),
+        terminal_size=NARROW,
+    )
+
+
+def test_glue_open_context_picker_snapshot(snap_compare) -> None:
+    assert snap_compare(
+        GluePageApp(
+            theme="carbon",
+            view="jobs",
+            open_picker=True,
+        ),
+        terminal_size=WIDE,
+    )
+
+
 @pytest.mark.parametrize(
     ("view", "fixture"),
     [
@@ -105,7 +125,7 @@ def test_glue_snapshot_content_guards(theme: str) -> None:
     forbidden = _snapshot("test_glue_catalog_forbidden_snapshot", theme)
     empty = _snapshot("test_glue_catalog_empty_snapshot", theme)
 
-    source = "analytics-prod&#160;·&#160;us-west-2"
+    source = "analytics-prod·us-west-2"
     assert source in catalog
     assert "analytics" in catalog
     assert "events" in catalog

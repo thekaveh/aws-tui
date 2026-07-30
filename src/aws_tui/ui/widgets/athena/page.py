@@ -65,18 +65,29 @@ class AthenaPage(HubSubscriberMixin, Widget):
     }
     AthenaPage > #athena-context-header {
         width: 1fr;
-        height: 3;
+        height: auto;
+        min-height: 5;
         layout: horizontal;
+        border-title-align: left;
     }
     AthenaPage #athena-source-header {
-        width: 2fr;
-        min-width: 22;
-        height: 3;
+        width: 29;
+        min-width: 29;
+        height: auto;
+        min-height: 3;
     }
     AthenaPage #athena-context-header > ContextPicker {
-        width: 2fr;
-        min-width: 14;
-        height: 3;
+        width: 1fr;
+        min-width: 16;
+        height: auto;
+        min-height: 3;
+    }
+    AthenaPage #athena-context-header > #athena-catalog {
+        width: 1fr;
+        min-width: 19;
+    }
+    AthenaPage #athena-context-header > #athena-database {
+        min-width: 12;
     }
     AthenaPage #athena-context-header > AthenaLoadMoreButton {
         width: 3;
@@ -187,6 +198,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 yield child
 
     def on_mount(self) -> None:
+        self.query_one("#athena-context-header").border_title = "AWS context"
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,

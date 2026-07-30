@@ -7,7 +7,7 @@ from typing import ClassVar, cast
 from reactivex.abc import DisposableBase
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Container, VerticalScroll
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList
@@ -15,7 +15,7 @@ from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
-from aws_tui.ui.widgets.context_picker import ContextPicker
+from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
@@ -28,6 +28,20 @@ from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _VIEW_ORDER: tuple[GlueView, ...] = ("catalog", "jobs", "crawlers")
+_RUN_FILTERS = (
+    ("All states", "ALL"),
+    ("Running", "RUNNING"),
+    ("Succeeded", "SUCCEEDED"),
+    ("Failed", "FAILED"),
+    ("Stopped", "STOPPED"),
+    ("Timed out", "TIMEOUT"),
+)
+_CRAWLER_FILTERS = (
+    ("All states", "ALL"),
+    ("Ready", "READY"),
+    ("Running", "RUNNING"),
+    ("Stopping", "STOPPING"),
+)
 _GLUE_FOCUS_ORDER = (
     FocusSlot.GLUE_SOURCE,
     FocusSlot.GLUE_FILTER,
@@ -67,9 +81,18 @@ class GluePage(HubSubscriberMixin, Widget):
         height: 1fr;
         layout: vertical;
     }
-    GluePage > ServiceSourceHeader {
+    GluePage > #glue-context-pane {
         width: 1fr;
-        height: 3;
+        height: auto;
+        min-height: 5;
+        layout: horizontal;
+        border-title-align: left;
+    }
+    GluePage > #glue-context-pane > ServiceSourceHeader,
+    GluePage > #glue-context-pane > ContextPicker {
+        width: 1fr;
+        height: auto;
+        min-height: 3;
     }
     GluePage > #glue-view-host {
         width: 1fr;
@@ -105,11 +128,28 @@ class GluePage(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        yield ServiceSourceHeader(
-            self._vm.source,
-            candidates=self._source_candidates,
-            id="glue-source-header",
-        )
+        with Horizontal(id="glue-context-pane"):
+            yield ServiceSourceHeader(
+                self._vm.source,
+                candidates=self._source_candidates,
+                id="glue-source-header",
+            )
+            run_filter = ContextPicker(
+                "Run state",
+                tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
+                selected=self._job_filter_value(),
+                id="glue-run-state-filter",
+            )
+            run_filter.display = self._vm.active_view == "jobs"
+            yield run_filter
+            crawler_filter = ContextPicker(
+                "Crawler state",
+                tuple(ContextOption(label, value) for label, value in _CRAWLER_FILTERS),
+                selected=self._vm.crawlers.state_filter or "ALL",
+                id="glue-crawler-state-filter",
+            )
+            crawler_filter.display = self._vm.active_view == "crawlers"
+            yield crawler_filter
         yield ServiceTabStrip(
             tuple(
                 (
@@ -129,7 +169,9 @@ class GluePage(HubSubscriberMixin, Widget):
             yield GlueCrawlersView(self._vm, id="glue-crawlers-view")
 
     def on_mount(self) -> None:
+        self.query_one("#glue-context-pane").border_title = "AWS context"
         self._sync_view()
+        self._sync_context()
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
@@ -145,7 +187,7 @@ class GluePage(HubSubscriberMixin, Widget):
             self._focus_subscriptions.append(
                 child_vm.on_property_changed.subscribe(
                     on_next=partial(
-                        self._on_focus_availability_changed,
+                        self._on_child_vm_changed,
                         sensitive_slots,
                     )
                 )
@@ -199,6 +241,24 @@ class GluePage(HubSubscriberMixin, Widget):
             )
         )
 
+    def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:
+        if event.control.id == "glue-run-state-filter":
+            states = frozenset() if event.value == "ALL" else frozenset((event.value,))
+            if states != self._vm.jobs.run_state_filter:
+                self.run_worker(
+                    self._vm.set_job_run_states(states),
+                    exclusive=True,
+                    group="glue-filter-runs",
+                )
+        elif event.control.id == "glue-crawler-state-filter":
+            state = None if event.value == "ALL" else event.value
+            if state != self._vm.crawlers.state_filter:
+                self.run_worker(
+                    self._vm.set_crawler_state(state),
+                    exclusive=True,
+                    group="glue-filter-crawlers",
+                )
+
     def cycle_focus(self, *, reverse: bool) -> None:
         if self._focus_coordinator is None:
             return
@@ -246,20 +306,26 @@ class GluePage(HubSubscriberMixin, Widget):
                 for widget in iceberg.focus_targets()
             )
         elif active == "jobs":
-            filter_target, primary, secondary, detail = self.query_one(GlueJobsView).focus_targets()
+            primary, secondary, detail = self.query_one(GlueJobsView).focus_targets()
             targets = [
                 (FocusSlot.GLUE_SOURCE, source),
-                (FocusSlot.GLUE_FILTER, filter_target),
+                (
+                    FocusSlot.GLUE_FILTER,
+                    self.query_one("#glue-run-state-filter", ContextPicker),
+                ),
                 (FocusSlot.GLUE_TABS, tabs),
                 (FocusSlot.GLUE_PRIMARY, primary),
                 (FocusSlot.GLUE_SECONDARY, secondary),
                 (FocusSlot.GLUE_DETAIL, detail),
             ]
         else:
-            filter_target, primary, detail = self.query_one(GlueCrawlersView).focus_targets()
+            primary, detail = self.query_one(GlueCrawlersView).focus_targets()
             targets = [
                 (FocusSlot.GLUE_SOURCE, source),
-                (FocusSlot.GLUE_FILTER, filter_target),
+                (
+                    FocusSlot.GLUE_FILTER,
+                    self.query_one("#glue-crawler-state-filter", ContextPicker),
+                ),
                 (FocusSlot.GLUE_TABS, tabs),
                 (FocusSlot.GLUE_PRIMARY, primary),
                 (FocusSlot.GLUE_DETAIL, detail),
@@ -351,11 +417,12 @@ class GluePage(HubSubscriberMixin, Widget):
     def _on_active_view_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._sync_view)
 
-    def _on_focus_availability_changed(
+    def _on_child_vm_changed(
         self,
         sensitive_slots: frozenset[FocusSlot],
         _property_name: str,
     ) -> None:
+        self.call_after_refresh(self._sync_context)
         if (
             self._focus_coordinator is None
             or self._focus_coordinator.focused_slot not in sensitive_slots
@@ -374,6 +441,28 @@ class GluePage(HubSubscriberMixin, Widget):
             child.display = view == active
         with contextlib.suppress(Exception):
             self.query_one("#glue-view-tabs", ServiceTabStrip).set_active(active)
+        self._sync_context()
+
+    def _sync_context(self) -> None:
+        with contextlib.suppress(NoMatches):
+            run_filter = self.query_one("#glue-run-state-filter", ContextPicker)
+            run_filter.display = self._vm.active_view == "jobs"
+            run_filter.set_options(
+                tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
+                selected=self._job_filter_value(),
+            )
+            crawler_filter = self.query_one(
+                "#glue-crawler-state-filter",
+                ContextPicker,
+            )
+            crawler_filter.display = self._vm.active_view == "crawlers"
+            crawler_filter.set_options(
+                tuple(ContextOption(label, value) for label, value in _CRAWLER_FILTERS),
+                selected=self._vm.crawlers.state_filter or "ALL",
+            )
+
+    def _job_filter_value(self) -> str:
+        return next(iter(sorted(self._vm.jobs.run_state_filter)), "ALL")
 
     def _maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
         focused = self.app.focused

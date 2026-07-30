@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual.widget import Widget
 
@@ -110,10 +111,13 @@ class NavRow(Widget):
         # ``Text.append`` adds literal text — NOT parsed as Rich
         # markup — so descriptor labels containing characters like
         # ``[`` or ``]`` can never crash the renderer.
-        text = Text()
-        text.append(_RIBBON_GLYPH if self._is_selected else _RIBBON_SPACER)
-        text.append(" ")
+        width = max(self.size.width, cell_len(self._label) + 2)
+        label_width = cell_len(self._label)
+        label_start = max(1, (width - label_width) // 2)
+        text = Text(_RIBBON_GLYPH if self._is_selected else _RIBBON_SPACER)
+        text.append(" " * (label_start - 1))
         text.append(self._label)
+        text.append(" " * max(0, width - label_start - label_width))
         return text
 
 

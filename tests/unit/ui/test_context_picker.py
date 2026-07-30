@@ -40,7 +40,23 @@ async def test_context_picker_renders_its_label_and_selected_value() -> None:
 
         assert picker.value == "primary"
         assert picker.border_title == "Workgroup"
-        assert str(picker.query_one(".context-picker-trigger", Static).render()) == "primary"
+        assert str(picker.query_one(".context-picker-trigger", Static).render()) == "primary ▾"
+
+
+@pytest.mark.asyncio
+async def test_context_picker_indicator_tracks_open_state() -> None:
+    picker = _picker()
+
+    async with PickerHost(picker).run_test() as pilot:
+        await pilot.pause()
+        trigger = picker.query_one(".context-picker-trigger", Static)
+
+        assert str(trigger.render()).endswith("▾")
+
+        picker.open()
+        await pilot.pause()
+
+        assert str(trigger.render()).endswith("▴")
 
 
 @pytest.mark.asyncio

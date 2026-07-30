@@ -10,6 +10,7 @@ from tests.snapshot.conftest import THEMES
 
 WIDE = (150, 44)
 COMPACT = (100, 30)
+NARROW = (80, 24)
 FIXTURES: tuple[AthenaFixture, ...] = (
     "empty-query",
     "running",
@@ -67,6 +68,24 @@ def test_athena_compact_snapshot(
     )
 
 
+def test_athena_query_narrow_snapshot(snap_compare) -> None:
+    assert snap_compare(
+        AthenaPageApp(theme="carbon", fixture="empty-query"),
+        terminal_size=NARROW,
+    )
+
+
+def test_athena_open_context_picker_snapshot(snap_compare) -> None:
+    assert snap_compare(
+        AthenaPageApp(
+            theme="carbon",
+            fixture="empty-query",
+            open_picker=True,
+        ),
+        terminal_size=WIDE,
+    )
+
+
 def _snapshot(fixture: AthenaFixture, theme: str) -> str:
     path = (
         Path(__file__).parent
@@ -101,7 +120,7 @@ def test_athena_snapshot_content_guards(theme: str) -> None:
     missing = _snapshot("missing-result-config", theme)
     rebound = _snapshot("focused-rebound-tabs", theme)
 
-    source = "analytics-prod&#160;·&#160;us-west-2"
+    source = "analytics-prod·us-west-2"
     assert source in empty
     assert "Enter&#160;a&#160;read-only&#160;query" in empty
     assert "q-20260726-running" in running
@@ -133,7 +152,7 @@ def test_athena_compact_snapshot_content_guards(theme: str) -> None:
     saved = _compact_snapshot("saved", theme)
     rebound = _compact_snapshot("focused-rebound-tabs", theme)
 
-    assert "analytics-prod&#160;·" in empty
+    assert "analytics-prod·" in empty
     assert "us-west-2" in empty
     assert "read-only&#160;query" in empty
     assert results.count("event[id]") >= 2

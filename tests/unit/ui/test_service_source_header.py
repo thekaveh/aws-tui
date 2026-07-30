@@ -39,7 +39,10 @@ async def test_source_header_renders_active_connection_profile_and_region() -> N
 
         picker = header.query_one(ContextPicker)
         assert picker.border_title == "AWS source"
-        assert str(picker.query_one(".context-picker-trigger", Static).render()) == _PROD.label
+        assert (
+            str(picker.query_one(".context-picker-trigger", Static).render())
+            == f"{_PROD.label.replace(' · ', '·')} ▾"
+        )
 
 
 @pytest.mark.asyncio

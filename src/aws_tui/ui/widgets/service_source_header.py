@@ -19,11 +19,13 @@ class ServiceSourceHeader(Widget, can_focus=True):
     DEFAULT_CSS: ClassVar[str] = """
     ServiceSourceHeader {
         width: 1fr;
-        height: 3;
+        height: auto;
+        min-height: 3;
     }
     ServiceSourceHeader > ContextPicker {
         width: 1fr;
-        height: 3;
+        height: auto;
+        min-height: 3;
     }
     ServiceSourceHeader:focus > ContextPicker {
         border: heavy $accent;
@@ -52,6 +54,7 @@ class ServiceSourceHeader(Widget, can_focus=True):
         super().__init__(id=id)
         ordered = dict.fromkeys((*candidates, source))
         self._source = source
+        self.tooltip = source.label
         self._candidates = tuple(ordered)
         self._candidate_values = {
             str(index): candidate for index, candidate in enumerate(self._candidates)
@@ -73,7 +76,7 @@ class ServiceSourceHeader(Widget, can_focus=True):
         yield ContextPicker(
             "AWS source",
             tuple(
-                ContextOption(candidate.label, value)
+                ContextOption(candidate.label.replace(" · ", "·"), value)
                 for value, candidate in self._candidate_values.items()
             ),
             selected=selected,

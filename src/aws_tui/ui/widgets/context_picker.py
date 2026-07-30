@@ -50,8 +50,9 @@ class ContextPicker(Widget, can_focus=True):
     ContextPicker > .context-picker-trigger {
         width: 1fr;
         height: 1;
-        padding: 0 1;
+        padding: 0;
         content-align: left middle;
+        text-overflow: ellipsis;
     }
     ContextPicker > OptionList {
         width: 1fr;
@@ -168,12 +169,14 @@ class ContextPicker(Widget, can_focus=True):
             return
         self._refresh_options()
         self.add_class("-open")
+        self._refresh_trigger()
         self.call_after_refresh(self._focus_options)
 
     def close(self, *, restore: bool = True) -> None:
         """Hide the option list and optionally restore its cursor to the value."""
 
         self.remove_class("-open")
+        self._refresh_trigger()
         if restore:
             self._restore_highlight()
         if not self.disabled:
@@ -240,13 +243,18 @@ class ContextPicker(Widget, can_focus=True):
 
     def _trigger_text(self) -> str:
         if self._loading:
-            return "Loading..."
-        if self._error:
-            return "Unable to load options"
-        if not self._options:
-            return "(No options)"
-        selected = next((option for option in self._options if option.value == self._value), None)
-        return selected.label if selected is not None else f"(Select {self._label.lower()})"
+            value = "Loading..."
+        elif self._error:
+            value = "Unable to load options"
+        elif not self._options:
+            value = "(No options)"
+        else:
+            selected = next(
+                (option for option in self._options if option.value == self._value),
+                None,
+            )
+            value = selected.label if selected is not None else f"(Select {self._label.lower()})"
+        return f"{value} {'▴' if self.is_open else '▾'}"
 
     def _build_options(self) -> tuple[Option, ...]:
         if self._loading:

@@ -481,8 +481,7 @@ async def test_jobs_and_crawlers_use_context_picker_filters() -> None:
         page = app.query_one(GluePage)
         await page.action_select_view("jobs")
         await pilot.pause()
-        jobs = page.query_one(GlueJobsView)
-        run_filter = jobs.query_one("#glue-run-state-filter", ContextPicker)
+        run_filter = page.query_one("#glue-run-state-filter", ContextPicker)
         run_filter._commit("RUNNING")  # type: ignore[attr-defined]
         await pilot.pause()
         assert vm.jobs.run_state_filter == frozenset({"RUNNING"})
@@ -490,8 +489,7 @@ async def test_jobs_and_crawlers_use_context_picker_filters() -> None:
 
         await page.action_select_view("crawlers")
         await pilot.pause()
-        crawlers = page.query_one(GlueCrawlersView)
-        crawler_filter = crawlers.query_one("#glue-crawler-state-filter", ContextPicker)
+        crawler_filter = page.query_one("#glue-crawler-state-filter", ContextPicker)
         crawler_filter._commit("RUNNING")  # type: ignore[attr-defined]
         await pilot.pause()
         assert vm.crawlers.state_filter == "RUNNING"
@@ -581,7 +579,7 @@ async def test_selected_job_detail_is_retained_when_filter_has_no_matching_runs(
         await page.action_select_view("jobs")
         await pilot.pause()
         jobs = page.query_one(GlueJobsView)
-        jobs.query_one("#glue-run-state-filter", ContextPicker)._commit(  # type: ignore[attr-defined]
+        page.query_one("#glue-run-state-filter", ContextPicker)._commit(  # type: ignore[attr-defined]
             "FAILED"
         )
         await pilot.pause()
