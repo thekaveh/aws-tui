@@ -240,6 +240,27 @@ async def test_glue_refresh_falls_back_to_the_nearest_available_slot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_glue_view_switch_reprojects_focus_before_action_returns() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    await vm.select_view("jobs")
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        runs = app.query_one("#glue-runs-pane-options", OptionList)
+        runs.focus()
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await page.action_select_view("crawlers")
+
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_DETAIL
+        assert app.focused is not None
+        assert app.focused.id == "glue-crawler-detail-pane-scroll"
+
+
+@pytest.mark.asyncio
 async def test_glue_page_composes_source_tabs_and_three_views() -> None:
     vm, _fake = _build_vm()
     await vm.setup()
