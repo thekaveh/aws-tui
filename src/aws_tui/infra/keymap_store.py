@@ -10,16 +10,52 @@ overlay never unions with defaults; the user is in charge.
 Adding a wholly new action through the overlay is rejected with
 :class:`UnknownAction`: there would be no command anywhere in the app to
 bind to, so it would silently do nothing.
+
+An overlay also may not introduce a new same-key action pair. Deliberate
+built-in aliases remain valid, but new collisions are rejected with
+:class:`KeybindingCollision` instead of relying on binding declaration order.
 """
 
 from __future__ import annotations
 
+from itertools import combinations
 from typing import ClassVar
 
 
 class UnknownAction(Exception):
     """Raised when :meth:`KeymapStore.resolve` is asked for an action that
     has no default and no overlay binding."""
+
+
+class KeybindingCollision(ValueError):
+    """Raised when an overlay introduces a same-key action collision."""
+
+
+_TEXTUAL_KEY_NAME_OVERRIDES: dict[str, str] = {
+    ",": "comma",
+    ":": "colon",
+    "?": "question_mark",
+    "/": "slash",
+}
+
+
+def textual_key_name(key: str) -> str:
+    """Return the runtime Textual name for a configured key literal."""
+    return _TEXTUAL_KEY_NAME_OVERRIDES.get(key, key)
+
+
+def _collision_pairs(
+    bindings: dict[str, tuple[str, ...]],
+) -> set[tuple[str, str, str]]:
+    actions_by_key: dict[str, set[str]] = {}
+    for action, keys in bindings.items():
+        for key in keys:
+            actions_by_key.setdefault(textual_key_name(key), set()).add(action)
+    return {
+        (key, left, right)
+        for key, actions in actions_by_key.items()
+        for left, right in combinations(sorted(actions), 2)
+    }
 
 
 class KeymapStore:
@@ -96,6 +132,13 @@ class KeymapStore:
                     merged[action] = (keys,)
                 else:
                     merged[action] = tuple(keys)
+            introduced = _collision_pairs(merged) - _collision_pairs(self.DEFAULT_BINDINGS)
+            if introduced:
+                key, left, right = min(introduced)
+                raise KeybindingCollision(
+                    f"keybinding overlay assigns {key!r} to both "
+                    f"{left!r} and {right!r}; choose distinct keys"
+                )
         self._bindings: dict[str, tuple[str, ...]] = merged
 
     def resolve(self, action: str) -> tuple[str, ...]:
@@ -113,4 +156,4 @@ class KeymapStore:
         return dict(self._bindings)
 
 
-__all__ = ["KeymapStore", "UnknownAction"]
+__all__ = ["KeybindingCollision", "KeymapStore", "UnknownAction", "textual_key_name"]

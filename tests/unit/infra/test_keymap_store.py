@@ -76,8 +76,28 @@ class TestOverlay:
         assert store.resolve("app.quit") == ("ctrl+d",)
 
     def test_overlay_list_keys_replaces_defaults(self) -> None:
-        store = KeymapStore(overlay={"pane.copy": ["c", "y"]})
-        assert store.resolve("pane.copy") == ("c", "y")
+        store = KeymapStore(overlay={"pane.copy": ["c", "ctrl+y"]})
+        assert store.resolve("pane.copy") == ("c", "ctrl+y")
+
+    def test_overlay_preserves_deliberate_builtin_collision_pairs(self) -> None:
+        store = KeymapStore(
+            overlay={
+                "pane.copy": "c",
+                "glue.catalog": "1",
+                "athena.query": "1",
+            }
+        )
+
+        assert store.resolve("pane.copy") == ("c",)
+        assert store.resolve("glue.catalog") == ("1",)
+        assert store.resolve("athena.query") == ("1",)
+
+    def test_overlay_rejects_textual_equivalent_key_names(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"'colon'.*'app\.command_palette'.*'pane\.copy'",
+        ):
+            KeymapStore(overlay={"pane.copy": "colon"})
 
     def test_overlay_does_not_add_unknown_actions(self) -> None:
         # The overlay can override existing actions but adding wholly

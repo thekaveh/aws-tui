@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from aws_tui.composition import build_app_context
 
 
@@ -51,12 +53,45 @@ def test_keybinding_overlay_validates_but_does_not_change_live_legend_keys(
     cache = tmp_path / "cache"
     _write_config(
         cfg,
-        '[keybindings]\npane.delete = "x"\n',
+        '[keybindings]\n"pane.delete" = "x"\n',
     )
     cache.mkdir()
     ctx = build_app_context(config_dir=cfg, cache_dir=cache)
     try:
         assert ctx.keymap_store.resolve("pane.delete") == ("d",)
+    finally:
+        ctx.root_vm.dispose()
+
+
+def test_keybinding_collision_logs_clear_error_and_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = tmp_path / "config"
+    cache = tmp_path / "cache"
+    _write_config(
+        cfg,
+        '[keybindings]\n"pane.copy" = "y"\n',
+    )
+    cache.mkdir()
+    warnings: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(
+        "aws_tui.composition._logger.warning",
+        lambda event, *, extra: warnings.append((event, extra)),
+    )
+
+    ctx = build_app_context(config_dir=cfg, cache_dir=cache)
+    try:
+        assert ctx.keymap_store.resolve("pane.copy") == ("c",)
+        collision_errors = [
+            extra["error"]
+            for event, extra in warnings
+            if event == "composition.keymap_overlay.invalid"
+        ]
+        assert any(
+            "'y'" in error and "'glue.copy_table_ref'" in error and "'pane.copy'" in error
+            for error in collision_errors
+        )
     finally:
         ctx.root_vm.dispose()
 

@@ -177,12 +177,12 @@ def test_overlay_remaps_a_handled_action() -> None:
     from aws_tui.ui.actions import ActionRegistry
     from aws_tui.ui.bindings import BindingResolver
 
-    keymap = KeymapStore(overlay={"pane.copy": "y"})
+    keymap = KeymapStore(overlay={"pane.copy": "ctrl+y"})
     actions = ActionRegistry()
     actions.register("pane.copy", lambda: None)
     resolver = BindingResolver(keymap=keymap, actions=actions)
     keys = {b.key for b in resolver.to_textual_bindings()}
-    assert "y" in keys
+    assert "ctrl+y" in keys
     assert "c" not in keys
 
 

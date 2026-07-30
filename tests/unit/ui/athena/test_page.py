@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.css.query import NoMatches
 from textual.widgets import Button, DataTable, OptionList, Static, TextArea
 from vmx import NULL_DISPATCHER
 
@@ -728,16 +729,49 @@ async def test_page_selects_query_view_before_inserting_table_reference() -> Non
 
 
 @pytest.mark.asyncio
-async def test_page_refresh_tolerates_query_controls_unmounting() -> None:
+async def test_page_refresh_surfaces_missing_required_control_while_live() -> None:
     vm, _client = _build_vm()
     await vm.setup()
     app = _AthenaApp(vm)
 
     async with app.run_test() as pilot:
         page = app.query_one(AthenaPage)
-        await app.query_one("#athena-cancel", Button).remove()
+        await pilot.pause()
+        original_query_one = page.query_one
+
+        def missing_cancel(
+            selector: object,
+            expect_type: object | None = None,
+        ) -> object:
+            if selector == "#athena-cancel":
+                raise NoMatches("No nodes match '#athena-cancel' on AthenaPage()")
+            if expect_type is None:
+                return original_query_one(selector)  # type: ignore[arg-type]
+            return original_query_one(selector, expect_type)  # type: ignore[arg-type]
+
+        assert page.is_running
+        assert page.is_attached
+        try:
+            page.query_one = missing_cancel  # type: ignore[method-assign]
+            with pytest.raises(NoMatches, match="#athena-cancel"):
+                page._refresh_page()
+        finally:
+            page.query_one = original_query_one  # type: ignore[method-assign]
+
+
+@pytest.mark.asyncio
+async def test_page_refresh_tolerates_genuine_page_teardown() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        page = app.query_one(AthenaPage)
+        await page.remove()
         await pilot.pause()
 
+        assert not page.is_running
+        assert not page.is_attached
         page._refresh_page()
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
@@ -91,16 +93,12 @@ def test_resolve_action_id_roundtrip() -> None:
     assert resolver.resolve_action_id("nope-no-such-key") is None
 
 
-def test_duplicate_overlay_key_resolution_is_first_declared_and_stable() -> None:
-    keymap = KeymapStore(overlay={"pane.copy": "y"})
-    actions = _registry("pane.copy", "glue.copy_table_ref")
-    resolver = BindingResolver(keymap=keymap, actions=actions)
-
-    assert resolver.resolve_action_id("y") == "pane.copy"
-    assert [binding.action for binding in resolver.to_textual_bindings() if binding.key == "y"] == [
-        "dispatch('pane.copy')",
-        "dispatch('glue.copy_table_ref')",
-    ]
+def test_duplicate_overlay_key_is_rejected_before_binding_materialization() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"'y'.*'glue\.copy_table_ref'.*'pane\.copy'",
+    ):
+        KeymapStore(overlay={"pane.copy": "y"})
 
 
 def test_keys_for_returns_tuple() -> None:

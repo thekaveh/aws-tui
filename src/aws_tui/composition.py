@@ -34,7 +34,7 @@ from aws_tui.domain.transfer_journal import TransferJournal, TransferJournalEntr
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
-from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
+from aws_tui.infra.keymap_store import KeybindingCollision, KeymapStore, UnknownAction
 from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
@@ -214,7 +214,7 @@ def build_app_context(
     # ``AwsTuiApp.BINDINGS`` does not actually dispatch yet.
     try:
         KeymapStore(overlay=keybindings_overlay)
-    except UnknownAction as exc:
+    except (KeybindingCollision, UnknownAction) as exc:
         _logger.warning(
             "composition.keymap_overlay.invalid",
             extra={"error": str(exc), "error_type": type(exc).__name__},

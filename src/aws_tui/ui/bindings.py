@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from textual.binding import Binding
 
-from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
+from aws_tui.infra.keymap_store import KeymapStore, UnknownAction, textual_key_name
 from aws_tui.ui.actions import ActionRegistry
 
 #: Human-readable label per action id used in Textual binding descriptions.
@@ -103,19 +103,6 @@ def _binding_priority(action_id: str, key: str) -> bool:
     )
 
 
-#: The keymap stores user-facing key literals, but Textual delivers punctuation
-#: under key *names* (a ``:`` press arrives as ``"colon"``) and treats ``","``
-#: as the multi-key separator (``Binding(",")`` raises ``InvalidBinding``). Map
-#: the punctuation we bind to Textual's names; letters, named keys, and
-#: modifier combos (``tab``, ``ctrl+c``, ``shift+up``) pass through unchanged.
-_KEY_NAME_OVERRIDES: dict[str, str] = {
-    ",": "comma",
-    ":": "colon",
-    "?": "question_mark",
-    "/": "slash",
-}
-
-
 class BindingResolver:
     """Bridge between Textual's BINDINGS list and our ``KeymapStore``.
 
@@ -168,7 +155,7 @@ class BindingResolver:
             for index, key in enumerate(keys):
                 bindings.append(
                     Binding(
-                        key=_KEY_NAME_OVERRIDES.get(key, key),
+                        key=textual_key_name(key),
                         action=f"dispatch({action_id!r})",
                         description=description,
                         show=index == 0 and visible,

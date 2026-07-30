@@ -654,6 +654,8 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self.call_after_refresh(partial(self._maybe_focus_active, reference))
 
     def _refresh_page(self) -> None:
+        if not self.is_running or not self.is_attached:
+            return
         reference = (
             self._focus_coordinator.focused_slot if self._focus_coordinator is not None else None
         )
@@ -664,10 +666,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self._sync_context(context_controls)
         self._sync_view(view_controls)
         cast(AthenaQueryView, view_controls[0][0]).refresh_from_vm()
-        try:
-            focus_targets = dict(self._focus_targets())
-        except NoMatches:
-            return
+        focus_targets = dict(self._focus_targets())
         if reference is not None and reference not in focus_targets:
             self.call_after_refresh(partial(self._maybe_focus_active, reference))
 
