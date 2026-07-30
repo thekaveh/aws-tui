@@ -6,7 +6,7 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.widget import Widget
 from textual.widgets import OptionList, Select
 from textual.worker import Worker
@@ -80,6 +80,14 @@ class GlueCrawlersView(Widget):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+    def focus_targets(self) -> tuple[Widget, ...]:
+        """Return the ordered, concrete targets for the Crawlers focus ring."""
+        return (
+            self.query_one("#glue-crawler-state-filter", Select),
+            self.query_one("#glue-crawlers-pane", ResourceListPane).option_list,
+            self.query_one("#glue-crawler-detail-pane", DetailRows).query_one(VerticalScroll),
+        )
 
     def on_option_list_option_highlighted(
         self,

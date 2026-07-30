@@ -66,6 +66,19 @@ async def test_service_tab_strip_enter_selects_the_highlighted_tab() -> None:
 
 
 @pytest.mark.asyncio
+async def test_service_tab_strip_space_selects_the_highlighted_tab() -> None:
+    tabs = _tabs()
+
+    async with TabHost(tabs).run_test() as pilot:
+        tabs.focus()
+        tabs._highlighted = "jobs"
+        await pilot.press("space")
+
+        assert tabs.active == "catalog"
+        assert pilot.app.changes == ["jobs"]
+
+
+@pytest.mark.asyncio
 async def test_service_tab_strip_set_active_updates_without_emitting() -> None:
     tabs = _tabs()
 

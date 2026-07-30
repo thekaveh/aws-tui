@@ -358,6 +358,24 @@ Each implementation task records:
 | Test LOC | Deleted, added, delta |
 | Coverage | Before, after, and delta |
 
+### `vmx31-glue-athena-focus-rings`
+
+| Field | Evidence |
+|---|---|
+| Change ID | `vmx31-glue-athena-focus-rings` |
+| Required behavior | Maintain one typed app-wide focus identity while callers supply deterministic, availability-filtered Glue and Athena rings and views project the selected logical slot to Textual widgets. |
+| VMx candidates | `DiscriminatorVM[FocusSlot]`, `FilteredCompositeVM`, `GroupVM`, and `HierarchicalVM`. |
+| Selected primitive | Existing `DiscriminatorVM[FocusSlot]`, through public `active_key`, `active_changed`, `is_active()`, and `set_active_key()` APIs behind `FocusCoordinatorVM.cycle_focus_ring()`. |
+| Rejected candidates | `FilteredCompositeVM` models a filtered component cursor rather than app-to-widget focus identity; `GroupVM` owns component membership without an active discriminator; `HierarchicalVM` models recursive resource ownership, not a flat dynamic focus ring. A service-local discriminator was also rejected because it would create a second focus authority. |
+| Bespoke code retained | Glue and Athena views build ordered tuples of currently valid concrete widgets and call Textual `App.set_focus()` for runtime projection. VMx does not own Textual DOM availability, visibility, disabled state, or widget focus. |
+| VM files | Changed `src/aws_tui/vm/chrome/focus_coordinator_vm.py`. |
+| View files | Changed `src/aws_tui/app.py`, Glue/Athena page and filter views, and the shared service tab strip. |
+| Tests | Expanded coordinator composition/ring tests, complete forward/reverse page-ring tests for all seven service views, hidden/disabled omission coverage, and explicit Space activation regression coverage. |
+| VM LOC | 39 added, 0 deleted, net +39. |
+| View LOC | 306 added, 135 deleted, net +171; 135 lines of raw tab/focus traversal presentation were removed or replaced. |
+| Test LOC | 333 added, 6 deleted, net +327. |
+| Coverage | The specified focused suite increased from 50 to 64 tests and from 32.10% to 32.56% whole-package coverage, +0.45 percentage points. The changed focus coordinator remained at 95%; Glue page coverage increased from 63% to 66% and Athena page coverage from 57% to 60%. |
+
 # 7. Testing and acceptance
 
 ## 7.1. Test-first requirement

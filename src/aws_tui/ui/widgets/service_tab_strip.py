@@ -15,8 +15,8 @@ from textual.widgets import Static
 class _ServiceTab(Static):
     """Non-focusable visual child owned by :class:`ServiceTabStrip`."""
 
-    def __init__(self, value: str, label: str) -> None:
-        super().__init__(label, id=f"service-tab-{value}", classes="service-tab", markup=False)
+    def __init__(self, value: str, label: str, *, id_prefix: str) -> None:
+        super().__init__(label, id=f"{id_prefix}-{value}", classes="service-tab", markup=False)
         self.value = value
 
 
@@ -66,6 +66,7 @@ class ServiceTabStrip(Widget, can_focus=True):
         *,
         active: str,
         id: str | None = None,
+        tab_id_prefix: str = "service-tab",
     ) -> None:
         if not tabs:
             raise ValueError("ServiceTabStrip requires at least one tab")
@@ -79,6 +80,7 @@ class ServiceTabStrip(Widget, can_focus=True):
         self._tabs = tabs
         self._active = active
         self._highlighted = active
+        self._tab_id_prefix = tab_id_prefix
 
     @property
     def active(self) -> str:
@@ -88,7 +90,7 @@ class ServiceTabStrip(Widget, can_focus=True):
 
     def compose(self) -> ComposeResult:
         for value, label in self._tabs:
-            yield _ServiceTab(value, label)
+            yield _ServiceTab(value, label, id_prefix=self._tab_id_prefix)
 
     def on_mount(self) -> None:
         self._sync_tabs()

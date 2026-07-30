@@ -6,13 +6,10 @@ from typing import ClassVar, cast
 
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.binding import Binding, BindingType
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.css.query import NoMatches
-from textual.events import Click
-from textual.message import Message as TextualMessage
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, OptionList, Select, Static, TextArea
+from textual.widgets import Button, DataTable, OptionList, Select, TextArea
 from textual.worker import Worker
 from vmx import Message, MessageHub
 
@@ -23,7 +20,9 @@ from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.athena.saved_view import AthenaSavedView
+from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM, AthenaView
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -35,30 +34,8 @@ _ContextControls = tuple[
 ]
 
 
-class _ViewTab(Static, can_focus=True):
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("enter,space", "select", "Select", show=False),
-    ]
-
-    class Selected(TextualMessage):
-        def __init__(self, view: AthenaView) -> None:
-            super().__init__()
-            self.view = view
-
-    def __init__(self, view: AthenaView, key_label: str) -> None:
-        super().__init__(
-            f"{key_label} {view}".strip(),
-            id=f"athena-tab-{view}",
-            classes="athena-view-tab",
-            markup=False,
-        )
-        self.view = view
-
-    def on_click(self, _event: Click) -> None:
-        self.post_message(self.Selected(self.view))
-
-    def action_select(self) -> None:
-        self.post_message(self.Selected(self.view))
+class _FocusableSourceHeader(ServiceSourceHeader, can_focus=True):
+    """Temporary focus bridge until Task 3 supplies the source picker."""
 
 
 class AthenaPage(HubSubscriberMixin, Widget):
@@ -86,17 +63,6 @@ class AthenaPage(HubSubscriberMixin, Widget):
     AthenaPage #athena-context-header > AthenaLoadMoreButton {
         width: 3;
         min-width: 3;
-    }
-    AthenaPage > #athena-view-tabs {
-        width: 1fr;
-        height: 1;
-        layout: horizontal;
-    }
-    AthenaPage .athena-view-tab {
-        width: 1fr;
-        height: 1;
-        padding: 0 1;
-        content-align: center middle;
     }
     AthenaPage > #athena-view-host,
     AthenaPage .athena-service-view {
@@ -141,7 +107,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="athena-context-header"):
-            yield ServiceSourceHeader(self._vm.source, id="athena-source-header")
+            yield _FocusableSourceHeader(self._vm.source, id="athena-source-header")
             yield Select(
                 (),
                 prompt="workgroup",
@@ -178,12 +144,19 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 id="athena-more-databases",
                 tooltip="Load more databases",
             )
-        with Horizontal(id="athena-view-tabs"):
-            for view in _VIEW_ORDER:
-                keys = self._keymap.resolve(f"athena.{view}")
-                tab = _ViewTab(view, keys[0] if keys else "")
-                tab.set_class(view == self._vm.active_view, "-active")
-                yield tab
+        yield ServiceTabStrip(
+            tuple(
+                (
+                    view,
+                    f"{keys[0] if keys else ''} {view}".strip(),
+                )
+                for view in _VIEW_ORDER
+                for keys in (self._keymap.resolve(f"athena.{view}"),)
+            ),
+            active=self._vm.active_view,
+            id="athena-view-tabs",
+            tab_id_prefix="athena-tab",
+        )
         with Container(id="athena-view-host"):
             views: tuple[tuple[AthenaView, Widget], ...] = (
                 ("query", AthenaQueryView(self._vm, id="athena-query-view")),
@@ -226,8 +199,8 @@ class AthenaPage(HubSubscriberMixin, Widget):
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()
 
-    async def on__view_tab_selected(self, event: _ViewTab.Selected) -> None:
-        await self.action_select_view(event.view)
+    async def on_service_tab_strip_changed(self, event: ServiceTabStrip.Changed) -> None:
+        await self.action_select_view(event.value)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if self._syncing_context or event.value is Select.NULL:
@@ -361,10 +334,110 @@ class AthenaPage(HubSubscriberMixin, Widget):
             await self._vm.saved.setup()
 
     def cycle_focus(self, *, reverse: bool) -> None:
-        if reverse:
-            self.app.action_focus_previous()
+        if self._focus_coordinator is None:
+            return
+        targets = self._focus_targets()
+        slot = self._focus_coordinator.cycle_focus_ring(
+            tuple(slot for slot, _widget in targets),
+            reverse=reverse,
+        )
+        self._project_focus_slot(slot, targets=targets)
+
+    def focus_default(self) -> None:
+        """Focus the active view's primary operational target."""
+        self._project_focus_slot(FocusSlot.ATHENA_PRIMARY)
+
+    def _focus_targets(self) -> tuple[tuple[FocusSlot, Widget], ...]:
+        targets: list[tuple[FocusSlot, Widget]] = [
+            (FocusSlot.ATHENA_SOURCE, self.query_one("#athena-source-header", Widget)),
+        ]
+        for slot, selector in (
+            (FocusSlot.ATHENA_WORKGROUP, "#athena-workgroup"),
+            (FocusSlot.ATHENA_CATALOG, "#athena-catalog"),
+            (FocusSlot.ATHENA_DATABASE, "#athena-database"),
+        ):
+            widget = self.query_one(selector, Select)
+            if self._is_focus_target(widget):
+                targets.append((slot, widget))
+        targets.append(
+            (
+                FocusSlot.ATHENA_TABS,
+                self.query_one("#athena-view-tabs", ServiceTabStrip),
+            )
+        )
+        targets.extend(self._active_surface_focus_targets())
+        return tuple(targets)
+
+    def _active_surface_focus_targets(self) -> tuple[tuple[FocusSlot, Widget], ...]:
+        candidates: tuple[tuple[FocusSlot, Widget], ...]
+        if self._vm.active_view == "query":
+            candidates = (
+                (FocusSlot.ATHENA_PRIMARY, self.query_one("#athena-editor", TextArea)),
+                (FocusSlot.ATHENA_SECONDARY, self.query_one("#athena-execute", Button)),
+                (
+                    FocusSlot.ATHENA_DETAIL,
+                    self.query_one("#athena-query-detail", VerticalScroll),
+                ),
+            )
+        elif self._vm.active_view == "history":
+            candidates = (
+                (
+                    FocusSlot.ATHENA_PRIMARY,
+                    self.query_one("#athena-history-pane", ResourceListPane).option_list,
+                ),
+                (
+                    FocusSlot.ATHENA_SECONDARY,
+                    self.query_one("#athena-history-results", Button),
+                ),
+                (
+                    FocusSlot.ATHENA_DETAIL,
+                    self.query_one("#athena-history-detail", DetailRows).query_one(VerticalScroll),
+                ),
+            )
+        elif self._vm.active_view == "results":
+            candidates = (
+                (
+                    FocusSlot.ATHENA_PRIMARY,
+                    self.query_one("#athena-results-table", DataTable),
+                ),
+                (
+                    FocusSlot.ATHENA_SECONDARY,
+                    self.query_one("#athena-more-results", Button),
+                ),
+            )
         else:
-            self.app.action_focus_next()
+            candidates = (
+                (
+                    FocusSlot.ATHENA_PRIMARY,
+                    self.query_one("#athena-named-pane", ResourceListPane).option_list,
+                ),
+                (
+                    FocusSlot.ATHENA_SECONDARY,
+                    self.query_one("#athena-prepared-pane", ResourceListPane).option_list,
+                ),
+                (
+                    FocusSlot.ATHENA_DETAIL,
+                    self.query_one("#athena-saved-detail", DetailRows).query_one(VerticalScroll),
+                ),
+            )
+        return tuple((slot, widget) for slot, widget in candidates if self._is_focus_target(widget))
+
+    @staticmethod
+    def _is_focus_target(widget: Widget) -> bool:
+        return widget.display and not widget.disabled and widget.can_focus
+
+    def _project_focus_slot(
+        self,
+        slot: FocusSlot,
+        *,
+        targets: tuple[tuple[FocusSlot, Widget], ...] | None = None,
+    ) -> None:
+        target = dict(targets or self._focus_targets()).get(slot)
+        if target is None:
+            return
+        if self._focus_coordinator is not None:
+            self._focus_coordinator.set_focused_slot(slot)
+        self.app.set_focus(target)
 
     def move_focused(self, delta: int) -> None:
         focused = self.app.focused
@@ -384,7 +457,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
             return False
         if isinstance(focused, TextArea):
             focused.insert("\n")
-        elif isinstance(focused, _ViewTab):
+        elif isinstance(focused, ServiceTabStrip):
             focused.action_select()
         elif isinstance(focused, Select):
             focused.action_show_overlay()
@@ -517,34 +590,32 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 error_text=error_text,
             )
 
-    def _view_controls(self) -> tuple[tuple[Widget, _ViewTab], ...] | None:
+    def _view_controls(self) -> tuple[tuple[Widget, ...], ServiceTabStrip] | None:
         if not self.is_mounted:
             return None
         try:
-            controls = tuple(
-                (
-                    self.query_one(f"#athena-{view}-view", Widget),
-                    self.query_one(f"#athena-tab-{view}", _ViewTab),
-                )
-                for view in _VIEW_ORDER
+            controls = (
+                tuple(self.query_one(f"#athena-{view}-view", Widget) for view in _VIEW_ORDER),
+                self.query_one("#athena-view-tabs", ServiceTabStrip),
             )
         except NoMatches:
             return None
-        if not all(control.is_mounted for pair in controls for control in pair):
+        if not all(control.is_mounted for control in (*controls[0], controls[1])):
             return None
         return controls
 
     def _sync_view(
         self,
-        controls: tuple[tuple[Widget, _ViewTab], ...] | None = None,
+        controls: tuple[tuple[Widget, ...], ServiceTabStrip] | None = None,
     ) -> None:
         controls = controls or self._view_controls()
         if controls is None:
             return
         active = self._vm.active_view
-        for view, (child, tab) in zip(_VIEW_ORDER, controls, strict=True):
+        views, tabs = controls
+        for view, child in zip(_VIEW_ORDER, views, strict=True):
             child.display = view == active
-            tab.set_class(view == active, "-active")
+        tabs.set_active(active)
 
     def _replace_select(
         self,
@@ -583,15 +654,17 @@ class AthenaPage(HubSubscriberMixin, Widget):
         if focused is not None and not self.has_focus_within:
             return
         try:
-            active = self.query_one(f"#athena-{self._vm.active_view}-view")
+            targets = self._focus_targets()
         except NoMatches:
             return
-        focusable = next(
-            iter(active.query("TextArea, DataTable, OptionList, Button, Select")),
-            None,
+        current_slot = (
+            self._focus_coordinator.focused_slot
+            if self._focus_coordinator is not None
+            else FocusSlot.ATHENA_PRIMARY
         )
-        if focusable is not None:
-            focusable.focus()
+        if current_slot not in dict(targets):
+            current_slot = FocusSlot.ATHENA_PRIMARY
+        self._project_focus_slot(current_slot, targets=targets)
 
 
 __all__ = ["AthenaPage"]

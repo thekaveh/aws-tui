@@ -1,52 +1,30 @@
 from __future__ import annotations
 
+import contextlib
 from typing import ClassVar, cast
 
 from textual.app import ComposeResult
-from textual.binding import Binding, BindingType
-from textual.containers import Container, Horizontal
-from textual.events import Click
-from textual.message import Message as TextualMessage
+from textual.containers import Container, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import OptionList, Select, Static
+from textual.widgets import OptionList, Select
 from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
+from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 
 _VIEW_ORDER: tuple[GlueView, ...] = ("catalog", "jobs", "crawlers")
 
 
-class _ViewTab(Static, can_focus=True):
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("enter,space", "select", "Select", show=False),
-    ]
-
-    class Selected(TextualMessage):
-        def __init__(self, view: GlueView) -> None:
-            super().__init__()
-            self.view = view
-
-    def __init__(self, view: GlueView, key_label: str) -> None:
-        super().__init__(
-            f"{key_label} {view}".strip(),
-            id=f"glue-tab-{view}",
-            classes="glue-view-tab",
-            markup=False,
-        )
-        self.view = view
-
-    def on_click(self, _event: Click) -> None:
-        self.post_message(self.Selected(self.view))
-
-    def action_select(self) -> None:
-        self.post_message(self.Selected(self.view))
+class _FocusableSourceHeader(ServiceSourceHeader, can_focus=True):
+    """Temporary focus bridge until Task 3 supplies the source picker."""
 
 
 class GluePage(HubSubscriberMixin, Widget):
@@ -58,17 +36,6 @@ class GluePage(HubSubscriberMixin, Widget):
     GluePage > ServiceSourceHeader {
         width: 1fr;
         height: 1;
-    }
-    GluePage > #glue-view-tabs {
-        width: 1fr;
-        height: 1;
-        layout: horizontal;
-    }
-    GluePage .glue-view-tab {
-        width: 1fr;
-        height: 1;
-        padding: 0 1;
-        content-align: center middle;
     }
     GluePage > #glue-view-host {
         width: 1fr;
@@ -101,11 +68,20 @@ class GluePage(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        yield ServiceSourceHeader(self._vm.source, id="glue-source-header")
-        with Horizontal(id="glue-view-tabs"):
-            for view in _VIEW_ORDER:
-                keys = self._keymap.resolve(f"glue.{view}")
-                yield _ViewTab(view, keys[0] if keys else "")
+        yield _FocusableSourceHeader(self._vm.source, id="glue-source-header")
+        yield ServiceTabStrip(
+            tuple(
+                (
+                    view,
+                    f"{keys[0] if keys else ''} {view}".strip(),
+                )
+                for view in _VIEW_ORDER
+                for keys in (self._keymap.resolve(f"glue.{view}"),)
+            ),
+            active=self._vm.active_view,
+            id="glue-view-tabs",
+            tab_id_prefix="glue-tab",
+        )
         with Container(id="glue-view-host"):
             yield GlueCatalogView(self._vm, id="glue-catalog-view")
             yield GlueJobsView(self._vm, id="glue-jobs-view")
@@ -124,8 +100,8 @@ class GluePage(HubSubscriberMixin, Widget):
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()
 
-    async def on__view_tab_selected(self, event: _ViewTab.Selected) -> None:
-        await self.action_select_view(event.view)
+    async def on_service_tab_strip_changed(self, event: ServiceTabStrip.Changed) -> None:
+        await self.action_select_view(event.value)
 
     async def action_select_view(self, view: str) -> None:
         selected = cast(GlueView, view)
@@ -139,10 +115,74 @@ class GluePage(HubSubscriberMixin, Widget):
         await self._vm.refresh_active()
 
     def cycle_focus(self, *, reverse: bool) -> None:
-        if reverse:
-            self.app.action_focus_previous()
-        else:
-            self.app.action_focus_next()
+        if self._focus_coordinator is None:
+            return
+        targets = self._focus_targets()
+        slot = self._focus_coordinator.cycle_focus_ring(
+            tuple(slot for slot, _widget in targets),
+            reverse=reverse,
+        )
+        self._project_focus_slot(slot, targets=targets)
+
+    def focus_default(self) -> None:
+        """Focus the active view's primary operational target."""
+        self._project_focus_slot(FocusSlot.GLUE_PRIMARY)
+
+    def _focus_targets(self) -> tuple[tuple[FocusSlot, Widget], ...]:
+        source = self.query_one("#glue-source-header", Widget)
+        tabs = self.query_one("#glue-view-tabs", ServiceTabStrip)
+        active = self._vm.active_view
+        if active == "catalog":
+            catalog = self.query_one(GlueCatalogView)
+            return (
+                (FocusSlot.GLUE_SOURCE, source),
+                (FocusSlot.GLUE_TABS, tabs),
+                (
+                    FocusSlot.GLUE_PRIMARY,
+                    catalog.query_one("#glue-databases-pane", ResourceListPane).option_list,
+                ),
+                (
+                    FocusSlot.GLUE_SECONDARY,
+                    catalog.query_one("#glue-tables-pane", ResourceListPane).option_list,
+                ),
+                (
+                    FocusSlot.GLUE_DETAIL,
+                    catalog.query_one("#glue-table-detail-pane", DetailRows).query_one(
+                        VerticalScroll
+                    ),
+                ),
+            )
+        if active == "jobs":
+            filter_target, primary, secondary, detail = self.query_one(GlueJobsView).focus_targets()
+            return (
+                (FocusSlot.GLUE_SOURCE, source),
+                (FocusSlot.GLUE_FILTER, filter_target),
+                (FocusSlot.GLUE_TABS, tabs),
+                (FocusSlot.GLUE_PRIMARY, primary),
+                (FocusSlot.GLUE_SECONDARY, secondary),
+                (FocusSlot.GLUE_DETAIL, detail),
+            )
+        filter_target, primary, detail = self.query_one(GlueCrawlersView).focus_targets()
+        return (
+            (FocusSlot.GLUE_SOURCE, source),
+            (FocusSlot.GLUE_FILTER, filter_target),
+            (FocusSlot.GLUE_TABS, tabs),
+            (FocusSlot.GLUE_PRIMARY, primary),
+            (FocusSlot.GLUE_DETAIL, detail),
+        )
+
+    def _project_focus_slot(
+        self,
+        slot: FocusSlot,
+        *,
+        targets: tuple[tuple[FocusSlot, Widget], ...] | None = None,
+    ) -> None:
+        target = dict(targets or self._focus_targets()).get(slot)
+        if target is None:
+            return
+        if self._focus_coordinator is not None:
+            self._focus_coordinator.set_focused_slot(slot)
+        self.app.set_focus(target)
 
     def move_focused(self, delta: int) -> None:
         focused = self.app.focused
@@ -169,7 +209,7 @@ class GluePage(HubSubscriberMixin, Widget):
         focused = self.app.focused
         if not self._contains_focus(focused):
             return False
-        if isinstance(focused, _ViewTab):
+        if isinstance(focused, ServiceTabStrip):
             focused.action_select()
         elif isinstance(focused, Select):
             focused.action_show_overlay()
@@ -188,11 +228,11 @@ class GluePage(HubSubscriberMixin, Widget):
         for view in _VIEW_ORDER:
             try:
                 child = self.query_one(f"#glue-{view}-view")
-                tab = self.query_one(f"#glue-tab-{view}", _ViewTab)
             except Exception:
                 continue
             child.display = view == active
-            tab.set_class(view == active, "-active")
+        with contextlib.suppress(Exception):
+            self.query_one("#glue-view-tabs", ServiceTabStrip).set_active(active)
 
     def _maybe_focus_active(self) -> None:
         focused = self.app.focused
@@ -205,10 +245,15 @@ class GluePage(HubSubscriberMixin, Widget):
             return
         if focused is not None and not self.has_focus_within:
             return
-        active = self.query_one(f"#glue-{self._vm.active_view}-view")
-        focusable = next(iter(active.query("OptionList, Select")), None)
-        if focusable is not None:
-            focusable.focus()
+        targets = self._focus_targets()
+        current_slot = (
+            self._focus_coordinator.focused_slot
+            if self._focus_coordinator is not None
+            else FocusSlot.GLUE_PRIMARY
+        )
+        if current_slot not in dict(targets):
+            current_slot = FocusSlot.GLUE_PRIMARY
+        self._project_focus_slot(current_slot, targets=targets)
 
 
 __all__ = ["GluePage"]

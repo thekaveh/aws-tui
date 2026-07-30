@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Button, DataTable, OptionList, Select, Static, TextArea
+from vmx import NULL_DISPATCHER
 
 from aws_tui.domain.query import ResultColumn, ResultPage
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
@@ -10,7 +11,9 @@ from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.athena.saved_view import AthenaSavedView
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
 
@@ -18,9 +21,112 @@ class _AthenaApp(App[None]):
     def __init__(self, vm: AthenaPageVM) -> None:
         super().__init__()
         self._vm = vm
+        self.focus_coordinator = FocusCoordinatorVM(
+            hub=vm._hub,  # type: ignore[attr-defined]
+            dispatcher=NULL_DISPATCHER,
+        )
+        self.focus_coordinator.construct()
 
     def compose(self) -> ComposeResult:
-        yield AthenaPage(self._vm, hub=self._vm._hub)  # type: ignore[attr-defined]
+        yield AthenaPage(
+            self._vm,
+            hub=self._vm._hub,  # type: ignore[attr-defined]
+            focus_coordinator=self.focus_coordinator,
+        )
+
+    def on_unmount(self) -> None:
+        self.focus_coordinator.dispose()
+
+
+def _athena_target_ids(page: AthenaPage) -> tuple[str, ...]:
+    return tuple(widget.id or "" for _slot, widget in page._focus_targets())
+
+
+def _cycle_athena_target_ids(
+    app: _AthenaApp,
+    page: AthenaPage,
+    *,
+    reverse: bool,
+) -> tuple[str, ...]:
+    expected_count = len(page._focus_targets())
+    app.focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
+    visited: list[str] = []
+    for _ in range(expected_count):
+        page.cycle_focus(reverse=reverse)
+        focused = app.focused
+        assert focused is not None
+        visited.append(focused.id or "")
+    page.cycle_focus(reverse=reverse)
+    assert app.focused is not None
+    assert app.focused.id == visited[0]
+    return tuple(visited)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view", "surface_ids"),
+    [
+        ("query", ("athena-editor", "athena-query-detail")),
+        (
+            "history",
+            ("athena-history-pane-options", "athena-history-results", ""),
+        ),
+        ("results", ("athena-results-table",)),
+        (
+            "saved",
+            ("athena-named-pane-options", "athena-prepared-pane-options", ""),
+        ),
+    ],
+)
+async def test_athena_views_have_complete_deterministic_focus_rings(
+    view: str,
+    surface_ids: tuple[str, ...],
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    await vm.select_view(view)  # type: ignore[arg-type]
+    app = _AthenaApp(vm)
+    context_ids = (
+        "athena-source-header",
+        "athena-workgroup",
+        "athena-catalog",
+        "athena-database",
+        "athena-view-tabs",
+    )
+    expected_ids = (*context_ids, *surface_ids)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        assert _athena_target_ids(page) == expected_ids
+        assert _cycle_athena_target_ids(app, page, reverse=False) == expected_ids
+        assert _cycle_athena_target_ids(app, page, reverse=True) == (
+            expected_ids[0],
+            *reversed(expected_ids[1:]),
+        )
+
+
+@pytest.mark.asyncio
+async def test_athena_focus_ring_omits_hidden_views_and_disabled_load_more() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        target_ids = set(_athena_target_ids(page))
+
+        assert not target_ids & {
+            "athena-more-workgroups",
+            "athena-more-catalogs",
+            "athena-more-databases",
+            "athena-history-pane-options",
+            "athena-results-table",
+            "athena-named-pane-options",
+            "athena-prepared-pane-options",
+        }
+        assert page.query_one("#athena-view-tabs", ServiceTabStrip)
 
 
 def _build_vm(client: PageClient | None = None) -> tuple[AthenaPageVM, PageClient]:

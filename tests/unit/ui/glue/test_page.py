@@ -14,6 +14,8 @@ from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
@@ -43,12 +45,116 @@ class _GlueApp(App[None]):
         super().__init__()
         self._vm = vm
         self._keymap = keymap
+        self.focus_coordinator = FocusCoordinatorVM(
+            hub=vm.hub,
+            dispatcher=NULL_DISPATCHER,
+        )
+        self.focus_coordinator.construct()
 
     def compose(self) -> ComposeResult:
         if self._keymap is None:
-            yield GluePage(self._vm, hub=self._vm.hub)
+            yield GluePage(
+                self._vm,
+                hub=self._vm.hub,
+                focus_coordinator=self.focus_coordinator,
+            )
         else:
-            yield GluePage(self._vm, hub=self._vm.hub, keymap=self._keymap)
+            yield GluePage(
+                self._vm,
+                hub=self._vm.hub,
+                keymap=self._keymap,
+                focus_coordinator=self.focus_coordinator,
+            )
+
+    def on_unmount(self) -> None:
+        self.focus_coordinator.dispose()
+
+
+def _focus_target_ids(page: GluePage) -> tuple[str, ...]:
+    return tuple(widget.id or "" for _slot, widget in page._focus_targets())
+
+
+def _cycle_target_ids(
+    app: _GlueApp,
+    page: GluePage,
+    *,
+    reverse: bool,
+) -> tuple[str, ...]:
+    expected_count = len(page._focus_targets())
+    app.focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
+    visited: list[str] = []
+    for _ in range(expected_count):
+        page.cycle_focus(reverse=reverse)
+        focused = app.focused
+        assert focused is not None
+        visited.append(focused.id or "")
+    page.cycle_focus(reverse=reverse)
+    assert app.focused is not None
+    assert app.focused.id == visited[0]
+    return tuple(visited)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view", "expected_ids"),
+    [
+        (
+            "catalog",
+            (
+                "glue-source-header",
+                "glue-view-tabs",
+                "glue-databases-pane-options",
+                "glue-tables-pane-options",
+                "",
+            ),
+        ),
+        (
+            "jobs",
+            (
+                "glue-source-header",
+                "glue-run-state-filter",
+                "glue-view-tabs",
+                "glue-jobs-pane-options",
+                "glue-runs-pane-options",
+                "",
+            ),
+        ),
+        (
+            "crawlers",
+            (
+                "glue-source-header",
+                "glue-crawler-state-filter",
+                "glue-view-tabs",
+                "glue-crawlers-pane-options",
+                "",
+            ),
+        ),
+    ],
+)
+async def test_glue_views_have_complete_deterministic_focus_rings(
+    view: str,
+    expected_ids: tuple[str, ...],
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    await vm.select_view(view)  # type: ignore[arg-type]
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        assert _focus_target_ids(page) == expected_ids
+        assert _cycle_target_ids(app, page, reverse=False) == expected_ids
+        assert _cycle_target_ids(app, page, reverse=True) == (
+            expected_ids[0],
+            *reversed(expected_ids[1:]),
+        )
+        active_id = f"glue-{view}-view"
+        assert all(
+            active_id in {ancestor.id for ancestor in widget.ancestors_with_self}
+            or slot in {FocusSlot.GLUE_SOURCE, FocusSlot.GLUE_FILTER, FocusSlot.GLUE_TABS}
+            for slot, widget in page._focus_targets()
+        )
 
 
 @pytest.mark.asyncio
@@ -156,10 +262,11 @@ async def test_focused_tab_activates_with_keyboard(key: str) -> None:
         page = app.query_one(GluePage)
         page._maybe_focus_active()  # type: ignore[attr-defined]
         await pilot.pause(0.05)
-        tab = app.query_one("#glue-tab-jobs")
+        tab = app.query_one("#glue-view-tabs", ServiceTabStrip)
         tab.focus()
         await pilot.pause()
         assert tab.has_focus
+        tab._highlighted = "jobs"
 
         await pilot.press(key)
         await pilot.pause()

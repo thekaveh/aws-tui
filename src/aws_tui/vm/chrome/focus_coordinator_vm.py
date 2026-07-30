@@ -54,6 +54,20 @@ class FocusSlot(StrEnum):
     EMR_RUNS = "emr.runs"
     EMR_DETAIL = "emr.detail"
     EMR_LOGS = "emr.logs"
+    GLUE_SOURCE = "glue.source"
+    GLUE_FILTER = "glue.filter"
+    GLUE_TABS = "glue.tabs"
+    GLUE_PRIMARY = "glue.primary"
+    GLUE_SECONDARY = "glue.secondary"
+    GLUE_DETAIL = "glue.detail"
+    ATHENA_SOURCE = "athena.source"
+    ATHENA_WORKGROUP = "athena.workgroup"
+    ATHENA_CATALOG = "athena.catalog"
+    ATHENA_DATABASE = "athena.database"
+    ATHENA_TABS = "athena.tabs"
+    ATHENA_PRIMARY = "athena.primary"
+    ATHENA_SECONDARY = "athena.secondary"
+    ATHENA_DETAIL = "athena.detail"
     SETTINGS = "settings"
     MODAL = "modal"
 
@@ -148,6 +162,31 @@ class FocusCoordinatorVM:
         """
         _ = reverse
         self._cycle((FocusSlot.SETTINGS, FocusSlot.NAV_MENU))
+
+    def cycle_focus_ring(
+        self,
+        slots: tuple[FocusSlot, ...],
+        *,
+        reverse: bool = False,
+    ) -> FocusSlot:
+        """Move through a caller-defined logical focus ring.
+
+        The caller owns availability and ordering; the composed VMx
+        discriminator remains the sole owner of the active identity.
+        """
+        if not slots:
+            raise ValueError("focus ring requires at least one slot")
+        if len(set(slots)) != len(slots):
+            raise ValueError("focus ring slots must be unique")
+        try:
+            index = slots.index(self.focused_slot)
+        except ValueError:
+            selected = slots[0]
+        else:
+            step = -1 if reverse else 1
+            selected = slots[(index + step) % len(slots)]
+        self.set_focused_slot(selected)
+        return selected
 
     def modal_open(self) -> None:
         """Push the MODAL precedence slot. Saves the prior non-modal

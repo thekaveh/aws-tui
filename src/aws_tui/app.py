@@ -1479,6 +1479,32 @@ class AwsTuiApp(App[None]):
             with contextlib.suppress(Exception):
                 settings = self.query_one(SettingsView)
                 settings.focus_default()
+            return
+        if slot in {
+            FocusSlot.GLUE_SOURCE,
+            FocusSlot.GLUE_FILTER,
+            FocusSlot.GLUE_TABS,
+            FocusSlot.GLUE_PRIMARY,
+            FocusSlot.GLUE_SECONDARY,
+            FocusSlot.GLUE_DETAIL,
+        }:
+            page = self._glue_page()
+            if page is not None:
+                page._project_focus_slot(slot)
+            return
+        if slot in {
+            FocusSlot.ATHENA_SOURCE,
+            FocusSlot.ATHENA_WORKGROUP,
+            FocusSlot.ATHENA_CATALOG,
+            FocusSlot.ATHENA_DATABASE,
+            FocusSlot.ATHENA_TABS,
+            FocusSlot.ATHENA_PRIMARY,
+            FocusSlot.ATHENA_SECONDARY,
+            FocusSlot.ATHENA_DETAIL,
+        }:
+            athena_page = self._athena_page()
+            if athena_page is not None:
+                athena_page._project_focus_slot(slot)
 
     def _focus_demo_launch_nav(self) -> None:
         self._app_ctx.focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
@@ -1526,12 +1552,12 @@ class AwsTuiApp(App[None]):
         if current_id == "glue":
             with contextlib.suppress(Exception):
                 page = self.query_one("#content-glue-page", GluePage)
-                page.query_one("#glue-databases-pane").query_one(OptionList).focus()
+                page.focus_default()
             return
         if current_id == "athena":
             with contextlib.suppress(Exception):
                 athena_page = self.query_one("#content-athena-page", AthenaPage)
-                athena_page.query_one("#athena-editor").focus()
+                athena_page.focus_default()
             return
         if current_id == SETTINGS_NAV_ID:
             with contextlib.suppress(Exception):

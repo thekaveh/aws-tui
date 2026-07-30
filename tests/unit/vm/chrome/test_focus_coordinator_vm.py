@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from vmx import NULL_DISPATCHER, MessageHub
+import pytest
+from vmx import NULL_DISPATCHER, DiscriminatorVM, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
@@ -36,11 +37,84 @@ def test_initial_can_be_overridden() -> None:
 
 
 def test_focus_coordinator_uses_vmx_discriminator() -> None:
-    from vmx import DiscriminatorVM
-
     vm = _make()
     try:
         assert isinstance(vm._focus_discriminator, DiscriminatorVM)
+    finally:
+        vm.dispose()
+
+
+def test_service_ring_uses_vmx_discriminator() -> None:
+    vm = _make()
+    try:
+        assert isinstance(vm._focus_discriminator, DiscriminatorVM)
+        selected = vm.cycle_focus_ring((FocusSlot.GLUE_SOURCE, FocusSlot.GLUE_TABS))
+        assert selected is FocusSlot.GLUE_SOURCE
+        assert vm.focused_slot is FocusSlot.GLUE_SOURCE
+    finally:
+        vm.dispose()
+
+
+def test_service_ring_wraps_and_reverse_is_the_exact_inverse() -> None:
+    ring = (
+        FocusSlot.ATHENA_SOURCE,
+        FocusSlot.ATHENA_WORKGROUP,
+        FocusSlot.ATHENA_TABS,
+    )
+    vm = _make(initial=FocusSlot.ATHENA_SOURCE)
+    try:
+        assert vm.cycle_focus_ring(ring) is FocusSlot.ATHENA_WORKGROUP
+        assert vm.cycle_focus_ring(ring) is FocusSlot.ATHENA_TABS
+        assert vm.cycle_focus_ring(ring) is FocusSlot.ATHENA_SOURCE
+        assert vm.cycle_focus_ring(ring, reverse=True) is FocusSlot.ATHENA_TABS
+        assert vm.cycle_focus_ring(ring, reverse=True) is FocusSlot.ATHENA_WORKGROUP
+        assert vm.cycle_focus_ring(ring, reverse=True) is FocusSlot.ATHENA_SOURCE
+    finally:
+        vm.dispose()
+
+
+def test_service_ring_uses_first_caller_supplied_slot_when_current_is_absent() -> None:
+    vm = _make(initial=FocusSlot.GLUE_FILTER)
+    try:
+        selected = vm.cycle_focus_ring(
+            (FocusSlot.GLUE_SOURCE, FocusSlot.GLUE_PRIMARY),
+            reverse=True,
+        )
+        assert selected is FocusSlot.GLUE_SOURCE
+    finally:
+        vm.dispose()
+
+
+def test_service_ring_respects_slots_omitted_by_the_caller() -> None:
+    vm = _make(initial=FocusSlot.GLUE_SOURCE)
+    try:
+        selected = vm.cycle_focus_ring(
+            (FocusSlot.GLUE_SOURCE, FocusSlot.GLUE_PRIMARY, FocusSlot.GLUE_DETAIL)
+        )
+        assert selected is FocusSlot.GLUE_PRIMARY
+        assert (
+            vm.cycle_focus_ring((FocusSlot.GLUE_SOURCE, FocusSlot.GLUE_DETAIL))
+            is FocusSlot.GLUE_SOURCE
+        )
+    finally:
+        vm.dispose()
+
+
+def test_service_ring_rejects_an_empty_ring() -> None:
+    vm = _make()
+    try:
+        with pytest.raises(ValueError, match="at least one"):
+            vm.cycle_focus_ring(())
+    finally:
+        vm.dispose()
+
+
+def test_service_ring_modal_close_restores_the_service_slot() -> None:
+    vm = _make(initial=FocusSlot.ATHENA_DATABASE)
+    try:
+        vm.modal_open()
+        vm.modal_close()
+        assert vm.focused_slot is FocusSlot.ATHENA_DATABASE
     finally:
         vm.dispose()
 
@@ -263,6 +337,20 @@ def test_focus_slot_enum_has_all_required_members() -> None:
         "EMR_RUNS",
         "EMR_DETAIL",
         "EMR_LOGS",
+        "GLUE_SOURCE",
+        "GLUE_FILTER",
+        "GLUE_TABS",
+        "GLUE_PRIMARY",
+        "GLUE_SECONDARY",
+        "GLUE_DETAIL",
+        "ATHENA_SOURCE",
+        "ATHENA_WORKGROUP",
+        "ATHENA_CATALOG",
+        "ATHENA_DATABASE",
+        "ATHENA_TABS",
+        "ATHENA_PRIMARY",
+        "ATHENA_SECONDARY",
+        "ATHENA_DETAIL",
         "SETTINGS",
         "MODAL",
     }
@@ -279,5 +367,19 @@ def test_focus_slot_values_are_canonical_strings() -> None:
     assert FocusSlot.EMR_RUNS.value == "emr.runs"
     assert FocusSlot.EMR_DETAIL.value == "emr.detail"
     assert FocusSlot.EMR_LOGS.value == "emr.logs"
+    assert FocusSlot.GLUE_SOURCE.value == "glue.source"
+    assert FocusSlot.GLUE_FILTER.value == "glue.filter"
+    assert FocusSlot.GLUE_TABS.value == "glue.tabs"
+    assert FocusSlot.GLUE_PRIMARY.value == "glue.primary"
+    assert FocusSlot.GLUE_SECONDARY.value == "glue.secondary"
+    assert FocusSlot.GLUE_DETAIL.value == "glue.detail"
+    assert FocusSlot.ATHENA_SOURCE.value == "athena.source"
+    assert FocusSlot.ATHENA_WORKGROUP.value == "athena.workgroup"
+    assert FocusSlot.ATHENA_CATALOG.value == "athena.catalog"
+    assert FocusSlot.ATHENA_DATABASE.value == "athena.database"
+    assert FocusSlot.ATHENA_TABS.value == "athena.tabs"
+    assert FocusSlot.ATHENA_PRIMARY.value == "athena.primary"
+    assert FocusSlot.ATHENA_SECONDARY.value == "athena.secondary"
+    assert FocusSlot.ATHENA_DETAIL.value == "athena.detail"
     assert FocusSlot.SETTINGS.value == "settings"
     assert FocusSlot.MODAL.value == "modal"
