@@ -8,9 +8,10 @@ from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import OptionList, Select
+from textual.widgets import OptionList
 from textual.worker import Worker
 
+from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
     DetailValue,
@@ -42,7 +43,7 @@ class GlueCrawlersView(Widget):
         height: 1fr;
         layout: vertical;
     }
-    GlueCrawlersView > .glue-filtered-list > Select {
+    GlueCrawlersView > .glue-filtered-list > ContextPicker {
         height: 3;
     }
     GlueCrawlersView > .glue-filtered-list > ResourceListPane {
@@ -58,11 +59,10 @@ class GlueCrawlersView(Widget):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="glue-filtered-list"):
-            yield Select(
-                _CRAWLER_FILTERS,
-                value=self._vm.state_filter or "ALL",
-                allow_blank=False,
-                compact=True,
+            yield ContextPicker(
+                "Crawler state",
+                tuple(ContextOption(label, value) for label, value in _CRAWLER_FILTERS),
+                selected=self._vm.state_filter or "ALL",
                 id="glue-crawler-state-filter",
             )
             yield ResourceListPane(
@@ -84,7 +84,7 @@ class GlueCrawlersView(Widget):
     def focus_targets(self) -> tuple[Widget, ...]:
         """Return the ordered, concrete targets for the Crawlers focus ring."""
         return (
-            self.query_one("#glue-crawler-state-filter", Select),
+            self.query_one("#glue-crawler-state-filter", ContextPicker),
             self.query_one("#glue-crawlers-pane", ResourceListPane).option_list,
             self.query_one("#glue-crawler-detail-pane", DetailRows).query_one(VerticalScroll),
         )
@@ -105,8 +105,8 @@ class GlueCrawlersView(Widget):
                 group="glue-select-crawler",
             )
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id != "glue-crawler-state-filter":
+    def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:
+        if event.control.id != "glue-crawler-state-filter":
             return
         state = None if event.value == "ALL" else str(event.value)
         if state != self._vm.state_filter:
@@ -133,8 +133,13 @@ class GlueCrawlersView(Widget):
         try:
             crawlers = self.query_one("#glue-crawlers-pane", ResourceListPane)
             detail = self.query_one("#glue-crawler-detail-pane", DetailRows)
+            state_filter = self.query_one("#glue-crawler-state-filter", ContextPicker)
         except Exception:
             return
+        state_filter.set_options(
+            tuple(ContextOption(label, value) for label, value in _CRAWLER_FILTERS),
+            selected=self._vm.state_filter or "ALL",
+        )
         crawlers.replace(
             tuple(
                 (

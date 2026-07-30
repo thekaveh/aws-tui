@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar, cast
 
 from reactivex.abc import DisposableBase
-from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, OptionList, Select, TextArea
+from textual.widgets import Button, DataTable, OptionList, TextArea
 from textual.worker import Worker
 from vmx import Message, MessageHub
 
@@ -22,12 +22,14 @@ from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.athena.saved_view import AthenaSavedView
+from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM, AthenaView
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _VIEW_ORDER: tuple[AthenaView, ...] = ("query", "history", "results", "saved")
 _ATHENA_FOCUS_ORDER = (
@@ -50,13 +52,9 @@ _ATHENA_FOCUS_ORDER = (
     FocusSlot.NAV_MENU,
 )
 _ContextControls = tuple[
-    tuple[Select[str], Select[str], Select[str]],
+    tuple[ContextPicker, ContextPicker, ContextPicker],
     tuple[AthenaLoadMoreButton, AthenaLoadMoreButton, AthenaLoadMoreButton],
 ]
-
-
-class _FocusableSourceHeader(ServiceSourceHeader, can_focus=True):
-    """Temporary focus bridge until Task 3 supplies the source picker."""
 
 
 class AthenaPage(HubSubscriberMixin, Widget):
@@ -74,9 +72,8 @@ class AthenaPage(HubSubscriberMixin, Widget):
         width: 2fr;
         min-width: 22;
         height: 3;
-        padding: 1 1 0 1;
     }
-    AthenaPage #athena-context-header > Select {
+    AthenaPage #athena-context-header > ContextPicker {
         width: 2fr;
         min-width: 14;
         height: 3;
@@ -110,6 +107,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         *,
         hub: MessageHub[Message],
         keymap: KeymapStore | None = None,
+        source_candidates: tuple[ServiceSourceContext, ...] = (),
         focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
@@ -118,9 +116,9 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self._vm = vm
         self._hub = hub
         self._keymap = keymap or KeymapStore()
+        self._source_candidates = source_candidates
         self._focus_coordinator = focus_coordinator
         self._syncing_context = False
-        self._context_options: dict[str, tuple[str, ...]] = {}
         self._focus_subscriptions: list[DisposableBase] = []
 
     @property
@@ -129,38 +127,36 @@ class AthenaPage(HubSubscriberMixin, Widget):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="athena-context-header"):
-            yield _FocusableSourceHeader(self._vm.source, id="athena-source-header")
-            yield Select(
+            yield ServiceSourceHeader(
+                self._vm.source,
+                candidates=self._source_candidates,
+                id="athena-source-header",
+            )
+            yield ContextPicker(
+                "Workgroup",
                 (),
-                prompt="workgroup",
-                allow_blank=True,
-                compact=True,
+                selected=None,
                 id="athena-workgroup",
-                tooltip="Athena workgroup",
             )
             yield AthenaLoadMoreButton(
                 id="athena-more-workgroups",
                 tooltip="Load more workgroups",
             )
-            yield Select(
+            yield ContextPicker(
+                "Catalog",
                 (),
-                prompt="catalog",
-                allow_blank=True,
-                compact=True,
+                selected=None,
                 id="athena-catalog",
-                tooltip="Data catalog",
             )
             yield AthenaLoadMoreButton(
                 id="athena-more-catalogs",
                 tooltip="Load more data catalogs",
             )
-            yield Select(
+            yield ContextPicker(
+                "Database",
                 (),
-                prompt="database",
-                allow_blank=True,
-                compact=True,
+                selected=None,
                 id="athena-database",
-                tooltip="Database",
             )
             yield AthenaLoadMoreButton(
                 id="athena-more-databases",
@@ -260,21 +256,21 @@ class AthenaPage(HubSubscriberMixin, Widget):
         if event.widget is self.app.focused:
             self._sync_focused_widget(event.widget)
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if self._syncing_context or event.value is Select.NULL:
+    def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:
+        if self._syncing_context:
             return
-        value = str(event.value)
-        if event.select.id == "athena-workgroup" and value != self._vm.context.workgroup:
+        value = event.value
+        if event.control.id == "athena-workgroup" and value != self._vm.context.workgroup:
             self._run_lifecycle_worker(
                 partial(self._vm.select_workgroup, value),
                 group="athena-context",
             )
-        elif event.select.id == "athena-catalog" and value != self._vm.context.catalog:
+        elif event.control.id == "athena-catalog" and value != self._vm.context.catalog:
             self._run_lifecycle_worker(
                 partial(self._vm.select_catalog, value),
                 group="athena-context",
             )
-        elif event.select.id == "athena-database" and value != self._vm.context.database:
+        elif event.control.id == "athena-database" and value != self._vm.context.database:
             self._run_lifecycle_worker(
                 partial(self._vm.select_database, value),
                 group="athena-context",
@@ -391,6 +387,24 @@ class AthenaPage(HubSubscriberMixin, Widget):
         else:
             await self._vm.saved.setup()
 
+    def action_choose_workgroup(self) -> None:
+        self._focus_and_open_picker(
+            FocusSlot.ATHENA_WORKGROUP,
+            "#athena-workgroup",
+        )
+
+    def action_choose_catalog(self) -> None:
+        self._focus_and_open_picker(
+            FocusSlot.ATHENA_CATALOG,
+            "#athena-catalog",
+        )
+
+    def action_choose_database(self) -> None:
+        self._focus_and_open_picker(
+            FocusSlot.ATHENA_DATABASE,
+            "#athena-database",
+        )
+
     def cycle_focus(self, *, reverse: bool) -> None:
         if self._focus_coordinator is None:
             return
@@ -432,7 +446,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 "#athena-more-databases",
             ),
         ):
-            widget = self.query_one(selector, Select)
+            widget = self.query_one(selector, ContextPicker)
             if self._is_focus_target(widget):
                 targets.append((slot, widget))
             load_more = self.query_one(more_selector, AthenaLoadMoreButton)
@@ -550,6 +564,12 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 self._focus_coordinator.set_focused_slot(slot)
                 return
 
+    def _focus_and_open_picker(self, slot: FocusSlot, selector: str) -> None:
+        with contextlib.suppress(NoMatches):
+            picker = self.query_one(selector, ContextPicker)
+            self._project_focus_slot(slot)
+            picker.open()
+
     def move_focused(self, delta: int) -> None:
         focused = self.app.focused
         if not self._contains_focus(focused):
@@ -559,8 +579,8 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 focused.action_cursor_up()
             else:
                 focused.action_cursor_down()
-        elif isinstance(focused, Select):
-            focused.action_show_overlay()
+        elif isinstance(focused, ContextPicker):
+            focused.open()
 
     def activate_focused(self) -> bool:
         focused = self.app.focused
@@ -570,8 +590,8 @@ class AthenaPage(HubSubscriberMixin, Widget):
             focused.insert("\n")
         elif isinstance(focused, ServiceTabStrip):
             focused.action_select()
-        elif isinstance(focused, Select):
-            focused.action_show_overlay()
+        elif isinstance(focused, ServiceSourceHeader | ContextPicker):
+            focused.open()
         elif isinstance(focused, OptionList):
             focused.action_select()
         elif isinstance(focused, DataTable):
@@ -634,9 +654,9 @@ class AthenaPage(HubSubscriberMixin, Widget):
         try:
             controls = (
                 (
-                    self.query_one("#athena-workgroup", Select),
-                    self.query_one("#athena-catalog", Select),
-                    self.query_one("#athena-database", Select),
+                    self.query_one("#athena-workgroup", ContextPicker),
+                    self.query_one("#athena-catalog", ContextPicker),
+                    self.query_one("#athena-database", ContextPicker),
                 ),
                 (
                     self.query_one("#athena-more-workgroups", AthenaLoadMoreButton),
@@ -661,25 +681,27 @@ class AthenaPage(HubSubscriberMixin, Widget):
         workgroup, catalog, database = selects
         self._syncing_context = True
         try:
-            with self.prevent(Select.Changed):
-                self._replace_select(
-                    workgroup,
-                    tuple(row.name for row in self._vm.workgroups),
-                    self._vm.context.workgroup,
-                    self._vm.workgroups_state,
-                )
-                self._replace_select(
-                    catalog,
-                    tuple(row.name for row in self._vm.catalogs),
-                    self._vm.context.catalog,
-                    self._vm.catalogs_state,
-                )
-                self._replace_select(
-                    database,
-                    tuple(row.ref.database_name for row in self._vm.databases),
-                    self._vm.context.database,
-                    self._vm.databases_state,
-                )
+            self._sync_picker(
+                workgroup,
+                tuple(row.name for row in self._vm.workgroups),
+                self._vm.context.workgroup,
+                self._vm.workgroups_state,
+                self._vm.workgroups_error_text,
+            )
+            self._sync_picker(
+                catalog,
+                tuple(row.name for row in self._vm.catalogs),
+                self._vm.context.catalog,
+                self._vm.catalogs_state,
+                self._vm.catalogs_error_text,
+            )
+            self._sync_picker(
+                database,
+                tuple(row.ref.database_name for row in self._vm.databases),
+                self._vm.context.database,
+                self._vm.databases_state,
+                self._vm.databases_error_text,
+            )
             self._sync_context_load_more(load_more)
         finally:
             self._syncing_context = False
@@ -746,30 +768,25 @@ class AthenaPage(HubSubscriberMixin, Widget):
             child.display = view == active
         tabs.set_active(active)
 
-    def _replace_select(
+    def _sync_picker(
         self,
-        select: Select[str],
+        picker: ContextPicker,
         values: tuple[str, ...],
         selected: str,
         state: PaneState,
+        error_text: str | None,
     ) -> None:
-        key = select.id or ""
-        if self._context_options.get(key) != values:
-            select.set_options((Text(value), value) for value in values)
-            self._context_options[key] = values
-        select.disabled = state is not PaneState.IDLE or not values
-        if selected in values:
-            select.value = selected
-        else:
-            select.clear()
-        error_text = {
-            "athena-workgroup": self._vm.workgroups_error_text,
-            "athena-catalog": self._vm.catalogs_error_text,
-            "athena-database": self._vm.databases_error_text,
-        }.get(key)
-        select.tooltip = error_text
-        select.set_class(state is PaneState.FORBIDDEN, "-warning")
-        select.set_class(state is PaneState.ERROR, "-error")
+        picker.set_options(
+            tuple(ContextOption(value, value) for value in values),
+            selected=selected,
+        )
+        picker.set_state(
+            loading=state is PaneState.LOADING,
+            disabled=state is not PaneState.IDLE or not values,
+            warning=state is PaneState.FORBIDDEN,
+            error=state is PaneState.ERROR,
+            tooltip=error_text,
+        )
 
     def _maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
         focused = self.app.focused

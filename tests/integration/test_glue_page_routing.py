@@ -8,13 +8,13 @@ from contextlib import asynccontextmanager
 
 import pytest
 from textual.containers import Container
-from textual.widgets import OptionList, Select
-from textual.widgets._select import SelectOverlay
+from textual.widgets import OptionList
 from vmx import NULL_DISPATCHER
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.glue.page_vm import GluePageVM
@@ -114,7 +114,7 @@ async def test_production_router_navigates_glue_lists_and_filters(app_context_fa
         await pilot.pause()
         jobs = app.query_one("#glue-jobs-pane-options", OptionList)
         runs = app.query_one("#glue-runs-pane-options", OptionList)
-        run_filter = app.query_one("#glue-run-state-filter", Select)
+        run_filter = app.query_one("#glue-run-state-filter", ContextPicker)
         jobs.focus()
         await pilot.press("tab")
         await pilot.pause()
@@ -123,8 +123,8 @@ async def test_production_router_navigates_glue_lists_and_filters(app_context_fa
         run_filter.focus()
         await pilot.press("down")
         await pilot.pause()
-        assert run_filter.expanded
-        assert app.focused is run_filter.query_one(SelectOverlay)
+        assert run_filter.is_open
+        assert app.focused is run_filter.query_one(OptionList)
 
         await pilot.press("down")
         await pilot.press("enter")

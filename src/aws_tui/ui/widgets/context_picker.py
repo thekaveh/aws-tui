@@ -75,9 +75,14 @@ class ContextPicker(Widget, can_focus=True):
     class Changed(Message):
         """Posted after the user commits an option."""
 
-        def __init__(self, value: str) -> None:
+        def __init__(self, picker: ContextPicker, value: str) -> None:
             super().__init__()
+            self.picker = picker
             self.value = value
+
+        @property
+        def control(self) -> ContextPicker:
+            return self.picker
 
     def __init__(
         self,
@@ -198,7 +203,7 @@ class ContextPicker(Widget, can_focus=True):
         self._value = value
         self._refresh_trigger()
         self.close(restore=False)
-        self.post_message(self.Changed(value))
+        self.post_message(self.Changed(self, value))
 
     def _refresh(self) -> None:
         self._refresh_trigger()

@@ -10,11 +10,12 @@ from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import OptionList, Select
+from textual.widgets import OptionList
 from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
@@ -24,6 +25,7 @@ from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _VIEW_ORDER: tuple[GlueView, ...] = ("catalog", "jobs", "crawlers")
 _GLUE_FOCUS_ORDER = (
@@ -59,10 +61,6 @@ _ICEBERG_FOCUS_SLOTS = {
 }
 
 
-class _FocusableSourceHeader(ServiceSourceHeader, can_focus=True):
-    """Temporary focus bridge until Task 3 supplies the source picker."""
-
-
 class GluePage(HubSubscriberMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     GluePage {
@@ -71,7 +69,7 @@ class GluePage(HubSubscriberMixin, Widget):
     }
     GluePage > ServiceSourceHeader {
         width: 1fr;
-        height: 1;
+        height: 3;
     }
     GluePage > #glue-view-host {
         width: 1fr;
@@ -89,6 +87,7 @@ class GluePage(HubSubscriberMixin, Widget):
         *,
         hub: MessageHub[Message],
         keymap: KeymapStore | None = None,
+        source_candidates: tuple[ServiceSourceContext, ...] = (),
         focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
@@ -97,6 +96,7 @@ class GluePage(HubSubscriberMixin, Widget):
         self._vm = vm
         self._hub = hub
         self._keymap = keymap or KeymapStore()
+        self._source_candidates = source_candidates
         self._focus_coordinator = focus_coordinator
         self._focus_subscriptions: list[DisposableBase] = []
 
@@ -105,7 +105,11 @@ class GluePage(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        yield _FocusableSourceHeader(self._vm.source, id="glue-source-header")
+        yield ServiceSourceHeader(
+            self._vm.source,
+            candidates=self._source_candidates,
+            id="glue-source-header",
+        )
         yield ServiceTabStrip(
             tuple(
                 (
@@ -174,6 +178,26 @@ class GluePage(HubSubscriberMixin, Widget):
 
     async def action_refresh_active(self) -> None:
         await self._vm.refresh_active()
+
+    async def action_choose_run_state(self) -> None:
+        await self.action_select_view("jobs")
+        self.call_after_refresh(
+            partial(
+                self._focus_and_open_picker,
+                FocusSlot.GLUE_FILTER,
+                "#glue-run-state-filter",
+            )
+        )
+
+    async def action_choose_crawler_state(self) -> None:
+        await self.action_select_view("crawlers")
+        self.call_after_refresh(
+            partial(
+                self._focus_and_open_picker,
+                FocusSlot.GLUE_FILTER,
+                "#glue-crawler-state-filter",
+            )
+        )
 
     def cycle_focus(self, *, reverse: bool) -> None:
         if self._focus_coordinator is None:
@@ -287,8 +311,8 @@ class GluePage(HubSubscriberMixin, Widget):
             else:
                 focused.action_cursor_down()
             return
-        if isinstance(focused, Select):
-            focused.action_show_overlay()
+        if isinstance(focused, ContextPicker):
+            focused.open()
             return
         action = getattr(
             focused,
@@ -307,13 +331,19 @@ class GluePage(HubSubscriberMixin, Widget):
         if isinstance(focused, ServiceTabStrip):
             focused.action_select()
             return True
-        elif isinstance(focused, Select):
-            focused.action_show_overlay()
+        elif isinstance(focused, ServiceSourceHeader | ContextPicker):
+            focused.open()
             return True
         elif not space and isinstance(focused, OptionList):
             focused.action_select()
             return True
         return False
+
+    def _focus_and_open_picker(self, slot: FocusSlot, selector: str) -> None:
+        with contextlib.suppress(NoMatches):
+            picker = self.query_one(selector, ContextPicker)
+            self._project_focus_slot(slot)
+            picker.open()
 
     def _contains_focus(self, focused: Widget | None) -> bool:
         return focused is not None and (focused is self or self in focused.ancestors_with_self)

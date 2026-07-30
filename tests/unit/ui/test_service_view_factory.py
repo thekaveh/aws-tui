@@ -18,10 +18,16 @@ from aws_tui.ui.widgets.service_view_factory import build_service_view
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 from tests.unit.domain._in_memory_fs import InMemoryFS
 from tests.unit.ui.athena.test_page import _build_vm as _build_athena_vm
 from tests.unit.ui.emr_serverless.test_emr_page_pollers import _build_page
 from tests.unit.ui.glue.test_page import _build_vm as _build_glue_vm
+
+_SOURCE_CANDIDATES = (
+    ServiceSourceContext("analytics-dev", "dev", "us-east-1"),
+    ServiceSourceContext("analytics-prod", "prod", "us-west-2"),
+)
 
 
 def _build_dual_pane_vm(tmp_path: Path, hub: MessageHub[Message]) -> DualPaneVM:
@@ -90,10 +96,12 @@ def test_factory_builds_glue_page() -> None:
         glue_page_vm,
         hub=hub,
         focus_coordinator=focus_coordinator,
+        source_candidates=_SOURCE_CANDIDATES,
     )
 
     assert isinstance(view, GluePage)
     assert view.id == "content-glue-page"
+    assert view._source_candidates == _SOURCE_CANDIDATES  # type: ignore[attr-defined]
 
 
 def test_factory_threads_keymap_to_glue_page() -> None:
@@ -124,10 +132,12 @@ def test_factory_builds_athena_page() -> None:
         athena_page_vm,
         hub=hub,
         focus_coordinator=focus_coordinator,
+        source_candidates=_SOURCE_CANDIDATES,
     )
 
     assert isinstance(view, AthenaPage)
     assert view.id == "content-athena-page"
+    assert view._source_candidates == _SOURCE_CANDIDATES  # type: ignore[attr-defined]
 
 
 def test_factory_rejects_unknown_service() -> None:

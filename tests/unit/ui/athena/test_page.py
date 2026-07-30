@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button, DataTable, OptionList, Select, Static, TextArea
+from textual.widgets import Button, DataTable, OptionList, Static, TextArea
 from vmx import NULL_DISPATCHER
 
 from aws_tui.domain.query import ResultColumn, ResultPage
@@ -11,6 +11,7 @@ from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.athena.saved_view import AthenaSavedView
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM
@@ -259,14 +260,14 @@ async def test_athena_ring_syncs_direct_focus_and_projects_to_nav() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(AthenaPage)
-        catalog = app.query_one("#athena-catalog", Select)
+        catalog = app.query_one("#athena-catalog", ContextPicker)
         catalog.focus()
         await pilot.pause()
 
         assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CATALOG
         page.cycle_focus(reverse=False)
         await pilot.pause()
-        assert app.query_one("#athena-database", Select).has_focus
+        assert app.query_one("#athena-database", ContextPicker).has_focus
 
         await pilot.click("#athena-tab-history")
         await pilot.pause()
@@ -327,7 +328,7 @@ async def test_context_refresh_reconciles_an_unavailable_pager_to_its_nearest_sl
 
         assert load_more.disabled
         assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CATALOG
-        assert app.query_one("#athena-catalog", Select).has_focus
+        assert app.query_one("#athena-catalog", ContextPicker).has_focus
 
 
 @pytest.mark.asyncio
@@ -375,9 +376,9 @@ async def test_page_composes_context_tabs_and_all_operational_views() -> None:
         page = app.query_one(AthenaPage)
 
         assert page.query_one("#athena-source-header")
-        assert page.query_one("#athena-workgroup", Select)
-        assert page.query_one("#athena-catalog", Select)
-        assert page.query_one("#athena-database", Select)
+        assert page.query_one("#athena-workgroup", ContextPicker)
+        assert page.query_one("#athena-catalog", ContextPicker)
+        assert page.query_one("#athena-database", ContextPicker)
         assert page.query_one("#athena-more-workgroups", Button)
         assert page.query_one("#athena-more-catalogs", Button)
         assert page.query_one("#athena-more-databases", Button)
@@ -393,6 +394,54 @@ async def test_page_composes_context_tabs_and_all_operational_views() -> None:
         assert page.query_one("#athena-more-results", Button)
         assert page.query_one("#athena-more-named", Button)
         assert page.query_one("#athena-more-prepared", Button)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action_name", "picker_id", "slot"),
+    [
+        ("action_choose_workgroup", "athena-workgroup", FocusSlot.ATHENA_WORKGROUP),
+        ("action_choose_catalog", "athena-catalog", FocusSlot.ATHENA_CATALOG),
+        ("action_choose_database", "athena-database", FocusSlot.ATHENA_DATABASE),
+    ],
+)
+async def test_named_context_action_focuses_and_opens_picker(
+    action_name: str,
+    picker_id: str,
+    slot: FocusSlot,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        getattr(page, action_name)()
+        await pilot.pause()
+
+        picker = app.query_one(f"#{picker_id}", ContextPicker)
+        assert picker.is_open
+        assert app.focus_coordinator.focused_slot is slot
+
+
+@pytest.mark.asyncio
+async def test_context_picker_selection_routes_through_page_vm() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        page.query_one("#athena-workgroup", ContextPicker)._commit(  # type: ignore[attr-defined]
+            "analysts"
+        )
+        await page.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert vm.context.workgroup == "analysts"
+        assert client.catalog_calls[-1] == ("analysts", None)
 
 
 @pytest.mark.asyncio
@@ -418,7 +467,7 @@ async def test_page_refresh_is_safe_during_partial_descendant_teardown() -> None
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(AthenaPage)
-        workgroup = page.query_one("#athena-workgroup", Select)
+        workgroup = page.query_one("#athena-workgroup", ContextPicker)
         await page.query_one("#athena-more-workgroups", Button).remove()
 
         assert page.is_mounted

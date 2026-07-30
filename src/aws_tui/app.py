@@ -57,6 +57,7 @@ from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.quick_look import QuickLook
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_view_factory import build_service_view
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
@@ -81,6 +82,7 @@ from aws_tui.vm.messages import (
     ThemeChangedMessage,
 )
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _ACTION_RING_SIZE = 100
 _QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
@@ -118,6 +120,8 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("app.themes", "Theme picker"),
     ("app.cycle_theme", "Cycle theme"),
     ("app.swap_source", "Switch source"),
+    ("glue.choose_run_state", "Choose Glue run state"),
+    ("glue.choose_crawler_state", "Choose Glue crawler state"),
     ("glue.open_s3_location", "Open table location in S3"),
     ("glue.query_in_athena", "Query table in Athena"),
     ("glue.time_travel_in_athena", "Query Iceberg snapshot in Athena"),
@@ -125,6 +129,9 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("athena.history", "Athena history"),
     ("athena.results", "Athena results"),
     ("athena.saved", "Athena saved queries"),
+    ("athena.choose_workgroup", "Choose Athena workgroup"),
+    ("athena.choose_catalog", "Choose Athena catalog"),
+    ("athena.choose_database", "Choose Athena database"),
     ("athena.execute", "Execute Athena query"),
     ("athena.cancel", "Cancel Athena query"),
     ("athena.load_more", "Load more Athena rows"),
@@ -213,6 +220,17 @@ def _service_source_candidates(ctx: AppContext, service_id: str) -> tuple[Connec
         connection
         for connection in ctx.connection_resolver.list()
         if connection.kind == "aws" and service.supports(connection)
+    )
+
+
+def _service_source_contexts(
+    ctx: AppContext,
+    service_id: str,
+) -> tuple[ServiceSourceContext, ...]:
+    """Project supported connections into immutable source-picker values."""
+    return tuple(
+        ServiceSourceContext.from_connection(connection)
+        for connection in _service_source_candidates(ctx, service_id)
     )
 
 
@@ -410,6 +428,14 @@ class AwsTuiApp(App[None]):
             "glue.crawlers",
             partial(self.action_select_glue_view, "crawlers"),
         )
+        self._actions.register(
+            "glue.choose_run_state",
+            self.action_choose_glue_run_state,
+        )
+        self._actions.register(
+            "glue.choose_crawler_state",
+            self.action_choose_glue_crawler_state,
+        )
         self._actions.register("glue.open_s3_location", self.action_open_glue_s3_location)
         self._actions.register("glue.query_in_athena", self.action_query_glue_table_in_athena)
         self._actions.register(
@@ -431,6 +457,18 @@ class AwsTuiApp(App[None]):
         self._actions.register(
             "athena.saved",
             partial(self.action_select_athena_view, "saved"),
+        )
+        self._actions.register(
+            "athena.choose_workgroup",
+            self.action_choose_athena_workgroup,
+        )
+        self._actions.register(
+            "athena.choose_catalog",
+            self.action_choose_athena_catalog,
+        )
+        self._actions.register(
+            "athena.choose_database",
+            self.action_choose_athena_database,
         )
         self._actions.register("athena.execute", self.action_execute_athena)
         self._actions.register("athena.cancel", self.action_cancel_athena)
@@ -1206,6 +1244,10 @@ class AwsTuiApp(App[None]):
                         current_vm,
                         hub=ctx.hub,
                         keymap=getattr(ctx, "keymap_store", None),
+                        source_candidates=_service_source_contexts(
+                            ctx,
+                            _svc_id or "unknown",
+                        ),
                         focus_coordinator=ctx.focus_coordinator,
                         dual_pane_class=DualPane,
                         emr_page_class=EmrServerlessPage,
@@ -2194,6 +2236,26 @@ class AwsTuiApp(App[None]):
                 return
             await self._swap_source_transaction()
 
+    async def on_service_source_header_source_selected(
+        self,
+        event: ServiceSourceHeader.SourceSelected,
+    ) -> None:
+        """Switch to the exact source committed by a Glue/Athena picker."""
+        event.stop()
+        service_id = self._app_ctx.root_vm.services_menu.selected_id
+        if service_id is None or service_id == SETTINGS_NAV_ID:
+            return
+        self.record_action("app.swap_source")
+        generation = self._supersede_table_navigation()
+        async with self._service_navigation_lock:
+            if not self._service_navigation_is_owned_by("external", generation):
+                return
+            await self._switch_single_context_source_to(
+                service_id,
+                event.connection_name,
+                event.region,
+            )
+
     async def _swap_source_transaction(self) -> None:
         ctx = self._app_ctx
         dual = self._dual_pane()
@@ -2314,6 +2376,36 @@ class AwsTuiApp(App[None]):
         ):
             await glue_page.action_select_view(glue_view)
 
+    async def action_choose_glue_run_state(self) -> None:
+        self.record_action("glue.choose_run_state")
+        page = self._glue_page()
+        if page is not None:
+            await page.action_choose_run_state()
+
+    async def action_choose_glue_crawler_state(self) -> None:
+        self.record_action("glue.choose_crawler_state")
+        page = self._glue_page()
+        if page is not None:
+            await page.action_choose_crawler_state()
+
+    def action_choose_athena_workgroup(self) -> None:
+        self.record_action("athena.choose_workgroup")
+        page = self._athena_page()
+        if page is not None:
+            page.action_choose_workgroup()
+
+    def action_choose_athena_catalog(self) -> None:
+        self.record_action("athena.choose_catalog")
+        page = self._athena_page()
+        if page is not None:
+            page.action_choose_catalog()
+
+    def action_choose_athena_database(self) -> None:
+        self.record_action("athena.choose_database")
+        page = self._athena_page()
+        if page is not None:
+            page.action_choose_database()
+
     async def action_execute_athena(self) -> None:
         self.record_action("athena.execute")
         page = self._athena_page()
@@ -2424,6 +2516,41 @@ class AwsTuiApp(App[None]):
                 subject="Source",
                 message="no AWS profiles configured",
             )
+            return
+        await self._switch_single_context_source_to(
+            service_id,
+            target.name,
+            target.region,
+        )
+
+    async def _switch_single_context_source_to(
+        self,
+        service_id: str,
+        connection_name: str,
+        region: str,
+    ) -> None:
+        """Rebuild a non-S3 service under one explicit supported source."""
+        ctx = self._app_ctx
+        target = next(
+            (
+                connection
+                for connection in _service_source_candidates(ctx, service_id)
+                if (connection.name, connection.region) == (connection_name, region)
+            ),
+            None,
+        )
+        if target is None:
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="selected AWS profile is no longer available",
+            )
+            return
+        active = ctx.root_vm.active_connection
+        if active is not None and (active.name, active.region) == (
+            target.name,
+            target.region,
+        ):
             return
         try:
             auth_state = ctx.aws_session.probe_token(target).state
@@ -3780,6 +3907,7 @@ class AwsTuiApp(App[None]):
                     current_vm,
                     hub=ctx.hub,
                     keymap=ctx.keymap_store,
+                    source_candidates=_service_source_contexts(ctx, service_id),
                     focus_coordinator=ctx.focus_coordinator,
                     dual_pane_class=DualPane,
                     emr_page_class=EmrServerlessPage,

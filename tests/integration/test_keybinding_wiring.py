@@ -51,11 +51,16 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("1", "dispatch('glue.catalog')", False, False),
     ("2", "dispatch('glue.jobs')", False, False),
     ("3", "dispatch('glue.crawlers')", False, False),
+    ("F", "dispatch('glue.choose_run_state')", False, False),
+    ("G", "dispatch('glue.choose_crawler_state')", False, False),
     ("V", "dispatch('glue.time_travel_in_athena')", False, False),
     ("1", "dispatch('athena.query')", False, False),
     ("2", "dispatch('athena.history')", False, False),
     ("3", "dispatch('athena.results')", False, False),
     ("4", "dispatch('athena.saved')", False, False),
+    ("W", "dispatch('athena.choose_workgroup')", False, False),
+    ("C", "dispatch('athena.choose_catalog')", False, False),
+    ("D", "dispatch('athena.choose_database')", False, False),
     ("ctrl+enter", "dispatch('athena.execute')", False, True),
     ("escape", "dispatch('athena.cancel')", False, False),
     ("l", "dispatch('athena.load_more')", False, False),
@@ -88,6 +93,20 @@ def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore
     # (`space`->quick_look and `:`/`ctrl+k`->command_palette are now wired.)
     for k in ("slash", "v", "a", "m", "n"):
         assert k not in keys, f"{k} should be unbound (handlerless)"
+
+
+def test_printable_selector_bindings_yield_to_athena_editor(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    installed = _installed(app)
+
+    for key, action_id in (
+        ("F", "glue.choose_run_state"),
+        ("G", "glue.choose_crawler_state"),
+        ("W", "athena.choose_workgroup"),
+        ("C", "athena.choose_catalog"),
+        ("D", "athena.choose_database"),
+    ):
+        assert (key, f"dispatch('{action_id}')", False, False) in installed
 
 
 def test_dispatch_invokes_registered_handler(app_context_factory) -> None:  # type: ignore[no-untyped-def]

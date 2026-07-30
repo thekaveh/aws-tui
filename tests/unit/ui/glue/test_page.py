@@ -3,12 +3,13 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
-from textual.widgets import OptionList, Select, Static
+from textual.widgets import OptionList, Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
@@ -317,6 +318,35 @@ async def test_view_actions_switch_views_and_load_them_lazily() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("view", "action_name", "picker_id"),
+    [
+        ("jobs", "action_choose_run_state", "glue-run-state-filter"),
+        ("crawlers", "action_choose_crawler_state", "glue-crawler-state-filter"),
+    ],
+)
+async def test_named_filter_action_focuses_and_opens_picker(
+    view: str,
+    action_name: str,
+    picker_id: str,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    await vm.select_view(view)  # type: ignore[arg-type]
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await getattr(page, action_name)()
+        await pilot.pause()
+
+        picker = app.query_one(f"#{picker_id}", ContextPicker)
+        assert picker.is_open
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_FILTER
+
+
+@pytest.mark.asyncio
 async def test_clicking_tab_switches_the_active_view() -> None:
     vm, _fake = _build_vm()
     await vm.setup()
@@ -441,7 +471,7 @@ async def test_aws_controlled_text_is_rendered_without_markup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_jobs_and_crawlers_use_select_filters() -> None:
+async def test_jobs_and_crawlers_use_context_picker_filters() -> None:
     vm, fake = _build_vm()
     await vm.setup()
     app = _GlueApp(vm)
@@ -452,8 +482,8 @@ async def test_jobs_and_crawlers_use_select_filters() -> None:
         await page.action_select_view("jobs")
         await pilot.pause()
         jobs = page.query_one(GlueJobsView)
-        run_filter = jobs.query_one("#glue-run-state-filter", Select)
-        run_filter.value = "RUNNING"
+        run_filter = jobs.query_one("#glue-run-state-filter", ContextPicker)
+        run_filter._commit("RUNNING")  # type: ignore[attr-defined]
         await pilot.pause()
         assert vm.jobs.run_state_filter == frozenset({"RUNNING"})
         assert fake.run_requests[-1] == ("nightly", None, ("RUNNING",))
@@ -461,8 +491,8 @@ async def test_jobs_and_crawlers_use_select_filters() -> None:
         await page.action_select_view("crawlers")
         await pilot.pause()
         crawlers = page.query_one(GlueCrawlersView)
-        crawler_filter = crawlers.query_one("#glue-crawler-state-filter", Select)
-        crawler_filter.value = "RUNNING"
+        crawler_filter = crawlers.query_one("#glue-crawler-state-filter", ContextPicker)
+        crawler_filter._commit("RUNNING")  # type: ignore[attr-defined]
         await pilot.pause()
         assert vm.crawlers.state_filter == "RUNNING"
         assert fake.crawler_requests[-1] == (None, "RUNNING")
@@ -551,7 +581,9 @@ async def test_selected_job_detail_is_retained_when_filter_has_no_matching_runs(
         await page.action_select_view("jobs")
         await pilot.pause()
         jobs = page.query_one(GlueJobsView)
-        jobs.query_one("#glue-run-state-filter", Select).value = "FAILED"
+        jobs.query_one("#glue-run-state-filter", ContextPicker)._commit(  # type: ignore[attr-defined]
+            "FAILED"
+        )
         await pilot.pause()
         await jobs.workers.wait_for_complete()
         await pilot.pause()

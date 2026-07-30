@@ -9,6 +9,7 @@ import pytest
 
 from aws_tui.app import AwsTuiApp, _next_service_source, _service_source_candidates
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.infra.aws_session import TokenProbeResult, TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
@@ -128,6 +129,18 @@ async def test_shift_s_rebuilds_emr_under_next_profile(tmp_path: Path) -> None:
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
             await _await_service_mount(pilot, app)
             before = ctx.root_vm.content_host.current
+            selected: list[tuple[str, str, str]] = []
+            switch_to = app._switch_single_context_source_to
+
+            async def recording_switch_to(
+                service_id: str,
+                connection_name: str,
+                region: str,
+            ) -> None:
+                selected.append((service_id, connection_name, region))
+                await switch_to(service_id, connection_name, region)
+
+            app._switch_single_context_source_to = recording_switch_to  # type: ignore[method-assign]
 
             await app.action_swap_source()
             await _await_service_mount(pilot, app)
@@ -138,7 +151,49 @@ async def test_shift_s_rebuilds_emr_under_next_profile(tmp_path: Path) -> None:
             assert ctx.root_vm.active_connection is not None
             assert ctx.root_vm.active_connection.name == "dev"
             assert after.source.connection_key == ("dev", "us-east-1")
+            assert selected == [("emr-serverless", "dev", "us-east-1")]
             assert calls == ["prod-west", "dev"]
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_direct_source_selection_probes_and_mounts_exact_target(tmp_path: Path) -> None:
+    ctx, calls = _multi_profile_emr_context(tmp_path)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_service_mount(pilot, app)
+            probed: list[tuple[str, str]] = []
+
+            def probe(connection: Connection) -> TokenProbeResult:
+                probed.append((connection.name, connection.region))
+                return TokenProbeResult(TokenState.CONNECTED)
+
+            ctx.aws_session.probe_token = probe  # type: ignore[method-assign]
+            await app._switch_single_context_source_to(
+                "emr-serverless",
+                "dev",
+                "us-east-1",
+            )
+            await _await_service_mount(pilot, app)
+
+            assert probed == [("dev", "us-east-1")]
+            assert calls == ["prod-west", "dev"]
+            assert ctx.root_vm.active_connection is not None
+            assert (
+                ctx.root_vm.active_connection.name,
+                ctx.root_vm.active_connection.region,
+            ) == ("dev", "us-east-1")
+            assert ctx.root_vm.content_host.current is not None
+            assert ctx.root_vm.content_host.current.source.connection_key == (
+                "dev",
+                "us-east-1",
+            )
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

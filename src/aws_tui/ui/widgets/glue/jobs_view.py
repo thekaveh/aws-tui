@@ -8,9 +8,10 @@ from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import OptionList, Select
+from textual.widgets import OptionList
 from textual.worker import Worker
 
+from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
     DetailValue,
@@ -45,7 +46,7 @@ class GlueJobsView(Widget):
         height: 1fr;
         layout: vertical;
     }
-    GlueJobsView > .glue-filtered-list > Select {
+    GlueJobsView > .glue-filtered-list > ContextPicker {
         height: 3;
     }
     GlueJobsView > .glue-filtered-list > ResourceListPane {
@@ -62,11 +63,10 @@ class GlueJobsView(Widget):
     def compose(self) -> ComposeResult:
         yield ResourceListPane("jobs", id="glue-jobs-pane", empty_text="no jobs")
         with Vertical(classes="glue-filtered-list"):
-            yield Select(
-                _RUN_FILTERS,
-                value=self._filter_value(),
-                allow_blank=False,
-                compact=True,
+            yield ContextPicker(
+                "Run state",
+                tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
+                selected=self._filter_value(),
                 id="glue-run-state-filter",
             )
             yield ResourceListPane(
@@ -88,7 +88,7 @@ class GlueJobsView(Widget):
     def focus_targets(self) -> tuple[Widget, ...]:
         """Return the ordered, concrete targets for the Jobs focus ring."""
         return (
-            self.query_one("#glue-run-state-filter", Select),
+            self.query_one("#glue-run-state-filter", ContextPicker),
             self.query_one("#glue-jobs-pane", ResourceListPane).option_list,
             self.query_one("#glue-runs-pane", ResourceListPane).option_list,
             self.query_one("#glue-job-detail-pane", DetailRows).query_one(VerticalScroll),
@@ -113,10 +113,10 @@ class GlueJobsView(Widget):
         ):
             self._page_vm.select_job_run(option_id)
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id != "glue-run-state-filter":
+    def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:
+        if event.control.id != "glue-run-state-filter":
             return
-        value = str(event.value)
+        value = event.value
         states = frozenset() if value == "ALL" else frozenset({value})
         if states != self._vm.run_state_filter:
             self._run_lifecycle_worker(
@@ -143,8 +143,13 @@ class GlueJobsView(Widget):
             jobs = self.query_one("#glue-jobs-pane", ResourceListPane)
             runs = self.query_one("#glue-runs-pane", ResourceListPane)
             detail = self.query_one("#glue-job-detail-pane", DetailRows)
+            run_filter = self.query_one("#glue-run-state-filter", ContextPicker)
         except Exception:
             return
+        run_filter.set_options(
+            tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
+            selected=self._filter_value(),
+        )
         jobs.replace(
             tuple((row.name, f"{row.name}  {row.command_name}") for row in self._vm.jobs),
             selected_id=self._vm.selected_job_name,
