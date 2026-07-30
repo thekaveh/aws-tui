@@ -114,6 +114,7 @@ class ServiceTabStrip(Widget, can_focus=True):
 
     def on_click(self, event: Click) -> None:
         if isinstance(event.widget, _ServiceTab):
+            self.focus()
             self._highlighted = event.widget.value
             self._commit_highlighted()
 

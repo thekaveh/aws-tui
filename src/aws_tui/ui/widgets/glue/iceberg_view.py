@@ -66,6 +66,7 @@ class _IcebergTab(Static, can_focus=True):
         self.tooltip = f"Show Iceberg {view}"
 
     def on_click(self, _event: Click) -> None:
+        self.focus()
         self.action_select()
 
     def action_select(self) -> None:
@@ -178,6 +179,23 @@ class GlueIcebergView(Widget):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+    def focus_targets(self) -> tuple[Widget, ...]:
+        """Return the complete enabled Iceberg interaction surface."""
+        if not self.display:
+            return ()
+        candidates = (
+            *(self.query_one(f"#glue-iceberg-tab-{view}", _IcebergTab) for view in _VIEW_ORDER),
+            self.query_one("#glue-iceberg-table", DataTable),
+            self.query_one("#glue-iceberg-more", Button),
+            self.query_one("#glue-iceberg-retry", Button),
+            self.query_one("#glue-iceberg-time-travel", Button),
+        )
+        return tuple(
+            widget
+            for widget in candidates
+            if widget.display and not widget.disabled and widget.can_focus
+        )
 
     def on__iceberg_tab_selected(self, event: _IcebergTab.Selected) -> None:
         self._run_lifecycle_worker(

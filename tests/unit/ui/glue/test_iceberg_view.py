@@ -12,6 +12,7 @@ from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.messages import OpenAthenaTableRequest
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
@@ -49,9 +50,21 @@ class _GlueIcebergApp(App[None]):
     def __init__(self, vm: GluePageVM) -> None:
         super().__init__()
         self._vm = vm
+        self.focus_coordinator = FocusCoordinatorVM(
+            hub=vm.hub,
+            dispatcher=NULL_DISPATCHER,
+        )
+        self.focus_coordinator.construct()
 
     def compose(self) -> ComposeResult:
-        yield GluePage(self._vm, hub=self._vm.hub)
+        yield GluePage(
+            self._vm,
+            hub=self._vm.hub,
+            focus_coordinator=self.focus_coordinator,
+        )
+
+    def on_unmount(self) -> None:
+        self.focus_coordinator.dispose()
 
 
 @pytest.mark.asyncio
@@ -137,6 +150,32 @@ async def test_switching_metadata_tabs_preserves_loaded_pane_and_focus_targets()
             "glue-iceberg-tab-partitions",
             "glue-iceberg-tab-refs",
         }.issubset(focus_ids)
+
+
+@pytest.mark.asyncio
+async def test_enabled_iceberg_surface_is_in_the_glue_typed_focus_ring() -> None:
+    vm, _inspector = _build_vm()
+    vm.catalog.iceberg._page_size = 1  # type: ignore[attr-defined]
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await pilot.pause()
+        page = pilot.app.query_one(GluePage)
+        target_ids = {widget.id for _slot, widget in page._focus_targets()}
+
+        assert {
+            "glue-iceberg-tab-snapshots",
+            "glue-iceberg-tab-history",
+            "glue-iceberg-tab-manifests",
+            "glue-iceberg-tab-files",
+            "glue-iceberg-tab-partitions",
+            "glue-iceberg-tab-refs",
+            "glue-iceberg-table",
+            "glue-iceberg-more",
+            "glue-iceberg-time-travel",
+        }.issubset(target_ids)
+        assert pilot.app.focus_coordinator.focused_slot is FocusSlot.GLUE_ICEBERG_SNAPSHOTS
 
 
 @pytest.mark.asyncio
@@ -239,6 +278,7 @@ async def test_retry_and_load_more_buttons_run_current_view_actions() -> None:
         assert retry.display
         assert not retry.disabled
         assert retry in pilot.app.screen.focus_chain
+        assert retry in {widget for _slot, widget in pilot.app.query_one(GluePage)._focus_targets()}
 
         inspector.errors.pop("snapshots")
         await pilot.click("#glue-iceberg-retry")

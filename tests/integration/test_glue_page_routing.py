@@ -16,6 +16,7 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
@@ -85,12 +86,14 @@ async def test_production_router_tabs_between_glue_controls(app_context_factory)
 @pytest.mark.asyncio
 async def test_production_router_activates_focused_glue_tabs(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     async with _mounted_glue_app(app_context_factory) as (app, vm, _fake, pilot):
-        app.query_one("#glue-tab-jobs").focus()
+        tabs = app.query_one("#glue-view-tabs", ServiceTabStrip)
+        tabs.focus()
+        tabs._highlighted = "jobs"
         await pilot.press("enter")
         await pilot.pause()
         assert vm.active_view == "jobs"
 
-        app.query_one("#glue-tab-crawlers").focus()
+        tabs._highlighted = "crawlers"
         await pilot.press("space")
         await pilot.pause()
         assert vm.active_view == "crawlers"
@@ -110,12 +113,14 @@ async def test_production_router_navigates_glue_lists_and_filters(app_context_fa
         await pilot.press("2")
         await pilot.pause()
         jobs = app.query_one("#glue-jobs-pane-options", OptionList)
+        runs = app.query_one("#glue-runs-pane-options", OptionList)
         run_filter = app.query_one("#glue-run-state-filter", Select)
         jobs.focus()
         await pilot.press("tab")
         await pilot.pause()
-        assert run_filter.has_focus
+        assert runs.has_focus
 
+        run_filter.focus()
         await pilot.press("down")
         await pilot.pause()
         assert run_filter.expanded

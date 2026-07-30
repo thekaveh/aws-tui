@@ -16,6 +16,7 @@ from aws_tui.domain.query import QueryExecutionRef, QueryState, ResultColumn, Re
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.services.athena import AthenaService
 from aws_tui.ui.widgets.athena.page import AthenaPage
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from tests.integration.test_glue_page import open_service
 from tests.unit.vm.athena.test_page_vm import PageClient
@@ -217,7 +218,7 @@ async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path
         await pilot.pause()
         assert client.start_calls
 
-        app.query_one("#athena-tab-history").focus()
+        app.query_one("#athena-view-tabs", ServiceTabStrip).focus()
         await pilot.press("2")
         await pilot.pause()
         assert vm.active_view == "history"
@@ -238,7 +239,7 @@ async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path
         vm.query._state = QueryState.RUNNING  # type: ignore[attr-defined]
         vm.query._busy = True  # type: ignore[attr-defined]
         vm.query._owns_active_query = True  # type: ignore[attr-defined]
-        app.query_one("#athena-tab-saved").focus()
+        app.query_one("#athena-view-tabs", ServiceTabStrip).focus()
         await pilot.press("escape")
         await pilot.pause()
         assert vm.query.owns_active_query is False
@@ -398,7 +399,7 @@ async def test_configured_athena_rebindings_replace_defaults(tmp_path: Path) -> 
             for view in ("query", "history", "results", "saved")
         ) == ("7 query", "8 history", "9 results", "0 saved")
 
-        app.query_one("#athena-tab-query").focus()
+        app.query_one("#athena-view-tabs", ServiceTabStrip).focus()
         await pilot.press("8")
         await pilot.pause()
         assert vm.active_view == "history"

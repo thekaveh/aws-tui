@@ -1480,28 +1480,12 @@ class AwsTuiApp(App[None]):
                 settings = self.query_one(SettingsView)
                 settings.focus_default()
             return
-        if slot in {
-            FocusSlot.GLUE_SOURCE,
-            FocusSlot.GLUE_FILTER,
-            FocusSlot.GLUE_TABS,
-            FocusSlot.GLUE_PRIMARY,
-            FocusSlot.GLUE_SECONDARY,
-            FocusSlot.GLUE_DETAIL,
-        }:
+        if slot.value.startswith("glue."):
             page = self._glue_page()
             if page is not None:
                 page._project_focus_slot(slot)
             return
-        if slot in {
-            FocusSlot.ATHENA_SOURCE,
-            FocusSlot.ATHENA_WORKGROUP,
-            FocusSlot.ATHENA_CATALOG,
-            FocusSlot.ATHENA_DATABASE,
-            FocusSlot.ATHENA_TABS,
-            FocusSlot.ATHENA_PRIMARY,
-            FocusSlot.ATHENA_SECONDARY,
-            FocusSlot.ATHENA_DETAIL,
-        }:
+        if slot.value.startswith("athena."):
             athena_page = self._athena_page()
             if athena_page is not None:
                 athena_page._project_focus_slot(slot)

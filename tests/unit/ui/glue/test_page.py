@@ -14,10 +14,13 @@ from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
+from aws_tui.vm.nav_menu_vm import NavMenuVM
+from aws_tui.vm.services_protocol import ServiceRegistry
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
@@ -41,6 +44,12 @@ def _build_vm(fake: InMemoryGlue | None = None) -> tuple[GluePageVM, InMemoryGlu
 
 
 class _GlueApp(App[None]):
+    CSS = """
+    Screen { layout: horizontal; }
+    GluePage { width: 1fr; }
+    #nav-menu { width: 1; min-width: 1; }
+    """
+
     def __init__(self, vm: GluePageVM, *, keymap: KeymapStore | None = None) -> None:
         super().__init__()
         self._vm = vm
@@ -50,6 +59,12 @@ class _GlueApp(App[None]):
             dispatcher=NULL_DISPATCHER,
         )
         self.focus_coordinator.construct()
+        self.nav_vm = NavMenuVM(
+            registry=ServiceRegistry(),
+            hub=vm.hub,
+            dispatcher=NULL_DISPATCHER,
+        )
+        self.nav_vm.construct()
 
     def compose(self) -> ComposeResult:
         if self._keymap is None:
@@ -65,9 +80,16 @@ class _GlueApp(App[None]):
                 keymap=self._keymap,
                 focus_coordinator=self.focus_coordinator,
             )
+        yield NavMenu(
+            vm=self.nav_vm,
+            hub=self._vm.hub,
+            focus_coordinator=self.focus_coordinator,
+            id="nav-menu",
+        )
 
     def on_unmount(self) -> None:
         self.focus_coordinator.dispose()
+        self.nav_vm.dispose()
 
 
 def _focus_target_ids(page: GluePage) -> tuple[str, ...]:
@@ -81,6 +103,7 @@ def _cycle_target_ids(
     reverse: bool,
 ) -> tuple[str, ...]:
     expected_count = len(page._focus_targets())
+    app.set_focus(app.query_one("#nav-menu", NavMenu))
     app.focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
     visited: list[str] = []
     for _ in range(expected_count):
@@ -105,7 +128,8 @@ def _cycle_target_ids(
                 "glue-view-tabs",
                 "glue-databases-pane-options",
                 "glue-tables-pane-options",
-                "",
+                "glue-table-detail-pane-scroll",
+                "nav-menu",
             ),
         ),
         (
@@ -116,7 +140,8 @@ def _cycle_target_ids(
                 "glue-view-tabs",
                 "glue-jobs-pane-options",
                 "glue-runs-pane-options",
-                "",
+                "glue-job-detail-pane-scroll",
+                "nav-menu",
             ),
         ),
         (
@@ -126,7 +151,8 @@ def _cycle_target_ids(
                 "glue-crawler-state-filter",
                 "glue-view-tabs",
                 "glue-crawlers-pane-options",
-                "",
+                "glue-crawler-detail-pane-scroll",
+                "nav-menu",
             ),
         ),
     ],
@@ -146,15 +172,70 @@ async def test_glue_views_have_complete_deterministic_focus_rings(
         assert _focus_target_ids(page) == expected_ids
         assert _cycle_target_ids(app, page, reverse=False) == expected_ids
         assert _cycle_target_ids(app, page, reverse=True) == (
-            expected_ids[0],
-            *reversed(expected_ids[1:]),
+            *reversed(expected_ids[:-1]),
+            expected_ids[-1],
         )
         active_id = f"glue-{view}-view"
         assert all(
             active_id in {ancestor.id for ancestor in widget.ancestors_with_self}
-            or slot in {FocusSlot.GLUE_SOURCE, FocusSlot.GLUE_FILTER, FocusSlot.GLUE_TABS}
+            or slot
+            in {
+                FocusSlot.GLUE_SOURCE,
+                FocusSlot.GLUE_FILTER,
+                FocusSlot.GLUE_TABS,
+                FocusSlot.NAV_MENU,
+            }
             for slot, widget in page._focus_targets()
         )
+
+
+@pytest.mark.asyncio
+async def test_glue_ring_projects_to_nav_and_direct_focus_resumes_from_typed_slot() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        tables = app.query_one("#glue-tables-pane-options", OptionList)
+        tables.focus()
+        await pilot.pause()
+
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_SECONDARY
+        page.cycle_focus(reverse=False)
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "glue-table-detail-pane-scroll"
+
+        app.query_one("#glue-source-header").focus()
+        await pilot.pause()
+        page.cycle_focus(reverse=True)
+        await pilot.pause()
+        assert app.query_one("#nav-menu", NavMenu).has_focus
+        assert app.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
+
+
+@pytest.mark.asyncio
+async def test_glue_refresh_falls_back_to_the_nearest_available_slot() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    await vm.select_view("jobs")
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        runs = app.query_one("#glue-runs-pane-options", OptionList)
+        runs.focus()
+        await pilot.pause()
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_SECONDARY
+
+        await app.query_one(GluePage).action_select_view("crawlers")
+        await pilot.pause()
+
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_DETAIL
+        assert app.focused is not None
+        assert app.focused.id == "glue-crawler-detail-pane-scroll"
 
 
 @pytest.mark.asyncio

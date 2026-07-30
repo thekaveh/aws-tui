@@ -376,6 +376,24 @@ Each implementation task records:
 | Test LOC | 333 added, 6 deleted, net +327. |
 | Coverage | The specified focused suite increased from 50 to 64 tests and from 32.10% to 32.56% whole-package coverage, +0.45 percentage points. The changed focus coordinator remained at 95%; Glue page coverage increased from 63% to 66% and Athena page coverage from 57% to 60%. |
 
+### `vmx31-glue-athena-focus-rings-review-fix`
+
+| Field | Evidence |
+|---|---|
+| Change ID | `vmx31-glue-athena-focus-rings-review-fix` |
+| Required behavior | Keep users in one deterministic typed ring that reaches the real navigation rail, includes every visible and enabled Glue/Athena control, synchronizes direct Textual focus back to VMx before cycling, and chooses the nearest surviving slot after refresh. |
+| VMx candidates | Existing `DiscriminatorVM[FocusSlot]`, a second service-local `DiscriminatorVM`, `FilteredCompositeVM`, and bespoke widget-index state. |
+| Selected primitive | Extended the existing app-wide `DiscriminatorVM[FocusSlot]` facade with concrete control identities and `FocusCoordinatorVM.select_nearest_focus_slot()`. `active_key` remains the only logical focus identity; pages supply current availability and stable order. |
+| Rejected candidates | A service-local discriminator or widget index would create parallel focus authority. `FilteredCompositeVM` models a component collection cursor rather than Textual focus. Directly trusting `App.focused` during later cycles would leave VMx stale after pointer or programmatic focus changes. |
+| Bespoke code retained | Pages map typed slots to mounted widgets, filter Textual visibility/enabled/focusability, observe child refreshes, synchronize `DescendantFocus`, and call `App.set_focus()`. `GlueIcebergView` exposes its current enabled focus targets. These are DOM/runtime concerns outside VMx. |
+| VM files | Changed `src/aws_tui/vm/chrome/focus_coordinator_vm.py`. |
+| View files | Changed `src/aws_tui/app.py`, the Glue/Athena pages, Glue detail and Iceberg views, and the shared service tab strip. |
+| Tests | Expanded coordinator, Glue, Athena, Iceberg, shared-tab, production-router, and real-nav coverage. Tests prove enabled transient controls enter the ring, direct focus controls the next transition, Nav is reachable in both directions, and unavailable slots fall back by proximity. |
+| VM LOC | 59 added, 0 deleted, net +59. |
+| View LOC | 290 added, 40 deleted, net +250. |
+| Test LOC | 428 added, 19 deleted, net +409. |
+| Coverage | Review RED run: 20 failed and 53 passed for the intended missing behavior; the final context-refresh regression also failed RED in isolation. Final combined unit and production integration suite: 112 passed. |
+
 # 7. Testing and acceptance
 
 ## 7.1. Test-first requirement

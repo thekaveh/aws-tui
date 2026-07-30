@@ -4,7 +4,9 @@ from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar, cast
 
+from reactivex.abc import DisposableBase
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.css.query import NoMatches
@@ -28,6 +30,25 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 _VIEW_ORDER: tuple[AthenaView, ...] = ("query", "history", "results", "saved")
+_ATHENA_FOCUS_ORDER = (
+    FocusSlot.ATHENA_SOURCE,
+    FocusSlot.ATHENA_WORKGROUP,
+    FocusSlot.ATHENA_WORKGROUP_MORE,
+    FocusSlot.ATHENA_CATALOG,
+    FocusSlot.ATHENA_CATALOG_MORE,
+    FocusSlot.ATHENA_DATABASE,
+    FocusSlot.ATHENA_DATABASE_MORE,
+    FocusSlot.ATHENA_TABS,
+    FocusSlot.ATHENA_PRIMARY,
+    FocusSlot.ATHENA_SAVED_NAMED_MORE,
+    FocusSlot.ATHENA_HISTORY_MORE,
+    FocusSlot.ATHENA_SECONDARY,
+    FocusSlot.ATHENA_CANCEL,
+    FocusSlot.ATHENA_SAVED_PREPARED_MORE,
+    FocusSlot.ATHENA_DETAIL,
+    FocusSlot.ATHENA_SAVED_OPEN_EDITOR,
+    FocusSlot.NAV_MENU,
+)
 _ContextControls = tuple[
     tuple[Select[str], Select[str], Select[str]],
     tuple[AthenaLoadMoreButton, AthenaLoadMoreButton, AthenaLoadMoreButton],
@@ -100,6 +121,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self._focus_coordinator = focus_coordinator
         self._syncing_context = False
         self._context_options: dict[str, tuple[str, ...]] = {}
+        self._focus_subscriptions: list[DisposableBase] = []
 
     @property
     def vm(self) -> AthenaPageVM:
@@ -193,14 +215,49 @@ class AthenaPage(HubSubscriberMixin, Widget):
             ),
             on_property_changed=self._on_page_changed,
         )
+        for child_vm, sensitive_slots in (
+            (
+                self._vm.query,
+                frozenset((FocusSlot.ATHENA_SECONDARY, FocusSlot.ATHENA_CANCEL)),
+            ),
+            (
+                self._vm.history,
+                frozenset((FocusSlot.ATHENA_HISTORY_MORE, FocusSlot.ATHENA_SECONDARY)),
+            ),
+            (self._vm.results, frozenset((FocusSlot.ATHENA_SECONDARY,))),
+            (
+                self._vm.saved,
+                frozenset(
+                    (
+                        FocusSlot.ATHENA_SAVED_NAMED_MORE,
+                        FocusSlot.ATHENA_SAVED_PREPARED_MORE,
+                        FocusSlot.ATHENA_SAVED_OPEN_EDITOR,
+                    )
+                ),
+            ),
+        ):
+            self._focus_subscriptions.append(
+                child_vm.on_property_changed.subscribe(
+                    on_next=partial(
+                        self._on_focus_availability_changed,
+                        sensitive_slots,
+                    )
+                )
+            )
         self.call_after_refresh(self._refresh_page)
         self.call_after_refresh(self._maybe_focus_active)
 
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()
+        for subscription in self._focus_subscriptions:
+            subscription.dispose()
+        self._focus_subscriptions.clear()
 
     async def on_service_tab_strip_changed(self, event: ServiceTabStrip.Changed) -> None:
         await self.action_select_view(event.value)
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        self._sync_focused_widget(event.widget)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if self._syncing_context or event.value is Select.NULL:
@@ -336,6 +393,9 @@ class AthenaPage(HubSubscriberMixin, Widget):
     def cycle_focus(self, *, reverse: bool) -> None:
         if self._focus_coordinator is None:
             return
+        focused = self.app.focused
+        if focused is not None:
+            self._sync_focused_widget(focused)
         targets = self._focus_targets()
         slot = self._focus_coordinator.cycle_focus_ring(
             tuple(slot for slot, _widget in targets),
@@ -351,14 +411,32 @@ class AthenaPage(HubSubscriberMixin, Widget):
         targets: list[tuple[FocusSlot, Widget]] = [
             (FocusSlot.ATHENA_SOURCE, self.query_one("#athena-source-header", Widget)),
         ]
-        for slot, selector in (
-            (FocusSlot.ATHENA_WORKGROUP, "#athena-workgroup"),
-            (FocusSlot.ATHENA_CATALOG, "#athena-catalog"),
-            (FocusSlot.ATHENA_DATABASE, "#athena-database"),
+        for slot, selector, more_slot, more_selector in (
+            (
+                FocusSlot.ATHENA_WORKGROUP,
+                "#athena-workgroup",
+                FocusSlot.ATHENA_WORKGROUP_MORE,
+                "#athena-more-workgroups",
+            ),
+            (
+                FocusSlot.ATHENA_CATALOG,
+                "#athena-catalog",
+                FocusSlot.ATHENA_CATALOG_MORE,
+                "#athena-more-catalogs",
+            ),
+            (
+                FocusSlot.ATHENA_DATABASE,
+                "#athena-database",
+                FocusSlot.ATHENA_DATABASE_MORE,
+                "#athena-more-databases",
+            ),
         ):
             widget = self.query_one(selector, Select)
             if self._is_focus_target(widget):
                 targets.append((slot, widget))
+            load_more = self.query_one(more_selector, AthenaLoadMoreButton)
+            if self._is_focus_target(load_more):
+                targets.append((more_slot, load_more))
         targets.append(
             (
                 FocusSlot.ATHENA_TABS,
@@ -366,6 +444,12 @@ class AthenaPage(HubSubscriberMixin, Widget):
             )
         )
         targets.extend(self._active_surface_focus_targets())
+        try:
+            nav = self.screen.query_one("#nav-menu", Widget)
+        except NoMatches:
+            pass
+        else:
+            targets.append((FocusSlot.NAV_MENU, nav))
         return tuple(targets)
 
     def _active_surface_focus_targets(self) -> tuple[tuple[FocusSlot, Widget], ...]:
@@ -374,6 +458,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
             candidates = (
                 (FocusSlot.ATHENA_PRIMARY, self.query_one("#athena-editor", TextArea)),
                 (FocusSlot.ATHENA_SECONDARY, self.query_one("#athena-execute", Button)),
+                (FocusSlot.ATHENA_CANCEL, self.query_one("#athena-cancel", Button)),
                 (
                     FocusSlot.ATHENA_DETAIL,
                     self.query_one("#athena-query-detail", VerticalScroll),
@@ -384,6 +469,10 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 (
                     FocusSlot.ATHENA_PRIMARY,
                     self.query_one("#athena-history-pane", ResourceListPane).option_list,
+                ),
+                (
+                    FocusSlot.ATHENA_HISTORY_MORE,
+                    self.query_one("#athena-more-history", AthenaLoadMoreButton),
                 ),
                 (
                     FocusSlot.ATHENA_SECONDARY,
@@ -412,12 +501,24 @@ class AthenaPage(HubSubscriberMixin, Widget):
                     self.query_one("#athena-named-pane", ResourceListPane).option_list,
                 ),
                 (
+                    FocusSlot.ATHENA_SAVED_NAMED_MORE,
+                    self.query_one("#athena-more-named", AthenaLoadMoreButton),
+                ),
+                (
                     FocusSlot.ATHENA_SECONDARY,
                     self.query_one("#athena-prepared-pane", ResourceListPane).option_list,
                 ),
                 (
+                    FocusSlot.ATHENA_SAVED_PREPARED_MORE,
+                    self.query_one("#athena-more-prepared", AthenaLoadMoreButton),
+                ),
+                (
                     FocusSlot.ATHENA_DETAIL,
                     self.query_one("#athena-saved-detail", DetailRows).query_one(VerticalScroll),
+                ),
+                (
+                    FocusSlot.ATHENA_SAVED_OPEN_EDITOR,
+                    self.query_one("#athena-open-editor", Button),
                 ),
             )
         return tuple((slot, widget) for slot, widget in candidates if self._is_focus_target(widget))
@@ -438,6 +539,15 @@ class AthenaPage(HubSubscriberMixin, Widget):
         if self._focus_coordinator is not None:
             self._focus_coordinator.set_focused_slot(slot)
         self.app.set_focus(target)
+
+    def _sync_focused_widget(self, focused: Widget) -> None:
+        if self._focus_coordinator is None:
+            return
+        ancestors = set(focused.ancestors_with_self)
+        for slot, target in self._focus_targets():
+            if target in ancestors:
+                self._focus_coordinator.set_focused_slot(slot)
+                return
 
     def move_focused(self, delta: int) -> None:
         focused = self.app.focused
@@ -490,7 +600,23 @@ class AthenaPage(HubSubscriberMixin, Widget):
     def _on_page_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh_page)
 
+    def _on_focus_availability_changed(
+        self,
+        sensitive_slots: frozenset[FocusSlot],
+        _property_name: str,
+    ) -> None:
+        if (
+            self._focus_coordinator is None
+            or self._focus_coordinator.focused_slot not in sensitive_slots
+        ):
+            return
+        reference = self._focus_coordinator.focused_slot
+        self.call_after_refresh(partial(self._maybe_focus_active, reference))
+
     def _refresh_page(self) -> None:
+        reference = (
+            self._focus_coordinator.focused_slot if self._focus_coordinator is not None else None
+        )
         context_controls = self._context_controls()
         view_controls = self._view_controls()
         if context_controls is None or view_controls is None:
@@ -498,6 +624,8 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self._sync_context(context_controls)
         self._sync_view(view_controls)
         cast(AthenaQueryView, view_controls[0][0]).refresh_from_vm()
+        if reference is not None and reference not in dict(self._focus_targets()):
+            self.call_after_refresh(partial(self._maybe_focus_active, reference))
 
     def _context_controls(self) -> _ContextControls | None:
         if not self.is_mounted:
@@ -642,7 +770,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         select.set_class(state is PaneState.FORBIDDEN, "-warning")
         select.set_class(state is PaneState.ERROR, "-error")
 
-    def _maybe_focus_active(self) -> None:
+    def _maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
         focused = self.app.focused
         if (
             self._focus_coordinator is not None
@@ -658,12 +786,19 @@ class AthenaPage(HubSubscriberMixin, Widget):
         except NoMatches:
             return
         current_slot = (
-            self._focus_coordinator.focused_slot
+            reference or self._focus_coordinator.focused_slot
             if self._focus_coordinator is not None
             else FocusSlot.ATHENA_PRIMARY
         )
         if current_slot not in dict(targets):
-            current_slot = FocusSlot.ATHENA_PRIMARY
+            if self._focus_coordinator is None:
+                current_slot = FocusSlot.ATHENA_PRIMARY
+            else:
+                current_slot = self._focus_coordinator.select_nearest_focus_slot(
+                    tuple(slot for slot, _widget in targets),
+                    order=_ATHENA_FOCUS_ORDER,
+                    reference=current_slot,
+                )
         self._project_focus_slot(current_slot, targets=targets)
 
 

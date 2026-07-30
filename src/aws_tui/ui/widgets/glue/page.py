@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+from functools import partial
 from typing import ClassVar, cast
 
+from reactivex.abc import DisposableBase
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList, Select
 from vmx import Message, MessageHub
@@ -14,6 +18,7 @@ from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
+from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
@@ -21,6 +26,37 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 
 _VIEW_ORDER: tuple[GlueView, ...] = ("catalog", "jobs", "crawlers")
+_GLUE_FOCUS_ORDER = (
+    FocusSlot.GLUE_SOURCE,
+    FocusSlot.GLUE_FILTER,
+    FocusSlot.GLUE_TABS,
+    FocusSlot.GLUE_PRIMARY,
+    FocusSlot.GLUE_SECONDARY,
+    FocusSlot.GLUE_DETAIL,
+    FocusSlot.GLUE_ICEBERG_SNAPSHOTS,
+    FocusSlot.GLUE_ICEBERG_HISTORY,
+    FocusSlot.GLUE_ICEBERG_MANIFESTS,
+    FocusSlot.GLUE_ICEBERG_FILES,
+    FocusSlot.GLUE_ICEBERG_PARTITIONS,
+    FocusSlot.GLUE_ICEBERG_REFS,
+    FocusSlot.GLUE_ICEBERG_TABLE,
+    FocusSlot.GLUE_ICEBERG_MORE,
+    FocusSlot.GLUE_ICEBERG_RETRY,
+    FocusSlot.GLUE_ICEBERG_TIME_TRAVEL,
+    FocusSlot.NAV_MENU,
+)
+_ICEBERG_FOCUS_SLOTS = {
+    "glue-iceberg-tab-snapshots": FocusSlot.GLUE_ICEBERG_SNAPSHOTS,
+    "glue-iceberg-tab-history": FocusSlot.GLUE_ICEBERG_HISTORY,
+    "glue-iceberg-tab-manifests": FocusSlot.GLUE_ICEBERG_MANIFESTS,
+    "glue-iceberg-tab-files": FocusSlot.GLUE_ICEBERG_FILES,
+    "glue-iceberg-tab-partitions": FocusSlot.GLUE_ICEBERG_PARTITIONS,
+    "glue-iceberg-tab-refs": FocusSlot.GLUE_ICEBERG_REFS,
+    "glue-iceberg-table": FocusSlot.GLUE_ICEBERG_TABLE,
+    "glue-iceberg-more": FocusSlot.GLUE_ICEBERG_MORE,
+    "glue-iceberg-retry": FocusSlot.GLUE_ICEBERG_RETRY,
+    "glue-iceberg-time-travel": FocusSlot.GLUE_ICEBERG_TIME_TRAVEL,
+}
 
 
 class _FocusableSourceHeader(ServiceSourceHeader, can_focus=True):
@@ -62,6 +98,7 @@ class GluePage(HubSubscriberMixin, Widget):
         self._hub = hub
         self._keymap = keymap or KeymapStore()
         self._focus_coordinator = focus_coordinator
+        self._focus_subscriptions: list[DisposableBase] = []
 
     @property
     def vm(self) -> GluePageVM:
@@ -95,13 +132,33 @@ class GluePage(HubSubscriberMixin, Widget):
             property_names=("active_view",),
             on_property_changed=self._on_active_view_changed,
         )
+        iceberg_slots = frozenset(_ICEBERG_FOCUS_SLOTS.values())
+        for child_vm, sensitive_slots in (
+            (self._vm.catalog.iceberg, iceberg_slots),
+            (self._vm.jobs, frozenset((FocusSlot.GLUE_FILTER,))),
+            (self._vm.crawlers, frozenset((FocusSlot.GLUE_FILTER,))),
+        ):
+            self._focus_subscriptions.append(
+                child_vm.on_property_changed.subscribe(
+                    on_next=partial(
+                        self._on_focus_availability_changed,
+                        sensitive_slots,
+                    )
+                )
+            )
         self.call_after_refresh(self._maybe_focus_active)
 
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()
+        for subscription in self._focus_subscriptions:
+            subscription.dispose()
+        self._focus_subscriptions.clear()
 
     async def on_service_tab_strip_changed(self, event: ServiceTabStrip.Changed) -> None:
         await self.action_select_view(event.value)
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        self._sync_focused_widget(event.widget)
 
     async def action_select_view(self, view: str) -> None:
         selected = cast(GlueView, view)
@@ -117,6 +174,9 @@ class GluePage(HubSubscriberMixin, Widget):
     def cycle_focus(self, *, reverse: bool) -> None:
         if self._focus_coordinator is None:
             return
+        focused = self.app.focused
+        if focused is not None:
+            self._sync_focused_widget(focused)
         targets = self._focus_targets()
         slot = self._focus_coordinator.cycle_focus_ring(
             tuple(slot for slot, _widget in targets),
@@ -134,7 +194,7 @@ class GluePage(HubSubscriberMixin, Widget):
         active = self._vm.active_view
         if active == "catalog":
             catalog = self.query_one(GlueCatalogView)
-            return (
+            targets: list[tuple[FocusSlot, Widget]] = [
                 (FocusSlot.GLUE_SOURCE, source),
                 (FocusSlot.GLUE_TABS, tabs),
                 (
@@ -151,25 +211,54 @@ class GluePage(HubSubscriberMixin, Widget):
                         VerticalScroll
                     ),
                 ),
+            ]
+            iceberg = catalog.query_one(GlueIcebergView)
+            targets.extend(
+                (_ICEBERG_FOCUS_SLOTS[widget.id or ""], widget)
+                for widget in iceberg.focus_targets()
             )
-        if active == "jobs":
+        elif active == "jobs":
             filter_target, primary, secondary, detail = self.query_one(GlueJobsView).focus_targets()
-            return (
+            targets = [
                 (FocusSlot.GLUE_SOURCE, source),
                 (FocusSlot.GLUE_FILTER, filter_target),
                 (FocusSlot.GLUE_TABS, tabs),
                 (FocusSlot.GLUE_PRIMARY, primary),
                 (FocusSlot.GLUE_SECONDARY, secondary),
                 (FocusSlot.GLUE_DETAIL, detail),
-            )
-        filter_target, primary, detail = self.query_one(GlueCrawlersView).focus_targets()
-        return (
-            (FocusSlot.GLUE_SOURCE, source),
-            (FocusSlot.GLUE_FILTER, filter_target),
-            (FocusSlot.GLUE_TABS, tabs),
-            (FocusSlot.GLUE_PRIMARY, primary),
-            (FocusSlot.GLUE_DETAIL, detail),
+            ]
+        else:
+            filter_target, primary, detail = self.query_one(GlueCrawlersView).focus_targets()
+            targets = [
+                (FocusSlot.GLUE_SOURCE, source),
+                (FocusSlot.GLUE_FILTER, filter_target),
+                (FocusSlot.GLUE_TABS, tabs),
+                (FocusSlot.GLUE_PRIMARY, primary),
+                (FocusSlot.GLUE_DETAIL, detail),
+            ]
+        nav = self._nav_focus_target()
+        if nav is not None:
+            targets.append((FocusSlot.NAV_MENU, nav))
+        return tuple(
+            (slot, widget)
+            for slot, widget in targets
+            if widget.display and not widget.disabled and widget.can_focus
         )
+
+    def _nav_focus_target(self) -> Widget | None:
+        try:
+            return self.screen.query_one("#nav-menu", Widget)
+        except NoMatches:
+            return None
+
+    def _sync_focused_widget(self, focused: Widget) -> None:
+        if self._focus_coordinator is None:
+            return
+        ancestors = set(focused.ancestors_with_self)
+        for slot, target in self._focus_targets():
+            if target in ancestors:
+                self._focus_coordinator.set_focused_slot(slot)
+                return
 
     def _project_focus_slot(
         self,
@@ -223,6 +312,19 @@ class GluePage(HubSubscriberMixin, Widget):
     def _on_active_view_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._sync_view)
 
+    def _on_focus_availability_changed(
+        self,
+        sensitive_slots: frozenset[FocusSlot],
+        _property_name: str,
+    ) -> None:
+        if (
+            self._focus_coordinator is None
+            or self._focus_coordinator.focused_slot not in sensitive_slots
+        ):
+            return
+        reference = self._focus_coordinator.focused_slot
+        self.call_after_refresh(partial(self._maybe_focus_active, reference))
+
     def _sync_view(self) -> None:
         active = self._vm.active_view
         for view in _VIEW_ORDER:
@@ -234,7 +336,7 @@ class GluePage(HubSubscriberMixin, Widget):
         with contextlib.suppress(Exception):
             self.query_one("#glue-view-tabs", ServiceTabStrip).set_active(active)
 
-    def _maybe_focus_active(self) -> None:
+    def _maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
         focused = self.app.focused
         if (
             self._focus_coordinator is not None
@@ -247,12 +349,19 @@ class GluePage(HubSubscriberMixin, Widget):
             return
         targets = self._focus_targets()
         current_slot = (
-            self._focus_coordinator.focused_slot
+            reference or self._focus_coordinator.focused_slot
             if self._focus_coordinator is not None
             else FocusSlot.GLUE_PRIMARY
         )
         if current_slot not in dict(targets):
-            current_slot = FocusSlot.GLUE_PRIMARY
+            if self._focus_coordinator is None:
+                current_slot = FocusSlot.GLUE_PRIMARY
+            else:
+                current_slot = self._focus_coordinator.select_nearest_focus_slot(
+                    tuple(slot for slot, _widget in targets),
+                    order=_GLUE_FOCUS_ORDER,
+                    reference=current_slot,
+                )
         self._project_focus_slot(current_slot, targets=targets)
 
 

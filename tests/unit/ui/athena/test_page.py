@@ -11,13 +11,22 @@ from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.athena.saved_view import AthenaSavedView
+from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
+from aws_tui.vm.nav_menu_vm import NavMenuVM
+from aws_tui.vm.services_protocol import ServiceRegistry
 from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
 
 class _AthenaApp(App[None]):
+    CSS = """
+    Screen { layout: horizontal; }
+    AthenaPage { width: 1fr; }
+    #nav-menu { width: 1; min-width: 1; }
+    """
+
     def __init__(self, vm: AthenaPageVM) -> None:
         super().__init__()
         self._vm = vm
@@ -26,6 +35,12 @@ class _AthenaApp(App[None]):
             dispatcher=NULL_DISPATCHER,
         )
         self.focus_coordinator.construct()
+        self.nav_vm = NavMenuVM(
+            registry=ServiceRegistry(),
+            hub=vm._hub,  # type: ignore[attr-defined]
+            dispatcher=NULL_DISPATCHER,
+        )
+        self.nav_vm.construct()
 
     def compose(self) -> ComposeResult:
         yield AthenaPage(
@@ -33,9 +48,16 @@ class _AthenaApp(App[None]):
             hub=self._vm._hub,  # type: ignore[attr-defined]
             focus_coordinator=self.focus_coordinator,
         )
+        yield NavMenu(
+            vm=self.nav_vm,
+            hub=self._vm._hub,  # type: ignore[attr-defined]
+            focus_coordinator=self.focus_coordinator,
+            id="nav-menu",
+        )
 
     def on_unmount(self) -> None:
         self.focus_coordinator.dispose()
+        self.nav_vm.dispose()
 
 
 def _athena_target_ids(page: AthenaPage) -> tuple[str, ...]:
@@ -49,6 +71,7 @@ def _cycle_athena_target_ids(
     reverse: bool,
 ) -> tuple[str, ...]:
     expected_count = len(page._focus_targets())
+    app.set_focus(app.query_one("#nav-menu", NavMenu))
     app.focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
     visited: list[str] = []
     for _ in range(expected_count):
@@ -69,12 +92,20 @@ def _cycle_athena_target_ids(
         ("query", ("athena-editor", "athena-query-detail")),
         (
             "history",
-            ("athena-history-pane-options", "athena-history-results", ""),
+            (
+                "athena-history-pane-options",
+                "athena-history-results",
+                "athena-history-detail-scroll",
+            ),
         ),
         ("results", ("athena-results-table",)),
         (
             "saved",
-            ("athena-named-pane-options", "athena-prepared-pane-options", ""),
+            (
+                "athena-named-pane-options",
+                "athena-prepared-pane-options",
+                "athena-saved-detail-scroll",
+            ),
         ),
     ],
 )
@@ -93,7 +124,7 @@ async def test_athena_views_have_complete_deterministic_focus_rings(
         "athena-database",
         "athena-view-tabs",
     )
-    expected_ids = (*context_ids, *surface_ids)
+    expected_ids = (*context_ids, *surface_ids, "nav-menu")
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -101,8 +132,8 @@ async def test_athena_views_have_complete_deterministic_focus_rings(
         assert _athena_target_ids(page) == expected_ids
         assert _cycle_athena_target_ids(app, page, reverse=False) == expected_ids
         assert _cycle_athena_target_ids(app, page, reverse=True) == (
-            expected_ids[0],
-            *reversed(expected_ids[1:]),
+            *reversed(expected_ids[:-1]),
+            expected_ids[-1],
         )
 
 
@@ -127,6 +158,176 @@ async def test_athena_focus_ring_omits_hidden_views_and_disabled_load_more() -> 
             "athena-prepared-pane-options",
         }
         assert page.query_one("#athena-view-tabs", ServiceTabStrip)
+
+
+@pytest.mark.asyncio
+async def test_athena_ring_includes_enabled_context_load_more_controls() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    vm._workgroup_pager._current_token = "workgroups-next"  # type: ignore[attr-defined]
+    vm._catalog_pager._current_token = "catalogs-next"  # type: ignore[attr-defined]
+    vm._database_pager._current_token = "databases-next"  # type: ignore[attr-defined]
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        page._refresh_page()  # type: ignore[attr-defined]
+        await pilot.pause()
+
+        assert _athena_target_ids(page)[:8] == (
+            "athena-source-header",
+            "athena-workgroup",
+            "athena-more-workgroups",
+            "athena-catalog",
+            "athena-more-catalogs",
+            "athena-database",
+            "athena-more-databases",
+            "athena-view-tabs",
+        )
+
+
+@pytest.mark.asyncio
+async def test_athena_rings_include_enabled_query_history_results_and_saved_controls() -> None:
+    client = PageClient()
+    client.workgroups.reverse()
+    vm, _client = _build_vm(client)
+    await vm.setup()
+    vm.query.set_sql("SELECT 1")
+    vm.history._pager._current_token = "history-next"  # type: ignore[attr-defined]
+    vm.results._execution_id = "q-results"  # type: ignore[attr-defined]
+    vm.results._pager._current_token = "results-next"  # type: ignore[attr-defined]
+    vm.saved._named_pager._current_token = "named-next"  # type: ignore[attr-defined]
+    vm.saved._prepared_pager._current_token = "prepared-next"  # type: ignore[attr-defined]
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+
+        cancel = app.query_one("#athena-cancel", Button)
+        cancel.disabled = False
+        assert {
+            "athena-editor",
+            "athena-execute",
+            "athena-cancel",
+            "athena-query-detail",
+        }.issubset(_athena_target_ids(page))
+
+        await page.action_select_view("history")
+        vm.history._pager._current_token = "history-next"  # type: ignore[attr-defined]
+        page.query_one(AthenaHistoryView)._refresh()  # type: ignore[attr-defined]
+        await pilot.pause()
+        assert {
+            "athena-history-pane-options",
+            "athena-more-history",
+            "athena-history-results",
+            "athena-history-detail-scroll",
+        } <= set(_athena_target_ids(page))
+
+        await page.action_select_view("results")
+        vm.results._pager._current_token = "results-next"  # type: ignore[attr-defined]
+        page.query_one(AthenaResultsView)._refresh()  # type: ignore[attr-defined]
+        await pilot.pause()
+        assert {
+            "athena-results-table",
+            "athena-more-results",
+        } <= set(_athena_target_ids(page))
+
+        await page.action_select_view("saved")
+        vm.saved._named_pager._current_token = "named-next"  # type: ignore[attr-defined]
+        vm.saved._prepared_pager._current_token = "prepared-next"  # type: ignore[attr-defined]
+        await vm.select_named_query("named-1")
+        page.query_one(AthenaSavedView)._refresh()  # type: ignore[attr-defined]
+        await pilot.pause()
+        assert {
+            "athena-named-pane-options",
+            "athena-more-named",
+            "athena-prepared-pane-options",
+            "athena-more-prepared",
+            "athena-saved-detail-scroll",
+            "athena-open-editor",
+        } <= set(_athena_target_ids(page))
+
+
+@pytest.mark.asyncio
+async def test_athena_ring_syncs_direct_focus_and_projects_to_nav() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        catalog = app.query_one("#athena-catalog", Select)
+        catalog.focus()
+        await pilot.pause()
+
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CATALOG
+        page.cycle_focus(reverse=False)
+        await pilot.pause()
+        assert app.query_one("#athena-database", Select).has_focus
+
+        await pilot.click("#athena-tab-history")
+        await pilot.pause()
+        assert app.query_one("#athena-view-tabs", ServiceTabStrip).has_focus
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_TABS
+
+        app.query_one("#athena-source-header").focus()
+        await pilot.pause()
+        page.cycle_focus(reverse=True)
+        await pilot.pause()
+        assert app.query_one("#nav-menu", NavMenu).has_focus
+        assert app.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
+
+
+@pytest.mark.asyncio
+async def test_athena_refresh_falls_back_to_the_nearest_available_slot() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    vm.query.set_sql("SELECT 1")
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        cancel = app.query_one("#athena-cancel", Button)
+        cancel.disabled = False
+        cancel.focus()
+        await pilot.pause()
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CANCEL
+
+        vm.query.set_sql("SELECT 2")
+        await pilot.pause()
+
+        assert cancel.disabled
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_SECONDARY
+        assert app.query_one("#athena-execute", Button).has_focus
+
+
+@pytest.mark.asyncio
+async def test_context_refresh_reconciles_an_unavailable_pager_to_its_nearest_slot() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    vm._workgroup_pager._current_token = "workgroups-next"  # type: ignore[attr-defined]
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        page._refresh_page()  # type: ignore[attr-defined]
+        await pilot.pause()
+        load_more = app.query_one("#athena-more-workgroups", Button)
+        load_more.focus()
+        await pilot.pause()
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_WORKGROUP_MORE
+
+        vm._workgroup_pager._current_token = None  # type: ignore[attr-defined]
+        page._refresh_page()  # type: ignore[attr-defined]
+        await pilot.pause()
+
+        assert load_more.disabled
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CATALOG
+        assert app.query_one("#athena-catalog", Select).has_focus
 
 
 def _build_vm(client: PageClient | None = None) -> tuple[AthenaPageVM, PageClient]:
@@ -444,7 +645,7 @@ async def test_default_focus_and_tab_cycle_are_stable() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(AthenaPage)
-        page._maybe_focus_active()  # type: ignore[attr-defined]
+        page.focus_default()
         await pilot.pause()
         editor = app.query_one("#athena-editor", TextArea)
         assert editor.has_focus

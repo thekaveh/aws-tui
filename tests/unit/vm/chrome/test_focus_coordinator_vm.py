@@ -109,6 +109,51 @@ def test_service_ring_rejects_an_empty_ring() -> None:
         vm.dispose()
 
 
+def test_nearest_focus_slot_prefers_the_forward_neighbor_on_a_tie() -> None:
+    vm = _make(initial=FocusSlot.GLUE_SECONDARY)
+    try:
+        selected = vm.select_nearest_focus_slot(
+            (FocusSlot.GLUE_PRIMARY, FocusSlot.GLUE_DETAIL),
+            order=(
+                FocusSlot.GLUE_PRIMARY,
+                FocusSlot.GLUE_SECONDARY,
+                FocusSlot.GLUE_DETAIL,
+            ),
+        )
+        assert selected is FocusSlot.GLUE_DETAIL
+        assert vm.focused_slot is FocusSlot.GLUE_DETAIL
+    finally:
+        vm.dispose()
+
+
+def test_nearest_focus_slot_uses_the_nearest_available_predecessor() -> None:
+    vm = _make(initial=FocusSlot.ATHENA_CANCEL)
+    try:
+        selected = vm.select_nearest_focus_slot(
+            (FocusSlot.ATHENA_PRIMARY, FocusSlot.NAV_MENU),
+            order=(
+                FocusSlot.ATHENA_PRIMARY,
+                FocusSlot.ATHENA_SECONDARY,
+                FocusSlot.ATHENA_CANCEL,
+                FocusSlot.ATHENA_DETAIL,
+                FocusSlot.ATHENA_HISTORY_MORE,
+                FocusSlot.NAV_MENU,
+            ),
+        )
+        assert selected is FocusSlot.ATHENA_PRIMARY
+    finally:
+        vm.dispose()
+
+
+def test_nearest_focus_slot_rejects_an_empty_available_set() -> None:
+    vm = _make()
+    try:
+        with pytest.raises(ValueError, match="at least one"):
+            vm.select_nearest_focus_slot((), order=(FocusSlot.NAV_MENU,))
+    finally:
+        vm.dispose()
+
+
 def test_service_ring_modal_close_restores_the_service_slot() -> None:
     vm = _make(initial=FocusSlot.ATHENA_DATABASE)
     try:
@@ -343,14 +388,32 @@ def test_focus_slot_enum_has_all_required_members() -> None:
         "GLUE_PRIMARY",
         "GLUE_SECONDARY",
         "GLUE_DETAIL",
+        "GLUE_ICEBERG_SNAPSHOTS",
+        "GLUE_ICEBERG_HISTORY",
+        "GLUE_ICEBERG_MANIFESTS",
+        "GLUE_ICEBERG_FILES",
+        "GLUE_ICEBERG_PARTITIONS",
+        "GLUE_ICEBERG_REFS",
+        "GLUE_ICEBERG_TABLE",
+        "GLUE_ICEBERG_MORE",
+        "GLUE_ICEBERG_RETRY",
+        "GLUE_ICEBERG_TIME_TRAVEL",
         "ATHENA_SOURCE",
         "ATHENA_WORKGROUP",
+        "ATHENA_WORKGROUP_MORE",
         "ATHENA_CATALOG",
+        "ATHENA_CATALOG_MORE",
         "ATHENA_DATABASE",
+        "ATHENA_DATABASE_MORE",
         "ATHENA_TABS",
         "ATHENA_PRIMARY",
         "ATHENA_SECONDARY",
+        "ATHENA_CANCEL",
         "ATHENA_DETAIL",
+        "ATHENA_HISTORY_MORE",
+        "ATHENA_SAVED_NAMED_MORE",
+        "ATHENA_SAVED_PREPARED_MORE",
+        "ATHENA_SAVED_OPEN_EDITOR",
         "SETTINGS",
         "MODAL",
     }
@@ -373,13 +436,31 @@ def test_focus_slot_values_are_canonical_strings() -> None:
     assert FocusSlot.GLUE_PRIMARY.value == "glue.primary"
     assert FocusSlot.GLUE_SECONDARY.value == "glue.secondary"
     assert FocusSlot.GLUE_DETAIL.value == "glue.detail"
+    assert FocusSlot.GLUE_ICEBERG_SNAPSHOTS.value == "glue.iceberg.snapshots"
+    assert FocusSlot.GLUE_ICEBERG_HISTORY.value == "glue.iceberg.history"
+    assert FocusSlot.GLUE_ICEBERG_MANIFESTS.value == "glue.iceberg.manifests"
+    assert FocusSlot.GLUE_ICEBERG_FILES.value == "glue.iceberg.files"
+    assert FocusSlot.GLUE_ICEBERG_PARTITIONS.value == "glue.iceberg.partitions"
+    assert FocusSlot.GLUE_ICEBERG_REFS.value == "glue.iceberg.refs"
+    assert FocusSlot.GLUE_ICEBERG_TABLE.value == "glue.iceberg.table"
+    assert FocusSlot.GLUE_ICEBERG_MORE.value == "glue.iceberg.more"
+    assert FocusSlot.GLUE_ICEBERG_RETRY.value == "glue.iceberg.retry"
+    assert FocusSlot.GLUE_ICEBERG_TIME_TRAVEL.value == "glue.iceberg.time_travel"
     assert FocusSlot.ATHENA_SOURCE.value == "athena.source"
     assert FocusSlot.ATHENA_WORKGROUP.value == "athena.workgroup"
+    assert FocusSlot.ATHENA_WORKGROUP_MORE.value == "athena.workgroup.more"
     assert FocusSlot.ATHENA_CATALOG.value == "athena.catalog"
+    assert FocusSlot.ATHENA_CATALOG_MORE.value == "athena.catalog.more"
     assert FocusSlot.ATHENA_DATABASE.value == "athena.database"
+    assert FocusSlot.ATHENA_DATABASE_MORE.value == "athena.database.more"
     assert FocusSlot.ATHENA_TABS.value == "athena.tabs"
     assert FocusSlot.ATHENA_PRIMARY.value == "athena.primary"
     assert FocusSlot.ATHENA_SECONDARY.value == "athena.secondary"
+    assert FocusSlot.ATHENA_CANCEL.value == "athena.cancel"
     assert FocusSlot.ATHENA_DETAIL.value == "athena.detail"
+    assert FocusSlot.ATHENA_HISTORY_MORE.value == "athena.history.more"
+    assert FocusSlot.ATHENA_SAVED_NAMED_MORE.value == "athena.saved.named.more"
+    assert FocusSlot.ATHENA_SAVED_PREPARED_MORE.value == "athena.saved.prepared.more"
+    assert FocusSlot.ATHENA_SAVED_OPEN_EDITOR.value == "athena.saved.open_editor"
     assert FocusSlot.SETTINGS.value == "settings"
     assert FocusSlot.MODAL.value == "modal"
