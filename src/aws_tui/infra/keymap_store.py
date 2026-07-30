@@ -18,6 +18,7 @@ built-in aliases remain valid, but new collisions are rejected with
 
 from __future__ import annotations
 
+import unicodedata
 from itertools import combinations
 from typing import ClassVar
 
@@ -31,17 +32,27 @@ class KeybindingCollision(ValueError):
     """Raised when an overlay introduces a same-key action collision."""
 
 
-_TEXTUAL_KEY_NAME_OVERRIDES: dict[str, str] = {
-    ",": "comma",
-    ":": "colon",
-    "?": "question_mark",
-    "/": "slash",
+_TEXTUAL_FRIENDLY_KEY_NAMES: dict[str, str] = {
+    "solidus": "slash",
+    "reverse_solidus": "backslash",
+    "commercial_at": "at",
+    "hyphen_minus": "minus",
+    "plus_sign": "plus",
+    "low_line": "underscore",
 }
 
 
 def textual_key_name(key: str) -> str:
     """Return the runtime Textual name for a configured key literal."""
-    return _TEXTUAL_KEY_NAME_OVERRIDES.get(key, key)
+    if len(key) != 1:
+        return key
+    if key.isalnum():
+        return key
+    try:
+        normalized = unicodedata.name(key).lower().replace("-", "_").replace(" ", "_")
+    except ValueError:
+        normalized = "tab" if key == "\t" else key
+    return _TEXTUAL_FRIENDLY_KEY_NAMES.get(normalized, normalized)
 
 
 def _collision_pairs(
@@ -60,6 +71,18 @@ def _collision_pairs(
 
 class KeymapStore:
     """Resolve action names to keystrokes, with optional overlay merging."""
+
+    APPROVED_ALIAS_PAIRS: ClassVar[frozenset[tuple[str, str]]] = frozenset(
+        {
+            ("pane.quick_look", "pane.toggle_select"),
+            ("auth.authenticate", "pane.select_all"),
+            ("emr.clone", "pane.copy"),
+            ("athena.cancel", "modal.cancel"),
+            ("athena.query", "glue.catalog"),
+            ("athena.history", "glue.jobs"),
+            ("athena.results", "glue.crawlers"),
+        }
+    )
 
     DEFAULT_BINDINGS: ClassVar[dict[str, tuple[str, ...]]] = {
         "app.quit": ("q", "ctrl+c"),
@@ -132,9 +155,13 @@ class KeymapStore:
                     merged[action] = (keys,)
                 else:
                     merged[action] = tuple(keys)
-            introduced = _collision_pairs(merged) - _collision_pairs(self.DEFAULT_BINDINGS)
-            if introduced:
-                key, left, right = min(introduced)
+            unapproved = {
+                (key, left, right)
+                for key, left, right in _collision_pairs(merged)
+                if (left, right) not in self.APPROVED_ALIAS_PAIRS
+            }
+            if unapproved:
+                key, left, right = min(unapproved)
                 raise KeybindingCollision(
                     f"keybinding overlay assigns {key!r} to both "
                     f"{left!r} and {right!r}; choose distinct keys"
