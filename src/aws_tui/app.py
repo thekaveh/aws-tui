@@ -57,6 +57,7 @@ from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.quick_look import QuickLook
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_view_factory import build_service_view
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
@@ -75,12 +76,14 @@ from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
     ConnectionListChangedMessage,
+    CopyTableReferenceRequest,
     OpenAthenaTableRequest,
     OpenGlueTableRequest,
     OpenS3LocationRequest,
     ThemeChangedMessage,
 )
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _ACTION_RING_SIZE = 100
 _QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
@@ -118,6 +121,9 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("app.themes", "Theme picker"),
     ("app.cycle_theme", "Cycle theme"),
     ("app.swap_source", "Switch source"),
+    ("glue.choose_run_state", "Choose Glue run state"),
+    ("glue.choose_crawler_state", "Choose Glue crawler state"),
+    ("glue.copy_table_ref", "Copy Glue table reference"),
     ("glue.open_s3_location", "Open table location in S3"),
     ("glue.query_in_athena", "Query table in Athena"),
     ("glue.time_travel_in_athena", "Query Iceberg snapshot in Athena"),
@@ -125,6 +131,10 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("athena.history", "Athena history"),
     ("athena.results", "Athena results"),
     ("athena.saved", "Athena saved queries"),
+    ("athena.choose_workgroup", "Choose Athena workgroup"),
+    ("athena.choose_catalog", "Choose Athena catalog"),
+    ("athena.choose_database", "Choose Athena database"),
+    ("athena.insert_table_ref", "Insert copied table reference"),
     ("athena.execute", "Execute Athena query"),
     ("athena.cancel", "Cancel Athena query"),
     ("athena.load_more", "Load more Athena rows"),
@@ -213,6 +223,17 @@ def _service_source_candidates(ctx: AppContext, service_id: str) -> tuple[Connec
         connection
         for connection in ctx.connection_resolver.list()
         if connection.kind == "aws" and service.supports(connection)
+    )
+
+
+def _service_source_contexts(
+    ctx: AppContext,
+    service_id: str,
+) -> tuple[ServiceSourceContext, ...]:
+    """Project supported connections into immutable source-picker values."""
+    return tuple(
+        ServiceSourceContext.from_connection(connection)
+        for connection in _service_source_candidates(ctx, service_id)
     )
 
 
@@ -317,9 +338,9 @@ class AwsTuiApp(App[None]):
     # ``#main-area`` and ``#content-host`` need explicit ``1fr`` sizing
     # so the Horizontal layout allocates the remaining width to the
     # content host after the always-visible NavMenu takes its fixed
-    # 10-cell width (post-PR-#94 / #97 — single mode, no
-    # collapse/expand, sized to fit the longest 3-letter service
-    # label + the ``▌`` ribbon + per-row padding + borders). Without
+    # width (single mode, no collapse/expand, sized by
+    # ``nav_menu.NAV_MENU_WIDTH`` to center the longest service label
+    # alongside the ``▌`` ribbon). Without
     # this, the DualPane mounted inside renders at zero width and the
     # user sees a blank screen at startup. The pre-#94 standalone
     # ServicesHamburger widget + the toggle/collapse modes were both
@@ -410,6 +431,18 @@ class AwsTuiApp(App[None]):
             "glue.crawlers",
             partial(self.action_select_glue_view, "crawlers"),
         )
+        self._actions.register(
+            "glue.choose_run_state",
+            self.action_choose_glue_run_state,
+        )
+        self._actions.register(
+            "glue.choose_crawler_state",
+            self.action_choose_glue_crawler_state,
+        )
+        self._actions.register(
+            "glue.copy_table_ref",
+            self.action_copy_glue_table_reference,
+        )
         self._actions.register("glue.open_s3_location", self.action_open_glue_s3_location)
         self._actions.register("glue.query_in_athena", self.action_query_glue_table_in_athena)
         self._actions.register(
@@ -431,6 +464,22 @@ class AwsTuiApp(App[None]):
         self._actions.register(
             "athena.saved",
             partial(self.action_select_athena_view, "saved"),
+        )
+        self._actions.register(
+            "athena.choose_workgroup",
+            self.action_choose_athena_workgroup,
+        )
+        self._actions.register(
+            "athena.choose_catalog",
+            self.action_choose_athena_catalog,
+        )
+        self._actions.register(
+            "athena.choose_database",
+            self.action_choose_athena_database,
+        )
+        self._actions.register(
+            "athena.insert_table_ref",
+            self.action_insert_athena_table_reference,
         )
         self._actions.register("athena.execute", self.action_execute_athena)
         self._actions.register("athena.cancel", self.action_cancel_athena)
@@ -466,6 +515,7 @@ class AwsTuiApp(App[None]):
         self._nav_selection_sub: DisposableBase | None = None
         self._cursor_sub: DisposableBase | None = None
         self._service_navigation_sub: DisposableBase | None = None
+        self._table_clipboard_sub: DisposableBase | None = None
         self._service_navigation_closed = False
         self._table_navigation_generation = 0
         self._service_navigation_owner: tuple[str, int] | None = None
@@ -578,6 +628,9 @@ class AwsTuiApp(App[None]):
         self._service_navigation_sub = ctx.hub.messages.subscribe(
             on_next=self._on_service_navigation_message
         )
+        self._table_clipboard_sub = ctx.table_clipboard_vm.on_property_changed.subscribe(
+            on_next=self._on_table_clipboard_changed
+        )
 
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
@@ -638,6 +691,16 @@ class AwsTuiApp(App[None]):
             # it runs AFTER Textual's first focus pass instead of being
             # silently undone by it.
             self.call_after_refresh(lambda: self.set_focus(None))
+
+    def on_unmount(self) -> None:
+        self._dispose_table_clipboard_subscription()
+
+    def _dispose_table_clipboard_subscription(self) -> None:
+        subscription = self._table_clipboard_sub
+        if subscription is None:
+            return
+        subscription.dispose()
+        self._table_clipboard_sub = None
 
     async def _initial_mount_worker(
         self, *, initial_conn: Connection, auth_state: TokenState
@@ -1206,6 +1269,10 @@ class AwsTuiApp(App[None]):
                         current_vm,
                         hub=ctx.hub,
                         keymap=getattr(ctx, "keymap_store", None),
+                        source_candidates=_service_source_contexts(
+                            ctx,
+                            _svc_id or "unknown",
+                        ),
                         focus_coordinator=ctx.focus_coordinator,
                         dual_pane_class=DualPane,
                         emr_page_class=EmrServerlessPage,
@@ -1213,7 +1280,7 @@ class AwsTuiApp(App[None]):
                         athena_page_class=AthenaPage,
                     )
                 )
-                if _svc_id == "athena":
+                if _svc_id in {"glue", "athena"}:
                     self._recompute_hint_disables()
         except Exception as exc:
             ctx.log_sink.error(
@@ -1479,6 +1546,16 @@ class AwsTuiApp(App[None]):
             with contextlib.suppress(Exception):
                 settings = self.query_one(SettingsView)
                 settings.focus_default()
+            return
+        if slot.value.startswith("glue."):
+            page = self._glue_page()
+            if page is not None:
+                page._project_focus_slot(slot)
+            return
+        if slot.value.startswith("athena."):
+            athena_page = self._athena_page()
+            if athena_page is not None:
+                athena_page._project_focus_slot(slot)
 
     def _focus_demo_launch_nav(self) -> None:
         self._app_ctx.focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
@@ -1526,12 +1603,12 @@ class AwsTuiApp(App[None]):
         if current_id == "glue":
             with contextlib.suppress(Exception):
                 page = self.query_one("#content-glue-page", GluePage)
-                page.query_one("#glue-databases-pane").query_one(OptionList).focus()
+                page.focus_default()
             return
         if current_id == "athena":
             with contextlib.suppress(Exception):
                 athena_page = self.query_one("#content-athena-page", AthenaPage)
-                athena_page.query_one("#athena-editor").focus()
+                athena_page.focus_default()
             return
         if current_id == SETTINGS_NAV_ID:
             with contextlib.suppress(Exception):
@@ -2184,6 +2261,28 @@ class AwsTuiApp(App[None]):
                 return
             await self._swap_source_transaction()
 
+    async def on_service_source_header_source_selected(
+        self,
+        event: ServiceSourceHeader.SourceSelected,
+    ) -> None:
+        """Switch to the exact source committed by a Glue/Athena picker."""
+        event.stop()
+        service_id = self._app_ctx.root_vm.services_menu.selected_id
+        if service_id is None or service_id == SETTINGS_NAV_ID:
+            return
+        self.record_action("app.swap_source")
+        generation = self._supersede_table_navigation()
+        async with self._service_navigation_lock:
+            if not self._service_navigation_is_owned_by("external", generation):
+                return
+            accepted = await self._switch_single_context_source_to(
+                service_id,
+                event.connection_name,
+                event.region,
+            )
+            if not accepted:
+                event.header.restore_source()
+
     async def _swap_source_transaction(self) -> None:
         ctx = self._app_ctx
         dual = self._dual_pane()
@@ -2304,6 +2403,36 @@ class AwsTuiApp(App[None]):
         ):
             await glue_page.action_select_view(glue_view)
 
+    async def action_choose_glue_run_state(self) -> None:
+        self.record_action("glue.choose_run_state")
+        page = self._glue_page()
+        if page is not None:
+            await page.action_choose_run_state()
+
+    async def action_choose_glue_crawler_state(self) -> None:
+        self.record_action("glue.choose_crawler_state")
+        page = self._glue_page()
+        if page is not None:
+            await page.action_choose_crawler_state()
+
+    def action_choose_athena_workgroup(self) -> None:
+        self.record_action("athena.choose_workgroup")
+        page = self._athena_page()
+        if page is not None:
+            page.action_choose_workgroup()
+
+    def action_choose_athena_catalog(self) -> None:
+        self.record_action("athena.choose_catalog")
+        page = self._athena_page()
+        if page is not None:
+            page.action_choose_catalog()
+
+    def action_choose_athena_database(self) -> None:
+        self.record_action("athena.choose_database")
+        page = self._athena_page()
+        if page is not None:
+            page.action_choose_database()
+
     async def action_execute_athena(self) -> None:
         self.record_action("athena.execute")
         page = self._athena_page()
@@ -2375,6 +2504,60 @@ class AwsTuiApp(App[None]):
             toast_id="glue-athena-table-unavailable",
         )
 
+    def action_copy_glue_table_reference(self) -> None:
+        self.record_action("glue.copy_table_ref")
+        page = self._glue_page()
+        if page is not None and not page.vm.actions_available:
+            return
+        if page is not None and page.vm.copy_table_reference():
+            return
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="select a Glue table to copy",
+            toast_id="glue-table-reference-unavailable",
+        )
+
+    async def action_insert_athena_table_reference(self) -> None:
+        self.record_action("athena.insert_table_ref")
+        page = self._athena_page()
+        if page is None:
+            return
+        copied = self._app_ctx.table_clipboard_vm.copied_table
+        if copied is None:
+            notifications.advise(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="copy a Glue table reference first",
+                toast_id="athena-table-reference-empty",
+            )
+            return
+        context = page.vm.context
+        copied_source = (
+            copied.table_ref.connection_name,
+            copied.table_ref.region,
+        )
+        active_source = (context.connection_name, context.region)
+        if copied_source != active_source:
+            notifications.advise(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message=(
+                    f"copied {copied_source[0]} ({copied_source[1]}); "
+                    f"active {active_source[0]} ({active_source[1]})"
+                ),
+                toast_id="athena-table-reference-source-mismatch",
+            )
+            return
+        if not await page.insert_table_reference(copied.sql_identifier):
+            return
+        notifications.success(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="inserted copied table reference",
+            toast_id="athena-table-reference-inserted",
+        )
+
     async def action_time_travel_glue_table_in_athena(self) -> None:
         self.record_action("glue.time_travel_in_athena")
         page = self._glue_page()
@@ -2415,6 +2598,48 @@ class AwsTuiApp(App[None]):
                 message="no AWS profiles configured",
             )
             return
+        await self._rebuild_single_context_source(service_id, target)
+
+    async def _switch_single_context_source_to(
+        self,
+        service_id: str,
+        connection_name: str,
+        region: str,
+    ) -> bool:
+        """Rebuild a non-S3 service under one explicit supported source."""
+        ctx = self._app_ctx
+        target = next(
+            (
+                connection
+                for connection in _service_source_candidates(ctx, service_id)
+                if (connection.name, connection.region) == (connection_name, region)
+            ),
+            None,
+        )
+        if target is None:
+            notifications.advise(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="selected AWS profile is no longer available",
+            )
+            return False
+        active = ctx.root_vm.active_connection
+        if active is not None and (active.name, active.region) == (
+            target.name,
+            target.region,
+        ):
+            return True
+        await self._rebuild_single_context_source(service_id, target)
+        return True
+
+    async def _rebuild_single_context_source(
+        self,
+        service_id: str,
+        target: Connection,
+    ) -> None:
+        """Rebuild a service under an already validated AWS connection."""
+
+        ctx = self._app_ctx
         try:
             auth_state = ctx.aws_session.probe_token(target).state
         except Exception as exc:
@@ -2752,6 +2977,9 @@ class AwsTuiApp(App[None]):
                 group="content-mount",
             )
             return
+        if isinstance(msg, CopyTableReferenceRequest):
+            self._copy_table_reference_request(msg)
+            return
         if isinstance(msg, (OpenAthenaTableRequest, OpenGlueTableRequest)):
             generation = self._advance_service_navigation("table")
             navigation = asyncio.create_task(
@@ -2765,6 +2993,26 @@ class AwsTuiApp(App[None]):
                 exclusive=True,
                 group="content-mount",
             )
+
+    def _copy_table_reference_request(self, request: CopyTableReferenceRequest) -> None:
+        clipboard = self._app_ctx.table_clipboard_vm
+        clipboard.copy_command.execute(request.table_ref)
+        copied = clipboard.copied_table
+        if copied is None:
+            return
+        try:
+            self.copy_to_clipboard(copied.sql_identifier)
+        except Exception as exc:
+            self._app_ctx.log_sink.warning(
+                "table_clipboard.system_copy_unavailable",
+                error_type=type(exc).__name__,
+            )
+        notifications.success(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="copied table reference",
+            toast_id="glue-table-reference-copied",
+        )
 
     def _advance_service_navigation(
         self,
@@ -3459,6 +3707,13 @@ class AwsTuiApp(App[None]):
 
         if not isinstance(msg, PropertyChangedMessage):
             return
+        glue_page = self._glue_page()
+        if glue_page is not None and msg.sender_object in {
+            glue_page.vm,
+            glue_page.vm.catalog,
+        }:
+            self._recompute_hint_disables()
+            return
         athena_page = self._athena_page()
         if athena_page is not None and msg.sender_object in {
             athena_page.vm,
@@ -3473,6 +3728,9 @@ class AwsTuiApp(App[None]):
             return
         if not isinstance(msg.sender_object, PaneVM):
             return
+        self._recompute_hint_disables()
+
+    def _on_table_clipboard_changed(self, _property_name: str) -> None:
         self._recompute_hint_disables()
 
     def _recompute_hint_disables(self) -> None:
@@ -3490,7 +3748,30 @@ class AwsTuiApp(App[None]):
                 disabled.add("athena.cancel")
             if not athena_page.can_load_more():
                 disabled.add("athena.load_more")
+            copied = self._app_ctx.table_clipboard_vm.copied_table
+            active_source = (
+                athena_page.vm.context.connection_name,
+                athena_page.vm.context.region,
+            )
+            if (
+                copied is None
+                or (
+                    copied.table_ref.connection_name,
+                    copied.table_ref.region,
+                )
+                != active_source
+            ):
+                disabled.add("athena.insert_table_ref")
             self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset(disabled))
+            return
+        glue_page = self._glue_page()
+        if glue_page is not None:
+            glue_disabled = (
+                frozenset()
+                if glue_page.vm.can_copy_table_reference
+                else frozenset({"glue.copy_table_ref"})
+            )
+            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(glue_disabled)
             return
         dual = self._dual_pane()
         if dual is None:
@@ -3770,6 +4051,7 @@ class AwsTuiApp(App[None]):
                     current_vm,
                     hub=ctx.hub,
                     keymap=ctx.keymap_store,
+                    source_candidates=_service_source_contexts(ctx, service_id),
                     focus_coordinator=ctx.focus_coordinator,
                     dual_pane_class=DualPane,
                     emr_page_class=EmrServerlessPage,
@@ -3777,7 +4059,7 @@ class AwsTuiApp(App[None]):
                     athena_page_class=AthenaPage,
                 )
             )
-            if service_id == "athena":
+            if service_id in {"glue", "athena"}:
                 self._recompute_hint_disables()
         except Exception as exc:
             ctx.log_sink.error(
@@ -4011,6 +4293,8 @@ class AwsTuiApp(App[None]):
                 self._service_navigation_sub.dispose()
                 self._service_navigation_sub = None
         with contextlib.suppress(Exception):
+            self._dispose_table_clipboard_subscription()
+        with contextlib.suppress(Exception):
             # Currently-hosted SettingsVM (if any) is disposed by the
             # ContentHostVM tree teardown via ``root_vm.shutdown()``.
             ctx.s3_connections_vm.dispose()
@@ -4026,6 +4310,8 @@ class AwsTuiApp(App[None]):
             ctx.confirm_vm.dispose()
         with contextlib.suppress(Exception):
             ctx.transfers_vm.dispose()
+        with contextlib.suppress(Exception):
+            ctx.table_clipboard_vm.dispose()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
         with contextlib.suppress(Exception):

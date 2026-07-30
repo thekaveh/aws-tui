@@ -115,6 +115,15 @@ def _theme_tokens(content: str) -> dict[str, str]:
     return tokens
 
 
+def _bodies_for_selector(content: str, selector: str) -> tuple[str, ...]:
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    return tuple(
+        body
+        for selector_list, body in re.findall(r"([^{}]+)\{([^}]*)\}", content)
+        if selector in (candidate.strip() for candidate in selector_list.split(","))
+    )
+
+
 def _relative_luminance(hex_color: str) -> float:
     raw = hex_color.removeprefix("#")
     channels = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
@@ -229,6 +238,59 @@ def test_glue_pane_titles_use_readable_theme_tokens(name: str) -> None:
     assert "border-title-color: $text;" in inactive.group(1)
     assert focused is not None
     assert "border-title-color: $accent;" in focused.group(1)
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_glue_and_athena_context_panes_use_operational_borders(name: str) -> None:
+    content = ThemeStore().load(name)
+
+    for selector in (
+        "GluePage > #glue-context-pane",
+        "AthenaPage > #athena-context-header",
+    ):
+        inactive = _bodies_for_selector(content, selector)
+        focused = _bodies_for_selector(content, f"{selector}:focus-within")
+
+        assert inactive, f"theme {name}: missing {selector}"
+        assert any("border: solid $rule-dim;" in body for body in inactive)
+        assert any("border-title-color: $text;" in body for body in inactive)
+        assert focused, f"theme {name}: missing focused {selector}"
+        assert any("border: solid $accent;" in body for body in focused)
+        assert any("border-title-color: $accent;" in body for body in focused)
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_glue_and_athena_operational_surfaces_have_rest_and_focus_borders(
+    name: str,
+) -> None:
+    content = ThemeStore().load(name)
+
+    for selector in (
+        "GluePage GlueIcebergView",
+        "AthenaPage TextArea",
+        "AthenaPage #athena-query-controls",
+        "AthenaPage #athena-query-detail",
+        "AthenaPage #athena-results-summary",
+        "AthenaPage DataTable",
+    ):
+        inactive = _bodies_for_selector(content, selector)
+        assert inactive, f"theme {name}: missing {selector}"
+        assert any("border: solid $rule-dim;" in body for body in inactive), (
+            f"theme {name}: {selector} lacks a resting border"
+        )
+
+    for selector in (
+        "GluePage GlueIcebergView:focus-within",
+        "AthenaPage TextArea:focus",
+        "AthenaPage #athena-query-controls:focus-within",
+        "AthenaPage #athena-query-detail:focus-within",
+        "AthenaPage DataTable:focus",
+    ):
+        focused = _bodies_for_selector(content, selector)
+        assert focused, f"theme {name}: missing {selector}"
+        assert any("border: solid $accent;" in body for body in focused), (
+            f"theme {name}: {selector} lacks a focus border"
+        )
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)

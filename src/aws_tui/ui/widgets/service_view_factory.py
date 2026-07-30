@@ -13,6 +13,7 @@ from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 
 def build_service_view(
@@ -22,6 +23,7 @@ def build_service_view(
     hub: MessageHub[Message],
     focus_coordinator: FocusCoordinatorVM,
     keymap: KeymapStore | None = None,
+    source_candidates: tuple[ServiceSourceContext, ...] = (),
     dual_pane_class: type[DualPane] = DualPane,
     emr_page_class: type[EmrServerlessPage] = EmrServerlessPage,
     glue_page_class: type[GluePage] = GluePage,
@@ -46,6 +48,7 @@ def build_service_view(
             vm,
             hub=hub,
             keymap=keymap,
+            source_candidates=source_candidates,
             focus_coordinator=focus_coordinator,
             id="content-glue-page",
         )
@@ -54,6 +57,7 @@ def build_service_view(
             vm,
             hub=hub,
             keymap=keymap,
+            source_candidates=source_candidates,
             focus_coordinator=focus_coordinator,
             id="content-athena-page",
         )

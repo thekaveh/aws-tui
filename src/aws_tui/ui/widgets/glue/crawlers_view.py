@@ -6,9 +6,9 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import VerticalScroll
 from textual.widget import Widget
-from textual.widgets import OptionList, Select
+from textual.widgets import OptionList
 from textual.worker import Worker
 
 from aws_tui.ui.widgets.glue.detail_rows import (
@@ -19,13 +19,6 @@ from aws_tui.ui.widgets.glue.detail_rows import (
     display_value,
 )
 from aws_tui.vm.glue.page_vm import GluePageVM
-
-_CRAWLER_FILTERS = (
-    ("All states", "ALL"),
-    ("Ready", "READY"),
-    ("Running", "RUNNING"),
-    ("Stopping", "STOPPING"),
-)
 
 
 class GlueCrawlersView(Widget):
@@ -38,16 +31,6 @@ class GlueCrawlersView(Widget):
         grid-rows: 1fr;
         grid-gutter: 0;
     }
-    GlueCrawlersView > .glue-filtered-list {
-        height: 1fr;
-        layout: vertical;
-    }
-    GlueCrawlersView > .glue-filtered-list > Select {
-        height: 3;
-    }
-    GlueCrawlersView > .glue-filtered-list > ResourceListPane {
-        height: 1fr;
-    }
     """
 
     def __init__(self, vm: GluePageVM, *, id: str | None = None) -> None:
@@ -57,19 +40,11 @@ class GlueCrawlersView(Widget):
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="glue-filtered-list"):
-            yield Select(
-                _CRAWLER_FILTERS,
-                value=self._vm.state_filter or "ALL",
-                allow_blank=False,
-                compact=True,
-                id="glue-crawler-state-filter",
-            )
-            yield ResourceListPane(
-                "crawlers",
-                id="glue-crawlers-pane",
-                empty_text="no crawlers",
-            )
+        yield ResourceListPane(
+            "crawlers",
+            id="glue-crawlers-pane",
+            empty_text="no crawlers",
+        )
         yield DetailRows("crawler detail", id="glue-crawler-detail-pane")
 
     def on_mount(self) -> None:
@@ -80,6 +55,13 @@ class GlueCrawlersView(Widget):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+    def focus_targets(self) -> tuple[Widget, ...]:
+        """Return the ordered, concrete targets for the Crawlers focus ring."""
+        return (
+            self.query_one("#glue-crawlers-pane", ResourceListPane).option_list,
+            self.query_one("#glue-crawler-detail-pane", DetailRows).query_one(VerticalScroll),
+        )
 
     def on_option_list_option_highlighted(
         self,
@@ -95,16 +77,6 @@ class GlueCrawlersView(Widget):
             self._run_lifecycle_worker(
                 partial(self._page_vm.select_crawler, option_id),
                 group="glue-select-crawler",
-            )
-
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id != "glue-crawler-state-filter":
-            return
-        state = None if event.value == "ALL" else str(event.value)
-        if state != self._vm.state_filter:
-            self._run_lifecycle_worker(
-                partial(self._page_vm.set_crawler_state, state),
-                group="glue-filter-crawlers",
             )
 
     def _run_lifecycle_worker(

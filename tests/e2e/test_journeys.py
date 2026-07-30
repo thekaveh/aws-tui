@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from textual.widgets import Static
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
@@ -322,15 +323,21 @@ async def test_journey_6_switch_emr_profile_updates_visible_source(tmp_path: Pat
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
             await _await_service_mount(pilot, app)
 
-            source_header = app.query_one("#emr-source-header")
-            initial_source = source_header.render().plain
+            source_value = app.query_one(
+                "#emr-source-header .service-source-value",
+                Static,
+            )
+            initial_source = str(source_value.render())
             assert initial_source in {"dev · us-east-1", "prod · us-west-2"}
 
             await pilot.press("S")
             await _await_service_mount(pilot, app)
 
-            source_header = app.query_one("#emr-source-header")
-            assert source_header.render().plain != initial_source
+            source_value = app.query_one(
+                "#emr-source-header .service-source-value",
+                Static,
+            )
+            assert str(source_value.render()) != initial_source
             assert ctx.root_vm.services_menu.selected_id == "emr-serverless"
     finally:
         with contextlib.suppress(Exception):

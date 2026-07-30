@@ -520,6 +520,13 @@ def quote_athena_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+def quote_athena_table_ref(ref: TableRef) -> str:
+    return ".".join(
+        quote_athena_identifier(part)
+        for part in (ref.catalog_name, ref.database_name, ref.table_name)
+    )
+
+
 def select_starter_sql(
     ref: TableRef,
     snapshot_id: int | None = None,
@@ -528,10 +535,7 @@ def select_starter_sql(
         isinstance(snapshot_id, bool) or not isinstance(snapshot_id, int) or snapshot_id < 0
     ):
         raise ValueError("snapshot ID must be a non-negative integer")
-    qualified = ".".join(
-        quote_athena_identifier(part)
-        for part in (ref.catalog_name, ref.database_name, ref.table_name)
-    )
+    qualified = quote_athena_table_ref(ref)
     travel = f" FOR VERSION AS OF {snapshot_id}" if snapshot_id is not None else ""
     return f"SELECT * FROM {qualified}{travel} LIMIT 100"
 
@@ -540,5 +544,6 @@ __all__ = [
     "QueryRejectedError",
     "ReadOnlySqlPolicy",
     "quote_athena_identifier",
+    "quote_athena_table_ref",
     "select_starter_sql",
 ]

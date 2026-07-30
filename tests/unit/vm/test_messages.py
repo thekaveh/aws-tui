@@ -11,6 +11,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.messages import (
     AuthExpiredMessage,
     ConnectionChangedMessage,
+    CopyTableReferenceRequest,
     FocusChangedMessage,
     KeymapChangedMessage,
     OpenAthenaTableRequest,
@@ -65,6 +66,15 @@ def _connection() -> Connection:
                 "us-west-2",
             ),
             snapshot_id=42,
+        ),
+        lambda: CopyTableReferenceRequest(
+            table_ref=TableRef(
+                "AwsDataCatalog",
+                "analytics",
+                "events",
+                "prod-west",
+                "us-west-2",
+            )
         ),
         lambda: OpenGlueTableRequest(
             table_ref=TableRef(
@@ -164,12 +174,15 @@ def test_cross_service_messages_preserve_table_security_context() -> None:
 
     athena = OpenAthenaTableRequest(table_ref=table, snapshot_id=42)
     glue = OpenGlueTableRequest(table_ref=table)
+    copied = CopyTableReferenceRequest(table_ref=table)
 
-    assert athena.table_ref == glue.table_ref == table
+    assert athena.table_ref == glue.table_ref == copied.table_ref == table
     assert athena.snapshot_id == 42
     assert athena.sender_name == glue.sender_name == "service_navigation"
     assert athena.sender_object is athena
     assert glue.sender_object is glue
+    assert copied.sender_name == "service_navigation"
+    assert copied.sender_object is copied
 
 
 @pytest.mark.parametrize(
@@ -193,6 +206,15 @@ def test_cross_service_messages_preserve_table_security_context() -> None:
                 "us-west-2",
             )
         ),
+        CopyTableReferenceRequest(
+            TableRef(
+                "AwsDataCatalog",
+                "analytics",
+                "events",
+                "prod-west",
+                "us-west-2",
+            )
+        ),
     ],
 )
 def test_cross_service_messages_are_frozen_and_slot_backed(message: object) -> None:
@@ -207,6 +229,7 @@ def test_cross_service_messages_are_frozen_and_slot_backed(message: object) -> N
     [
         lambda value: OpenAthenaTableRequest(value),
         lambda value: OpenGlueTableRequest(value),
+        lambda value: CopyTableReferenceRequest(value),
     ],
 )
 @pytest.mark.parametrize(
@@ -242,7 +265,10 @@ def test_cross_service_messages_require_exact_table_ref_type(
     ],
 )
 @pytest.mark.parametrize("value", ["", "   ", None, 7, True])
-@pytest.mark.parametrize("message_type", [OpenAthenaTableRequest, OpenGlueTableRequest])
+@pytest.mark.parametrize(
+    "message_type",
+    [OpenAthenaTableRequest, OpenGlueTableRequest, CopyTableReferenceRequest],
+)
 def test_cross_service_messages_require_nonempty_plain_string_identity_fields(
     field: str,
     value: object,

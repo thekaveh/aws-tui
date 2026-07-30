@@ -18,6 +18,7 @@ from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
 AthenaFixture = Literal[
@@ -71,7 +72,13 @@ def _client(fixture: AthenaFixture) -> _SnapshotAthena:
 
 
 class AthenaPageApp(App[None]):
-    def __init__(self, *, theme: str, fixture: AthenaFixture) -> None:
+    def __init__(
+        self,
+        *,
+        theme: str,
+        fixture: AthenaFixture,
+        open_picker: bool = False,
+    ) -> None:
         super().__init__()
         self.CSS = ThemeStore().load(theme)
         self._fixture = fixture
@@ -89,6 +96,7 @@ class AthenaPageApp(App[None]):
             if fixture == "focused-rebound-tabs"
             else KeymapStore()
         )
+        self._open_picker = open_picker
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -101,9 +109,15 @@ class AthenaPageApp(App[None]):
                 self._vm,
                 hub=self._vm._hub,  # type: ignore[attr-defined]
                 keymap=self._keymap,
+                source_candidates=(
+                    self._vm.source,
+                    ServiceSourceContext("analytics-dev", "dev-sso", "us-east-1"),
+                ),
                 id="athena-page",
             )
         )
+        if self._open_picker:
+            self.query_one("#athena-database").open()
         if self._fixture == "focused-rebound-tabs":
             self.query_one("#athena-tab-query").focus()
 

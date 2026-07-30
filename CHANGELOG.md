@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 1.1. [Unreleased]
 
-These changes have landed on ``main`` since the v0.8.0 cut commit
-(``cd2c9e8``) but have not yet been packaged as a release. The v0.8.0
-PyPI publish is gated on
+The Unreleased section is the promotion queue for the next package release.
+Entries may reside on ``develop`` before promotion to ``main``; inclusion here
+does not by itself claim that every entry has landed on ``main``. Changes
+already promoted to ``main`` are tracked relative to the v0.8.0 cut commit
+(``cd2c9e8``). The v0.8.0 PyPI publish is gated on
 [pypi/support#11264](https://github.com/pypi/support/issues/11264)
 (name-similarity exception for ``aws-tui`` vs ``awstui``). Glue, Athena, and
 Iceberg integration target v0.9.0: they are new minor-version feature work
@@ -19,6 +21,16 @@ until the release cut.
 
 ### 1.1.1. Added
 
+- **Glue and Athena interaction polish.** Bordered, keyboard-focusable AWS
+  context selectors now expose source, Glue state filters, and Athena
+  workgroup/catalog/database choices with named commands and complete
+  forward/reverse focus rings. Glue can copy a selected table's canonical,
+  fully quoted identifier to an authoritative VMx-backed in-app clipboard
+  (`y`) and best-effort OS clipboard, while Athena can insert that value at
+  the editor cursor (`i`) or replace a selection. Cross-source insertion is
+  refused without mutating the editor or switching profiles; the existing
+  source-preserving **Query table in Athena** workflow remains available.
+  The service rail is wider and centers all service names, including Athena.
 - **Integrated Glue, Athena, and Iceberg workflow.** Glue tables can prefill
   exact, fully-qualified Athena queries; Athena can return to one unambiguous
   visible Glue table; and Iceberg tables expose bounded, on-demand Snapshots,

@@ -120,7 +120,11 @@ class EmrServerlessPage(Widget):
         # containing detail (top, 1fr) + logs (bottom, 1fr) in a
         # 50/50 vertical split.
         with Vertical(classes="emr-left-column"):
-            yield ServiceSourceHeader(self._vm.source, id="emr-source-header")
+            yield ServiceSourceHeader(
+                self._vm.source,
+                selectable=False,
+                id="emr-source-header",
+            )
             with Horizontal(classes="emr-app-box", id="emr-app-box"):
                 yield self._picker
             yield self._left

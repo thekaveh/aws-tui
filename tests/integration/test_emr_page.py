@@ -506,6 +506,8 @@ async def test_emr_shift_s_rebuilds_under_current_profile_when_only_one_exists(
     """``Shift+S`` remounts EMR without cycling its application selection."""
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    dev = ctx.connection_resolver.resolve("dev")
+    ctx.connection_resolver.list = lambda: [dev]  # type: ignore[method-assign]
     fake.add_application(app_id="00other", name="ad-hoc")
     fake.add_job_run(application_id="00other", job_run_id="r-other")
     fake.add_job_run_detail(application_id="00other", job_run_id="r-other")
@@ -515,6 +517,7 @@ async def test_emr_shift_s_rebuilds_under_current_profile_when_only_one_exists(
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
+            await ctx.root_vm.switch_connection_with(dev, TokenState.CONNECTED)
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
             await _await_emr_mount(pilot, app)
 
@@ -522,9 +525,8 @@ async def test_emr_shift_s_rebuilds_under_current_profile_when_only_one_exists(
             initial_app_id = page_vm.applications.selected_id
             assert initial_app_id is not None
 
-            await pilot.press("S")  # Shift+S
-            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await app.action_swap_source()
+            await _await_emr_mount(pilot, app)
 
             replacement = ctx.root_vm.content_host.current
             assert replacement is not page_vm

@@ -18,20 +18,20 @@ class AthenaQueryView(Widget):
         height: 1fr;
         layout: grid;
         grid-size: 1 3;
-        grid-rows: 1fr 3 6;
+        grid-rows: 1fr 5 7;
         grid-columns: 1fr;
     }
     AthenaQueryView > TextArea {
         width: 1fr;
         height: 1fr;
-        border: solid transparent;
         scrollbar-size: 1 1;
     }
     AthenaQueryView > #athena-query-controls {
         width: 1fr;
-        height: 3;
+        height: 5;
         layout: horizontal;
-        padding: 0 1;
+        padding: 1 1 0 1;
+        border-title-align: left;
     }
     AthenaQueryView #athena-execute,
     AthenaQueryView #athena-cancel {
@@ -48,9 +48,10 @@ class AthenaQueryView(Widget):
     }
     AthenaQueryView > #athena-query-detail {
         width: 1fr;
-        height: 6;
+        height: 7;
         padding: 0 1;
         scrollbar-size: 1 1;
+        border-title-align: left;
     }
     AthenaQueryView #athena-query-detail-text {
         width: 1fr;
@@ -97,6 +98,9 @@ class AthenaQueryView(Widget):
             yield Static("", id="athena-query-detail-text", markup=False)
 
     def on_mount(self) -> None:
+        self.query_one("#athena-editor", TextArea).border_title = "query editor"
+        self.query_one("#athena-query-controls").border_title = "query status"
+        self.query_one("#athena-query-detail").border_title = "execution detail"
         self._refresh()
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
 
@@ -130,6 +134,23 @@ class AthenaQueryView(Widget):
 
     async def cancel(self) -> None:
         await self._vm.cancel()
+
+    def insert_table_reference(self, identifier: str) -> bool:
+        if not identifier:
+            return False
+        try:
+            editor = self.query_one("#athena-editor", TextArea)
+        except Exception:
+            return False
+        selection = editor.selection
+        editor.replace(
+            identifier,
+            selection.start,
+            selection.end,
+            maintain_selection_offset=False,
+        )
+        self._vm.set_sql(editor.text)
+        return True
 
     def refresh_from_vm(self) -> None:
         self._refresh()
@@ -187,18 +208,6 @@ class AthenaQueryView(Widget):
 
     def _detail_text(self) -> str:
         rows: list[str] = []
-        workgroup = self._page_vm.workgroup_detail
-        if workgroup is not None:
-            managed = workgroup.managed_query_results_enabled
-            rows.extend(
-                (
-                    f"{'Workgroup mode':<15} {'managed results' if managed else 'S3 output'}",
-                    f"{'Configuration':<15} "
-                    f"{'enforced' if workgroup.enforce_workgroup_configuration else 'caller configurable'}",
-                    f"{'Workgroup output':<15} "
-                    f"{'Athena managed' if managed else display_value(workgroup.output_location)}",
-                )
-            )
         for label, error_text in (
             ("Workgroup", self._page_vm.workgroup_detail_error_text),
             ("Workgroups", self._page_vm.workgroups_error_text),
@@ -221,6 +230,18 @@ class AthenaQueryView(Widget):
                     f"Error type      {display_value(error.error_type)}",
                     f"Retryable       {display_value(error.retryable)}",
                     f"Message         {error.message}",
+                )
+            )
+        workgroup = self._page_vm.workgroup_detail
+        if workgroup is not None:
+            managed = workgroup.managed_query_results_enabled
+            rows.extend(
+                (
+                    f"{'Workgroup mode':<15} {'managed results' if managed else 'S3 output'}",
+                    f"{'Configuration':<15} "
+                    f"{'enforced' if workgroup.enforce_workgroup_configuration else 'caller configurable'}",
+                    f"{'Workgroup output':<15} "
+                    f"{'Athena managed' if managed else display_value(workgroup.output_location)}",
                 )
             )
         stats = self._vm.statistics

@@ -23,7 +23,7 @@ from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 
 
-class _FakeS3Service:
+class _FakeService:
     """Bare-minimum :class:`Service` impl for snapshot scaffolding.
     The snapshot only needs the descriptor for ``NavMenuVM`` to
     render the row; ``build_vm`` / ``supports`` are stubs.
@@ -31,7 +31,8 @@ class _FakeS3Service:
     renders text labels only.
     """
 
-    descriptor = ServiceDescriptor(id="s3", label="S3", icon="")
+    def __init__(self, service_id: str, label: str) -> None:
+        self.descriptor = ServiceDescriptor(id=service_id, label=label, icon="")
 
     def supports(self, _connection: Connection) -> bool:
         return True
@@ -47,7 +48,13 @@ def _load_css(theme: str) -> str:
 def _build_vm() -> NavMenuVM:
     hub: MessageHub[Message] = MessageHub()
     registry = ServiceRegistry()
-    registry.register(_FakeS3Service())  # type: ignore[arg-type]
+    for service_id, label in (
+        ("s3", "S3"),
+        ("emr-serverless", "EMR"),
+        ("glue", "Glue"),
+        ("athena", "Athena"),
+    ):
+        registry.register(_FakeService(service_id, label))  # type: ignore[arg-type]
     vm = NavMenuVM(registry=registry, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     # Seed an active connection so the S3 row passes ``supports()``

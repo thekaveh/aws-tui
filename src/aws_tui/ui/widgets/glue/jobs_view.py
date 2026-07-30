@@ -6,9 +6,9 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import VerticalScroll
 from textual.widget import Widget
-from textual.widgets import OptionList, Select
+from textual.widgets import OptionList
 from textual.worker import Worker
 
 from aws_tui.ui.widgets.glue.detail_rows import (
@@ -21,15 +21,6 @@ from aws_tui.ui.widgets.glue.detail_rows import (
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 
-_RUN_FILTERS = (
-    ("All states", "ALL"),
-    ("Running", "RUNNING"),
-    ("Succeeded", "SUCCEEDED"),
-    ("Failed", "FAILED"),
-    ("Stopped", "STOPPED"),
-    ("Timed out", "TIMEOUT"),
-)
-
 
 class GlueJobsView(Widget):
     DEFAULT_CSS: ClassVar[str] = """
@@ -41,16 +32,6 @@ class GlueJobsView(Widget):
         grid-rows: 1fr;
         grid-gutter: 0;
     }
-    GlueJobsView > .glue-filtered-list {
-        height: 1fr;
-        layout: vertical;
-    }
-    GlueJobsView > .glue-filtered-list > Select {
-        height: 3;
-    }
-    GlueJobsView > .glue-filtered-list > ResourceListPane {
-        height: 1fr;
-    }
     """
 
     def __init__(self, vm: GluePageVM, *, id: str | None = None) -> None:
@@ -61,19 +42,11 @@ class GlueJobsView(Widget):
 
     def compose(self) -> ComposeResult:
         yield ResourceListPane("jobs", id="glue-jobs-pane", empty_text="no jobs")
-        with Vertical(classes="glue-filtered-list"):
-            yield Select(
-                _RUN_FILTERS,
-                value=self._filter_value(),
-                allow_blank=False,
-                compact=True,
-                id="glue-run-state-filter",
-            )
-            yield ResourceListPane(
-                "runs",
-                id="glue-runs-pane",
-                empty_text="no runs",
-            )
+        yield ResourceListPane(
+            "runs",
+            id="glue-runs-pane",
+            empty_text="no runs",
+        )
         yield DetailRows("job and run detail", id="glue-job-detail-pane")
 
     def on_mount(self) -> None:
@@ -84,6 +57,14 @@ class GlueJobsView(Widget):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+    def focus_targets(self) -> tuple[Widget, ...]:
+        """Return the ordered, concrete targets for the Jobs focus ring."""
+        return (
+            self.query_one("#glue-jobs-pane", ResourceListPane).option_list,
+            self.query_one("#glue-runs-pane", ResourceListPane).option_list,
+            self.query_one("#glue-job-detail-pane", DetailRows).query_one(VerticalScroll),
+        )
 
     def on_option_list_option_highlighted(
         self,
@@ -103,17 +84,6 @@ class GlueJobsView(Widget):
             and option_id != self._vm.selected_run_id
         ):
             self._page_vm.select_job_run(option_id)
-
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id != "glue-run-state-filter":
-            return
-        value = str(event.value)
-        states = frozenset() if value == "ALL" else frozenset({value})
-        if states != self._vm.run_state_filter:
-            self._run_lifecycle_worker(
-                partial(self._page_vm.set_job_run_states, states),
-                group="glue-filter-runs",
-            )
 
     def _run_lifecycle_worker(
         self,
@@ -166,9 +136,6 @@ class GlueJobsView(Widget):
             error_text=self._vm.runs_error_text,
             empty_text="select a job and run",
         )
-
-    def _filter_value(self) -> str:
-        return next(iter(sorted(self._vm.run_state_filter)), "ALL")
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         job = self._vm.selected_job

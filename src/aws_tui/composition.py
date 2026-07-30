@@ -34,7 +34,7 @@ from aws_tui.domain.transfer_journal import TransferJournal, TransferJournalEntr
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
-from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
+from aws_tui.infra.keymap_store import KeybindingCollision, KeymapStore, UnknownAction
 from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
@@ -53,6 +53,7 @@ from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.service_source_vm import ServiceSelectionStore
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM, entry_from_s3_form
+from aws_tui.vm.table_clipboard_vm import TableClipboardVM
 
 _logger = logging.getLogger("aws_tui.composition")
 
@@ -78,6 +79,7 @@ class AppContext:
         "registry",
         "root_vm",
         "s3_connections_vm",
+        "table_clipboard_vm",
         "theme_store",
         "transfer_journal",
         "transfers_vm",
@@ -105,6 +107,7 @@ class AppContext:
         initial_theme: str,
         s3_connections_vm: S3ConnectionsVM,
         focus_coordinator: FocusCoordinatorVM | None = None,
+        table_clipboard_vm: TableClipboardVM | None = None,
         demo: bool = False,
         demo_emr: InMemoryEmr | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
@@ -136,6 +139,13 @@ class AppContext:
         )
         if focus_coordinator is None:
             self.focus_coordinator.construct()
+        self.table_clipboard_vm: TableClipboardVM = (
+            table_clipboard_vm
+            if table_clipboard_vm is not None
+            else TableClipboardVM(hub=hub, dispatcher=dispatcher)
+        )
+        if table_clipboard_vm is None:
+            self.table_clipboard_vm.construct()
         self.demo = demo
         # Non-None only in demo mode; disposed by AwsTuiApp on shutdown so
         # in-flight clone state-machine tasks are cancelled cleanly.
@@ -204,7 +214,7 @@ def build_app_context(
     # ``AwsTuiApp.BINDINGS`` does not actually dispatch yet.
     try:
         KeymapStore(overlay=keybindings_overlay)
-    except UnknownAction as exc:
+    except (KeybindingCollision, UnknownAction) as exc:
         _logger.warning(
             "composition.keymap_overlay.invalid",
             extra={"error": str(exc), "error_type": type(exc).__name__},
@@ -338,6 +348,8 @@ def build_app_context(
     )
     focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=dispatcher)
     focus_coordinator.construct()
+    table_clipboard_vm = TableClipboardVM(hub=hub, dispatcher=dispatcher)
+    table_clipboard_vm.construct()
     return AppContext(
         root_vm=root_vm,
         registry=registry,
@@ -357,6 +369,7 @@ def build_app_context(
         initial_theme=initial_theme,
         s3_connections_vm=s3_connections_vm,
         focus_coordinator=focus_coordinator,
+        table_clipboard_vm=table_clipboard_vm,
         demo=demo,
         demo_emr=demo_emr_ref,
         unreachable_connections=set(),

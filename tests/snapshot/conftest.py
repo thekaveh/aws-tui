@@ -8,6 +8,8 @@ Ubuntu only (rendering-tolerance reasons).
 
 from __future__ import annotations
 
+import pytest
+
 THEMES = (
     "carbon",
     "voidline",
@@ -23,3 +25,20 @@ THEMES = (
 
 #: Standard terminal size for every snapshot fixture.
 TERMINAL_SIZE = (120, 40)
+
+
+@pytest.fixture
+def snapshot_caller_environment() -> None:
+    """Extension point for tests that emulate a hostile caller environment."""
+
+
+@pytest.fixture(autouse=True)
+def canonical_snapshot_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot_caller_environment: None,
+) -> None:
+    """Make every snapshot render with the same color-capable terminal."""
+    del snapshot_caller_environment
+    for name in ("NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")

@@ -27,6 +27,7 @@ THEMES = [
     "gruvbox-dark",
 ]
 TERMINAL_SIZE = (40, 20)
+NARROW_TERMINAL_SIZE = (20, 14)
 
 
 @pytest.mark.parametrize("theme", THEMES)
@@ -34,11 +35,18 @@ def test_nav_menu(theme: str, snap_compare) -> None:  # type: ignore[no-untyped-
     assert snap_compare(NavMenuApp(theme=theme), terminal_size=TERMINAL_SIZE)
 
 
+def test_nav_menu_narrow(snap_compare) -> None:
+    assert snap_compare(
+        NavMenuApp(theme="carbon"),
+        terminal_size=NARROW_TERMINAL_SIZE,
+    )
+
+
 @pytest.mark.parametrize("theme", THEMES)
 def test_nav_menu_renders_labels_and_selection_ribbon(theme: str) -> None:
     """Content-presence guard. A NavMenu render MUST surface:
 
-    - the ``S3`` service label (top, in #menu-services);
+    - all supported service labels (top, in #menu-services);
     - the gear glyph ``⚙`` for the Settings row (bottom, docked in
       #menu-settings-rows). Post-PR-#98 the Settings row renders the
       descriptor's icon instead of the ``Settings`` word so the rail
@@ -60,6 +68,9 @@ def test_nav_menu_renders_labels_and_selection_ribbon(theme: str) -> None:
     # codepoint count in SVG text.
     assert "⚙" in svg, f"gear glyph ⚙ for Settings missing for theme {theme!r}"
     assert "S3" in svg, f"'S3' label missing for theme {theme!r}"
+    assert "EMR" in svg, f"'EMR' label missing for theme {theme!r}"
+    assert "Glue" in svg, f"'Glue' label missing for theme {theme!r}"
+    assert "Athena" in svg, f"'Athena' label missing for theme {theme!r}"
     assert svg.index("S3") < svg.index("⚙"), (
         f"Settings (gear) should be docked BELOW S3 in the rendered NavMenu for theme {theme!r}"
     )

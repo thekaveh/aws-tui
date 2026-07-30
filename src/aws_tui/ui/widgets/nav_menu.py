@@ -51,6 +51,12 @@ if TYPE_CHECKING:
     from aws_tui.vm.nav_menu_vm import NavItemVM, NavMenuVM
 
 
+#: Fixed outer width for the always-visible service rail. Twelve cells
+#: leave a ten-cell content row: enough to center ``Athena`` with space on
+#: both sides while retaining the selected-row ribbon at the far left.
+NAV_MENU_WIDTH = 12
+
+
 #: Round-3 / PR #101: per-service default focus slot. On ENTER,
 #: ``action_commit`` projects this slot through the coordinator so
 #: VM subscribers observe the user's intent to "enter" the service
@@ -67,17 +73,10 @@ _SERVICE_DEFAULT_SLOT: dict[str, FocusSlot] = {
 class NavMenu(Widget, can_focus=True):
     """Always-visible left rail of :class:`NavRow` widgets."""
 
-    DEFAULT_CSS: ClassVar[str] = """
-    NavMenu {
+    DEFAULT_CSS: ClassVar[str] = f"""
+    NavMenu {{
         display: block;
-        /* Width: 10 cells. User feedback (post-PR-#97): since all
-           AWS service labels are at most three letters and Settings
-           is rendered as the gear glyph (⚙️, 2 cells) instead of
-           the 8-char "Settings" word, 10 cells fits the longest row
-           (ribbon 1 + space 1 + "EMR" 3 = 5 cells of content + the
-           per-row padding 2 + NavMenu borders 2 = 9 total) with
-           1 cell of slack. */
-        width: 10;
+        width: {NAV_MENU_WIDTH};
         /* Fill the available vertical space so the flex spacer
            below has room to push Settings to the bottom. Without
            an explicit ``height: 1fr`` the rail collapses to the
@@ -86,14 +85,14 @@ class NavMenu(Widget, can_focus=True):
            bottom. */
         height: 1fr;
         layout: vertical;
-    }
+    }}
     /* The spacer is the flex-height filler between the services
        and the Settings row. Pushes Settings to the bottom of the
        rail without needing dock: bottom on a separate container
        (which was the prior OptionList approach). */
-    NavMenu > #menu-spacer {
+    NavMenu > #menu-spacer {{
         height: 1fr;
-    }
+    }}
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -410,4 +409,4 @@ class NavMenu(Widget, can_focus=True):
         )
 
 
-__all__ = ["NavMenu"]
+__all__ = ["NAV_MENU_WIDTH", "NavMenu"]

@@ -15,6 +15,7 @@ from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
@@ -59,6 +60,7 @@ class GluePageApp(App[None]):
         view: GlueView = "catalog",
         fixture: GlueFixture = "populated",
         iceberg_view: IcebergView = "snapshots",
+        open_picker: bool = False,
     ) -> None:
         super().__init__()
         self.CSS = ThemeStore().load(theme)
@@ -79,6 +81,7 @@ class GluePageApp(App[None]):
         self._vm.construct()
         self._view = view
         self._iceberg_view = iceberg_view
+        self._open_picker = open_picker
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -90,8 +93,18 @@ class GluePageApp(App[None]):
         if self._vm.catalog.iceberg.available:
             await self._vm.catalog.iceberg.select_view(self._iceberg_view)
         await self.query_one("#content-host", Container).mount(
-            GluePage(self._vm, hub=self._vm.hub, id="glue-page")
+            GluePage(
+                self._vm,
+                hub=self._vm.hub,
+                source_candidates=(
+                    self._vm.source,
+                    ServiceSourceContext("analytics-dev", "dev-sso", "us-east-1"),
+                ),
+                id="glue-page",
+            )
         )
+        if self._open_picker:
+            self.query_one("#glue-run-state-filter").open()
 
 
 __all__ = ["GluePageApp"]

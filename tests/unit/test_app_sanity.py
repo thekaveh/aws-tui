@@ -264,6 +264,7 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
         command_palette_vm=_Disposable(),
         quick_look_vm=_Disposable(),
         confirm_vm=_Disposable(),
+        table_clipboard_vm=SimpleNamespace(dispose=lambda: events.append("clipboard.dispose")),
         root_vm=_RootVM(),
         focus_coordinator=_Disposable(),
         demo_emr=None,
@@ -276,6 +277,7 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
         "clients.close",
         "logs.flush",
         "logs.close",
+        "clipboard.dispose",
         "root.dispose",
     ]
 
@@ -320,6 +322,7 @@ async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
         command_palette_vm=_Disposable(),
         quick_look_vm=_Disposable(),
         confirm_vm=_Disposable(),
+        table_clipboard_vm=_Disposable(),
         root_vm=_RootVM(),
         focus_coordinator=_Disposable(),
         demo_emr=None,
@@ -612,6 +615,11 @@ async def test_initial_service_mount_awaits_content_host_operations(
         ),
         hub=object(),
         focus_coordinator=object(),
+        registry=SimpleNamespace(
+            get=lambda _service_id: SimpleNamespace(supports=lambda _connection: True)
+        ),
+        connection_resolver=SimpleNamespace(list=lambda: ()),
+        unreachable_connections=set(),
         log_sink=FakeLogSink(),
     )
 

@@ -4,11 +4,13 @@ import logging
 
 import pytest
 
+from aws_tui.domain import sql_policy
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import (
     QueryRejectedError,
     ReadOnlySqlPolicy,
+    quote_athena_table_ref,
     select_starter_sql,
 )
 
@@ -612,6 +614,40 @@ def test_select_starter_sql_quotes_every_identifier_exactly(
     )
 
     assert select_starter_sql(ref, snapshot_id) == expected
+
+
+def test_quote_athena_table_ref_quotes_all_segments_and_embedded_quotes() -> None:
+    ref = TableRef(
+        'Catalog"Name',
+        "db name",
+        'table"name',
+        "prod-west",
+        "us-west-2",
+    )
+
+    assert quote_athena_table_ref(ref) == '"Catalog""Name"."db name"."table""name"'
+
+
+def test_select_starter_sql_delegates_qualified_identifier_quoting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ref = TableRef(
+        "AwsDataCatalog",
+        "analytics",
+        "events",
+        "prod-west",
+        "us-west-2",
+    )
+    seen: list[TableRef] = []
+
+    def quote(candidate: TableRef) -> str:
+        seen.append(candidate)
+        return '"canonical"."table"."reference"'
+
+    monkeypatch.setattr(sql_policy, "quote_athena_table_ref", quote)
+
+    assert select_starter_sql(ref) == 'SELECT * FROM "canonical"."table"."reference" LIMIT 100'
+    assert seen == [ref]
 
 
 @pytest.mark.parametrize("snapshot_id", [-1, True, 1.5, "42"])

@@ -26,6 +26,26 @@ def _strip_text(host: HintLegend) -> str:
     return " ".join(str(s.render()) for s in host.query(Static))
 
 
+def test_glue_and_athena_selector_actions_are_discoverable(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    legend = ctx.root_vm.chrome.hint_legend
+
+    legend.set_current_service("glue")
+    glue = {action.action_id: action for action in legend.actions}
+    assert glue["glue.choose_run_state"].action_label == "run state"
+    assert glue["glue.choose_crawler_state"].action_label == "crawler state"
+    assert glue["glue.copy_table_ref"].action_label == "copy table"
+
+    legend.set_current_service("athena")
+    athena = {action.action_id: action for action in legend.actions}
+    assert athena["athena.choose_workgroup"].action_label == "workgroup"
+    assert athena["athena.choose_catalog"].action_label == "catalog"
+    assert athena["athena.choose_database"].action_label == "database"
+    assert athena["athena.insert_table_ref"].action_label == "insert table"
+
+
 @pytest.mark.asyncio
 async def test_chrome_has_banner_no_statusbar(
     app_context_factory: AppContextBuilder,
@@ -41,6 +61,19 @@ async def test_chrome_has_banner_no_statusbar(
         from aws_tui.ui.widgets.status_bar import StatusBar
 
         assert len(app.query(StatusBar)) == 0
+
+
+@pytest.mark.asyncio
+async def test_app_unmount_disposes_table_clipboard_subscription(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    app = AwsTuiApp(app_context_factory())
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app._table_clipboard_sub is not None
+
+    assert app._table_clipboard_sub is None
 
 
 @pytest.mark.asyncio

@@ -10,10 +10,16 @@ overlay never unions with defaults; the user is in charge.
 Adding a wholly new action through the overlay is rejected with
 :class:`UnknownAction`: there would be no command anywhere in the app to
 bind to, so it would silently do nothing.
+
+An overlay also may not introduce a new same-key action pair. Deliberate
+built-in aliases remain valid, but new collisions are rejected with
+:class:`KeybindingCollision` instead of relying on binding declaration order.
 """
 
 from __future__ import annotations
 
+import unicodedata
+from itertools import combinations
 from typing import ClassVar
 
 
@@ -22,8 +28,61 @@ class UnknownAction(Exception):
     has no default and no overlay binding."""
 
 
+class KeybindingCollision(ValueError):
+    """Raised when an overlay introduces a same-key action collision."""
+
+
+_TEXTUAL_FRIENDLY_KEY_NAMES: dict[str, str] = {
+    "solidus": "slash",
+    "reverse_solidus": "backslash",
+    "commercial_at": "at",
+    "hyphen_minus": "minus",
+    "plus_sign": "plus",
+    "low_line": "underscore",
+}
+
+
+def textual_key_name(key: str) -> str:
+    """Return the runtime Textual name for a configured key literal."""
+    if len(key) != 1:
+        return key
+    if key.isalnum():
+        return key
+    try:
+        normalized = unicodedata.name(key).lower().replace("-", "_").replace(" ", "_")
+    except ValueError:
+        normalized = "tab" if key == "\t" else key
+    return _TEXTUAL_FRIENDLY_KEY_NAMES.get(normalized, normalized)
+
+
+def _collision_pairs(
+    bindings: dict[str, tuple[str, ...]],
+) -> set[tuple[str, str, str]]:
+    actions_by_key: dict[str, set[str]] = {}
+    for action, keys in bindings.items():
+        for key in keys:
+            actions_by_key.setdefault(textual_key_name(key), set()).add(action)
+    return {
+        (key, left, right)
+        for key, actions in actions_by_key.items()
+        for left, right in combinations(sorted(actions), 2)
+    }
+
+
 class KeymapStore:
     """Resolve action names to keystrokes, with optional overlay merging."""
+
+    APPROVED_ALIAS_PAIRS: ClassVar[frozenset[tuple[str, str]]] = frozenset(
+        {
+            ("pane.quick_look", "pane.toggle_select"),
+            ("auth.authenticate", "pane.select_all"),
+            ("emr.clone", "pane.copy"),
+            ("athena.cancel", "modal.cancel"),
+            ("athena.query", "glue.catalog"),
+            ("athena.history", "glue.jobs"),
+            ("athena.results", "glue.crawlers"),
+        }
+    )
 
     DEFAULT_BINDINGS: ClassVar[dict[str, tuple[str, ...]]] = {
         "app.quit": ("q", "ctrl+c"),
@@ -66,11 +125,18 @@ class KeymapStore:
         "glue.catalog": ("1",),
         "glue.jobs": ("2",),
         "glue.crawlers": ("3",),
+        "glue.choose_run_state": ("F",),
+        "glue.choose_crawler_state": ("G",),
+        "glue.copy_table_ref": ("y",),
         "glue.time_travel_in_athena": ("V",),
         "athena.query": ("1",),
         "athena.history": ("2",),
         "athena.results": ("3",),
         "athena.saved": ("4",),
+        "athena.choose_workgroup": ("W",),
+        "athena.choose_catalog": ("C",),
+        "athena.choose_database": ("D",),
+        "athena.insert_table_ref": ("i",),
         "athena.execute": ("ctrl+enter",),
         "athena.cancel": ("escape",),
         "athena.load_more": ("l",),
@@ -89,6 +155,17 @@ class KeymapStore:
                     merged[action] = (keys,)
                 else:
                     merged[action] = tuple(keys)
+            unapproved = {
+                (key, left, right)
+                for key, left, right in _collision_pairs(merged)
+                if (left, right) not in self.APPROVED_ALIAS_PAIRS
+            }
+            if unapproved:
+                key, left, right = min(unapproved)
+                raise KeybindingCollision(
+                    f"keybinding overlay assigns {key!r} to both "
+                    f"{left!r} and {right!r}; choose distinct keys"
+                )
         self._bindings: dict[str, tuple[str, ...]] = merged
 
     def resolve(self, action: str) -> tuple[str, ...]:
@@ -106,4 +183,4 @@ class KeymapStore:
         return dict(self._bindings)
 
 
-__all__ = ["KeymapStore", "UnknownAction"]
+__all__ = ["KeybindingCollision", "KeymapStore", "UnknownAction", "textual_key_name"]

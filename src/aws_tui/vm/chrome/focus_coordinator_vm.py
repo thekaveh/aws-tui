@@ -54,6 +54,38 @@ class FocusSlot(StrEnum):
     EMR_RUNS = "emr.runs"
     EMR_DETAIL = "emr.detail"
     EMR_LOGS = "emr.logs"
+    GLUE_SOURCE = "glue.source"
+    GLUE_FILTER = "glue.filter"
+    GLUE_TABS = "glue.tabs"
+    GLUE_PRIMARY = "glue.primary"
+    GLUE_SECONDARY = "glue.secondary"
+    GLUE_DETAIL = "glue.detail"
+    GLUE_ICEBERG_SNAPSHOTS = "glue.iceberg.snapshots"
+    GLUE_ICEBERG_HISTORY = "glue.iceberg.history"
+    GLUE_ICEBERG_MANIFESTS = "glue.iceberg.manifests"
+    GLUE_ICEBERG_FILES = "glue.iceberg.files"
+    GLUE_ICEBERG_PARTITIONS = "glue.iceberg.partitions"
+    GLUE_ICEBERG_REFS = "glue.iceberg.refs"
+    GLUE_ICEBERG_TABLE = "glue.iceberg.table"
+    GLUE_ICEBERG_MORE = "glue.iceberg.more"
+    GLUE_ICEBERG_RETRY = "glue.iceberg.retry"
+    GLUE_ICEBERG_TIME_TRAVEL = "glue.iceberg.time_travel"
+    ATHENA_SOURCE = "athena.source"
+    ATHENA_WORKGROUP = "athena.workgroup"
+    ATHENA_WORKGROUP_MORE = "athena.workgroup.more"
+    ATHENA_CATALOG = "athena.catalog"
+    ATHENA_CATALOG_MORE = "athena.catalog.more"
+    ATHENA_DATABASE = "athena.database"
+    ATHENA_DATABASE_MORE = "athena.database.more"
+    ATHENA_TABS = "athena.tabs"
+    ATHENA_PRIMARY = "athena.primary"
+    ATHENA_SECONDARY = "athena.secondary"
+    ATHENA_CANCEL = "athena.cancel"
+    ATHENA_DETAIL = "athena.detail"
+    ATHENA_HISTORY_MORE = "athena.history.more"
+    ATHENA_SAVED_NAMED_MORE = "athena.saved.named.more"
+    ATHENA_SAVED_PREPARED_MORE = "athena.saved.prepared.more"
+    ATHENA_SAVED_OPEN_EDITOR = "athena.saved.open_editor"
     SETTINGS = "settings"
     MODAL = "modal"
 
@@ -148,6 +180,74 @@ class FocusCoordinatorVM:
         """
         _ = reverse
         self._cycle((FocusSlot.SETTINGS, FocusSlot.NAV_MENU))
+
+    def cycle_focus_ring(
+        self,
+        slots: tuple[FocusSlot, ...],
+        *,
+        reverse: bool = False,
+    ) -> FocusSlot:
+        """Move through a caller-defined logical focus ring.
+
+        The caller owns availability and ordering; the composed VMx
+        discriminator remains the sole owner of the active identity.
+        """
+        if not slots:
+            raise ValueError("focus ring requires at least one slot")
+        if len(set(slots)) != len(slots):
+            raise ValueError("focus ring slots must be unique")
+        try:
+            index = slots.index(self.focused_slot)
+        except ValueError:
+            selected = slots[0]
+        else:
+            step = -1 if reverse else 1
+            selected = slots[(index + step) % len(slots)]
+        self.set_focused_slot(selected)
+        return selected
+
+    def select_nearest_focus_slot(
+        self,
+        slots: tuple[FocusSlot, ...],
+        *,
+        order: tuple[FocusSlot, ...],
+        reference: FocusSlot | None = None,
+    ) -> FocusSlot:
+        """Keep the current slot or select its nearest available neighbor.
+
+        ``order`` supplies relative service order. Slots absent from the
+        current ring are excluded from distance calculations; the disappearing
+        reference is retained long enough to identify its available neighbors.
+        A forward neighbor wins an equal-distance tie.
+        """
+        if not slots:
+            raise ValueError("available focus slots require at least one slot")
+        if len(set(slots)) != len(slots):
+            raise ValueError("available focus slots must be unique")
+        if len(set(order)) != len(order):
+            raise ValueError("focus slot order must be unique")
+        if any(slot not in order for slot in slots):
+            raise ValueError("available focus slots must exist in focus slot order")
+        reference_slot = reference or self.focused_slot
+        if reference_slot in slots:
+            self.set_focused_slot(reference_slot)
+            return reference_slot
+        try:
+            current_order = tuple(slot for slot in order if slot is reference_slot or slot in slots)
+            current_index = current_order.index(reference_slot)
+        except ValueError:
+            selected = slots[0]
+        else:
+            indices = {slot: current_order.index(slot) for slot in slots}
+            selected = min(
+                slots,
+                key=lambda slot: (
+                    abs(indices[slot] - current_index),
+                    indices[slot] < current_index,
+                ),
+            )
+        self.set_focused_slot(selected)
+        return selected
 
     def modal_open(self) -> None:
         """Push the MODAL precedence slot. Saves the prior non-modal

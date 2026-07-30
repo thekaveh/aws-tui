@@ -8,14 +8,15 @@ from contextlib import asynccontextmanager
 
 import pytest
 from textual.containers import Container
-from textual.widgets import OptionList, Select
-from textual.widgets._select import SelectOverlay
+from textual.widgets import OptionList
 from vmx import NULL_DISPATCHER
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
@@ -85,12 +86,14 @@ async def test_production_router_tabs_between_glue_controls(app_context_factory)
 @pytest.mark.asyncio
 async def test_production_router_activates_focused_glue_tabs(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     async with _mounted_glue_app(app_context_factory) as (app, vm, _fake, pilot):
-        app.query_one("#glue-tab-jobs").focus()
+        tabs = app.query_one("#glue-view-tabs", ServiceTabStrip)
+        tabs.focus()
+        tabs._highlighted = "jobs"
         await pilot.press("enter")
         await pilot.pause()
         assert vm.active_view == "jobs"
 
-        app.query_one("#glue-tab-crawlers").focus()
+        tabs._highlighted = "crawlers"
         await pilot.press("space")
         await pilot.pause()
         assert vm.active_view == "crawlers"
@@ -110,16 +113,18 @@ async def test_production_router_navigates_glue_lists_and_filters(app_context_fa
         await pilot.press("2")
         await pilot.pause()
         jobs = app.query_one("#glue-jobs-pane-options", OptionList)
-        run_filter = app.query_one("#glue-run-state-filter", Select)
+        runs = app.query_one("#glue-runs-pane-options", OptionList)
+        run_filter = app.query_one("#glue-run-state-filter", ContextPicker)
         jobs.focus()
         await pilot.press("tab")
         await pilot.pause()
-        assert run_filter.has_focus
+        assert runs.has_focus
 
+        run_filter.focus()
         await pilot.press("down")
         await pilot.pause()
-        assert run_filter.expanded
-        assert app.focused is run_filter.query_one(SelectOverlay)
+        assert run_filter.is_open
+        assert app.focused is run_filter.query_one(OptionList)
 
         await pilot.press("down")
         await pilot.press("enter")
@@ -142,6 +147,63 @@ async def test_production_router_refreshes_active_glue_view(app_context_factory)
         assert len(fake.database_tokens) == before + 1
         assert fake.job_tokens == []
         assert fake.crawler_requests == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_y_copies_exact_table_from_focused_glue_list(
+    app_context_factory,
+) -> None:  # type: ignore[no-untyped-def]
+    async with _mounted_glue_app(app_context_factory) as (app, _vm, _fake, pilot):
+        tables = app.query_one("#glue-tables-pane-options", OptionList)
+        selected = next(
+            row.ref
+            for row in _vm.catalog.tables
+            if row.ref.table_name == _vm.catalog.selected_table_name
+        )
+        tables.focus()
+
+        await pilot.press("y")
+        await pilot.pause()
+
+        copied = app.app_ctx.table_clipboard_vm.copied_table
+        assert copied is not None
+        assert copied.table_ref is selected
+        assert copied.sql_identifier == '"AwsDataCatalog"."analytics"."events"'
+
+
+@pytest.mark.asyncio
+async def test_glue_copy_hint_tracks_selected_table_reactively(
+    app_context_factory,
+) -> None:  # type: ignore[no-untyped-def]
+    async with _mounted_glue_app(app_context_factory) as (app, vm, fake, pilot):
+        legend = app.app_ctx.root_vm.chrome.hint_legend
+        legend.set_current_service("glue")
+        app._recompute_hint_disables()
+
+        def copy_enabled() -> bool:
+            return next(
+                hint.enabled for hint in legend.actions if hint.action_id == "glue.copy_table_ref"
+            )
+
+        assert copy_enabled()
+
+        fake.add_database("empty")
+        await vm.catalog.refresh_databases()
+        await vm.select_database("empty")
+        await pilot.pause()
+        assert not copy_enabled()
+
+        await vm.select_database("analytics")
+        await pilot.pause()
+        assert copy_enabled()
+
+        await vm.select_view("jobs")
+        await pilot.pause()
+        assert not copy_enabled()
+
+        await vm.select_view("catalog")
+        await pilot.pause()
+        assert copy_enabled()
 
 
 @pytest.mark.asyncio

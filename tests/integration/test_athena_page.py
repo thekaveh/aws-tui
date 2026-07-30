@@ -11,11 +11,14 @@ from textual.widgets import Button, DataTable, Static, TextArea
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryExecutionRef, QueryState, ResultColumn, ResultPage
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.services.athena import AthenaService
 from aws_tui.ui.widgets.athena.page import AthenaPage
+from aws_tui.ui.widgets.context_picker import ContextPicker
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from tests.integration.test_glue_page import open_service
 from tests.unit.vm.athena.test_page_vm import PageClient
@@ -97,6 +100,24 @@ async def test_real_app_mounts_editor_results_and_explicit_entry_focuses_editor(
         await page.action_select_view("results")
         assert page.query_one(DataTable)
         assert vm.active_view == "results"
+
+
+@pytest.mark.asyncio
+async def test_printable_selector_keys_remain_athena_editor_input(
+    tmp_path: Path,
+) -> None:
+    async with _mounted_athena_app(tmp_path) as (app, _ctx, _vm, _client, pilot):
+        page = app.query_one("#content-athena-page", AthenaPage)
+        editor = page.query_one("#athena-editor", TextArea)
+        editor.text = ""
+        editor.focus()
+
+        await pilot.press("W", "C", "D", "F", "G")
+        await pilot.pause()
+
+        assert editor.text == "WCDFG"
+        assert editor.has_focus
+        assert all(not picker.is_open for picker in page.query(ContextPicker))
 
 
 @pytest.mark.asyncio
@@ -217,7 +238,7 @@ async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path
         await pilot.pause()
         assert client.start_calls
 
-        app.query_one("#athena-tab-history").focus()
+        app.query_one("#athena-view-tabs", ServiceTabStrip).focus()
         await pilot.press("2")
         await pilot.pause()
         assert vm.active_view == "history"
@@ -238,7 +259,7 @@ async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path
         vm.query._state = QueryState.RUNNING  # type: ignore[attr-defined]
         vm.query._busy = True  # type: ignore[attr-defined]
         vm.query._owns_active_query = True  # type: ignore[attr-defined]
-        app.query_one("#athena-tab-saved").focus()
+        app.query_one("#athena-view-tabs", ServiceTabStrip).focus()
         await pilot.press("escape")
         await pilot.pause()
         assert vm.query.owns_active_query is False
@@ -301,6 +322,46 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         vm._set_loading_more("workgroups", True)  # type: ignore[attr-defined]
         await pilot.pause()
         assert not hint_enabled("athena.load_more")
+
+
+@pytest.mark.asyncio
+async def test_athena_insert_hint_tracks_typed_clipboard_and_source(
+    tmp_path: Path,
+) -> None:
+    async with _mounted_athena_app(tmp_path) as (_app, ctx, vm, _client, pilot):
+
+        def insert_enabled() -> bool:
+            return next(
+                hint.enabled
+                for hint in ctx.root_vm.chrome.hint_legend.actions
+                if hint.action_id == "athena.insert_table_ref"
+            )
+
+        assert not insert_enabled()
+
+        ctx.table_clipboard_vm.copy_command.execute(
+            TableRef(
+                "AwsDataCatalog",
+                "events",
+                "sessions",
+                vm.context.connection_name,
+                vm.context.region,
+            )
+        )
+        await pilot.pause()
+        assert insert_enabled()
+
+        ctx.table_clipboard_vm.copy_command.execute(
+            TableRef(
+                "AwsDataCatalog",
+                "events",
+                "sessions",
+                "another-profile",
+                "us-west-2",
+            )
+        )
+        await pilot.pause()
+        assert not insert_enabled()
 
 
 @pytest.mark.asyncio
@@ -398,7 +459,7 @@ async def test_configured_athena_rebindings_replace_defaults(tmp_path: Path) -> 
             for view in ("query", "history", "results", "saved")
         ) == ("7 query", "8 history", "9 results", "0 saved")
 
-        app.query_one("#athena-tab-query").focus()
+        app.query_one("#athena-view-tabs", ServiceTabStrip).focus()
         await pilot.press("8")
         await pilot.pause()
         assert vm.active_view == "history"

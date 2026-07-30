@@ -170,7 +170,10 @@ class DetailRows(Widget):
         self._title = title
 
     def compose(self) -> ComposeResult:
-        yield VerticalScroll(classes="glue-detail-scroll")
+        yield VerticalScroll(
+            id=f"{self.id}-scroll",
+            classes="glue-detail-scroll",
+        )
 
     def on_mount(self) -> None:
         self.border_title = self._title

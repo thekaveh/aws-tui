@@ -21,15 +21,18 @@ class AthenaResultsView(Widget):
         height: 1fr;
         layout: grid;
         grid-size: 1 3;
-        grid-rows: 1 1fr 3;
+        grid-rows: 3 1fr 3;
         grid-columns: 1fr;
     }
-    AthenaResultsView > #athena-results-status,
+    AthenaResultsView > #athena-results-summary,
     AthenaResultsView #athena-results-footer {
         width: 1fr;
-        height: 1;
+        height: 3;
         padding: 0 1;
         text-overflow: ellipsis;
+    }
+    AthenaResultsView > #athena-results-summary {
+        border-title-align: left;
     }
     AthenaResultsView #athena-results-footer {
         text-align: right;
@@ -52,7 +55,7 @@ class AthenaResultsView(Widget):
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="athena-results-status", markup=False)
+        yield Static("", id="athena-results-summary", markup=False)
         yield DataTable(
             id="athena-results-table",
             cursor_type="row",
@@ -67,6 +70,8 @@ class AthenaResultsView(Widget):
             )
 
     def on_mount(self) -> None:
+        self.query_one("#athena-results-summary").border_title = "query status"
+        self.query_one("#athena-results-table", DataTable).border_title = "query results"
         self._refresh()
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
 
@@ -89,7 +94,7 @@ class AthenaResultsView(Widget):
     def _refresh(self) -> None:
         try:
             table = self.query_one("#athena-results-table", DataTable)
-            status = self.query_one("#athena-results-status", Static)
+            status = self.query_one("#athena-results-summary", Static)
             footer = self.query_one("#athena-results-footer", Static)
             load_more = self.query_one(
                 "#athena-more-results",

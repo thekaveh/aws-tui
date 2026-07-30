@@ -126,33 +126,72 @@ App-level `priority=True` and short-circuit through
 ### 1.1.9. AWS Glue
 
 Glue is a single-context AWS service. It keeps one active connection
-and region for the whole page; S3-compatible connections are excluded.
+and region for the whole page; S3-compatible connections are excluded. Its
+source and active filters are bordered selectors in the **AWS context** pane.
+Focus a selector and press `Enter` or `Space` to open it; use the arrow keys
+and `Enter` to commit a value, or `Esc` to close it without changing the value.
 
 | Action | Default | Notes |
 |---|---|---|
 | Catalog / Jobs / Crawlers | `1` / `2` / `3` | Selects the corresponding Glue view. |
+| Choose job-run state | `Shift+F` (`F`) | Runs `glue.choose_run_state`, focuses and opens the bordered **Run state** selector in Jobs. |
+| Choose crawler state | `Shift+G` (`G`) | Runs `glue.choose_crawler_state`, focuses and opens the bordered **Crawler state** selector in Crawlers. |
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the focused resource list or scrolls detail. |
-| Cycle focus | `Tab` / `Shift+Tab` | Walks Glue tabs, lists, filters, and detail controls. |
+| Cycle focus | `Tab` / `Shift+Tab` | Walks the complete deterministic Glue ring described below; reverse traversal is the exact inverse. |
 | Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
-| Switch AWS source | `Shift+S` | Rebuilds Glue under the next supported AWS profile and region. |
+| Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Glue under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
+| Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard; OS clipboard delivery is best effort. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
 | Query selected table in Athena | `:` / `Ctrl+K`, then **Query table in Athena** | `glue.query_in_athena` is palette-only. It prefills exact, bounded SQL in Athena and never executes it automatically. |
 | Query selected Iceberg snapshot in Athena | `V` or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It prefills `FOR VERSION AS OF` SQL without executing. |
 
+Glue's forward focus order is:
+
+- **Catalog:** Source, view tabs, databases, tables, table detail, then every
+  visible and enabled Iceberg tab/control, and the navigation rail.
+- **Jobs:** Source, Run state, view tabs, jobs, runs, job detail, and the
+  navigation rail.
+- **Crawlers:** Source, Crawler state, view tabs, crawlers, crawler detail, and
+  the navigation rail.
+
+Disabled Iceberg load-more/retry/time-travel controls are omitted. `Shift+Tab`
+walks the same active ring in reverse.
+
 ### 1.1.10. Amazon Athena
 
 Athena is a single-context AWS service; its controls do not appear for
-S3-compatible connections.
+S3-compatible connections. Source, Workgroup, Catalog, and Database are
+bordered selectors in the **AWS context** pane. Focus one and press `Enter` or
+`Space` to open it.
 
 | Action | Default | Notes |
 |---|---|---|
 | Query / History / Results / Saved | `1` / `2` / `3` / `4` | Selects the matching Athena view. |
+| Choose workgroup / catalog / database | `Shift+W` / `Shift+C` / `Shift+D` | Runs `athena.choose_workgroup`, `athena.choose_catalog`, or `athena.choose_database` and opens the corresponding selector. |
 | Execute editor SQL | `Ctrl+Enter` | Runs `athena.execute` only after the local read-only SQL validation succeeds. |
 | Cancel active query | `Esc` | Runs `athena.cancel`; it can stop only an app-owned active execution. |
 | Load more result rows | `l` | Runs `athena.load_more` when the selected result has another page. |
-| Switch AWS source | `Shift+S` | Rebuilds Athena under the next supported AWS profile and region. |
+| Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Athena under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
+| Insert copied table reference | `i` | Runs `athena.insert_table_ref`, selecting Query when needed and inserting at the editor cursor or replacing its active selection. It refuses a copied connection/region that differs from Athena's active source and leaves both editor and typed clipboard unchanged; it never switches profiles because that could discard unrelated editor state. |
 | Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
 | Open query table in Glue | `:` / `Ctrl+K`, then **Open query table in Glue** | `athena.open_in_glue` is palette-only and works only when the current read-only SQL resolves to one visible table. |
+
+Athena's forward focus order is Source, Workgroup, its enabled load-more
+button, Catalog, its enabled load-more button, Database, its enabled load-more
+button, view tabs, the active view's controls, and the navigation rail. The
+active-view controls are:
+
+- **Query:** editor, enabled Execute, enabled Cancel, query detail.
+- **History:** history list, enabled Load more, enabled Results, history detail.
+- **Results:** results table, enabled Load more.
+- **Saved:** named queries, enabled named-query Load more, prepared statements,
+  enabled prepared-statement Load more, saved-query detail, enabled Open in
+  editor.
+
+Unavailable buttons are omitted, and `Shift+Tab` is the exact reverse order.
+Bare printable bindings, including `i`, `W`, `C`, and `D`, are deliberately
+non-priority: a focused Athena editor receives them as text. Use the command
+palette or move focus outside the editor to invoke those actions.
 
 ## 1.2. Customizing
 
@@ -171,11 +210,18 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "glue.catalog" = "1"
 "glue.jobs" = "2"
 "glue.crawlers" = "3"
+"glue.choose_run_state" = "F"
+"glue.choose_crawler_state" = "G"
+"glue.copy_table_ref" = "y"
 "glue.time_travel_in_athena" = "V"
 "athena.query" = "1"
 "athena.history" = "2"
 "athena.results" = "3"
 "athena.saved" = "4"
+"athena.choose_workgroup" = "W"
+"athena.choose_catalog" = "C"
+"athena.choose_database" = "D"
+"athena.insert_table_ref" = "i"
 "athena.execute" = "ctrl+enter"
 "athena.cancel" = "escape"
 "athena.load_more" = "l"
@@ -190,7 +236,8 @@ The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
 `Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
 `c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
-`1` / `2` / `3` / `4`, `V`, `Ctrl+Enter`, `Esc`, `l`,
+`1` / `2` / `3` / `4`, `F`, `G`, `y`, `W`, `C`, `D`, `i`, `V`,
+`Ctrl+Enter`, `Esc`, `l`,
 `Shift+↑`, and `Shift+↓`.
 
 ## 1.3. Action IDs
@@ -231,6 +278,9 @@ unbound until a handler ships.
 | `glue.catalog` | `1` | ✓ | Select the Glue Catalog view |
 | `glue.jobs` | `2` | ✓ | Select the Glue Jobs view |
 | `glue.crawlers` | `3` | ✓ | Select the Glue Crawlers view |
+| `glue.choose_run_state` | `F` (`shift+f`) | ✓ | Focus and open the Jobs run-state selector |
+| `glue.choose_crawler_state` | `G` (`shift+g`) | ✓ | Focus and open the Crawlers state selector |
+| `glue.copy_table_ref` | `y` | ✓ | Copy the selected table's canonical identifier and source identity |
 | `glue.open_s3_location` | none (command palette) | ✓ | Open the selected Glue table's S3 location under the exact source connection and region |
 | `glue.query_in_athena` | none (command palette) | ✓ | Prefill a bounded query for the selected Glue table in Athena |
 | `glue.time_travel_in_athena` | `V` | ✓ | Prefill a bounded Athena query for the selected visible Iceberg snapshot |
@@ -238,6 +288,10 @@ unbound until a handler ships.
 | `athena.history` | `2` | ✓ | Select the Athena History view |
 | `athena.results` | `3` | ✓ | Select the Athena Results view |
 | `athena.saved` | `4` | ✓ | Select the Athena Saved view |
+| `athena.choose_workgroup` | `W` (`shift+w`) | ✓ | Focus and open the Workgroup selector |
+| `athena.choose_catalog` | `C` (`shift+c`) | ✓ | Focus and open the Catalog selector |
+| `athena.choose_database` | `D` (`shift+d`) | ✓ | Focus and open the Database selector |
+| `athena.insert_table_ref` | `i` | ✓ | Insert the same-source typed table clipboard value into the query editor |
 | `athena.execute` | `ctrl+enter` | ✓ | Submit validated, read-only editor SQL |
 | `athena.cancel` | `escape` | ✓ | Stop an app-owned active Athena query |
 | `athena.load_more` | `l` | ✓ | Fetch the next available result page |

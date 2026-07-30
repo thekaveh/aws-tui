@@ -249,6 +249,21 @@ class OpenAthenaTableRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class CopyTableReferenceRequest:
+    """Request copying one exact Glue table identity without navigation."""
+
+    table_ref: TableRef
+    sender_name: str = "service_navigation"
+
+    def __post_init__(self) -> None:
+        _validate_table_ref(self.table_ref)
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
 class OpenGlueTableRequest:
     """Request Glue navigation for one exact Athena table identity."""
 
@@ -284,6 +299,7 @@ __all__ = [
     "AuthExpiredReason",
     "ConnectionChangedMessage",
     "ConnectionListChangedMessage",
+    "CopyTableReferenceRequest",
     "FocusChangedMessage",
     "KeymapChangedMessage",
     "OpenAthenaTableRequest",
