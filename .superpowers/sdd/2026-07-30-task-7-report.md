@@ -5,7 +5,7 @@
 - Branch: `codex/glue-athena-interaction-polish`
 - Exact branch point: `b92ad89f68dd19ca61cd567ce0f82b5379fb0499`
 - Integration target: `develop` only; `main` remains out of scope.
-- Final production/test state verified at `177e47f77756b4c7f56c3ead52af899bc54c45cd`
+- Final production/test state verified at `3691ec0`
   before the documentation-only commit.
 
 ## Verification
@@ -14,22 +14,22 @@
 |---|---|
 | VMx smoke | 5 passed |
 | Glue, Athena, and chrome VM suites | 547 passed |
-| Glue/Athena/nav UI suites | 81 passed |
+| Glue/Athena/nav UI suites | 82 passed |
 | Shared context picker, source header, and service tab strip | 19 passed |
-| Focused lifecycle, navigation, clipboard, source-swap, routing, hints, keybinding, and S3 handoff integration matrix | 152 passed |
+| Focused lifecycle, navigation, clipboard, source-swap, routing, hints, keybinding, and S3 handoff integration matrix | 153 passed |
 | Documentation tests | 73 passed |
 | Mypy | Clean across 161 source files |
 | Ruff check | Clean |
 | Ruff format | 407 files already formatted |
 | Architecture layers | Clean |
-| Full unit and integration suite | 2977 passed, 9 deselected |
-| Full-suite coverage | 85.74% |
+| Full unit and integration suite | 2979 passed, 9 deselected |
+| Full-suite coverage | 85.77% |
 | Full snapshot suite | 806 passed; 481 snapshot comparisons |
 | Hostile snapshot environment probe | 7 passed; 4 snapshot comparisons |
 | Diff whitespace | `git diff --check` clean |
 
 The exact detached baseline is 2789 passed, 9 deselected at 85.67%. The final
-delta is +188 passing tests and +0.07 percentage points. The final full run
+delta is +190 passing tests and +0.10 percentage points. The final full run
 needed no reruns.
 
 ## LOC
@@ -40,9 +40,9 @@ is counted as UI/view production.
 | Category | Additions | Deletions | Net |
 |---|---:|---:|---:|
 | VM production | 253 | 1 | +252 |
-| UI/view production | 2061 | 379 | +1682 |
+| UI/view production | 2091 | 379 | +1712 |
 | Other production | 102 | 7 | +95 |
-| Non-generated tests | 2812 | 71 | +2741 |
+| Non-generated tests | 2891 | 71 | +2820 |
 | Generated snapshots, excluded (237 changed files) | 24265 | 22489 | +1776 |
 
 No file-level rename or move is detected from the exact branch point. Internal
@@ -72,7 +72,16 @@ interchangeable.
 - `67ffc54` adds an immediate rapid Glue view-switch regression. It failed RED
   when synchronous focus projection was replaced with
   `call_after_refresh(...)`, then passed with the production synchronous path;
-  the full Glue page unit module passed 24 tests.
+  the full Glue page unit module passed 24 tests at that review point.
+- `7ff0b1b` adds an empty teardown-ring regression after the final coverage
+  gate exposed a deferred Glue focus callback observing no mounted targets.
+  The view now returns without violating the VM selector's intentional
+  non-empty precondition; the final Glue page module passes 25 tests.
+- `3691ec0` restores a source picker to its page's authoritative source when a
+  profile disappears before the asynchronous app transaction accepts it. The
+  integration regression covers the real picker event and confirms that the
+  picker label, active connection, mounted page, and service calls remain
+  unchanged. Independent re-review approved the remediation with no findings.
 - `177e47f` introduces a shared autouse snapshot environment fixture using
   pytest `monkeypatch`. It removes `NO_COLOR`, `CLICOLOR`, and
   `CLICOLOR_FORCE`, sets `TERM=xterm-256color`, and removes Athena-only setup.
@@ -93,15 +102,20 @@ interchangeable.
 
 ## Defects Found
 
-Verification exposed two production defects, each fixed before documentation
+Verification exposed four production defects, each fixed before final documentation
 and kept out of the documentation commit:
 
 - `5a89d14 fix(ui): settle Glue focus during view switches`
 - `9277a6a fix(ui): preserve compact EMR source identity`
+- `7ff0b1b fix(ui): ignore empty teardown focus rings`
+- `3691ec0 fix(ui): restore rejected source selections`
 
 The first full coverage attempt exposed the EMR regression and ended with 1
 failed, 2974 passed, 9 deselected, 2 rerun at 85.70%. After the narrow fixes,
-the clean full run reached the final result above.
+the branch reached a clean intermediate full run. The pre-PR gate then exposed
+the empty teardown ring, and independent review found the rejected-source
+projection issue. Both failed focused RED tests before remediation. The final
+exact-head full run reached the result above without reruns.
 
 The initial app-wide snapshot run had 282 expected mismatches because the wider
 service rail changed shared chrome and the EMR source header had inherited an
