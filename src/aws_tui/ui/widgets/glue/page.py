@@ -477,6 +477,8 @@ class GluePage(HubSubscriberMixin, Widget):
         if reference is None and focused is not None and not self.has_focus_within:
             return
         targets = self._focus_targets()
+        if not targets:
+            return
         current_slot = (
             reference or self._focus_coordinator.focused_slot
             if self._focus_coordinator is not None

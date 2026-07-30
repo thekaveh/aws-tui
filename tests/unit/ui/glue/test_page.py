@@ -408,6 +408,22 @@ async def test_focused_tab_activates_with_keyboard(key: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_deferred_focus_projection_ignores_empty_teardown_ring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        monkeypatch.setattr(page, "_focus_targets", lambda: ())
+
+        page._maybe_focus_active(FocusSlot.NAV_MENU)  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
 async def test_refresh_action_refreshes_only_the_active_view() -> None:
     vm, fake = _build_vm()
     await vm.setup()
