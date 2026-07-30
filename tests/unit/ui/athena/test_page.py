@@ -427,7 +427,7 @@ async def test_named_context_action_focuses_and_opens_picker(
 
 
 @pytest.mark.asyncio
-async def test_context_picker_selection_routes_through_page_vm() -> None:
+async def test_context_picker_changed_routes_through_page_vm() -> None:
     vm, client = _build_vm()
     await vm.setup()
     app = _AthenaApp(vm)
@@ -435,10 +435,9 @@ async def test_context_picker_selection_routes_through_page_vm() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(AthenaPage)
-        page.query_one("#athena-workgroup", ContextPicker)._commit(  # type: ignore[attr-defined]
-            "analysts"
-        )
-        await pilot.pause()
+        picker = page.query_one("#athena-workgroup", ContextPicker)
+        event = ContextPicker.Changed(picker, "analysts")
+        page.on_context_picker_changed(event)
         await page.workers.wait_for_complete()
         await pilot.pause()
 

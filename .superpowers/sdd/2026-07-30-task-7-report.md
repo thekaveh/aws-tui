@@ -92,6 +92,12 @@ interchangeable.
   idempotent while `Shift+S` still refreshes the current service. The regression
   now fixes its candidate set, activates `dev` explicitly, and awaits the app
   action, so it is independent of caller AWS profiles and event-loop timing.
+- Windows/Python 3.11 exposed that a unit test combined the shared picker's
+  asynchronous Textual message delivery with Athena's handler-to-VM routing.
+  Picker emission remains covered by its keyboard and click tests; the Athena
+  test now invokes `ContextPicker.Changed` at the page-handler boundary and
+  drains the lifecycle worker it creates, removing scheduler dependence without
+  weakening either contract.
 - `177e47f` introduces a shared autouse snapshot environment fixture using
   pytest `monkeypatch`. It removes `NO_COLOR`, `CLICOLOR`, and
   `CLICOLOR_FORCE`, sets `TERM=xterm-256color`, and removes Athena-only setup.
