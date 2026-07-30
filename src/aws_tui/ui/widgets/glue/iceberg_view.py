@@ -197,6 +197,21 @@ class GlueIcebergView(Widget):
             if widget.display and not widget.disabled and widget.can_focus
         )
 
+    def activate_focused(self, focused: Widget) -> bool:
+        """Activate a supported focused control through its public action."""
+        ancestors = set(focused.ancestors_with_self)
+        target = next(
+            (candidate for candidate in self.focus_targets() if candidate in ancestors),
+            None,
+        )
+        if isinstance(target, _IcebergTab):
+            target.action_select()
+            return True
+        if isinstance(target, Button):
+            target.press()
+            return True
+        return False
+
     def on__iceberg_tab_selected(self, event: _IcebergTab.Selected) -> None:
         self._run_lifecycle_worker(
             partial(self._vm.select_view, event.view),

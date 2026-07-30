@@ -158,15 +158,19 @@ class GluePage(HubSubscriberMixin, Widget):
         await self.action_select_view(event.value)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
-        self._sync_focused_widget(event.widget)
+        if event.widget is self.app.focused:
+            self._sync_focused_widget(event.widget)
 
     async def action_select_view(self, view: str) -> None:
         selected = cast(GlueView, view)
         if selected not in _VIEW_ORDER:
             return
+        reference = (
+            self._focus_coordinator.focused_slot if self._focus_coordinator is not None else None
+        )
         await self._vm.select_view(selected)
         self._sync_view()
-        self.call_after_refresh(self._maybe_focus_active)
+        self.call_after_refresh(partial(self._maybe_focus_active, reference))
 
     async def action_refresh_active(self) -> None:
         await self._vm.refresh_active()
@@ -296,15 +300,20 @@ class GluePage(HubSubscriberMixin, Widget):
 
     def activate_focused(self, *, space: bool) -> bool:
         focused = self.app.focused
-        if not self._contains_focus(focused):
+        if focused is None or not self._contains_focus(focused):
             return False
+        if self.query_one(GlueIcebergView).activate_focused(focused):
+            return True
         if isinstance(focused, ServiceTabStrip):
             focused.action_select()
+            return True
         elif isinstance(focused, Select):
             focused.action_show_overlay()
+            return True
         elif not space and isinstance(focused, OptionList):
             focused.action_select()
-        return True
+            return True
+        return False
 
     def _contains_focus(self, focused: Widget | None) -> bool:
         return focused is not None and (focused is self or self in focused.ancestors_with_self)
@@ -339,13 +348,14 @@ class GluePage(HubSubscriberMixin, Widget):
     def _maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
         focused = self.app.focused
         if (
-            self._focus_coordinator is not None
+            reference is None
+            and self._focus_coordinator is not None
             and focused is not None
             and not self.has_focus_within
             and self._focus_coordinator.focused_slot is FocusSlot.NAV_MENU
         ):
             return
-        if focused is not None and not self.has_focus_within:
+        if reference is None and focused is not None and not self.has_focus_within:
             return
         targets = self._focus_targets()
         current_slot = (

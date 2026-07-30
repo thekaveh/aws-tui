@@ -126,11 +126,11 @@ def test_nearest_focus_slot_prefers_the_forward_neighbor_on_a_tie() -> None:
         vm.dispose()
 
 
-def test_nearest_focus_slot_uses_the_nearest_available_predecessor() -> None:
+def test_nearest_focus_slot_uses_the_only_available_neighbor() -> None:
     vm = _make(initial=FocusSlot.ATHENA_CANCEL)
     try:
         selected = vm.select_nearest_focus_slot(
-            (FocusSlot.ATHENA_PRIMARY, FocusSlot.NAV_MENU),
+            (FocusSlot.ATHENA_PRIMARY,),
             order=(
                 FocusSlot.ATHENA_PRIMARY,
                 FocusSlot.ATHENA_SECONDARY,
@@ -141,6 +141,30 @@ def test_nearest_focus_slot_uses_the_nearest_available_predecessor() -> None:
             ),
         )
         assert selected is FocusSlot.ATHENA_PRIMARY
+    finally:
+        vm.dispose()
+
+
+def test_nearest_focus_slot_ignores_inactive_slots_and_uses_forward_tie() -> None:
+    vm = _make(initial=FocusSlot.ATHENA_SAVED_NAMED_MORE)
+    try:
+        selected = vm.select_nearest_focus_slot(
+            (
+                FocusSlot.ATHENA_PRIMARY,
+                FocusSlot.ATHENA_SECONDARY,
+                FocusSlot.ATHENA_DETAIL,
+            ),
+            order=(
+                FocusSlot.ATHENA_PRIMARY,
+                FocusSlot.ATHENA_SAVED_NAMED_MORE,
+                FocusSlot.ATHENA_HISTORY_MORE,
+                FocusSlot.ATHENA_SECONDARY,
+                FocusSlot.ATHENA_CANCEL,
+                FocusSlot.ATHENA_DETAIL,
+            ),
+        )
+        assert selected is FocusSlot.ATHENA_SECONDARY
+        assert vm.focused_slot is FocusSlot.ATHENA_SECONDARY
     finally:
         vm.dispose()
 

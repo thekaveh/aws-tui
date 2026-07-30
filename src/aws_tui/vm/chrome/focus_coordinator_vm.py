@@ -215,9 +215,10 @@ class FocusCoordinatorVM:
     ) -> FocusSlot:
         """Keep the current slot or select its nearest available neighbor.
 
-        ``order`` is the caller's stable, availability-independent service
-        order. A forward neighbor wins an equal-distance tie so refreshes
-        move predictably toward the next control.
+        ``order`` supplies relative service order. Slots absent from the
+        current ring are excluded from distance calculations; the disappearing
+        reference is retained long enough to identify its available neighbors.
+        A forward neighbor wins an equal-distance tie.
         """
         if not slots:
             raise ValueError("available focus slots require at least one slot")
@@ -232,11 +233,12 @@ class FocusCoordinatorVM:
             self.set_focused_slot(reference_slot)
             return reference_slot
         try:
-            current_index = order.index(reference_slot)
+            current_order = tuple(slot for slot in order if slot is reference_slot or slot in slots)
+            current_index = current_order.index(reference_slot)
         except ValueError:
             selected = slots[0]
         else:
-            indices = {slot: order.index(slot) for slot in slots}
+            indices = {slot: current_order.index(slot) for slot in slots}
             selected = min(
                 slots,
                 key=lambda slot: (

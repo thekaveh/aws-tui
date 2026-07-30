@@ -300,8 +300,8 @@ async def test_athena_refresh_falls_back_to_the_nearest_available_slot() -> None
         await pilot.pause()
 
         assert cancel.disabled
-        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_SECONDARY
-        assert app.query_one("#athena-execute", Button).has_focus
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_DETAIL
+        assert app.query_one("#athena-query-detail").has_focus
 
 
 @pytest.mark.asyncio
@@ -328,6 +328,35 @@ async def test_context_refresh_reconciles_an_unavailable_pager_to_its_nearest_sl
         assert load_more.disabled
         assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CATALOG
         assert app.query_one("#athena-catalog", Select).has_focus
+
+
+@pytest.mark.asyncio
+async def test_saved_refresh_uses_current_ring_forward_tie_for_disappearing_control() -> None:
+    client = PageClient()
+    client.workgroups.reverse()
+    vm, _client = _build_vm(client)
+    await vm.setup()
+    await vm.select_view("saved")
+    vm.saved._named_pager._current_token = "named-next"  # type: ignore[attr-defined]
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        saved = app.query_one(AthenaSavedView)
+        saved._refresh()  # type: ignore[attr-defined]
+        await pilot.pause()
+        load_more = app.query_one("#athena-more-named", Button)
+        load_more.focus()
+        await pilot.pause()
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_SAVED_NAMED_MORE
+
+        vm.saved._named_pager._current_token = None  # type: ignore[attr-defined]
+        vm.saved._notify("has_more_named_queries")  # type: ignore[attr-defined]
+        await pilot.pause()
+
+        assert load_more.disabled
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_SECONDARY
+        assert app.query_one("#athena-prepared-pane-options", OptionList).has_focus
 
 
 def _build_vm(client: PageClient | None = None) -> tuple[AthenaPageVM, PageClient]:

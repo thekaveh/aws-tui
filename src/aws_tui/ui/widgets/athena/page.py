@@ -257,7 +257,8 @@ class AthenaPage(HubSubscriberMixin, Widget):
         await self.action_select_view(event.value)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
-        self._sync_focused_widget(event.widget)
+        if event.widget is self.app.focused:
+            self._sync_focused_widget(event.widget)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if self._syncing_context or event.value is Select.NULL:
