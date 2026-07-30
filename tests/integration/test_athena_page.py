@@ -16,6 +16,7 @@ from aws_tui.domain.query import QueryExecutionRef, QueryState, ResultColumn, Re
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.services.athena import AthenaService
 from aws_tui.ui.widgets.athena.page import AthenaPage
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from tests.integration.test_glue_page import open_service
@@ -98,6 +99,24 @@ async def test_real_app_mounts_editor_results_and_explicit_entry_focuses_editor(
         await page.action_select_view("results")
         assert page.query_one(DataTable)
         assert vm.active_view == "results"
+
+
+@pytest.mark.asyncio
+async def test_printable_selector_keys_remain_athena_editor_input(
+    tmp_path: Path,
+) -> None:
+    async with _mounted_athena_app(tmp_path) as (app, _ctx, _vm, _client, pilot):
+        page = app.query_one("#content-athena-page", AthenaPage)
+        editor = page.query_one("#athena-editor", TextArea)
+        editor.text = ""
+        editor.focus()
+
+        await pilot.press("W", "C", "D", "F", "G")
+        await pilot.pause()
+
+        assert editor.text == "WCDFG"
+        assert editor.has_focus
+        assert all(not picker.is_open for picker in page.query(ContextPicker))
 
 
 @pytest.mark.asyncio
