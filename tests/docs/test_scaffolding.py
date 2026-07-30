@@ -522,3 +522,12 @@ def test_cross_service_action_and_message_ledgers_match_source() -> None:
     for message in messages:
         assert f"class {message}" in message_source
         assert message in ledger
+
+
+def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:
+    changelog = _read("CHANGELOG.md")
+    unreleased_intro = changelog.split("### 1.1.1. Added", maxsplit=1)[0]
+    assert "may reside on ``develop`` before promotion to ``main``" in unreleased_intro
+    assert "does not by itself claim that every entry has landed on ``main``" in unreleased_intro
+    assert "These changes have landed on ``main``" not in unreleased_intro
+    assert "v0.8.0 cut commit" in unreleased_intro
