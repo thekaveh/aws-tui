@@ -438,7 +438,7 @@ reported separately so the table reconciles without hiding implementation.
 | VM production (`src/aws_tui/vm`) | 253 | 1 | +252 |
 | UI/view production (`src/aws_tui/ui` plus `src/aws_tui/app.py`) | 2091 | 379 | +1712 |
 | Other production (`composition.py`, `domain/sql_policy.py`, `infra/keymap_store.py`) | 102 | 7 | +95 |
-| Non-generated tests | 2891 | 71 | +2820 |
+| Non-generated tests | 2902 | 75 | +2827 |
 | Generated snapshots, excluded from authored LOC (237 changed files) | 24265 | 22489 | +1776 |
 
 Git detects no file-level rename or move in this range. Code replacement within
@@ -454,7 +454,7 @@ The exact detached baseline is 2789 passed, 9 deselected at 85.67%. The final
 unit and integration suite is 2979 passed, 9 deselected at 85.77%: +190 passing
 tests and +0.10 percentage points. The full snapshot suite is 806 passed with
 481 snapshot comparisons; 237 generated snapshot files differ from the branch
-point.
+point. All 9 end-to-end user journeys also pass.
 
 # 7. Testing and acceptance
 

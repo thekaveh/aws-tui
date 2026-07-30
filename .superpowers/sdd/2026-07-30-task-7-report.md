@@ -5,8 +5,7 @@
 - Branch: `codex/glue-athena-interaction-polish`
 - Exact branch point: `b92ad89f68dd19ca61cd567ce0f82b5379fb0499`
 - Integration target: `develop` only; `main` remains out of scope.
-- Final production/test state verified at `3691ec0`
-  before the documentation-only commit.
+- Final production/test state and CI remediation are summarized below.
 
 ## Verification
 
@@ -18,6 +17,7 @@
 | Shared context picker, source header, and service tab strip | 19 passed |
 | Focused lifecycle, navigation, clipboard, source-swap, routing, hints, keybinding, and S3 handoff integration matrix | 153 passed |
 | Documentation tests | 73 passed |
+| End-to-end user journeys | 9 passed |
 | Mypy | Clean across 161 source files |
 | Ruff check | Clean |
 | Ruff format | 407 files already formatted |
@@ -42,7 +42,7 @@ is counted as UI/view production.
 | VM production | 253 | 1 | +252 |
 | UI/view production | 2091 | 379 | +1712 |
 | Other production | 102 | 7 | +95 |
-| Non-generated tests | 2891 | 71 | +2820 |
+| Non-generated tests | 2902 | 75 | +2827 |
 | Generated snapshots, excluded (237 changed files) | 24265 | 22489 | +1776 |
 
 No file-level rename or move is detected from the exact branch point. Internal
@@ -82,6 +82,10 @@ interchangeable.
   integration regression covers the real picker event and confirms that the
   picker label, active connection, mounted page, and service calls remain
   unchanged. Independent re-review approved the remediation with no findings.
+- The PR's first Linux E2E run exposed a stale journey assertion that rendered
+  the `ServiceSourceHeader` container directly after `9277a6a` changed EMR to
+  the compact passive header. The journey now queries the visible
+  `.service-source-value` child; all nine E2E journeys pass locally.
 - `177e47f` introduces a shared autouse snapshot environment fixture using
   pytest `monkeypatch`. It removes `NO_COLOR`, `CLICOLOR`, and
   `CLICOLOR_FORCE`, sets `TERM=xterm-256color`, and removes Athena-only setup.
@@ -102,13 +106,14 @@ interchangeable.
 
 ## Defects Found
 
-Verification exposed four production defects, each fixed before final documentation
-and kept out of the documentation commit:
+Verification exposed four production defects and one stale E2E assertion, all
+fixed before merge:
 
 - `5a89d14 fix(ui): settle Glue focus during view switches`
 - `9277a6a fix(ui): preserve compact EMR source identity`
 - `7ff0b1b fix(ui): ignore empty teardown focus rings`
 - `3691ec0 fix(ui): restore rejected source selections`
+- `test(e2e): read compact EMR source identity`
 
 The first full coverage attempt exposed the EMR regression and ended with 1
 failed, 2974 passed, 9 deselected, 2 rerun at 85.70%. After the narrow fixes,
