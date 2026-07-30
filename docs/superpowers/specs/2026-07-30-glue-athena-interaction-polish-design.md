@@ -392,7 +392,7 @@ Each implementation task records:
 | VM LOC | 84 added, 0 deleted, net +84 for `src/aws_tui/vm/table_clipboard_vm.py`. |
 | View LOC | 2 added, 0 deleted in `src/aws_tui/app.py` for app-lifetime disposal. |
 | Test LOC | 251 added, 0 deleted, net +251 across the two clipboard commits. |
-| Coverage | The final branch suite is 2979 passed, 9 deselected at 85.76%, versus 2789 passed, 9 deselected at 85.67% on the exact branch point. The full-suite delta is +190 passing tests and +0.09 percentage points; it is a branch-wide result and is not attributed solely to this responsibility. |
+| Coverage | The final branch suite is 2979 passed, 9 deselected at 85.75%, versus 2789 passed, 9 deselected at 85.67% on the exact branch point. The full-suite delta is +190 passing tests and +0.08 percentage points; it is a branch-wide result and is not attributed solely to this responsibility. |
 
 ### `vmx31-glue-athena-focus-rings-review-fix`
 
@@ -438,7 +438,7 @@ reported separately so the table reconciles without hiding implementation.
 | VM production (`src/aws_tui/vm`) | 253 | 1 | +252 |
 | UI/view production (`src/aws_tui/ui` plus `src/aws_tui/app.py`) | 2097 | 379 | +1718 |
 | Other production (`composition.py`, `domain/sql_policy.py`, `infra/keymap_store.py`) | 102 | 7 | +95 |
-| Non-generated tests | 2906 | 78 | +2828 |
+| Non-generated tests | 2910 | 78 | +2832 |
 | Generated snapshots, excluded from authored LOC (237 changed files) | 24265 | 22489 | +1776 |
 
 Git detects no file-level rename or move in this range. Code replacement within
@@ -451,8 +451,8 @@ quoting, and custom command lifecycle/disposal. Those are concrete mechanisms
 avoided, not LOC claimed as removed.
 
 The exact detached baseline is 2789 passed, 9 deselected at 85.67%. The final
-unit and integration suite is 2979 passed, 9 deselected at 85.76%: +190 passing
-tests and +0.09 percentage points. The full snapshot suite is 806 passed with
+unit and integration suite is 2979 passed, 9 deselected at 85.75%: +190 passing
+tests and +0.08 percentage points. The full snapshot suite is 806 passed with
 481 snapshot comparisons; 237 generated snapshot files differ from the branch
 point. All 9 end-to-end user journeys also pass.
 

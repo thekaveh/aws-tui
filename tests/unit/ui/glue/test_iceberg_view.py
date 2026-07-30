@@ -201,6 +201,7 @@ async def test_enter_and_space_activate_focused_iceberg_tab(key: str) -> None:
         tab = pilot.app.query_one("#glue-iceberg-tab-history")
         pilot.app.set_focus(tab)
         await pilot.press(key)
+        await pilot.pause()
         await pilot.app.workers.wait_for_complete(list(pilot.app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
 
@@ -226,6 +227,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         snapshot_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
         pilot.app.set_focus(snapshot_tab)
         await pilot.press(key)
+        await pilot.pause()
         await pilot.app.workers.wait_for_complete(list(pilot.app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
 
@@ -234,6 +236,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         assert not retry.disabled
         pilot.app.set_focus(retry)
         await pilot.press(key)
+        await pilot.pause()
         await pilot.app.workers.wait_for_complete(list(pilot.app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
         assert len(vm.catalog.iceberg.snapshots) == 1
@@ -242,6 +245,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         assert not more.disabled
         pilot.app.set_focus(more)
         await pilot.press(key)
+        await pilot.pause()
         await pilot.app.workers.wait_for_complete(list(pilot.app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
         assert len(vm.catalog.iceberg.snapshots) == 2

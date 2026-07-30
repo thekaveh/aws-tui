@@ -23,13 +23,13 @@
 | Ruff format | 407 files already formatted |
 | Architecture layers | Clean |
 | Full unit and integration suite | 2979 passed, 9 deselected |
-| Full-suite coverage | 85.76% |
+| Full-suite coverage | 85.75% |
 | Full snapshot suite | 806 passed; 481 snapshot comparisons |
 | Hostile snapshot environment probe | 7 passed; 4 snapshot comparisons |
 | Diff whitespace | `git diff --check` clean |
 
 The exact detached baseline is 2789 passed, 9 deselected at 85.67%. The final
-delta is +190 passing tests and +0.09 percentage points. The final full run
+delta is +190 passing tests and +0.08 percentage points. The final full run
 needed no reruns.
 
 ## LOC
@@ -42,7 +42,7 @@ is counted as UI/view production.
 | VM production | 253 | 1 | +252 |
 | UI/view production | 2097 | 379 | +1718 |
 | Other production | 102 | 7 | +95 |
-| Non-generated tests | 2906 | 78 | +2828 |
+| Non-generated tests | 2910 | 78 | +2832 |
 | Generated snapshots, excluded (237 changed files) | 24265 | 22489 | +1776 |
 
 No file-level rename or move is detected from the exact branch point. Internal
@@ -102,6 +102,10 @@ interchangeable.
   VMx focus authority and Textual focus directly, leaving each service's
   dedicated direct-focus test responsible for the asynchronous
   `DescendantFocus` bridge.
+- A subsequent Windows/Python 3.12 lane exposed an equivalent
+  dispatch-before-drain race in the Iceberg keyboard test. Each `pilot.press`
+  now yields for key dispatch before the test snapshots and drains app workers,
+  so retry and pagination assertions wait for the worker they actually trigger.
 - `177e47f` introduces a shared autouse snapshot environment fixture using
   pytest `monkeypatch`. It removes `NO_COLOR`, `CLICOLOR`, and
   `CLICOLOR_FORCE`, sets `TERM=xterm-256color`, and removes Athena-only setup.
