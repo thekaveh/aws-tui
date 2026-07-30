@@ -438,6 +438,7 @@ async def test_context_picker_selection_routes_through_page_vm() -> None:
         page.query_one("#athena-workgroup", ContextPicker)._commit(  # type: ignore[attr-defined]
             "analysts"
         )
+        await pilot.pause()
         await page.workers.wait_for_complete()
         await pilot.pause()
 
