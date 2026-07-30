@@ -36,12 +36,14 @@ def test_glue_and_athena_selector_actions_are_discoverable(
     glue = {action.action_id: action for action in legend.actions}
     assert glue["glue.choose_run_state"].action_label == "run state"
     assert glue["glue.choose_crawler_state"].action_label == "crawler state"
+    assert glue["glue.copy_table_ref"].action_label == "copy table"
 
     legend.set_current_service("athena")
     athena = {action.action_id: action for action in legend.actions}
     assert athena["athena.choose_workgroup"].action_label == "workgroup"
     assert athena["athena.choose_catalog"].action_label == "catalog"
     assert athena["athena.choose_database"].action_label == "database"
+    assert athena["athena.insert_table_ref"].action_label == "insert table"
 
 
 @pytest.mark.asyncio

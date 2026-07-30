@@ -53,6 +53,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("3", "dispatch('glue.crawlers')", False, False),
     ("F", "dispatch('glue.choose_run_state')", False, False),
     ("G", "dispatch('glue.choose_crawler_state')", False, False),
+    ("y", "dispatch('glue.copy_table_ref')", False, False),
     ("V", "dispatch('glue.time_travel_in_athena')", False, False),
     ("1", "dispatch('athena.query')", False, False),
     ("2", "dispatch('athena.history')", False, False),
@@ -61,6 +62,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("W", "dispatch('athena.choose_workgroup')", False, False),
     ("C", "dispatch('athena.choose_catalog')", False, False),
     ("D", "dispatch('athena.choose_database')", False, False),
+    ("i", "dispatch('athena.insert_table_ref')", False, False),
     ("ctrl+enter", "dispatch('athena.execute')", False, True),
     ("escape", "dispatch('athena.cancel')", False, False),
     ("l", "dispatch('athena.load_more')", False, False),
@@ -105,6 +107,7 @@ def test_printable_selector_bindings_yield_to_athena_editor(app_context_factory)
         ("W", "athena.choose_workgroup"),
         ("C", "athena.choose_catalog"),
         ("D", "athena.choose_database"),
+        ("i", "athena.insert_table_ref"),
     ):
         assert (key, f"dispatch('{action_id}')", False, False) in installed
 

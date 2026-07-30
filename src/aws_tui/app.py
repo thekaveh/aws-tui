@@ -76,6 +76,7 @@ from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
     ConnectionListChangedMessage,
+    CopyTableReferenceRequest,
     OpenAthenaTableRequest,
     OpenGlueTableRequest,
     OpenS3LocationRequest,
@@ -122,6 +123,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("app.swap_source", "Switch source"),
     ("glue.choose_run_state", "Choose Glue run state"),
     ("glue.choose_crawler_state", "Choose Glue crawler state"),
+    ("glue.copy_table_ref", "Copy Glue table reference"),
     ("glue.open_s3_location", "Open table location in S3"),
     ("glue.query_in_athena", "Query table in Athena"),
     ("glue.time_travel_in_athena", "Query Iceberg snapshot in Athena"),
@@ -132,6 +134,7 @@ _PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("athena.choose_workgroup", "Choose Athena workgroup"),
     ("athena.choose_catalog", "Choose Athena catalog"),
     ("athena.choose_database", "Choose Athena database"),
+    ("athena.insert_table_ref", "Insert copied table reference"),
     ("athena.execute", "Execute Athena query"),
     ("athena.cancel", "Cancel Athena query"),
     ("athena.load_more", "Load more Athena rows"),
@@ -436,6 +439,10 @@ class AwsTuiApp(App[None]):
             "glue.choose_crawler_state",
             self.action_choose_glue_crawler_state,
         )
+        self._actions.register(
+            "glue.copy_table_ref",
+            self.action_copy_glue_table_reference,
+        )
         self._actions.register("glue.open_s3_location", self.action_open_glue_s3_location)
         self._actions.register("glue.query_in_athena", self.action_query_glue_table_in_athena)
         self._actions.register(
@@ -469,6 +476,10 @@ class AwsTuiApp(App[None]):
         self._actions.register(
             "athena.choose_database",
             self.action_choose_athena_database,
+        )
+        self._actions.register(
+            "athena.insert_table_ref",
+            self.action_insert_athena_table_reference,
         )
         self._actions.register("athena.execute", self.action_execute_athena)
         self._actions.register("athena.cancel", self.action_cancel_athena)
@@ -2477,6 +2488,60 @@ class AwsTuiApp(App[None]):
             toast_id="glue-athena-table-unavailable",
         )
 
+    def action_copy_glue_table_reference(self) -> None:
+        self.record_action("glue.copy_table_ref")
+        page = self._glue_page()
+        if page is not None and not page.vm.actions_available:
+            return
+        if page is not None and page.vm.copy_table_reference():
+            return
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="select a Glue table to copy",
+            toast_id="glue-table-reference-unavailable",
+        )
+
+    async def action_insert_athena_table_reference(self) -> None:
+        self.record_action("athena.insert_table_ref")
+        page = self._athena_page()
+        if page is None:
+            return
+        copied = self._app_ctx.table_clipboard_vm.copied_table
+        if copied is None:
+            notifications.advise(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="copy a Glue table reference first",
+                toast_id="athena-table-reference-empty",
+            )
+            return
+        context = page.vm.context
+        copied_source = (
+            copied.table_ref.connection_name,
+            copied.table_ref.region,
+        )
+        active_source = (context.connection_name, context.region)
+        if copied_source != active_source:
+            notifications.advise(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message=(
+                    f"copied {copied_source[0]} ({copied_source[1]}); "
+                    f"active {active_source[0]} ({active_source[1]})"
+                ),
+                toast_id="athena-table-reference-source-mismatch",
+            )
+            return
+        if not await page.insert_table_reference(copied.sql_identifier):
+            return
+        notifications.success(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="inserted copied table reference",
+            toast_id="athena-table-reference-inserted",
+        )
+
     async def action_time_travel_glue_table_in_athena(self) -> None:
         self.record_action("glue.time_travel_in_athena")
         page = self._glue_page()
@@ -2889,6 +2954,9 @@ class AwsTuiApp(App[None]):
                 group="content-mount",
             )
             return
+        if isinstance(msg, CopyTableReferenceRequest):
+            self._copy_table_reference_request(msg)
+            return
         if isinstance(msg, (OpenAthenaTableRequest, OpenGlueTableRequest)):
             generation = self._advance_service_navigation("table")
             navigation = asyncio.create_task(
@@ -2902,6 +2970,26 @@ class AwsTuiApp(App[None]):
                 exclusive=True,
                 group="content-mount",
             )
+
+    def _copy_table_reference_request(self, request: CopyTableReferenceRequest) -> None:
+        clipboard = self._app_ctx.table_clipboard_vm
+        clipboard.copy_command.execute(request.table_ref)
+        copied = clipboard.copied_table
+        if copied is None:
+            return
+        try:
+            self.copy_to_clipboard(copied.sql_identifier)
+        except Exception as exc:
+            self._app_ctx.log_sink.warning(
+                "table_clipboard.system_copy_unavailable",
+                error_type=type(exc).__name__,
+            )
+        notifications.success(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="copied table reference",
+            toast_id="glue-table-reference-copied",
+        )
 
     def _advance_service_navigation(
         self,

@@ -135,6 +135,23 @@ class AthenaQueryView(Widget):
     async def cancel(self) -> None:
         await self._vm.cancel()
 
+    def insert_table_reference(self, identifier: str) -> bool:
+        if not identifier:
+            return False
+        try:
+            editor = self.query_one("#athena-editor", TextArea)
+        except Exception:
+            return False
+        selection = editor.selection
+        editor.replace(
+            identifier,
+            selection.start,
+            selection.end,
+            maintain_selection_offset=False,
+        )
+        self._vm.set_sql(editor.text)
+        return True
+
     def refresh_from_vm(self) -> None:
         self._refresh()
 

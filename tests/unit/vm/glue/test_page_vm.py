@@ -16,7 +16,11 @@ from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
 from aws_tui.vm.glue.crawlers_vm import GlueCrawlersVM
 from aws_tui.vm.glue.jobs_vm import GlueJobsVM
 from aws_tui.vm.glue.page_vm import GluePageVM
-from aws_tui.vm.messages import OpenAthenaTableRequest, OpenS3LocationRequest
+from aws_tui.vm.messages import (
+    CopyTableReferenceRequest,
+    OpenAthenaTableRequest,
+    OpenS3LocationRequest,
+)
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 from tests.unit.vm.glue._fake_glue import (
     CancellationResistantGlue,
@@ -203,6 +207,49 @@ async def test_catalog_query_in_athena_sends_selected_table_identity() -> None:
         ]
     finally:
         subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalog_copy_sends_exact_selected_table_identity_or_no_ops() -> None:
+    page = make_page_vm(seeded_glue())
+    await page.setup()
+    messages: list[CopyTableReferenceRequest] = []
+    subscription = page.hub.messages.subscribe(
+        on_next=lambda message: (
+            messages.append(message) if isinstance(message, CopyTableReferenceRequest) else None
+        )
+    )
+    selected = next(
+        row.ref
+        for row in page.catalog.tables
+        if row.ref.table_name == page.catalog.selected_table_name
+    )
+    try:
+        assert page.catalog.copy_table_reference() is True
+        assert messages == [CopyTableReferenceRequest(selected)]
+
+        page.catalog._selected_table_name = None  # type: ignore[attr-defined]
+        assert page.catalog.copy_table_reference() is False
+        assert messages == [CopyTableReferenceRequest(selected)]
+    finally:
+        subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_page_copy_delegates_to_catalog_without_selection_state() -> None:
+    page = make_page_vm(seeded_glue())
+    await page.setup()
+    calls = 0
+
+    def copy() -> bool:
+        nonlocal calls
+        calls += 1
+        return True
+
+    page.catalog.copy_table_reference = copy  # type: ignore[method-assign]
+
+    assert page.copy_table_reference() is True
+    assert calls == 1
 
 
 @pytest.mark.asyncio

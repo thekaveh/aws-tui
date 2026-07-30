@@ -6,6 +6,7 @@ import inspect
 from pathlib import Path
 
 import pytest
+from textual.widgets import TextArea
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
@@ -147,6 +148,180 @@ async def test_glue_to_athena_preserves_identity_and_prefills_without_running(
             )
             assert page.query.execution_ref is None
             assert not any(call.method == "start_query" for call in client.calls)
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("system_clipboard_fails", [False, True])
+async def test_glue_copy_updates_typed_clipboard_and_system_clipboard_best_effort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    system_clipboard_fails: bool,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    copied: list[str] = []
+
+    def copy_to_clipboard(_app: AwsTuiApp, value: str) -> None:
+        if system_clipboard_fails:
+            raise RuntimeError("OSC 52 unavailable")
+        copied.append(value)
+
+    monkeypatch.setattr(AwsTuiApp, "copy_to_clipboard", copy_to_clipboard)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+
+            await _invoke(app, "glue.copy_table_ref")
+            await pilot.pause()
+
+            payload = ctx.table_clipboard_vm.copied_table
+            assert payload is not None
+            assert payload.table_ref == TableRef(
+                "AwsDataCatalog",
+                "dev_analytics",
+                "dev_events",
+                "demo-dev",
+                "us-east-1",
+            )
+            assert payload.sql_identifier == ('"AwsDataCatalog"."dev_analytics"."dev_events"')
+            assert copied == ([] if system_clipboard_fails else [payload.sql_identifier])
+            assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
+                "glue-table-reference-copied"
+            )
+            assert ctx.root_vm.content_host.current is glue
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_athena_insert_empty_clipboard_is_non_mutating(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            page = await _open_service(ctx, app, pilot, "athena")
+            assert isinstance(page, AthenaPageVM)
+            editor = app.query_one("#athena-editor", TextArea)
+            editor.text = "SELECT 1"
+            await pilot.pause()
+
+            await _invoke(app, "athena.insert_table_ref")
+            await pilot.pause()
+
+            assert editor.text == "SELECT 1"
+            assert page.query.sql == "SELECT 1"
+            assert page.query.execution_ref is None
+            assert ctx.table_clipboard_vm.copied_table is None
+            assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
+                "athena-table-reference-empty"
+            )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_athena_insert_refuses_source_mismatch_without_mutation(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    ctx.table_clipboard_vm.copy_command.execute(
+        TableRef(
+            "AwsDataCatalog",
+            "prod_analytics",
+            "events",
+            "demo-prod",
+            "us-west-2",
+        )
+    )
+    copied_before = ctx.table_clipboard_vm.copied_table
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            page = await _open_service(ctx, app, pilot, "athena")
+            assert isinstance(page, AthenaPageVM)
+            editor = app.query_one("#athena-editor", TextArea)
+            editor.text = "SELECT 1"
+            await pilot.pause()
+
+            await _invoke(app, "athena.insert_table_ref")
+            await pilot.pause()
+
+            assert editor.text == "SELECT 1"
+            assert page.query.sql == "SELECT 1"
+            assert page.query.execution_ref is None
+            assert ctx.table_clipboard_vm.copied_table is copied_before
+            toast = ctx.root_vm.chrome.toast_stack.toasts[-1].model
+            assert toast.id == "athena-table-reference-source-mismatch"
+            assert "demo-prod (us-west-2)" in toast.text
+            assert "demo-dev (us-east-1)" in toast.text
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_athena_insert_matching_source_switches_view_and_never_executes(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            page = await _open_service(ctx, app, pilot, "athena")
+            assert isinstance(page, AthenaPageVM)
+            client = _athena_client(ctx, "demo-dev")
+            ctx.table_clipboard_vm.copy_command.execute(
+                TableRef(
+                    "AwsDataCatalog",
+                    "dev_analytics",
+                    "dev_events",
+                    "demo-dev",
+                    "us-east-1",
+                )
+            )
+            editor = app.query_one("#athena-editor", TextArea)
+            editor.text = "SELECT  LIMIT 10"
+            editor.selection = type(editor.selection).cursor((0, 7))
+            await page.select_view("history")
+            await pilot.pause()
+            client.calls.clear()
+
+            await _invoke(app, "athena.insert_table_ref")
+            await pilot.pause()
+
+            expected = 'SELECT "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 10'
+            assert page.active_view == "query"
+            assert editor.text == expected
+            assert page.query.sql == expected
+            assert page.query.execution_ref is None
+            assert not any(call.method == "start_query" for call in client.calls)
+            assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
+                "athena-table-reference-inserted"
+            )
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

@@ -31,7 +31,11 @@ from aws_tui.vm.glue.iceberg_vm import (
     IcebergInspectorProtocol,
     UnavailableIcebergInspector,
 )
-from aws_tui.vm.messages import OpenAthenaTableRequest, OpenS3LocationRequest
+from aws_tui.vm.messages import (
+    CopyTableReferenceRequest,
+    OpenAthenaTableRequest,
+    OpenS3LocationRequest,
+)
 
 _DISCOVERY_PAGE_LIMIT = 64
 _DISCOVERY_EMPTY_PAGE_LIMIT = 3
@@ -561,6 +565,19 @@ class GlueCatalogVM:
                 snapshot_id=snapshot_id,
             )
         )
+        return True
+
+    def copy_table_reference(self) -> bool:
+        """Publish the currently selected table for the app clipboard."""
+        if not self._is_alive() or self._selected_table_name is None:
+            return False
+        summary = next(
+            (row for row in self.tables if row.ref.table_name == self._selected_table_name),
+            None,
+        )
+        if summary is None:
+            return False
+        self._hub.send(CopyTableReferenceRequest(summary.ref))
         return True
 
     async def load_more_partitions(self) -> None:

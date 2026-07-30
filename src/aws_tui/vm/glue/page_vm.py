@@ -302,6 +302,11 @@ class GluePageVM:
             return False
         return self.catalog.query_in_athena()
 
+    def copy_table_reference(self) -> bool:
+        if not self._is_alive():
+            return False
+        return self.catalog.copy_table_reference()
+
     def time_travel_in_athena(self) -> bool:
         if not self._is_alive():
             return False

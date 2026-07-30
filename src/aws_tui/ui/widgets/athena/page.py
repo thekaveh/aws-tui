@@ -326,6 +326,13 @@ class AthenaPage(HubSubscriberMixin, Widget):
     async def action_cancel(self) -> None:
         await self.query_one(AthenaQueryView).cancel()
 
+    async def insert_table_reference(self, identifier: str) -> bool:
+        if not identifier:
+            return False
+        if self._vm.active_view != "query":
+            await self.action_select_view("query")
+        return self.query_one(AthenaQueryView).insert_table_reference(identifier)
+
     async def action_load_more(self) -> None:
         focused_ids = self._focused_ids()
         if focused_ids & {"athena-workgroup", "athena-more-workgroups"}:

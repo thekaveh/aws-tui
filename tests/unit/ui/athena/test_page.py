@@ -616,6 +616,94 @@ async def test_editor_and_execute_button_drive_the_query_vm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_view_inserts_at_cursor_and_synchronizes_vm_without_execution() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        editor = app.query_one("#athena-editor", TextArea)
+        editor.text = "SELECT  LIMIT 10"
+        editor.selection = type(editor.selection).cursor((0, 7))
+        await pilot.pause()
+
+        inserted = app.query_one(AthenaQueryView).insert_table_reference(
+            '"AwsDataCatalog"."analytics"."events"'
+        )
+        await pilot.pause()
+
+        expected = 'SELECT "AwsDataCatalog"."analytics"."events" LIMIT 10'
+        assert inserted is True
+        assert editor.text == expected
+        assert vm.query.sql == expected
+        assert client.start_calls == []
+
+
+@pytest.mark.asyncio
+async def test_query_view_replaces_active_selection_and_preserves_surrounding_text() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        editor = app.query_one("#athena-editor", TextArea)
+        editor.text = "SELECT old_table WHERE enabled"
+        editor.selection = type(editor.selection)((0, 7), (0, 16))
+        await pilot.pause()
+
+        inserted = app.query_one(AthenaQueryView).insert_table_reference(
+            '"AwsDataCatalog"."analytics"."events"'
+        )
+        await pilot.pause()
+
+        expected = 'SELECT "AwsDataCatalog"."analytics"."events" WHERE enabled'
+        assert inserted is True
+        assert editor.text == expected
+        assert vm.query.sql == expected
+        assert client.start_calls == []
+
+
+@pytest.mark.asyncio
+async def test_query_view_rejects_empty_identifier_without_mutation() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        editor = app.query_one("#athena-editor", TextArea)
+        editor.text = "SELECT 1"
+        editor.selection = type(editor.selection).cursor((0, 4))
+        await pilot.pause()
+
+        assert app.query_one(AthenaQueryView).insert_table_reference("") is False
+        assert editor.text == "SELECT 1"
+        assert vm.query.sql == "SELECT 1"
+        assert client.start_calls == []
+
+
+@pytest.mark.asyncio
+async def test_page_selects_query_view_before_inserting_table_reference() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    await vm.select_view("history")
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        inserted = await app.query_one(AthenaPage).insert_table_reference(
+            '"AwsDataCatalog"."analytics"."events"'
+        )
+        await pilot.pause()
+
+        assert inserted is True
+        assert vm.active_view == "query"
+        assert app.query_one(AthenaQueryView).display is True
+        assert vm.query.sql == '"AwsDataCatalog"."analytics"."events"'
+        assert client.start_calls == []
+
+
+@pytest.mark.asyncio
 async def test_results_preserve_null_empty_and_markup_like_values_literally() -> None:
     client = PageClient()
 
