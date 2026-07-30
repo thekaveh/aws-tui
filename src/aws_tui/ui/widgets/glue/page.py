@@ -216,7 +216,7 @@ class GluePage(HubSubscriberMixin, Widget):
         )
         await self._vm.select_view(selected)
         self._sync_view()
-        self.call_after_refresh(partial(self._maybe_focus_active, reference))
+        self._maybe_focus_active(reference)
 
     async def action_refresh_active(self) -> None:
         await self._vm.refresh_active()
