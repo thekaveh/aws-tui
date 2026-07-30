@@ -8,6 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.widget import Widget
+from textual.widgets import Static
 
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.vm.service_source_vm import ServiceSourceContext
@@ -30,6 +31,16 @@ class ServiceSourceHeader(Widget, can_focus=True):
     ServiceSourceHeader:focus > ContextPicker {
         border: heavy $accent;
     }
+    ServiceSourceHeader.-compact {
+        height: 1;
+        min-height: 1;
+    }
+    ServiceSourceHeader.-compact > .service-source-value {
+        width: 1fr;
+        height: 1;
+        padding: 0 1;
+        content-align: left middle;
+    }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -49,9 +60,12 @@ class ServiceSourceHeader(Widget, can_focus=True):
         source: ServiceSourceContext,
         *,
         candidates: tuple[ServiceSourceContext, ...] = (),
+        selectable: bool = True,
         id: str | None = None,
     ) -> None:
-        super().__init__(id=id)
+        super().__init__(id=id, classes=None if selectable else "-compact")
+        self.can_focus = selectable
+        self._selectable = selectable
         ordered = dict.fromkeys((*candidates, source))
         self._source = source
         self.tooltip = source.label
@@ -65,6 +79,14 @@ class ServiceSourceHeader(Widget, can_focus=True):
         return self.query_one(ContextPicker)
 
     def compose(self) -> ComposeResult:
+        if not self._selectable:
+            yield Static(
+                self._source.label,
+                id=f"{self.id}-value" if self.id is not None else None,
+                classes="service-source-value",
+                markup=False,
+            )
+            return
         selected = next(
             (
                 value
@@ -87,6 +109,8 @@ class ServiceSourceHeader(Widget, can_focus=True):
         self.open()
 
     def open(self) -> None:
+        if not self._selectable:
+            return
         self.picker.open()
 
     def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:

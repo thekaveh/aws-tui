@@ -55,3 +55,16 @@ async def test_source_header_emits_selected_connection_identity() -> None:
         await pilot.press("enter", "down", "enter")
 
         assert pilot.app.selections == [("analytics-prod", "us-west-2")]
+
+
+@pytest.mark.asyncio
+async def test_source_header_compact_mode_preserves_passive_one_row_identity() -> None:
+    header = ServiceSourceHeader(_DEV, selectable=False)
+
+    async with _SourceHost(header).run_test() as pilot:
+        await pilot.pause()
+
+        assert not header.can_focus
+        assert not header.query(ContextPicker)
+        assert str(header.query_one(".service-source-value", Static).render()) == _DEV.label
+        assert header.region.height == 1
