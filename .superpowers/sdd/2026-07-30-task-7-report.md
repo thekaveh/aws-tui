@@ -97,7 +97,11 @@ interchangeable.
   Picker emission remains covered by its keyboard and click tests; the Athena
   test now invokes `ContextPicker.Changed` at the page-handler boundary and
   drains the lifecycle worker it creates, removing scheduler dependence without
-  weakening either contract.
+  weakening either contract. A later Windows/Python 3.12 lane exposed the same
+  issue in fallback-test setup: the Athena and Glue fallback tests now seed the
+  VMx focus authority and Textual focus directly, leaving each service's
+  dedicated direct-focus test responsible for the asynchronous
+  `DescendantFocus` bridge.
 - `177e47f` introduces a shared autouse snapshot environment fixture using
   pytest `monkeypatch`. It removes `NO_COLOR`, `CLICOLOR`, and
   `CLICOLOR_FORCE`, sets `TERM=xterm-256color`, and removes Athena-only setup.

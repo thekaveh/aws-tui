@@ -227,9 +227,9 @@ async def test_glue_refresh_falls_back_to_the_nearest_available_slot() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         runs = app.query_one("#glue-runs-pane-options", OptionList)
-        runs.focus()
+        app.focus_coordinator.set_focused_slot(FocusSlot.GLUE_SECONDARY)
+        app.set_focus(runs)
         await pilot.pause()
-        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_SECONDARY
 
         await app.query_one(GluePage).action_select_view("crawlers")
         await pilot.pause()

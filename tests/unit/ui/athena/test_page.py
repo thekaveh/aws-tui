@@ -294,9 +294,9 @@ async def test_athena_refresh_falls_back_to_the_nearest_available_slot() -> None
         await pilot.pause()
         cancel = app.query_one("#athena-cancel", Button)
         cancel.disabled = False
-        cancel.focus()
+        app.focus_coordinator.set_focused_slot(FocusSlot.ATHENA_CANCEL)
+        app.set_focus(cancel)
         await pilot.pause()
-        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CANCEL
 
         vm.query.set_sql("SELECT 2")
         await pilot.pause()
@@ -319,9 +319,9 @@ async def test_context_refresh_reconciles_an_unavailable_pager_to_its_nearest_sl
         page._refresh_page()  # type: ignore[attr-defined]
         await pilot.pause()
         load_more = app.query_one("#athena-more-workgroups", Button)
-        load_more.focus()
+        app.focus_coordinator.set_focused_slot(FocusSlot.ATHENA_WORKGROUP_MORE)
+        app.set_focus(load_more)
         await pilot.pause()
-        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_WORKGROUP_MORE
 
         vm._workgroup_pager._current_token = None  # type: ignore[attr-defined]
         page._refresh_page()  # type: ignore[attr-defined]
@@ -348,9 +348,9 @@ async def test_saved_refresh_uses_current_ring_forward_tie_for_disappearing_cont
         saved._refresh()  # type: ignore[attr-defined]
         await pilot.pause()
         load_more = app.query_one("#athena-more-named", Button)
-        load_more.focus()
+        app.focus_coordinator.set_focused_slot(FocusSlot.ATHENA_SAVED_NAMED_MORE)
+        app.set_focus(load_more)
         await pilot.pause()
-        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_SAVED_NAMED_MORE
 
         vm.saved._named_pager._current_token = None  # type: ignore[attr-defined]
         vm.saved._notify("has_more_named_queries")  # type: ignore[attr-defined]
