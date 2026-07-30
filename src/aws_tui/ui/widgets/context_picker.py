@@ -9,6 +9,7 @@ from typing import ClassVar
 from rich.markup import escape as escape_markup
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
+from textual.containers import Horizontal
 from textual.events import Click
 from textual.message import Message
 from textual.widget import Widget
@@ -50,9 +51,22 @@ class ContextPicker(Widget, can_focus=True):
     ContextPicker > .context-picker-trigger {
         width: 1fr;
         height: 1;
+        layout: horizontal;
         padding: 0;
+    }
+    ContextPicker .context-picker-value {
+        width: 1fr;
+        min-width: 0;
+        height: 1;
         content-align: left middle;
         text-overflow: ellipsis;
+    }
+    ContextPicker .context-picker-indicator {
+        width: 1;
+        min-width: 1;
+        max-width: 1;
+        height: 1;
+        content-align: right middle;
     }
     ContextPicker > OptionList {
         width: 1fr;
@@ -120,7 +134,9 @@ class ContextPicker(Widget, can_focus=True):
         return f"{self.id}-options" if self.id is not None else "context-picker-options"
 
     def compose(self) -> ComposeResult:
-        yield Static(classes="context-picker-trigger", markup=False)
+        with Horizontal(classes="context-picker-trigger"):
+            yield Static(classes="context-picker-value", markup=False)
+            yield Static(classes="context-picker-indicator", markup=False)
         yield OptionList(id=self._options_id)
 
     def on_mount(self) -> None:
@@ -214,8 +230,8 @@ class ContextPicker(Widget, can_focus=True):
 
     def _refresh_trigger(self) -> None:
         with contextlib.suppress(Exception):
-            trigger = self.query_one(".context-picker-trigger", Static)
-            trigger.update(self._trigger_text())
+            self.query_one(".context-picker-value", Static).update(self._trigger_value())
+            self.query_one(".context-picker-indicator", Static).update("▴" if self.is_open else "▾")
 
     def _refresh_options(self) -> None:
         with contextlib.suppress(Exception):
@@ -241,20 +257,18 @@ class ContextPicker(Widget, can_focus=True):
         with contextlib.suppress(Exception):
             self.query_one(OptionList).focus()
 
-    def _trigger_text(self) -> str:
+    def _trigger_value(self) -> str:
         if self._loading:
-            value = "Loading..."
+            return "Loading..."
         elif self._error:
-            value = "Unable to load options"
+            return "Unable to load options"
         elif not self._options:
-            value = "(No options)"
-        else:
-            selected = next(
-                (option for option in self._options if option.value == self._value),
-                None,
-            )
-            value = selected.label if selected is not None else f"(Select {self._label.lower()})"
-        return f"{value} {'▴' if self.is_open else '▾'}"
+            return "(No options)"
+        selected = next(
+            (option for option in self._options if option.value == self._value),
+            None,
+        )
+        return selected.label if selected is not None else f"(Select {self._label.lower()})"
 
     def _build_options(self) -> tuple[Option, ...]:
         if self._loading:

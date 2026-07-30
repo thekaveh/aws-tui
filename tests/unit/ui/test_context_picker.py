@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.containers import Horizontal
 from textual.widgets import OptionList, Static
 
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
@@ -40,7 +41,8 @@ async def test_context_picker_renders_its_label_and_selected_value() -> None:
 
         assert picker.value == "primary"
         assert picker.border_title == "Workgroup"
-        assert str(picker.query_one(".context-picker-trigger", Static).render()) == "primary ▾"
+        assert str(picker.query_one(".context-picker-value", Static).render()) == "primary"
+        assert str(picker.query_one(".context-picker-indicator", Static).render()) == "▾"
 
 
 @pytest.mark.asyncio
@@ -49,14 +51,61 @@ async def test_context_picker_indicator_tracks_open_state() -> None:
 
     async with PickerHost(picker).run_test() as pilot:
         await pilot.pause()
-        trigger = picker.query_one(".context-picker-trigger", Static)
+        indicator = picker.query_one(".context-picker-indicator", Static)
 
-        assert str(trigger.render()).endswith("▾")
+        assert str(indicator.render()) == "▾"
 
         picker.open()
         await pilot.pause()
 
-        assert str(trigger.render()).endswith("▴")
+        assert str(indicator.render()) == "▴"
+
+
+@pytest.mark.asyncio
+async def test_context_picker_long_value_keeps_indicator_visible_when_narrow() -> None:
+    label = "[bold]production-analytics-workgroup-with-a-long-name[/bold]"
+    picker = ContextPicker(
+        "Workgroup",
+        (ContextOption(label, "production"), ContextOption("secondary", "secondary")),
+        selected="production",
+        id="long-workgroup-picker",
+    )
+
+    async with PickerHost(picker).run_test(size=(18, 10)) as pilot:
+        await pilot.pause()
+        trigger = picker.query_one(".context-picker-trigger", Horizontal)
+        value = picker.query_one(".context-picker-value", Static)
+        indicator = picker.query_one(".context-picker-indicator", Static)
+
+        assert picker.outer_size.height == 3
+        assert value.size.width < len(label)
+        assert value.styles.text_overflow == "ellipsis"
+        assert str(value.render()) == label
+        assert indicator.size.width == 1
+        assert indicator.region.right == trigger.content_region.right
+        assert str(indicator.render()) == "▾"
+
+        picker.open()
+        await pilot.pause()
+
+        assert picker.is_open
+        assert indicator.size.width == 1
+        assert indicator.region.right == trigger.content_region.right
+        assert str(indicator.render()) == "▴"
+
+
+@pytest.mark.asyncio
+async def test_context_picker_whole_trigger_toggles_from_value_and_indicator() -> None:
+    picker = _picker()
+
+    async with PickerHost(picker).run_test() as pilot:
+        await pilot.click(".context-picker-value")
+        await pilot.pause()
+        assert picker.is_open
+
+        await pilot.click(".context-picker-indicator")
+        await pilot.pause()
+        assert not picker.is_open
 
 
 @pytest.mark.asyncio
@@ -124,18 +173,22 @@ async def test_context_picker_exposes_empty_and_transient_states() -> None:
         await pilot.pause()
 
         options = picker.query_one(OptionList)
+        value = picker.query_one(".context-picker-value", Static)
         assert picker.has_class("-loading")
         assert picker.tooltip == "Loading workgroups"
+        assert str(value.render()) == "Loading..."
         assert options.option_count == 1
         assert options.get_option_at_index(0).disabled is True
 
         picker.set_state(warning=True)
         assert picker.has_class("-warning")
         assert not picker.has_class("-loading")
+        assert str(value.render()) == "(No options)"
 
         picker.set_state(error=True)
         assert picker.has_class("-error")
         assert not picker.has_class("-warning")
+        assert str(value.render()) == "Unable to load options"
 
 
 @pytest.mark.asyncio

@@ -118,12 +118,28 @@ async def test_navigation_rows_center_every_label_at_stable_width() -> None:
                 "settings",
             }
             assert {row.size.width for row in rows} == {nav.content_size.width}
+            baseline = {
+                row.descriptor_id: (row.size.width, str(row.render()).index(row._label))
+                for row in rows
+            }
             for row in rows:
                 rendered = str(row.render())
                 label = row._label  # type: ignore[attr-defined]
                 expected_start = (row.size.width - len(label)) // 2
                 assert rendered.index(label) == expected_start
                 assert cell_len(rendered) == row.size.width
+
+            for selected in rows:
+                for row in rows:
+                    row.set_selected(row is selected)
+                await pilot.pause()
+
+                for row in rows:
+                    rendered = str(row.render())
+                    baseline_width, baseline_start = baseline[row.descriptor_id]
+                    assert row.size.width == baseline_width
+                    assert rendered.index(row._label) == baseline_start
+                    assert cell_len(rendered) == baseline_width
     finally:
         vm.dispose()
 
