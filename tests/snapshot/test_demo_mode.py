@@ -12,7 +12,9 @@ import pytest
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
+from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.pane import Pane
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.snapshot.apps.demo_mode import DemoModeApp
@@ -139,7 +141,12 @@ async def _show_profile_iceberg(  # type: ignore[no-untyped-def]
             region,
         )
     )
-    await page.catalog.iceberg.select_view(view)
+    selected = await page.catalog.iceberg.select_view(view)
+    assert selected
+    assert page.catalog.iceberg.active_view == view
+    assert page.catalog.iceberg.state in {PaneState.IDLE, PaneState.EMPTY}
+    iceberg_view = app.query_one(GlueIcebergView)
+    iceberg_view._refresh()
     await pilot.pause()
     await pilot.pause()
     await pilot.wait_for_scheduled_animations()
@@ -214,7 +221,7 @@ def test_demo_iceberg_profile_snapshot(
 ) -> None:  # type: ignore[no-untyped-def]
     assert snap_compare(
         DemoModeApp(theme="carbon"),
-        terminal_size=(100, 30),
+        terminal_size=(100, 40),
         run_before=partial(
             _show_profile_iceberg,
             profile=profile,
@@ -283,8 +290,8 @@ def test_demo_iceberg_metadata_snapshot_content() -> None:
         return html_lib.unescape(path.read_text()).replace("\xa0", " ")
 
     assert "4201" in read("history")
-    assert "dev/dev_analytics/dev_events_iceberg/metada" in read("manifests")
-    assert "dev/dev_analytics/dev_events_iceberg/data/e" in read("files")
+    assert "s3://demo-dev/dev_analytics/dev_events_iceberg/met" in read("manifests")
+    assert "s3://demo-dev/dev_analytics/dev_events_iceberg/dat" in read("files")
     assert "event_date=2026-07-24" in read("partitions")
     assert "dev-main" in read("refs")
 
@@ -298,7 +305,7 @@ def test_demo_iceberg_metadata_snapshot_content() -> None:
             "files",
             (
                 "prod_sales_iceberg",
-                "s3://demo-prod/prod_warehouse/prod_sales_ic",
+                "s3://demo-prod/prod_warehouse/prod_sales",
             ),
         ),
         (
