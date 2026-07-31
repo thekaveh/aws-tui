@@ -4,7 +4,8 @@
 
 - Branch: `codex/post-merge-audit-remediation`
 - Base: `develop` at `a14bc98fce5847f31199d9d44cc2ff255448e09f`
-- Exact pre-report head: `35b419259d4978964f3fa1d7ce1c7c963cf4f5e5`
+- Exact pre-report head for the original Task 7 gate:
+  `35b419259d4978964f3fa1d7ce1c7c963cf4f5e5`
 - Implemented: runtime keymap overlays, contextual command-palette projection,
   operational CSS ownership, source-derived documentation contracts, canonical
   documentation parity, architecture diagram parity, and the reproduced
@@ -111,6 +112,57 @@ through pre-report head `35b419259d4978964f3fa1d7ce1c7c963cf4f5e5`:
 | Snapshot goldens | 0 | 0 | No files changed |
 
 Overall pre-report shortstat: `48 files changed, 3119 insertions(+), 1163 deletions(-)`.
+
+## Final Complete-Branch Review Remediation
+
+The final complete-branch review found that the corrected custom-theme
+documentation exposed a runtime contradiction: `ThemeStore.list_themes()`
+already discovered custom themes, but `AwsTuiApp.action_themes()` passed only
+`ThemeStore.BUILTIN_NAMES` into the existing VMx `ThemePickerVM`. The final
+remediation commit has subject `fix(theme): expose custom themes in picker`.
+
+`action_themes()` now passes the injected context's deterministic
+`theme_store.list_themes()` result to `ThemePickerVM`, preserving built-ins in
+their declared order and appending sorted, deduplicated custom themes. The
+picker remains owned by the same VMx abstraction. `action_cycle_theme()` still
+uses `BUILTIN_NAMES`: the user documentation promises custom-theme selection
+through the picker, while the documented `Shift+T` sequence contains only the
+ten built-ins.
+
+TDD evidence:
+
+- RED: the new full-app regression failed with the picker tuple missing the
+  configured `midnight` theme; the companion cycle characterization passed.
+- GREEN: both focused tests passed after the one-line runtime correction.
+- The final focused theme/app set passed `237` tests. The dedicated picker
+  snapshot suite passed `20` tests and all `10` snapshot comparisons without
+  updating goldens.
+
+The overwritten `.superpowers/sdd/task-1-report.md` was restored directly from
+base commit `a14bc98fce5847f31199d9d44cc2ff255448e09f`. A final
+`git diff --exit-code` against that base path produced no output, proving the
+historical 560-line Iceberg Task 1 report is byte-for-byte unchanged. This
+branch's keymap evidence remains in its uniquely named dated reports.
+
+Final remediation verification:
+
+| Command | Result |
+| --- | --- |
+| Focused custom-picker and built-in-cycle regressions | `2 passed` |
+| Theme/app/store/VM/palette integration set | `237 passed` |
+| `uv run pytest --force-reruns 0 tests/snapshot/test_theme_picker.py -q` | `20 passed`; 10 snapshots passed; no goldens changed |
+| `uv run pytest tests/docs -q` | `79 passed` |
+| Ruff check on changed Python | All checks passed |
+| Ruff format check on changed Python | 2 files already formatted |
+| `make docs-check` | `check_docs: clean`; strict MkDocs build passed |
+| `make docs-wiki` | Wiki generation and parity check passed |
+| Historical Task 1 report comparison to base | Zero diff |
+| `git diff --check` | Clean |
+
+Tracked files in this final remediation are `src/aws_tui/app.py`,
+`tests/integration/test_theme_picker_keyboard.py`, this dated report, and the
+byte-for-byte restoration of `.superpowers/sdd/task-1-report.md`. No main,
+develop, remote, PR, or snapshot-golden state was changed.
 
 ## Residual Risk
 

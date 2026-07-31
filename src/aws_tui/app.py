@@ -2831,7 +2831,7 @@ class AwsTuiApp(App[None]):
             self._raise_theme_changed_toast(name)
 
         picker = ThemePickerVM(
-            themes=ctx.theme_store.BUILTIN_NAMES,
+            themes=tuple(ctx.theme_store.list_themes()),
             active_theme=ctx.initial_theme,
             on_pick=_pick_with_toast,
             on_preview=self.switch_theme,

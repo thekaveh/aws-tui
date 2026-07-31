@@ -9,9 +9,12 @@ silently and the picker never moves.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from tests.integration.conftest import AppContextBuilder
 
@@ -73,3 +76,58 @@ async def test_theme_picker_arrows_move_cursor(
         assert modal._cursor == initial, (  # type: ignore[attr-defined]
             f"Up arrow didn't reverse cursor: {modal._cursor} vs {initial}"  # type: ignore[attr-defined]
         )
+
+
+@pytest.mark.asyncio
+async def test_theme_picker_lists_custom_themes_after_builtins(
+    app_context_factory: AppContextBuilder,
+    tmp_path: Path,
+) -> None:
+    user_themes = tmp_path / "themes"
+    user_themes.mkdir()
+    (user_themes / "midnight.tcss").write_text(
+        "Screen { background: #101010; }\n",
+        encoding="utf-8",
+    )
+    ctx = app_context_factory()
+    ctx.theme_store = ThemeStore(
+        user_themes_dir=user_themes,
+        user_overlay=tmp_path / "theme.tcss",
+    )
+    app = AwsTuiApp(ctx)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("t")
+        await pilot.pause()
+
+        modal = app.screen
+        assert isinstance(modal, ThemePickerModal)
+        names = tuple(option.name for option in modal._picker.options)  # type: ignore[attr-defined]
+        assert names == (*ThemeStore.BUILTIN_NAMES, "midnight")
+
+
+@pytest.mark.asyncio
+async def test_cycle_theme_remains_limited_to_builtins(
+    app_context_factory: AppContextBuilder,
+    tmp_path: Path,
+) -> None:
+    user_themes = tmp_path / "themes"
+    user_themes.mkdir()
+    (user_themes / "midnight.tcss").write_text(
+        "Screen { background: #101010; }\n",
+        encoding="utf-8",
+    )
+    ctx = app_context_factory(initial_theme=ThemeStore.BUILTIN_NAMES[-1])
+    ctx.theme_store = ThemeStore(
+        user_themes_dir=user_themes,
+        user_overlay=tmp_path / "theme.tcss",
+    )
+    app = AwsTuiApp(ctx)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("T")
+        await pilot.pause()
+
+        assert ctx.initial_theme == ThemeStore.BUILTIN_NAMES[0]
