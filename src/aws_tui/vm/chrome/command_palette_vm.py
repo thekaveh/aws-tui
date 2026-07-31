@@ -20,7 +20,7 @@ import asyncio
 import contextlib
 import inspect
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from vmx import (
     ComponentVM,
@@ -56,12 +56,15 @@ class PaletteEntry:
         the view layer as a chip.
     keywords:
         Additional search tokens that match even if the label doesn't.
+    service_ids:
+        Eligible content-host service IDs. An empty set means the entry is global.
     """
 
     id: str
     label: str
     category: str
     keywords: tuple[str, ...] = ()
+    service_ids: frozenset[str] = field(default_factory=frozenset)
 
 
 def _subsequence_span(text: str, query: str) -> int | None:
@@ -191,6 +194,7 @@ class CommandPaletteVM:
         )
 
         self._filter_text: str = ""
+        self._active_service_id: str | None = None
         self._scored_filter: ScoredFilteredCompositeVM[ComponentVMOf[PaletteEntry]] = (
             ScoredFilteredCompositeVM(self._inner_registry, scorer=self._score_for_vmx)
         )
@@ -239,6 +243,17 @@ class CommandPaletteVM:
             return
         self._filter_text = value
         self._hub.send(PropertyChangedMessage.create(self, self.name, "filter_text"))
+        self._recompute_filtered()
+
+    @property
+    def active_service_id(self) -> str | None:
+        return self._active_service_id
+
+    def set_active_service(self, service_id: str | None) -> None:
+        if self._active_service_id == service_id:
+            return
+        self._active_service_id = service_id
+        self._hub.send(PropertyChangedMessage.create(self, self.name, "active_service_id"))
         self._recompute_filtered()
 
     @property
@@ -412,7 +427,10 @@ class CommandPaletteVM:
         return tuple(item.inner for item in self._items.values())
 
     def _score_for_vmx(self, item_inner: ComponentVMOf[PaletteEntry]) -> int | None:
-        score = _score(item_inner.model, self._filter_text)
+        entry = item_inner.model
+        if entry.service_ids and self._active_service_id not in entry.service_ids:
+            return None
+        score = _score(entry, self._filter_text)
         if score is None:
             return None
         # VMx ScoredFilteredCompositeVM ranks higher scores first; aws-tui's

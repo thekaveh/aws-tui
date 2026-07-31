@@ -115,34 +115,105 @@ class _S3HandoffStageError(Exception):
         self.error_type = error_type
 
 
-#: Curated app-level commands surfaced in the command palette (action_id, label).
-#: Each dispatches through the ActionRegistry — the same path as its key binding.
-_PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
-    ("app.themes", "Theme picker"),
-    ("app.cycle_theme", "Cycle theme"),
-    ("app.swap_source", "Switch source"),
-    ("glue.choose_run_state", "Choose Glue run state"),
-    ("glue.choose_crawler_state", "Choose Glue crawler state"),
-    ("glue.copy_table_ref", "Copy Glue table reference"),
-    ("glue.open_s3_location", "Open table location in S3"),
-    ("glue.query_in_athena", "Query table in Athena"),
-    ("glue.time_travel_in_athena", "Query Iceberg snapshot in Athena"),
-    ("athena.query", "Athena query"),
-    ("athena.history", "Athena history"),
-    ("athena.results", "Athena results"),
-    ("athena.saved", "Athena saved queries"),
-    ("athena.choose_workgroup", "Choose Athena workgroup"),
-    ("athena.choose_catalog", "Choose Athena catalog"),
-    ("athena.choose_database", "Choose Athena database"),
-    ("athena.insert_table_ref", "Insert copied table reference"),
-    ("athena.execute", "Execute Athena query"),
-    ("athena.cancel", "Cancel Athena query"),
-    ("athena.load_more", "Load more Athena rows"),
-    ("athena.open_result_location", "Open Athena result in S3"),
-    ("athena.open_in_glue", "Open query table in Glue"),
-    ("app.open_settings", "Settings"),
-    ("app.help", "Help"),
-    ("app.quit", "Quit"),
+_SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
+_GLUE_SERVICE_IDS = frozenset({"glue"})
+_ATHENA_SERVICE_IDS = frozenset({"athena"})
+
+_PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
+    PaletteEntry("app.themes", "Theme picker", "app"),
+    PaletteEntry("app.cycle_theme", "Cycle theme", "app"),
+    PaletteEntry(
+        "app.swap_source",
+        "Switch source",
+        "source",
+        service_ids=_SOURCE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.choose_run_state",
+        "Choose Glue run state",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.choose_crawler_state",
+        "Choose Glue crawler state",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.copy_table_ref",
+        "Copy Glue table reference",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.open_s3_location",
+        "Open table location in S3",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.query_in_athena",
+        "Query table in Athena",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.time_travel_in_athena",
+        "Query Iceberg snapshot in Athena",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry("athena.query", "Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry("athena.history", "Athena history", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry("athena.results", "Athena results", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry("athena.saved", "Athena saved queries", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry(
+        "athena.choose_workgroup",
+        "Choose Athena workgroup",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.choose_catalog",
+        "Choose Athena catalog",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.choose_database",
+        "Choose Athena database",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.insert_table_ref",
+        "Insert copied table reference",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.execute", "Execute Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS
+    ),
+    PaletteEntry("athena.cancel", "Cancel Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry(
+        "athena.load_more", "Load more Athena rows", "athena", service_ids=_ATHENA_SERVICE_IDS
+    ),
+    PaletteEntry(
+        "athena.open_result_location",
+        "Open Athena result in S3",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.open_in_glue",
+        "Open query table in Glue",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry("app.open_settings", "Settings", "app"),
+    PaletteEntry("app.help", "Help", "app"),
+    PaletteEntry("app.quit", "Quit", "app"),
 )
 
 
@@ -1425,10 +1496,10 @@ class AwsTuiApp(App[None]):
         if self._command_palette_populated:
             return
         vm = self._app_ctx.command_palette_vm
-        for action_id, label in _PALETTE_COMMANDS:
+        for entry in _PALETTE_COMMANDS:
             vm.register_entry(
-                PaletteEntry(id=action_id, label=label, category="app"),
-                partial(self._actions.invoke, action_id),
+                entry,
+                partial(self._actions.invoke, entry.id),
             )
         self._command_palette_populated = True
 
@@ -1436,8 +1507,10 @@ class AwsTuiApp(App[None]):
         """Open the fuzzy command palette (bound to ``:`` / ``Ctrl+K``)."""
         self.record_action("app.command_palette")
         self._populate_command_palette()
-        self._app_ctx.command_palette_vm.open_command.execute()
-        self.push_screen(CommandPalette(self._app_ctx.command_palette_vm, hub=self._app_ctx.hub))
+        vm = self._app_ctx.command_palette_vm
+        vm.set_active_service(self._app_ctx.root_vm.content_host.current_id)
+        vm.open_command.execute()
+        self.push_screen(CommandPalette(vm, hub=self._app_ctx.hub))
 
     def _dual_pane(self) -> DualPaneVM | None:
         """Return the currently-hosted ``DualPaneVM`` (or None).
