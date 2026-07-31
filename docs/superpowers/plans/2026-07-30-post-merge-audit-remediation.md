@@ -1524,7 +1524,7 @@ git commit -m "docs(architecture): add typed table clipboard flow"
 - Produces: exact-head verification evidence and implementation metrics.
 - Preserves: clean branch, no ignored generated outputs staged, and `main` unchanged.
 
-- [ ] **Step 1: Run the observed flaky module repeatedly with reruns disabled**
+- [x] **Step 1: Run the observed flaky module repeatedly with reruns disabled**
 
 Run five independent processes:
 
@@ -1542,7 +1542,7 @@ the first traceback, identify the shared state or timing boundary, add one
 deterministic RED regression, implement the minimum fix, and rerun all five
 processes. Do not increase sleeps or rerun counts as a fix.
 
-- [ ] **Step 2: Run focused remediation suites**
+- [x] **Step 2: Run focused remediation suites**
 
 Run:
 
@@ -1552,7 +1552,7 @@ uv run pytest --reruns 0 tests/unit/test_composition_initial_theme.py tests/inte
 
 Expected: all selected tests pass without reruns.
 
-- [ ] **Step 3: Run unit and in-process integration with coverage**
+- [x] **Step 3: Run unit and in-process integration with coverage**
 
 Run:
 
@@ -1567,7 +1567,7 @@ Expected:
 - no material regression in `composition.py`,
   `command_palette_vm.py`, Glue/Athena page widgets, or documentation helpers.
 
-- [ ] **Step 4: Run all snapshots without update mode**
+- [x] **Step 4: Run all snapshots without update mode**
 
 Run:
 
@@ -1580,7 +1580,7 @@ If Task 3 caused intentional golden changes, record the exact affected cases,
 visually inspect them, regenerate only those cases, and rerun the entire
 snapshot tier without update mode.
 
-- [ ] **Step 5: Run E2E and architecture gates**
+- [x] **Step 5: Run E2E and architecture gates**
 
 Run:
 
@@ -1591,7 +1591,7 @@ scripts/check-layers.sh
 
 Expected: all nine current journeys pass; layer rules are clean.
 
-- [ ] **Step 6: Run lint, format, typing, and docs gates**
+- [x] **Step 6: Run lint, format, typing, and docs gates**
 
 Run:
 
@@ -1606,7 +1606,7 @@ git diff --check
 
 Expected: every command exits zero.
 
-- [ ] **Step 7: Calculate exact authored change metrics**
+- [x] **Step 7: Calculate exact authored change metrics**
 
 Run:
 
@@ -1626,7 +1626,7 @@ Record separately:
 - generated diagram artifacts;
 - snapshot goldens, expected to remain unchanged unless visually justified.
 
-- [ ] **Step 8: Write the completion report**
+- [x] **Step 8: Write the completion report**
 
 Create
 `.superpowers/sdd/2026-07-30-post-merge-audit-remediation-report.md`
@@ -1671,7 +1671,7 @@ Any reproducible remaining issue; write "None observed" only when every gate
 passed without reruns.
 ```
 
-- [ ] **Step 9: Update design and plan completion records**
+- [x] **Step 9: Update design and plan completion records**
 
 Append an `## Implementation Record` to the design spec and an
 `## Completion Record` to this plan. Include:
@@ -1685,7 +1685,7 @@ Append an `## Implementation Record` to the design spec and an
 
 Do not mark checkbox steps complete until their commands have actually passed.
 
-- [ ] **Step 10: Run final documentation checks and commit the report**
+- [x] **Step 10: Run final documentation checks and commit the report**
 
 Run:
 
@@ -1701,7 +1701,7 @@ git add .superpowers/sdd/2026-07-30-post-merge-audit-remediation-report.md docs/
 git commit -m "docs: record audit remediation results"
 ```
 
-- [ ] **Step 11: Verify exact final branch state**
+- [x] **Step 11: Verify exact final branch state**
 
 Run:
 
@@ -1729,3 +1729,63 @@ gate, and keep the branch ready for a pull request into `develop`.
 
 Do not create or merge the pull request unless the user separately requests
 integration.
+
+## Completion Record
+
+### Pre-Report Identity
+
+- Branch: `codex/post-merge-audit-remediation`
+- Base: `a14bc98fce5847f31199d9d44cc2ff255448e09f`
+- Exact head before the final documentation commit:
+  `35b419259d4978964f3fa1d7ce1c7c963cf4f5e5`
+- Local `main` and `origin/main` before finalization:
+  `0b63c4a73f29a7fa58671163492fd3d0d17b2348`
+
+### Commits by Task
+
+- Planning: `aae1e60` design; `f4ce676` plan.
+- Task 1: `c5663c0` runtime keymap overlays.
+- Task 2: `cbd5fce` service-scoped palette projection.
+- Task 3: `e3d4867` shared operational CSS; `7f80476` duplicated-selector fix.
+- Task 4: `8c3dbb8` source-derived contracts; `bada240` changelog guard.
+- Task 5: `d53eaa4`, `20aa86a`, `f0ec671` canonical docs and smoke guidance.
+- Task 6: `7564bbc` architecture diagram parity.
+- Task 7: `35b4192` retry-disabled teardown-race fix; final report commit uses
+  the planned `docs: record audit remediation results` subject.
+
+### Evidence
+
+- Athena-to-S3: after reproducing and fixing the stale refresh race, five
+  independent exact-command processes each passed 41 tests, for 205 total,
+  with no `R` marker.
+- Focused remediation: 315 passed.
+- Unit/integration: 2,980 passed, 9 external-service tests deselected, 85.76%
+  coverage.
+- Snapshots: 806 tests and 481 comparisons passed without update mode; no
+  golden changed.
+- E2E: all 9 journeys passed.
+- Final standalone documentation suite: 77 passed.
+- Ruff: clean; format: 408 files already formatted; mypy: 161 source files
+  clean; layers, strict docs, wiki parity, and diff checks: clean.
+
+### Metrics
+
+At pre-report head, `a14bc98...HEAD` changed 48 files with +3,119/-1,163.
+Runtime Python is +138/-46. The ten raw theme files are +10/-370 and the shared
+operational stylesheet is +33/-0. Tests are +511/-71. Canonical docs are
++137/-32. Architecture HTML is +84/-61; generated SVG is +84/-61 and the PNG
+changed from 125,122 to 148,500 bytes. Planning/design is +2,034/-6, tracked
+SDD records are +87/-515, CI is +1/-1, and snapshot goldens are unchanged.
+
+Task 3's actual theme metrics replace the stale 330-deletion estimate because
+Textual custom variables required the packaged operational stylesheet to be
+concatenated between built-in CSS and user overlay CSS. Replacement themes
+bypass that packaged layer.
+
+### Branch Preservation
+
+Task 7 did not switch, update, merge, or push `main`. Generated site, wiki,
+coverage, and snapshot outputs remain ignored and were not staged. Step 12 is
+intentionally left unmarked because the controller will perform the independent
+task and whole-branch reviews after this handoff; no reviewer or pull request
+was invoked here.

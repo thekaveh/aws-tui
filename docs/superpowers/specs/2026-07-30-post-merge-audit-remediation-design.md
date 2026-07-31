@@ -295,3 +295,47 @@ The design is satisfied only when:
 - the updated landscape diagram is readable and geometrically sound;
 - full verification passes without reruns;
 - the branch contains no unrelated production refactor.
+
+## Implementation Record
+
+Task 7 established pre-report head
+`35b419259d4978964f3fa1d7ce1c7c963cf4f5e5` on
+`codex/post-merge-audit-remediation`, based on
+`a14bc98fce5847f31199d9d44cc2ff255448e09f`.
+
+The delivered task commits are:
+
+- planning: `aae1e60`, `f4ce676`;
+- Task 1, runtime keymap overlay: `c5663c0`;
+- Task 2, contextual palette projection: `cbd5fce`;
+- Task 3, operational CSS ownership and focus-selector correction:
+  `e3d4867`, `7f80476`;
+- Task 4, source-derived documentation contracts and changelog guard:
+  `8c3dbb8`, `bada240`;
+- Task 5, canonical interaction documentation and corrected smoke guidance:
+  `d53eaa4`, `20aa86a`, `f0ec671`;
+- Task 6, architecture diagram parity: `7564bbc`;
+- Task 7, reproduced Athena teardown-race fix: `35b4192`.
+
+Task 3 used a framework correction: Textual custom variables are source-scoped,
+so `ThemeStore` concatenates one packaged `operational-panes.tcss` between
+built-in CSS and the user overlay, while replacement themes bypass it. Actual
+TCSS metrics are +10/-370 in the ten raw themes and +33/-0 in the shared
+operational stylesheet; the original 330-deletion estimate was not forced.
+
+Verification at the pre-report head passed 205 Athena-to-S3 stress tests across
+five independent processes with no `R` markers, 315 focused tests, 2,980
+unit/integration tests with 9 external-service tests deselected and 85.76%
+coverage, 806 snapshot tests with 481 comparisons, and all 9 E2E journeys.
+Layers, Ruff, formatting, mypy, strict docs, wiki parity, and diff checks passed.
+No snapshot golden changed.
+
+Authored pre-report metrics are 48 files, +3,119/-1,163: runtime Python
++138/-46, tests +511/-71, canonical docs +137/-32, architecture HTML +84/-61,
+generated SVG +84/-61 plus one changed PNG, planning/design +2,034/-6,
+tracked SDD records +87/-515, and CI +1/-1.
+
+Local `main` and `origin/main` remained
+`0b63c4a73f29a7fa58671163492fd3d0d17b2348`. Generated site, wiki, coverage,
+and snapshot outputs remained ignored and were not staged. Live publication
+still waits for normal promotion to `main`.
