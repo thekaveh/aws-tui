@@ -437,6 +437,15 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         "CopyTableReferenceRequest",
     ):
         assert current_claim in _squash(public_docs)
+    for diagram_claim in (
+        "ContextPicker",
+        "ServiceTabStrip",
+        "TableClipboardVM",
+        "CopyTableReferenceRequest",
+        "copy quoted table ref",
+        "same-source insert",
+    ):
+        assert diagram_claim in diagram
 
 
 def test_glue_and_athena_palette_only_actions_are_not_default_bindings() -> None:

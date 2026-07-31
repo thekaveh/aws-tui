@@ -149,6 +149,12 @@ def test_architecture_diagram_is_landscape_and_current():
         "OpenGlueTableRequest",
         "OpenS3LocationRequest",
         "Lake Formation",
+        "ContextPicker",
+        "ServiceTabStrip",
+        "TableClipboardVM",
+        "CopyTableReferenceRequest",
+        "copy quoted table ref",
+        "same-source insert",
     ):
         assert label in svg
     for inaccurate_claim in (
@@ -168,5 +174,9 @@ def test_architecture_diagram_is_landscape_and_current():
     assert "DualPane" in groups["textual-views"]
     assert "service_view_factory.py" in groups["textual-views"]
     assert "S3Page" not in groups["textual-views"]
+    assert "ContextPicker" in groups["textual-views"]
+    assert "ServiceTabStrip" in groups["textual-views"]
     assert "ServiceSelectionStore" in groups["viewmodels"]
+    assert "TableClipboardVM" in groups["viewmodels"]
     assert "ServiceSelectionStore" not in groups["infrastructure"]
+    assert "CopyTableReferenceRequest" in groups["cross-service-handoffs"]
