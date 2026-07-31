@@ -80,19 +80,26 @@ class ThemeStore:
             if name not in seen:
                 ordered.append(name)
                 seen.add(name)
-        if self._user_themes_dir.is_dir():
-            for path in sorted(self._user_themes_dir.glob("*.tcss")):
-                name = path.stem
-                if name not in seen:
-                    ordered.append(name)
-                    seen.add(name)
+        try:
+            candidates = (
+                sorted(self._user_themes_dir.glob("*.tcss"))
+                if self._user_themes_dir.is_dir()
+                else ()
+            )
+        except OSError:
+            candidates = ()
+        for path in candidates:
+            name = path.stem
+            if name not in seen and self._resolve_user_theme(name) is not None:
+                ordered.append(name)
+                seen.add(name)
         return ordered
 
     def exists(self, name: str) -> bool:
         """Return True if ``name`` resolves to a known built-in or user theme."""
         if name in self.BUILTIN_NAMES:
             return True
-        return self._user_theme_path(name).is_file()
+        return self._resolve_user_theme(name) is not None
 
     def load(self, name: str) -> str:
         """Return the concatenated ``.tcss`` content for ``name``.
@@ -100,24 +107,12 @@ class ThemeStore:
         Raises :class:`ThemeNotFound` if neither a built-in nor a user
         theme with that name exists.
         """
-        user_path = self._user_theme_path(name)
-        if user_path.is_file():
-            # Refuse to follow a symlink that points outside the
-            # user-themes directory — a malicious symlink at
-            # ``~/.config/aws-tui/themes/foo.tcss → /etc/passwd``
-            # would otherwise have its contents inlined into the
-            # active stylesheet (and surface on screen, since
-            # Textual will try to parse it as CSS). Local-only
-            # threat model, but a TUI shouldn't open arbitrary
-            # paths just because the symlink target is readable.
+        user_path = self._resolve_user_theme(name)
+        if user_path is not None:
             try:
-                resolved = user_path.resolve(strict=True)
-                themes_root = self._user_themes_dir.resolve()
-            except OSError as exc:  # pragma: no cover - extremely rare
+                base = user_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
                 raise ThemeNotFound(name) from exc
-            if not resolved.is_relative_to(themes_root):
-                raise ThemeNotFound(f"{name}: resolves outside {themes_root}")
-            base = resolved.read_text(encoding="utf-8")
         elif name in self.BUILTIN_NAMES:
             base = self._read_builtin(name)
             if base and not base.endswith("\n"):
@@ -139,6 +134,20 @@ class ThemeStore:
 
     def _user_theme_path(self, name: str) -> Path:
         return self._user_themes_dir / f"{name}.tcss"
+
+    def _resolve_user_theme(self, name: str) -> Path | None:
+        """Return a readable, regular user-theme path contained by its root."""
+        try:
+            themes_root = self._user_themes_dir.resolve(strict=True)
+            resolved = self._user_theme_path(name).resolve(strict=True)
+            resolved.relative_to(themes_root)
+            if not resolved.is_file():
+                return None
+            with resolved.open("r", encoding="utf-8"):
+                pass
+        except (OSError, ValueError):
+            return None
+        return resolved
 
     @staticmethod
     def _read_builtin(name: str) -> str:

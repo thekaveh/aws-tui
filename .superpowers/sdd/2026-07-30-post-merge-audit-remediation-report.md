@@ -158,11 +158,81 @@ Final remediation verification:
 | `make docs-wiki` | Wiki generation and parity check passed |
 | Historical Task 1 report comparison to base | Zero diff |
 | `git diff --check` | Clean |
+| `git diff --check` | Clean |
 
 Tracked files in this final remediation are `src/aws_tui/app.py`,
 `tests/integration/test_theme_picker_keyboard.py`, this dated report, and the
 byte-for-byte restoration of `.superpowers/sdd/task-1-report.md`. No main,
 develop, remote, PR, or snapshot-golden state was changed.
+
+## Custom-Theme Boundary Remediation
+
+A subsequent independent boundary review found three coupled root causes:
+
+1. `ThemeStore.list_themes()` trusted every `*.tcss` glob entry, while
+   `exists()` used `is_file()` and `load()` independently performed a stricter
+   containment check. Unsafe symlinks, dangling symlinks, and directories could
+   therefore be advertised but not loaded.
+2. In Textual 8.2.8, `Stylesheet.add_source()` replaces the keyed source and
+   defers parsing. A later failed `reparse()` keeps the invalid candidate in
+   the live `source` mapping. Textual's own `_on_css_change` avoids this by
+   copying, parsing, and only then swapping the stylesheet.
+3. `ThemePickerVM` callbacks returned no outcome, so its RelayCommands marked a
+   rejected preview or pick active and the app could emit a false success
+   toast.
+
+`ThemeStore` now has one path resolver shared by discovery, existence checks,
+and loading. A user theme is eligible only when its strict resolved path is a
+readable regular file contained by the strict resolved configured root. Safe
+in-root symlinks remain supported. Built-ins remain first, custom names remain
+sorted and deduplicated, valid user files still shadow built-ins, and invalid
+shadows do not remove the packaged fallback.
+
+Runtime switching now copies the live Textual stylesheet, replaces the stable
+theme key on the copy, validates the complete candidate with Textual's parser,
+and swaps only after validation. A live refresh failure restores the previous
+stylesheet and reapplies it before returning failure. `ctx.initial_theme` and
+`ThemeChangedMessage` change only after successful application.
+`ThemePickerVM` remains the state owner and still uses VMx RelayCommands; its
+pick and preview callbacks now return `bool`, and option state changes only on
+`True`. Picker and cycle wrappers emit success toasts only after `True`.
+Repeated failure of the same visible candidate is deduplicated at the existing
+toast/log boundary.
+
+TDD evidence:
+
+- The initial focused RED run reported `7 failed, 29 passed`: three unsafe
+  discovery cases were advertised, two VM rejection callbacks still changed
+  active state, and invalid TCSS escaped while replacing the stable source.
+  The valid custom theme applied successfully; its initial assertion was
+  narrowed from total stylesheet source count to the stable theme key because
+  mounting the modal and toast legitimately registers widget CSS sources.
+- After the boundary implementation, the focused set reported `36 passed`.
+- A second RED proved preview plus Enter wrote two
+  `app.theme.switch_failed` records; the focused GREEN reported `1 passed`
+  after stable failure-id deduplication.
+- A full-app retained-behavior test previews a valid custom theme and presses
+  Esc, proving the original theme and stable source are restored.
+
+Final boundary verification:
+
+| Command | Result |
+| --- | --- |
+| Focused store/VM/modal boundary set | `37 passed` |
+| Expanded theme/app/store/VM/palette set | `256 passed` |
+| `uv run pytest --force-reruns 0 tests/snapshot/test_theme_picker.py -q` | `20 passed`; 10 snapshots passed; no goldens changed |
+| `uv run pytest tests/docs -q` | `79 passed` |
+| Ruff check on 9 changed Python files | All checks passed |
+| Ruff format check on 9 changed Python files | 9 files already formatted |
+| Mypy on `app.py`, `theme_store.py`, and `theme_picker_vm.py` | No issues in 3 source files |
+| `scripts/check-layers.sh` | `layer rules clean` |
+| `make docs-check` | `check_docs: clean`; strict MkDocs build passed |
+| `make docs-wiki` | Wiki generation and parity check passed |
+| Historical Task 1 report comparison to base | Zero diff |
+
+The focused commit subject is
+`fix(theme): make custom theme switching transactional`; no self-referential
+commit hash is recorded here.
 
 ## Residual Risk
 

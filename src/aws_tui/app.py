@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 from textual.app import App, ComposeResult
 from textual.binding import BindingsMap, BindingType
 from textual.containers import Container, Horizontal
+from textual.css.errors import StylesheetError
+from textual.css.tokenizer import TokenError
 from textual.widgets import OptionList, Static
 
 from aws_tui.composition import AppContext, build_app_context
@@ -42,6 +44,7 @@ from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.redaction import redact_text
+from aws_tui.infra.theme_store import ThemeNotFound
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
@@ -2256,10 +2259,17 @@ class AwsTuiApp(App[None]):
         """
         self.record_action("app.cycle_theme")
         ctx = self._app_ctx
+
+        def _pick_with_toast(name: str) -> bool:
+            if not self.switch_theme(name):
+                return False
+            self._raise_theme_changed_toast(name)
+            return True
+
         picker = ThemePickerVM(
             themes=ctx.theme_store.BUILTIN_NAMES,
             active_theme=ctx.initial_theme,
-            on_pick=self.switch_theme,
+            on_pick=_pick_with_toast,
             on_preview=self.switch_theme,
             hub=ctx.hub,
             dispatcher=ctx.dispatcher,
@@ -2270,7 +2280,6 @@ class AwsTuiApp(App[None]):
             picker.pick_theme_command.execute(nxt)
         finally:
             self.call_after_refresh(picker.dispose)
-        self._raise_theme_changed_toast(nxt)
 
     def action_mark_up(self) -> None:
         self.record_action("pane.mark_up")
@@ -2826,9 +2835,11 @@ class AwsTuiApp(App[None]):
 
         ctx = self._app_ctx
 
-        def _pick_with_toast(name: str) -> None:
-            self.switch_theme(name)
+        def _pick_with_toast(name: str) -> bool:
+            if not self.switch_theme(name):
+                return False
             self._raise_theme_changed_toast(name)
+            return True
 
         picker = ThemePickerVM(
             themes=tuple(ctx.theme_store.list_themes()),
@@ -2875,46 +2886,92 @@ class AwsTuiApp(App[None]):
     # per swap, which is wasteful and can leak cached rules).
     _THEME_SOURCE_KEY: ClassVar[tuple[str, str]] = ("aws_tui", "active-theme.tcss")
 
-    def switch_theme(self, name: str) -> None:
+    def _report_theme_switch_failure(
+        self,
+        name: str,
+        stage: str,
+        exc: Exception,
+    ) -> None:
+        ctx = self._app_ctx
+        toast_id = f"theme-switch-failed-{name}"
+        if any(toast.model.id == toast_id for toast in ctx.root_vm.chrome.toast_stack.toasts):
+            return
+        ctx.log_sink.error(
+            "app.theme.switch_failed",
+            name=name,
+            stage=stage,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        notifications.error(
+            ctx.root_vm.chrome.toast_stack,
+            subject="Theme",
+            message=f"could not switch to {name}",
+            action="check theme syntax and logs",
+            toast_id=toast_id,
+        )
+
+    def switch_theme(self, name: str) -> bool:
         """Runtime theme swap.
 
-        Mirrors Textual's own ``_watch_theme`` flow:
+        Mirrors Textual's transactional ``_on_css_change`` flow and uses its
+        public refresh pipeline:
 
-        1. Replace the theme tcss source via a stable ``read_from`` key so
-           sources don't accumulate.
-        2. Call ``refresh_css(animate=False)`` — that one call re-parses
-           the stylesheet, re-resolves variables, and applies styles to
-           every screen in the stack (current + background). It's the
-           same API Textual uses internally for its theme reactive.
-        3. Publish a ThemeChangedMessage on the hub so VMx-bound widgets
+        1. Load and parse a copied stylesheet with the candidate theme.
+        2. Swap the validated copy via the stable ``read_from`` key so
+           sources don't accumulate, then call ``refresh_css(animate=False)``.
+        3. Restore the previous stylesheet if live application fails.
+        4. Publish a ThemeChangedMessage on the hub so VMx-bound widgets
            that bake colors into Python (BrandBanner) can swap their
            per-theme palette without us reaching in by widget type.
+
+        Returns ``True`` only after the candidate is applied successfully.
+
+        ``refresh_css`` re-parses the stylesheet, re-resolves variables, and
+        applies styles to every screen in the stack. It's the same API Textual
+        uses internally for its theme reactive.
         """
         ctx = self._app_ctx
         try:
             theme_css = ctx.theme_store.load(name)
+        except (OSError, ThemeNotFound, UnicodeError) as exc:
+            self._report_theme_switch_failure(name, "load", exc)
+            return False
+
+        previous_stylesheet = self.stylesheet
+        candidate = previous_stylesheet.copy()
+        candidate.set_variables(self.get_css_variables())
+        candidate.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
+        try:
+            candidate.parse()
+        except (StylesheetError, TokenError) as exc:
+            self._report_theme_switch_failure(name, "validate", exc)
+            return False
+
+        self.stylesheet = candidate
+        try:
+            self._invalidate_css()
+            self.refresh_css(animate=False)
         except Exception as exc:
-            ctx.log_sink.error(
-                "app.theme.load_failed",
-                name=name,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            return
-
-        # 1. Replace, don't accumulate.
-        self.stylesheet.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
-
-        # 2. Use Textual's own theme-refresh pipeline. This is the API
-        # ``_watch_theme`` itself uses — it covers reparse, variable
-        # re-resolution, and layout refresh across all mounted screens.
-        self._invalidate_css()
-        self.refresh_css(animate=False)
+            self.stylesheet = previous_stylesheet
+            try:
+                self._invalidate_css()
+                self.refresh_css(animate=False)
+            except Exception as rollback_exc:
+                ctx.log_sink.error(
+                    "app.theme.rollback_failed",
+                    name=name,
+                    error=str(rollback_exc),
+                    error_type=type(rollback_exc).__name__,
+                )
+            self._report_theme_switch_failure(name, "apply", exc)
+            return False
 
         ctx.initial_theme = name
 
-        # 3. Broadcast for Python-side palettes (e.g. the banner).
+        # 4. Broadcast for Python-side palettes (e.g. the banner).
         ctx.hub.send(ThemeChangedMessage(name=name))
+        return True
 
     # ── Connection-reachability tracking ───────────────────────────────────
 

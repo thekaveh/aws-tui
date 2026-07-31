@@ -32,6 +32,63 @@ class TestListThemes:
         listed = store.list_themes()
         assert listed.count("carbon") == 1
 
+    def test_outside_symlink_is_rejected_consistently(self, tmp_path: Path) -> None:
+        user_themes = tmp_path / "themes"
+        user_themes.mkdir()
+        outside = tmp_path / "outside.tcss"
+        outside.write_text("/* outside */", encoding="utf-8")
+        (user_themes / "escaped.tcss").symlink_to(outside)
+        store = ThemeStore(user_themes_dir=user_themes)
+
+        assert "escaped" not in store.list_themes()
+        assert store.exists("escaped") is False
+        with pytest.raises(ThemeNotFound):
+            store.load("escaped")
+
+    def test_dangling_symlink_is_rejected_consistently(self, tmp_path: Path) -> None:
+        user_themes = tmp_path / "themes"
+        user_themes.mkdir()
+        (user_themes / "dangling.tcss").symlink_to(user_themes / "missing.tcss")
+        store = ThemeStore(user_themes_dir=user_themes)
+
+        assert "dangling" not in store.list_themes()
+        assert store.exists("dangling") is False
+        with pytest.raises(ThemeNotFound):
+            store.load("dangling")
+
+    def test_tcss_directory_is_rejected_consistently(self, tmp_path: Path) -> None:
+        user_themes = tmp_path / "themes"
+        user_themes.mkdir()
+        (user_themes / "directory.tcss").mkdir()
+        store = ThemeStore(user_themes_dir=user_themes)
+
+        assert "directory" not in store.list_themes()
+        assert store.exists("directory") is False
+        with pytest.raises(ThemeNotFound):
+            store.load("directory")
+
+    def test_regular_file_is_available_consistently(self, tmp_path: Path) -> None:
+        user_themes = tmp_path / "themes"
+        user_themes.mkdir()
+        (user_themes / "midnight.tcss").write_text("/* midnight */", encoding="utf-8")
+        store = ThemeStore(user_themes_dir=user_themes)
+
+        assert store.list_themes() == [*ThemeStore.BUILTIN_NAMES, "midnight"]
+        assert store.exists("midnight") is True
+        assert store.load("midnight") == "/* midnight */"
+
+    def test_in_root_symlink_is_available_consistently(self, tmp_path: Path) -> None:
+        user_themes = tmp_path / "themes"
+        user_themes.mkdir()
+        target = user_themes / "shared"
+        target.write_text("/* shared */", encoding="utf-8")
+        (user_themes / "linked.tcss").symlink_to(target)
+        store = ThemeStore(user_themes_dir=user_themes)
+
+        assert "linked" in store.list_themes()
+        assert store.exists("linked") is True
+        assert store.load("linked") == "/* shared */"
+
 
 class TestExists:
     def test_existing_builtin(self, tmp_path: Path) -> None:
