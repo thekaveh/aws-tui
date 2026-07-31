@@ -17,10 +17,15 @@ def _hub() -> MessageHub[Message]:
 
 def _build(active: str = "carbon") -> ThemePickerVM:
     picks: list[str] = []
+
+    def _record_pick(name: str) -> bool:
+        picks.append(name)
+        return True
+
     vm = ThemePickerVM(
         themes=("carbon", "voidline", "lattice", "amber"),
         active_theme=active,
-        on_pick=lambda n: picks.append(n),
+        on_pick=_record_pick,
         hub=_hub(),
         dispatcher=NULL_DISPATCHER,
     )
@@ -124,5 +129,22 @@ def test_pick_theme_command_ignores_empty_string_and_none() -> None:
         vm.pick_theme_command.execute("")
         assert vm._picks == []  # type: ignore[attr-defined]
         assert vm.active_theme == "carbon"
+    finally:
+        vm.dispose()
+
+
+def test_pick_theme_command_keeps_active_theme_when_callback_rejects() -> None:
+    vm = ThemePickerVM(
+        themes=("carbon", "broken"),
+        active_theme="carbon",
+        on_pick=lambda _name: False,
+        hub=_hub(),
+        dispatcher=NULL_DISPATCHER,
+    )
+    vm.construct()
+    try:
+        vm.pick_theme_command.execute("broken")
+        assert vm.active_theme == "carbon"
+        assert [option.name for option in vm.options if option.is_active] == ["carbon"]
     finally:
         vm.dispose()

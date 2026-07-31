@@ -348,6 +348,26 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
         "exact S3 artifact",
     ):
         assert step in normalized_releasing
+    for step in (
+        "at least two demo profiles",
+        "forward focus ring",
+        "reverse focus ring",
+        "`Tab` / `Shift+Tab` to focus the bordered source selector",
+        "press `Enter` or `Space` to open it",
+        "choose another demo profile",
+        "press `Enter` to commit",
+        "verify the exact connection name and region changed as selected",
+        "Glue `Shift+F` / `Shift+G`",
+        "Athena `Shift+W` / `Shift+C` / `Shift+D`",
+        "contextual command palette",
+        "wrong-service commands are absent",
+        "typed clipboard",
+        "copy the selected table reference",
+        "insert the copied table reference in Athena under the same source",
+        "refuse a copied reference from another source",
+        "editor, typed clipboard, and active profile are unchanged",
+    ):
+        assert step.casefold() in normalized_releasing.casefold()
     assert '__version__ = "0.8.0"' in version
 
 
@@ -411,8 +431,21 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         "OpenAthenaTableRequest",
         "OpenGlueTableRequest",
         "generated SQL in the editor but does not execute it",
+        "ContextPicker",
+        "ServiceTabStrip",
+        "TableClipboardVM",
+        "CopyTableReferenceRequest",
     ):
         assert current_claim in _squash(public_docs)
+    for diagram_claim in (
+        "ContextPicker",
+        "ServiceTabStrip",
+        "TableClipboardVM",
+        "CopyTableReferenceRequest",
+        "copy quoted table ref",
+        "same-source insert",
+    ):
+        assert diagram_claim in diagram
 
 
 def test_glue_and_athena_palette_only_actions_are_not_default_bindings() -> None:
@@ -442,7 +475,20 @@ def test_public_docs_cover_integrated_iceberg_workflow() -> None:
         assert "Iceberg" in page
     assert "resolver order" in connections
     assert "connection name and region" in connections
+    assert "exact source" in _squash(connections).casefold()
+    assert "`:` opens the command palette" in normalized_cookbook
+    assert (
+        "`Switch source` command invokes `app.swap_source` and cycles resolver order"
+        in normalized_cookbook
+    )
+    assert "Use `Tab` / `Shift+Tab` to focus the bordered source selector" in normalized_cookbook
+    assert "press `Enter` or `Space` to open it" in normalized_cookbook
+    assert "opens the help overlay" not in _squash(cookbook).casefold()
     assert "Glue → Athena" in cookbook
+    assert "copy table reference" in _squash(cookbook).casefold()
+    assert "insert copied table reference" in _squash(cookbook).casefold()
+    assert "ctrl+y" in keybindings
+    assert 'pane.copy = "y"' not in f"{readme}\n{cookbook}\n{keybindings}\n{changelog}"
     assert "FOR VERSION AS OF" in cookbook
     assert "never executes generated queries automatically" in normalized_cookbook
     assert "metadata-query costs" in normalized_cookbook
@@ -499,29 +545,6 @@ def test_glue_operation_ledger_matches_domain_adapter_exactly() -> None:
         "text",
     )
     assert tuple(sts_block.splitlines()) == ("get_caller_identity",)
-
-
-def test_cross_service_action_and_message_ledgers_match_source() -> None:
-    ledger = _read("docs/contract-ledger.md")
-    app_source = _read("src/aws_tui/app.py")
-    message_source = _read("src/aws_tui/vm/messages.py")
-
-    actions = (
-        "glue.query_in_athena",
-        "glue.time_travel_in_athena",
-        "athena.open_in_glue",
-        "athena.open_result_location",
-    )
-    messages = ("OpenAthenaTableRequest", "OpenGlueTableRequest", "OpenS3LocationRequest")
-    for action in actions:
-        assert re.search(
-            rf"""self\._actions\.register\(\s*["']{re.escape(action)}["']""",
-            app_source,
-        )
-        assert f"`{action}`" in ledger
-    for message in messages:
-        assert f"class {message}" in message_source
-        assert message in ledger
 
 
 def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:

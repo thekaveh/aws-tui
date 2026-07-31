@@ -130,6 +130,8 @@ class AthenaHistoryView(Widget):
         self.call_after_refresh(self._refresh)
 
     def _refresh(self) -> None:
+        if self._pruning:
+            return
         try:
             listing = self.query_one("#athena-history-pane", ResourceListPane)
             detail = self.query_one("#athena-history-detail", DetailRows)

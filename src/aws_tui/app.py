@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 from textual.app import App, ComposeResult
 from textual.binding import BindingsMap, BindingType
 from textual.containers import Container, Horizontal
+from textual.css.errors import StylesheetError
+from textual.css.tokenizer import TokenError
 from textual.widgets import OptionList, Static
 
 from aws_tui.composition import AppContext, build_app_context
@@ -42,6 +44,7 @@ from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.redaction import redact_text
+from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
@@ -115,34 +118,111 @@ class _S3HandoffStageError(Exception):
         self.error_type = error_type
 
 
-#: Curated app-level commands surfaced in the command palette (action_id, label).
-#: Each dispatches through the ActionRegistry — the same path as its key binding.
-_PALETTE_COMMANDS: tuple[tuple[str, str], ...] = (
-    ("app.themes", "Theme picker"),
-    ("app.cycle_theme", "Cycle theme"),
-    ("app.swap_source", "Switch source"),
-    ("glue.choose_run_state", "Choose Glue run state"),
-    ("glue.choose_crawler_state", "Choose Glue crawler state"),
-    ("glue.copy_table_ref", "Copy Glue table reference"),
-    ("glue.open_s3_location", "Open table location in S3"),
-    ("glue.query_in_athena", "Query table in Athena"),
-    ("glue.time_travel_in_athena", "Query Iceberg snapshot in Athena"),
-    ("athena.query", "Athena query"),
-    ("athena.history", "Athena history"),
-    ("athena.results", "Athena results"),
-    ("athena.saved", "Athena saved queries"),
-    ("athena.choose_workgroup", "Choose Athena workgroup"),
-    ("athena.choose_catalog", "Choose Athena catalog"),
-    ("athena.choose_database", "Choose Athena database"),
-    ("athena.insert_table_ref", "Insert copied table reference"),
-    ("athena.execute", "Execute Athena query"),
-    ("athena.cancel", "Cancel Athena query"),
-    ("athena.load_more", "Load more Athena rows"),
-    ("athena.open_result_location", "Open Athena result in S3"),
-    ("athena.open_in_glue", "Open query table in Glue"),
-    ("app.open_settings", "Settings"),
-    ("app.help", "Help"),
-    ("app.quit", "Quit"),
+@dataclass(frozen=True, slots=True)
+class _ThemeApplyFailure:
+    stage: str
+    error: Exception
+
+
+_SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
+_GLUE_SERVICE_IDS = frozenset({"glue"})
+_ATHENA_SERVICE_IDS = frozenset({"athena"})
+
+_PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
+    PaletteEntry("app.themes", "Theme picker", "app"),
+    PaletteEntry("app.cycle_theme", "Cycle theme", "app"),
+    PaletteEntry(
+        "app.swap_source",
+        "Switch source",
+        "source",
+        service_ids=_SOURCE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.choose_run_state",
+        "Choose Glue run state",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.choose_crawler_state",
+        "Choose Glue crawler state",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.copy_table_ref",
+        "Copy Glue table reference",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.open_s3_location",
+        "Open table location in S3",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.query_in_athena",
+        "Query table in Athena",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "glue.time_travel_in_athena",
+        "Query Iceberg snapshot in Athena",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry("athena.query", "Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry("athena.history", "Athena history", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry("athena.results", "Athena results", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry("athena.saved", "Athena saved queries", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry(
+        "athena.choose_workgroup",
+        "Choose Athena workgroup",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.choose_catalog",
+        "Choose Athena catalog",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.choose_database",
+        "Choose Athena database",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.insert_table_ref",
+        "Insert copied table reference",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.execute", "Execute Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS
+    ),
+    PaletteEntry("athena.cancel", "Cancel Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS),
+    PaletteEntry(
+        "athena.load_more", "Load more Athena rows", "athena", service_ids=_ATHENA_SERVICE_IDS
+    ),
+    PaletteEntry(
+        "athena.open_result_location",
+        "Open Athena result in S3",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.open_in_glue",
+        "Open query table in Glue",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry("app.open_settings", "Settings", "app"),
+    PaletteEntry("app.help", "Help", "app"),
+    PaletteEntry("app.quit", "Quit", "app"),
 )
 
 
@@ -1167,27 +1247,59 @@ class AwsTuiApp(App[None]):
     # ── on_mount helpers ───────────────────────────────────────────────────
 
     def _apply_initial_theme(self) -> None:
-        """Layer the active theme `.tcss` on top of Textual's defaults.
-
-        Uses the same ``read_from=self._THEME_SOURCE_KEY`` keyed
-        source that ``switch_theme`` uses, so the first runtime theme
-        swap REPLACES this initial source instead of stacking on top
-        of an anonymous one (which would leave a dead entry the
-        stylesheet would still re-parse on every refresh).
-        """
+        """Apply the configured theme or a packaged, user-file-free fallback."""
         ctx = self._app_ctx
+        configured_name = ctx.initial_theme
+        failure: _ThemeApplyFailure | None
         try:
-            theme_css = ctx.theme_store.load(ctx.initial_theme)
-            self.stylesheet.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
-            self.stylesheet.parse()
-            self.stylesheet.update(self)
-        except Exception as exc:
+            theme_css = ctx.theme_store.load(configured_name)
+        except (OSError, ThemeNotFound, UnicodeError) as exc:
+            failure = _ThemeApplyFailure("load", exc)
+        else:
+            failure = self._apply_theme_css(configured_name, theme_css)
+
+        if failure is None:
+            ctx.initial_theme = configured_name
+            return
+
+        ctx.log_sink.error(
+            "app.theme.initial_failed",
+            name=configured_name,
+            stage=failure.stage,
+            error=str(failure.error),
+            error_type=type(failure.error).__name__,
+        )
+        fallback_name = ThemeStore.DEFAULT_NAME
+        try:
+            fallback_css = ctx.theme_store.load_builtin(fallback_name)
+        except (OSError, ThemeNotFound, UnicodeError) as exc:
             ctx.log_sink.error(
-                "app.theme.load_failed",
-                name=ctx.initial_theme,
+                "app.theme.fallback_failed",
+                name=fallback_name,
+                stage="load",
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            return
+
+        fallback_failure = self._apply_theme_css(fallback_name, fallback_css)
+        if fallback_failure is not None:
+            ctx.log_sink.error(
+                "app.theme.fallback_failed",
+                name=fallback_name,
+                stage=fallback_failure.stage,
+                error=str(fallback_failure.error),
+                error_type=type(fallback_failure.error).__name__,
+            )
+            return
+
+        ctx.initial_theme = fallback_name
+        self.query_one(BrandBanner).set_theme(fallback_name)
+        ctx.log_sink.info(
+            "app.theme.fallback_applied",
+            configured_name=configured_name,
+            fallback_name=fallback_name,
+        )
 
     def _resolve_initial_connection(self) -> Connection | None:
         """Pick the initial connection in this order:
@@ -1425,10 +1537,10 @@ class AwsTuiApp(App[None]):
         if self._command_palette_populated:
             return
         vm = self._app_ctx.command_palette_vm
-        for action_id, label in _PALETTE_COMMANDS:
+        for entry in _PALETTE_COMMANDS:
             vm.register_entry(
-                PaletteEntry(id=action_id, label=label, category="app"),
-                partial(self._actions.invoke, action_id),
+                entry,
+                partial(self._actions.invoke, entry.id),
             )
         self._command_palette_populated = True
 
@@ -1436,8 +1548,10 @@ class AwsTuiApp(App[None]):
         """Open the fuzzy command palette (bound to ``:`` / ``Ctrl+K``)."""
         self.record_action("app.command_palette")
         self._populate_command_palette()
-        self._app_ctx.command_palette_vm.open_command.execute()
-        self.push_screen(CommandPalette(self._app_ctx.command_palette_vm, hub=self._app_ctx.hub))
+        vm = self._app_ctx.command_palette_vm
+        vm.set_active_service(self._app_ctx.root_vm.content_host.current_id)
+        vm.open_command.execute()
+        self.push_screen(CommandPalette(vm, hub=self._app_ctx.hub))
 
     def _dual_pane(self) -> DualPaneVM | None:
         """Return the currently-hosted ``DualPaneVM`` (or None).
@@ -2183,10 +2297,17 @@ class AwsTuiApp(App[None]):
         """
         self.record_action("app.cycle_theme")
         ctx = self._app_ctx
+
+        def _pick_with_toast(name: str) -> bool:
+            if not self.switch_theme(name):
+                return False
+            self._raise_theme_changed_toast(name)
+            return True
+
         picker = ThemePickerVM(
             themes=ctx.theme_store.BUILTIN_NAMES,
             active_theme=ctx.initial_theme,
-            on_pick=self.switch_theme,
+            on_pick=_pick_with_toast,
             on_preview=self.switch_theme,
             hub=ctx.hub,
             dispatcher=ctx.dispatcher,
@@ -2197,7 +2318,6 @@ class AwsTuiApp(App[None]):
             picker.pick_theme_command.execute(nxt)
         finally:
             self.call_after_refresh(picker.dispose)
-        self._raise_theme_changed_toast(nxt)
 
     def action_mark_up(self) -> None:
         self.record_action("pane.mark_up")
@@ -2753,12 +2873,14 @@ class AwsTuiApp(App[None]):
 
         ctx = self._app_ctx
 
-        def _pick_with_toast(name: str) -> None:
-            self.switch_theme(name)
+        def _pick_with_toast(name: str) -> bool:
+            if not self.switch_theme(name):
+                return False
             self._raise_theme_changed_toast(name)
+            return True
 
         picker = ThemePickerVM(
-            themes=ctx.theme_store.BUILTIN_NAMES,
+            themes=tuple(ctx.theme_store.list_themes()),
             active_theme=ctx.initial_theme,
             on_pick=_pick_with_toast,
             on_preview=self.switch_theme,
@@ -2802,46 +2924,101 @@ class AwsTuiApp(App[None]):
     # per swap, which is wasteful and can leak cached rules).
     _THEME_SOURCE_KEY: ClassVar[tuple[str, str]] = ("aws_tui", "active-theme.tcss")
 
-    def switch_theme(self, name: str) -> None:
+    def _report_theme_switch_failure(
+        self,
+        name: str,
+        stage: str,
+        exc: Exception,
+    ) -> None:
+        ctx = self._app_ctx
+        toast_id = f"theme-switch-failed-{name}"
+        if any(toast.model.id == toast_id for toast in ctx.root_vm.chrome.toast_stack.toasts):
+            return
+        ctx.log_sink.error(
+            "app.theme.switch_failed",
+            name=name,
+            stage=stage,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        notifications.error(
+            ctx.root_vm.chrome.toast_stack,
+            subject="Theme",
+            message=f"could not switch to {name}",
+            action="check theme syntax and logs",
+            toast_id=toast_id,
+        )
+
+    def switch_theme(self, name: str) -> bool:
         """Runtime theme swap.
 
-        Mirrors Textual's own ``_watch_theme`` flow:
+        Mirrors Textual's transactional ``_on_css_change`` flow and uses its
+        public refresh pipeline:
 
-        1. Replace the theme tcss source via a stable ``read_from`` key so
-           sources don't accumulate.
-        2. Call ``refresh_css(animate=False)`` — that one call re-parses
-           the stylesheet, re-resolves variables, and applies styles to
-           every screen in the stack (current + background). It's the
-           same API Textual uses internally for its theme reactive.
-        3. Publish a ThemeChangedMessage on the hub so VMx-bound widgets
+        1. Load and parse a copied stylesheet with the candidate theme.
+        2. Swap the validated copy via the stable ``read_from`` key so
+           sources don't accumulate, then call ``refresh_css(animate=False)``.
+        3. Restore the previous stylesheet if live application fails.
+        4. Publish a ThemeChangedMessage on the hub so VMx-bound widgets
            that bake colors into Python (BrandBanner) can swap their
            per-theme palette without us reaching in by widget type.
+
+        Returns ``True`` only after the candidate is applied successfully.
+
+        ``refresh_css`` re-parses the stylesheet, re-resolves variables, and
+        applies styles to every screen in the stack. It's the same API Textual
+        uses internally for its theme reactive.
         """
         ctx = self._app_ctx
         try:
             theme_css = ctx.theme_store.load(name)
-        except Exception as exc:
-            ctx.log_sink.error(
-                "app.theme.load_failed",
-                name=name,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            return
+        except (OSError, ThemeNotFound, UnicodeError) as exc:
+            self._report_theme_switch_failure(name, "load", exc)
+            return False
 
-        # 1. Replace, don't accumulate.
-        self.stylesheet.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
-
-        # 2. Use Textual's own theme-refresh pipeline. This is the API
-        # ``_watch_theme`` itself uses — it covers reparse, variable
-        # re-resolution, and layout refresh across all mounted screens.
-        self._invalidate_css()
-        self.refresh_css(animate=False)
+        failure = self._apply_theme_css(name, theme_css)
+        if failure is not None:
+            self._report_theme_switch_failure(name, failure.stage, failure.error)
+            return False
 
         ctx.initial_theme = name
 
-        # 3. Broadcast for Python-side palettes (e.g. the banner).
+        # 4. Broadcast for Python-side palettes (e.g. the banner).
         ctx.hub.send(ThemeChangedMessage(name=name))
+        return True
+
+    def _apply_theme_css(self, name: str, theme_css: str) -> _ThemeApplyFailure | None:
+        """Validate and apply theme CSS while preserving the live stylesheet."""
+        previous_stylesheet = self.stylesheet
+        previous_sources = previous_stylesheet.source
+        candidate = previous_stylesheet.copy()
+        candidate.set_variables(self.get_css_variables())
+        candidate.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
+        try:
+            candidate.parse()
+        except (StylesheetError, TokenError) as exc:
+            return _ThemeApplyFailure("validate", exc)
+
+        self.stylesheet = candidate
+        try:
+            self._invalidate_css()
+            self.refresh_css(animate=False)
+        except Exception as exc:
+            self.stylesheet = previous_stylesheet
+            try:
+                self._invalidate_css()
+                self.refresh_css(animate=False)
+            except Exception as rollback_exc:
+                self._app_ctx.log_sink.error(
+                    "app.theme.rollback_failed",
+                    name=name,
+                    error=str(rollback_exc),
+                    error_type=type(rollback_exc).__name__,
+                )
+            finally:
+                previous_stylesheet.source = previous_sources
+            return _ThemeApplyFailure("apply", exc)
+        return None
 
     # ── Connection-reachability tracking ───────────────────────────────────
 

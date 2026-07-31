@@ -206,20 +206,14 @@ def build_app_context(
             extra={"error": str(exc), "error_type": type(exc).__name__},
         )
         initial_theme = "carbon"
-    # The CHANGELOG ``### Deferred / v0.9 roadmap`` entry promises
-    # that ``[keybindings]`` overlays in ``config.toml`` parse and
-    # validate but do not yet affect the live keymap. Validate the
-    # overlay here, then keep the runtime-visible ``KeymapStore`` on
-    # defaults so the command legend cannot advertise keys that
-    # ``AwsTuiApp.BINDINGS`` does not actually dispatch yet.
     try:
-        KeymapStore(overlay=keybindings_overlay)
+        keymap_store = KeymapStore(overlay=keybindings_overlay)
     except (KeybindingCollision, UnknownAction) as exc:
         _logger.warning(
             "composition.keymap_overlay.invalid",
             extra={"error": str(exc), "error_type": type(exc).__name__},
         )
-    keymap_store = KeymapStore()
+        keymap_store = KeymapStore()
     theme_store = ThemeStore(
         user_themes_dir=config_dir / "themes",
         user_overlay=config_dir / "theme.tcss",

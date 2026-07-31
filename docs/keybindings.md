@@ -231,6 +231,8 @@ The default map is declared in `infra/keymap_store.py`. At composition
 time, aws-tui validates the overlay and `BindingResolver` installs keys
 only for registered actions. Unknown action IDs are logged and the app
 continues with the default keymap so a typo does not crash startup.
+For example, use `"pane.copy" = "ctrl+y"` to move pane copy without
+claiming bare `y`, which is reserved by `glue.copy_table_ref`.
 
 The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
@@ -250,6 +252,7 @@ unbound until a handler ships.
 | Action ID | Default key | Wired? | What it does |
 |---|---|---|---|
 | `app.quit` | `q` / `ctrl+c` | ✓ | Graceful shutdown |
+| `app.open_settings` | `,` | ✓ | Open the Settings navigation page |
 | `app.command_palette` | `:` / `ctrl+k` | ✓ | Open the command palette |
 | `app.help` | `?` | ✓ | Help overlay |
 | `app.themes` | `t` | ✓ | Open theme picker modal |
@@ -258,6 +261,8 @@ unbound until a handler ships.
 | `pane.move_up` / `pane.move_down` | `↑` / `↓` (also `k` / `j`) | ✓ | Move cursor |
 | `pane.descend` | `enter` | ✓ | Descend into folder / bucket |
 | `pane.ascend` | `backspace` / `←` | ✓ | Parent path |
+| `pane.mark_up` | `shift+up` | ✓ | Extend the marked selection upward |
+| `pane.mark_down` | `shift+down` | ✓ | Extend the marked selection downward |
 | `pane.switch_focus` | `tab` | ✓ | Cycle the active page's focus ring |
 | `pane.switch_focus_back` | `shift+tab` | ✓ | Cycle the active page's focus ring in reverse |
 | `pane.quick_look` | `space` (normal mode) | ✓ | Stream first 64 KB |
@@ -297,6 +302,8 @@ unbound until a handler ships.
 | `athena.load_more` | `l` | ✓ | Fetch the next available result page |
 | `athena.open_result_location` | none (command palette) | ✓ | Open a validated successful Athena result artifact in S3 under its exact source identity |
 | `athena.open_in_glue` | none (command palette) | ✓ | Open the one unambiguous visible query table in Glue |
+| `pane.modal_left` | `left` | ✓ | Route left-arrow modal or pane navigation |
+| `pane.modal_right` | `right` | ✓ | Route right-arrow modal or pane navigation |
 | `modal.cancel` | `escape` | ✓ | Cancel / close current overlay (modal-owned) |
 
 Rows with a default key are registered by

@@ -17,11 +17,20 @@ def _hub() -> MessageHub[Message]:
 def test_preview_command_calls_on_preview_without_committing_pick() -> None:
     previewed: list[str] = []
     picked: list[str] = []
+
+    def _record_pick(name: str) -> bool:
+        picked.append(name)
+        return True
+
+    def _record_preview(name: str) -> bool:
+        previewed.append(name)
+        return True
+
     picker = ThemePickerVM(
         themes=("carbon", "amber", "voidline"),
         active_theme="carbon",
-        on_pick=picked.append,
-        on_preview=previewed.append,
+        on_pick=_record_pick,
+        on_preview=_record_preview,
         hub=_hub(),
         dispatcher=NULL_DISPATCHER,
     )
@@ -40,11 +49,20 @@ def test_preview_command_calls_on_preview_without_committing_pick() -> None:
 def test_pick_command_still_calls_on_pick_after_preview() -> None:
     previewed: list[str] = []
     picked: list[str] = []
+
+    def _record_pick(name: str) -> bool:
+        picked.append(name)
+        return True
+
+    def _record_preview(name: str) -> bool:
+        previewed.append(name)
+        return True
+
     picker = ThemePickerVM(
         themes=("carbon", "amber", "voidline"),
         active_theme="carbon",
-        on_pick=picked.append,
-        on_preview=previewed.append,
+        on_pick=_record_pick,
+        on_preview=_record_preview,
         hub=_hub(),
         dispatcher=NULL_DISPATCHER,
     )
@@ -64,7 +82,7 @@ def test_on_preview_defaults_to_noop_when_omitted() -> None:
     picker = ThemePickerVM(
         themes=("carbon", "amber"),
         active_theme="carbon",
-        on_pick=lambda _n: None,
+        on_pick=lambda _n: True,
         hub=_hub(),
         dispatcher=NULL_DISPATCHER,
     )
@@ -72,5 +90,23 @@ def test_on_preview_defaults_to_noop_when_omitted() -> None:
     try:
         picker.preview_command.execute("amber")  # must not raise
         assert picker.active_theme == "amber"
+    finally:
+        picker.dispose()
+
+
+def test_preview_command_keeps_active_theme_when_callback_rejects() -> None:
+    picker = ThemePickerVM(
+        themes=("carbon", "broken"),
+        active_theme="carbon",
+        on_pick=lambda _name: True,
+        on_preview=lambda _name: False,
+        hub=_hub(),
+        dispatcher=NULL_DISPATCHER,
+    )
+    picker.construct()
+    try:
+        picker.preview_command.execute("broken")
+        assert picker.active_theme == "carbon"
+        assert [option.name for option in picker.options if option.is_active] == ["carbon"]
     finally:
         picker.dispose()

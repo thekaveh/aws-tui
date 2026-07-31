@@ -22,7 +22,9 @@ from aws_tui.domain.query import QueryContext, QueryState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
 from aws_tui.services.s3.service import S3Service
+from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
 from aws_tui.ui.widgets.dual_pane import DualPane
+from aws_tui.ui.widgets.glue.detail_rows import ResourceListPane
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
@@ -215,6 +217,37 @@ async def test_results_handoff_reloads_authoritative_execution_output(
             assert dual.left.path.as_posix() == "/athena-results/prod"
             assert dual.left.selected_entry is not None
             assert dual.left.selected_entry.entry.name == "q-prod-succeeded.csv"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pruning_history_view_ignores_queued_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_athena(ctx, app, pilot)
+            history = app.query_one(AthenaHistoryView)
+            listing = history.query_one("#athena-history-pane", ResourceListPane)
+
+            def reject_stale_refresh(*_args: object, **_kwargs: object) -> None:
+                raise AssertionError("pruning history view refreshed detached children")
+
+            monkeypatch.setattr(listing, "replace", reject_stale_refresh)
+            removal = history.remove()
+            try:
+                history._refresh()
+            finally:
+                await removal
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

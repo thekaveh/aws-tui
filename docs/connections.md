@@ -156,18 +156,21 @@ unreachable pane and recovering it also clears the mark.
 
 aws-tui has two source scopes. S3 keeps an independent source in each file
 pane, so the left and right panes can intentionally point at different
-connections or local storage. Single-context AWS services use the one active
-AWS connection owned by `RootVM`; `Shift+S` rebuilds that service under the
-next supported AWS profile and region.
+connections or local storage; each pane selects its own source. Glue and
+Athena use a bordered picker to select an exact source, while `Shift+S`
+cycles the single-context service through resolver order. Single-context AWS
+services use the one active AWS connection owned by `RootVM`; selecting a
+source rebuilds that service under the chosen profile and region.
 Single-context AWS services, including EMR Serverless and Glue,
 intentionally do not consult or mutate the S3 pane reachability set. Athena
 follows the same rule.
 Authentication and service API failures remain visible in the mounted service
 instead of filtering or removing the connection from that source ring.
 
-The compact source header on EMR, Glue, and Athena pages identifies that rebuilt context as
-`connection-name · profile · region`, omitting `profile` when it matches the
-connection name. EMR application selection plus Glue and Athena view/resource selections
+EMR retains a compact passive source identity. The bordered Glue and Athena
+picker displays an exact selectable source as `connection-name · profile ·
+region`, omitting `profile` when it matches the connection name. EMR
+application selection plus Glue and Athena view/resource selections
 are scoped to service, connection name, and region, so switching back may
 restore a still-valid identifier without crossing account or regional
 boundaries. Use **`Shift+A`** to cycle EMR applications;

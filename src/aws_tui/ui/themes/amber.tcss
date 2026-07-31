@@ -902,9 +902,7 @@ AthenaPage DetailRows {
     border-title-color: $text;
 }
 AthenaPage ResourceListPane:focus-within,
-AthenaPage DetailRows:focus-within,
-AthenaPage TextArea:focus,
-AthenaPage DataTable:focus {
+AthenaPage DetailRows:focus-within {
     border: solid $accent; border-title-color: $accent;
 }
 AthenaPage OptionList,
@@ -956,37 +954,3 @@ AthenaPage .glue-detail-row.-state-cancelled { color: $danger; }
 AthenaPage .glue-detail-row.-state-running,
 AthenaPage .glue-detail-row.-state-queued { color: $accent; }
 AthenaPage .glue-detail-row.-state-succeeded { color: $success; }
-
-/* ── Glue / Athena operational pane hierarchy ─────────────────────────── */
-GluePage > #glue-context-pane,
-AthenaPage > #athena-context-header {
-    background: $bg;
-    color: $text;
-    border: solid $rule-dim;
-    border-title-color: $text;
-}
-GluePage > #glue-context-pane:focus-within,
-AthenaPage > #athena-context-header:focus-within {
-    border: solid $accent;
-    border-title-color: $accent;
-}
-GluePage GlueIcebergView,
-AthenaPage TextArea,
-AthenaPage #athena-query-controls,
-AthenaPage #athena-query-detail,
-AthenaPage #athena-results-summary,
-AthenaPage DataTable {
-    background: $bg;
-    color: $text;
-    border: solid $rule-dim;
-    border-title-color: $text;
-}
-GluePage GlueIcebergView:focus-within,
-AthenaPage TextArea:focus,
-AthenaPage #athena-query-controls:focus-within,
-AthenaPage #athena-query-detail:focus-within,
-AthenaPage #athena-results-summary:focus-within,
-AthenaPage DataTable:focus {
-    border: solid $accent;
-    border-title-color: $accent;
-}

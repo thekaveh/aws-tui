@@ -154,7 +154,7 @@ def test_theme_picker_vm_composes_compositevm_internally() -> None:
     vm = ThemePickerVM(
         themes=("amber", "nord"),
         active_theme="amber",
-        on_pick=lambda _: None,
+        on_pick=lambda _: True,
         hub=_hub(),
         dispatcher=NULL_DISPATCHER,
     )

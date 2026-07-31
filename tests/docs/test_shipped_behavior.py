@@ -25,11 +25,16 @@ def test_readme_describes_shipped_runtime_bindings_quick_look_and_palette() -> N
 
 def test_cookbook_describes_live_keybinding_overrides() -> None:
     text = _text("docs/cookbook.md")
+    changelog = _text("CHANGELOG.md").split("## 1.2.", maxsplit=1)[0]
+    active_docs = f"{text}\n{changelog}"
 
     assert "Runtime dispatch still uses `AwsTuiApp.BINDINGS`" not in text
     assert "so `d` still follows `AwsTuiApp.BINDINGS`" not in text
     assert "The composition root installs handled overrides on the live Textual keymap" in text
     assert "an empty `[keybindings]` value removes the live keybinding" in text
+    assert '"pane.copy" = "ctrl+y"' in text
+    assert '"pane.copy" = "y"' not in active_docs
+    assert 'pane.copy = "y"' not in active_docs
 
 
 def test_keybindings_describes_shipped_palette_and_runtime_resolver() -> None:

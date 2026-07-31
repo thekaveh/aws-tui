@@ -23,9 +23,19 @@ def _build() -> CommandPaletteVM:
 
 
 def _entry(
-    id_: str, label: str, category: str = "test", keywords: tuple[str, ...] = ()
+    id_: str,
+    label: str,
+    category: str = "test",
+    keywords: tuple[str, ...] = (),
+    service_ids: frozenset[str] | None = None,
 ) -> PaletteEntry:
-    return PaletteEntry(id=id_, label=label, category=category, keywords=keywords)
+    return PaletteEntry(
+        id=id_,
+        label=label,
+        category=category,
+        keywords=keywords,
+        service_ids=service_ids or frozenset(),
+    )
 
 
 def test_initial_state() -> None:
@@ -176,6 +186,51 @@ def test_filter_clear_restores_all_entries() -> None:
     assert len(vm.filtered_entries) == 1
     vm.filter_text = ""
     assert len(vm.filtered_entries) == 2
+    vm.dispose()
+
+
+def test_active_service_filters_entries_through_vmx_projection() -> None:
+    vm = _build()
+    vm.register_entry(_entry("global", "Help"), lambda: None)
+    vm.register_entry(
+        _entry("glue", "Choose Glue run state", service_ids=frozenset({"glue"})),
+        lambda: None,
+    )
+    vm.register_entry(
+        _entry("athena", "Choose Athena workgroup", service_ids=frozenset({"athena"})),
+        lambda: None,
+    )
+
+    vm.set_active_service("glue")
+    assert [entry.id for entry in vm.filtered_entries] == ["global", "glue"]
+
+    vm.set_active_service("athena")
+    assert [entry.id for entry in vm.filtered_entries] == ["global", "athena"]
+
+    vm.set_active_service(None)
+    assert [entry.id for entry in vm.filtered_entries] == ["global"]
+    vm.dispose()
+
+
+def test_context_change_resets_palette_selection() -> None:
+    vm = _build()
+    vm.register_entry(_entry("global", "Help"), lambda: None)
+    vm.register_entry(
+        _entry("glue-1", "Glue catalog", service_ids=frozenset({"glue"})),
+        lambda: None,
+    )
+    vm.register_entry(
+        _entry("glue-2", "Glue jobs", service_ids=frozenset({"glue"})),
+        lambda: None,
+    )
+    vm.set_active_service("glue")
+    vm.open_command.execute()
+    vm.move_selection_command.execute(2)
+    assert vm.selected_index == 2
+
+    vm.set_active_service("athena")
+    assert vm.selected_index == 0
+    assert [entry.id for entry in vm.filtered_entries] == ["global"]
     vm.dispose()
 
 

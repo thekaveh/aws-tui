@@ -83,7 +83,7 @@ until the release cut.
   `AwsTuiApp` installs its key bindings at runtime from
   `BindingResolver.to_textual_bindings()` instead of a hard-coded
   `BINDINGS` ClassVar, so a `[keybindings]` table in `config.toml`
-  remaps any handled action on the live keymap (e.g. `pane.copy = "y"`).
+  remaps any handled action on the live keymap (e.g. `pane.copy = "ctrl+y"`).
   Each binding dispatches through a single `action_dispatch(id)` into the
   `ActionRegistry`; the resolver emits a binding only for actions with a
   registered handler, so deferred/unwired actions stay unbound. Default
@@ -112,6 +112,11 @@ until the release cut.
   ``SettingsView.focus_default``.
 
 ### 1.1.2. Changed
+
+- **Interaction-surface parity.** Restored configured keymap overlays at
+  startup, filtered contextual palette commands by active service, clarified
+  CSS ownership for shared selectors and tabs, and aligned the canonical
+  documentation with the shipped Glue and Athena workflows.
 
 - ``docs/`` + ``ui/widgets/settings_view.py``: retargeted the
   ``Deferred / v0.8 roadmap`` references to ``Deferred / v0.9

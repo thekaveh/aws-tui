@@ -148,10 +148,9 @@ show up as `s3-compatible · {name} · {endpoint}`. Tap
 `s3-compatible · minio-local · {endpoint}` — the bucket list
 should populate immediately.
 
-> The dedicated command-palette path (`: connection switch ▸ minio-local`)
-> is spec'd but deferred to v0.9 — in v0.8.x ``:`` opens the
-> help overlay as a placeholder. ``Shift+S`` is the one-keystroke
-> equivalent today.
+> `:` opens the command palette. Its `Switch source` command invokes
+> `app.swap_source` and cycles resolver order; `Shift+S` is the one-keystroke
+> equivalent. Neither path selects one exact source.
 
 ---
 
@@ -267,10 +266,11 @@ stylesheet instantly without a restart:
 - Press `Shift+T` (`T`) to cycle straight to the next theme without
   the modal — handy when you just want to flip carbon ↔ voidline.
 
-> The command-palette path (`:` then `theme switch ▸ voidline`) is
-> spec'd in the design but not wired in v0.8.x — the palette
-> registers no entries yet, so `t` / `Shift+T` are the working
-> shortcuts.
+The command palette has two working global theme commands: `:` then
+**Theme picker** opens the same picker as `t`, and `:` then **Cycle theme**
+has the same effect as `Shift+T`. Per-theme dynamic entries such as
+`theme switch ▸ voidline` remain deferred and are not registered, so use
+**Theme picker** to select a specific built-in or custom theme.
 
 ### 1.2.2. Persistent
 ```toml
@@ -285,9 +285,19 @@ Theme names: `carbon` (default), `voidline`, `lattice`, `amber`,
 the full per-theme palette breakdown.
 
 ### 1.2.3. Add a custom theme
-Copy `src/aws_tui/ui/themes/carbon.tcss` to
-`<config-dir>/themes/midnight.tcss`, edit the palette tokens,
-and pick it from the theme picker (`t`) like any built-in. See
+A full replacement bypasses the built-in composition, so a repository checkout
+must combine the raw built-in theme, then the shared operational layer, before
+installing a custom file:
+
+```bash
+cat src/aws_tui/ui/themes/carbon.tcss \
+    src/aws_tui/ui/themes/operational-panes.tcss \
+    > <config-dir>/themes/midnight.tcss
+```
+
+Edit `midnight.tcss`, then select it with `t` or `:` then **Theme picker**.
+Including `operational-panes.tcss` retains the Glue and Athena borders and
+focus styling that built-in themes receive automatically. See
 [theming.md](theming.md#132-full-custom-themes) for the full token table.
 
 ### 1.2.4. Tweak just one or two colors
@@ -309,13 +319,16 @@ Footer { background: #050505; }
 > action ids through `KeymapStore` and logs/falls back to defaults when
 > an overlay is invalid. Handlerless deferred actions remain unbound.
 
-Rebind copy (`pane.copy`) from `c` to `y` (vim yank):
+Rebind copy (`pane.copy`) from `c` to `Ctrl+Y`:
 
 ```toml
 # <config-dir>/config.toml
 [keybindings]
-"pane.copy" = "y"
+"pane.copy" = "ctrl+y"
 ```
+
+Bare `y` is reserved by `glue.copy_table_ref` for copying a selected Glue
+table reference.
 
 For a fallback list (try `Ctrl+K` first, fall back to `:`):
 
@@ -452,6 +465,26 @@ profile name when present, and region. Switching profiles clears the
 old page before the replacement VM loads, and remembered selections
 are isolated by connection name and region.
 
+For the shared source, state, and table-reference workflow:
+
+1. `:` opens the command palette. Its `Switch source` command invokes
+   `app.swap_source` and cycles resolver order; it does not select an exact
+   source.
+2. Use `Tab` / `Shift+Tab` to focus the bordered source selector, then press
+   `Enter` or `Space` to open it. Use `Up` / `Down`, commit with `Enter`, and
+   cancel with `Escape`.
+3. In Glue Jobs press `Shift+F`; in Crawlers press `Shift+G`.
+4. In Athena press `Shift+W`, `Shift+C`, or `Shift+D` for the corresponding
+   context selector.
+5. In Glue Catalog select a table and press `y` to copy its canonical,
+   fully quoted identifier.
+6. In Athena press `i` outside the editor, or choose **Insert copied table
+   reference**, to replace the editor selection or insert at the cursor.
+7. A connection/region mismatch is refused without changing the editor,
+   clipboard, or active profile.
+
+This is the copy table reference workflow for the typed app clipboard.
+
 ### 1.5.1. Least-privilege Glue permissions
 
 Grant only the read operations needed by the views you use. A complete
@@ -521,6 +554,9 @@ and never makes a real AWS call.
 
 Athena is an AWS-only, read-only query service. Select **Athena** in the
 nav rail and choose a workgroup, catalog, and database in the page header.
+Each is a bordered, keyboard-focusable selector; use `Shift+W`, `Shift+C`,
+or `Shift+D` to focus the corresponding control and commit or cancel it with
+the shared picker workflow above.
 The four views are Query (`1`), History (`2`), Results (`3`), and Saved (`4`).
 `Shift+S` rebuilds the whole Athena page for the next supported AWS connection;
 the old page is disposed, so rows, selections, loaders, result fetches, and any
