@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from aws_tui.composition import build_app_context
+from aws_tui.infra.keymap_store import KeymapStore
 
 
 def _write_config(config_dir: Path, body: str) -> None:
@@ -46,9 +47,7 @@ def test_initial_theme_honours_defaults_theme_from_config(tmp_path: Path) -> Non
         ctx.root_vm.dispose()
 
 
-def test_keybinding_overlay_validates_but_does_not_change_live_legend_keys(
-    tmp_path: Path,
-) -> None:
+def test_keybinding_overlay_becomes_the_runtime_keymap(tmp_path: Path) -> None:
     cfg = tmp_path / "config"
     cache = tmp_path / "cache"
     _write_config(
@@ -58,7 +57,23 @@ def test_keybinding_overlay_validates_but_does_not_change_live_legend_keys(
     cache.mkdir()
     ctx = build_app_context(config_dir=cfg, cache_dir=cache)
     try:
-        assert ctx.keymap_store.resolve("pane.delete") == ("d",)
+        assert ctx.keymap_store.resolve("pane.delete") == ("x",)
+        assert ctx.root_vm.chrome.hint_legend._keymap is ctx.keymap_store
+    finally:
+        ctx.root_vm.dispose()
+
+
+def test_empty_keybinding_overlay_disables_the_runtime_binding(tmp_path: Path) -> None:
+    cfg = tmp_path / "config"
+    cache = tmp_path / "cache"
+    _write_config(
+        cfg,
+        '[keybindings]\n"pane.delete" = []\n',
+    )
+    cache.mkdir()
+    ctx = build_app_context(config_dir=cfg, cache_dir=cache)
+    try:
+        assert ctx.keymap_store.resolve("pane.delete") == ()
     finally:
         ctx.root_vm.dispose()
 
@@ -83,6 +98,7 @@ def test_keybinding_collision_logs_clear_error_and_falls_back(
     ctx = build_app_context(config_dir=cfg, cache_dir=cache)
     try:
         assert ctx.keymap_store.resolve("pane.copy") == ("c",)
+        assert ctx.keymap_store.all() == KeymapStore().all()
         collision_errors = [
             extra["error"]
             for event, extra in warnings
@@ -92,6 +108,31 @@ def test_keybinding_collision_logs_clear_error_and_falls_back(
             "'y'" in error and "'glue.copy_table_ref'" in error and "'pane.copy'" in error
             for error in collision_errors
         )
+    finally:
+        ctx.root_vm.dispose()
+
+
+def test_unknown_keybinding_action_logs_and_falls_back_atomically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = tmp_path / "config"
+    cache = tmp_path / "cache"
+    _write_config(
+        cfg,
+        '[keybindings]\n"pane.delete" = "x"\n"unknown.action" = "z"\n',
+    )
+    cache.mkdir()
+    warnings: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(
+        "aws_tui.composition._logger.warning",
+        lambda event, *, extra: warnings.append((event, extra)),
+    )
+
+    ctx = build_app_context(config_dir=cfg, cache_dir=cache)
+    try:
+        assert ctx.keymap_store.all() == KeymapStore().all()
+        assert warnings[-1][1]["error_type"] == "UnknownAction"
     finally:
         ctx.root_vm.dispose()
 

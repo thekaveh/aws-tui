@@ -8,6 +8,7 @@ retain priority routing.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.composition import build_app_context
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM
 from aws_tui.vm.messages import OpenAthenaTableRequest
@@ -184,6 +186,54 @@ def test_overlay_remaps_a_handled_action() -> None:
     keys = {b.key for b in resolver.to_textual_bindings()}
     assert "ctrl+y" in keys
     assert "c" not in keys
+
+
+def test_config_overlay_reaches_live_textual_bindings(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    cache_dir = tmp_path / "cache"
+    config_dir.mkdir()
+    cache_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        '[keybindings]\n"pane.copy" = "ctrl+y"\n"pane.delete" = []\n',
+        encoding="utf-8",
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=cache_dir)
+    try:
+        app = AwsTuiApp(ctx)
+        installed = _installed(app)
+        assert ("ctrl+y", "dispatch('pane.copy')", True, True) in installed
+        assert not any(
+            key == "c" and action == "dispatch('pane.copy')" for key, action, _, _ in installed
+        )
+        assert not any(action == "dispatch('pane.delete')" for _, action, _, _ in installed)
+        assert ctx.keymap_store.resolve("pane.copy") == ("ctrl+y",)
+        assert ctx.root_vm.chrome.hint_legend._keymap is ctx.keymap_store
+    finally:
+        ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_config_overlay_dispatches_the_registered_action_once(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    cache_dir = tmp_path / "cache"
+    config_dir.mkdir()
+    cache_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        '[keybindings]\n"pane.copy" = "ctrl+y"\n',
+        encoding="utf-8",
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=cache_dir)
+    app = AwsTuiApp(ctx)
+    calls: list[str] = []
+    app._actions.register("pane.copy", lambda: calls.append("copy"))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("ctrl+y")
+        await pilot.pause()
+
+    assert calls == ["copy"]
 
 
 @pytest.mark.asyncio
