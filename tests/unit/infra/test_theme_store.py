@@ -80,6 +80,25 @@ class TestLoad:
         content = store.load("carbon")
         assert "the overlay" in content
 
+    def test_builtin_base_operational_css_and_overlay_are_ordered(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        overlay = tmp_path / "theme.tcss"
+        overlay.write_text("/* user overlay */", encoding="utf-8")
+        store = ThemeStore(
+            user_themes_dir=tmp_path / "themes",
+            user_overlay=overlay,
+        )
+
+        content = store.load("carbon")
+
+        assert (
+            content.index("$bg:")
+            < content.index("Glue / Athena operational pane hierarchy")
+            < content.index("user overlay")
+        )
+
     def test_overlay_applied_to_user_theme(self, tmp_path: Path) -> None:
         user_themes = tmp_path / "themes"
         user_themes.mkdir()
@@ -91,3 +110,14 @@ class TestLoad:
         assert "base" in content
         assert "on top" in content
         assert content.index("base") < content.index("on top")
+
+    def test_user_theme_does_not_append_builtin_operational_css(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        user_themes = tmp_path / "themes"
+        user_themes.mkdir()
+        (user_themes / "carbon.tcss").write_text("/* replacement */", encoding="utf-8")
+        store = ThemeStore(user_themes_dir=user_themes)
+
+        assert "Glue / Athena operational pane hierarchy" not in store.load("carbon")

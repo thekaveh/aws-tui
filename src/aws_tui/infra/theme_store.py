@@ -1,13 +1,15 @@
 """Theme storage and discovery.
 
-Active theme content is the concatenation of three layers (later wins):
+Active theme content is the concatenation of four layers (later wins):
 
 1. The built-in ``<name>.tcss`` shipped with the package under
    ``src/aws_tui/ui/themes/``. The built-in set is defined by
    :attr:`ThemeStore.BUILTIN_NAMES`.
-2. A user-defined ``~/.config/aws-tui/themes/<name>.tcss`` that
+2. The built-in operational pane hierarchy, appended in the same source so
+   it can use the built-in theme tokens.
+3. A user-defined ``~/.config/aws-tui/themes/<name>.tcss`` that
    completely replaces the built-in if present.
-3. A user overlay ``~/.config/aws-tui/theme.tcss`` appended on top of
+4. A user overlay ``~/.config/aws-tui/theme.tcss`` appended on top of
    whichever theme is active.
 """
 
@@ -118,6 +120,9 @@ class ThemeStore:
             base = resolved.read_text(encoding="utf-8")
         elif name in self.BUILTIN_NAMES:
             base = self._read_builtin(name)
+            if base and not base.endswith("\n"):
+                base += "\n"
+            base += self._read_builtin("operational-panes")
         else:
             raise ThemeNotFound(name)
 
