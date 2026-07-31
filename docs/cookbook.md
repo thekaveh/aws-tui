@@ -266,10 +266,11 @@ stylesheet instantly without a restart:
 - Press `Shift+T` (`T`) to cycle straight to the next theme without
   the modal — handy when you just want to flip carbon ↔ voidline.
 
-> The command-palette path (`:` then `theme switch ▸ voidline`) is
-> spec'd in the design but not wired in v0.8.x — the palette
-> registers no entries yet, so `t` / `Shift+T` are the working
-> shortcuts.
+The command palette has two working global theme commands: `:` then
+**Theme picker** opens the same picker as `t`, and `:` then **Cycle theme**
+has the same effect as `Shift+T`. Per-theme dynamic entries such as
+`theme switch ▸ voidline` remain deferred and are not registered, so use
+**Theme picker** to select a specific built-in or custom theme.
 
 ### 1.2.2. Persistent
 ```toml
@@ -284,9 +285,19 @@ Theme names: `carbon` (default), `voidline`, `lattice`, `amber`,
 the full per-theme palette breakdown.
 
 ### 1.2.3. Add a custom theme
-Copy `src/aws_tui/ui/themes/carbon.tcss` to
-`<config-dir>/themes/midnight.tcss`, edit the palette tokens,
-and pick it from the theme picker (`t`) like any built-in. See
+A full replacement bypasses the built-in composition, so a repository checkout
+must combine the raw built-in theme, then the shared operational layer, before
+installing a custom file:
+
+```bash
+cat src/aws_tui/ui/themes/carbon.tcss \
+    src/aws_tui/ui/themes/operational-panes.tcss \
+    > <config-dir>/themes/midnight.tcss
+```
+
+Edit `midnight.tcss`, then select it with `t` or `:` then **Theme picker**.
+Including `operational-panes.tcss` retains the Glue and Athena borders and
+focus styling that built-in themes receive automatically. See
 [theming.md](theming.md#132-full-custom-themes) for the full token table.
 
 ### 1.2.4. Tweak just one or two colors

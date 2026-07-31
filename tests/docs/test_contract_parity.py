@@ -64,10 +64,47 @@ def _text_ledger_block(text: str, heading: str) -> tuple[str, ...]:
     return tuple(line.strip() for line in block.splitlines() if line.strip())
 
 
+def _action_id_table_actions(text: str) -> tuple[str, ...]:
+    """Extract action IDs from the first table under the Action IDs heading."""
+    heading = "## 1.3. Action IDs"
+    assert heading in text, f"missing Action IDs heading: {heading}"
+    section = text.split(heading, maxsplit=1)[1].split("\n## ", maxsplit=1)[0]
+    table_lines = [line for line in section.splitlines() if line.startswith("|")]
+    assert len(table_lines) >= 3, "missing Action IDs table"
+
+    actions: list[str] = []
+    for row in table_lines[2:]:
+        first_cell = row.split("|", maxsplit=2)[1]
+        actions.extend(re.findall(r"`([^`]+)`", first_cell))
+    return tuple(actions)
+
+
 def test_keybinding_action_table_covers_every_default_action() -> None:
-    keybindings = _text("docs/keybindings.md")
-    missing = [action for action in _default_binding_actions() if f"`{action}`" not in keybindings]
-    assert missing == []
+    documented_actions = _action_id_table_actions(_text("docs/keybindings.md"))
+    duplicate_or_missing = {
+        action: documented_actions.count(action)
+        for action in _default_binding_actions()
+        if documented_actions.count(action) != 1
+    }
+    assert duplicate_or_missing == {}
+
+
+def test_theme_docs_explain_composed_full_custom_themes() -> None:
+    for path in ("docs/cookbook.md", "docs/theming.md"):
+        text = re.sub(r"\s+", " ", _text(path))
+        assert "operational-panes.tcss" in text
+        assert "full replacement bypasses the built-in composition" in text
+        assert "raw built-in theme, then the shared operational layer" in text
+
+
+def test_theme_docs_describe_registered_palette_commands() -> None:
+    for path in ("docs/cookbook.md", "docs/theming.md"):
+        text = _text(path)
+        assert "Theme picker" in text
+        assert "Cycle theme" in text
+        assert "theme switch ▸ voidline" in text
+        assert "deferred" in text
+        assert "palette: `theme switch" not in text
 
 
 def test_public_service_action_ledger_matches_registered_source() -> None:

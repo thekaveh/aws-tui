@@ -261,6 +261,8 @@ unbound until a handler ships.
 | `pane.move_up` / `pane.move_down` | `↑` / `↓` (also `k` / `j`) | ✓ | Move cursor |
 | `pane.descend` | `enter` | ✓ | Descend into folder / bucket |
 | `pane.ascend` | `backspace` / `←` | ✓ | Parent path |
+| `pane.mark_up` | `shift+up` | ✓ | Extend the marked selection upward |
+| `pane.mark_down` | `shift+down` | ✓ | Extend the marked selection downward |
 | `pane.switch_focus` | `tab` | ✓ | Cycle the active page's focus ring |
 | `pane.switch_focus_back` | `shift+tab` | ✓ | Cycle the active page's focus ring in reverse |
 | `pane.quick_look` | `space` (normal mode) | ✓ | Stream first 64 KB |
