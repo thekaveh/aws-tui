@@ -30,6 +30,8 @@ def test_cookbook_describes_live_keybinding_overrides() -> None:
     assert "so `d` still follows `AwsTuiApp.BINDINGS`" not in text
     assert "The composition root installs handled overrides on the live Textual keymap" in text
     assert "an empty `[keybindings]` value removes the live keybinding" in text
+    assert '"pane.copy" = "ctrl+y"' in text
+    assert '"pane.copy" = "y"' not in text
 
 
 def test_keybindings_describes_shipped_palette_and_runtime_resolver() -> None:

@@ -309,12 +309,12 @@ Footer { background: #050505; }
 > action ids through `KeymapStore` and logs/falls back to defaults when
 > an overlay is invalid. Handlerless deferred actions remain unbound.
 
-Rebind copy (`pane.copy`) from `c` to `y` (vim yank):
+Rebind copy (`pane.copy`) from `c` to `Ctrl+Y`:
 
 ```toml
 # <config-dir>/config.toml
 [keybindings]
-"pane.copy" = "y"
+"pane.copy" = "ctrl+y"
 ```
 
 For a fallback list (try `Ctrl+K` first, fall back to `:`):

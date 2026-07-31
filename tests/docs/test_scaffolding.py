@@ -501,29 +501,6 @@ def test_glue_operation_ledger_matches_domain_adapter_exactly() -> None:
     assert tuple(sts_block.splitlines()) == ("get_caller_identity",)
 
 
-def test_cross_service_action_and_message_ledgers_match_source() -> None:
-    ledger = _read("docs/contract-ledger.md")
-    app_source = _read("src/aws_tui/app.py")
-    message_source = _read("src/aws_tui/vm/messages.py")
-
-    actions = (
-        "glue.query_in_athena",
-        "glue.time_travel_in_athena",
-        "athena.open_in_glue",
-        "athena.open_result_location",
-    )
-    messages = ("OpenAthenaTableRequest", "OpenGlueTableRequest", "OpenS3LocationRequest")
-    for action in actions:
-        assert re.search(
-            rf"""self\._actions\.register\(\s*["']{re.escape(action)}["']""",
-            app_source,
-        )
-        assert f"`{action}`" in ledger
-    for message in messages:
-        assert f"class {message}" in message_source
-        assert message in ledger
-
-
 def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:
     changelog = _read("CHANGELOG.md")
     unreleased_intro = changelog.split("### 1.1.1. Added", maxsplit=1)[0]

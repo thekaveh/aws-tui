@@ -250,6 +250,7 @@ unbound until a handler ships.
 | Action ID | Default key | Wired? | What it does |
 |---|---|---|---|
 | `app.quit` | `q` / `ctrl+c` | ✓ | Graceful shutdown |
+| `app.open_settings` | `,` | ✓ | Open the Settings navigation page |
 | `app.command_palette` | `:` / `ctrl+k` | ✓ | Open the command palette |
 | `app.help` | `?` | ✓ | Help overlay |
 | `app.themes` | `t` | ✓ | Open theme picker modal |
@@ -297,6 +298,8 @@ unbound until a handler ships.
 | `athena.load_more` | `l` | ✓ | Fetch the next available result page |
 | `athena.open_result_location` | none (command palette) | ✓ | Open a validated successful Athena result artifact in S3 under its exact source identity |
 | `athena.open_in_glue` | none (command palette) | ✓ | Open the one unambiguous visible query table in Glue |
+| `pane.modal_left` | `left` | ✓ | Route left-arrow modal or pane navigation |
+| `pane.modal_right` | `right` | ✓ | Route right-arrow modal or pane navigation |
 | `modal.cancel` | `escape` | ✓ | Cancel / close current overlay (modal-owned) |
 
 Rows with a default key are registered by
