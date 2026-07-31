@@ -158,7 +158,6 @@ Final remediation verification:
 | `make docs-wiki` | Wiki generation and parity check passed |
 | Historical Task 1 report comparison to base | Zero diff |
 | `git diff --check` | Clean |
-| `git diff --check` | Clean |
 
 Tracked files in this final remediation are `src/aws_tui/app.py`,
 `tests/integration/test_theme_picker_keyboard.py`, this dated report, and the
@@ -183,10 +182,12 @@ A subsequent independent boundary review found three coupled root causes:
 
 `ThemeStore` now has one path resolver shared by discovery, existence checks,
 and loading. A user theme is eligible only when its strict resolved path is a
-readable regular file contained by the strict resolved configured root. Safe
-in-root symlinks remain supported. Built-ins remain first, custom names remain
-sorted and deduplicated, valid user files still shadow built-ins, and invalid
-shadows do not remove the packaged fallback.
+readable regular file contained by the strict resolved configured root. At
+that stage safe in-root symlinks remained supported; the final lifecycle
+remediation below deliberately replaces that policy with direct regular files
+only. Built-ins remain first, custom names remain sorted and deduplicated,
+valid user files still shadow built-ins, and invalid shadows do not remove the
+packaged fallback.
 
 Runtime switching now copies the live Textual stylesheet, replaces the stable
 theme key on the copy, validates the complete candidate with Textual's parser,
@@ -233,6 +234,107 @@ Final boundary verification:
 The focused commit subject is
 `fix(theme): make custom theme switching transactional`; no self-referential
 commit hash is recorded here.
+
+## Startup and Atomic-Read Lifecycle Remediation
+
+The final lifecycle review found three remaining causes that crossed the
+startup, storage, and live-application boundaries:
+
+1. Startup still called `add_source()`, `parse()`, and `update()` directly on
+   the live stylesheet. A configured theme or overlay that failed after source
+   replacement could therefore remain installed while `ctx.initial_theme`
+   continued to name a theme that never applied.
+2. User-theme validation opened and closed a path before `load()` reopened it,
+   leaving a same-user replacement window. Overlay loading independently used
+   `Path.is_file()` plus `read_text()`, followed symlinks, and did not share the
+   discovery/load contract.
+3. The retained live-apply rollback test covered parser preflight only. Textual
+   `Stylesheet.reparse()` replaces the source mapping after a successful
+   reparse, so applying the restored stylesheet did not preserve the original
+   mapping and source-object identities.
+
+`ThemeStore` now reads user themes and the optional overlay through one safe
+descriptor helper. On POSIX it pins the direct parent directory and opens the
+candidate relative to that descriptor with `O_NOFOLLOW`, `O_CLOEXEC`, and a
+regular-file `fstat()` check; the read uses that same descriptor. The
+cross-platform fallback rejects links/non-files and compares directory,
+pre-open, opened-descriptor, and post-open file identities. Both in-root and
+external symlinks are now intentionally rejected. Missing overlays remain
+optional, while present unsafe, unreadable, or invalid-UTF-8 overlays reject
+the selected-theme load. Built-ins remain first, custom names remain sorted,
+valid direct files still shadow built-ins, and discovery, `exists()`, and
+`load()` use the same read policy.
+
+`ThemeStore.load_builtin()` provides the explicit known-good startup path:
+packaged Carbon followed by `operational-panes.tcss`, with no user replacement
+or overlay. Startup and runtime now share `_apply_theme_css()`, which validates
+a copied Textual stylesheet, swaps only after preflight, and restores the
+original stylesheet plus source identities on live failure. Startup records
+one configured-theme failure and one fallback outcome, updates
+`ctx.initial_theme` only to the theme actually applied, and emits no
+`ThemeChangedMessage` or success toast. Runtime retains the VMx
+`ThemePickerVM` callback contract, existing deduplicated feedback, built-in
+cycle behavior, stable source key, and successful-message semantics.
+The final call-site review also caught that a valid configured built-in with a
+broken overlay could compose the banner with the configured palette before
+startup fell back. The fallback now uses the banner's existing public,
+idempotent `set_theme()` initial-composition API, keeping its Python-rendered
+palette aligned with Carbon without publishing a runtime theme-change event.
+The same review tightened the direct-child name guard for Windows alternate
+streams and embedded NUL paths, preserving false/`ThemeNotFound` behavior for
+cross-platform-invalid names instead of allowing a `ValueError` to escape.
+
+TDD evidence:
+
+- The focused RED command reported `13 failed, 21 passed`. It reproduced the
+  in-root symlink and invalid-UTF-8 discovery gaps, unsafe overlay behavior,
+  the check-then-reopen race returning outside content, missing packaged
+  startup fallback, and rollback replacing the original source mapping.
+- The first GREEN reached `34 passed`; one assertion was then narrowed from
+  the generic word `overlay` to its unique user marker because packaged widget
+  comments legitimately contain that word.
+- The strengthened final focused run reported `36 passed`, including a
+  replacement injected during descriptor-relative `os.open()`, configured
+  invalid TCSS, invalid overlay TCSS, a forced startup live-apply exception,
+  and a forced runtime live-apply exception followed by a successful switch.
+- The final manual call-site review added an assertion that invalid-overlay
+  fallback also resets the already-composed banner palette to Carbon; the
+  three directly affected startup fallback regressions passed.
+- Five directly affected ThemeStore regressions passed for traversal,
+  cross-platform separators, Windows alternate-stream syntax, and embedded
+  NUL names.
+
+Final lifecycle verification:
+
+| Command | Result |
+| --- | --- |
+| Focused ThemeStore/startup/runtime lifecycle suite | `36 passed` |
+| Expanded theme/app/store/VMx/palette suite | `288 passed` |
+| `uv run pytest --force-reruns 0 tests/snapshot/test_theme_picker.py -q` | `20 passed`; 10 snapshots passed; no goldens changed |
+| `uv run pytest --force-reruns 0 tests/docs -q` | `79 passed` |
+| Full unit + in-process integration suite with coverage and `--force-reruns 0` | `3005 passed`, `9 deselected`; `85.71%` coverage |
+| Separately marked MinIO integration tier with `--force-reruns 0` | `9 passed`, `264 deselected` |
+| Full snapshot suite with `--force-reruns 0` | `806 passed`; 481 snapshots passed; no goldens changed |
+| Full E2E suite with `--force-reruns 0` | `9 passed` |
+| Ruff check / format check on 4 changed Python files | All checks passed; 4 files already formatted |
+| Mypy on `app.py` and `theme_store.py` | No issues in 2 source files |
+| `scripts/check-layers.sh` | `layer rules clean` |
+| `make docs-check` | `check_docs: clean`; strict MkDocs build passed |
+| `make docs-wiki` | Wiki generation and parity check passed |
+| Historical Task 1 SHA-256 comparison to base | Both `f92da5c48849eb4d9c0a3b504dc385b7386d2e91926317262bb497b1d4a18a32` |
+| `git diff --check` | Clean |
+
+The broad-suite counts above were recorded before the two final manual-review
+corrections. Per the final instruction, those suites were not rerun; only the
+directly affected startup (`3 passed`) and ThemeStore name-boundary (`5
+passed`) checks were repeated, together with Ruff and mypy.
+
+Tracked files for this final lifecycle remediation are `src/aws_tui/app.py`,
+`src/aws_tui/infra/theme_store.py`,
+`tests/integration/test_theme_runtime_propagation.py`,
+`tests/unit/infra/test_theme_store.py`, and this dated report. The focused
+commit subject is `fix(theme): validate startup theme atomically`; no
+self-referential commit hash is recorded here.
 
 ## Residual Risk
 

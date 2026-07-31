@@ -44,7 +44,7 @@ from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.redaction import redact_text
-from aws_tui.infra.theme_store import ThemeNotFound
+from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
@@ -116,6 +116,12 @@ class _S3HandoffStageError(Exception):
         super().__init__(f"S3 handoff failed during {stage}")
         self.stage = stage
         self.error_type = error_type
+
+
+@dataclass(frozen=True, slots=True)
+class _ThemeApplyFailure:
+    stage: str
+    error: Exception
 
 
 _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
@@ -1241,27 +1247,59 @@ class AwsTuiApp(App[None]):
     # ── on_mount helpers ───────────────────────────────────────────────────
 
     def _apply_initial_theme(self) -> None:
-        """Layer the active theme `.tcss` on top of Textual's defaults.
-
-        Uses the same ``read_from=self._THEME_SOURCE_KEY`` keyed
-        source that ``switch_theme`` uses, so the first runtime theme
-        swap REPLACES this initial source instead of stacking on top
-        of an anonymous one (which would leave a dead entry the
-        stylesheet would still re-parse on every refresh).
-        """
+        """Apply the configured theme or a packaged, user-file-free fallback."""
         ctx = self._app_ctx
+        configured_name = ctx.initial_theme
+        failure: _ThemeApplyFailure | None
         try:
-            theme_css = ctx.theme_store.load(ctx.initial_theme)
-            self.stylesheet.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
-            self.stylesheet.parse()
-            self.stylesheet.update(self)
-        except Exception as exc:
+            theme_css = ctx.theme_store.load(configured_name)
+        except (OSError, ThemeNotFound, UnicodeError) as exc:
+            failure = _ThemeApplyFailure("load", exc)
+        else:
+            failure = self._apply_theme_css(configured_name, theme_css)
+
+        if failure is None:
+            ctx.initial_theme = configured_name
+            return
+
+        ctx.log_sink.error(
+            "app.theme.initial_failed",
+            name=configured_name,
+            stage=failure.stage,
+            error=str(failure.error),
+            error_type=type(failure.error).__name__,
+        )
+        fallback_name = ThemeStore.DEFAULT_NAME
+        try:
+            fallback_css = ctx.theme_store.load_builtin(fallback_name)
+        except (OSError, ThemeNotFound, UnicodeError) as exc:
             ctx.log_sink.error(
-                "app.theme.load_failed",
-                name=ctx.initial_theme,
+                "app.theme.fallback_failed",
+                name=fallback_name,
+                stage="load",
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            return
+
+        fallback_failure = self._apply_theme_css(fallback_name, fallback_css)
+        if fallback_failure is not None:
+            ctx.log_sink.error(
+                "app.theme.fallback_failed",
+                name=fallback_name,
+                stage=fallback_failure.stage,
+                error=str(fallback_failure.error),
+                error_type=type(fallback_failure.error).__name__,
+            )
+            return
+
+        ctx.initial_theme = fallback_name
+        self.query_one(BrandBanner).set_theme(fallback_name)
+        ctx.log_sink.info(
+            "app.theme.fallback_applied",
+            configured_name=configured_name,
+            fallback_name=fallback_name,
+        )
 
     def _resolve_initial_connection(self) -> Connection | None:
         """Pick the initial connection in this order:
@@ -2938,15 +2976,28 @@ class AwsTuiApp(App[None]):
             self._report_theme_switch_failure(name, "load", exc)
             return False
 
+        failure = self._apply_theme_css(name, theme_css)
+        if failure is not None:
+            self._report_theme_switch_failure(name, failure.stage, failure.error)
+            return False
+
+        ctx.initial_theme = name
+
+        # 4. Broadcast for Python-side palettes (e.g. the banner).
+        ctx.hub.send(ThemeChangedMessage(name=name))
+        return True
+
+    def _apply_theme_css(self, name: str, theme_css: str) -> _ThemeApplyFailure | None:
+        """Validate and apply theme CSS while preserving the live stylesheet."""
         previous_stylesheet = self.stylesheet
+        previous_sources = previous_stylesheet.source
         candidate = previous_stylesheet.copy()
         candidate.set_variables(self.get_css_variables())
         candidate.add_source(theme_css, read_from=self._THEME_SOURCE_KEY)
         try:
             candidate.parse()
         except (StylesheetError, TokenError) as exc:
-            self._report_theme_switch_failure(name, "validate", exc)
-            return False
+            return _ThemeApplyFailure("validate", exc)
 
         self.stylesheet = candidate
         try:
@@ -2958,20 +3009,16 @@ class AwsTuiApp(App[None]):
                 self._invalidate_css()
                 self.refresh_css(animate=False)
             except Exception as rollback_exc:
-                ctx.log_sink.error(
+                self._app_ctx.log_sink.error(
                     "app.theme.rollback_failed",
                     name=name,
                     error=str(rollback_exc),
                     error_type=type(rollback_exc).__name__,
                 )
-            self._report_theme_switch_failure(name, "apply", exc)
-            return False
-
-        ctx.initial_theme = name
-
-        # 4. Broadcast for Python-side palettes (e.g. the banner).
-        ctx.hub.send(ThemeChangedMessage(name=name))
-        return True
+            finally:
+                previous_stylesheet.source = previous_sources
+            return _ThemeApplyFailure("apply", exc)
+        return None
 
     # ── Connection-reachability tracking ───────────────────────────────────
 
