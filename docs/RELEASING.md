@@ -55,13 +55,15 @@ Review the PR like any other change. Merge when CI is green.
   through Shift+S, the S3 pane shows demo objects, the EMR pane shows two
   applications plus about 10 job runs across states, and clone-from-detail
   visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within about 5 seconds.
-- **Interaction-surface smoke.** With at least two demo profiles, open the
-  exact source selector and verify its forward and reverse focus rings. Check
-  Glue filter commands, copy the selected table reference, then insert the
-  copied table reference in Athena. Reject a copied reference from another
-  source and confirm the editor, clipboard, and active profile are unchanged.
-  Open the command palette on Glue and Athena and verify service-specific
-  commands are visible only in their matching active service.
+- **Interaction-surface smoke.** With at least two demo profiles, use `Tab`
+  to reach the exact source selector and verify the forward focus ring; use
+  `Shift+Tab` to verify the reverse focus ring. Check Glue `Shift+F` /
+  `Shift+G` filter commands and Athena `Shift+W` / `Shift+C` / `Shift+D`
+  selector commands. Open the contextual command palette on Glue and Athena
+  and confirm wrong-service commands are absent. Copy the selected table
+  reference to the typed clipboard, then insert the copied table reference in
+  Athena under the same source. Refuse a copied reference from another source
+  and confirm the editor, typed clipboard, and active profile are unchanged.
 - **Athena release smoke.** On `demo-dev`, execute a valid bounded query and
   observe QUEUED/RUNNING/SUCCEEDED lifecycle state. Enter `DELETE FROM events`
   and verify that aws-tui will reject an unsafe statement before dispatch.

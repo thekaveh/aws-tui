@@ -148,10 +148,9 @@ show up as `s3-compatible · {name} · {endpoint}`. Tap
 `s3-compatible · minio-local · {endpoint}` — the bucket list
 should populate immediately.
 
-> The dedicated command-palette path (`: connection switch ▸ minio-local`)
-> is spec'd but deferred to v0.9 — in v0.8.x ``:`` opens the
-> help overlay as a placeholder. ``Shift+S`` is the one-keystroke
-> equivalent today.
+> `:` opens the command palette. Its `Switch source` command invokes
+> `app.swap_source` and cycles resolver order; `Shift+S` is the one-keystroke
+> equivalent. Neither path selects one exact source.
 
 ---
 
@@ -457,9 +456,12 @@ are isolated by connection name and region.
 
 For the shared source, state, and table-reference workflow:
 
-1. Focus the bordered AWS source selector with `Tab`, or open it directly
-   from the command palette.
-2. Use `Up` / `Down`, commit with `Enter`, and cancel with `Escape`.
+1. `:` opens the command palette. Its `Switch source` command invokes
+   `app.swap_source` and cycles resolver order; it does not select an exact
+   source.
+2. Use `Tab` / `Shift+Tab` to focus the bordered source selector, then press
+   `Enter` or `Space` to open it. Use `Up` / `Down`, commit with `Enter`, and
+   cancel with `Escape`.
 3. In Glue Jobs press `Shift+F`; in Crawlers press `Shift+G`.
 4. In Athena press `Shift+W`, `Shift+C`, or `Shift+D` for the corresponding
    context selector.

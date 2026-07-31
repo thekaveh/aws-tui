@@ -349,12 +349,20 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
     ):
         assert step in normalized_releasing
     for step in (
-        "open the exact source selector",
+        "at least two demo profiles",
+        "forward focus ring",
+        "reverse focus ring",
+        "Glue `Shift+F` / `Shift+G`",
+        "Athena `Shift+W` / `Shift+C` / `Shift+D`",
+        "contextual command palette",
+        "wrong-service commands are absent",
+        "typed clipboard",
         "copy the selected table reference",
-        "insert the copied table reference",
-        "reject a copied reference from another source",
+        "insert the copied table reference in Athena under the same source",
+        "refuse a copied reference from another source",
+        "editor, typed clipboard, and active profile are unchanged",
     ):
-        assert step in normalized_releasing.casefold()
+        assert step.casefold() in normalized_releasing.casefold()
     assert '__version__ = "0.8.0"' in version
 
 
@@ -454,6 +462,14 @@ def test_public_docs_cover_integrated_iceberg_workflow() -> None:
     assert "resolver order" in connections
     assert "connection name and region" in connections
     assert "exact source" in _squash(connections).casefold()
+    assert "`:` opens the command palette" in normalized_cookbook
+    assert (
+        "`Switch source` command invokes `app.swap_source` and cycles resolver order"
+        in normalized_cookbook
+    )
+    assert "Use `Tab` / `Shift+Tab` to focus the bordered source selector" in normalized_cookbook
+    assert "press `Enter` or `Space` to open it" in normalized_cookbook
+    assert "`:` opens Help" not in cookbook
     assert "Glue → Athena" in cookbook
     assert "copy table reference" in _squash(cookbook).casefold()
     assert "insert copied table reference" in _squash(cookbook).casefold()
