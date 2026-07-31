@@ -113,6 +113,11 @@ until the release cut.
 
 ### 1.1.2. Changed
 
+- **Interaction-surface parity.** Restored configured keymap overlays at
+  startup, filtered contextual palette commands by active service, clarified
+  CSS ownership for shared selectors and tabs, and aligned the canonical
+  documentation with the shipped Glue and Athena workflows.
+
 - ``docs/`` + ``ui/widgets/settings_view.py``: retargeted the
   ``Deferred / v0.8 roadmap`` references to ``Deferred / v0.9
   roadmap`` (and ``coming in v0.8`` placeholders to

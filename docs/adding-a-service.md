@@ -101,6 +101,9 @@ needs a `construct → destruct → dispose` surface.
     - For flat resource lists (EC2 instances, IAM users): write a new
       `ListPaneVM` under `vm/<service>/` and a corresponding widget
       family under `ui/widgets/<service>/`.
+    - Reuse `ServiceSourceHeader`, `ContextPicker`, and `ServiceTabStrip`
+      for shared source, context, and view focus behavior. Extend
+      `FocusCoordinatorVM` instead of creating another focus authority.
 
 6. **Layer rules.** Services live one layer above domain, so they may
     import from `domain/`, `infra/`, and the public VM surface
@@ -117,6 +120,11 @@ needs a `construct → destruct → dispose` surface.
 
 8. **Update docs.** Add any vendor / API quirks to
    `docs/connections.md`. Update the README's features list.
+
+9. **Palette and cross-service state.** Declare the command-palette service
+   IDs for service-specific commands. Publish immutable typed requests for
+   app-level cross-service state; the composition root owns delivery and
+   Textual integration.
 
 For cross-service links, publish an immutable VM message carrying plain
 identifiers and source identity. The app composition root resolves the

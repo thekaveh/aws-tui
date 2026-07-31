@@ -301,16 +301,16 @@ def test_no_handlerless_keys_bound() -> None:
 
 
 def test_overlay_remaps_a_handled_action(tmp_path, monkeypatch) -> None:
-    # Build an app whose KeymapStore carries an overlay {pane.copy: "y"}.
+    # Build an app whose KeymapStore carries an overlay {pane.copy: "ctrl+y"}.
     from aws_tui.infra.keymap_store import KeymapStore
     from aws_tui.ui.actions import ActionRegistry
     from aws_tui.ui.bindings import BindingResolver
-    keymap = KeymapStore(overlay={"pane.copy": "y"})
+    keymap = KeymapStore(overlay={"pane.copy": "ctrl+y"})
     actions = ActionRegistry()
     actions.register("pane.copy", lambda: None)
     resolver = BindingResolver(keymap=keymap, actions=actions)
     keys = {b.key for b in resolver.to_textual_bindings()}
-    assert "y" in keys and "c" not in keys
+    assert "ctrl+y" in keys and "c" not in keys
 
 
 @pytest.mark.asyncio

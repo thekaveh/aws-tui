@@ -134,7 +134,7 @@ asserts Tab/arrow nav still fire (priority preserved).
 
 `AwsTuiApp` already loads the `[keybindings]` overlay into `KeymapStore`.
 Once the resolver drives `BINDINGS`, an overlay that remaps a handled
-action (e.g. `pane.copy = "y"`) takes effect with no further work.
+action (e.g. `pane.copy = "ctrl+y"`) takes effect with no further work.
 
 ## Backward-compatibility guarantee
 
@@ -155,8 +155,8 @@ duplicate chip — accepted, not a regression.
 3. **Dispatch routing** — `action_dispatch("pane.copy")` invokes the
    registered `pane.copy` handler exactly once; unknown id raises
    `UnknownAction`.
-4. **Overlay remap** — with overlay `{"pane.copy": "y"}`, the materialized
-   bindings bind `y`→`pane.copy` and drop `c`.
+4. **Overlay remap** — with overlay `{"pane.copy": "ctrl+y"}`, the materialized
+   bindings bind `ctrl+y`→`pane.copy` and drop `c`.
 5. **Nav-not-regressed** — a pilot/integration test: Tab switches panes,
    arrows move the cursor (priority bindings still win over Screen focus).
 6. **`KeymapStore` defaults** — unit-assert the edited `DEFAULT_BINDINGS`

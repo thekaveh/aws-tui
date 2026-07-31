@@ -26,6 +26,9 @@ VMs to build service pages, but it cannot import Textual widgets.
   notifications. The S3 root is the code-backed `DualPane` from
   `src/aws_tui/ui/widgets/dual_pane.py`, mounted through
   `src/aws_tui/ui/widgets/service_view_factory.py`; there is no `S3Page` class.
+  `ContextPicker` provides bordered keyboard-focusable context selection, and
+  `ServiceTabStrip` provides one predictable focus stop for service-local
+  views.
 - **ViewModel** — VMx-based viewmodels with reactive commands and
   property-changed messages (`src/aws_tui/vm/`). Never imports
   Textual; tests run headless. `ServiceSelectionStore` is a VM-layer type in
@@ -37,6 +40,8 @@ VMs to build service pages, but it cannot import Textual widgets.
     legacy status bookkeeping even though no `StatusBar` widget is
     mounted in the production chrome).
   - `vm/file_manager/` — pane / dual-pane / entry / transfer VMs.
+  - `vm/table_clipboard_vm.py` — `TableClipboardVM`, an app-lifetime VMx
+    component that retains one typed, replaceable table reference.
   - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
     `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
     (added post-tag by PR #76 and extended by PR #84; the read-only EMR Serverless browser with logs streaming).
@@ -123,6 +128,10 @@ handlers.
 - `add_s3_compat_connection(form)` — materializes the in-TUI
   S3-compatible form into a config-store entry.
 
+It also constructs the app-lifetime `TableClipboardVM`. `app.py` owns the
+best-effort OS clipboard copy after it receives the typed request; the VM
+remains the authoritative in-app clipboard.
+
 ## 1.3. Lifecycle
 VMs implement `construct → run → destruct → dispose` (VMx convention).
 The `RootVM` constructs the chrome and content-host children
@@ -144,7 +153,7 @@ All cross-VM communication goes through the session's single
   `KeymapChangedMessage`, `FocusChangedMessage`,
   `TransferCancelRequestedMessage`, `ConnectionListChangedMessage`,
   `OpenS3LocationRequest`, `OpenAthenaTableRequest`,
-  `OpenGlueTableRequest`.
+  `OpenGlueTableRequest`, `CopyTableReferenceRequest`.
 
 Cross-service navigation stays service-neutral. `OpenAthenaTableRequest` and
 `OpenGlueTableRequest` carry a `TableRef` containing catalog, database, table,
@@ -157,6 +166,10 @@ exact connection, region, URI, pane, and reveal-object intent. The Results VM
 reloads an execution and publishes only when it succeeded, belongs to the
 active context, and has a valid `s3://` output location. Missing, malformed,
 ambiguous, or stale identities stop at an advisory; VMs never import UI code.
+`CopyTableReferenceRequest` carries one exact `TableRef` to the composition
+root, which updates `TableClipboardVM` and attempts the OS clipboard copy.
+Palette eligibility is VM-owned state: the palette projects global commands
+and only commands whose declared service IDs include the active service.
 
 VMs subscribe via `hub.messages.subscribe(on_next=callback)` (an
 `reactivex.Observable` under the hood); filtering happens inside the

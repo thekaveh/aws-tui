@@ -348,6 +348,13 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
         "exact S3 artifact",
     ):
         assert step in normalized_releasing
+    for step in (
+        "open the exact source selector",
+        "copy the selected table reference",
+        "insert the copied table reference",
+        "reject a copied reference from another source",
+    ):
+        assert step in normalized_releasing.casefold()
     assert '__version__ = "0.8.0"' in version
 
 
@@ -411,6 +418,10 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         "OpenAthenaTableRequest",
         "OpenGlueTableRequest",
         "generated SQL in the editor but does not execute it",
+        "ContextPicker",
+        "ServiceTabStrip",
+        "TableClipboardVM",
+        "CopyTableReferenceRequest",
     ):
         assert current_claim in _squash(public_docs)
 
@@ -442,7 +453,12 @@ def test_public_docs_cover_integrated_iceberg_workflow() -> None:
         assert "Iceberg" in page
     assert "resolver order" in connections
     assert "connection name and region" in connections
+    assert "exact source" in _squash(connections).casefold()
     assert "Glue → Athena" in cookbook
+    assert "copy table reference" in _squash(cookbook).casefold()
+    assert "insert copied table reference" in _squash(cookbook).casefold()
+    assert "ctrl+y" in keybindings
+    assert 'pane.copy = "y"' not in f"{readme}\n{cookbook}\n{keybindings}\n{changelog}"
     assert "FOR VERSION AS OF" in cookbook
     assert "never executes generated queries automatically" in normalized_cookbook
     assert "metadata-query costs" in normalized_cookbook

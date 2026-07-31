@@ -231,6 +231,8 @@ The default map is declared in `infra/keymap_store.py`. At composition
 time, aws-tui validates the overlay and `BindingResolver` installs keys
 only for registered actions. Unknown action IDs are logged and the app
 continues with the default keymap so a typo does not crash startup.
+For example, use `"pane.copy" = "ctrl+y"` to move pane copy without
+claiming bare `y`, which is reserved by `glue.copy_table_ref`.
 
 The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,

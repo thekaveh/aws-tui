@@ -317,6 +317,9 @@ Rebind copy (`pane.copy`) from `c` to `Ctrl+Y`:
 "pane.copy" = "ctrl+y"
 ```
 
+Bare `y` is reserved by `glue.copy_table_ref` for copying a selected Glue
+table reference.
+
 For a fallback list (try `Ctrl+K` first, fall back to `:`):
 
 ```toml
@@ -452,6 +455,23 @@ profile name when present, and region. Switching profiles clears the
 old page before the replacement VM loads, and remembered selections
 are isolated by connection name and region.
 
+For the shared source, state, and table-reference workflow:
+
+1. Focus the bordered AWS source selector with `Tab`, or open it directly
+   from the command palette.
+2. Use `Up` / `Down`, commit with `Enter`, and cancel with `Escape`.
+3. In Glue Jobs press `Shift+F`; in Crawlers press `Shift+G`.
+4. In Athena press `Shift+W`, `Shift+C`, or `Shift+D` for the corresponding
+   context selector.
+5. In Glue Catalog select a table and press `y` to copy its canonical,
+   fully quoted identifier.
+6. In Athena press `i` outside the editor, or choose **Insert copied table
+   reference**, to replace the editor selection or insert at the cursor.
+7. A connection/region mismatch is refused without changing the editor,
+   clipboard, or active profile.
+
+This is the copy table reference workflow for the typed app clipboard.
+
 ### 1.5.1. Least-privilege Glue permissions
 
 Grant only the read operations needed by the views you use. A complete
@@ -521,6 +541,9 @@ and never makes a real AWS call.
 
 Athena is an AWS-only, read-only query service. Select **Athena** in the
 nav rail and choose a workgroup, catalog, and database in the page header.
+Each is a bordered, keyboard-focusable selector; use `Shift+W`, `Shift+C`,
+or `Shift+D` to focus the corresponding control and commit or cancel it with
+the shared picker workflow above.
 The four views are Query (`1`), History (`2`), Results (`3`), and Saved (`4`).
 `Shift+S` rebuilds the whole Athena page for the next supported AWS connection;
 the old page is disposed, so rows, selections, loaders, result fetches, and any

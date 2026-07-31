@@ -34,7 +34,11 @@ Linux, and Windows. Powered by
   rail to browse databases, tables, schema/storage detail, partitions,
   column statistics, jobs and recent runs, and crawler status/detail.
   `1` / `2` / `3` select Catalog / Jobs / Crawlers, `r` refreshes the
-  active view, and `Shift+S` rebuilds Glue under the next AWS profile.
+  active view. The bordered AWS source selector chooses an exact configured
+  profile and region; `Shift+S` still cycles in resolver order. Jobs and
+  Crawlers expose bordered state selectors through `Shift+F` and `Shift+G`.
+  On a selected Catalog table, `y` copies the fully quoted table reference
+  into the VMx-backed app clipboard and best-effort OS clipboard.
   From a selected Catalog table, the command palette can open its exact
   location in S3 or prefill an Athena query. Iceberg tables add bounded,
   on-demand Snapshots, History, Manifests, Files, Partitions, and References
@@ -47,6 +51,10 @@ Linux, and Windows. Powered by
   to choose a workgroup, catalog, and database; submit one allowed read-only
   statement; follow its lifecycle; page through Results; inspect History; and
   open named or prepared queries in the editor.
+  Workgroup, catalog, and database are keyboard-focusable selectors opened by
+  `Shift+W`, `Shift+C`, and `Shift+D`. Press `i` outside the editor, or choose
+  the contextual palette command, to insert a same-source copied table
+  reference at the editor selection or cursor without executing SQL.
   Athena is AWS-only. The local parser fails closed before dispatch, while AWS
   IAM, Lake Formation, workgroup, and S3 policies remain authoritative. The
   Query execution detail shows bytes scanned; History detail shows bytes
@@ -124,7 +132,8 @@ Linux, and Windows. Powered by
   `<config-dir>/config.toml` for routine endpoint changes.
 - **Runtime-configurable keymap.** `BindingResolver` installs handled
   `[keybindings]` overrides at runtime, so remapping an action changes
-  the live Textual keymap on the next launch. Handlerless deferred
+  the live Textual keymap on the next launch. Valid overlays apply on the
+  next launch; invalid overlays fall back atomically. Handlerless deferred
   action IDs remain unbound. See
   [`docs/keybindings.md` customizing](docs/keybindings.md#12-customizing)
   and [action IDs](docs/keybindings.md#13-action-ids).
@@ -135,7 +144,8 @@ Linux, and Windows. Powered by
 - **Command palette.** Press `:` or `Ctrl+K` for the fuzzy-filterable
   curated command list, including **Open table location in S3** on
   Glue and **Open Athena result in S3** for a validated successful Athena
-  execution. Dynamic `connection switch <name>` / `theme switch <name>`
+  execution. Service commands appear only for their active service. Dynamic
+  `connection switch <name>` / `theme switch <name>`
   entries and consolidation with Textual's `Ctrl+P` palette remain deferred.
   Integrated commands include **Query table in Athena**, **Query Iceberg
   snapshot in Athena**, and **Open query table in Glue**; each preserves the

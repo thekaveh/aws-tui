@@ -133,8 +133,8 @@ fixed before merge:
 - `9277a6a fix(ui): preserve compact EMR source identity`
 - `7ff0b1b fix(ui): ignore empty teardown focus rings`
 - `3691ec0 fix(ui): restore rejected source selections`
-- `fix(ui): preserve one-profile source rebuilds`
-- `test(e2e): read compact EMR source identity`
+- `3660c39 fix(ui): preserve one-profile source rebuilds`
+- `5dffc81 test(e2e): read compact EMR source identity`
 
 The first full coverage attempt exposed the EMR regression and ended with 1
 failed, 2974 passed, 9 deselected, 2 rerun at 85.70%. After the narrow fixes,
