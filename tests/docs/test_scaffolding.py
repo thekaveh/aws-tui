@@ -352,6 +352,11 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
         "at least two demo profiles",
         "forward focus ring",
         "reverse focus ring",
+        "`Tab` / `Shift+Tab` to focus the bordered source selector",
+        "press `Enter` or `Space` to open it",
+        "choose another demo profile",
+        "press `Enter` to commit",
+        "verify the exact connection name and region changed as selected",
         "Glue `Shift+F` / `Shift+G`",
         "Athena `Shift+W` / `Shift+C` / `Shift+D`",
         "contextual command palette",
@@ -469,7 +474,7 @@ def test_public_docs_cover_integrated_iceberg_workflow() -> None:
     )
     assert "Use `Tab` / `Shift+Tab` to focus the bordered source selector" in normalized_cookbook
     assert "press `Enter` or `Space` to open it" in normalized_cookbook
-    assert "`:` opens Help" not in cookbook
+    assert "opens the help overlay" not in _squash(cookbook).casefold()
     assert "Glue → Athena" in cookbook
     assert "copy table reference" in _squash(cookbook).casefold()
     assert "insert copied table reference" in _squash(cookbook).casefold()
