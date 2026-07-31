@@ -849,9 +849,7 @@ AthenaPage DetailRows {
     border-title-color: $text;
 }
 AthenaPage ResourceListPane:focus-within,
-AthenaPage DetailRows:focus-within,
-AthenaPage TextArea:focus,
-AthenaPage DataTable:focus {
+AthenaPage DetailRows:focus-within {
     border: solid $accent; border-title-color: $accent;
 }
 AthenaPage OptionList,

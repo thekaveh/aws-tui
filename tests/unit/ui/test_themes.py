@@ -314,6 +314,8 @@ def test_builtin_themes_do_not_duplicate_operational_structure(name: str) -> Non
         "GluePage > #glue-context-pane:focus-within",
         "GluePage GlueIcebergView:focus-within",
         "AthenaPage > #athena-context-header:focus-within",
+        "AthenaPage TextArea:focus",
+        "AthenaPage DataTable:focus",
         "AthenaPage #athena-query-controls:focus-within",
         "AthenaPage #athena-query-detail:focus-within",
         "AthenaPage #athena-results-summary:focus-within",
