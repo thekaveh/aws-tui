@@ -872,12 +872,13 @@ async def test_windows_conditional_delete_detects_metadata_only_change(tmp_path:
     fs = _make_fs(tmp_path)
     observed = await fs.stat(PathRef.from_posix("/file.txt"))
 
-    target.chmod(stat.S_IREAD)
-    try:
-        with pytest.raises(ConflictError, match="source changed"):
-            await fs.delete(PathRef.from_posix("/file.txt"), expected_etag=observed.etag)
-    finally:
-        target.chmod(stat.S_IWRITE)
+    original = target.stat()
+    os.utime(
+        target,
+        ns=(original.st_atime_ns, original.st_mtime_ns + 2_000_000_000),
+    )
+    with pytest.raises(ConflictError, match="source changed"):
+        await fs.delete(PathRef.from_posix("/file.txt"), expected_etag=observed.etag)
 
     assert target.read_bytes() == b"unchanged-content"
 
