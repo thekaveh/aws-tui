@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from textual.widgets import OptionList
 
@@ -18,7 +20,9 @@ async def test_tab_cycle_closes_departed_application_picker() -> None:
         page = app.query_one(EmrServerlessPage)
         picker = app.query_one(ApplicationPicker)
         picker.toggle_open()
-        await pilot.pause(0.05)
+        async with asyncio.timeout(1.0):
+            while not page.has_class("-application-picker-open"):
+                await asyncio.sleep(0.01)
         assert picker.has_class("-open")
         assert page.has_class("-application-picker-open")
         assert app.focused is not None

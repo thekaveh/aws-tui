@@ -48,6 +48,7 @@ async def test_enter_on_copy_confirm_modal_runs_copy(
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
+        await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
         await pilot.press("c")
         await pilot.pause()

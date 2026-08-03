@@ -214,6 +214,40 @@ def test_windows_rename_handle_uses_complete_relative_buffer() -> None:
     }
 
 
+def test_windows_directory_handles_share_write_but_not_delete() -> None:
+    from aws_tui.domain import local_fs
+
+    shares: list[int] = []
+
+    def create_file(
+        _path: str,
+        _access: int,
+        share_mode: int,
+        *_args: object,
+    ) -> int:
+        shares.append(share_mode)
+        return 22
+
+    api = object.__new__(local_fs._WindowsAPI)
+    api._dll = SimpleNamespace(CreateFileW=create_file)
+
+    api.open(
+        r"C:\locked",
+        access=(local_fs._WINDOWS_FILE_LIST_DIRECTORY | local_fs._WINDOWS_FILE_READ_ATTRIBUTES),
+        disposition=local_fs._WINDOWS_OPEN_EXISTING,
+    )
+    api.open(
+        r"C:\locked\file.txt",
+        access=local_fs._WINDOWS_FILE_READ_ATTRIBUTES,
+        disposition=local_fs._WINDOWS_OPEN_EXISTING,
+    )
+
+    assert shares == [
+        local_fs._WINDOWS_FILE_SHARE_READ | local_fs._WINDOWS_FILE_SHARE_WRITE,
+        local_fs._WINDOWS_FILE_SHARE_READ,
+    ]
+
+
 def test_windows_delete_claims_and_removes_the_same_open_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

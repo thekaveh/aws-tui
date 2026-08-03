@@ -609,6 +609,7 @@ async def test_load_more_routes_by_focused_context_or_active_surface() -> None:
                 }[expected]
                 if page.vm.active_view != view:
                     await page.action_select_view(view)
+                    await pilot.pause(0.05)
             target = app.query_one(selector)
             target.focus()
             await pilot.pause(0.05)

@@ -738,6 +738,7 @@ _WINDOWS_DELETE_ACCESS = 0x00010000
 _WINDOWS_GENERIC_READ = 0x80000000
 _WINDOWS_GENERIC_WRITE = 0x40000000
 _WINDOWS_FILE_SHARE_READ = 0x00000001
+_WINDOWS_FILE_SHARE_WRITE = 0x00000002
 _WINDOWS_CREATE_NEW = 1
 _WINDOWS_OPEN_EXISTING = 3
 _WINDOWS_FILE_BASIC_INFO = 0
@@ -886,13 +887,18 @@ class _WindowsAPI:
         self._ntdll.RtlNtStatusToDosError.restype = wintypes.ULONG
 
     def open(self, path: str, *, access: int, disposition: int) -> int:
+        share_mode = _WINDOWS_FILE_SHARE_READ
+        if access & _WINDOWS_FILE_LIST_DIRECTORY:
+            # A handle-relative rename opens its target against the locked
+            # directory with write access. Permit that while continuing to
+            # withhold delete sharing, which prevents path replacement.
+            share_mode |= _WINDOWS_FILE_SHARE_WRITE
         handle = self._dll.CreateFileW(
             path,
             access,
             # Keep the opened entry stable while its path is validated and used.
-            # Read sharing permits our own directory enumeration; withholding
-            # write/delete sharing blocks reparse mutation and path replacement.
-            _WINDOWS_FILE_SHARE_READ,
+            # Withholding delete sharing blocks reparse mutation and path replacement.
+            share_mode,
             None,
             disposition,
             _WINDOWS_FILE_FLAG_BACKUP_SEMANTICS | _WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT,
