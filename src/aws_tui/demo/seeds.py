@@ -19,6 +19,7 @@ from aws_tui.demo.in_memory_emr import InMemoryEmr
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.demo.in_memory_glue import InMemoryGlue
 from aws_tui.domain.data_catalog import Column
+from aws_tui.domain.emr_logs import LogFileKind
 from aws_tui.domain.emr_serverless import (
     ApplicationState,
     JobRunState,
@@ -251,6 +252,13 @@ def seed_emr_data(emr: InMemoryEmr) -> None:
             application_id="etl-pipeline-1",
             job_run_id=run_id,
             entry_point="s3://demo-prod/etl/scripts/nightly.py",
+            s3_monitoring_log_uri="s3://demo-emr-logs/logs",
+        )
+        emr.add_log_file(
+            application_id="etl-pipeline-1",
+            job_run_id=run_id,
+            kind=LogFileKind.DRIVER_STDERR,
+            lines=("INFO nightly job started", "INFO nightly job completed"),
         )
     # 2 SUCCESS runs on ad-hoc-queries.
     for i, days_ago in enumerate([3, 2]):
@@ -266,10 +274,15 @@ def seed_emr_data(emr: InMemoryEmr) -> None:
             application_id="ad-hoc-queries",
             job_run_id=run_id,
             entry_point="s3://demo-prod/etl/scripts/ad-hoc.py",
+            s3_monitoring_log_uri="s3://demo-emr-logs/logs",
         )
-    # 2 FAILED runs on etl-pipeline-1. Details intentionally omit fake
-    # S3 log URIs; the demo client returns typed no-log states instead
-    # of pointing at nonexistent in-memory log files.
+        emr.add_log_file(
+            application_id="ad-hoc-queries",
+            job_run_id=run_id,
+            kind=LogFileKind.DRIVER_STDOUT,
+            lines=("INFO query accepted", "INFO query completed"),
+        )
+    # 2 FAILED runs on etl-pipeline-1 with useful filtered log output.
     for i, days_ago in enumerate([3, 1]):
         run_id = f"r-etl-failed-{i:03d}"
         emr.add_job_run(
@@ -283,6 +296,16 @@ def seed_emr_data(emr: InMemoryEmr) -> None:
             application_id="etl-pipeline-1",
             job_run_id=run_id,
             entry_point="s3://demo-prod/etl/scripts/nightly.py",
+            s3_monitoring_log_uri="s3://demo-emr-logs/logs",
+        )
+        emr.add_log_file(
+            application_id="etl-pipeline-1",
+            job_run_id=run_id,
+            kind=LogFileKind.DRIVER_STDERR,
+            lines=(
+                "ERROR nightly transform failed",
+                "Caused by: demo input schema mismatch",
+            ),
         )
     # 1 RUNNING run on etl-pipeline-1.
     emr.add_job_run(

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from textual.widgets import Static
+from textual.widgets import OptionList, Static
 
 from aws_tui.app import AwsTuiApp, _next_service_source, _service_source_candidates
 from aws_tui.composition import AppContext, build_app_context
@@ -17,6 +17,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.services.glue import GlueClientProtocol, GlueService
 from aws_tui.ui.widgets.context_picker import ContextPicker
+from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 from tests.unit.vm.glue._fake_glue import seeded_glue
@@ -89,6 +90,22 @@ def test_service_candidates_include_only_supported_aws_connections(tmp_path: Pat
         ("zulu", "eu-west-1"),
         ("alpha", "ap-southeast-1"),
     ]
+
+
+@pytest.mark.parametrize("service_id", ["emr-serverless", "glue", "athena"])
+def test_s3_unreachable_mark_does_not_suppress_other_service_candidates(
+    tmp_path: Path,
+    service_id: str,
+) -> None:
+    ctx = build_app_context(
+        config_dir=_three_source_config(tmp_path),
+        cache_dir=tmp_path / "cache",
+    )
+    ctx.unreachable_connections.add(("aws", "prod-west"))
+
+    candidates = _service_source_candidates(ctx, service_id)
+
+    assert any(connection.name == "prod-west" for connection in candidates)
 
 
 def test_next_service_source_wraps_by_connection_name_and_region() -> None:
@@ -218,6 +235,95 @@ async def test_direct_source_selection_probes_and_mounts_exact_target(tmp_path: 
                 "dev",
                 "us-east-1",
             )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_source_picker_rebuilds_exact_selected_target(tmp_path: Path) -> None:
+    ctx, calls = _multi_profile_emr_context(tmp_path)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_service_mount(pilot, app)
+            page = app.query_one("#content-emr-page", EmrServerlessPage)
+            picker = page.query_one("#emr-source-header-picker", ContextPicker)
+            probed: list[tuple[str, str]] = []
+
+            def probe(connection: Connection) -> TokenProbeResult:
+                probed.append((connection.name, connection.region))
+                return TokenProbeResult(TokenState.CONNECTED)
+
+            ctx.aws_session.probe_token = probe  # type: ignore[method-assign]
+            picker.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert picker.is_open
+            await pilot.press("down")
+            await pilot.pause()
+            assert picker.query_one(OptionList).highlighted == 1
+            await pilot.press("enter")
+            await _await_service_mount(pilot, app)
+
+            current = ctx.root_vm.content_host.current
+            assert current is not None
+            assert current.source.connection_key == ("dev", "us-east-1")
+            assert probed == [("dev", "us-east-1")]
+            assert calls == ["prod-west", "dev"]
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_source_mount_restores_previous_source(tmp_path: Path) -> None:
+    ctx, _calls = _multi_profile_emr_context(tmp_path)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_service_mount(pilot, app)
+            prior = ctx.root_vm.active_connection
+            assert prior is not None
+            target = next(
+                connection
+                for connection in _service_source_candidates(ctx, "emr-serverless")
+                if connection != prior
+            )
+            real_mount = app._mount_service_view
+            mount_targets: list[str] = []
+
+            async def fail_target_mount(
+                service_id: str,
+                *,
+                required_connection: Connection | None = None,
+            ) -> bool:
+                assert required_connection is not None
+                mount_targets.append(required_connection.name)
+                if required_connection == target:
+                    return False
+                return await real_mount(
+                    service_id,
+                    required_connection=required_connection,
+                )
+
+            app._mount_service_view = fail_target_mount  # type: ignore[method-assign]
+            accepted = await app._rebuild_single_context_source("emr-serverless", target)
+
+            assert accepted is False
+            assert ctx.root_vm.active_connection == prior
+            assert ctx.root_vm.content_host.current is not None
+            assert ctx.root_vm.content_host.current.source.connection_key == (
+                prior.name,
+                prior.region,
+            )
+            assert mount_targets == [target.name, prior.name]
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

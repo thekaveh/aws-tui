@@ -1,11 +1,17 @@
 # 1. aws-tui
 
-Cross-platform TUI for AWS and S3-compatible services — a
-Norton-Commander–style dual-pane file manager for S3 plus an EMR
-Serverless console and Unreleased AWS Glue, Amazon Athena, and Iceberg
-inspection workflows,
-built on [Textual](https://textual.textualize.io/) and the VMx MVVM
-framework.
+<p align="center">
+  <img src="../assets/screenshots/aws-tui-running.png" alt="aws-tui in demo mode with the S3, EMR, Glue, and Athena service rail; the Glue catalog is showing an Iceberg table, its metadata tabs, and snapshot history." width="100%">
+</p>
+
+Cross-platform TUI for AWS and S3-compatible services — runs on macOS,
+Linux, and Windows. Powered by
+[Textual](https://textual.textualize.io/) and the
+[VMx](https://github.com/thekaveh/VMx) MVVM framework.
+
+The application combines a Norton-Commander-style S3 file manager, an EMR
+Serverless console, and Unreleased AWS Glue, Amazon Athena, and Iceberg
+inspection workflows.
 
 ## 1.1. What it does
 

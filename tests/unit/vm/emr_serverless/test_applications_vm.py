@@ -35,6 +35,27 @@ async def test_starts_loading_then_idle_after_refresh() -> None:
 
 
 @pytest.mark.asyncio
+async def test_throwing_property_observer_does_not_interrupt_refresh() -> None:
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    observed: list[str] = []
+
+    def fail(_property: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    failing = vm.on_property_changed.subscribe(fail)
+    healthy = vm.on_property_changed.subscribe(observed.append)
+    try:
+        await vm.refresh()
+    finally:
+        failing.dispose()
+        healthy.dispose()
+
+    assert vm.state is PaneState.IDLE
+    assert "applications" in observed
+
+
+@pytest.mark.asyncio
 async def test_refresh_with_no_apps_lands_on_empty_state() -> None:
     vm, _ = _make()
     await vm.refresh()
@@ -126,6 +147,34 @@ async def test_refresh_is_no_op_when_application_list_unchanged() -> None:
         assert "selected_id" not in notified
     finally:
         sub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_is_no_op_when_provider_only_changes_application_order() -> None:
+    vm, fake = _make()
+    fake.add_application(app_id="stopped", name="zeta", state=ApplicationState.STOPPED)
+    fake.add_application(app_id="started-b", name="bravo", state=ApplicationState.STARTED)
+    fake.add_application(app_id="started-a", name="alpha", state=ApplicationState.STARTED)
+
+    applications = list(await fake.list_applications())
+    orders = iter((applications, list(reversed(applications))))
+
+    async def list_in_permuted_order():  # type: ignore[no-untyped-def]
+        return next(orders)
+
+    fake.list_applications = list_in_permuted_order  # type: ignore[method-assign]
+    await vm.refresh()
+    assert [app.id for app in vm.applications] == ["started-a", "started-b", "stopped"]
+
+    notified: list[str] = []
+    sub = vm.on_property_changed.subscribe(notified.append)
+    try:
+        await vm.refresh()
+    finally:
+        sub.dispose()
+
+    assert "applications" not in notified
+    assert [app.id for app in vm.applications] == ["started-a", "started-b", "stopped"]
 
 
 # -------------------- Phase 1: composite-backed selection (§4.2.3) --------------------

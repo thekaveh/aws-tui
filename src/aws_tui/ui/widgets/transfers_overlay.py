@@ -25,8 +25,8 @@ from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub, PropertyChangedMessage
 
+from aws_tui.ui.formatters import humanize_bytes
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
-from aws_tui.vm.chrome.resume_vm import humanize_bytes
 from aws_tui.vm.file_manager.transfer_vm import TransferState, TransferVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 
@@ -71,6 +71,7 @@ def _state_class(state: TransferState) -> str:
         TransferState.RUNNING: "-running",
         TransferState.PAUSED: "-paused",
         TransferState.COMPLETED: "-done",
+        TransferState.SKIPPED: "-cancelled",
         TransferState.FAILED: "-failed",
         TransferState.CANCELLED: "-cancelled",
     }.get(state, "-pending")
@@ -211,6 +212,8 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
             return f"⏸ {pct}%" if pct is not None else "⏸ ..."
         if state is TransferState.COMPLETED:
             return "✓ done"
+        if state is TransferState.SKIPPED:
+            return "skipped"
         if state is TransferState.FAILED:
             return "✗ failed"
         if state is TransferState.CANCELLED:

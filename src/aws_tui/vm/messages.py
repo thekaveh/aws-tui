@@ -19,6 +19,7 @@ from typing import Literal
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.redaction import redact_text
 
 #: Reason values for ``AuthExpiredMessage``.
 AuthExpiredReason = Literal["expired", "missing", "load_error"]
@@ -37,6 +38,7 @@ class TransferState(StrEnum):
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"
+    SKIPPED = "skipped"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -193,6 +195,55 @@ class KeymapChangedMessage:
 
 
 @dataclass(frozen=True, slots=True)
+class PaletteActionFailedMessage:
+    """A command-palette action failed before or during execution."""
+
+    entry_id: str
+    error_type: str
+    sender_name: str = "command_palette"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceOperationFailedMessage:
+    """An unexpected service exception recovered into a visible VM state."""
+
+    service: str
+    operation: str
+    error_type: str
+    safe_error: str
+    source: str | None = None
+    region: str | None = None
+    sender_name: str = "service_operation"
+
+    @classmethod
+    def from_error(
+        cls,
+        *,
+        service: str,
+        operation: str,
+        error: BaseException,
+        source: str | None = None,
+        region: str | None = None,
+    ) -> ServiceOperationFailedMessage:
+        return cls(
+            service=service,
+            operation=operation,
+            error_type=type(error).__name__,
+            safe_error=redact_text(str(error)),
+            source=source,
+            region=region,
+        )
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
 class FocusChangedMessage:
     """Published by the view layer (via ``RootVM``) whenever focus moves to a
     different VM.
@@ -305,6 +356,8 @@ __all__ = [
     "OpenAthenaTableRequest",
     "OpenGlueTableRequest",
     "OpenS3LocationRequest",
+    "PaletteActionFailedMessage",
+    "ServiceOperationFailedMessage",
     "ThemeChangedMessage",
     "TransferCancelRequestedMessage",
     "TransferProgressMessage",

@@ -7,14 +7,16 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
+from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext, ResultColumn, ResultPage
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.vm.athena._pager_compat import SnapshotTokenPager
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.messages import ServiceOperationFailedMessage
 
 _ID = ResultColumn("id", "varchar", "NULLABLE")
 _VALUE = ResultColumn("value", "varchar", "NULLABLE")
@@ -109,7 +111,7 @@ async def test_results_use_token_paging_without_eager_materialization() -> None:
 
     await vm.load("q-1")
 
-    assert isinstance(vm._pager, TokenPagedComposition)  # type: ignore[attr-defined]
+    assert isinstance(vm._pager, SnapshotTokenPager)  # type: ignore[attr-defined]
     assert vm.columns == (_ID,)
     assert vm.rows == (("one",),)
     assert vm.has_more
@@ -120,6 +122,39 @@ async def test_results_use_token_paging_without_eager_materialization() -> None:
     assert vm.rows == (("one",), ("two",))
     assert not vm.has_more
     assert client.calls == [("q-1", None), ("q-1", "next")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_diagnostics"),
+    [
+        (ProviderError("access denied"), 0),
+        (RuntimeError("unexpected client failure"), 1),
+    ],
+)
+async def test_result_handoff_only_reports_unexpected_client_failures(
+    error: Exception,
+    expected_diagnostics: int,
+) -> None:
+    client = ResultClient({("q-1", None): ResultPage((_ID,), (("one",),), None)})
+
+    async def fail_detail(_execution_id: str) -> object:
+        raise error
+
+    client.get_query_execution = fail_detail  # type: ignore[attr-defined]
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+    messages: list[Message] = []
+    subscription = vm._hub.messages.subscribe(messages.append)  # type: ignore[attr-defined]
+    try:
+        assert not await vm.open_s3_location()
+    finally:
+        subscription.dispose()
+
+    diagnostics = [
+        message for message in messages if isinstance(message, ServiceOperationFailedMessage)
+    ]
+    assert len(diagnostics) == expected_diagnostics
 
 
 @pytest.mark.asyncio

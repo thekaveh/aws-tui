@@ -22,11 +22,23 @@ We aim to acknowledge reports within 72 hours and to issue a patch within 14 day
 
 ## 1.3. Scope
 
-aws-tui orchestrates the AWS CLI and the `boto3` credential chain for AWS connections and does not store AWS credentials itself. Reports involving the AWS CLI, `boto3`, or upstream Python libraries should be filed with those projects.
+aws-tui reads shared AWS configuration and SSO token caches through
+`aioboto3`/`botocore`; it does not launch the AWS CLI or initiate sign-in.
+Users run `aws sso login --profile <name>` themselves when authentication is
+required. Reports involving the AWS CLI, `botocore`, or upstream Python
+libraries should be filed with those projects.
 
-### 1.3.1. S3-compatible static credentials are persisted on disk
+### 1.3.1. S3-compatible credentials use OS-backed secret storage
 
-When a user adds an `s3-compatible` connection with `credentials = "static"` (the default written by the in-TUI add form), the `access_key_id`, `secret_access_key`, and optional `session_token` are persisted **in plaintext** to `<config-dir>/config.toml` (see `docs/platforms.md` for the exact OS path). On POSIX filesystems aws-tui creates the config directory with owner-only permissions and writes the config file through an owner-only temporary file; platforms without POSIX permission bits depend on the OS profile's normal user isolation. For non-throwaway credentials we recommend the `credentials = "keychain:<service>"` source, which delegates secret storage to the OS keychain via the `keyring` library. The static-credentials path emits a launch-time warning toast as a reminder.
+The in-TUI Settings form stores secrets in the OS keychain through the Python
+`keyring` library and persists only a `keychain:` reference in
+`<config-dir>/config.toml` (see `docs/platforms.md` for the exact OS path).
+Credential updates write to the inactive one of two bounded revision services
+before the configuration reference changes, so the previous committed
+credentials remain available if persistence fails. Hand-authored
+`credentials = "static"` entries
+remain supported for compatibility, but their key fields are plaintext in
+`config.toml` and trigger a launch-time warning toast.
 
 ### 1.3.2. Crash dumps can contain redacted log content
 

@@ -163,3 +163,9 @@ def test_glue_iceberg_metadata_content_guards() -> None:
     narrow = _snapshot("test_glue_iceberg_narrow_snapshot")
     for label in ("Snaps", "Hist", "Mnfst", "Files", "Parts", "Refs"):
         assert label in narrow
+
+
+def test_glue_narrow_catalog_keeps_table_type_on_its_resource_row() -> None:
+    catalog = _snapshot("test_glue_service_narrow_snapshot[catalog]")
+    sessions_row = next(line for line in catalog.splitlines() if ">sessions" in line)
+    assert "EXTERNAL_TA" in sessions_row

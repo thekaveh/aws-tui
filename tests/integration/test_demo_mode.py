@@ -215,7 +215,11 @@ async def test_glue_demo_profiles_have_disjoint_catalogs(tmp_path: Path) -> None
     )
     app = AwsTuiApp(ctx)
     try:
-        async with app.run_test() as pilot:
+        # This test asserts rendered catalog data, so use the same
+        # operational viewport as the adjacent Athena profile test. At
+        # Textual's 80x24 default the global banner and command deck leave
+        # the service content host only one row tall.
+        async with app.run_test(size=(120, 40)) as pilot:
             await _open_service(ctx, pilot, "glue")
             assert "dev_events" in app.export_screenshot()
 
@@ -313,7 +317,9 @@ async def test_athena_profile_switch_mounts_empty_rows_before_new_load(
             assert new_page is not old_page
             assert new_page.workgroups == ()
             assert new_page.history.items == ()
-            assert "dev-analytics" not in app.export_screenshot()
+            async with asyncio.timeout(5.0):
+                while "dev-analytics" in app.export_screenshot():
+                    await pilot.pause(0.01)
 
             release.set()
             await switching

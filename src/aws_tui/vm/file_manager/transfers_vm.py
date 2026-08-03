@@ -33,6 +33,8 @@ from aws_tui.vm.messages import TransferProgressMessage
 if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
 
+_MAX_FINISHED_TRANSFERS = 100
+
 
 class TransfersVM:
     """Composite + hub subscriber for active and finished transfers."""
@@ -160,6 +162,7 @@ class TransfersVM:
             vm.construct()
         self._inner.append(vm.inner)
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
+        self._trim_finished()
         return vm
 
     def cancel(self, transfer_id: str) -> None:
@@ -167,13 +170,6 @@ class TransfersVM:
         if target is None:
             return
         target.cancel_command.execute()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
-
-    def retry(self, transfer_id: str) -> None:
-        target = self._find(transfer_id)
-        if target is None:
-            return
-        target.retry_command.execute()
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
 
     def update(
@@ -194,6 +190,7 @@ class TransfersVM:
             state=state,
             error=error,
         )
+        self._trim_finished()
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
 
     # ── Hub subscriber ──────────────────────────────────────────────────────
@@ -229,6 +226,7 @@ class TransfersVM:
             bytes_total=msg.bytes_total,
             state=new_state,
         )
+        self._trim_finished()
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -244,6 +242,16 @@ class TransfersVM:
             if t.id == transfer_id:
                 return t
         return None
+
+    def _trim_finished(self) -> None:
+        excess = len(self.finished) - _MAX_FINISHED_TRANSFERS
+        if excess <= 0:
+            return
+        for transfer in [item for item in self._transfers if item.is_finished][:excess]:
+            self._transfers.remove(transfer)
+            if transfer.inner in self._inner:
+                self._inner.remove(transfer.inner)
+            transfer.dispose()
 
     def _initial_children(self) -> Iterable[ComponentVMOf[TransferModel]]:
         return tuple(t.inner for t in self._transfers)

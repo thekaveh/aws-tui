@@ -1,9 +1,9 @@
 # 1. Glue and Athena interaction polish design
 
-**Status:** Accepted in brainstorming on 2026-07-30. This document refines the
+**Status:** Implemented on 2026-07-31. This document refines the
 Glue and Athena first-release design after hands-on review of the merged
 services. It is the source of truth for the interaction-polish implementation
-plan.
+plan and records the resulting behavior.
 
 ## 1.1. Decision summary
 
@@ -44,9 +44,9 @@ After this work:
    cursor.
 7. Glue and Athena visually belong to the same application as S3 and EMR.
 
-# 2. Visual and interaction model
+## 1.3. Visual and interaction model
 
-## 2.1. Shared bordered selector field
+### 1.3.1. Shared bordered selector field
 
 Add one reusable Textual widget, `ContextPicker`, for source and context
 selection. It owns presentation only:
@@ -70,7 +70,7 @@ or open. Its label is presented as a border title, matching established content
 panes. Opening the picker expands its row in place, keeping the list inside the
 active pane and avoiding overlay clipping.
 
-## 2.2. Service context panes
+### 1.3.2. Service context panes
 
 Glue and Athena each gain an enclosing `AWS context` pane:
 
@@ -85,7 +85,7 @@ Controls that are loading, forbidden, empty, or failed remain visible. Their
 state is communicated by styling, field value, and tooltip rather than making
 the control disappear.
 
-## 2.3. Content borders
+### 1.3.3. Content borders
 
 Glue and Athena must observe the same enclosing-border convention as S3 and
 EMR:
@@ -102,7 +102,7 @@ EMR:
 Nested cards are not introduced. Borders describe focusable operational panes
 and related tool surfaces only.
 
-## 2.4. Navigation rail
+### 1.3.4. Navigation rail
 
 The navigation rail must:
 
@@ -112,9 +112,9 @@ The navigation rail must:
 - preserve settings-row alignment;
 - remain usable at the repository's minimum supported terminal size.
 
-# 3. Focus and command behavior
+## 1.4. Focus and command behavior
 
-## 3.1. Explicit focus rings
+### 1.4.1. Explicit focus rings
 
 Glue and Athena must not delegate service-level traversal to Textual's raw DOM
 order. Each page exposes an ordered tuple of currently valid focus targets and
@@ -152,7 +152,7 @@ The Athena order is:
 Within a focused tab strip, left/right selects the neighboring tab and
 `Enter`/`Space` activates it. Numeric view shortcuts remain available.
 
-## 3.2. VMx focus ownership
+### 1.4.2. VMx focus ownership
 
 `FocusCoordinatorVM` remains the application-wide source of focus identity and
 continues to compose VMx `DiscriminatorVM[FocusSlot]`.
@@ -168,7 +168,7 @@ state.
 Textual remains authoritative for the runtime widget currently holding focus.
 The view bridges typed VM focus identity to concrete widget IDs.
 
-## 3.3. Named commands
+### 1.4.3. Named commands
 
 The following action IDs must exist in `KeymapStore`, `ActionRegistry`, command
 palette entries, binding descriptions, and hint labels:
@@ -197,9 +197,9 @@ The bottom hint legend remains concise and context-sensitive. It exposes
 and `insert table` in Athena. The command palette remains the complete
 discoverability surface.
 
-# 4. Profile-aware context
+## 1.5. Profile-aware context
 
-## 4.1. Source selection
+### 1.5.1. Source selection
 
 `ServiceSourceHeader` is replaced or refactored into the shared focusable source
 selector field. It displays connection name, profile label, and region without
@@ -210,7 +210,7 @@ service. Selecting one dispatches through the existing source-switch
 transaction. The existing transaction remains authoritative for cancellation,
 page reconstruction, credential state, and stale-data prevention.
 
-## 4.2. Dependent context
+### 1.5.2. Dependent context
 
 Athena context follows resolver order:
 
@@ -225,9 +225,9 @@ values are cleared before new asynchronous results become visible.
 
 Glue filters are restored per connection and per view only when still valid.
 
-# 5. Glue-to-Athena table transfer
+## 1.6. Glue-to-Athena table transfer
 
-## 5.1. Glue's role
+### 1.6.1. Glue's role
 
 Glue is the metadata discovery and inspection surface for:
 
@@ -242,7 +242,7 @@ The catalog table selection exposes both:
   bounded read-only starter query;
 - `Copy table reference`, which does not navigate.
 
-## 5.2. Typed application clipboard
+### 1.6.2. Typed application clipboard
 
 Add an application-owned clipboard VM with one immutable payload:
 
@@ -263,7 +263,7 @@ leaf for one replaceable immutable payload. It:
 - retains connection name and region through `TableRef`;
 - contains no OS-specific clipboard calls.
 
-## 5.3. SQL quoting
+### 1.6.3. SQL quoting
 
 Promote the existing private identifier quoting behavior into one public domain
 function:
@@ -276,14 +276,14 @@ def quote_athena_table_ref(ref: TableRef) -> str:
 Both `select_starter_sql()` and copied references use this function so direct
 handoff and clipboard insertion cannot disagree about quoting.
 
-## 5.4. System clipboard bridge
+### 1.6.4. System clipboard bridge
 
 The Textual application calls `App.copy_to_clipboard(text)` after the typed VM
 clipboard accepts a table reference. No subprocess or clipboard dependency is
 introduced. OSC 52 support varies by terminal, so system clipboard delivery is
 best effort and the typed in-app clipboard remains authoritative.
 
-## 5.5. Athena insertion
+### 1.6.5. Athena insertion
 
 `AthenaQueryVM` owns SQL text but not Textual cursor coordinates. Therefore:
 
@@ -303,9 +303,9 @@ switches profiles because rebuilding Athena could discard unrelated editor
 state. Direct `Query table in Athena` remains the source-preserving workflow
 when automatic navigation is desired.
 
-# 6. VMx abstraction-selection standard
+## 1.7. VMx abstraction-selection standard
 
-## 6.1. Mandatory selection process
+### 1.7.1. Mandatory selection process
 
 Before changing or adding each VM responsibility:
 
@@ -318,7 +318,7 @@ Before changing or adding each VM responsibility:
    application contract adds behavior VMx does not own.
 7. Do not access VMx private state.
 
-## 6.2. Initial candidate matrix
+### 1.7.2. Initial candidate matrix
 
 | Responsibility | Preferred VMx candidate | Candidates requiring comparison |
 |---|---|---|
@@ -338,7 +338,7 @@ The matrix is a starting point, not permission to force an abstraction. UI
 borders, Textual focus calls, cursor insertion, OS clipboard access, and AWS SDK
 calls remain outside VMx where the framework has no matching responsibility.
 
-## 6.3. Evidence ledger
+### 1.7.3. Evidence ledger
 
 Each implementation task records:
 
@@ -358,7 +358,7 @@ Each implementation task records:
 | Test LOC | Deleted, added, delta |
 | Coverage | Before, after, and delta |
 
-### `vmx31-glue-athena-focus-rings`
+#### 1.7.3.1. `vmx31-glue-athena-focus-rings`
 
 | Field | Evidence |
 |---|---|
@@ -376,7 +376,7 @@ Each implementation task records:
 | Test LOC | 333 added, 6 deleted, net +327. |
 | Coverage | The specified focused suite increased from 50 to 64 tests and from 32.10% to 32.56% whole-package coverage, +0.45 percentage points. The changed focus coordinator remained at 95%; Glue page coverage increased from 63% to 66% and Athena page coverage from 57% to 60%. |
 
-### `vmx31-table-clipboard`
+#### 1.7.3.2. `vmx31-table-clipboard`
 
 | Field | Evidence |
 |---|---|
@@ -394,7 +394,7 @@ Each implementation task records:
 | Test LOC | 251 added, 0 deleted, net +251 across the two clipboard commits. |
 | Coverage | The final branch suite is 2979 passed, 9 deselected at 85.75%, versus 2789 passed, 9 deselected at 85.67% on the exact branch point. The full-suite delta is +190 passing tests and +0.08 percentage points; it is a branch-wide result and is not attributed solely to this responsibility. |
 
-### `vmx31-glue-athena-focus-rings-review-fix`
+#### 1.7.3.3. `vmx31-glue-athena-focus-rings-review-fix`
 
 | Field | Evidence |
 |---|---|
@@ -412,7 +412,7 @@ Each implementation task records:
 | Test LOC | 428 added, 19 deleted, net +409. |
 | Coverage | Review RED run: 20 failed and 53 passed for the intended missing behavior; the final context-refresh regression also failed RED in isolation. Final combined unit and production integration suite: 112 passed. |
 
-## 6.4. Final responsibility ledger
+### 1.7.4. Final responsibility ledger
 
 This ledger closes the initial candidate matrix against VMx 3.1.0's public
 surface. No implementation on this branch accesses a private VMx member.
@@ -426,7 +426,7 @@ surface. No implementation on this branch accesses a private VMx member.
 | Dependent command availability | `DerivedProperty`, relay-command `can_execute`, facade properties, duplicate booleans | Existing VM command `can_execute()` and facade capability properties, projected into `HintLegendVM` | A new derived property would duplicate already authoritative command/page state and still could not model Textual focus-dependent load-more routing | The app combines active Textual focus with VM capabilities to dim context-sensitive hints | Hint-legend, Glue routing, Athena page, clipboard mismatch, and keybinding tests |
 | Editor insertion and system clipboard delivery | `DialogService`, `ModalVM`, VM messages, no matching VMx primitive | No VMx primitive; Textual public `TextArea` editing APIs and `App.copy_to_clipboard()` | No confirmation or modal state exists, so `DialogService`/`ModalVM` do not fit; VM messages cannot own cursor coordinates or terminal clipboard support | Cursor/selection replacement and best-effort OSC 52 delivery remain view concerns. The typed in-app clipboard remains authoritative when OS delivery fails | Query-view selection/cursor tests, OS clipboard success/failure tests, empty/mismatched clipboard tests, and Glue-to-Athena integration tests |
 
-## 6.5. Exact branch metrics
+### 1.7.5. Exact branch metrics
 
 Metrics use branch point `b92ad89f68dd19ca61cd567ce0f82b5379fb0499`.
 Generated `.raw` snapshots are excluded from authored LOC. `src/aws_tui/app.py`
@@ -456,14 +456,14 @@ tests and +0.08 percentage points. The full snapshot suite is 806 passed with
 481 snapshot comparisons; 237 generated snapshot files differ from the branch
 point. All 9 end-to-end user journeys also pass.
 
-# 7. Testing and acceptance
+## 1.8. Testing and acceptance
 
-## 7.1. Test-first requirement
+### 1.8.1. Test-first requirement
 
 Every behavior change follows red-green-refactor. Production code is not added
 until a focused test has failed for the intended missing behavior.
 
-## 7.2. Required coverage
+### 1.8.2. Required coverage
 
 - Shared selector field rendering and focused/open/disabled/error states.
 - Complete forward and reverse Glue focus rings for Catalog, Jobs, and Crawlers.
@@ -485,7 +485,7 @@ until a focused test has failed for the intended missing behavior.
 - S3, EMR, theme, and shared-chrome regressions.
 - VMx composition-shape tests for every selected VMx primitive.
 
-## 7.3. Verification commands
+### 1.8.3. Verification commands
 
 At minimum:
 
@@ -504,7 +504,7 @@ uv run pytest tests/snapshot -q
 Any repository-provided snapshot command that updates expected SVGs must be
 followed by visual inspection of the affected artifacts.
 
-## 7.4. Completion criteria
+### 1.8.4. Completion criteria
 
 - All outcomes in section 1.2 are demonstrated by tests.
 - No selector shown on screen is unreachable by keyboard.

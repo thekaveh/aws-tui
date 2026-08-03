@@ -25,6 +25,8 @@ from aws_tui.vm.messages import (
 )
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
+SERVICE_SETUP_TIMEOUT_SECONDS = 30
+
 
 async def _wait_for_service_setup(
     ctx: AppContext,
@@ -36,7 +38,7 @@ async def _wait_for_service_setup(
             *(worker.wait() for worker in list(app.workers._workers)),
             return_exceptions=True,
         ),
-        timeout=10,
+        timeout=SERVICE_SETUP_TIMEOUT_SECONDS,
     )
     while app._table_navigation_tasks:
         await asyncio.wait_for(
@@ -44,11 +46,11 @@ async def _wait_for_service_setup(
                 *tuple(app._table_navigation_tasks),
                 return_exceptions=True,
             ),
-            timeout=10,
+            timeout=SERVICE_SETUP_TIMEOUT_SECONDS,
         )
     setup_task = ctx.root_vm.content_host._setup_task  # type: ignore[attr-defined]
     if setup_task is not None and not setup_task.done():
-        await asyncio.wait_for(setup_task, timeout=10)
+        await asyncio.wait_for(setup_task, timeout=SERVICE_SETUP_TIMEOUT_SECONDS)
     await pilot.pause()  # type: ignore[attr-defined]
 
 

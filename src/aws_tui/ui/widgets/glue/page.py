@@ -223,22 +223,16 @@ class GluePage(HubSubscriberMixin, Widget):
 
     async def action_choose_run_state(self) -> None:
         await self.action_select_view("jobs")
-        self.call_after_refresh(
-            partial(
-                self._focus_and_open_picker,
-                FocusSlot.GLUE_FILTER,
-                "#glue-run-state-filter",
-            )
+        self._focus_and_open_picker(
+            FocusSlot.GLUE_FILTER,
+            "#glue-run-state-filter",
         )
 
     async def action_choose_crawler_state(self) -> None:
         await self.action_select_view("crawlers")
-        self.call_after_refresh(
-            partial(
-                self._focus_and_open_picker,
-                FocusSlot.GLUE_FILTER,
-                "#glue-crawler-state-filter",
-            )
+        self._focus_and_open_picker(
+            FocusSlot.GLUE_FILTER,
+            "#glue-crawler-state-filter",
         )
 
     def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:
@@ -270,11 +264,31 @@ class GluePage(HubSubscriberMixin, Widget):
             tuple(slot for slot, _widget in targets),
             reverse=reverse,
         )
+        self._close_departed_picker(focused)
         self._project_focus_slot(slot, targets=targets)
+
+    @staticmethod
+    def _close_departed_picker(focused: Widget | None) -> None:
+        if focused is None:
+            return
+        picker = next(
+            (
+                widget
+                for widget in focused.ancestors_with_self
+                if isinstance(widget, ContextPicker) and widget.is_open
+            ),
+            None,
+        )
+        if picker is not None:
+            picker.close(refocus=False)
 
     def focus_default(self) -> None:
         """Focus the active view's primary operational target."""
         self._project_focus_slot(FocusSlot.GLUE_PRIMARY)
+
+    def project_focus_slot(self, slot: FocusSlot) -> None:
+        """Project an app-coordinated focus slot onto this page."""
+        self._project_focus_slot(slot)
 
     def _focus_targets(self) -> tuple[tuple[FocusSlot, Widget], ...]:
         source = self.query_one("#glue-source-header", Widget)
@@ -408,6 +422,9 @@ class GluePage(HubSubscriberMixin, Widget):
     def _focus_and_open_picker(self, slot: FocusSlot, selector: str) -> None:
         with contextlib.suppress(NoMatches):
             picker = self.query_one(selector, ContextPicker)
+            for sibling in self.query(ContextPicker):
+                if sibling is not picker:
+                    sibling.close(refocus=False)
             self._project_focus_slot(slot)
             picker.open()
 
@@ -447,6 +464,8 @@ class GluePage(HubSubscriberMixin, Widget):
         with contextlib.suppress(NoMatches):
             run_filter = self.query_one("#glue-run-state-filter", ContextPicker)
             run_filter.display = self._vm.active_view == "jobs"
+            if not run_filter.display:
+                run_filter.close(refocus=False)
             run_filter.set_options(
                 tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
                 selected=self._job_filter_value(),
@@ -456,6 +475,8 @@ class GluePage(HubSubscriberMixin, Widget):
                 ContextPicker,
             )
             crawler_filter.display = self._vm.active_view == "crawlers"
+            if not crawler_filter.display:
+                crawler_filter.close(refocus=False)
             crawler_filter.set_options(
                 tuple(ContextOption(label, value) for label, value in _CRAWLER_FILTERS),
                 selected=self._vm.crawlers.state_filter or "ALL",

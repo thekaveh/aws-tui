@@ -755,7 +755,7 @@ v1 keeps region as a **per-connection field**, not switchable mid-session. Multi
 
 ### 1.8.1. Principle
 
-Trust boto3's retry layer; own only the UX surface and the crash-recovery journal. We don't reinvent backoff, partial-failure parsing, or multipart mechanics — botocore already does that.
+Trust boto3's retry layer; own only the UX surface and the interrupted-transfer diagnostic journal. We don't reinvent backoff, partial-failure parsing, or multipart mechanics — botocore already does that.
 
 ### 1.8.2. Taxonomy → surface mapping
 
@@ -812,33 +812,26 @@ pending -> running -> { completed | failed | cancelled }
 
 `TransferVM.state` is reactive; `TransfersVM.active_count` is a `DerivedProperty`.
 
-### 1.8.6. Crash-recovery journal
+### 1.8.6. Interrupted-transfer diagnostic journal
 
-After each completed multipart part, the transfer state appends a line to `~/.cache/aws-tui/transfers/<id>.jsonl`:
+The original unshipped design proposed appending every completed multipart
+part to `~/.cache/aws-tui/transfers/<id>.jsonl`:
 
 ```jsonl
 {"ts":"2026-06-13T23:45:11Z","upload_id":"abc...","part":1,"etag":"\"d41d...\"","bytes":8388608}
 {"ts":"2026-06-13T23:45:13Z","upload_id":"abc...","part":2,"etag":"\"098f...\"","bytes":8388608}
 ```
 
-On launch, aws-tui scans the directory. Any journal without a closing `{"event":"completed"}` or `{"event":"aborted"}` line is offered for resume:
-
-```
-Modal: "2 transfers from a previous session were not finished.
-        - api-2026-06-13.json  (3.4 M / 4.2 M, 82%)
-        - db-slowq-06-13.csv   (279 k / 892 k, 31%)
-        [resume all] [abort all] [decide each] [keep journal for later]"
-```
-
-This early sketch predates the shipped v0.7 modal contract. The live
-implementation and tests are authoritative: startup scans pending
-journals, presents resume decisions through the transfer modal, keeps
-`decide each` intentionally deferred, and preserves journal files when
-abort cleanup cannot safely acquire or enter the S3 client. "Abort all"
-calls `AbortMultipartUpload` per `upload_id` and deletes only journals
-whose remote abort path completes. `docs/connections.md` recommends
-users set a **1-day MPU abort lifecycle rule** on their buckets as a
-backstop for any orphaned MPUs.
+Production does not persist multipart parts or upload IDs. The shipped
+implementation retains unfinished `begin` journals for diagnostics and
+exposes `TransferJournal.find_unfinished()` to tests and maintenance tooling.
+Startup does not scan, prompt, resume, or abort those entries, and terminal
+transfer outcomes remove their journals promptly. An interactive recovery
+flow and remote multipart-abort controls remain deferred; documentation must
+not present the original resume-modal sketch as available behavior. Operators
+can inspect or remove stale local journal files manually, and should configure
+a short incomplete-multipart-upload lifecycle rule on S3 buckets as a remote
+cleanup backstop.
 
 ### 1.8.7. Inline pane placeholders
 
@@ -950,7 +943,9 @@ Goldens under `tests/snapshot/snapshots/<theme>/`. Updates via `pytest --snapsho
 1. **First launch with cached SSO → silent S3 view** (§6.4 Flow 1)
 2. **Copy one object from S3 to local** (cursor → `c` → wait for `TransferVM.state == completed` → byte-check file)
 3. **Switch AWS → MinIO mid-session with confirmation of in-flight transfer cancellation** (§6.4 Flow 2 + §7 cancel)
-4. **Resume a transfer from journal after simulated crash** (write a journal manually, launch, assert resume modal)
+4. **Original unshipped target:** resume a transfer from a journal after a
+   simulated crash. Current tests cover durable diagnostic replay only; no
+   startup resume modal is implemented.
 5. **Delete with confirm → cancel → no AWS call made** (regression-class destructive path)
 
 ### 1.9.6. VMx contract tests
@@ -1103,7 +1098,7 @@ This is M0 below.
 | M3 | VM layer — shell | 1.5 wk | `RootVM`, `ServicesMenuVM`, `ContentHostVM`, `ChromeVM`, `HintLegendVM`, `StatusBarVM`, `ToastStackVM`, `CommandPaletteVM`, `ConfirmationVM`, `QuickLookVM`, connection/theme switch cmds |
 | M4 | VM layer — file mgr + S3 | 1.5 wk | `DualPaneVM`, `PaneVM`, `EntryVM`, `S3Service` + contract tests |
 | M5 | UI layer + themes | 2 wk | All Textual widgets; Carbon `.tcss` (default); Voidline/Lattice/Amber; snapshot tests; E2E smoke tests |
-| M6 | Polish & v0.1 release | 1 wk | Crash modal, transfer resume, first-run flow, full README, asciinema, `git tag v0.1.0` |
+| M6 | Original polish target | 1 wk | Proposed crash modal, transfer resume, and first-run flow; current shipped status is documented elsewhere in this historical spec |
 
 **Total: ~8 weeks** of focused solo work. First release: **v0.1.0 via `pipx install git+...`** at the end of M6.
 
@@ -1160,7 +1155,7 @@ Concise list of key decisions and rationale, for future readers.
 | **DerivedProperty** | VMx primitive for computed values that auto-recompute when their sources change |
 | **Hint legend** | The dim row at the bottom of the screen showing key bindings relevant to the focused widget |
 | **Connection probe** | Cheap freshness check on SSO cache files — returns `connected | expired | missing` without calling AWS; non-SSO AWS profiles return `connected` so live boto credential resolution can decide |
-| **Transfer journal** | Per-transfer `.jsonl` file in `~/.cache/aws-tui/transfers/` that lets us resume across crashes |
+| **Transfer journal** | Per-transfer `.jsonl` file in `~/.cache/aws-tui/transfers/` that preserves diagnostic evidence after interruption; interactive resume remains deferred |
 | **Quick Look** | macOS-borrowed term for the modal preview opened by `Space` |
 
 ---

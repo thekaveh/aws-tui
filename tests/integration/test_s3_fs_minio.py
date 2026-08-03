@@ -87,7 +87,7 @@ async def test_minio_delete_then_missing(minio_endpoint: tuple[str, str, str]) -
 
 
 async def test_minio_multipart_16mb(minio_endpoint: tuple[str, str, str]) -> None:
-    """Real multipart upload via MinIO — sanity check the upload_fileobj path."""
+    """Real multipart upload via MinIO exercises the explicit part loop."""
     endpoint, ak, sk = minio_endpoint
     await _create_bucket(endpoint, ak, sk, "bigbkt")
     fs = _fs(endpoint, ak, sk, "bigbkt")

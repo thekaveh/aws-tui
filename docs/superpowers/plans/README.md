@@ -26,6 +26,15 @@ current code, tests, README, and focused specs for the live behavior contract.
 8. [EMR job-run logs pane](2026-06-26-emr-job-run-logs-pane.md) — job-run log discovery, filtering, and pane integration.
 9. [Cross-platform readiness](2026-06-28-cross-platform-readiness.md) — macOS, Linux, and Windows install/smoke/readiness work.
 10. [Demo mode](2026-06-28-demo-mode.md) — deterministic in-memory demo data and no-real-AWS launch path.
+11. [Three-surface documentation](2026-07-10-three-surface-docs.md) — canonical repository documentation projected to the site and wiki.
+12. [Binding resolver keystone](2026-07-21-binding-resolver-keystone.md) — runtime keymap materialization and action dispatch.
+13. [Quick Look wiring](2026-07-21-quick-look-wiring.md) — bounded file preview and command integration.
+14. [Athena service](2026-07-22-athena-service.md) — read-only query, history, results, saved-query, and prepared-query workflows.
+15. [AWS service profile switching](2026-07-22-aws-service-profile-switching.md) — exact profile and region identity across single-context services.
+16. [Glue service](2026-07-22-glue-service.md) — read-only Catalog, Jobs, Crawlers, and S3 handoff implementation.
+17. [Iceberg cross-service integration](2026-07-22-iceberg-cross-service-integration.md) — Glue metadata inspection and bounded Athena/S3 handoffs.
+18. [Glue and Athena interaction polish](2026-07-30-glue-athena-interaction-polish.md) — selectors, focus rings, borders, and typed table transfer.
+19. [Post-merge audit remediation](2026-07-30-post-merge-audit-remediation.md) — runtime, documentation, and verification corrections.
 
 ## 1.3. VMx 3.1 Adoption Plans
 

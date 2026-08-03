@@ -30,7 +30,7 @@ def _build(
 
 def test_initial_globals_include_help_and_theme_controls() -> None:
     # Post-PR-81: app-level fallbacks (themes/help/quit) live on the
-    # ``.global_actions`` (RIGHT side of the Commands pane) NOT on
+    # ``.global_actions`` (trailing entries in the Commands pane) NOT on
     # ``.actions`` (LEFT, service-specific).
     legend, _hub = _build()
     global_ids = {a.action_id for a in legend.global_actions}

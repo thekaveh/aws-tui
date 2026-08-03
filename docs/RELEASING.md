@@ -103,6 +103,12 @@ Review the PR like any other change. Merge when CI is green.
 
 If any smoke step breaks, fix forward; do **not** tag the release.
 
+The release commit must contain a dated changelog heading for the exact package
+version. The workflow rejects `Pending` headings. Because the current tree
+contains v0.9 feature work while package metadata still reads `0.8.0`, prepare
+v0.9 by bumping the version and cutting its changelog section in the release PR;
+do not tag the current tree as v0.8.0.
+
 Then tag the merge commit and push:
 
 ```bash
@@ -118,27 +124,33 @@ gh run watch
 ```
 
 When the `publish-pypi` job hits the **environment approval gate**,
-click **Approve** in the Actions UI. That's the safety belt that
-makes the whole pipeline forgiving — if the verify or smoke-install
-jobs somehow let a bad tag through, this is your last chance to stop.
+click **Approve** in the Actions UI. This is the final manual stop after all
+mandatory release gates have passed.
 
 After approval the pipeline:
-1. Publishes only after `verify` builds the artifacts and
-   `smoke-install` clean-installs the built wheel on macOS, Linux, and
-   Windows across Python 3.11, 3.12, and 3.13.
-2. Publishes to PyPI via Trusted Publisher (sigstore attestation).
-3. Creates the GitHub Release with the changelog section as body
+1. Publishes only after `verify` builds and checks the artifacts, the mandatory
+   `platform-tests` gate passes behavioral tests on macOS and Windows, and
+   `smoke-install` clean-installs the built wheel on macOS, Linux, and Windows
+   across Python 3.11, 3.12, and 3.13.
+2. Requires `lowest-supported-dependencies` to install every declared direct
+   dependency at its minimum compatible version with `--resolution
+   lowest-direct`. It validates the S3 request-model members aws-tui uses and
+   exercises representative runtime surfaces for Textual/app construction,
+   aioboto3 client creation, LocalFS/AnyIO/aiofiles, SQLGlot, VMx reactive
+   state, keyring/resolver behavior, and tomli-w configuration round trips.
+3. Publishes to PyPI via Trusted Publisher (sigstore attestation).
+4. Creates the GitHub Release with the changelog section as body
    and wheel + sdist attached.
-4. Opens a PR in `thekaveh/homebrew-aws-tui` bumping the formula when
-   the formula has already been bootstrapped. On the first PyPI release,
-   the Homebrew job emits a notice and skips cleanly; bootstrap the
-   formula manually afterward.
+5. Opens a PR in `thekaveh/homebrew-aws-tui` only when the formula has already
+   been bootstrapped and `HOMEBREW_TAP_ENABLED=true`. Until then the entire
+   Homebrew job is skipped; bootstrap the formula manually after the first
+   PyPI release.
 
 Skim the Homebrew PR and merge it when one is created.
 
 Done.
 
-## 1.2. Rehearsing the pipeline (TestPyPI dry-run)
+## 1.2. Rehearsing the TestPyPI Pipeline
 
 Use this whenever the release machinery itself changes — a new
 job, a tweaked artifact layout, anything that risks burning a
@@ -206,7 +218,7 @@ is always "fix forward, never overwrite":
 
 ## 1.4. One-time bring-up
 
-These four console steps are not automatable. The maintainer
+These five console steps are not automatable. The maintainer
 does them once before the first release through this pipeline.
 PyPI/TestPyPI Trusted Publisher and GitHub environments may already
 exist; the Homebrew bootstrap waits until the first PyPI artifact is
@@ -260,6 +272,11 @@ fine-grained PAT scoped to the tap repo only:
 4. In `thekaveh/aws-tui` → Settings → **Secrets and variables**
    → **Actions** → **New repository secret** → name
    `HOMEBREW_TAP_TOKEN`, paste the token.
+5. In the same **Actions** settings page, open **Variables** →
+   **New repository variable** and set `HOMEBREW_TAP_ENABLED` to
+   `true`. Until this variable is enabled, real releases deliberately
+   skip the `bump-homebrew` job instead of failing against an absent or
+   partially configured tap.
 
 Token lifespan is the only routine recurring chore — set the
 calendar reminder for the expiry date.

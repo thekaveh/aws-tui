@@ -1,11 +1,9 @@
 """EMR Serverless domain types — records + StrEnums.
 
-PR-A ships only the read-only verbs (list applications, list job
-runs, get job run detail). PR-B adds cancel + lifecycle, PR-C adds
-submit. The records here are the wire-shape mapped from boto3
-``EMRServerless`` responses by :class:`EmrServerlessClient` (added
-in Task 3). VMs above hold these by value — no fields beyond what
-the read-only browser needs."""
+The supported surface is read-mostly: list applications and job runs, inspect
+job-run details and logs, and clone an existing run through ``start_job_run``.
+The records here map boto3 ``EMRServerless`` responses into values consumed by
+the viewmodels; generic submission and cancellation remain deferred."""
 
 from __future__ import annotations
 
@@ -17,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 import botocore.exceptions
 from botocore.config import Config as BotoConfig
 
+from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     NotFoundError,
@@ -38,7 +37,7 @@ if TYPE_CHECKING:
 _EMR_BOTO_CONFIG: BotoConfig = BotoConfig(
     connect_timeout=10,
     read_timeout=60,
-    retries={"max_attempts": 6, "mode": "adaptive"},
+    retries={"total_max_attempts": 6, "mode": "adaptive"},
 )
 EMR_BOTO_CONFIG: BotoConfig = _EMR_BOTO_CONFIG
 
@@ -176,14 +175,7 @@ def _map_boto_error(exc: BaseException) -> ProviderError | None:
     response dict missing a required field) are mapped to
     :class:`ValidationError` so future AWS additions surface as a
     typed domain error instead of a crash modal."""
-    if isinstance(
-        exc,
-        botocore.exceptions.NoCredentialsError
-        | botocore.exceptions.PartialCredentialsError
-        | botocore.exceptions.ProfileNotFound
-        | botocore.exceptions.TokenRetrievalError
-        | botocore.exceptions.CredentialRetrievalError,
-    ):
+    if isinstance(exc, AWS_CREDENTIAL_EXCEPTIONS):
         if isinstance(exc, botocore.exceptions.CredentialRetrievalError):
             return AuthRequiredError("credential process failed")
         return AuthRequiredError(str(exc) or "no AWS credentials")
@@ -191,6 +183,8 @@ def _map_boto_error(exc: BaseException) -> ProviderError | None:
         return ProviderUnreachableError(str(exc) or "endpoint unreachable")
     if isinstance(exc, botocore.exceptions.ClientError):
         code = exc.response.get("Error", {}).get("Code", "")
+        if code in AWS_AUTH_ERROR_CODES:
+            return AuthRequiredError(exc.response.get("Error", {}).get("Message", str(exc)))
         cls = _CLIENT_ERROR_CODE_MAP.get(code, ProviderError)
         return cls(exc.response.get("Error", {}).get("Message", str(exc)))
     if isinstance(exc, botocore.exceptions.ParamValidationError):
@@ -212,8 +206,7 @@ map_boto_error = _map_boto_error
 
 
 class EmrServerlessClient:
-    """Async aioboto3 facade for EMR Serverless. PR-A surfaces three
-    read-only verbs; PR-B/C extend with cancel/lifecycle/submit.
+    """Async aioboto3 facade for EMR Serverless read and clone operations.
 
     The client opens a fresh aioboto3 ``emr-serverless`` client per
     call (the boto3 EMR Serverless client is cheap to instantiate
@@ -237,6 +230,7 @@ class EmrServerlessClient:
             ) as c:
                 items: list[dict[str, Any]] = []
                 next_token: str | None = None
+                seen_tokens: set[str] = set()
                 while True:
                     kwargs: dict[str, Any] = {}
                     if next_token is not None:
@@ -246,6 +240,11 @@ class EmrServerlessClient:
                     next_token = resp.get("nextToken")
                     if next_token is None:
                         break
+                    if next_token in seen_tokens:
+                        raise ProviderError(
+                            "EMR Serverless repeated an application continuation token"
+                        )
+                    seen_tokens.add(next_token)
                 return [
                     ApplicationSummary(
                         id=a["id"],
@@ -272,11 +271,9 @@ class EmrServerlessClient:
         """Fetch ONE page of job runs and return ``(runs, next_token)``.
 
         The VM threads ``next_token`` back through this method on
-        ``load_more()`` to walk pages on demand. ``states`` filters
-        the returned page CLIENT-side; the same caveat as
-        :meth:`list_job_runs` applies (boto3 only supports a single
-        state filter server-side and we need multi-select for the
-        chip strip).
+        ``load_more()`` to walk pages on demand. ``states`` is passed
+        through to the service's list-valued filter and also checked
+        locally as a defensive response-contract guard.
 
         Used by :class:`JobRunsVM` so the LEFT pane can page through
         large run histories incrementally — user feedback (post-
@@ -294,6 +291,8 @@ class EmrServerlessClient:
                 kwargs: dict[str, Any] = {"applicationId": application_id}
                 if start_token is not None:
                     kwargs["nextToken"] = start_token
+                if states and states != set(JobRunState):
+                    kwargs["states"] = sorted(state.value for state in states)
                 resp = await c.list_job_runs(**kwargs)
                 summaries = [
                     JobRunSummary(
@@ -325,25 +324,29 @@ class EmrServerlessClient:
     ) -> list[JobRunSummary]:
         """List most-recent runs (sorted descending by createdAt).
 
-        ``states`` filters CLIENT-side after paging. boto3 supports
-        a single-state ``states`` parameter but multi-state requires
-        client-side filtering anyway, so we fetch unfiltered and
-        keep the logic in one place."""
+        ``states`` uses EMR Serverless's list-valued server-side filter;
+        local filtering defensively rejects an out-of-contract response."""
         try:
             async with self._session.client(
                 "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
             ) as c:
                 items: list[dict[str, object]] = []
                 next_token: str | None = None
+                seen_tokens: set[str] = set()
                 while len(items) < max_results:
-                    kwargs: dict[str, str] = {"applicationId": application_id}
+                    kwargs: dict[str, Any] = {"applicationId": application_id}
                     if next_token is not None:
                         kwargs["nextToken"] = next_token
+                    if states and states != set(JobRunState):
+                        kwargs["states"] = sorted(state.value for state in states)
                     resp = await c.list_job_runs(**kwargs)
                     items.extend(resp.get("jobRuns", []))
                     next_token = resp.get("nextToken")
                     if next_token is None:
                         break
+                    if next_token in seen_tokens:
+                        raise ProviderError("EMR Serverless repeated a job-run continuation token")
+                    seen_tokens.add(next_token)
                 summaries = [
                     JobRunSummary(
                         application_id=cast(str, r["applicationId"]),

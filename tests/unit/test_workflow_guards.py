@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,19 @@ def _assert_step_has_command(
     ), f"missing executable {command_prefix!r} line in {job!r} / {name!r}"
 
 
+def test_every_workflow_job_has_a_bounded_timeout() -> None:
+    for workflow_path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/pages.yml",
+        ".github/workflows/release.yml",
+    ):
+        workflow = _workflow(workflow_path)
+        for job_name, job in workflow["jobs"].items():
+            timeout = job.get("timeout-minutes")
+            assert isinstance(timeout, int), f"{workflow_path}:{job_name} has no timeout"
+            assert 1 <= timeout <= 60, f"{workflow_path}:{job_name} timeout is unbounded"
+
+
 def test_ci_dependency_audit_keeps_locked_hashes() -> None:
     _assert_hashed_audit_pair(".github/workflows/ci.yml", "security")
     assert _matrix_values(".github/workflows/ci.yml", "security", "python") == [
@@ -74,6 +88,9 @@ def test_ci_dependency_audit_keeps_locked_hashes() -> None:
 
 def test_ci_pytest_tiers_stay_wired() -> None:
     workflow = _workflow(".github/workflows/ci.yml")
+    assert workflow["jobs"]["unit"]["timeout-minutes"] == 30
+    assert workflow["jobs"]["integration"]["timeout-minutes"] == 20
+    assert workflow["jobs"]["coverage"]["timeout-minutes"] == 30
 
     _assert_step_has_command(
         workflow,
@@ -91,6 +108,7 @@ def test_ci_pytest_tiers_stay_wired() -> None:
         "pytest (integration tier)",
         "uv run",
         "pytest",
+        "tests/integration",
         "-m integration",
     )
     _assert_step_has_command(
@@ -139,9 +157,6 @@ def test_integration_marker_is_reserved_for_minio_tier() -> None:
 def test_release_dependency_audit_keeps_locked_hashes() -> None:
     workflow = _workflow(".github/workflows/release.yml")
     _assert_hashed_audit_pair(".github/workflows/release.yml", "verify")
-    _assert_supported_python_loop(
-        _step(workflow, "verify", "pytest supported Python matrix")["run"]
-    )
     export_run = _step(workflow, "verify", "export locked requirements")["run"]
     audit_run = _step(workflow, "verify", "pip-audit (locked dependencies)")["run"]
     _assert_supported_python_loop(export_run)
@@ -150,27 +165,39 @@ def test_release_dependency_audit_keeps_locked_hashes() -> None:
     assert "requirements-audit-$py.txt" in audit_run
 
 
+def test_release_version_and_changelog_are_guarded() -> None:
+    workflow = _workflow(".github/workflows/release.yml")
+    run = _step(workflow, "verify", "tag-version match")["run"]
+
+    assert "scripts.release_version stage-testpypi" in run
+    assert "scripts.release_version check-changelog" in run
+
+
 def test_release_pytest_tiers_stay_wired() -> None:
     workflow = _workflow(".github/workflows/release.yml")
+    assert workflow["jobs"]["verify"]["timeout-minutes"] == 45
 
     _assert_step_has_command(
         workflow,
         "verify",
-        "pytest supported Python matrix",
+        "pytest supported Python edge versions",
         "for py",
-        "for py in 3.11 3.12 3.13; do",
+        "for py in 3.11 3.13; do",
     )
     _assert_step_has_command(
         workflow,
         "verify",
-        "pytest supported Python matrix",
+        "pytest supported Python edge versions",
         "uv sync",
-        'uv sync --frozen --python "$py"',
+        'uv sync --frozen --python "$py" --group docs',
     )
+    matrix_run = _step(workflow, "verify", "pytest supported Python edge versions")["run"]
+    assert "uv sync --frozen --python 3.12 --group docs" in matrix_run
+    assert 'uv run --python "3.12" pytest' not in matrix_run
     _assert_step_has_command(
         workflow,
         "verify",
-        "pytest supported Python matrix",
+        "pytest supported Python edge versions",
         "uv run",
         'uv run --python "$py" pytest tests/unit tests/integration -v',
     )
@@ -221,6 +248,148 @@ def test_release_smoke_install_covers_supported_python_versions() -> None:
         "3.12",
         "3.13",
     ]
+
+
+def test_release_runs_behavioral_tests_on_non_linux_platforms_before_publish() -> None:
+    workflow = _workflow(".github/workflows/release.yml")
+
+    assert _matrix_values(".github/workflows/release.yml", "platform-tests", "os") == [
+        "macos-14",
+        "windows-latest",
+    ]
+    assert workflow["jobs"]["platform-tests"]["needs"] == "verify"
+    _assert_step_has_command(
+        workflow,
+        "platform-tests",
+        "pytest platform behavior",
+        "uv run",
+        "--python 3.12",
+        "pytest",
+        "tests/unit",
+        "tests/integration",
+    )
+    assert set(workflow["jobs"]["publish-pypi"]["needs"]) == {
+        "verify",
+        "platform-tests",
+        "smoke-install",
+        "lowest-supported-dependencies",
+    }
+
+
+def test_release_checks_declared_minimum_s3_dependency_models_before_publish() -> None:
+    workflow = _workflow(".github/workflows/release.yml")
+    job = workflow["jobs"]["lowest-supported-dependencies"]
+
+    assert job["needs"] == "verify"
+    assert job["timeout-minutes"] == 20
+    install = _step(
+        workflow, "lowest-supported-dependencies", "install declared minimum dependencies"
+    )["run"]
+    assert "uv pip install --resolution lowest-direct" in install
+    assert '--python "$PY" .' in install
+    assert "aioboto3==" not in install
+    assert "botocore==" not in install
+    exercise = _step(
+        workflow, "lowest-supported-dependencies", "exercise minimum dependency runtime"
+    )["run"]
+    assert "tests/unit/infra/test_connection_resolver.py" in exercise
+    assert "tests/minimum_runtime/test_dependency_floors.py" in exercise
+    assert "tests/unit/infra/test_keychain.py" in exercise
+    assert "tests/unit/test_app_sanity.py" in exercise
+    assert "tests/unit/vm/test_vmx_smoke.py" in exercise
+
+    model_check = _step(
+        workflow,
+        "lowest-supported-dependencies",
+        "assert required S3 request model members",
+    )["run"]
+    assert "import aws_tui" in model_check
+    for operation, member in (
+        ("CopyObject", "CopySourceIfMatch"),
+        ("DeleteObject", "IfMatch"),
+        ("DeleteObject", "IfMatchLastModifiedTime"),
+        ("DeleteObject", "IfMatchSize"),
+    ):
+        assert operation in model_check
+        assert member in model_check
+
+
+def test_textual_range_matches_the_audited_compatibility_adapter() -> None:
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    requirement = next(
+        value for value in project["project"]["dependencies"] if value.startswith("textual")
+    )
+
+    assert requirement == "textual==8.2.8"
+
+
+def test_ci_and_release_require_documentation_contracts() -> None:
+    ci = _workflow(".github/workflows/ci.yml")
+    release = _workflow(".github/workflows/release.yml")
+
+    assert "docs" in ci["jobs"]["gate"]["needs"]
+    _assert_step_has_command(
+        ci, "docs", "documentation drift and strict build", "make", "docs-check"
+    )
+    _assert_step_has_command(
+        ci,
+        "docs",
+        "pytest (documentation contracts)",
+        "uv run",
+        "pytest",
+        "tests/docs",
+    )
+    _assert_step_has_command(
+        release,
+        "verify",
+        "documentation drift and strict build",
+        "make",
+        "docs-check",
+    )
+    _assert_step_has_command(
+        release,
+        "verify",
+        "pytest (documentation contracts)",
+        "uv run",
+        "pytest",
+        "tests/docs",
+    )
+
+
+def test_pages_manual_dispatch_publishes_main_only() -> None:
+    workflow = _workflow(".github/workflows/pages.yml")
+
+    assert workflow[True]["workflow_dispatch"] is None
+    assert workflow["jobs"]["build"]["if"] == "github.ref == 'refs/heads/main'"
+    assert workflow["jobs"]["wiki"]["if"] == "github.ref == 'refs/heads/main'"
+    assert workflow["env"]["UV_VERSION"] == "0.11.19"
+    for job_name in ("build", "wiki"):
+        setup_uv = next(
+            step
+            for step in workflow["jobs"][job_name]["steps"]
+            if str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
+        )
+        assert setup_uv["with"]["version"] == "${{ env.UV_VERSION }}"
+    assert "assets/screenshots/aws-tui-running.png" in workflow[True]["push"]["paths"]
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["jobs"]["deploy"]["permissions"] == {
+        "contents": "read",
+        "pages": "write",
+        "id-token": "write",
+    }
+    _assert_step_has_command(
+        workflow, "build", "documentation drift and strict build", "make", "docs-check"
+    )
+    _assert_step_has_command(
+        workflow, "build", "documentation contract tests", "uv run", "pytest", "tests/docs"
+    )
+
+
+def test_ci_gate_rejects_every_non_success_result() -> None:
+    workflow = _workflow(".github/workflows/ci.yml")
+    run = _step(workflow, "gate", "require every CI tier")["run"]
+
+    assert '[[ "$result" != "success" ]]' in run
 
 
 def test_release_creation_does_not_depend_on_runner_gh_cli() -> None:

@@ -224,8 +224,8 @@ ConfirmModal > Container > .modal-footer {
    danger — only shows on hover / focus: the active button picks
    up its colour while the inactive sibling stays neutral, so the
    user never sees both buttons coloured at the same time.
-   Applies to every modal that uses ModalButton (ConfirmModal,
-   FirstRunModal, ResumeModal, inline ConnectionForm). */
+   Applies to every surface that uses ModalButton (ConfirmModal,
+   CrashModal, JobRunCloneModal, LogFilterModal, ConnectionForm). */
 ModalButton {
     background: $bg;
     color: $text;
@@ -654,9 +654,11 @@ EmrServerlessPage > .emr-left-column > .emr-app-box {
     background: $bg;
     color: $text;
     border: solid $rule-dim;
+    border-bottom: none;
 }
 EmrServerlessPage > .emr-left-column > .emr-app-box:focus-within {
     border: solid $accent;
+    border-bottom: none;
 }
 JobRunsPane > .runs-column-header {
     background: $bg-elev;
@@ -667,11 +669,11 @@ JobRunsPane > .runs-column-header {
 ApplicationPicker > .app-trigger {
     background: $bg;
     color: $text;
-    border: round $rule-dim;
+    border: none;
 }
 ApplicationPicker.-open > .app-trigger {
     background: $bg-elev;
-    border: round $accent;
+    border: none;
     color: $accent;
 }
 ApplicationPicker > OptionList {

@@ -117,14 +117,33 @@ async def test_seeded_demo_emr_has_runs_across_states() -> None:
 
 
 @pytest.mark.asyncio
-async def test_seeded_demo_failed_runs_do_not_advertise_fake_s3_logs() -> None:
+async def test_seeded_demo_failed_runs_have_streamable_logs() -> None:
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, build_run_prefix, parse_log_uri
+
     emr = seeded_demo_emr()
     runs, _ = await emr.list_job_runs_page("etl-pipeline-1")
     failed_ids = [r.job_run_id for r in runs if r.state is JobRunState.FAILED]
     assert failed_ids
 
     details = [await emr.get_job_run("etl-pipeline-1", run_id) for run_id in failed_ids]
-    assert {detail.s3_monitoring_log_uri for detail in details} == {None}
+    assert {detail.s3_monitoring_log_uri for detail in details} == {"s3://demo-emr-logs/logs"}
+    detail = details[0]
+    location = parse_log_uri(detail.s3_monitoring_log_uri or "")
+    files = await emr.list_files(
+        bucket=location.bucket,
+        run_prefix=build_run_prefix(location, detail.application_id, detail.job_run_id),
+    )
+    assert files
+    chunks = [
+        chunk
+        async for chunk in emr.stream(
+            log_file=files[0],
+            bucket=location.bucket,
+            max_bytes=1024,
+            filter_=DEFAULT_LOG_FILTER,
+        )
+    ]
+    assert any("ERROR" in line for chunk in chunks for line in chunk.lines)
 
 
 @pytest.mark.asyncio

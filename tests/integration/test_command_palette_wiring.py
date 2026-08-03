@@ -10,6 +10,9 @@ from aws_tui.ui.widgets.command_palette import CommandPalette
 _GLOBAL = {"Theme picker", "Cycle theme", "Settings", "Help", "Quit"}
 _SOURCE = {"Switch source"}
 _GLUE = {
+    "Glue catalog",
+    "Glue jobs",
+    "Glue crawlers",
     "Choose Glue run state",
     "Choose Glue crawler state",
     "Copy Glue table reference",
@@ -17,6 +20,7 @@ _GLUE = {
     "Query table in Athena",
     "Query Iceberg snapshot in Athena",
 }
+_EMR = {"Next EMR application"}
 _ATHENA = {
     "Athena query",
     "Athena history",
@@ -50,9 +54,11 @@ async def test_palette_projects_only_global_and_active_service_commands(
         vm.set_active_service("athena")
         assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE | _ATHENA
 
-        for service_id in ("s3", "emr-serverless"):
-            vm.set_active_service(service_id)
-            assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE
+        vm.set_active_service("s3")
+        assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE
+
+        vm.set_active_service("emr-serverless")
+        assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE | _EMR
 
         vm.set_active_service("settings")
         assert {entry.label for entry in vm.filtered_entries} == _GLOBAL
@@ -93,3 +99,24 @@ async def test_palette_entry_action_dispatches(app_context_factory) -> None:  # 
         app._actions.register("app.cycle_theme", lambda: calls.append("cycle"))
         app._app_ctx.command_palette_vm._actions["app.cycle_theme"]()
         assert calls == ["cycle"]
+
+
+@pytest.mark.asyncio
+async def test_enter_executes_filtered_palette_entry_with_production_bindings(
+    app_context_factory,  # type: ignore[no-untyped-def]
+) -> None:
+    app = AwsTuiApp(app_context_factory())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        calls: list[str] = []
+        app._actions.register("app.cycle_theme", lambda: calls.append("cycle"))
+        await pilot.press("colon")
+        await pilot.pause()
+        assert isinstance(app.screen, CommandPalette)
+        await pilot.press(*"Cycle theme")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert calls == ["cycle"]
+        assert not isinstance(app.screen, CommandPalette)

@@ -19,7 +19,7 @@ from typing import TypeAlias
 
 #: Handler signature for an action id. Sync returns ``None``; async
 #: returns ``Awaitable[None]`` which the caller may schedule on the loop.
-ActionHandler: TypeAlias = Callable[[], None | Awaitable[None]]
+ActionHandler: TypeAlias = Callable[[], Awaitable[None] | None]
 
 
 class UnknownAction(Exception):
@@ -49,7 +49,7 @@ class ActionRegistry:
         """Return True if a handler is registered for ``action_id``."""
         return action_id in self._handlers
 
-    def invoke(self, action_id: str) -> None | Awaitable[None]:
+    def invoke(self, action_id: str) -> Awaitable[None] | None:
         """Invoke the handler for ``action_id``.
 
         Returns whatever the handler returned (None or an awaitable).

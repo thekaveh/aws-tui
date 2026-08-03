@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
+from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
@@ -39,10 +39,11 @@ from aws_tui.domain.query import (
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.athena.saved_vm import SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.messages import OpenGlueTableRequest
+from aws_tui.vm.messages import OpenGlueTableRequest, ServiceOperationFailedMessage
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 
 _STATS = QueryStatistics(1, 1, 1, 1, 0, False)
@@ -739,9 +740,9 @@ async def test_setup_loads_context_lists_in_order_and_keeps_other_views_lazy() -
 
     await page.setup()
 
-    assert isinstance(page._workgroup_pager, TokenPagedComposition)  # type: ignore[attr-defined]
-    assert isinstance(page._catalog_pager, TokenPagedComposition)  # type: ignore[attr-defined]
-    assert isinstance(page._database_pager, TokenPagedComposition)  # type: ignore[attr-defined]
+    assert isinstance(page._workgroup_pager, SnapshotTokenPager)  # type: ignore[attr-defined]
+    assert isinstance(page._catalog_pager, SnapshotTokenPager)  # type: ignore[attr-defined]
+    assert isinstance(page._database_pager, SnapshotTokenPager)  # type: ignore[attr-defined]
     assert page.context == QueryContext(
         "analytics",
         "us-west-2",
@@ -843,11 +844,9 @@ async def test_shutdown_drains_workgroup_detail_without_late_publication() -> No
     selection = asyncio.create_task(page.select_workgroup("analysts"))
     await client.workgroup_detail_started.wait()
     shutdown = asyncio.create_task(page.shutdown())
-    await asyncio.sleep(0)
-
-    assert not shutdown.done()
-    client.release_workgroup_detail.set()
-    await asyncio.gather(selection, shutdown)
+    await shutdown
+    with pytest.raises(asyncio.CancelledError):
+        await selection
 
     assert page.context.workgroup == ""
     assert page.workgroup_detail is None
@@ -1268,16 +1267,86 @@ async def test_page_snapshot_preflight_provider_failures_are_atomic(
     snapshot = source.export_snapshot()
 
     store = ServiceSelectionStore()
-    destination = make_page_vm(client, selection_store=store)
+    hub: MessageHub[Message] = MessageHub()
+    destination = make_page_vm(client, selection_store=store, hub=hub)
     await destination.setup()
     destination.query.set_sql("UNCHANGED_DESTINATION_SQL")
     setattr(client, error_attribute, ProviderError("SNAPSHOT_PROVIDER_SECRET"))
     before = _page_restore_state(destination, store)
+    messages: list[Message] = []
+    subscription = hub.messages.subscribe(messages.append)
 
-    with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
-        await destination.restore_snapshot(snapshot)
+    try:
+        with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+            await destination.restore_snapshot(snapshot)
+    finally:
+        subscription.dispose()
 
     assert _page_restore_state(destination, store) == before
+    assert not any(isinstance(message, ServiceOperationFailedMessage) for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_page_snapshot_preflight_reports_unexpected_context_failure() -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    snapshot = source.export_snapshot()
+    hub: MessageHub[Message] = MessageHub()
+    destination = make_page_vm(client, hub=hub)
+    await destination.setup()
+    client.workgroup_error = RuntimeError(  # type: ignore[assignment]
+        "Authorization: Bearer SNAPSHOT_CONTEXT_SECRET"
+    )
+    messages: list[Message] = []
+    subscription = hub.messages.subscribe(messages.append)
+    try:
+        with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+            await destination.restore_snapshot(snapshot)
+    finally:
+        subscription.dispose()
+
+    diagnostics = [
+        message for message in messages if isinstance(message, ServiceOperationFailedMessage)
+    ]
+    assert len(diagnostics) == 1
+    assert diagnostics[0].operation == "restore_snapshot_context"
+    assert diagnostics[0].source == snapshot.context.connection_name
+    assert diagnostics[0].region == snapshot.context.region
+    assert diagnostics[0].safe_error == "Authorization: Bearer [REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_page_snapshot_preflight_forwards_staged_child_diagnostic() -> None:
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    await source.select_view("history")
+    snapshot = source.export_snapshot()
+    hub: MessageHub[Message] = MessageHub()
+    destination = make_page_vm(client, hub=hub)
+    await destination.setup()
+    client.history_error = RuntimeError(  # type: ignore[assignment]
+        "Authorization: Bearer SNAPSHOT_CHILD_SECRET"
+    )
+    messages: list[Message] = []
+    subscription = hub.messages.subscribe(messages.append)
+    try:
+        with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+            await destination.restore_snapshot(snapshot)
+    finally:
+        subscription.dispose()
+
+    diagnostics = [
+        message for message in messages if isinstance(message, ServiceOperationFailedMessage)
+    ]
+    assert len(diagnostics) == 1
+    assert diagnostics[0].operation == "list_query_executions"
+    assert diagnostics[0].source == snapshot.context.connection_name
+    assert diagnostics[0].region == snapshot.context.region
+    assert diagnostics[0].safe_error == "Authorization: Bearer [REDACTED]"
 
 
 @pytest.mark.asyncio
@@ -1845,7 +1914,11 @@ async def test_context_load_more_exposes_busy_state_without_reloading_page_one()
     client = PageClient()
     page = make_page_vm(client)
     await page.setup()
-    page._catalog_pager._current_token = "catalog-next"  # type: ignore[attr-defined]
+    seed_token_pager(
+        page._catalog_pager,  # type: ignore[attr-defined]
+        page.catalogs,
+        "catalog-next",
+    )
     client.block_catalog_for = "primary"
 
     loading = asyncio.create_task(page.load_more_catalogs())

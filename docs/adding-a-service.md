@@ -170,7 +170,7 @@ protocol applies.
 `src/aws_tui/services/s3/service.py` is the first concrete service.
 Read it end-to-end (~80 lines):
 
-- `descriptor` declares `id = "s3"`, label `"S3"`, icon `"🪣"`
+- `descriptor` declares `id = "s3"`, label `"S3"`, icon code point `U+1FAA3 BUCKET`
   (U+1FAA3 BUCKET — true emoji codepoint, renders coloured in any
   terminal with a modern emoji font). The icon literal in the
   template at §2 (``"•"``) is a placeholder — the convention is to
@@ -190,12 +190,12 @@ Read it end-to-end (~80 lines):
 shipped service and demonstrates the richer per-service pattern:
 
 - `descriptor` declares `id = "emr-serverless"`, label `"EMR"`, icon
-  `"🔥"` — U+1F525 FIRE (SMP single-codepoint, 2 cells, in
+  `U+1F525 FIRE` (SMP single-codepoint, 2 cells, in
   colour reliably across SF Mono / JetBrains Mono / Fira Code). See
   the ``services/emr_serverless/service.py`` module docstring for
   the full icon saga (PR #76 bare ``⚡`` U+26A1 → PR #77 ``⚡️``
-  with VS-16 → PR #79 ``🔥`` → PR #81 back to ``⚡️`` → PR #83
-  ``💥`` → reverted to ``🔥`` after ``💥`` rendered too small). The
+  with VS-16, then U+1F525 FIRE, U+26A1 HIGH VOLTAGE, and U+1F4A5
+  COLLISION before reverting to U+1F525 FIRE after COLLISION rendered too small). The
   documented "icon contract" future services should follow up front:
   **SMP single-codepoint, no VS-16 dance** — the glyph must reliably
   occupy 2 cells in monospace terminals

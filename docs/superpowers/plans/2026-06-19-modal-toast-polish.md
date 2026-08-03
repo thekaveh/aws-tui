@@ -2343,7 +2343,6 @@ Implements the design spec at \`docs/superpowers/specs/2026-06-19-modal-toast-po
 - [x] Out-of-scope snapshots verified unchanged (74 goldens: 5 deferred modals \xc3\x97 10 + pane states \xc3\x97 24).
 - [ ] CI on this PR (let it run; mirrors local).
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```

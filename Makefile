@@ -12,19 +12,24 @@ else
   DOCS_PY := uv run python
 endif
 
-.PHONY: help docs-diagrams docs-build docs-serve docs-check docs-wiki
+.PHONY: help docs-hero docs-diagrams docs-build docs-serve docs-check docs-wiki
 
 help:
 	@echo "docs-diagrams  render diagram masters -> SVG (site) + PNG (committed)"
+	@echo "docs-hero      render the README/site hero from the Carbon demo golden"
 	@echo "docs-build     render diagrams + site, then mkdocs --strict"
 	@echo "docs-serve     render diagrams + site, then mkdocs serve"
-	@echo "docs-check     render diagrams + check_docs + mkdocs --strict"
+	@echo "docs-check     verify diagrams + check_docs + mkdocs --strict"
 	@echo "docs-wiki      render wiki + push_wiki --check (no network)"
+
+docs-hero:
+	$(DOCS_PY) -m scripts.docs.render_hero
 
 docs-diagrams:
 	$(DOCS_PY) -m scripts.docs.render_diagrams
 
 docs-build:
+	$(DOCS_PY) -m scripts.docs.render_hero
 	$(DOCS_PY) -m scripts.docs.render_diagrams
 	$(DOCS_PY) -m scripts.docs.build_docs --site
 	uv run mkdocs build --strict
@@ -35,7 +40,8 @@ docs-serve:
 	uv run mkdocs serve
 
 docs-check:
-	$(DOCS_PY) -m scripts.docs.render_diagrams
+	$(DOCS_PY) -m scripts.docs.render_hero --check
+	$(DOCS_PY) -m scripts.docs.render_diagrams --check
 	$(DOCS_PY) -m scripts.docs.check_docs
 	uv run mkdocs build --strict
 

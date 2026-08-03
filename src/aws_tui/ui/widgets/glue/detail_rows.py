@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar
@@ -7,6 +8,7 @@ from typing import ClassVar
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
@@ -64,6 +66,8 @@ class ResourceListPane(Widget):
     ResourceListPane > OptionList {
         height: 1fr;
         scrollbar-size: 1 1;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
     }
     ResourceListPane > .glue-list-footer {
         height: 1;
@@ -82,6 +86,7 @@ class ResourceListPane(Widget):
         super().__init__(id=id, classes="glue-pane glue-list-pane")
         self._title = title
         self._empty_text = empty_text
+        self._footer_text = ""
 
     def compose(self) -> ComposeResult:
         yield OptionList(
@@ -90,10 +95,15 @@ class ResourceListPane(Widget):
             markup=False,
             compact=True,
         )
-        yield Static("", classes="glue-list-footer", markup=False)
+        yield Static(self._footer_text, classes="glue-list-footer", markup=False)
 
     def on_mount(self) -> None:
         self.border_title = self._title
+        self._refresh_footer()
+
+    def _refresh_footer(self) -> None:
+        with suppress(NoMatches):
+            self.query_one(".glue-list-footer", Static).update(self._footer_text)
 
     @property
     def option_list(self) -> OptionList:
@@ -137,10 +147,10 @@ class ResourceListPane(Widget):
                 if options.get_option_at_index(index).id == selected_id:
                     options.highlighted = index
                     break
-        footer = self.query_one(".glue-list-footer", Static)
         count = len(rows)
         suffix = " · more available" if has_more else ""
-        footer.update(f"{count} item{'s' if count != 1 else ''}{suffix}")
+        self._footer_text = f"{count} item{'s' if count != 1 else ''}{suffix}"
+        self._refresh_footer()
 
 
 class DetailRows(Widget):

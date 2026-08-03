@@ -42,11 +42,18 @@ def test_source_and_emr_application_bindings_have_distinct_descriptions() -> Non
 
 
 def test_priority_true_except_quit() -> None:
-    actions = _registry("app.quit", "pane.switch_focus")
+    actions = _registry(
+        "app.quit",
+        "pane.switch_focus",
+        "pane.modal_left",
+        "pane.modal_right",
+    )
     resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
     by_key = {b.key: b for b in resolver.to_textual_bindings()}
     assert by_key["q"].priority is False
     assert by_key["tab"].priority is True
+    assert by_key["left"].priority is False
+    assert by_key["right"].priority is False
 
 
 def test_first_key_visible_secondary_hidden() -> None:

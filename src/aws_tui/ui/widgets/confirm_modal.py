@@ -14,15 +14,20 @@ from ``AwsTuiApp`` (see ``_forward_to_modal``).
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+import asyncio
+from typing import Any, Literal, TypeVar
+
+from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.events import Click
 from textual.screen import ModalScreen
 from textual.widgets import Static
-from vmx import Message, MessageHub
+from vmx import DialogService, FileFilter, Message, MessageHub, ModalVM, NotificationSeverity
 
 from aws_tui.ui.widgets.modal_button import ModalButton as _ModalButton
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
+
+T = TypeVar("T")
 
 
 class ConfirmModal(ModalScreen[bool]):
@@ -120,10 +125,10 @@ class ConfirmModal(ModalScreen[bool]):
                 )
 
     def on_mount(self) -> None:
-        # No focus class on mount — both buttons start neutral.
-        # The first arrow / Tab press flips ``_focus_visible`` True
-        # and lights up the default-focused button.
-        return
+        # Keep Textual's real keyboard focus aligned with the safe logical
+        # default. The custom ``-focused`` class remains hidden until the user
+        # navigates, so this does not reintroduce the old double-selection look.
+        self._focus_button_widget()
 
     def action_cancel(self) -> None:
         self._vm.cancel_command.execute()
@@ -184,6 +189,77 @@ class ConfirmModal(ModalScreen[bool]):
                 btn.add_class("-focused")
             else:
                 btn.remove_class("-focused")
+        self._focus_button_widget()
+
+    def _focus_button_widget(self) -> None:
+        for button in self.query(_ModalButton):
+            if button.button_id == self._focused_button_id:
+                button.focus()
+                return
 
 
-__all__ = ["ConfirmModal"]
+class TextualDialogService(DialogService):
+    """VMx dialog host that presents confirmation VMs in Textual."""
+
+    def __init__(
+        self,
+        app: App[Any],
+        vm: ConfirmationVM,
+        *,
+        hub: MessageHub[Message],
+    ) -> None:
+        self._app = app
+        self._vm = vm
+        self._hub = hub
+
+    async def pick_file_to_open(
+        self,
+        filter: FileFilter | None = None,
+        title: str | None = None,
+    ) -> str | None:
+        return None
+
+    async def pick_file_to_save(
+        self,
+        filter: FileFilter | None = None,
+        title: str | None = None,
+        suggested_name: str | None = None,
+    ) -> str | None:
+        return None
+
+    async def confirm(self, message: str, title: str | None = None) -> bool:
+        return await self._vm.ask(
+            ConfirmRequest(title=title or "Confirm", body_lines=(message,)),
+            dialog_service=self,
+        )
+
+    async def notify(
+        self,
+        message: str,
+        title: str | None = None,
+        severity: NotificationSeverity = NotificationSeverity.INFO,
+    ) -> None:
+        severity_map: dict[NotificationSeverity, Literal["information", "warning", "error"]] = {
+            NotificationSeverity.INFO: "information",
+            NotificationSeverity.WARNING: "warning",
+            NotificationSeverity.ERROR: "error",
+        }
+        textual_severity = severity_map[severity]
+        self._app.notify(message, title=title or "", severity=textual_severity)
+
+    async def present(self, modal_vm: ModalVM[T]) -> T:
+        request = self._vm.request
+        if request is None:
+            raise RuntimeError("confirmation request is not open")
+        screen = ConfirmModal(self._vm, request, hub=self._hub)
+        await self._app.push_screen(screen)
+        try:
+            return await modal_vm.wait_result()
+        except asyncio.CancelledError:
+            modal_vm.dispose()
+            if screen in self._app.screen_stack:
+                await screen.dismiss(False)
+            raise
+
+
+__all__ = ["ConfirmModal", "TextualDialogService"]

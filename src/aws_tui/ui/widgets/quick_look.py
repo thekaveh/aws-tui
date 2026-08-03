@@ -7,12 +7,15 @@ on mount and append text to the body.
 
 from __future__ import annotations
 
+import asyncio
+
 from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static
 from vmx import Message, MessageHub
 
+from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.chrome.quick_look_vm import QuickLookVM
 
 
@@ -56,7 +59,15 @@ class QuickLook(ModalScreen[None]):
                     "loading...", id="quicklook-body", classes="quicklook-body", markup=False
                 )
 
-    async def on_mount(self) -> None:
+    def on_mount(self) -> None:
+        self.run_worker(
+            self._load_preview(),
+            group="quick-look-preview",
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    async def _load_preview(self) -> None:
         content = self._vm.content
         if content is None or content.chunks is None:
             return
@@ -68,6 +79,11 @@ class QuickLook(ModalScreen[None]):
                 buf.extend(chunk)
                 if len(buf) >= 64 * 1024:
                     break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            body.update(f"preview unavailable: {redact_text(str(exc))}")
+            return
         finally:
             # Close the underlying file handle / S3 stream deterministically
             # when we break out at the 64 KiB cap, rather than waiting for
@@ -82,6 +98,9 @@ class QuickLook(ModalScreen[None]):
         # previous ``except Exception`` + ``repr(bytes(buf))`` fallback
         # was dead code.
         body.update(buf.decode("utf-8", errors="replace"))
+
+    def on_unmount(self) -> None:
+        self.workers.cancel_group(self, "quick-look-preview")
 
     def action_close(self) -> None:
         self._vm.close_command.execute()

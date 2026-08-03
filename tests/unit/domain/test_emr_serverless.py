@@ -147,6 +147,9 @@ def _client_error(code: str, op: str = "ListApplications") -> botocore.exception
             ),
             AuthRequiredError,
         ),
+        (botocore.exceptions.SSOTokenLoadError(error_msg="expired"), AuthRequiredError),
+        (botocore.exceptions.UnauthorizedSSOTokenError(), AuthRequiredError),
+        (botocore.exceptions.NoAuthTokenError(), AuthRequiredError),
         (botocore.exceptions.EndpointConnectionError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ConnectTimeoutError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ReadTimeoutError(endpoint_url="x"), ProviderUnreachableError),
@@ -157,6 +160,9 @@ def _client_error(code: str, op: str = "ListApplications") -> botocore.exception
         ),
         (botocore.exceptions.SSLError(endpoint_url="x", error="tls"), ProviderUnreachableError),
         (_client_error("AccessDeniedException"), PermissionDeniedError),
+        (_client_error("ExpiredToken"), AuthRequiredError),
+        (_client_error("InvalidClientTokenId"), AuthRequiredError),
+        (_client_error("UnrecognizedClientException"), AuthRequiredError),
         (_client_error("ThrottlingException"), ThrottledError),
         (_client_error("ResourceNotFoundException"), NotFoundError),
         (_client_error("ValidationException"), ValidationError),
@@ -322,7 +328,18 @@ async def test_list_applications_maps_response_to_records() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_job_runs_filters_by_state_client_side() -> None:
+async def test_list_applications_rejects_repeated_pagination_token() -> None:
+    stub = _StubClient()
+    stub.list_applications.return_value = {"applications": [], "nextToken": "same"}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="repeated an application continuation token"):
+        await client.list_applications()
+    assert stub.list_applications.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_passes_multi_state_filter_to_service() -> None:
     stub = _StubClient()
     stub.list_job_runs.return_value = _fake_run_response(
         [
@@ -355,6 +372,29 @@ async def test_list_job_runs_filters_by_state_client_side() -> None:
     client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
     runs = await client.list_job_runs("00abc", states={JobRunState.SUCCESS, JobRunState.RUNNING})
     assert [r.job_run_id for r in runs] == ["jr1", "jr3"]
+    assert set(stub.list_job_runs.call_args.kwargs["states"]) == {"SUCCESS", "RUNNING"}
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_rejects_repeated_pagination_token() -> None:
+    stub = _StubClient()
+    stub.list_job_runs.return_value = {"jobRuns": [], "nextToken": "same"}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="repeated a job-run continuation token"):
+        await client.list_job_runs("00abc")
+    assert stub.list_job_runs.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_omits_all_states_filter() -> None:
+    stub = _StubClient()
+    stub.list_job_runs.return_value = {"jobRuns": []}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    await client.list_job_runs("00abc", states=set(JobRunState))
+
+    assert "states" not in stub.list_job_runs.call_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -536,5 +576,5 @@ def test_emr_boto_config_pins_timeout_and_retry_shape() -> None:
     overlapping ``list_*`` calls on a flaky network."""
     assert _EMR_BOTO_CONFIG.connect_timeout == 10
     assert _EMR_BOTO_CONFIG.read_timeout == 60
-    assert _EMR_BOTO_CONFIG.retries == {"max_attempts": 6, "mode": "adaptive"}
+    assert _EMR_BOTO_CONFIG.retries == {"total_max_attempts": 6, "mode": "adaptive"}
     assert EMR_BOTO_CONFIG is _EMR_BOTO_CONFIG

@@ -54,3 +54,21 @@ def test_unreleased_changelog_does_not_contradict_shipped_handlers_or_demo() -> 
     assert "seeded in-memory S3 + EMR fakes" not in unreleased
     assert "Quick Look and the command palette now register their handlers" in unreleased
     assert "seeded in-memory S3, EMR, and Glue fakes" in unreleased
+
+
+def test_current_docs_do_not_claim_deleted_first_run_or_resume_modals() -> None:
+    current = " ".join(
+        _text(path) for path in ("README.md", "docs/connections.md", "docs/recording-todo.md")
+    )
+
+    assert "welcome modal exists" not in current.lower()
+    assert "resume modal pops up" not in current.lower()
+    assert "FirstRunModal" not in current
+    assert "ResumeModal" not in current
+
+
+def test_contributing_documents_gitflow_base_branches() -> None:
+    text = _text("CONTRIBUTING.md")
+
+    assert "Branch feature, fix, and maintenance work from `develop`" in text
+    assert "Reserve `main` for release-promotion PRs from `develop`" in text

@@ -22,7 +22,7 @@ from typing import Any
 import reactivex as rx
 from vmx import FormVM, RelayCommand
 
-from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 
 #: Async persister: (form) -> Awaitable[None]. Raises on failure.
 S3FormPersister = Callable[[S3CompatForm], Awaitable[None]]

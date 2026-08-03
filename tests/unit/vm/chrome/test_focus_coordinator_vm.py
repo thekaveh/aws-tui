@@ -403,6 +403,8 @@ def test_focus_slot_enum_has_all_required_members() -> None:
         "NAV_MENU",
         "S3_LEFT",
         "S3_RIGHT",
+        "EMR_SOURCE",
+        "EMR_APPLICATION",
         "EMR_RUNS",
         "EMR_DETAIL",
         "EMR_LOGS",
@@ -451,6 +453,8 @@ def test_focus_slot_values_are_canonical_strings() -> None:
     assert FocusSlot.NAV_MENU.value == "nav_menu"
     assert FocusSlot.S3_LEFT.value == "s3.left"
     assert FocusSlot.S3_RIGHT.value == "s3.right"
+    assert FocusSlot.EMR_SOURCE.value == "emr.source"
+    assert FocusSlot.EMR_APPLICATION.value == "emr.application"
     assert FocusSlot.EMR_RUNS.value == "emr.runs"
     assert FocusSlot.EMR_DETAIL.value == "emr.detail"
     assert FocusSlot.EMR_LOGS.value == "emr.logs"

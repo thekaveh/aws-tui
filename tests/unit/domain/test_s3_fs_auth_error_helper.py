@@ -11,15 +11,19 @@ from __future__ import annotations
 
 import pytest
 from botocore.exceptions import (
+    ClientError,
     CredentialRetrievalError,
     EndpointResolutionError,
+    NoAuthTokenError,
     NoCredentialsError,
     ProfileNotFound,
+    SSOTokenLoadError,
     TokenRetrievalError,
+    UnauthorizedSSOTokenError,
 )
 
 from aws_tui.domain.filesystem import AuthRequiredError, PathRef, ProviderUnreachableError
-from aws_tui.domain.s3_fs import _AUTH_HINT, S3FS, _auth_error
+from aws_tui.domain.s3_fs import _AUTH_HINT, S3FS, _auth_error, _map_client_error
 
 
 def test_auth_error_wraps_no_credentials() -> None:
@@ -52,6 +56,20 @@ def test_auth_error_wraps_token_retrieval_error() -> None:
     assert _AUTH_HINT in str(mapped)
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        SSOTokenLoadError(error_msg="expired"),
+        UnauthorizedSSOTokenError(),
+        NoAuthTokenError(),
+    ],
+)
+def test_auth_error_wraps_sso_and_bearer_token_failures(exc: BaseException) -> None:
+    mapped = _auth_error(exc)
+    assert isinstance(mapped, AuthRequiredError)
+    assert _AUTH_HINT in str(mapped)
+
+
 def test_auth_error_masks_credential_process_stderr() -> None:
     exc = CredentialRetrievalError(
         provider="credential-process",
@@ -73,7 +91,7 @@ class _CredentialProcessFailureClient:
     async def __aexit__(self, *args: object) -> None:
         return None
 
-    async def list_buckets(self) -> object:
+    async def list_buckets(self, **_kwargs: object) -> object:
         raise CredentialRetrievalError(
             provider="credential-process",
             error_msg="SECRET_TOKEN=leaked",
@@ -94,7 +112,7 @@ class _EndpointResolutionFailureClient:
     async def __aexit__(self, *args: object) -> None:
         return None
 
-    async def list_buckets(self) -> object:
+    async def list_buckets(self, **_kwargs: object) -> object:
         raise EndpointResolutionError(msg="invalid endpoint")
 
 
@@ -142,3 +160,12 @@ def test_auth_hint_lists_the_three_recovery_paths() -> None:
     assert "credential_process" in _AUTH_HINT
     assert "AWS_ACCESS_KEY_ID" in _AUTH_HINT
     assert "AWS_SESSION_TOKEN" in _AUTH_HINT
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["ExpiredToken", "InvalidAccessKeyId", "SignatureDoesNotMatch", "TokenRefreshRequired"],
+)
+def test_s3_service_auth_codes_map_to_auth_required(code: str) -> None:
+    error = ClientError({"Error": {"Code": code, "Message": "invalid"}}, "ListObjectsV2")
+    assert isinstance(_map_client_error(error, "bucket"), AuthRequiredError)

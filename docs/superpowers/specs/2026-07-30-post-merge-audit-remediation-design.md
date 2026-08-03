@@ -1,10 +1,11 @@
-# Post-Merge Audit Remediation Design
+# 1. Post-Merge Audit Remediation Design
 
 **Date:** 2026-07-30
+**Status:** Implemented and merged to `develop`; retained as the historical design record.
 **Branch:** `codex/post-merge-audit-remediation`
 **Base:** `develop` at `a14bc98fce5847f31199d9d44cc2ff255448e09f`
 
-## 1. Purpose
+## 1.1. Purpose
 
 This remediation closes the functional, usability, documentation, and
 maintenance gaps found by the post-merge audit of the Glue and Athena
@@ -13,10 +14,10 @@ removes command-palette dead ends, eliminates newly introduced theme
 duplication, updates every affected canonical document and architecture
 artifact, and strengthens tests so the same drift cannot pass again.
 
-The work remains on a fresh branch from `develop`. It targets a later merge
-back into `develop`; it does not promote `develop` to `main`.
+The work was completed on a fresh branch from `develop` and merged back into
+`develop`; it did not promote `develop` to `main`.
 
-## 2. Outcomes
+## 1.2. Outcomes
 
 The completed remediation must provide all of the following:
 
@@ -37,7 +38,7 @@ The completed remediation must provide all of the following:
    from source-of-truth files instead of fixed hand-maintained subsets.
 8. Full verification passes without relying on automatic test reruns.
 
-## 3. Non-Goals
+## 1.3. Non-Goals
 
 - No new AWS service or write-capable Glue/Athena operation.
 - No automatic execution of generated Athena SQL.
@@ -50,9 +51,9 @@ The completed remediation must provide all of the following:
 - No speculative change for the one observed Athena-to-S3 rerun unless a
   retry-disabled reproduction identifies a root cause.
 
-## 4. Runtime Keymap Contract
+## 1.4. Runtime Keymap Contract
 
-### 4.1. Composition
+### 1.4.1. Composition
 
 `build_app_context()` will load and copy the configured keybinding overlay,
 then construct the runtime-visible `KeymapStore` with that overlay. The same
@@ -69,7 +70,7 @@ Overlay construction remains an all-or-nothing startup transaction:
 There must be no temporary validation store followed by an unconditional
 default store.
 
-### 4.2. Collision Policy
+### 1.4.2. Collision Policy
 
 `KeymapStore` continues to reject duplicate keys unless the pair is explicitly
 approved because the actions cannot share the same resolver scope. The new
@@ -82,7 +83,7 @@ All current documentation examples will use a collision-free mapping such as
 overlay is merged, including empty-list disables and Textual key-name
 normalization.
 
-### 4.3. Binding Installation
+### 1.4.3. Binding Installation
 
 `AwsTuiApp` continues to install `BindingResolver.to_textual_bindings()` during
 construction. Existing Textual base bindings are preserved according to the
@@ -99,9 +100,9 @@ The authoritative integration test must start from a real temporary
 - the hint legend resolves the same overlaid store;
 - a configured key dispatches the registered action exactly once.
 
-## 5. Contextual Command Palette
+## 1.5. Contextual Command Palette
 
-### 5.1. Entry Contract
+### 1.5.1. Entry Contract
 
 `PaletteEntry` will gain immutable service-availability metadata. An empty
 service set means global; a non-empty set contains service IDs such as
@@ -111,7 +112,7 @@ family instead of assigning every entry to `"app"`.
 The app remains responsible for declaring command metadata and handlers.
 `CommandPaletteVM` remains responsible for the visible projection.
 
-### 5.2. VMx Selection
+### 1.5.2. VMx Selection
 
 The existing VMx `CompositeVM` registry and
 `ScoredFilteredCompositeVM` projection are the best-fitting abstractions.
@@ -132,7 +133,7 @@ Athena-only entries disappear outside their matching service. No visible
 palette entry may silently no-op because the corresponding page is absent.
 Action-level guards remain as defensive runtime checks.
 
-## 6. Styling Ownership
+## 1.6. Styling Ownership
 
 The identical 33-line Glue/Athena structural block added to all ten built-in
 themes will be removed. Theme-independent layout, border topology, focus
@@ -150,9 +151,9 @@ themes continue to define color tokens. User replacement themes and
 Snapshot coverage must verify all ten built-in themes, narrow layouts, open
 pickers, focused borders, and representative custom-theme layering.
 
-## 7. Documentation and Three-Surface Parity
+## 1.7. Documentation and Three-Surface Parity
 
-### 7.1. Canonical Documents
+### 1.7.1. Canonical Documents
 
 The following sources must be reviewed and updated where applicable:
 
@@ -188,7 +189,7 @@ Athena and `CopyTableReferenceRequest`.
 The task report's defect list must restore the missing commit IDs
 `3660c39` and `5dffc81`.
 
-### 7.2. Architecture Diagram
+### 1.7.2. Architecture Diagram
 
 The landscape architecture master will be revised through the
 `architecture-diagram` workflow. The VMx layer must show
@@ -204,7 +205,7 @@ The diagram must preserve:
 - orthogonal or perpendicularly broken routing where it improves clarity;
 - generated SVG and PNG parity with the HTML master.
 
-### 7.3. Publication Semantics
+### 1.7.3. Publication Semantics
 
 `docs/manifest.yaml` remains the single published-page inventory.
 `generated/site`, `generated/wiki`, and `mkdocs.yml` remain ignored outputs.
@@ -214,7 +215,7 @@ cleanly and that MkDocs builds in strict mode.
 The live site and wiki are expected to remain at `main` until normal Gitflow
 promotion. This branch must not claim that `develop` content is already live.
 
-## 8. Semantic Documentation Tests
+## 1.8. Semantic Documentation Tests
 
 Tests will stop treating fixed tuples as complete source inventories.
 
@@ -235,7 +236,7 @@ Tests will stop treating fixed tuples as complete source inventories.
 These checks validate semantic completeness while the three-surface generator
 continues to validate mechanical parity.
 
-## 9. Test and Verification Strategy
+## 1.9. Test and Verification Strategy
 
 Implementation follows focused test-driven increments:
 
@@ -265,7 +266,7 @@ The final branch gate is:
 - `git diff --check`;
 - clean worktree.
 
-## 10. Delivery Structure
+## 1.10. Delivery Structure
 
 The implementation plan will use atomic, reviewable commits in this order:
 
@@ -281,7 +282,7 @@ No task may mark documentation complete until all manifest pages and all three
 generated surfaces have been checked. No branch-completion claim may rely on a
 test that passed only after an automatic rerun.
 
-## 11. Acceptance Criteria
+## 1.11. Acceptance Criteria
 
 The design is satisfied only when:
 
@@ -296,7 +297,7 @@ The design is satisfied only when:
 - full verification passes without reruns;
 - the branch contains no unrelated production refactor.
 
-## Implementation Record
+## 1.12. Implementation Record
 
 Task 7 established pre-report head
 `35b419259d4978964f3fa1d7ce1c7c963cf4f5e5` on

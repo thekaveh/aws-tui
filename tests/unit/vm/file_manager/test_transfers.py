@@ -67,20 +67,16 @@ def test_transfer_vm_cancel_command() -> None:
     vm.dispose()
 
 
-def test_transfer_vm_retry_command_from_failed() -> None:
-    vm = TransferVM(_model(state=TransferState.FAILED), hub=_hub(), dispatcher=NULL_DISPATCHER)
-    vm.construct()
-    assert vm.retry_command.can_execute()
-    vm.retry_command.execute()
-    assert vm.state == TransferState.PENDING
-    vm.dispose()
-
-
-def test_transfer_vm_is_finished_property_covers_three_terminal_states() -> None:
-    """``is_finished`` is True for COMPLETED / FAILED / CANCELLED and
+def test_transfer_vm_is_finished_property_covers_terminal_states() -> None:
+    """``is_finished`` is True for COMPLETED / SKIPPED / FAILED / CANCELLED and
     False for PENDING / RUNNING / PAUSED — the contract used by the
     Pass-1 terminal-stickiness guard in ``apply_update``."""
-    for terminal in (TransferState.COMPLETED, TransferState.FAILED, TransferState.CANCELLED):
+    for terminal in (
+        TransferState.COMPLETED,
+        TransferState.SKIPPED,
+        TransferState.FAILED,
+        TransferState.CANCELLED,
+    ):
         vm = TransferVM(_model(state=terminal), hub=_hub(), dispatcher=NULL_DISPATCHER)
         vm.construct()
         assert vm.is_finished, f"{terminal} must be finished"
@@ -125,6 +121,18 @@ def test_transfer_vm_terminal_to_terminal_is_allowed() -> None:
     )
     assert vm.state == TransferState.FAILED
     assert vm.model.error == "boom"
+    vm.dispose()
+
+
+def test_transfers_vm_bounds_finished_history() -> None:
+    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+
+    for index in range(105):
+        vm.register(_model(id=f"t{index}", state=TransferState.COMPLETED))
+
+    assert len(vm.finished) == 100
+    assert vm.finished[0].id == "t5"
     vm.dispose()
 
 

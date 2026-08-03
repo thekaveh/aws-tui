@@ -225,6 +225,24 @@ async def test_printable_app_bindings_do_not_shadow_sql_editor_input(tmp_path: P
         await pilot.press("backspace")
         assert editor.text == "select 1, 2"
 
+        editor.text = "abc"
+        editor.move_cursor((0, 3))
+        await pilot.press("left")
+        await pilot.press("x")
+        assert editor.text == "abxc"
+
+
+@pytest.mark.asyncio
+async def test_real_app_allows_tab_strip_arrow_navigation(tmp_path: Path) -> None:
+    async with _mounted_athena_app(tmp_path) as (app, _ctx, vm, _client, pilot):
+        tabs = app.query_one("#athena-view-tabs", ServiceTabStrip)
+        tabs.focus()
+
+        await pilot.press("right")
+        await pilot.pause()
+
+        assert vm.active_view == "history"
+
 
 @pytest.mark.asyncio
 async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path) -> None:

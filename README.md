@@ -1,7 +1,7 @@
 # 1. aws-tui
 
 <p align="center">
-  <img src="assets/screenshots/aws-tui-running.png" alt="aws-tui — carbon block-art banner up top with a DEMO MODE pedigree subtitle, left rail with S3 and EMR services plus a docked Settings gear, EMR page mid-screen showing the etl-pipeline-1 application picker, a job-runs master list with a state-filter chip strip, a right-side run-detail pane (state, started, IAM role, entry point), a logs pane with the default ERROR/FAIL/Exception filter, and a labelled Commands row along the bottom." width="100%">
+  <img src="assets/screenshots/aws-tui-running.png" alt="aws-tui in demo mode with the S3, EMR, Glue, and Athena service rail; the Glue catalog is showing an Iceberg table, its metadata tabs, and snapshot history." width="100%">
 </p>
 
 Cross-platform TUI for AWS and S3-compatible services — runs on macOS,
@@ -9,12 +9,15 @@ Linux, and Windows. Powered by
 [Textual](https://textual.textualize.io/) and the
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
-> **Status: v0.8.0 cut; PyPI publish pending** — install from Git
+The application combines a Norton-Commander-style S3 file manager, an EMR
+Serverless console, and Unreleased AWS Glue, Amazon Athena, and Iceberg
+inspection workflows.
+
+> **Status: v0.9.0 development; no package release published** — install from Git
 > until the `aws-tui` project name is available on PyPI. Glue, Athena, and
-> their integrated Iceberg workflows are Unreleased feature work for the next
-> v0.9.0 minor release; the package version remains
-> `0.8.0` until a release is cut. The v0.8.0 headline remains EMR Serverless,
-> cross-platform packaging, and the public release pipeline. See
+> their integrated Iceberg workflows are Unreleased v0.9.0 feature work. The
+> package metadata remains `0.8.0` until the release-preparation PR bumps it;
+> the current tree must not be tagged as v0.8.0. See
 > [`CHANGELOG.md`](CHANGELOG.md) for the full per-PR delta.
 
 ## 1.1. Features
@@ -84,6 +87,7 @@ Linux, and Windows. Powered by
   AWS. Path-style addressing toggle and per-vendor docs.
 - **EMR Serverless (read-only browser + clone-job-run).** Second
   shipped service, alongside S3. Pick the **EMR** nav row to
+  choose an exact AWS profile and region from the bordered source selector,
   browse applications, drive a master-detail Job Runs pane with
   state-filter chips, inspect job-run details (driver, spark
   params, execution duration) — all driven by three independent
@@ -96,19 +100,21 @@ Linux, and Windows. Powered by
   ``start_job_run`` on save (PR #83 — landed ahead of the rest
   of PR-C). Job-run logs are streamable on demand; cancel and the
   vanilla submit form remain deferred. AWS-only (does not surface
-  for s3-compatible connections).
+  for s3-compatible connections). `Tab` and `Shift+Tab` traverse the source
+  selector, application selector, runs, detail, logs, and service rail.
 - **Silent SSO.** Auto-discovers every AWS profile from
   `~/.aws/{config,credentials}`. SSO-backed profiles get a cheap
   token-cache freshness probe on launch (one `stat`, one ~1 KB JSON
   read, sub-millisecond); non-SSO profiles go straight to live boto
   credential-chain validation.
-  Honors `$AWS_PROFILE` between `[defaults].connection` and the
-  first-auto fallback so SSO setups where `[default]` has no creds
-  still pick the right profile.
-- **Crash-recovery transfer journal.** Transfers leave durable
-  begin/finished/aborted journal records under
-  `<cache-dir>/transfers/<id>.jsonl`. Startup resume and true
-  multipart-upload replay/abort remain deferred in v0.8.x.
+  Honors `$AWS_DEFAULT_PROFILE` and then `$AWS_PROFILE` between
+  `[defaults].connection` and the first-auto fallback so SSO setups where
+  `[default]` has no creds still pick the right profile.
+- **In-flight transfer journal.** Active transfers write durable `begin`
+  records under `<cache-dir>/transfers/<id>.jsonl`; successful, skipped,
+  failed, and cancelled transfers remove their terminal journal promptly.
+  An entry left by a process crash is diagnostic only today: automatic
+  replay and startup cleanup remain deferred.
 - **Crash dump.** Unhandled exceptions write a dump to
   `<cache-dir>/crash/<ts>.txt` (traceback, last user actions, and log
   tail). The interactive recovery modal remains deferred in v0.8.x.
@@ -123,7 +129,7 @@ Linux, and Windows. Powered by
   banner gradient at launch and on every `T` cycle. User overrides
   via `<config-dir>/theme.tcss` or full `.tcss` themes under
   `<config-dir>/themes/`.
-- **In-app S3 connection settings.** The left rail's `⚙ Settings`
+- **In-app S3 connection settings.** The left rail's `Settings`
   nav peer opens a scrollable settings page (no modal overlay) with
   a Connections section that lists every configured s3-compatible
   endpoint and an inline form for add/edit (Save commits + reloads
@@ -161,9 +167,9 @@ Linux, and Windows. Powered by
 
 ## 1.2. Install
 
-> **PyPI release of `aws-tui` is in flight** — the VMx PyPI blocker has
-> lifted (the framework now ships on PyPI). Until aws-tui's own first
-> PyPI release lands, install from Git:
+> **PyPI status:** no `aws-tui` package is published yet. The v0.9.0 work in
+> this repository is development work; install from Git until the first
+> PyPI release lands:
 
 ```bash
 pipx install git+https://github.com/thekaveh/aws-tui.git
@@ -179,7 +185,7 @@ uv run aws-tui
 ```
 
 Requirements: Python 3.11 / 3.12 / 3.13 and a current `uv` that can
-read lockfile revision 3 (CI uses `astral-sh/setup-uv@v7`). Runs on
+read lockfile revision 3 (CI pins `uv==0.11.19`). Runs on
 macOS, Linux, and Windows — see [`docs/platforms.md`](docs/platforms.md)
 for the recommended terminal + font setup per OS.
 
@@ -193,7 +199,7 @@ AWS_TUI_DEMO=1 aws-tui
 aws-tui --demo
 ```
 
-You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications and job runs, profile-isolated Glue catalogs, jobs, runs, crawlers, and Iceberg metadata, plus Athena workgroups, query histories, results, saved queries, and prepared statements. `demo-shared` demonstrates scoped Glue and Athena access-denied states. The same-profile Glue-to-Athena table/snapshot flow and Glue/Athena-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
+You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications, job runs, and streamable success/failure logs, profile-isolated Glue catalogs, jobs, runs, crawlers, and Iceberg metadata, plus Athena workgroups, query histories, results, saved queries, and prepared statements. `demo-shared` demonstrates scoped Glue and Athena access-denied states. The same-profile Glue-to-Athena table/snapshot flow and Glue/Athena-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
 
 To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 
@@ -208,7 +214,7 @@ recently, aws-tui picks up the cached token silently (no network
 round-trip just to render the UI). Otherwise the picker shows the
 connection in `login needed` state — the `auth.authenticate` action is
 spec'd as `a` in
-[`docs/keybindings.md` connection/auth](docs/keybindings.md#116-connection-auth) but its
+[`docs/keybindings.md` connection/auth](docs/keybindings.md#116-connection-and-authentication) but its
 handler is deferred to v0.9. `BindingResolver` already installs handled
 overrides on the live keymap. Handlerless action IDs, including
 `auth.authenticate`, remain unbound. Today, run
@@ -219,39 +225,31 @@ profiles are attempted directly through boto3; debug shared credentials,
 
 If `aws s3 ls` works on your shell but `aws-tui` shows
 `access denied` on the left pane, the most common cause is that
-`[default]` in `~/.aws/config` has no creds. Export `$AWS_PROFILE`
-pointing at the working profile and relaunch — the resolver picks it
-up between `[defaults].connection` and the first-auto fallback.
+`[default]` in `~/.aws/config` has no creds. Export `$AWS_DEFAULT_PROFILE`
+(or `$AWS_PROFILE`) pointing at the working profile and relaunch. The resolver
+uses `[defaults].connection`, then `AWS_DEFAULT_PROFILE`, then `AWS_PROFILE`,
+then the first auto-discovered profile.
 
 ### 1.3.1. First-time launch
 
 If you have **no** `[connections.*]` in `<config-dir>/config.toml`
 **and** `~/.aws/{config,credentials}` is empty, v0.8.x opens the main
-screen with a local-only placeholder. A welcome modal exists in the UI
-surface but is not wired into startup yet (tracked for v0.9):
-
-```
-welcome to aws-tui
-no AWS or S3-compatible connections configured.
-  add aws profile  (runs 'aws configure sso' in your terminal)
-  add s3-compatible (in-TUI form for MinIO, R2, etc.)
-  skip for now (you can add later from Settings)
-```
-
-For now, add an AWS profile with `aws configure sso` / `aws sso login`,
-or open Settings with `,` and add an S3-compatible connection.
+screen with a local-only placeholder. Add an AWS profile with
+`aws configure sso` / `aws sso login`, or open Settings with `,` and
+add an S3-compatible connection. No first-run modal is currently shipped.
 
 ## 1.4. Documentation
 
 Numbered hierarchically for navigation.
 
 1. **User-facing**
-   1. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
-   2. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and shipped `[keybindings]` overlay behavior.
-   3. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
-   4. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to MinIO, switch theme on the fly, prepare keybinding overlays, resume after a crash).
-   5. [Supported platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
-   6. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — MinIO Docker Compose + seed for offline development.
+   1. [Installation](docs/install.md) — isolated Git installation, development setup, demo mode, and release-channel status.
+   2. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
+   3. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and shipped `[keybindings]` overlay behavior.
+   4. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
+   5. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to MinIO, switch theme on the fly, prepare keybinding overlays, inspect transfer evidence after a crash).
+   6. [Supported platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
+   7. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — MinIO Docker Compose + seed for offline development.
 2. **Contributor-facing**
    1. [Architecture](docs/architecture.md) — five-layer model + composition root + lifecycle + messaging primer.
    2. [Adding a new service](docs/adding-a-service.md) — the `Service` protocol + per-layer wiring.
@@ -260,7 +258,7 @@ Numbered hierarchically for navigation.
 
    Historical superpowers specs, plans, and notes are indexed here for
    provenance; headings are numbered for repository-wide navigation.
-   1. [v0.1.0 design spec](docs/superpowers/specs/2026-06-13-aws-tui-design.md) — authoritative source for behavior + acceptance.
+   1. [v0.1.0 design spec](docs/superpowers/specs/2026-06-13-aws-tui-design.md) — historical foundation; current code, tests, and focused specs define live behavior.
    2. [Settings as a first-class nav page](docs/superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md) — design + post-ship amendments (PR #54 / #55 / #56). Supersedes the modal-overlay design at [`docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md`](docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md) (kept for git-history continuity, marked SUPERSEDED in-file).
    3. [Modal & toast polish](docs/superpowers/specs/2026-06-19-modal-toast-polish-design.md) — PR #47 modal/toast surface rework.
    4. [Graceful unreachable connections](docs/superpowers/specs/2026-06-19-graceful-unreachable-connections.md) — PR #48/#49 design.
@@ -272,6 +270,13 @@ Numbered hierarchically for navigation.
    10. [VMx vNext upstream asks](docs/superpowers/specs/2026-06-28-vmx-upstream-vnext-asks.md) — feedback report for VMx maintainers, derived from the aws-tui toolkit-adoption review and focused on primitives that would reduce custom wrapper code.
    11. [VMx 3.1.0 adoption audit](docs/superpowers/specs/2026-07-02-vmx-3-1-adoption-audit.md) — current VMx 3.1.0 bump report mapping new upstream primitives (`TokenPagedComposition`, `FilteredCompositeVM`, `ScoredFilteredCompositeVM`, `FormVM` validators, `ModalVM`, `DiscriminatorVM`) to aws-tui VM/view refactor candidates.
    12. [Implementation plan index](docs/superpowers/plans/README.md) — per-milestone and post-tag implementation plans with one-line descriptions; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
+   13. [Three-surface documentation](docs/superpowers/specs/2026-07-10-three-surface-docs-design.md) — implemented canonical-source projection for repository, site, and wiki documentation.
+   14. [Binding resolver](docs/superpowers/specs/2026-07-21-binding-resolver-keystone-design.md) — implemented runtime keymap materialization design.
+   15. [Command palette wiring](docs/superpowers/specs/2026-07-21-command-palette-wiring-design.md) — implemented curated command-palette integration.
+   16. [Quick Look wiring](docs/superpowers/specs/2026-07-21-quick-look-wiring-design.md) — implemented bounded file-preview flow.
+   17. [Glue and Athena services](docs/superpowers/specs/2026-07-22-glue-athena-services-design.md) — implemented read-only service architecture and Iceberg integration foundation.
+   18. [Glue/Athena interaction polish](docs/superpowers/specs/2026-07-30-glue-athena-interaction-polish-design.md) — implemented source selectors, focus rings, borders, and typed clipboard flows.
+   19. [Post-merge audit remediation](docs/superpowers/specs/2026-07-30-post-merge-audit-remediation-design.md) — implemented runtime, documentation, and verification follow-up.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
    2. [Release procedure](docs/RELEASING.md) — cut-a-release checklist: version bump, CHANGELOG, tag, publish, Homebrew bump.
@@ -281,7 +286,7 @@ Numbered hierarchically for navigation.
    1. [Contributing](CONTRIBUTING.md) — development setup and commit conventions.
    2. [Code of Conduct](CODE_OF_CONDUCT.md) — contributor behavior expectations and enforcement.
    3. [Security policy](SECURITY.md) — vulnerability reporting + supported versions.
-   4. [Changelog](CHANGELOG.md) — per-pass + per-release deltas.
+   4. [Changelog](CHANGELOG.md) — user-visible unreleased and release deltas.
 
 ## 1.5. File locations
 
@@ -296,26 +301,28 @@ preserved when present.
 | `<config-dir>/theme.tcss` | Optional `.tcss` overlay over the active theme |
 | `<config-dir>/themes/<name>.tcss` | Optional full custom themes |
 | `<cache-dir>/log/aws-tui.log` | JSON-lines log (rotated 5 MB × 5) |
-| `<cache-dir>/transfers/<id>.jsonl` | Per-transfer crash-recovery journal |
+| `<cache-dir>/transfers/<id>.jsonl` | Per-transfer interrupted-operation diagnostics |
 | `<cache-dir>/crash/<ts>.txt` | Full traceback + log/action tail per crash |
 
 ## 1.6. Environment variables
 
 | Variable | Default | Effect |
 |---|---|---|
-| `AWS_PROFILE` | unset | Pick this AWS profile at launch when `[defaults].connection` is unset. Honored between config and first-auto-discovered fallback. |
-| `AWS_DEFAULT_REGION` | unset | Used only by AWS tooling outside aws-tui; aws-tui resolves connection regions from `[connections.*].region`, AWS profile config, or `us-east-1`. |
-| `AWS_REGION` | unset | Same caveat as `AWS_DEFAULT_REGION`: set a profile/config region for aws-tui connection selection. |
+| `AWS_DEFAULT_PROFILE` | unset | Preferred AWS profile at launch when `[defaults].connection` is unset. Takes precedence over `AWS_PROFILE`. |
+| `AWS_PROFILE` | unset | AWS profile fallback after `[defaults].connection` and `AWS_DEFAULT_PROFILE`, before the first auto-discovered profile. |
+| `AWS_DEFAULT_REGION` | unset | Region fallback after an explicit connection region and the selected AWS profile's configured region, before `us-east-1`. |
+| `AWS_CONFIG_FILE` | `~/.aws/config` | Overrides the shared AWS config path used for profile discovery. `~` and environment variables in the value are expanded. |
+| `AWS_SHARED_CREDENTIALS_FILE` | `~/.aws/credentials` | Overrides the shared AWS credentials path used for profile discovery. `~` and environment variables in the value are expanded. |
 | `AWS_TUI_DEMO` | unset | Truthy values `1`, `true`, and `yes` launch demo mode with seeded in-memory data. Equivalent to `aws-tui --demo`. |
 | `${PREFIX}_ACCESS_KEY_ID` / `${PREFIX}_SECRET_ACCESS_KEY` / optional `${PREFIX}_SESSION_TOKEN` | per-connection | Read by `ConnectionResolver` when a `[connections.<name>]` entry in `config.toml` sets `credentials = "env:PREFIX_"`. See [`docs/connections.md`](docs/connections.md) for the full pattern. |
 | `XDG_CONFIG_HOME` | per-OS default | Linux: used by `platformdirs` when no legacy `~/.config/aws-tui` directory already exists. macOS and Windows use the platform-native location regardless. |
 | `XDG_CACHE_HOME` | per-OS default | Linux: used by `platformdirs` when no legacy `~/.cache/aws-tui` directory already exists. macOS and Windows use the platform-native location regardless. |
 | `AWS_TUI_TRANSFER_LINGER` | `3.0` | Seconds a finished transfer's row stays visible in the transfers overlay before it fades. Test-only knob — short values make `pytest` runs faster. |
 
-Any `$PAGER` / `$EDITOR` semantics during the AWS-CLI shell-out for
-SSO setup follow the AWS CLI's own conventions; aws-tui itself does
-not read those variables in v0.8.x. The Quick Look full-file `$PAGER`
-shell-out is spec'd but not yet wired (see the
+aws-tui does not launch AWS CLI SSO setup; run `aws sso login --profile
+<name>` in a terminal when prompted. The app does not read `$PAGER` or
+`$EDITOR` in v0.8.x. The Quick Look full-file `$PAGER` shell-out is spec'd
+but not yet wired (see the
 `[Unreleased] Deferred` block of `CHANGELOG.md`).
 
 ## 1.7. Localization

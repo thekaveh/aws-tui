@@ -23,7 +23,7 @@ import aioboto3
 from vmx import Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.filesystem import FileSystemProvider
+from aws_tui.domain.filesystem import AuthRequiredError, FileSystemProvider
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.s3_fs import S3FS
 from aws_tui.domain.transfer_journal import TransferJournal
@@ -50,6 +50,10 @@ def _aioboto3_session_for(connection: Connection) -> aioboto3.Session:
             region_name=connection.region,
         )
     if connection.kind == "s3-compatible":
+        if not connection.access_key_id or not connection.secret_access_key:
+            raise AuthRequiredError(
+                f"S3-compatible connection {connection.name!r} requires an access key and secret key"
+            )
         return aioboto3.Session(
             aws_access_key_id=connection.access_key_id,
             aws_secret_access_key=connection.secret_access_key,
@@ -143,8 +147,8 @@ class S3Service:
         if self._hub is None:
             raise RuntimeError("S3Service.build_vm called before bind_hub — composition wiring bug")
         hub = self._hub
-        s3_provider = self._make_s3_provider(connection)
-        local_provider = LocalFS(root=self._local_root) if self._local_root else LocalFS()
+        s3_provider = self.build_remote_provider(connection)
+        local_provider = self.build_local_provider()
 
         left = PaneVM(
             provider=s3_provider,
@@ -172,9 +176,16 @@ class S3Service:
             transfer_journal=self._journal,
         )
 
-    # ── Internal ────────────────────────────────────────────────────────────
+    @property
+    def transfer_journal(self) -> TransferJournal:
+        """Return the journal shared by every S3 dual-pane instance."""
+        return self._journal
 
-    def _make_s3_provider(self, connection: Connection) -> FileSystemProvider:
+    def build_local_provider(self) -> FileSystemProvider:
+        """Build the local pane provider with the service's configured root."""
+        return LocalFS(root=self._local_root) if self._local_root else LocalFS()
+
+    def build_remote_provider(self, connection: Connection) -> FileSystemProvider:
         """Pull from the test factory, or build a fresh :class:`S3FS`."""
         if self._s3_fs_factory is not None:
             return self._s3_fs_factory(connection)

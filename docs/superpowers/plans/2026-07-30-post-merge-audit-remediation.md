@@ -1,4 +1,4 @@
-# Post-Merge Audit Remediation Implementation Plan
+# 1. Post-Merge Audit Remediation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11-3.13, Textual 8.2.8, VMx 3.1.0 public APIs, pytest, pytest-textual-snapshot, Ruff, mypy, MkDocs Material, CairoSVG, GitHub Actions.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Work only on `codex/post-merge-audit-remediation`, based on `develop` commit `a14bc98fce5847f31199d9d44cc2ff255448e09f`.
 - Target a later merge into `develop`; do not merge or push changes to `main`.
@@ -26,7 +26,7 @@
 
 ---
 
-## File and Responsibility Map
+## 1.2. File and Responsibility Map
 
 **Runtime keymap**
 
@@ -71,7 +71,7 @@
 
 ---
 
-### Task 1: Restore the Runtime Keymap Overlay
+### 1.2.1. Task 1: Restore the Runtime Keymap Overlay
 
 **Files:**
 - Modify: `tests/unit/test_composition_initial_theme.py`
@@ -306,7 +306,7 @@ git commit -m "fix(keymap): apply configured runtime overlays"
 
 ---
 
-### Task 2: Scope Command-Palette Entries Through the Existing VMx Projection
+### 1.2.2. Task 2: Scope Command-Palette Entries Through the Existing VMx Projection
 
 **Files:**
 - Modify: `tests/unit/vm/chrome/test_command_palette.py`
@@ -632,7 +632,7 @@ git commit -m "fix(palette): scope commands to active services"
 
 ---
 
-### Task 3: Move Operational Framing to Widget-Owned CSS
+### 1.2.3. Task 3: Move Operational Framing to Widget-Owned CSS
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/glue/page.py`
@@ -903,7 +903,7 @@ git commit -m "refactor(ui): centralize service pane framing"
 
 ---
 
-### Task 4: Make Documentation Contracts Source-Derived
+### 1.2.4. Task 4: Make Documentation Contracts Source-Derived
 
 **Files:**
 - Create: `tests/docs/test_contract_parity.py`
@@ -1164,7 +1164,7 @@ git commit -m "test(docs): derive public contracts from source"
 
 ---
 
-### Task 5: Update Every Affected Canonical Document
+### 1.2.5. Task 5: Update Every Affected Canonical Document
 
 **Files:**
 - Modify: `README.md`
@@ -1375,7 +1375,7 @@ correction.
 
 ---
 
-### Task 6: Regenerate the Landscape Architecture Diagram
+### 1.2.6. Task 6: Regenerate the Landscape Architecture Diagram
 
 **Files:**
 - Modify: `docs/diagrams/architecture.html`
@@ -1510,7 +1510,7 @@ git commit -m "docs(architecture): add typed table clipboard flow"
 
 ---
 
-### Task 7: Close Stability Risk, Record Metrics, and Run the Full Branch Gate
+### 1.2.7. Task 7: Close Stability Risk, Record Metrics, and Run the Full Branch Gate
 
 **Files:**
 - Create: `.superpowers/sdd/2026-07-30-post-merge-audit-remediation-report.md`
@@ -1730,9 +1730,9 @@ gate, and keep the branch ready for a pull request into `develop`.
 Do not create or merge the pull request unless the user separately requests
 integration.
 
-## Completion Record
+## 1.3. Completion Record
 
-### Pre-Report Identity
+### 1.3.1. Pre-Report Identity
 
 - Branch: `codex/post-merge-audit-remediation`
 - Base: `a14bc98fce5847f31199d9d44cc2ff255448e09f`
@@ -1741,7 +1741,7 @@ integration.
 - Local `main` and `origin/main` before finalization:
   `0b63c4a73f29a7fa58671163492fd3d0d17b2348`
 
-### Commits by Task
+### 1.3.2. Commits by Task
 
 - Planning: `aae1e60` design; `f4ce676` plan.
 - Task 1: `c5663c0` runtime keymap overlays.
@@ -1753,7 +1753,7 @@ integration.
 - Task 7: `35b4192` retry-disabled teardown-race fix; final report commit uses
   the planned `docs: record audit remediation results` subject.
 
-### Evidence
+### 1.3.3. Evidence
 
 - Athena-to-S3: after reproducing and fixing the stale refresh race, five
   independent exact-command processes each passed 41 tests, for 205 total,
@@ -1768,7 +1768,7 @@ integration.
 - Ruff: clean; format: 408 files already formatted; mypy: 161 source files
   clean; layers, strict docs, wiki parity, and diff checks: clean.
 
-### Metrics
+### 1.3.4. Metrics
 
 At pre-report head, `a14bc98...HEAD` changed 48 files with +3,119/-1,163.
 Runtime Python is +138/-46. The ten raw theme files are +10/-370 and the shared
@@ -1782,7 +1782,7 @@ Textual custom variables required the packaged operational stylesheet to be
 concatenated between built-in CSS and user overlay CSS. Replacement themes
 bypass that packaged layer.
 
-### Branch Preservation
+### 1.3.5. Branch Preservation
 
 Task 7 did not switch, update, merge, or push `main`. Generated site, wiki,
 coverage, and snapshot outputs remain ignored and were not staged. Step 12 is

@@ -177,12 +177,12 @@ async def test_list_log_files_groups_driver_first_then_executors() -> None:
     from aws_tui.domain.emr_logs import list_log_files
 
     fake_keys = [
-        ("logs/applications/a/jobs/r/SPARK_EXECUTOR_2/stdout.gz", 1024),
+        ("logs/applications/a/jobs/r/SPARK_EXECUTOR/2/stdout.gz", 1024),
         ("logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz", 2048),
-        ("logs/applications/a/jobs/r/SPARK_EXECUTOR_1/stderr.gz", 512),
+        ("logs/applications/a/jobs/r/SPARK_EXECUTOR/1/stderr.gz", 512),
         ("logs/applications/a/jobs/r/SPARK_DRIVER/stdout.gz", 1024),
-        ("logs/applications/a/jobs/r/SPARK_EXECUTOR_1/stdout.gz", 768),
-        ("logs/applications/a/jobs/r/SPARK_EXECUTOR_2/stderr.gz", 256),
+        ("logs/applications/a/jobs/r/SPARK_EXECUTOR/1/stdout.gz", 768),
+        ("logs/applications/a/jobs/r/SPARK_EXECUTOR/2/stderr.gz", 256),
     ]
     stub = _StubS3ListObjectsV2(fake_keys)
     session = _StubSessionListObjectsV2(stub)
@@ -203,6 +203,31 @@ async def test_list_log_files_groups_driver_first_then_executors() -> None:
     ]
     # Driver-first invariant: first two entries are driver.
     assert all(f.kind in (LogFileKind.DRIVER_STDOUT, LogFileKind.DRIVER_STDERR) for f in files[:2])
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_supports_retries_rotation_and_hive_workers() -> None:
+    from aws_tui.domain.emr_logs import list_log_files
+
+    fake_keys = [
+        ("logs/applications/a/jobs/r/attempts/2/SPARK_DRIVER/archived/stderr_1.gz", 10),
+        ("logs/applications/a/jobs/r/attempts/2/SPARK_EXECUTOR/7/stdout.gz", 20),
+        ("logs/applications/a/jobs/r/attempts/2/HIVE_DRIVER/stderr.gz", 30),
+        ("logs/applications/a/jobs/r/attempts/2/TEZ_TASK/4/stdout.gz", 40),
+    ]
+    files = await list_log_files(  # type: ignore[arg-type]
+        session=_StubSessionListObjectsV2(_StubS3ListObjectsV2(fake_keys)),
+        region_name="us-east-1",
+        bucket="b",
+        run_prefix="logs/applications/a/jobs/r",
+    )
+
+    assert {file.kind for file in files} == {
+        LogFileKind.DRIVER_STDERR,
+        LogFileKind.EXECUTOR_STDOUT,
+        LogFileKind.HIVE_DRIVER_STDERR,
+        LogFileKind.TEZ_TASK_STDOUT,
+    }
 
 
 @pytest.mark.asyncio
@@ -249,6 +274,87 @@ async def test_stream_log_yields_matched_lines() -> None:
     assert chunks[-1].lines_scanned == 5
     # Not truncated for this small input.
     assert chunks[-1].truncated is False
+
+
+@pytest.mark.asyncio
+async def test_stream_log_bounds_decompressed_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aws_tui.domain.emr_logs as emr_logs
+
+    monkeypatch.setattr(emr_logs, "_MAX_DECOMPRESSED_BYTES", 1024)
+    payload = gzip.compress(("ERROR highly compressible line\n" * 10_000).encode())
+    stub = _StubS3(payload)
+    log_file = emr_logs.LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=emr_logs.LogFileKind.DRIVER_STDERR,
+    )
+
+    chunks = [
+        chunk
+        async for chunk in emr_logs.stream_log(
+            session=_StubSession(stub),  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=log_file,
+            bucket="b",
+            max_bytes=1024 * 1024,
+            filter_=emr_logs.DEFAULT_LOG_FILTER,
+        )
+    ]
+
+    assert chunks[-1].truncated is True
+    assert sum(len(line.encode()) for chunk in chunks for line in chunk.lines) <= 1024
+
+
+@pytest.mark.asyncio
+async def test_stream_log_exact_compressed_limit_is_not_truncated() -> None:
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, LogFile, stream_log
+
+    payload = gzip.compress(b"ERROR complete\n")
+    chunks = [
+        chunk
+        async for chunk in stream_log(
+            session=_StubSession(_StubS3(payload)),  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=LogFile(key="complete.gz", kind=LogFileKind.DRIVER_STDERR),
+            bucket="b",
+            max_bytes=len(payload),
+            filter_=DEFAULT_LOG_FILTER,
+        )
+    ]
+
+    assert chunks[-1].lines == ("ERROR complete",)
+    assert chunks[-1].truncated is False
+
+
+@pytest.mark.asyncio
+async def test_stream_log_bounds_unterminated_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aws_tui.domain.emr_logs as emr_logs
+
+    monkeypatch.setattr(emr_logs, "_MAX_LINE_BYTES", 128)
+    payload = gzip.compress(b"ERROR " + b"x" * 10_000)
+    stub = _StubS3(payload)
+    log_file = emr_logs.LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=emr_logs.LogFileKind.DRIVER_STDERR,
+    )
+
+    chunks = [
+        chunk
+        async for chunk in emr_logs.stream_log(
+            session=_StubSession(stub),  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=log_file,
+            bucket="b",
+            max_bytes=1024 * 1024,
+            filter_=emr_logs.DEFAULT_LOG_FILTER,
+        )
+    ]
+
+    assert chunks[-1].truncated is True
+    assert all(len(line.encode()) <= 128 for chunk in chunks for line in chunk.lines)
 
 
 # ── boto-error mapping (regression-guard for the silent-swallow audit) ────
@@ -363,6 +469,24 @@ async def test_list_log_files_wraps_access_denied_client_error() -> None:
     with pytest.raises(PermissionDeniedError):
         await list_log_files(  # type: ignore[arg-type]
             session=session,
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_wraps_expired_token_client_error() -> None:
+    from aws_tui.domain.emr_logs import list_log_files
+    from aws_tui.domain.filesystem import AuthRequiredError
+
+    err = botocore.exceptions.ClientError(
+        {"Error": {"Code": "ExpiredToken", "Message": "session expired"}},
+        "ListObjectsV2",
+    )
+    with pytest.raises(AuthRequiredError):
+        await list_log_files(  # type: ignore[arg-type]
+            session=_RaisingSession(err),
             region_name="us-east-1",
             bucket="b",
             run_prefix="logs/applications/a/jobs/r",

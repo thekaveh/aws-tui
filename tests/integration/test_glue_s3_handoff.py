@@ -236,17 +236,20 @@ async def test_s3_handoff_mount_failure_is_reported_and_redacted(
     try:
         async with app.run_test(size=(120, 40)) as pilot:
             await _open_demo_glue(ctx, app, pilot)
-            host = app.query_one("#content-host", Container)
             mount_results: list[tuple[str, bool]] = []
-            original_mount = host.mount
+            original_mount = Container.mount
             original_mount_service_view = app._mount_service_view
 
-            def fail_mount(*widgets: object, **kwargs: object) -> object:
+            def fail_mount(
+                mount_host: Container,
+                *widgets: object,
+                **kwargs: object,
+            ) -> object:
                 if any(isinstance(widget, DualPane) for widget in widgets):
                     raise RuntimeError(
                         "mount failed for s3://private-bucket/events/?token=HANDOFF_SECRET"
                     )
-                return original_mount(*widgets, **kwargs)  # type: ignore[arg-type]
+                return original_mount(mount_host, *widgets, **kwargs)  # type: ignore[arg-type]
 
             async def record_mount_result(
                 service_id: str,
@@ -260,10 +263,10 @@ async def test_s3_handoff_mount_failure_is_reported_and_redacted(
                 mount_results.append((service_id, result))
                 return result
 
-            monkeypatch.setattr(host, "mount", fail_mount)
+            monkeypatch.setattr(Container, "mount", fail_mount)
             monkeypatch.setattr(app, "_mount_service_view", record_mount_result)
             await app._open_s3_location_request(_handoff_request())
-            monkeypatch.setattr(host, "mount", original_mount)
+            monkeypatch.setattr(Container, "mount", original_mount)
             await _wait_for_service_setup(ctx, app, pilot)
 
             assert mount_results == [("s3", False), ("glue", True)]

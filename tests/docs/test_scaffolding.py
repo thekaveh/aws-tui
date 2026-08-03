@@ -92,6 +92,19 @@ def test_pyyaml_available():
     assert yaml.safe_load("a: 1") == {"a": 1}
 
 
+def test_package_metadata_tracks_quickstart_and_emr_clone_surface() -> None:
+    pypi = _read("PYPI.md")
+    domain_source = _read("src/aws_tui/domain/emr_serverless.py")
+    keymap_source = _read("src/aws_tui/infra/keymap_store.py")
+
+    assert "#13-quickstart" in pypi
+    assert "#14-quickstart" not in pypi
+    assert "read-mostly" in pypi
+    assert "clone submission" in pypi
+    assert "async def start_job_run(" in domain_source
+    assert '"emr.clone"' in keymap_source
+
+
 def test_public_docs_cover_athena_read_only_contract() -> None:
     """Keep Athena's read-only and integrated behavior discoverable."""
     readme = _read("README.md")
@@ -324,15 +337,18 @@ def test_athena_sql_grammar_matches_policy_tests() -> None:
 
 def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
     readme = _read("README.md")
+    pypi = _read("PYPI.md")
     changelog = _read("CHANGELOG.md")
     releasing = _read("docs/RELEASING.md")
     normalized_releasing = _squash(releasing)
     version = _read("src/aws_tui/version.py")
 
     assert (
-        "Glue, Athena, and their integrated Iceberg workflows are Unreleased feature work "
-        "for the next v0.9.0 minor release"
+        "Glue, Athena, and their integrated Iceberg workflows are Unreleased v0.9.0 feature work"
     ) in _squash(readme)
+    assert "Iceberg workflows are unreleased v0.9.0 work" in _squash(pypi)
+    assert "no aws-tui package is published on PyPI" in _squash(pypi)
+    assert "published v0.8.0 package" not in _squash(pypi)
     assert "Glue, Athena, and Iceberg integration target v0.9.0" in _squash(changelog)
     assert "not a v0.8.0 headline or a v0.8.1 patch candidate" in _squash(changelog)
     assert "will either ship as v0.8.1" not in changelog
@@ -371,11 +387,26 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
     assert '__version__ = "0.8.0"' in version
 
 
+def test_release_docs_describe_the_mandatory_publish_gates() -> None:
+    releasing = _squash(_read("docs/RELEASING.md"))
+    homebrew = _squash(_read("docs/homebrew-bootstrap.md"))
+
+    assert "mandatory `platform-tests` gate" in releasing
+    assert "macOS and Windows" in releasing
+    assert "lowest-supported-dependencies" in releasing
+    assert "lowest-direct" in releasing
+    assert "Textual/app construction" in releasing
+    assert "tomli-w configuration round trips" in releasing
+    assert "release candidate is staged" not in homebrew
+    assert "v0.9.0 development work" in homebrew
+
+
 def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
     manifest = yaml.safe_load(_read("docs/manifest.yaml"))
     index = _read("docs/index.md")
     architecture = _read("docs/architecture.md")
     diagram = _read("docs/diagrams/architecture.html")
+    deployment = _read("docs/diagrams/deployment.html")
     public_docs = "\n".join(
         _read(path)
         for path in (
@@ -389,19 +420,26 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
 
     assert manifest["sections"][0]["source"] == "docs/index.md"
     assert manifest["diagrams"] == [
-        {"id": "architecture", "master": "docs/diagrams/architecture.html"}
+        {"id": "architecture", "master": "docs/diagrams/architecture.html"},
+        {"id": "operations-flow", "master": "docs/diagrams/operations-flow.html"},
+        {"id": "deployment", "master": "docs/diagrams/deployment.html"},
+        {"id": "lifecycle", "master": "docs/diagrams/lifecycle.html"},
     ]
     for service in ("S3", "EMR Serverless", "AWS Glue", "Amazon Athena"):
         assert service in index
         assert service in diagram
     for layer in ("TEXTUAL VIEW", "VIEWMODEL / VMX", "SERVICE", "DOMAIN", "INFRA"):
         assert layer in diagram
-    assert "await Athena shutdown" in diagram
+    assert "await hosted VM shutdown" in diagram
     assert "then dispose outgoing VM" in diagram
     assert "exact connection + region" in diagram
     assert "DualPane" in diagram
     assert "service_view_factory.py" in diagram
     assert "S3Page" not in diagram
+    assert "S3-compatible requests use their configured endpoint and credential reference" in (
+        deployment
+    )
+    assert "Each request uses one explicit connection name, profile, and region" not in deployment
     assert "S3 root is the code-backed `DualPane`" in architecture
     assert "`ServiceSelectionStore` is a VM-layer type" in architecture
     alt_match = re.search(r"!\[([^\]]+)\]\(diagrams/img/architecture\.png\)", architecture)
@@ -414,7 +452,7 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         "AWS Glue, Athena, S3, and Lake Formation boundary",
     ):
         assert phrase in alt_text
-    assert "Athena shutdown is awaited before disposal" in _squash(architecture)
+    assert "hosted VM shutdown is awaited before disposal" in _squash(architecture)
     assert "Domain adapters perform the runtime AWS and filesystem I/O" in _squash(architecture)
     assert (
         "Infrastructure owns sessions, credentials, configuration, SDK client construction, and OS-backed stores"
@@ -553,4 +591,15 @@ def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:
     assert "may reside on ``develop`` before promotion to ``main``" in unreleased_intro
     assert "does not by itself claim that every entry has landed on ``main``" in unreleased_intro
     assert "These changes have landed on ``main``" not in unreleased_intro
-    assert "v0.8.0 cut commit" in unreleased_intro
+    assert "historical v0.8.0 staging commit" in _squash(unreleased_intro)
+
+
+def test_readme_and_published_index_share_the_product_summary() -> None:
+    summary = (
+        "The application combines a Norton-Commander-style S3 file manager, an EMR\n"
+        "Serverless console, and Unreleased AWS Glue, Amazon Athena, and Iceberg\n"
+        "inspection workflows."
+    )
+
+    assert summary in _read("README.md")
+    assert summary in _read("docs/index.md")

@@ -1,9 +1,9 @@
 # 1. Bootstrapping the Homebrew formula
 
 Run this **once**, immediately after the first PyPI release lands.
-The v0.8.0 code has been cut in-repo, but the PyPI publish is still
-pending; do not run this bootstrap until the wheel and sdist are
-visible on PyPI. After that, the `bump-homebrew` job in
+The v0.9.0 development work is present in the repository, but the tag and PyPI
+publish are still pending; do not run this bootstrap until the wheel and sdist
+are visible on PyPI. After that, the `bump-homebrew` job in
 `.github/workflows/release.yml` opens PRs against the tap
 automatically — bootstrapping just gets the first formula in
 place.
@@ -24,7 +24,7 @@ cd ~/repos/homebrew-aws-tui
 mkdir -p Formula
 
 # 2. Compute the published sdist's sha256.
-PKG_URL="https://files.pythonhosted.org/packages/source/a/aws-tui/aws_tui-0.8.0.tar.gz"
+PKG_URL="https://files.pythonhosted.org/packages/source/a/aws-tui/aws_tui-0.9.0.tar.gz"
 curl --fail --location --silent -o /tmp/aws-tui.tar.gz "$PKG_URL"
 PKG_SHA="$(shasum -a 256 /tmp/aws-tui.tar.gz | awk '{print $1}')"
 echo "PKG_URL=$PKG_URL"
@@ -53,7 +53,7 @@ fields that the auto-bump workflow expects to be on their own
 top-level lines before any `resource` blocks are:
 
 ```ruby
-url "https://files.pythonhosted.org/packages/source/a/aws-tui/aws_tui-0.8.0.tar.gz"
+url "https://files.pythonhosted.org/packages/source/a/aws-tui/aws_tui-0.9.0.tar.gz"
 sha256 "<PKG_SHA from step 2>"
 ```
 
@@ -79,7 +79,7 @@ brew uninstall aws-tui
 
 ```bash
 git add Formula/aws-tui.rb
-git commit -m "aws-tui 0.8.0 (initial)"
+git commit -m "aws-tui 0.9.0 (initial)"
 git push origin main
 ```
 
@@ -104,7 +104,12 @@ bumps are opened automatically by the upstream release workflow.
 
 ## 1.6. After bootstrap
 
-Tag v0.8.1 in the main repo (whenever the next patch ships) and
+Enable that job in `thekaveh/aws-tui` under **Settings** →
+**Secrets and variables** → **Actions** → **Variables** by setting
+the repository variable `HOMEBREW_TAP_ENABLED` to `true`. The workflow
+intentionally skips Homebrew updates until this switch is enabled.
+
+Tag v0.9.1 in the main repo (whenever the next patch ships) and
 confirm the `bump-homebrew` job opens a PR against the tap
 within a few minutes of the PyPI publish. From here it's
 fully automated; you just merge the PR.

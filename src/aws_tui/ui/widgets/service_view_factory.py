@@ -40,6 +40,7 @@ def build_service_view(
         return emr_page_class(
             vm,
             hub=hub,
+            source_candidates=source_candidates,
             focus_coordinator=focus_coordinator,
             id="content-emr-page",
         )

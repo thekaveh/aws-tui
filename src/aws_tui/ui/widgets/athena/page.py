@@ -435,11 +435,31 @@ class AthenaPage(HubSubscriberMixin, Widget):
             tuple(slot for slot, _widget in targets),
             reverse=reverse,
         )
+        self._close_departed_picker(focused)
         self._project_focus_slot(slot, targets=targets)
+
+    @staticmethod
+    def _close_departed_picker(focused: Widget | None) -> None:
+        if focused is None:
+            return
+        picker = next(
+            (
+                widget
+                for widget in focused.ancestors_with_self
+                if isinstance(widget, ContextPicker) and widget.is_open
+            ),
+            None,
+        )
+        if picker is not None:
+            picker.close(refocus=False)
 
     def focus_default(self) -> None:
         """Focus the active view's primary operational target."""
         self._project_focus_slot(FocusSlot.ATHENA_PRIMARY)
+
+    def project_focus_slot(self, slot: FocusSlot) -> None:
+        """Project an app-coordinated focus slot onto this page."""
+        self._project_focus_slot(slot)
 
     def _focus_targets(self) -> tuple[tuple[FocusSlot, Widget], ...]:
         targets: list[tuple[FocusSlot, Widget]] = [
@@ -586,6 +606,9 @@ class AthenaPage(HubSubscriberMixin, Widget):
     def _focus_and_open_picker(self, slot: FocusSlot, selector: str) -> None:
         with contextlib.suppress(NoMatches):
             picker = self.query_one(selector, ContextPicker)
+            for sibling in self.query(ContextPicker):
+                if sibling is not picker:
+                    sibling.close(refocus=False)
             self._project_focus_slot(slot)
             picker.open()
 

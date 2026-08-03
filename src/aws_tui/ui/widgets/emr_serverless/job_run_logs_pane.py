@@ -29,7 +29,7 @@ from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Static
 
-from aws_tui.domain.emr_logs import LogFileKind
+from aws_tui.domain.emr_logs import LogFile, LogFileKind
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
 
 
@@ -37,9 +37,9 @@ class _LogFileChip(Static):
     """One log-file chip in the file selector. Carries the LogFileKind
     so the pane's on_click can map a clicked chip to the file kind."""
 
-    def __init__(self, content: str, *, kind: LogFileKind, classes: str | None = None) -> None:
+    def __init__(self, content: str, *, key: str, classes: str | None = None) -> None:
         super().__init__(content, classes=classes)
-        self.kind: LogFileKind = kind
+        self.key = key
 
 
 class JobRunLogsPane(Widget, can_focus=True):
@@ -127,9 +127,9 @@ class JobRunLogsPane(Widget, can_focus=True):
     class LogFileSelected(TextualMessage):
         """User selected a different log file from the chip strip."""
 
-        def __init__(self, kind: LogFileKind) -> None:
+        def __init__(self, key: str) -> None:
             super().__init__()
-            self.kind = kind
+            self.key = key
 
     def __init__(
         self,
@@ -213,14 +213,14 @@ class JobRunLogsPane(Widget, can_focus=True):
     def on_click(self, event: Click) -> None:
         """Click on a file chip → select that file."""
         target: object | None = event.widget
-        kind: LogFileKind | None = None
+        key: str | None = None
         while target is not None:
             if isinstance(target, _LogFileChip):
-                kind = target.kind
+                key = target.key
                 break
             target = getattr(target, "parent", None)
-        if kind is not None:
-            self.post_message(self.LogFileSelected(kind))
+        if key is not None:
+            self.post_message(self.LogFileSelected(key))
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -267,11 +267,11 @@ class JobRunLogsPane(Widget, can_focus=True):
         chip_row.remove_children()
         current = self._vm.current_file
         for f in self._vm.available_files:
-            label = _format_log_file_label(f.kind)
+            label = _format_log_file_label(f)
             classes = "logs-chip"
             if f == current:
                 classes += " -active"
-            chip = _LogFileChip(label, kind=f.kind, classes=classes)
+            chip = _LogFileChip(label, key=f.key, classes=classes)
             chip_row.mount(chip)
 
     def _refresh_body(self) -> None:
@@ -307,7 +307,7 @@ class JobRunLogsPane(Widget, can_focus=True):
             return
         if state is LogsState.LOADING:
             current = self._vm.current_file
-            file_label = _format_log_file_label(current.kind) if current else "?"
+            file_label = _format_log_file_label(current) if current else "?"
             text = (
                 f"loading {file_label}: {self._vm.bytes_read} bytes, "
                 f"{self._vm.lines_scanned} lines scanned, {len(self._vm.lines)} matches"
@@ -371,7 +371,7 @@ class JobRunLogsPane(Widget, can_focus=True):
             status.update("")
 
 
-def _format_log_file_label(kind: LogFileKind) -> str:
+def _format_log_file_label(log_file: LogFile) -> str:
     """Format a LogFileKind as a chip label.
 
     Examples:
@@ -380,14 +380,40 @@ def _format_log_file_label(kind: LogFileKind) -> str:
         EXECUTOR_STDOUT → "EXEC 0 stdout" (extracted from S3 key)
         EXECUTOR_STDERR → "EXEC 1 stderr"
     """
+    kind = log_file.kind
+    segments = log_file.key.split("/")
+    suffixes: list[str] = []
+    if "attempts" in segments:
+        index = segments.index("attempts")
+        if index + 1 < len(segments):
+            suffixes.append(f"try {segments[index + 1]}")
+    filename = segments[-1]
+    if filename.startswith(("stdout_", "stderr_")):
+        suffixes.append(f"archive {filename.rsplit('_', 1)[-1].removesuffix('.gz')}")
+
+    def decorated(label: str) -> str:
+        return f"{label} · {' · '.join(suffixes)}" if suffixes else label
+
     if kind == LogFileKind.DRIVER_STDOUT:
-        return "DRIVER stdout"
+        return decorated("DRIVER stdout")
     if kind == LogFileKind.DRIVER_STDERR:
-        return "DRIVER stderr"
+        return decorated("DRIVER stderr")
     if kind == LogFileKind.EXECUTOR_STDOUT:
-        return "EXEC stdout"
+        worker = segments[segments.index("SPARK_EXECUTOR") + 1]
+        return decorated(f"EXEC {worker} stdout")
     if kind == LogFileKind.EXECUTOR_STDERR:
-        return "EXEC stderr"
+        worker = segments[segments.index("SPARK_EXECUTOR") + 1]
+        return decorated(f"EXEC {worker} stderr")
+    if kind == LogFileKind.HIVE_DRIVER_STDOUT:
+        return decorated("HIVE stdout")
+    if kind == LogFileKind.HIVE_DRIVER_STDERR:
+        return decorated("HIVE stderr")
+    if kind == LogFileKind.TEZ_TASK_STDOUT:
+        worker = segments[segments.index("TEZ_TASK") + 1]
+        return decorated(f"TEZ {worker} stdout")
+    if kind == LogFileKind.TEZ_TASK_STDERR:
+        worker = segments[segments.index("TEZ_TASK") + 1]
+        return decorated(f"TEZ {worker} stderr")
     return str(kind)
 
 

@@ -69,11 +69,13 @@ Font).
 
 ### 1.2.4. AWS profile resolution on Windows
 
-The AWS CLI uses identical paths on every OS: `~/.aws/config` and
+The AWS CLI uses identical default paths on every OS: `~/.aws/config` and
 `~/.aws/credentials`, where `~` is `%USERPROFILE%` on Windows
-(`C:\Users\<you>\.aws\config`). aws-tui's silent SSO discovery and
-`$AWS_PROFILE` honoring work the same way as on macOS/Linux — see the
-README's "Quickstart" section.
+(`C:\Users\<you>\.aws\config`). `AWS_CONFIG_FILE` and
+`AWS_SHARED_CREDENTIALS_FILE` override those paths; aws-tui expands `%VAR%`,
+`$VAR`, and `~` in their values. Silent SSO discovery and the
+`AWS_DEFAULT_PROFILE` / `AWS_PROFILE` startup precedence work the same way as
+on macOS/Linux. See the README's "Environment variables" section.
 
 ## 1.3. macOS
 

@@ -11,11 +11,22 @@ depends on. Two concrete implementations:
 
 from __future__ import annotations
 
-import contextlib
 from typing import Protocol, runtime_checkable
+from urllib.parse import quote
 
 import keyring as _keyring_lib
-from keyring.errors import KeyringError, PasswordDeleteError
+
+
+def app_keychain_service(connection_name: str) -> str:
+    """Return the collision-free primary service for a connection."""
+    return f"aws-tui:connections/{quote(connection_name, safe='')}"
+
+
+def app_keychain_revision_service(connection_name: str, slot: int) -> str:
+    """Return one of the two bounded credential staging services."""
+    if slot not in {0, 1}:
+        raise ValueError("keychain revision slot must be 0 or 1")
+    return f"aws-tui:connection-revisions/{quote(connection_name, safe='')}/{slot}"
 
 
 @runtime_checkable
@@ -37,18 +48,7 @@ class Keyring:
     """Thin wrapper around the ``keyring`` library."""
 
     def get(self, service: str, key: str) -> str | None:
-        # Treat any keyring-side failure (locked keychain, no backend
-        # configured on headless Linux, OS error, etc.) as "no
-        # credential available" rather than letting the exception
-        # escape and crash startup. The caller (``ConnectionResolver
-        # ._dispatch_s3_credentials``) is already prepared to handle
-        # ``None`` — it just means the credential lookup didn't
-        # resolve here and the connection will surface as
-        # ``AUTH_REQUIRED`` once it's used.
-        try:
-            return _keyring_lib.get_password(service, key)
-        except KeyringError:
-            return None
+        return _keyring_lib.get_password(service, key)
 
     def set(self, service: str, key: str, value: str) -> None:
         # No suppression on set: the caller explicitly asked to
@@ -58,13 +58,12 @@ class Keyring:
         _keyring_lib.set_password(service, key, value)
 
     def delete(self, service: str, key: str) -> None:
-        # Deleting a non-existent secret should be a no-op so callers can
-        # call delete unconditionally on cleanup paths. Also suppress
-        # the general ``KeyringError`` for the same reason as ``get``
-        # — a failed delete on a degraded keychain backend shouldn't
-        # block a cleanup flow.
-        with contextlib.suppress(PasswordDeleteError, KeyringError):
-            _keyring_lib.delete_password(service, key)
+        # Missing secrets are already absent. Other backend failures must
+        # propagate so callers can roll back configuration and report that
+        # credential removal did not complete.
+        if _keyring_lib.get_password(service, key) is None:
+            return
+        _keyring_lib.delete_password(service, key)
 
 
 class InMemoryKeychain:
@@ -83,4 +82,10 @@ class InMemoryKeychain:
         self._store.pop((service, key), None)
 
 
-__all__ = ["InMemoryKeychain", "KeychainBackend", "Keyring"]
+__all__ = [
+    "InMemoryKeychain",
+    "KeychainBackend",
+    "Keyring",
+    "app_keychain_revision_service",
+    "app_keychain_service",
+]

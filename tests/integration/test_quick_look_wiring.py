@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
@@ -44,8 +45,10 @@ async def test_space_opens_quick_look(app_context_factory: AppContextBuilder) ->
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        await pilot.pause()
-        assert list(app.query(EntryRow)), "pane entries did not mount"
+        await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+        async with asyncio.timeout(5.0):
+            while not list(app.query(EntryRow)):
+                await pilot.pause(0.01)
 
         await pilot.press("space")
         await pilot.pause()

@@ -1,4 +1,4 @@
-"""$AWS_PROFILE env-var resolution.
+"""Standard AWS profile environment-variable resolution.
 
 If $AWS_PROFILE is exported, ``AwsTuiApp._resolve_initial_connection``
 must prefer that profile over the first auto-discovered profile. This is
@@ -103,6 +103,7 @@ def test_resolve_picks_aws_profile_env_var_when_set(
     tmp_path: Path,
 ) -> None:
     app = _make_app_with_two_profiles(tmp_path, default_profile="default")
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
     monkeypatch.setenv("AWS_PROFILE", "sso-dev")
 
     conn = app._resolve_initial_connection()  # type: ignore[attr-defined]
@@ -112,12 +113,27 @@ def test_resolve_picks_aws_profile_env_var_when_set(
     )
 
 
+def test_resolve_prefers_aws_default_profile_like_botocore(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _make_app_with_two_profiles(tmp_path, default_profile="default")
+    monkeypatch.setenv("AWS_DEFAULT_PROFILE", "sso-dev")
+    monkeypatch.setenv("AWS_PROFILE", "default")
+
+    conn = app._resolve_initial_connection()  # type: ignore[attr-defined]
+
+    assert conn is not None
+    assert conn.profile == "sso-dev"
+
+
 def test_resolve_falls_back_to_first_auto_when_env_unset(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     app = _make_app_with_two_profiles(tmp_path, default_profile="default")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
 
     conn = app._resolve_initial_connection()  # type: ignore[attr-defined]
     assert conn is not None
@@ -133,6 +149,7 @@ def test_resolve_ignores_empty_aws_profile(
     (a user exporting it to '' should be treated as not-set)."""
     app = _make_app_with_two_profiles(tmp_path, default_profile="default")
     monkeypatch.setenv("AWS_PROFILE", "  ")
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
     conn = app._resolve_initial_connection()  # type: ignore[attr-defined]
     assert conn is not None
     assert conn.profile == "default"
@@ -152,6 +169,7 @@ def test_resolve_prefers_config_defaults_over_aws_profile_env(
     not ``sso-dev``.
     """
     app = _make_app_with_two_profiles(tmp_path, default_profile="default")
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
     monkeypatch.setenv("AWS_PROFILE", "sso-dev")
 
     (tmp_path / "config.toml").write_text(
@@ -180,6 +198,7 @@ def test_resolve_returns_none_when_nothing_configured(
     so the no-connection placeholder mounts.
     """
     monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
 
     aws_config = tmp_path / "aws-config"
     aws_config.write_text("")  # no profiles

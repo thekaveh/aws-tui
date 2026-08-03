@@ -197,7 +197,7 @@ Run:
 
 ```bash
 # Every place we hardcode a Unicode glyph.
-rg -n "▌|✓|●|⏸|↻|✗|⊘|🔥|🪣|⚙️" src/ tests/ | sort -u
+rg -n "▌|✓|●|⏸|↻|✗|⊘|U\\+1F525|U\\+1FAA3|U\\+2699" src/ tests/ | sort -u
 
 # Any place we emit raw ANSI escapes.
 rg -n "\\\\033\\[|\\\\x1b\\[" src/ | sort

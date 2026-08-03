@@ -1241,7 +1241,7 @@ Expected: commit succeeds.
 
 Create `/Users/kaveh/repos/aws-tui/docs/architecture.md`:
 
-```markdown
+````markdown
 # Architecture
 
 > Human-readable mirror of §2 of [the design spec](superpowers/specs/2026-06-13-aws-tui-design.md). Fleshes out as layers land in M1+.
@@ -1261,13 +1261,13 @@ Each layer only imports from the layer beneath it. `ruff` `flake8-tidy-imports` 
 - **Infrastructure** — `AwsSession`, `ConnectionResolver`, `ConfigStore`, `ThemeStore`, `KeymapStore`, `LogSink`. The only layer that touches the OS or AWS APIs.
 
 See the spec for the full VM tree, lifecycle invariants, and per-VM capability adoption.
-```
+````
 
 - [ ] **Step 2: Write `docs/keybindings.md`**
 
 Create `/Users/kaveh/repos/aws-tui/docs/keybindings.md`:
 
-```markdown
+````markdown
 # Keybindings
 
 > Mirror of spec §4.2. Fully customizable via `~/.config/aws-tui/config.toml` `[keybindings]`.
@@ -1303,13 +1303,13 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier (terminals inte
 ```
 
 The input router goes through `ui/actions.py` (action registry) → `ui/bindings.py` (action ↔ key) → VM command — so users rebind anything without touching code.
-```
+````
 
 - [ ] **Step 3: Write `docs/theming.md`**
 
 Create `/Users/kaveh/repos/aws-tui/docs/theming.md`:
 
-```markdown
+````markdown
 # Theming
 
 > Mirror of spec §4.5. Four built-in themes ship; the default is configurable; full `.tcss` overrides are supported.
@@ -1350,13 +1350,13 @@ The Carbon palette tokens (full table in spec §4.5):
 | `danger` | `#ff6b7a` |
 
 See spec §4.5 for Voidline / Lattice / Amber palettes.
-```
+````
 
 - [ ] **Step 4: Write `docs/connections.md`**
 
 Create `/Users/kaveh/repos/aws-tui/docs/connections.md`:
 
-```markdown
+````markdown
 # Connections (AWS profiles + S3-compatible)
 
 > Mirror of spec §6.1–6.3 and §6.5. Lands in M1.
@@ -1405,7 +1405,7 @@ connection = "kaveh-dev"
 ## Recommended: 1-day MPU abort lifecycle rule
 
 Set a 1-day lifecycle rule to abort incomplete multipart uploads on every bucket you write to from aws-tui or any other tool. aws-tui aborts MPUs on user cancel, but a network drop or app crash before the abort completes can leave orphans.
-```
+````
 
 - [ ] **Step 5: Write `docs/adding-a-service.md`**
 
@@ -1473,7 +1473,7 @@ cd /Users/kaveh/repos/aws-tui && \
 
 ---
 
-## 2.1. Task 12: Add scripts
+## 1.13. Task 12: Add scripts
 
 **Files:**
 - Create: `scripts/bootstrap.sh`
@@ -1545,7 +1545,7 @@ Expected: completes without errors. Final line shows the suggested next command.
 
 ---
 
-## 2.2. Task 13: Add `.pre-commit-config.yaml` and verify
+## 1.14. Task 13: Add `.pre-commit-config.yaml` and verify
 
 **Files:**
 - Create: `.pre-commit-config.yaml`
@@ -1619,7 +1619,7 @@ cd /Users/kaveh/repos/aws-tui && git add .pre-commit-config.yaml && \
 
 ---
 
-## 2.3. Task 14: Add GitHub workflows + templates + dependabot
+## 1.15. Task 14: Add GitHub workflows + templates + dependabot
 
 **Files:**
 - Create: `.github/workflows/ci.yml`
@@ -1878,7 +1878,7 @@ cd /Users/kaveh/repos/aws-tui && \
 
 ---
 
-## 2.4. Task 15: Commit scripts
+## 1.16. Task 15: Commit scripts
 
 - [ ] **Step 1: Stage and commit**
 
@@ -1893,7 +1893,7 @@ Expected: commit succeeds. (We split this off from Task 12 so the script-add and
 
 ---
 
-## 2.5. Task 16: Verify everything locally before push
+## 1.17. Task 16: Verify everything locally before push
 
 - [ ] **Step 1: Re-run the full test suite**
 
@@ -1947,7 +1947,7 @@ Expected: ~7 commits in chronological order — initial hygiene, VMx submodule, 
 
 ---
 
-## 2.6. Task 17: Push to GitHub and verify CI green
+## 1.18. Task 17: Push to GitHub and verify CI green
 
 - [ ] **Step 1: Push**
 
@@ -2011,7 +2011,7 @@ Expected: JSON shows the URL, the description we set in Task 1, MIT license (det
 
 ---
 
-## 2.7. Done
+## 1.19. Done
 
 M0 is complete: public repo, scaffolded layout, VMx submodule pinned, hello-world Textual app, 3 sanity tests, 7 atomic commits, full CI matrix green, v0.0.1 tagged and released.
 

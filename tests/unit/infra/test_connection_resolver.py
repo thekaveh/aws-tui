@@ -61,6 +61,58 @@ def test_connection_repr_masks_endpoint_url_secrets() -> None:
     assert "TOKEN" not in rendered
 
 
+def test_default_paths_honor_standard_aws_file_overrides(
+    tmp_path: Path,
+    store: ConfigStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "shared" / "config"
+    credentials = tmp_path / "shared" / "credentials"
+    config.parent.mkdir()
+    config.write_text("[profile override]\nregion = eu-west-1\n", encoding="utf-8")
+    credentials.write_text("", encoding="utf-8")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+
+    resolver = ConnectionResolver(config_store=store)
+
+    assert [(item.name, item.region) for item in resolver.list()] == [("override", "eu-west-1")]
+
+
+def test_default_paths_expand_environment_variables(
+    tmp_path: Path,
+    store: ConfigStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, credentials = _write_aws_files(
+        tmp_path,
+        config_body="[profile expanded]\nregion = ap-southeast-2\n",
+        credentials_body="",
+    )
+    monkeypatch.setenv("AWS_TEST_ROOT", str(tmp_path))
+    monkeypatch.setenv("AWS_CONFIG_FILE", "$AWS_TEST_ROOT/.aws/config")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "$AWS_TEST_ROOT/.aws/credentials")
+
+    resolver = ConnectionResolver(config_store=store)
+
+    assert resolver._aws_config_path == config
+    assert resolver._aws_credentials_path == credentials
+    assert [item.name for item in resolver.list()] == ["expanded"]
+
+
+def test_present_empty_standard_path_overrides_are_not_treated_as_unset(
+    store: ConfigStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_CONFIG_FILE", "")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "")
+
+    resolver = ConnectionResolver(config_store=store)
+
+    assert resolver._aws_config_path == Path()
+    assert resolver._aws_credentials_path == Path()
+
+
 class TestList:
     def test_empty_config_no_aws_files_returns_empty_list(
         self, tmp_path: Path, store: ConfigStore
@@ -142,8 +194,12 @@ class TestList:
         assert only.region == "eu-central-1"
 
     def test_default_region_falls_back_when_profile_has_none(
-        self, tmp_path: Path, store: ConfigStore
+        self,
+        tmp_path: Path,
+        store: ConfigStore,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
         cfg, creds = _write_aws_files(tmp_path, config_body="[profile noregion]\noutput = json\n")
         resolver = ConnectionResolver(
             config_store=store,
@@ -154,6 +210,47 @@ class TestList:
         assert len(listed) == 1
         # Falls back to "us-east-1" (boto3 default) when nothing is set.
         assert listed[0].region == "us-east-1"
+
+    def test_standard_default_region_fills_missing_profile_region(
+        self,
+        tmp_path: Path,
+        store: ConfigStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg, creds = _write_aws_files(
+            tmp_path,
+            config_body="[profile noregion]\noutput = json\n",
+        )
+        monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-3")
+
+        resolver = ConnectionResolver(
+            config_store=store,
+            aws_config_path=cfg,
+            aws_credentials_path=creds,
+        )
+
+        assert resolver.list()[0].region == "eu-west-3"
+
+    def test_aws_region_does_not_override_botocore_compatible_fallback(
+        self,
+        tmp_path: Path,
+        store: ConfigStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg, creds = _write_aws_files(
+            tmp_path,
+            config_body="[profile noregion]\noutput = json\n",
+        )
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        monkeypatch.setenv("AWS_REGION", "ap-south-2")
+
+        resolver = ConnectionResolver(
+            config_store=store,
+            aws_config_path=cfg,
+            aws_credentials_path=creds,
+        )
+
+        assert resolver.list()[0].region == "us-east-1"
 
 
 class TestResolveAndMaterialize:
@@ -217,6 +314,34 @@ class TestResolveAndMaterialize:
 
 
 class TestS3CompatibleCredentialDispatch:
+    def test_keychain_read_failure_resolves_as_missing_credentials(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        class _FailingKeychain(InMemoryKeychain):
+            def get(self, service: str, key: str) -> str | None:
+                del service, key
+                raise RuntimeError("keychain locked")
+
+        store.add_connection(
+            ConnectionEntry(
+                name="locked",
+                kind="s3-compatible",
+                endpoint_url="http://localhost:9000",
+                credentials="keychain:aws-tui:locked",
+            )
+        )
+        resolver = ConnectionResolver(
+            config_store=store,
+            keychain=_FailingKeychain(),
+            aws_config_path=tmp_path / "missing",
+            aws_credentials_path=tmp_path / "missing",
+        )
+
+        connection = resolver.resolve("locked")
+
+        assert connection.access_key_id is None
+        assert connection.secret_access_key is None
+
     def test_keychain_credentials(self, tmp_path: Path, store: ConfigStore) -> None:
         kc = InMemoryKeychain()
         kc.set("minio-local", "access_key_id", "AKIA-MINIO")

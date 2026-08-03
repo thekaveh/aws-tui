@@ -13,11 +13,12 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from vmx import MessageHub, RxDispatcher
@@ -47,6 +48,23 @@ _MINIO_IMAGE = (
 )
 
 
+def _minio_unavailable(message: str) -> None:
+    """Fail required CI coverage while keeping local Docker tests optional."""
+    if os.environ.get("CI"):
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def _start_minio_or_unavailable(container: Any) -> None:
+    """Start MinIO or tear down any partially allocated container."""
+    try:
+        container.start()
+    except Exception as exc:  # pragma: no cover - exercised through helper tests
+        with contextlib.suppress(Exception):
+            container.stop()
+        _minio_unavailable(f"could not start MinIO container (Docker missing?): {exc}")
+
+
 @pytest.fixture(scope="session")
 def minio_endpoint() -> Iterator[tuple[str, str, str]]:
     """Spin up a real MinIO container.
@@ -58,13 +76,13 @@ def minio_endpoint() -> Iterator[tuple[str, str, str]]:
     try:
         from testcontainers.minio import MinioContainer  # lazy import
     except Exception as exc:  # pragma: no cover
-        pytest.skip(f"testcontainers MinIO unavailable: {exc}")
+        _minio_unavailable(f"testcontainers MinIO unavailable: {exc}")
 
     try:
         container = MinioContainer(image=_MINIO_IMAGE)
-        container.start()
     except Exception as exc:  # pragma: no cover
-        pytest.skip(f"could not start MinIO container (Docker missing?): {exc}")
+        _minio_unavailable(f"could not construct MinIO container: {exc}")
+    _start_minio_or_unavailable(container)
 
     try:
         host = container.get_container_host_ip()
@@ -144,9 +162,9 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
             transfer_journal=journal,
             hub=hub,
             dispatcher=dispatcher,
+            local_root=tmp,
             s3_fs_factory=_factory,
         )
-        svc._local_root = tmp  # type: ignore[attr-defined]
 
         registry = ServiceRegistry()
         registry.register(cast(Service, svc))
@@ -202,31 +220,3 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
             # background worker still holding a file open at teardown
             # time on Windows) doesn't fail the whole test.
             shutil.rmtree(tmp, ignore_errors=True)
-
-
-_INTEGRATION_DIR = Path(__file__).parent
-
-
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Auto-retry the integration tier (pytest-rerunfailures).
-
-    The full-app Textual ``pilot`` tests under ``tests/integration/`` are
-    timing-sensitive: under concurrent-matrix load on slow CI runners
-    (notably Windows) a pilot step can miss its window and the test fails
-    non-deterministically (``asyncio.CancelledError``, an assertion on a
-    not-yet-settled state, etc.). A different test flakes each run, so
-    this is inherent timing jitter, not a product bug. Retry integration
-    items up to twice so a transient miss doesn't redden CI; a real,
-    deterministic failure still fails after every attempt.
-
-    A subdir conftest's ``pytest_collection_modifyitems`` receives the
-    whole session's items, so scope the marker to files under this
-    directory — unit tests must keep failing fast on the first attempt.
-    """
-    flaky = pytest.mark.flaky(reruns=2, reruns_delay=1)
-    for item in items:
-        try:
-            item.path.relative_to(_INTEGRATION_DIR)
-        except ValueError:
-            continue
-        item.add_marker(flaky)

@@ -15,12 +15,15 @@ from aws_tui.composition import build_app_context
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
+from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
 from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.nav_menu import NavMenu
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
@@ -141,17 +144,10 @@ async def test_emr_nav_row_hidden_on_s3_compatible_connection(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_emr_page_tab_cycle_includes_nav_then_left_detail_logs(tmp_path: Path) -> None:
-    """Post-PR-#94 contract: Tab on the EMR page cycles through 4
-    slots — NAV → LEFT → DETAIL → LOGS → NAV (and reverse on
-    Shift+Tab). User feedback: "I also want the menu pane be
-    treated like any other pane in the app, which mean tab
-    switching should allow for it being among the switchable panes
-    to be selected / focused: … On EMR, should be able to switch
-    among the menu, left application job runs pane, and the right
-    job details pane" — clarified in follow-up as 4-slot to keep
-    Logs reachable for ``Enter``-to-load.
-    """
+async def test_emr_page_tab_cycle_includes_source_application_and_panes(
+    tmp_path: Path,
+) -> None:
+    """The EMR ring includes every visible selector and pane."""
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
     app = AwsTuiApp(ctx)
@@ -167,6 +163,8 @@ async def test_emr_page_tab_cycle_includes_nav_then_left_detail_logs(tmp_path: P
             right_detail = pilot.app.query_one(JobRunDetailPane)
             right_logs = pilot.app.query_one(JobRunLogsPane)
             nav = pilot.app.query_one(NavMenu)
+            source = pilot.app.query_one(ServiceSourceHeader)
+            application = pilot.app.query_one(ApplicationPicker)
 
             # The page lands focus on the LEFT pane on mount.
             await pilot.pause()
@@ -193,6 +191,53 @@ async def test_emr_page_tab_cycle_includes_nav_then_left_detail_logs(tmp_path: P
             assert nav.has_focus_within, (
                 f"Tab on LOGS should move to NAV; got {pilot.app.focused!r}."
             )
+
+            # NAV → SOURCE → APPLICATION → RUNS.
+            await pilot.press("tab")
+            await pilot.pause()
+            assert source.has_focus or source.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert application.has_focus or application.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert left.has_focus or left.has_focus_within
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_focus_projects_bidirectionally_through_coordinator(tmp_path: Path) -> None:
+    """Direct Textual focus and app-level slot projection stay in sync."""
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            source = app.query_one(ServiceSourceHeader)
+            source.focus()
+            await pilot.pause()
+            assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_SOURCE
+
+            application = app.query_one(ApplicationPicker)
+            application.focus()
+            await pilot.pause()
+            assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_APPLICATION
+
+            app._project_focus_slot(FocusSlot.EMR_DETAIL)
+            await pilot.pause()
+            assert app.query_one(JobRunDetailPane).has_focus_within
+            assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_DETAIL
+
+            app.focus_active_service_pane()
+            await pilot.pause()
+            assert app.query_one(JobRunsPane).has_focus_within
+            assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_RUNS
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
@@ -266,6 +311,52 @@ async def test_emr_left_pane_auto_focuses_and_arrow_keys_move_cursor(tmp_path: P
                 f"Up arrow did not retract the cursor. Got "
                 f"{left._cursor_index()!r}, expected {initial_cursor}."  # type: ignore[attr-defined]
             )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_public_routing_delegates_to_focused_panes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    calls: list[str] = []
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            page = app.query_one(EmrServerlessPage)
+            left = app.query_one(JobRunsPane)
+            detail = app.query_one(JobRunDetailPane)
+            logs = app.query_one(JobRunLogsPane)
+            monkeypatch.setattr(left, "action_cursor_down", lambda: calls.append("runs-down"))
+            monkeypatch.setattr(left, "action_commit_selection", lambda: calls.append("runs-enter"))
+            monkeypatch.setattr(logs, "action_scroll_down", lambda: calls.append("logs-down"))
+            monkeypatch.setattr(logs, "action_load", lambda: calls.append("logs-enter"))
+
+            left.focus()
+            await pilot.pause()
+            assert page.move_focused(1)
+            assert page.activate_focused()
+
+            detail.focus()
+            await pilot.pause()
+            assert page.move_focused(1)
+            assert page.activate_focused()
+
+            logs.focus()
+            await pilot.pause()
+            assert page.move_focused(1)
+            assert page.activate_focused()
+
+            assert calls == ["runs-down", "runs-enter", "logs-down", "logs-enter"]
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
@@ -595,12 +686,7 @@ async def test_emr_shift_s_switches_profile_and_shift_a_cycles_application(
 
 @pytest.mark.asyncio
 async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> None:
-    """Post-PR-#94 cycle now includes the Detail pane as a real
-    slot — Detail's ``can_focus = True``. Verifies one full
-    rotation LEFT → DETAIL → LOGS → NAV → LEFT lands each slot
-    once and detail isn't skipped (the prior 2-slot cycle did skip
-    it).
-    """
+    """One full rotation visits selectors as well as all three data panes."""
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
     fake.add_job_run(application_id="00emr", job_run_id="r-001", name="test-run")
@@ -618,13 +704,15 @@ async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> N
             right_logs = pilot.app.query_one(JobRunLogsPane)
             right_detail = pilot.app.query_one(JobRunDetailPane)
             nav = pilot.app.query_one(NavMenu)
+            source = pilot.app.query_one(ServiceSourceHeader)
+            application = pilot.app.query_one(ApplicationPicker)
 
             # Focus the LEFT pane (the page auto-focuses it on mount).
             left.focus()
             await pilot.pause()
             assert left.has_focus or left.has_focus_within
 
-            # LEFT → DETAIL → LOGS → NAV → LEFT (one full rotation).
+            # RUNS → DETAIL → LOGS → NAV → SOURCE → APPLICATION → RUNS.
             await pilot.press("tab")
             await pilot.pause()
             assert right_detail.has_focus or right_detail.has_focus_within
@@ -634,6 +722,12 @@ async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> N
             await pilot.press("tab")
             await pilot.pause()
             assert nav.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert source.has_focus or source.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert application.has_focus or application.has_focus_within
             await pilot.press("tab")
             await pilot.pause()
             assert left.has_focus or left.has_focus_within, (

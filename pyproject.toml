@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "aws-tui"
 description = "Cross-platform TUI for AWS and S3-compatible services. Powered by Textual + VMx MVVM."
-readme = "README.md"
+readme = "PYPI.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Kaveh Razavi", email = "kaveh.razavi@gmail.com" }]
 requires-python = ">=3.11,<3.14"
@@ -42,10 +42,13 @@ dependencies = [
   # downstream `pip install aws-tui` from a transitive breaking
   # change between releases. Bump deliberately, not by accident.
   "vmx>=3.1.0,<4.0.0",
-  "textual>=8.2.8,<9",
-  "boto3>=1.34,<2",
-  "aioboto3>=13,<16",
-  "botocore>=1.34,<2",
+  # App crash/mount recovery and priority-preserving dynamic bindings use
+  # isolated private compatibility points. Re-audit before changing this pin.
+  "textual==8.2.8",
+  "aioboto3>=15.5,<16",
+  "botocore>=1.40.61,<2",
+  "reactivex>=4,<5",
+  "rich>=14,<16",
   "anyio>=4.14.2,<5",
   "aiofiles>=23,<26",
   "tomli-w>=1.0,<2",
@@ -93,7 +96,6 @@ dev = [
   "pytest-asyncio>=0.24",
   "pytest-cov>=4",
   "pytest-xdist>=3",
-  "pytest-rerunfailures>=14",
   "pytest-textual-snapshot>=1",
   "moto[server,s3]>=5",
   "testcontainers[minio]>=4",
@@ -112,6 +114,7 @@ docs = [
   "mkdocs-material>=9.7.7,<10.0",
   "pyyaml>=6.0,<7.0",
   "cairosvg>=2.7,<3.0",
+  "fonttools>=4.61,<5.0",
 ]
 
 [tool.pytest.ini_options]
@@ -193,7 +196,13 @@ strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 show_error_codes = true
-files = ["src/aws_tui"]
+files = [
+  "src/aws_tui",
+  "tests/e2e/test_journeys.py",
+  "tests/integration/test_swap_source_recovery.py",
+  "tests/unit/ui/test_pane_widgets.py",
+  "tests/unit/vm/file_manager/test_pane_vm.py",
+]
 
 [[tool.mypy.overrides]]
 module = ["tests.*"]

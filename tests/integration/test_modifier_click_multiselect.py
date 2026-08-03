@@ -44,6 +44,7 @@ async def test_shift_arrow_extends_selection(
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
+        await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
         # Press shift+down twice; expect marked count to climb.
         panes = list(app.query(Pane))

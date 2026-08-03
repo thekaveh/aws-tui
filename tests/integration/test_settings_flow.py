@@ -5,13 +5,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.config_store import ConfigStore
+from aws_tui.infra.keychain import InMemoryKeychain, app_keychain_service
+from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 
 _MINIO_LOCAL_TOML = (
     "[connections.minio-local]\n"
@@ -64,6 +68,20 @@ async def _await_boot(pilot: object, app: object) -> None:
     await pilot.pause()  # type: ignore[attr-defined]
 
 
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
+async def _await_content_mount(app: AwsTuiApp, expected_id: str) -> None:
+    await app.workers.wait_for_complete(list(app.workers._workers))
+    setup_task = app.app_ctx.root_vm.content_host._setup_task
+    if setup_task is not None and not setup_task.done():
+        await setup_task
+    await _wait_until(lambda: app.app_ctx.root_vm.content_host.current_id == expected_id)
+
+
 def _dispose(ctx: object) -> None:
     """Standard teardown — mirrors the pattern in build_app_context order."""
     for attr in [
@@ -93,11 +111,12 @@ async def test_toggle_settings_s3_settings_does_not_crash(tmp_path: Path) -> Non
     swap-in, so the second Settings click tried to re-construct an
     already-Disposed VM. Fix: build a fresh ``SettingsVM`` per mount.
     """
-    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
-    (config_dir / "config.toml").write_text(
-        _MINIO_LOCAL_TOML + '\n[defaults]\nconnection = "minio-local"\n'
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(
+        config_dir=config_dir,
+        cache_dir=tmp_path / "cache",
+        demo=True,
     )
-    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
@@ -105,13 +124,13 @@ async def test_toggle_settings_s3_settings_does_not_crash(tmp_path: Path) -> Non
             menu = ctx.root_vm.services_menu
             # 1st: settings
             menu.switch_service_command.execute("settings")
-            await pilot.pause()
+            await _await_content_mount(app, "settings")
             # 2nd: back to s3
             menu.switch_service_command.execute("s3")
-            await pilot.pause()
+            await _await_content_mount(app, "s3")
             # 3rd: settings again — this was the crash path.
             menu.switch_service_command.execute("settings")
-            await pilot.pause()
+            await _await_content_mount(app, "settings")
 
             from aws_tui.vm.settings.settings_vm import SettingsVM
 
@@ -213,9 +232,14 @@ async def test_comma_selects_settings_and_swaps_main_area(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
+async def test_add_inline_form_persists_to_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Open Settings → expand inline form → fill + Save → TOML round-trip."""
     config_dir = _prep(tmp_path)
+    keychain = InMemoryKeychain()
+    monkeypatch.setattr("aws_tui.composition.Keyring", lambda: keychain)
     ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
     app = AwsTuiApp(ctx)
     try:
@@ -230,7 +254,7 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
                 ConnectionFormInline,
                 ConnectionFormSubmitted,
             )
-            from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+            from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 
             form = pilot.app.query_one(ConnectionFormInline)
             form.open_for_add()
@@ -262,7 +286,11 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
             form.post_message(
                 ConnectionFormSubmitted(form=form_obj, mode="add", original_name=None)
             )
-            await pilot.pause()
+            await _wait_until(
+                lambda: (
+                    "minio-test" in ConfigStore(path=config_dir / "config.toml").load().connections
+                )
+            )
     finally:
         _dispose(ctx)
 
@@ -270,13 +298,20 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
     assert "minio-test" in cfg.connections
     entry = cfg.connections["minio-test"]
     assert entry.endpoint_url == "http://localhost:9000"
-    assert entry.credentials == "static"
-    assert entry.session_token == "SESSIONTEST"
+    assert entry.credentials == f"keychain:{app_keychain_service('minio-test')}"
+    assert entry.access_key_id is None
+    assert entry.secret_access_key is None
+    assert entry.session_token is None
+    persisted = (config_dir / "config.toml").read_text(encoding="utf-8")
+    assert "AKIATEST" not in persisted
+    assert "SECRETTEST" not in persisted
+    assert "SESSIONTEST" not in persisted
 
     from aws_tui.infra.connection_resolver import ConnectionResolver
 
     resolved = ConnectionResolver(
-        config_store=ConfigStore(path=config_dir / "config.toml")
+        config_store=ConfigStore(path=config_dir / "config.toml"),
+        keychain=keychain,
     ).resolve("minio-test")
     assert resolved.access_key_id == "AKIATEST"
     assert resolved.secret_access_key == "SECRETTEST"
@@ -299,6 +334,8 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
             await pilot.pause()
             await pilot.click("#delete-0")
             await pilot.pause()
+            assert isinstance(app.screen, ConfirmModal)
+            assert app.screen.vm.is_open
             # ConfirmModal opens; danger defaults focus to Cancel — press
             # Right then Enter to confirm.
             await pilot.press("right")
@@ -671,10 +708,14 @@ async def test_local_only_mount_returns_false_when_widget_mount_fails(
             await _await_boot(pilot, app)
             connection = ctx.connection_resolver.resolve("demo-dev")
             host = app.query_one("#content-host")
+            real_mount = host.mount
 
             def fail_mount(*widgets: object, **kwargs: object) -> object:
-                del widgets, kwargs
-                raise RuntimeError("widget mount failed")
+                from aws_tui.ui.widgets.dual_pane import DualPane
+
+                if any(isinstance(widget, DualPane) for widget in widgets):
+                    raise RuntimeError("widget mount failed")
+                return real_mount(*widgets, **kwargs)
 
             monkeypatch.setattr(host, "mount", fail_mount)
             result = await app._mount_local_only_dual_pane(
@@ -683,7 +724,199 @@ async def test_local_only_mount_returns_false_when_widget_mount_fails(
             )
 
             assert result is False
+            assert len(app.query_one("#content-host").query("#content-mount-error")) == 1
+            assert ctx.root_vm.content_host.current_id == "s3"
     finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_settings_mount_failure_leaves_error_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.ui.widgets.settings_view import SettingsView
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+            await ctx.root_vm.switch_connection_with(connection, TokenState.CONNECTED)
+            host = app.query_one("#content-host")
+            real_mount = host.mount
+            errors: list[tuple[str, dict[str, object]]] = []
+            monkeypatch.setattr(
+                ctx.log_sink,
+                "error",
+                lambda event, **fields: errors.append((event, fields)),
+            )
+
+            def fail_settings(*widgets: object, **kwargs: object) -> object:
+                if any(isinstance(widget, SettingsView) for widget in widgets):
+                    raise RuntimeError("settings mount failed")
+                return real_mount(*widgets, **kwargs)
+
+            monkeypatch.setattr(host, "mount", fail_settings)
+
+            await app._mount_settings_view()
+
+            current_host = app.query_one("#content-host")
+            assert len(current_host.query("#content-mount-error")) == 1, (
+                list(current_host.children),
+                errors,
+            )
+            assert ctx.root_vm.content_host.current_id == "settings"
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_service_mount_failure_leaves_error_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from textual.widgets import Static
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            host = app.query_one("#content-host")
+
+            class FailingReplacement(Static):
+                async def on_mount(self) -> None:
+                    raise RuntimeError("glue mount failed")
+
+            errors: list[tuple[str, dict[str, object]]] = []
+            monkeypatch.setattr(
+                ctx.log_sink,
+                "error",
+                lambda event, **fields: errors.append((event, fields)),
+            )
+            replacement = FailingReplacement("replacement", id="forced-replacement")
+            result = await app._replace_content_widget(
+                host,
+                replacement,
+            )
+            await _wait_until(lambda: len(app.query("#content-host #content-mount-error")) == 1)
+
+            assert result is None
+            recovered_host = app.query_one("#content-host")
+            assert [child.id for child in recovered_host.children] == ["content-mount-error"]
+            assert len(app.query("#forced-replacement")) == 0, errors
+
+            await app._replace_content_widget(
+                recovered_host,
+                Static("working", id="working-replacement"),
+            )
+            assert [child.id for child in app.query_one("#content-host").children] == [
+                "working-replacement"
+            ]
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_initial_service_lifecycle_failure_uses_recovery_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from textual.widgets import Static
+
+    from aws_tui import app as app_module
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+
+    class FailingInitialView(Static):
+        async def on_mount(self) -> None:
+            raise RuntimeError("initial view mount failed")
+
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            monkeypatch.setattr(
+                app_module,
+                "build_service_view",
+                lambda *_args, **_kwargs: FailingInitialView("initial", id="failing-initial-view"),
+            )
+
+            assert await app._mount_initial_service_view() is True
+            await _wait_until(lambda: len(app.query("#content-mount-error")) == 1)
+
+            assert [child.id for child in app.query_one("#content-host").children] == [
+                "content-mount-error"
+            ]
+            assert len(app.query("#failing-initial-view")) == 0
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_delayed_mount_recovery_does_not_overwrite_newer_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from textual.widgets import Static
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    recovery_started = asyncio.Event()
+    release_recovery = asyncio.Event()
+    original_recovery = app._recover_content_mount_lifecycle
+
+    async def delayed_recovery(*args: object) -> None:
+        recovery_started.set()
+        await release_recovery.wait()
+        await original_recovery(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(app, "_recover_content_mount_lifecycle", delayed_recovery)
+
+    class FailingReplacement(Static):
+        async def on_mount(self) -> None:
+            raise RuntimeError("delayed mount failure")
+
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            await app._replace_content_widget(
+                app.query_one("#content-host"),
+                FailingReplacement("failing", id="delayed-failure"),
+            )
+            await asyncio.wait_for(recovery_started.wait(), timeout=1)
+
+            await app._replace_content_widget(
+                app.query_one("#content-host"),
+                Static("newer", id="newer-content"),
+            )
+            release_recovery.set()
+            await pilot.pause()
+
+            current_host = app.query_one("#content-host")
+            assert [child.id for child in current_host.children] == ["newer-content"]
+            assert len(app.query("#delayed-failure")) == 0
+            assert len(app.query("#content-mount-error")) == 0
+    finally:
+        release_recovery.set()
         _dispose(ctx)
 
 

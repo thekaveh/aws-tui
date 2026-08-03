@@ -9,6 +9,7 @@ tests lock the open/closed contract in place.
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import OptionList
 from vmx import NULL_DISPATCHER, MessageHub
@@ -102,6 +103,28 @@ async def test_trigger_label_shows_name_and_colored_glyph_when_selected() -> Non
         assert "STARTED" not in label
 
 
+async def test_created_and_stopped_use_distinct_glyphs_and_textual_tooltips() -> None:
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="created", name="ready", state=ApplicationState.CREATED)
+    fake.add_application(app_id="stopped", name="quiet", state=ApplicationState.STOPPED)
+    vm, hub = _make_vm(fake)
+    await vm.refresh()
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        picker = pilot.app.query_one(ApplicationPicker)
+        await pilot.pause()
+
+        vm.select("created")
+        await pilot.pause()
+        created_marker, _ = picker._trigger_fragments()  # type: ignore[attr-defined]
+        assert picker.tooltip == "ready · CREATED"
+
+        vm.select("stopped")
+        await pilot.pause()
+        stopped_marker, _ = picker._trigger_fragments()  # type: ignore[attr-defined]
+        assert picker.tooltip == "quiet · STOPPED"
+        assert created_marker != stopped_marker
+
+
 # ── toggle_open (CSS class flip) ──────────────────────────────────────────────
 
 
@@ -121,6 +144,20 @@ async def test_toggle_open_flips_open_class_on_and_off() -> None:
         picker.toggle_open()
         await pilot.pause()
         assert "-open" not in picker.classes
+
+
+async def test_focused_picker_opens_with_enter() -> None:
+    vm, hub = _make_vm()
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        picker = pilot.app.query_one(ApplicationPicker)
+        picker.focus()
+        await pilot.pause()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert picker.has_class("-open")
+        assert picker.has_focus_within
 
 
 async def test_action_close_removes_open_class() -> None:
@@ -227,4 +264,28 @@ async def test_build_options_sorts_started_first_then_other_states() -> None:
             "a-created",
             "a-stopped",
             "a-terminated",
+        ]
+
+
+async def test_application_options_expose_literal_state_with_state_styling() -> None:
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="created", name="ready", state=ApplicationState.CREATED)
+    fake.add_application(app_id="stopped", name="quiet", state=ApplicationState.STOPPED)
+    vm, hub = _make_vm(fake)
+    await vm.refresh()
+
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        picker = pilot.app.query_one(ApplicationPicker)
+        options = picker._build_options()  # type: ignore[attr-defined]
+        prompts = [option.prompt for option in options]
+
+        assert all(isinstance(prompt, Text) for prompt in prompts)
+        assert [prompt.plain for prompt in prompts if isinstance(prompt, Text)] == [
+            "◇ CREATED · ready",
+            "○ STOPPED · quiet",
+        ]
+        assert [prompt.spans[0].style for prompt in prompts if isinstance(prompt, Text)] == [
+            "white",
+            "dim",
         ]

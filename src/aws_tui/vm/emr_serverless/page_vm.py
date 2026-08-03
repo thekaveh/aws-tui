@@ -8,6 +8,7 @@ via Textual's ``set_interval`` — there's no domain-tier
 
 from __future__ import annotations
 
+from collections.abc import Callable, Coroutine
 from typing import Any, Literal
 
 from vmx import ComponentVMOf, Message, MessageHub
@@ -19,6 +20,7 @@ from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
+from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
 from aws_tui.vm.service_source_vm import (
     SelectionScope,
     ServiceSelectionStore,
@@ -47,6 +49,8 @@ class EmrServerlessPageVM:
         )
         self._selection_store = selection_store or ServiceSelectionStore()
         self._disposed: bool = False
+        self._shutdown_started: bool = False
+        self._operations = OperationOwner()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -109,11 +113,18 @@ class EmrServerlessPageVM:
         if self._disposed:
             return
         self._disposed = True
+        self._operations.close()
         self.job_run_logs.dispose()
         self.job_run_detail.dispose()
         self.job_runs.dispose()
         self.applications.dispose()
         self._inner.dispose()
+
+    async def shutdown(self) -> None:
+        self._shutdown_started = True
+        self._operations.close()
+        await self._operations.cancel_and_drain()
+        await self.job_run_logs.shutdown()
 
     # ── Public surface ──────────────────────────────────────────────────────
 
@@ -122,7 +133,8 @@ class EmrServerlessPageVM:
         selection when available, otherwise select the first one in
         user-facing sorted order so the LEFT pane has something to
         populate."""
-        await self.applications.refresh()
+        if not await self._run(self.applications.refresh):
+            return
         await self._select_after_applications_load()
 
     async def refresh_applications(self) -> None:
@@ -134,7 +146,8 @@ class EmrServerlessPageVM:
         the dependent runs/detail/logs targets.
         """
         previous_selected = self.applications.selected_id
-        await self.applications.refresh()
+        if not await self._run(self.applications.refresh):
+            return
         selected = self.applications.selected_id
         if selected is not None:
             if selected != previous_selected or self.job_runs.application_id != selected:
@@ -151,11 +164,15 @@ class EmrServerlessPageVM:
             self.job_run_logs.set_target(None, None, None)
 
     async def select_application(self, app_id: str) -> None:
+        if self._disposed or self._shutdown_started:
+            return
         self.applications.select(app_id)
-        if self.applications.selected_id == app_id:
-            self._selection_store.set(self._selection_scope, "application_id", app_id)
+        if self.applications.selected_id != app_id:
+            return
+        self._selection_store.set(self._selection_scope, "application_id", app_id)
         self.job_runs.set_application(app_id)
-        await self.job_runs.refresh()
+        if not await self._run(self.job_runs.refresh):
+            return
         # Detail + logs follow the first run (if any) on application
         # switch. Without the explicit ``job_run_logs.set_target(None,
         # None, None)`` in the empty-runs branch, the logs pane keeps
@@ -185,6 +202,8 @@ class EmrServerlessPageVM:
         applications is the source of truth through which switch app
         command cycles".
         """
+        if self._disposed or self._shutdown_started:
+            return
         apps = self.applications.sorted_applications
         if len(apps) < 2:
             return
@@ -197,28 +216,56 @@ class EmrServerlessPageVM:
         await self.select_application(apps[next_idx].id)
 
     async def select_job_run(self, run_id: str) -> None:
+        if self._disposed or self._shutdown_started:
+            return
         self.job_runs.select(run_id)
+        if self.job_runs.selected_id != run_id:
+            return
         self.job_run_detail.set_target(self.applications.selected_id, run_id)
-        await self.job_run_detail.refresh()
+        target = (self.applications.selected_id, run_id)
+        if not await self._run(self.job_run_detail.refresh):
+            return
+        if (self.applications.selected_id, self.job_run_detail._job_run_id) != target:
+            return
         # Update logs target — does NOT fetch (user has to press
         # Enter in the logs pane). Reads the s3 log uri off the
         # freshly-refreshed detail. If detail is None or has no
         # uri, the logs VM transitions to NO_LOG_CONFIG.
-        detail = self.job_run_detail.detail
-        self.job_run_logs.set_target(
-            self.applications.selected_id,
-            run_id,
-            detail.s3_monitoring_log_uri if detail is not None else None,
-        )
+        self._sync_logs_target_from_detail()
+
+    async def refresh_job_runs(self) -> None:
+        """Refresh runs and reconcile detail/log targets with the result."""
+        previous_selected = self.job_runs.selected_id
+        if not await self._run(self.job_runs.refresh):
+            return
+        runs = self.job_runs.runs
+        selected = self.job_runs.selected_id
+        if selected is not None and any(run.job_run_id == selected for run in runs):
+            return
+        if runs:
+            await self.select_job_run(runs[0].job_run_id)
+            return
+        if previous_selected is not None or self.job_run_detail.detail is not None:
+            self.job_run_detail.set_target(None, None)
+            self.job_run_logs.set_target(None, None, None)
+
+    async def refresh_job_run_detail(self) -> None:
+        """Refresh detail through the page's lifecycle operation owner."""
+        if await self._run(self.job_run_detail.refresh):
+            self._sync_logs_target_from_detail()
+
+    async def load_more_job_runs(self) -> None:
+        """Load the next runs page through the page's lifecycle owner."""
+        await self._run(self.job_runs.load_more)
 
     async def refresh_focused(self, focus: Literal["applications", "runs", "detail"]) -> None:
         """Manual refresh — invoked by the ``r`` keybinding."""
         if focus == "applications":
             await self.refresh_applications()
         elif focus == "runs":
-            await self.job_runs.refresh()
+            await self.refresh_job_runs()
         else:
-            await self.job_run_detail.refresh()
+            await self.refresh_job_run_detail()
 
     async def _select_after_applications_load(self) -> None:
         if self.applications.selected_id is not None:
@@ -231,6 +278,25 @@ class EmrServerlessPageVM:
             await self.select_application(stored_id)
             return
         await self.select_application(apps[0].id)
+
+    def _sync_logs_target_from_detail(self) -> None:
+        detail = self.job_run_detail.detail
+        application_id = self.applications.selected_id
+        run_id = self.job_runs.selected_id
+        if detail is None or detail.application_id != application_id or detail.job_run_id != run_id:
+            return
+        self.job_run_logs.set_target(
+            application_id,
+            run_id,
+            detail.s3_monitoring_log_uri,
+        )
+
+    async def _run(self, operation: Callable[[], Coroutine[Any, Any, None]]) -> bool:
+        try:
+            await self._operations.run(operation)
+        except OperationSuperseded:
+            return False
+        return not self._disposed and not self._shutdown_started
 
 
 __all__ = ["EmrServerlessPageVM"]

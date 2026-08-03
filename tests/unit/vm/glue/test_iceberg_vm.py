@@ -812,21 +812,14 @@ async def test_cancelled_retry_never_restores_ownerless_loading_state() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("subscriber_kind", ["property", "hub"])
-async def test_cancelled_loading_notification_restores_before_provider_call(
-    subscriber_kind: str,
-) -> None:
+async def test_cancelled_hub_loading_notification_restores_before_provider_call() -> None:
     vm, inspector, hub = make_vm()
     await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
 
     def cancel_notification(_value: object) -> None:
         raise asyncio.CancelledError
 
-    subscription = (
-        vm.on_property_changed.subscribe(on_next=cancel_notification)
-        if subscriber_kind == "property"
-        else hub.messages.subscribe(on_next=cancel_notification)
-    )
+    subscription = hub.messages.subscribe(on_next=cancel_notification)
 
     with pytest.raises(asyncio.CancelledError):
         await vm.select_view("snapshots")
@@ -834,6 +827,26 @@ async def test_cancelled_loading_notification_restores_before_provider_call(
     assert inspector.calls == []
     assert vm.state is PaneState.EMPTY
     assert vm.snapshots == ()
+    subscription.dispose()
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_cancelled_property_observer_is_isolated_during_loading() -> None:
+    vm, inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+
+    def cancel_notification(_value: object) -> None:
+        raise asyncio.CancelledError
+
+    subscription = vm.on_property_changed.subscribe(on_next=cancel_notification)
+
+    assert await vm.select_view("snapshots")
+
+    assert inspector.calls == [("snapshots", ICEBERG_REF)]
+    assert [row.snapshot_id for row in vm.snapshots] == [43, 42]
+    assert vm.state is PaneState.IDLE
     subscription.dispose()
     vm.dispose()
     assert vm.status is ConstructionStatus.DISPOSED

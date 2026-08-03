@@ -368,6 +368,58 @@ async def test_named_filter_action_focuses_and_opens_picker(
 
 
 @pytest.mark.asyncio
+async def test_named_filter_action_closes_hidden_filter_from_previous_view() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await page.action_choose_run_state()
+        await pilot.pause()
+        run_filter = app.query_one("#glue-run-state-filter", ContextPicker)
+        assert run_filter.is_open
+
+        await page.action_choose_crawler_state()
+        await pilot.pause(0.05)
+        crawler_filter = app.query_one("#glue-crawler-state-filter", ContextPicker)
+        assert not run_filter.is_open
+        assert crawler_filter.is_open
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reverse", "expected_id"),
+    [(False, "glue-view-tabs"), (True, "glue-source-header")],
+)
+async def test_tab_cycle_closes_departed_filter_picker(
+    reverse: bool,
+    expected_id: str,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    await vm.select_view("jobs")
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await page.action_choose_run_state()
+        await pilot.pause()
+        picker = app.query_one("#glue-run-state-filter", ContextPicker)
+        assert picker.is_open
+
+        page.cycle_focus(reverse=reverse)
+        await pilot.pause()
+
+        assert not picker.is_open
+        assert app.focused is not None
+        assert app.focused.id == expected_id
+
+
+@pytest.mark.asyncio
 async def test_clicking_tab_switches_the_active_view() -> None:
     vm, _fake = _build_vm()
     await vm.setup()
@@ -505,6 +557,19 @@ async def test_aws_controlled_text_is_rendered_without_markup() -> None:
         rendered = app.export_screenshot()
         assert "analytics[prod]" in rendered
         assert "events[/bold]" in rendered
+
+
+@pytest.mark.asyncio
+async def test_resource_lists_keep_each_option_on_one_visual_row_at_narrow_width() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        options = app.query_one("#glue-tables-pane-options", OptionList)
+        assert str(options.styles.text_wrap) == "nowrap"
+        assert str(options.styles.text_overflow) == "ellipsis"
 
 
 @pytest.mark.asyncio

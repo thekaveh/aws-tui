@@ -209,6 +209,36 @@ def test_cli_env_demo_reaches_app_context(monkeypatch: pytest.MonkeyPatch) -> No
     assert demos == [True]
 
 
+def test_cli_returns_failure_when_textual_swallows_fatal_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui import app as app_module
+
+    report = SimpleNamespace(
+        exception_type="RuntimeError",
+        exception_message="boom",
+        dump_path=Path("/tmp/crash.txt"),
+    )
+
+    class FakeApp:
+        crash_report = report
+
+        def __init__(self, *, context: object) -> None:
+            pass
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(sys, "argv", ["aws-tui"])
+    monkeypatch.setattr(app_module, "build_app_context", lambda *, demo: object())
+    monkeypatch.setattr(app_module, "AwsTuiApp", FakeApp)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.main()
+
+    assert exc_info.value.code == 1
+
+
 def test_bound_action_records_action_id(monkeypatch: pytest.MonkeyPatch) -> None:
     from aws_tui import app as app_module
 
@@ -247,6 +277,7 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
         events.append("clients.close")
 
     app = object.__new__(app_module.AwsTuiApp)
+    app._workers = SimpleNamespace(cancel_group=lambda *_args: None)  # type: ignore[attr-defined]
     app._pane_state_sub = None  # type: ignore[attr-defined]
     app._connection_list_sub = None  # type: ignore[attr-defined]
     app._nav_selection_sub = None  # type: ignore[attr-defined]
@@ -308,6 +339,7 @@ async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
             pass
 
     app = object.__new__(app_module.AwsTuiApp)
+    app._workers = SimpleNamespace(cancel_group=lambda *_args: None)  # type: ignore[attr-defined]
     app._pane_state_sub = None  # type: ignore[attr-defined]
     app._connection_list_sub = None  # type: ignore[attr-defined]
     app._nav_selection_sub = None  # type: ignore[attr-defined]
@@ -425,7 +457,8 @@ def test_build_crash_report_writes_redacted_fallback_when_dump_write_fails(
     finally:
         log_sink.close()
 
-    assert report.dump_path == tmp_path / "log" / "crash-fallback.txt"
+    assert report.dump_path.parent == tmp_path / "log"
+    assert report.dump_path.name.startswith("crash-fallback-")
     fallback = report.dump_path.read_text(encoding="utf-8")
     assert "crash dump unavailable" in fallback
     for leaked in ["SECRETAPI", "SECRETPRIVATE"]:
@@ -553,7 +586,11 @@ async def test_rebind_pane_to_local_preserves_s3_service_local_root(tmp_path: Pa
 
     app = object.__new__(app_module.AwsTuiApp)
     app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
-        registry=SimpleNamespace(get=lambda _service_id: SimpleNamespace(_local_root=tmp_path)),
+        registry=SimpleNamespace(
+            get=lambda _service_id: SimpleNamespace(
+                build_local_provider=lambda: LocalFS(root=tmp_path)
+            )
+        ),
     )
 
     await app._rebind_pane_to_local(FakePane())
@@ -561,6 +598,92 @@ async def test_rebind_pane_to_local_preserves_s3_service_local_root(tmp_path: Pa
     [provider] = providers
     assert isinstance(provider, LocalFS)
     assert provider._root == tmp_path.resolve()  # type: ignore[attr-defined]
+
+
+def test_open_settings_records_registered_action_id() -> None:
+    from collections import deque
+    from types import SimpleNamespace
+
+    from aws_tui import app as app_module
+
+    executed: list[str] = []
+    app = object.__new__(app_module.AwsTuiApp)
+    app._action_ring = deque(maxlen=100)  # type: ignore[attr-defined]
+    app._last_action_id = None  # type: ignore[attr-defined]
+    app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
+        root_vm=SimpleNamespace(
+            services_menu=SimpleNamespace(
+                switch_service_command=SimpleNamespace(execute=executed.append)
+            )
+        )
+    )
+
+    app.action_open_settings()
+
+    assert app.last_action_id == "app.open_settings"
+    assert executed == ["settings"]
+
+
+def test_move_cursor_routes_emr_through_public_page_api_only() -> None:
+    from aws_tui import app as app_module
+
+    class FakeEmrPage:
+        def __init__(self) -> None:
+            self.moves: list[int] = []
+
+        @property
+        def _picker(self) -> object:
+            raise AssertionError("app must not inspect the EMR picker")
+
+        @property
+        def left_pane(self) -> object:
+            raise AssertionError("app must not inspect EMR panes")
+
+        def move_focused(self, delta: int) -> bool:
+            self.moves.append(delta)
+            return False
+
+    page = FakeEmrPage()
+    app = object.__new__(app_module.AwsTuiApp)
+    app._nav_has_focus = lambda: False  # type: ignore[method-assign]
+    app._glue_page = lambda: None  # type: ignore[method-assign]
+    app._athena_page = lambda: None  # type: ignore[method-assign]
+    app._emr_page = lambda: page  # type: ignore[method-assign]
+
+    app._move_cursor(1)
+
+    assert page.moves == [1]
+
+
+@pytest.mark.asyncio
+async def test_descend_routes_emr_through_public_page_api_only() -> None:
+    from aws_tui import app as app_module
+
+    class FakeEmrPage:
+        def __init__(self) -> None:
+            self.activations = 0
+
+        @property
+        def _picker(self) -> object:
+            raise AssertionError("app must not inspect the EMR picker")
+
+        def activate_focused(self) -> bool:
+            self.activations += 1
+            return True
+
+    page = FakeEmrPage()
+    app = object.__new__(app_module.AwsTuiApp)
+    app.record_action = lambda _action_id: None  # type: ignore[method-assign]
+    app._current_mode = "default"  # type: ignore[attr-defined]
+    app._screen_stacks = {"default": []}  # type: ignore[attr-defined]
+    app._nav_has_focus = lambda: False  # type: ignore[method-assign]
+    app._glue_page = lambda: None  # type: ignore[method-assign]
+    app._athena_page = lambda: None  # type: ignore[method-assign]
+    app._emr_page = lambda: page  # type: ignore[method-assign]
+
+    await app.action_descend()
+
+    assert page.activations == 1
 
 
 @pytest.mark.asyncio
@@ -597,11 +720,10 @@ async def test_initial_service_mount_awaits_content_host_operations(
     events: list[str] = []
 
     class FakeHost:
-        async def remove_children(self) -> None:
-            events.append("remove")
+        pass
 
-        async def mount(self, widget: object) -> None:
-            events.append(f"mount:{widget!r}")
+    async def replace(_host: object, widget: object) -> None:
+        events.append(f"replace:{widget!r}")
 
     class FakeLogSink:
         def error(self, *_args: object, **_kwargs: object) -> None:
@@ -624,11 +746,12 @@ async def test_initial_service_mount_awaits_content_host_operations(
     )
 
     monkeypatch.setattr(app, "query_one", lambda *_args, **_kwargs: FakeHost())
+    monkeypatch.setattr(app, "_replace_content_widget", replace)
     monkeypatch.setattr(app_module, "DualPane", lambda *_args, **_kwargs: "dual-pane")
 
     await app._mount_initial_service_view()
 
-    assert events == ["remove", "mount:'dual-pane'"]
+    assert events == ["replace:'dual-pane'"]
 
 
 @pytest.mark.asyncio
@@ -642,18 +765,27 @@ async def test_no_connection_placeholder_mount_awaits_content_host(
     config_path = tmp_path / "platform-config" / "config.toml"
 
     class FakeHost:
-        async def remove_children(self) -> None:
-            mounted.append("remove")
+        pass
 
-        async def mount(self, widget: object) -> None:
-            mounted.append(widget)
+    async def replace(_host: object, widget: object) -> None:
+        mounted.append(widget)
 
     app = object.__new__(app_module.AwsTuiApp)
     app._app_ctx = SimpleNamespace(config_store=SimpleNamespace(path=config_path))
     monkeypatch.setattr(app, "query_one", lambda *_args, **_kwargs: FakeHost())
+    monkeypatch.setattr(app, "_replace_content_widget", replace)
 
     await app._mount_no_connection_placeholder()
 
-    assert len(mounted) == 2
-    assert mounted[0] == "remove"
-    assert str(config_path) in str(getattr(mounted[1], "content", ""))
+    assert len(mounted) == 1
+    assert str(config_path) in str(getattr(mounted[0], "content", ""))
+
+
+def test_app_uses_public_service_page_operations() -> None:
+    app_source = (Path(__file__).parents[2] / "src" / "aws_tui" / "app.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "page._project_focus_slot" not in app_source
+    assert "emr_page._project_focus_slot" not in app_source
+    assert "emr_page._picker" not in app_source

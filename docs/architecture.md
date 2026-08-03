@@ -2,9 +2,11 @@
 
 ![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue, and Athena views with ContextPicker and ServiceTabStrip; Glue and Athena VM trees; a typed CopyTableReferenceRequest to TableClipboardVM copy-and-insert route; service plugins; shared TableRef and QueryContext models; IcebergInspector; source selection and connection resolution; immutable Glue, Athena, and S3 navigation messages; and the AWS Glue, Athena, S3, and Lake Formation boundary.](diagrams/img/architecture.png)
 
-> Human-readable mirror of §2 of [the design spec](superpowers/specs/2026-06-13-aws-tui-design.md).
-> For the deep dive (VM tree, lifecycle invariants, capability matrix,
-> end-to-end flows), read the spec.
+![aws-tui operational flows for local and S3 transfer, Glue-to-Athena query handoff, S3 result artifacts, and bounded EMR Serverless log loading.](diagrams/img/operations-flow.png)
+
+![aws-tui deployment boundaries showing the local process, platform config and keychain, multiple profile-scoped AWS accounts and regions, and optional S3-compatible endpoints.](diagrams/img/deployment.png)
+
+![aws-tui content lifecycle showing widget-worker drain before VM disposal, transactional source rollback, and ordered application shutdown.](diagrams/img/lifecycle.png)
 
 aws-tui follows a five-layer architecture with enforced forbidden edges:
 
@@ -36,7 +38,8 @@ VMs to build service pages, but it cannot import Textual widgets.
   VMs rather than owned by Infrastructure. Subtrees:
   - `vm/chrome/` — persistent shell state (hint legend, toasts,
     overlays like command palette / confirm / quick look / crash /
-    resume / first-run, plus a retained `StatusBarVM` subscriber for
+    first-run, plus dormant transfer-recovery scaffolding and a retained
+    `StatusBarVM` subscriber for
     legacy status bookkeeping even though no `StatusBar` widget is
     mounted in the production chrome).
   - `vm/file_manager/` — pane / dual-pane / entry / transfer VMs.
@@ -44,7 +47,8 @@ VMs to build service pages, but it cannot import Textual widgets.
     component that retains one typed, replaceable table reference.
   - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
     `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
-    (added post-tag by PR #76 and extended by PR #84; the read-only EMR Serverless browser with logs streaming).
+    (added post-tag by PR #76 and extended by PR #84; the read-mostly EMR
+    Serverless browser with logs streaming and focused clone submission).
     Its immutable `ServiceSourceContext` carries the active connection name,
     optional distinct AWS profile, and region to the service view; the shared
     `ServiceSourceHeader` renders that identity above the EMR application picker.
@@ -103,9 +107,9 @@ VMs to build service pages, but it cannot import Textual widgets.
 - **Infrastructure** — Infrastructure owns sessions, credentials,
   configuration, SDK client construction, and OS-backed stores.
   `AwsSession` and `ConnectionResolver` provide configured AWS identities and
-  client contexts to the domain adapters. `ServiceSelectionStore` scopes
-  workgroup and resource selections by service, connection name, and region;
-  resolver order drives `Shift+S`. `ConfigStore`, `ThemeStore`,
+  client contexts to the domain adapters. Resolver order drives `Shift+S`;
+  the VM-layer `ServiceSelectionStore` scopes workgroup and resource
+  selections by service, connection name, and region. `ConfigStore`, `ThemeStore`,
   `KeymapStore`, `LogSink`, `CrashDump`, and `KeychainBackend` persist
   application and platform state. Infrastructure prepares those boundaries;
   domain adapters perform the provider operations.
@@ -117,18 +121,7 @@ every layer. `composition.py` builds the dependency graph; `app.py`
 is the Textual `App` subclass that mounts widgets and wires action
 handlers.
 
-`composition.py` also owns three startup-time helpers:
-
-- `needs_first_run(...)` — true when neither config nor `~/.aws/`
-  knows any connection (spec §6.4 Flow 5).
-- `apply_resume_decision(...)` — deferred transfer-resume helper:
-  applies a modal choice to journal entries and calls
-  `AbortMultipartUpload` only when an entry carries an `upload_id`
-  (the current production transfer path does not record MPU IDs).
-- `add_s3_compat_connection(form)` — materializes the in-TUI
-  S3-compatible form into a config-store entry.
-
-It also constructs the app-lifetime `TableClipboardVM`. `app.py` owns the
+`composition.py` also constructs the app-lifetime `TableClipboardVM`. `app.py` owns the
 best-effort OS clipboard copy after it receives the typed request; the VM
 remains the authoritative in-app clipboard.
 
@@ -137,11 +130,13 @@ VMs implement `construct → run → destruct → dispose` (VMx convention).
 The `RootVM` constructs the chrome and content-host children
 depth-first; `ContentHostVM.set_content(new)` disposes the previous
 content via the same cascade. When outgoing content exposes `shutdown`,
-`ContentHostVM.set_content(...)` awaits it before calling `dispose`; Athena
-shutdown is awaited before disposal so its app-owned query cancellation and
-worker drains complete in order. App shutdown awaits the in-flight
-transfers cancel + closes every aioboto3 client before disposing the
-VM tree (spec §5.4).
+`ContentHostVM.set_content(...)` awaits it before calling `dispose`; hosted VM
+shutdown is awaited before disposal, and every hosted service's owned
+operations drain before teardown. App shutdown is task-owned and idempotent. Explicit quit and Textual
+unmount (including fatal teardown) await the same sequence: stop navigation
+intake, drain transfers, setup, queries, and preview workers, close every
+aioboto3 client, flush logs, then dispose subscriptions and the VM tree
+(spec §5.4).
 
 ## 1.4. Messaging
 All cross-VM communication goes through the session's single
@@ -150,10 +145,13 @@ All cross-VM communication goes through the session's single
 
 - `ConnectionChangedMessage`, `ThemeChangedMessage`,
   `AuthExpiredMessage`, `TransferProgressMessage`,
-  `KeymapChangedMessage`, `FocusChangedMessage`,
+  `KeymapChangedMessage`, `FocusChangedMessage`, `PaletteActionFailedMessage`,
   `TransferCancelRequestedMessage`, `ConnectionListChangedMessage`,
   `OpenS3LocationRequest`, `OpenAthenaTableRequest`,
-  `OpenGlueTableRequest`, `CopyTableReferenceRequest`.
+  `OpenGlueTableRequest`, `CopyTableReferenceRequest`, and
+  `ServiceOperationFailedMessage`. Recovered service exceptions use the last
+  envelope to reach `RootVM`'s redacted durable-log boundary without coupling
+  service VMs to logging infrastructure.
 
 Cross-service navigation stays service-neutral. `OpenAthenaTableRequest` and
 `OpenGlueTableRequest` carry a `TableRef` containing catalog, database, table,
@@ -180,7 +178,7 @@ the same observable plus dispose-on-unmount.
 ## 1.5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
-| Unit | Recount with `uv run pytest tests/unit --collect-only -q | tail -1` | VM, domain, infra behavior; no I/O |
+| Unit | Recount with `uv run pytest tests/unit --collect-only -q | tail -1` | VM, domain, infra behavior; isolated local I/O only, with no external services |
 | Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards (per PR #53 lesson) |
 | Integration (in-process) | Recount with `uv run pytest tests/integration --collect-only -q | tail -1` | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
 | E2E | Recount with `uv run pytest tests/e2e --collect-only -q | tail -1` | Pilot-driven user journeys |
@@ -210,8 +208,8 @@ at `src/aws_tui/` top-level so the check never inspects them.
    page VM (S3 service hosts it).
    `src/aws_tui/vm/emr_serverless/page_vm.py::EmrServerlessPageVM` —
    another concrete page VM; a richer pattern
-   that orchestrates three child VMs (`ApplicationsVM`,
-   `JobRunsVM`, `JobRunDetailVM`) and runs three independent
+   that orchestrates four child VMs (`ApplicationsVM`,
+   `JobRunsVM`, `JobRunDetailVM`, `JobRunLogsVM`) and runs three independent
    pollers.
 4. `src/aws_tui/services/s3/service.py` — the first concrete service
    in v0.7.0; pattern for future ones.

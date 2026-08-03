@@ -48,6 +48,7 @@ from aws_tui.domain.filesystem import (
 )
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 #: Module-level singleton for the default initial path (root).
 _ROOT_PATH: PathRef = PathRef(())
@@ -228,6 +229,7 @@ class PaneVM:
         self._filter_text: str = ""
         self._state: PaneState = PaneState.IDLE
         self._error_text: str | None = None
+        self._reload_generation: int = 0
         self._is_multiselect_mode: bool = False
 
         self._inner: CompositeVM[ComponentVMOf[EntryState]] = (
@@ -565,6 +567,7 @@ class PaneVM:
         self._inner.destruct()
 
     def dispose(self) -> None:
+        self._reload_generation += 1
         self._open_command.dispose()
         self._ascend_command.dispose()
         self._refresh_command.dispose()
@@ -790,6 +793,10 @@ class PaneVM:
     # ── Internal: listing & state ───────────────────────────────────────────
 
     async def _reload(self) -> None:
+        self._reload_generation += 1
+        generation = self._reload_generation
+        provider = self._provider
+        path = self._path
         # Clear the prior error text BEFORE entering LOADING so a
         # retry after a prior failure doesn't render the LOADING
         # placeholder as ``"loading...: <stale error>"`` (see
@@ -801,8 +808,10 @@ class PaneVM:
         self._error_text = None
         self._set_state(PaneState.LOADING)
         try:
-            raw = await self._provider.list(self._path)
+            raw = await provider.list(path)
         except NotFoundError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             # Root listing: an unknown path at root means empty (e.g. an
             # empty bucket); deeper paths surface as ERROR. The root
             # branch intentionally leaves ``_error_text`` UNCHANGED
@@ -819,26 +828,36 @@ class PaneVM:
                 self._set_state(PaneState.ERROR)
             return
         except AuthRequiredError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.AUTH_REQUIRED)
             return
         except PermissionDeniedError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.FORBIDDEN)
             return
         except ProviderUnreachableError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.UNREACHABLE)
             return
         except ProviderError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.ERROR)
             return
         except Exception as exc:  # defensive
+            if not self._reload_is_current(generation, provider, path):
+                return
             # Non-ProviderError escape — a programmer bug, an
             # OSError from the socket layer, or any other exception
             # not modelled by the provider taxonomy. Without this
@@ -846,10 +865,19 @@ class PaneVM:
             # ``run_worker`` machinery and the pane is permanently
             # stuck on LOADING with no user path to recovery.
             self._error_text = redact_text(f"unexpected error: {exc}")
+            report_unexpected_service_error(
+                self._hub,
+                service="s3" if self._connection_key is not None else "localfs",
+                operation="list",
+                error=exc,
+                source=self._connection_key[1] if self._connection_key is not None else "local",
+            )
             self._replace_entries([])
             self._set_state(PaneState.ERROR)
             return
 
+        if not self._reload_is_current(generation, provider, path):
+            return
         self._error_text = None
         # Prepend a synthetic ".." parent entry on any non-root path so the
         # user can navigate up via Enter / mouse / single keystroke without
@@ -874,6 +902,18 @@ class PaneVM:
         # IDLE if at least one real entry; EMPTY only if neither real entries
         # nor a ".." row is present (i.e. truly root + empty bucket).
         self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)
+
+    def _reload_is_current(
+        self,
+        generation: int,
+        provider: FileSystemProvider,
+        path: PathRef,
+    ) -> bool:
+        return (
+            generation == self._reload_generation
+            and provider is self._provider
+            and path == self._path
+        )
 
     def _replace_entries(self, new_entries: list[EntryVM]) -> None:
         for child in self._entries:

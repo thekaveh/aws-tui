@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from textual.app import App, ComposeResult
 from textual.containers import Container
+from textual.widgets import Input
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
@@ -116,3 +117,19 @@ async def test_action_submit_unexpected_exception_caught_keeps_modal_open() -> N
         assert len(captured) == 1
         assert "unexpected error" in captured[0]
         assert "bug in submit" in captured[0]
+
+
+async def test_enter_in_clone_input_submits_form() -> None:
+    vm = _make_vm()
+    vm.submit = AsyncMock(return_value="r-new")  # type: ignore[method-assign]
+    hub: MessageHub[Message] = MessageHub()
+
+    async with _CloneModalHostApp(vm, hub).run_test() as pilot:
+        modal = pilot.app.screen
+        assert isinstance(modal, JobRunCloneModal)
+        modal.query_one("#clone-name", Input).focus()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        vm.submit.assert_awaited_once()
+        assert not isinstance(pilot.app.screen, JobRunCloneModal)

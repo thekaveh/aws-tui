@@ -23,7 +23,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 |---|---|---|
 | Cursor up / down | `↑ ↓` or `k j` | vi-style alternatives are first-class |
 | Descend into directory / bucket | `Enter` | |
-| Ascend one level | `Backspace` or `←` | |
+| Ascend one level | `Backspace` or `left` | |
 | Switch pane focus | `Tab` / `Shift+Tab` | |
 | Top / bottom | `g` / `G` | |
 | Toggle hidden files (LocalFS) | `.` | |
@@ -76,7 +76,7 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 > `BindingResolver` does not emit `m` because the deferred `pane.move`
 > action has no registered handler (§1.3).
 
-### 1.1.6. Connection / auth
+### 1.1.6. Connection and Authentication
 
 | Action | Default | Notes |
 |---|---|---|
@@ -104,16 +104,17 @@ App-level `priority=True` and short-circuit through
 
 | Action | Default | Notes |
 |---|---|---|
-| Open application picker | `a` | Opens the applications dropdown above the LEFT pane. |
+| Open application picker | `a` | Opens the applications dropdown above the LEFT pane. The picker is also reachable with `Tab` and opens with `Enter` or `Space`. |
+| Select AWS source | `Tab`, then `Enter` / `Space` | The bordered source selector chooses an exact configured profile and region; `Shift+S` remains the resolver-order shortcut. |
 | Cycle next application | `Shift+A` | Cycles to the next EMR application without opening the picker. `Shift+S` remains available to switch the EMR page to the next configured AWS profile. |
 | State filter chips | `1` `2` `3` `4` `5` | Multi-select toggles, one chip per state in this key order: `SUCCESS` / `RUNNING` / `PENDING` / `FAILED` / `CANCELLED`. Source of truth: ``_KEY_TO_STATE`` in ``ui/widgets/emr_serverless/job_runs_pane.py``. The transient pre-terminal states `SUBMITTED` / `SCHEDULED` / `QUEUED` / `CANCELLING` are NOT chip-filterable — they always render (they're members of the initial all-on default filter set and have no toggle key). |
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the LEFT-pane row cursor; master-detail follows the cursor (the RIGHT pane re-loads on every cursor move, not only on `Enter`). |
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
 | Refresh | `r` | Forces an immediate poll on the active pane (apps if LEFT focused on the picker, runs if LEFT focused on the runs list, detail if RIGHT focused). |
 | Clone selected job run | `c` | Opens the `JobRunCloneModal` pre-filled from the focused run (name, entry point, IAM, args, spark params). Save fires `EmrServerlessClient.start_job_run`; success / error route through the unified `notifications.success` / `notifications.error` helpers (`Subject = "Job"`). `AwsTuiApp.action_copy` priority binding hijacks `c` to the EMR clone path when EMR is mounted — parallel to the dual-pane priority short-circuits for Tab / arrows. Added in PR #83. |
-| Cycle pane focus | `Tab` / `Shift+Tab` | 4-slot cycle: nav rail → runs pane → detail pane → logs pane → nav rail. |
+| Cycle pane focus | `Tab` / `Shift+Tab` | 6-slot cycle: nav rail → source selector → application selector → runs pane → detail pane → logs pane → nav rail. |
 | Backspace | `Backspace` | No-op on EMR (symmetric to `Descend` having an EMR branch). |
-| Load logs (on-demand) | `Enter` | Loads logs from S3 into the RIGHT-logs pane (first press in the logs slot after Tab-focusing). |
+| Load logs (on-demand) | `Enter` | Loads logs from S3 into the RIGHT-logs pane (first press in the logs slot after Tab-focusing). File chips preserve exact retry attempt and Spark executor or Hive/Tez worker identity, including rotated stdout/stderr objects. |
 | Reload logs | `r` | Re-fetches logs from S3 even on cache hit. |
 | Open log filter modal | `f` | Edit regex patterns, toggle "Show all" or "Match case"; ``Apply`` re-fetches. |
 | Reset log filter | `Shift+F` | Clears the logs filter and returns to the default log view. |
@@ -236,7 +237,7 @@ claiming bare `y`, which is reserved by `glue.copy_table_ref`.
 
 The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
-`Backspace`, `←`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
+`Backspace`, `left`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
 `c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
 `1` / `2` / `3` / `4`, `F`, `G`, `y`, `W`, `C`, `D`, `i`, `V`,
 `Ctrl+Enter`, `Esc`, `l`,
@@ -251,60 +252,60 @@ unbound until a handler ships.
 
 | Action ID | Default key | Wired? | What it does |
 |---|---|---|---|
-| `app.quit` | `q` / `ctrl+c` | ✓ | Graceful shutdown |
-| `app.open_settings` | `,` | ✓ | Open the Settings navigation page |
-| `app.command_palette` | `:` / `ctrl+k` | ✓ | Open the command palette |
-| `app.help` | `?` | ✓ | Help overlay |
-| `app.themes` | `t` | ✓ | Open theme picker modal |
-| `app.cycle_theme` | `T` (`shift+t`) | ✓ | Cycle to next theme without opening the modal |
-| `app.swap_source` | `S` (`shift+s`) | ✓ | Switch the focused S3 pane source, or rebuild the current single-context AWS service under the next profile |
-| `pane.move_up` / `pane.move_down` | `↑` / `↓` (also `k` / `j`) | ✓ | Move cursor |
-| `pane.descend` | `enter` | ✓ | Descend into folder / bucket |
-| `pane.ascend` | `backspace` / `←` | ✓ | Parent path |
-| `pane.mark_up` | `shift+up` | ✓ | Extend the marked selection upward |
-| `pane.mark_down` | `shift+down` | ✓ | Extend the marked selection downward |
-| `pane.switch_focus` | `tab` | ✓ | Cycle the active page's focus ring |
-| `pane.switch_focus_back` | `shift+tab` | ✓ | Cycle the active page's focus ring in reverse |
-| `pane.quick_look` | `space` (normal mode) | ✓ | Stream first 64 KB |
+| `app.quit` | `q` / `ctrl+c` | yes | Graceful shutdown |
+| `app.open_settings` | `,` | yes | Open the Settings navigation page |
+| `app.command_palette` | `:` / `ctrl+k` | yes | Open the command palette |
+| `app.help` | `?` | yes | Help overlay |
+| `app.themes` | `t` | yes | Open theme picker modal |
+| `app.cycle_theme` | `T` (`shift+t`) | yes | Cycle to next theme without opening the modal |
+| `app.swap_source` | `S` (`shift+s`) | yes | Switch the focused S3 pane source, or rebuild the current single-context AWS service under the next profile |
+| `pane.move_up` / `pane.move_down` | `up` / `down` (also `k` / `j`) | yes | Move cursor |
+| `pane.descend` | `enter` | yes | Descend into folder / bucket |
+| `pane.ascend` | `backspace` / `left` | yes | Parent path |
+| `pane.mark_up` | `shift+up` | yes | Extend the marked selection upward |
+| `pane.mark_down` | `shift+down` | yes | Extend the marked selection downward |
+| `pane.switch_focus` | `tab` | yes | Cycle the active page's focus ring |
+| `pane.switch_focus_back` | `shift+tab` | yes | Cycle the active page's focus ring in reverse |
+| `pane.quick_look` | `space` (normal mode) | yes | Stream first 64 KB |
 | `pane.filter` | `/` | *(deferred)* | Local pane filter |
 | `pane.fuzzy_find` | `ctrl+p` | *(deferred)* | Fuzzy find paths / buckets |
 | `pane.enter_multiselect` | `v` | *(deferred)* | Enter multi-select mode |
 | `pane.toggle_select` | `space` (multi-select) | *(deferred)* | Add / remove from selection |
 | `pane.select_all` | `a` | *(deferred)* | Select all in pane |
-| `pane.copy` | `c` | ✓ | Copy marked entries to other pane |
+| `pane.copy` | `c` | yes | Copy marked entries to other pane |
 | `pane.move` | `m` | *(deferred)* | Move marked entries (or rename one) — `m` is no longer reserved for the nav-menu toggle (dropped in PR #94), so the default is available when the wiring lands |
-| `pane.delete` | `d` | ✓ | Delete marked entries (confirms) |
+| `pane.delete` | `d` | yes | Delete marked entries (confirms) |
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
-| `pane.refresh` | `r` | ✓ | Re-run `provider.list()` |
-| `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Shell-out to `aws sso login` |
-| `emr.next_application` | `A` (`shift+a`) | ✓ | Cycle to the next EMR application |
-| `emr.clone` | `c` (when EMR page mounted) | ✓ | Open the EMR clone-job-run modal pre-filled from the focused run (PR #83) |
+| `pane.refresh` | `r` | yes | Re-run `provider.list()` |
+| `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Reserved for a future auth helper; currently run `aws sso login --profile <name>` yourself |
+| `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
+| `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run (PR #83) |
 | `emr.logs.filter` | `f` (when EMR logs pane focused) | widget-scoped | Open the EMR logs filter modal |
-| `glue.catalog` | `1` | ✓ | Select the Glue Catalog view |
-| `glue.jobs` | `2` | ✓ | Select the Glue Jobs view |
-| `glue.crawlers` | `3` | ✓ | Select the Glue Crawlers view |
-| `glue.choose_run_state` | `F` (`shift+f`) | ✓ | Focus and open the Jobs run-state selector |
-| `glue.choose_crawler_state` | `G` (`shift+g`) | ✓ | Focus and open the Crawlers state selector |
-| `glue.copy_table_ref` | `y` | ✓ | Copy the selected table's canonical identifier and source identity |
-| `glue.open_s3_location` | none (command palette) | ✓ | Open the selected Glue table's S3 location under the exact source connection and region |
-| `glue.query_in_athena` | none (command palette) | ✓ | Prefill a bounded query for the selected Glue table in Athena |
-| `glue.time_travel_in_athena` | `V` | ✓ | Prefill a bounded Athena query for the selected visible Iceberg snapshot |
-| `athena.query` | `1` | ✓ | Select the Athena Query view |
-| `athena.history` | `2` | ✓ | Select the Athena History view |
-| `athena.results` | `3` | ✓ | Select the Athena Results view |
-| `athena.saved` | `4` | ✓ | Select the Athena Saved view |
-| `athena.choose_workgroup` | `W` (`shift+w`) | ✓ | Focus and open the Workgroup selector |
-| `athena.choose_catalog` | `C` (`shift+c`) | ✓ | Focus and open the Catalog selector |
-| `athena.choose_database` | `D` (`shift+d`) | ✓ | Focus and open the Database selector |
-| `athena.insert_table_ref` | `i` | ✓ | Insert the same-source typed table clipboard value into the query editor |
-| `athena.execute` | `ctrl+enter` | ✓ | Submit validated, read-only editor SQL |
-| `athena.cancel` | `escape` | ✓ | Stop an app-owned active Athena query |
-| `athena.load_more` | `l` | ✓ | Fetch the next available result page |
-| `athena.open_result_location` | none (command palette) | ✓ | Open a validated successful Athena result artifact in S3 under its exact source identity |
-| `athena.open_in_glue` | none (command palette) | ✓ | Open the one unambiguous visible query table in Glue |
-| `pane.modal_left` | `left` | ✓ | Route left-arrow modal or pane navigation |
-| `pane.modal_right` | `right` | ✓ | Route right-arrow modal or pane navigation |
-| `modal.cancel` | `escape` | ✓ | Cancel / close current overlay (modal-owned) |
+| `glue.catalog` | `1` | yes | Select the Glue Catalog view |
+| `glue.jobs` | `2` | yes | Select the Glue Jobs view |
+| `glue.crawlers` | `3` | yes | Select the Glue Crawlers view |
+| `glue.choose_run_state` | `F` (`shift+f`) | yes | Focus and open the Jobs run-state selector |
+| `glue.choose_crawler_state` | `G` (`shift+g`) | yes | Focus and open the Crawlers state selector |
+| `glue.copy_table_ref` | `y` | yes | Copy the selected table's canonical identifier and source identity |
+| `glue.open_s3_location` | none (command palette) | yes | Open the selected Glue table's S3 location under the exact source connection and region |
+| `glue.query_in_athena` | none (command palette) | yes | Prefill a bounded query for the selected Glue table in Athena |
+| `glue.time_travel_in_athena` | `V` | yes | Prefill a bounded Athena query for the selected visible Iceberg snapshot |
+| `athena.query` | `1` | yes | Select the Athena Query view |
+| `athena.history` | `2` | yes | Select the Athena History view |
+| `athena.results` | `3` | yes | Select the Athena Results view |
+| `athena.saved` | `4` | yes | Select the Athena Saved view |
+| `athena.choose_workgroup` | `W` (`shift+w`) | yes | Focus and open the Workgroup selector |
+| `athena.choose_catalog` | `C` (`shift+c`) | yes | Focus and open the Catalog selector |
+| `athena.choose_database` | `D` (`shift+d`) | yes | Focus and open the Database selector |
+| `athena.insert_table_ref` | `i` | yes | Insert the same-source typed table clipboard value into the query editor |
+| `athena.execute` | `ctrl+enter` | yes | Submit validated, read-only editor SQL |
+| `athena.cancel` | `escape` | yes | Stop an app-owned active Athena query |
+| `athena.load_more` | `l` | yes | Fetch the next available result page |
+| `athena.open_result_location` | none (command palette) | yes | Open a validated successful Athena result artifact in S3 under its exact source identity |
+| `athena.open_in_glue` | none (command palette) | yes | Open the one unambiguous visible query table in Glue |
+| `pane.modal_left` | `left` | yes | Route left-arrow modal or pane navigation |
+| `pane.modal_right` | `right` | yes | Route right-arrow modal or pane navigation |
+| `modal.cancel` | `escape` | yes | Cancel / close current overlay (modal-owned) |
 
 Rows with a default key are registered by
 `KeymapStore.DEFAULT_BINDINGS` and may be overlaid in
@@ -331,7 +332,7 @@ including `Shift+↑` / `Shift+↓` for extend-selection. Their
 > `delete` when the cursor is on the `..` parent row) renders with
 > the `-disabled` class (`text-style: dim`) without losing its slot.
 
-## 1.4. Modal forwarding for Enter / Esc / arrows
+## 1.4. Modal Forwarding for Enter Escape and Arrow Keys
 
 Textual dispatches App-level `priority=True` bindings *before* modal
 screen bindings. Without that, pressing `Enter` inside the theme

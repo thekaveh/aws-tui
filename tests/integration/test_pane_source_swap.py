@@ -11,6 +11,7 @@ Locks in PaneVM.swap_provider behavior wired through the App action:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from vmx import MessageHub, RxDispatcher
@@ -91,12 +92,16 @@ async def test_unfocused_pane_unaffected_by_vm_swap() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pane_source_swap_does_not_change_active_connection() -> None:
+async def test_pane_source_swap_does_not_change_active_connection(tmp_path: Path) -> None:
     """The S3 dual-pane path owns independent sources, not RootVM state."""
     from aws_tui.app import AwsTuiApp
     from aws_tui.composition import build_app_context
 
-    ctx = build_app_context(demo=True)
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:

@@ -1,8 +1,9 @@
 """End-to-end journeys per spec §8.5.
 
-Five canonical user journeys driven by ``App.run_test()`` Pilot. Where a
-real network backend is required (journey #3, MinIO container) we skip
-cleanly when Docker isn't available.
+Canonical user journeys spanning full ``App.run_test()`` Pilot flows and
+lower-level orchestration checks. Real provider contracts live in the
+separate MinIO integration tier so this suite remains deterministic and
+Docker-free.
 
 The journeys are intentionally pragmatic — they assert the journey hits
 its key checkpoint rather than tracing every keystroke. The unit + snapshot
@@ -11,10 +12,12 @@ tiers already cover widget-level rendering.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
 import json
-from collections.abc import AsyncIterator
+import os
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import pytest
@@ -36,10 +39,18 @@ from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.glue.page_vm import GluePageVM
+from tests.e2e.conftest import _AWS_CREDENTIAL_ENV_VARS
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 from tests.unit.domain._in_memory_fs import InMemoryFS
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def test_e2e_environment_disables_host_aws_credentials() -> None:
+    assert set(_AWS_CREDENTIAL_ENV_VARS).isdisjoint(os.environ)
+    assert os.environ["AWS_EC2_METADATA_DISABLED"] == "true"
+    boto_config = Path(os.environ["BOTO_CONFIG"])
+    assert boto_config.read_text(encoding="utf-8") == ""
 
 
 async def _astream(data: bytes) -> AsyncIterator[bytes]:
@@ -54,6 +65,12 @@ def _aws_connection() -> Connection:
         source="config",
         profile="kaveh-dev",
     )
+
+
+async def _wait_until(predicate: Callable[[], bool]) -> None:
+    async with asyncio.timeout(10):
+        while not predicate():
+            await asyncio.sleep(0.01)
 
 
 # ── Journey 1: silent SSO on cold start ─────────────────────────────────────
@@ -101,7 +118,7 @@ async def test_journey_1_silent_sso(
 
     app = AwsTuiApp(app_context)
     async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
+        await _wait_until(lambda: app_context.root_vm.content_host.current is not None)
         await pilot.pause()
         # No toast was raised on launch.
         assert app_context.root_vm.chrome.toast_stack.count == 0
@@ -226,15 +243,15 @@ class _SpyProvider(InMemoryFS):
         super().__init__()
         self.delete_calls: list[PathRef] = []
 
-    async def delete(self, path: PathRef) -> None:
+    async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
         self.delete_calls.append(path)
-        await super().delete(path)
+        await super().delete(path, expected_etag=expected_etag)
 
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_journey_5_delete_cancel(app_context: AppContext) -> None:
-    """Press 'd' on a file, confirm modal -> Esc -> no delete fired."""
+    """A cancelled confirmation decision leaves the provider untouched."""
     fs = _SpyProvider()
     await fs.write_stream(PathRef(("foo.txt",)), _astream(b"keep me"))
 
@@ -324,17 +341,17 @@ async def test_journey_6_switch_emr_profile_updates_visible_source(tmp_path: Pat
             await _await_service_mount(pilot, app)
 
             source_value = app.query_one(
-                "#emr-source-header .service-source-value",
+                "#emr-source-header-picker .context-picker-value",
                 Static,
             )
             initial_source = str(source_value.render())
-            assert initial_source in {"dev · us-east-1", "prod · us-west-2"}
+            assert initial_source in {"dev·us-east-1", "prod·us-west-2"}
 
             await pilot.press("S")
             await _await_service_mount(pilot, app)
 
             source_value = app.query_one(
-                "#emr-source-header .service-source-value",
+                "#emr-source-header-picker .context-picker-value",
                 Static,
             )
             assert str(source_value.render()) != initial_source
@@ -378,7 +395,9 @@ async def test_journey_7_glue_table_opens_s3_under_same_profile(tmp_path: Path) 
             assert ctx.root_vm.content_host.current_id == "s3"
             assert ctx.root_vm.active_connection is not None
             assert ctx.root_vm.active_connection.name == "demo-dev"
-            pane = ctx.root_vm.content_host.current.left
+            current = ctx.root_vm.content_host.current
+            assert isinstance(current, DualPaneVM)
+            pane = current.left
             assert pane.current_connection_key == ("aws", "demo-dev")
             assert pane.path.as_posix() == "/demo-dev/dev_analytics/dev_events"
     finally:
@@ -420,7 +439,9 @@ async def test_journey_8_athena_result_opens_s3_under_same_profile(
             assert ctx.root_vm.content_host.current_id == "s3"
             assert ctx.root_vm.active_connection is not None
             assert ctx.root_vm.active_connection.name == "demo-dev"
-            pane = ctx.root_vm.content_host.current.left
+            current = ctx.root_vm.content_host.current
+            assert isinstance(current, DualPaneVM)
+            pane = current.left
             assert pane.current_connection_key == ("aws", "demo-dev")
             assert pane.path.as_posix() == "/athena-results/dev"
     finally:

@@ -1,4 +1,4 @@
-# Quick Look Wiring — Implementation Plan
+# 1. Quick Look Wiring — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development or superpowers:executing-plans. Steps use `- [ ]`.
 
@@ -6,7 +6,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-21-quick-look-wiring-design.md` (exact code lives there).
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - 64 KB preview cap enforced by `_first_bytes` (provider-independent).
 - Files only: directories / parent-link / empty cursor → no-op.
@@ -14,14 +14,14 @@
 - `pane.quick_look` handler registration goes in the keystone's registration block in `AwsTuiApp.__init__`.
 - `uv run pytest`, `uv run ruff check`, `uv run mypy src` per repo config.
 
-## File Structure
+## 1.2. File Structure
 
 - Modify `src/aws_tui/app.py` — content builder helpers + `action_quick_look` + `_focused_file_pane` + registration + imports.
 - Test `tests/unit/test_quick_look_content.py` (new) + `tests/integration/test_quick_look_wiring.py` (new).
 
 ---
 
-### Task 1: Content builder (`_first_bytes` + `_build_quick_look_content`)
+### 1.2.1. Task 1: Content builder (`_first_bytes` + `_build_quick_look_content`)
 
 **Files:** Modify `src/aws_tui/app.py`; Test `tests/unit/test_quick_look_content.py`
 
@@ -88,7 +88,7 @@ def test_build_content_unknown_mime_defaults_octet_stream() -> None:
 
 ---
 
-### Task 2: Wire `action_quick_look` + register `pane.quick_look`
+### 1.2.2. Task 2: Wire `action_quick_look` + register `pane.quick_look`
 
 **Files:** Modify `src/aws_tui/app.py`; Test `tests/integration/test_quick_look_wiring.py`
 

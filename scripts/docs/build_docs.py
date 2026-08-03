@@ -20,6 +20,9 @@ from scripts.docs.transforms import (
 )
 
 _IMG_RE = re.compile(r"(!\[[^\]]*\]\()\s*((?:\.\./)*)diagrams/img/([\w-]+)\.png(\))")
+_HERO_RE = re.compile(
+    r"(<img\s+[^>]*src=[\"'])\.\./assets/screenshots/aws-tui-running\.png([\"'][^>]*>)"
+)
 
 
 def _rewrite_images(md: str, surface: str) -> str:
@@ -29,7 +32,18 @@ def _rewrite_images(md: str, surface: str) -> str:
             return f"{head}{prefix}assets/img/{name}.svg{tail}"
         return f"{head}{prefix}img/{name}.png{tail}"  # wiki
 
-    return _IMG_RE.sub(repl, md)
+    rewritten = _IMG_RE.sub(repl, md)
+    hero_target = (
+        "assets/img/aws-tui-running.png" if surface == "site" else "img/aws-tui-running.png"
+    )
+    return _HERO_RE.sub(rf"\1{hero_target}\2", rewritten)
+
+
+def _copy_hero(repo_root: Path, target: Path) -> None:
+    source = repo_root / "assets" / "screenshots" / "aws-tui-running.png"
+    if source.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
 
 
 def render_site(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) -> None:
@@ -47,19 +61,19 @@ def render_site(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
         (out_dir / output_name(leaf, "site")).write_text(md, encoding="utf-8")
     # theme assets
     (out_dir / "stylesheets").mkdir(exist_ok=True)
-    (out_dir / "javascripts").mkdir(exist_ok=True)
     shutil.copy2(
         repo_root / "docs" / "stylesheets" / "extra.css", out_dir / "stylesheets" / "extra.css"
-    )
-    shutil.copy2(
-        repo_root / "docs" / "javascripts" / "mathjax.js", out_dir / "javascripts" / "mathjax.js"
     )
     # diagram SVGs
     img_dir = out_dir / "assets" / "img"
     img_dir.mkdir(parents=True, exist_ok=True)
     for d in manifest.diagrams:
-        svg = render_svg(repo_root / d.master)
+        svg = render_svg(
+            repo_root / d.master,
+            font_path=repo_root / "assets" / "fonts" / "fira-code" / "FiraCode-Regular.ttf",
+        )
         write_svg(img_dir / f"{d.id}.svg", svg)
+    _copy_hero(repo_root, img_dir / "aws-tui-running.png")
 
 
 def render_wiki(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) -> None:
@@ -80,6 +94,7 @@ def render_wiki(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
         "aws-tui documentation — generated; do not edit here.\n", encoding="utf-8"
     )
     copy_assets(repo_root, out_dir / "img")
+    _copy_hero(repo_root, out_dir / "img" / "aws-tui-running.png")
 
 
 def _wiki_link_name(section: Section) -> str:
@@ -88,14 +103,16 @@ def _wiki_link_name(section: Section) -> str:
 
 def _wiki_sidebar(manifest: Manifest) -> str:
     lines: list[str] = []
-    for section in manifest.sections:
+    for section_index, section in enumerate(manifest.sections, start=1):
+        section_title = f"{section_index}. {section.title}"
         if section.is_group:
-            lines.append(f"**{section.title}**")
+            lines.append(f"**{section_title}**")
             lines.extend(
-                f"  - [{child.title}]({_wiki_link_name(child)})" for child in section.children
+                f"  - [{section_index}.{child_index}. {child.title}]({_wiki_link_name(child)})"
+                for child_index, child in enumerate(section.children, start=1)
             )
         else:
-            lines.append(f"- [{section.title}]({_wiki_link_name(section)})")
+            lines.append(f"- [{section_title}]({_wiki_link_name(section)})")
     return "\n".join(lines) + "\n"
 
 
@@ -146,26 +163,25 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.keys
-  - pymdownx.arithmatex:
-      generic: true
   - toc:
       permalink: true
-extra_javascript:
-  - javascripts/mathjax.js
-  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 nav:
 {nav}"""
 
 
 def _mkdocs_nav(manifest: Manifest) -> str:
     lines: list[str] = []
-    for section in manifest.sections:
+    for section_index, section in enumerate(manifest.sections, start=1):
+        section_title = f"{section_index}. {section.title}"
         if section.is_group:
-            lines.append(f"  - {section.title}:")
-            for child in section.children:
-                lines.append(f"      - {child.title}: {output_name(child, 'site')}")
+            lines.append(f"  - {section_title}:")
+            for child_index, child in enumerate(section.children, start=1):
+                lines.append(
+                    f"      - {section_index}.{child_index}. {child.title}: "
+                    f"{output_name(child, 'site')}"
+                )
         else:
-            lines.append(f"  - {section.title}: {output_name(section, 'site')}")
+            lines.append(f"  - {section_title}: {output_name(section, 'site')}")
     return "\n".join(lines) + "\n"
 
 

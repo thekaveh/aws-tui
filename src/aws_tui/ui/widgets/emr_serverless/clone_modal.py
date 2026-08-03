@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from textual import on
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
 from textual.events import Click
@@ -197,6 +198,11 @@ class JobRunCloneModal(ModalScreen[str | None]):
             # it lets the user retry after editing the form.
             self._submitting = False
         self.dismiss(new_id)
+
+    @on(Input.Submitted)
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        await self.action_submit()
 
     async def on_click(self, event: Click) -> None:
         node: object | None = event.widget if hasattr(event, "widget") else None

@@ -30,9 +30,10 @@ from aws_tui.domain.iceberg import (
     IcebergReference,
     IcebergSnapshot,
 )
-from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenAthenaTableRequest
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 IcebergView: TypeAlias = Literal[
     "snapshots",
@@ -576,7 +577,14 @@ class GlueIcebergVM:
         except Exception as exc:
             if not self._is_current(view, request_generation, binding_generation, table_ref):
                 return False
-            del exc
+            report_unexpected_service_error(
+                self._hub,
+                service="glue",
+                operation=f"inspect_iceberg_{view}",
+                error=exc,
+                source=table_ref.connection_name,
+                region=table_ref.region,
+            )
             pane.state = PaneState.ERROR
             pane.error_text = "Iceberg metadata request failed"
             pane.loaded = False

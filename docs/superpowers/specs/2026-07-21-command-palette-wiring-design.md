@@ -1,17 +1,17 @@
-# Command Palette Wiring — Design Spec
+# 1. Command Palette Wiring — Design Spec
 
 **Date:** 2026-07-21
-**Status:** Approved direction (user: "start working on #2") — implementing.
+**Status:** Implemented; retained as the historical design record.
 **Depends on:** BindingResolver keystone (`app.command_palette` handlerless →
 skipped) and its documented note to move `:` back to the palette when wired.
 
-## Goal
+## 1.1. Goal
 
 Wire the built-but-unreached command palette: `:` (and `Ctrl+K`) open a
 fuzzy-filterable `CommandPalette` modal populated with the app-level
 commands; selecting one dispatches its action.
 
-## Background (verified)
+## 1.2. Background (verified)
 
 - `CommandPaletteVM` — `register_entry(entry: PaletteEntry, action:
   PaletteAction)`, `open_command`/`close_command`/`execute_selected_command`,
@@ -24,9 +24,9 @@ commands; selecting one dispatches its action.
   ("ctrl+k",)` (handlerless → `ctrl+k` unbound). `ActionRegistry` holds the
   app actions (themes, cycle_theme, swap_source, open_settings, help, quit).
 
-## Design
+## 1.3. Design
 
-### 1. `:` remap (per the keystone note)
+### 1.3.1. `:` remap (per the keystone note)
 
 `KeymapStore.DEFAULT_BINDINGS`:
 - `app.help: ("?", ":")` → `app.help: ("?",)`
@@ -35,7 +35,7 @@ commands; selecting one dispatches its action.
 `bindings.py`: add `app.command_palette` to `_VISIBLE_ACTIONS` so `:` shows a
 "Command palette" footer chip (it now has a handler).
 
-### 2. Register handler + populate
+### 1.3.2. Register handler + populate
 
 In `AwsTuiApp.__init__`'s keystone registration block:
 `self._actions.register("app.command_palette", self.action_command_palette)`.
@@ -72,14 +72,14 @@ def action_command_palette(self) -> None:
 
 `self._command_palette_populated = False` initialized in `__init__`.
 
-### 3. Execute / dismiss
+### 1.3.3. Execute / dismiss
 
 The built `CommandPalette` modal + `execute_selected_command` already run the
 selected entry's `PaletteAction` and close. Each action here is
 `self._actions.invoke(action_id)` — the same dispatch path the key bindings
 use, so selecting "Cycle theme" is identical to pressing `T`.
 
-## Scope
+## 1.4. Scope
 
 **In:** `:` / `Ctrl+K` open the palette with the 6 curated app commands;
 fuzzy filter (existing VM); select → dispatch.
@@ -92,7 +92,7 @@ fuzzy filter (existing VM); select → dispatch.
 - Pane-context commands (copy/delete/…) — they need a focused pane; omitted
   from the palette for now.
 
-## Testing (TDD)
+## 1.5. Testing (TDD)
 
 1. **Keymap remap** — `KeymapStore` defaults: `app.help == ("?",)`,
    `app.command_palette == (":", "ctrl+k")`.
@@ -104,7 +104,7 @@ fuzzy filter (existing VM); select → dispatch.
 4. **Integration** — pressing `:` opens the `CommandPalette` modal; selecting
    an entry invokes its action (spy).
 
-## Files touched
+## 1.6. Files touched
 
 - `src/aws_tui/infra/keymap_store.py` — `:` remap.
 - `src/aws_tui/ui/bindings.py` — add `app.command_palette` to `_VISIBLE_ACTIONS`.

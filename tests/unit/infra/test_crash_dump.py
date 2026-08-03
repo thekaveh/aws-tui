@@ -123,6 +123,18 @@ def test_write_appends_log_tail(tmp_path: Path) -> None:
     assert "line-0\n" not in text
 
 
+def test_write_appends_tail_across_rotated_logs(tmp_path: Path) -> None:
+    log = tmp_path / "aws-tui.log"
+    (tmp_path / "aws-tui.log.2").write_text("oldest\n", encoding="utf-8")
+    (tmp_path / "aws-tui.log.1").write_text("before-rollover\n", encoding="utf-8")
+    log.write_text("current\n", encoding="utf-8")
+
+    path = CrashDump(base_dir=tmp_path / "crash").write(exc=_make_exc(), log_path=log)
+    text = path.read_text(encoding="utf-8")
+
+    assert text.index("oldest") < text.index("before-rollover") < text.index("current")
+
+
 def test_write_appends_action_tail(tmp_path: Path) -> None:
     actions = [f"act-{i}" for i in range(150)]
     dump = CrashDump(base_dir=tmp_path / "crash")

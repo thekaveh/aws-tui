@@ -1,4 +1,4 @@
-# Glue and Athena Interaction Polish Implementation Plan
+# 1. Glue and Athena Interaction Polish Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -16,7 +16,7 @@ handoff.
 **Tech Stack:** Python 3.13, Textual, VMx 3.1.0, reactivex, pytest,
 pytest-textual-snapshot, mypy, Ruff.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Branch from `develop`; merge back to `develop`; do not merge to `main`.
 - Preserve read-only Glue and Athena behavior.
@@ -37,7 +37,7 @@ pytest-textual-snapshot, mypy, Ruff.
 
 ---
 
-### Task 1: Shared bordered picker and service tab strip
+### 1.1.1. Task 1: Shared bordered picker and service tab strip
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/context_picker.py`
@@ -160,7 +160,7 @@ git commit -m "feat(ui): add bordered context pickers"
 
 ---
 
-### Task 2: VMx-backed deterministic Glue and Athena focus rings
+### 1.1.2. Task 2: VMx-backed deterministic Glue and Athena focus rings
 
 **Files:**
 - Modify: `src/aws_tui/vm/chrome/focus_coordinator_vm.py`
@@ -280,7 +280,7 @@ git commit -m "feat(ui): make service focus rings deterministic"
 
 ---
 
-### Task 3: Focusable source selection and named selector commands
+### 1.1.3. Task 3: Focusable source selection and named selector commands
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/service_source_header.py`
@@ -386,7 +386,7 @@ git commit -m "feat(ui): expose service context commands"
 
 ---
 
-### Task 4: Bordered Glue/Athena layout and centered navigation
+### 1.1.4. Task 4: Bordered Glue/Athena layout and centered navigation
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/glue/page.py`
@@ -460,7 +460,7 @@ git commit -m "fix(ui): align service pane presentation"
 
 ---
 
-### Task 5: Canonical SQL identifier and VMx typed table clipboard
+### 1.1.5. Task 5: Canonical SQL identifier and VMx typed table clipboard
 
 **Files:**
 - Modify: `src/aws_tui/domain/sql_policy.py`
@@ -551,7 +551,7 @@ git commit -m "feat(vmx): add typed table clipboard"
 
 ---
 
-### Task 6: Glue copy and Athena cursor insertion
+### 1.1.6. Task 6: Glue copy and Athena cursor insertion
 
 **Files:**
 - Modify: `src/aws_tui/vm/messages.py`
@@ -652,7 +652,7 @@ git commit -m "feat(glue): copy table references into Athena"
 
 ---
 
-### Task 7: Documentation, metrics, and full branch verification
+### 1.1.7. Task 7: Documentation, metrics, and full branch verification
 
 **Files:**
 - Modify: `docs/keybindings.md`

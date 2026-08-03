@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import cast
 
+import pytest
 from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
@@ -104,16 +105,27 @@ async def test_shutdown_awaits_current_vm_before_sync_dispose() -> None:
     assert events == ["shutdown", "dispose"]
 
 
-async def test_set_content_same_service_is_noop() -> None:
+async def test_shutdown_waits_for_in_flight_content_swap() -> None:
+    host = _build()
+    await host._swap_lock.acquire()
+    shutdown = asyncio.create_task(host.shutdown())
+    await asyncio.sleep(0)
+    assert not shutdown.done()
+
+    host._swap_lock.release()
+    await shutdown
+    host.dispose()
+
+
+async def test_set_content_same_service_replaces_different_vm() -> None:
     host = _build()
     first = _component()
     second = _component()
     await host.set_content(first, service_id="ec2")
     await host.set_content(second, service_id="ec2")
-    # Second call is a no-op: first stays, second is NOT constructed.
-    assert host.current is first
-    assert first.is_constructed
-    assert second.status == ConstructionStatus.DESTRUCTED
+    assert host.current is second
+    assert first.status == ConstructionStatus.DISPOSED
+    assert second.is_constructed
     host.dispose()
 
 
@@ -211,6 +223,90 @@ async def test_set_content_does_not_block_on_slow_setup() -> None:
     release_setup.set()
     if host._setup_task is not None:
         await host._setup_task
+    host.dispose()
+
+
+async def test_concurrent_content_swaps_are_last_request_wins() -> None:
+    first_shutdown_started = asyncio.Event()
+    second_shutdown_started = asyncio.Event()
+    release_first = asyncio.Event()
+    release_second = asyncio.Event()
+
+    class _OldVM:
+        status = ConstructionStatus.DESTRUCTED
+        shutdown_calls = 0
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def shutdown(self) -> None:
+            self.shutdown_calls += 1
+            if self.shutdown_calls == 1:
+                first_shutdown_started.set()
+                await release_first.wait()
+            else:
+                second_shutdown_started.set()
+                await release_second.wait()
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    old = _OldVM()
+    await host.set_content(cast("ComponentVM", old), service_id="old")
+    first = _component()
+    second = _component()
+    first_swap = asyncio.create_task(host.set_content(first, service_id="first"))
+    await asyncio.wait_for(first_shutdown_started.wait(), timeout=1)
+    second_swap = asyncio.create_task(host.set_content(second, service_id="second"))
+
+    try:
+        await asyncio.wait_for(second_shutdown_started.wait(), timeout=0.05)
+    except TimeoutError:
+        release_first.set()
+        await first_swap
+        await second_swap
+    else:
+        release_second.set()
+        await second_swap
+        release_first.set()
+        await first_swap
+
+    assert host.current is second
+    assert host.current_id == "second"
+    host.dispose()
+
+
+async def test_setup_failure_is_reported() -> None:
+    reported: list[BaseException] = []
+
+    class _FailingSetupVM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            raise RuntimeError("setup failed")
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = ContentHostVM(
+        hub=_hub(),
+        dispatcher=NULL_DISPATCHER,
+        on_setup_error=reported.append,
+    )
+    host.construct()
+    await host.set_content(cast("ComponentVM", _FailingSetupVM()), service_id="bad")
+    assert host._setup_task is not None
+    task = host._setup_task
+    with pytest.raises(RuntimeError, match="setup failed"):
+        await task
+    await asyncio.sleep(0)
+
+    assert len(reported) == 1
+    assert isinstance(reported[0], RuntimeError)
     host.dispose()
 
 
@@ -347,6 +443,225 @@ async def test_set_content_cancels_prior_setup_task_on_swap() -> None:
     await host.set_content(second, service_id="ec2")
     await asyncio.wait_for(first_was_cancelled.wait(), timeout=1.0)
     assert host.current is second
+    host.dispose()
+
+
+async def test_set_content_immediate_swap_drains_unstarted_setup_without_cancelling_caller() -> (
+    None
+):
+    setup_called = False
+
+    class _VM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            nonlocal setup_called
+            setup_called = True
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    first = _VM()
+    second = _component()
+    await host.set_content(cast("ComponentVM", first), service_id="first")
+    assert not setup_called
+
+    await host.set_content(second, service_id="second")
+
+    assert not setup_called
+    assert first.status == ConstructionStatus.DISPOSED
+    assert host.current is second
+    host.dispose()
+
+
+async def test_set_content_drains_cancelled_setup_before_shutdown_and_dispose() -> None:
+    events: list[str] = []
+    setup_started = asyncio.Event()
+
+    class _VM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            setup_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await asyncio.sleep(0)
+                events.append("setup-drained")
+
+        async def shutdown(self) -> None:
+            events.append("shutdown")
+
+        def dispose(self) -> None:
+            events.append("dispose")
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    vm = _VM()
+    await host.set_content(cast("ComponentVM", vm), service_id="old")
+    await setup_started.wait()
+
+    await host.set_content(_component(), service_id="new")
+
+    assert events[:3] == ["setup-drained", "shutdown", "dispose"]
+    host.dispose()
+
+
+async def test_set_content_preserves_caller_cancellation_after_setup_cleanup() -> None:
+    setup_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+
+    class _VM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            setup_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleanup_started.set()
+                await release_cleanup.wait()
+                cleanup_finished.set()
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    current = _VM()
+    replacement = _component()
+    await host.set_content(cast("ComponentVM", current), service_id="old")
+    await setup_started.wait()
+
+    swap = asyncio.create_task(host.set_content(replacement, service_id="new"))
+    await cleanup_started.wait()
+    swap.cancel()
+    await asyncio.sleep(0)
+
+    assert not swap.done()
+    assert host.current is current
+
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await swap
+
+    assert cleanup_finished.is_set()
+    assert host.current is current
+    assert replacement.status == ConstructionStatus.DISPOSED
+    host.dispose()
+
+
+async def test_set_content_propagates_cancellation_already_pending_before_swap() -> None:
+    setup_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+
+    class _VM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            setup_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleanup_started.set()
+                await release_cleanup.wait()
+                cleanup_finished.set()
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    async def swap_with_pending_cancellation(host: ContentHostVM, replacement: ComponentVM) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.sleep(0)
+        await host.set_content(replacement, service_id="new")
+
+    host = _build()
+    current = _VM()
+    replacement = _component()
+    await host.set_content(cast("ComponentVM", current), service_id="old")
+    await setup_started.wait()
+
+    swap = asyncio.create_task(swap_with_pending_cancellation(host, replacement))
+    await cleanup_started.wait()
+    assert not swap.done()
+    assert host.current is current
+
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await swap
+
+    assert cleanup_finished.is_set()
+    assert host.current is current
+    assert replacement.status == ConstructionStatus.DISPOSED
+    host.dispose()
+
+
+async def test_set_content_drains_setup_cleanup_through_repeated_cancellation() -> None:
+    setup_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+
+    class _VM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            setup_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleanup_started.set()
+                await release_cleanup.wait()
+                cleanup_finished.set()
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    current = _VM()
+    replacement = _component()
+    await host.set_content(cast("ComponentVM", current), service_id="old")
+    await setup_started.wait()
+
+    swap = asyncio.create_task(host.set_content(replacement, service_id="new"))
+    await cleanup_started.wait()
+    swap.cancel()
+    await asyncio.sleep(0)
+    swap.cancel()
+    await asyncio.sleep(0)
+
+    assert not swap.done()
+    assert host.current is current
+
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await swap
+
+    assert cleanup_finished.is_set()
+    assert host.current is current
+    assert replacement.status == ConstructionStatus.DISPOSED
     host.dispose()
 
 
