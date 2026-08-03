@@ -288,7 +288,8 @@ def test_save_fsyncs_file_and_parent_directory(
         Config(connections={}, defaults=Defaults(), keybindings=Keybindings())
     )
 
-    assert len(calls) >= 2
+    expected_calls = 2 if os.name == "posix" else 1
+    assert len(calls) >= expected_calls
 
 
 def test_static_credentials_round_trip(config_path: Path) -> None:

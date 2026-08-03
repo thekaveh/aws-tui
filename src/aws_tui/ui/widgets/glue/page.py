@@ -223,22 +223,16 @@ class GluePage(HubSubscriberMixin, Widget):
 
     async def action_choose_run_state(self) -> None:
         await self.action_select_view("jobs")
-        self.call_after_refresh(
-            partial(
-                self._focus_and_open_picker,
-                FocusSlot.GLUE_FILTER,
-                "#glue-run-state-filter",
-            )
+        self._focus_and_open_picker(
+            FocusSlot.GLUE_FILTER,
+            "#glue-run-state-filter",
         )
 
     async def action_choose_crawler_state(self) -> None:
         await self.action_select_view("crawlers")
-        self.call_after_refresh(
-            partial(
-                self._focus_and_open_picker,
-                FocusSlot.GLUE_FILTER,
-                "#glue-crawler-state-filter",
-            )
+        self._focus_and_open_picker(
+            FocusSlot.GLUE_FILTER,
+            "#glue-crawler-state-filter",
         )
 
     def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:

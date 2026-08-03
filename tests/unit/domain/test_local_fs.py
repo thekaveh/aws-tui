@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import os
 import stat
@@ -167,6 +168,45 @@ def test_windows_revision_uses_change_time_not_creation_time() -> None:
 
     assert revision == "windows:7:9:11:13:17"
     assert "999" not in revision
+
+
+def test_windows_rename_handle_uses_absolute_destination() -> None:
+    from aws_tui.domain import local_fs
+
+    captured: dict[str, object] = {}
+
+    def set_file_information(
+        handle: int,
+        information_class: int,
+        buffer: object,
+        buffer_size: int,
+    ) -> int:
+        raw = ctypes.string_at(buffer, buffer_size)
+        information = ctypes.cast(
+            buffer,
+            ctypes.POINTER(local_fs._WindowsRenameInformation),
+        ).contents
+        name_offset = local_fs._WindowsRenameInformation.FileName.offset
+        captured.update(
+            handle=handle,
+            information_class=information_class,
+            root=information.RootDirectory,
+            name=raw[name_offset : name_offset + information.FileNameLength].decode("utf-16-le"),
+        )
+        return 1
+
+    api = object.__new__(local_fs._WindowsAPI)
+    api._dll = SimpleNamespace(SetFileInformationByHandle=set_file_information)
+    api.final_path = lambda handle, path: r"C:\locked\destination"  # type: ignore[method-assign]
+
+    api.rename_handle(22, 11, "published.txt", r"C:\source\stage.txt")
+
+    assert captured == {
+        "handle": 22,
+        "information_class": local_fs._WINDOWS_FILE_RENAME_INFO,
+        "root": None,
+        "name": r"C:\locked\destination\published.txt",
+    }
 
 
 def test_windows_delete_claims_and_removes_the_same_open_handle(

@@ -809,9 +809,7 @@ async def test_service_mount_failure_leaves_error_surface(
                 host,
                 replacement,
             )
-            await _wait_until(
-                lambda: len(app.query_one("#content-host").query("#content-mount-error")) == 1
-            )
+            await _wait_until(lambda: len(app.query("#content-host #content-mount-error")) == 1)
 
             assert result is None
             recovered_host = app.query_one("#content-host")
