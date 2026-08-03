@@ -1,7 +1,7 @@
 # 1. Graceful degradation for unreachable connections — Design Spec
 
 **Date:** 2026-06-19
-**Status:** Approved for implementation
+**Status:** Implemented; retained as a historical design record
 **Tracks:** `app.py` swap-source ring, `AppContext`, `Pane`/`PaneVM` state observation.
 
 ## 1.1. Motivation

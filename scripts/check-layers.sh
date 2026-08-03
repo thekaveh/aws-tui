@@ -94,6 +94,7 @@ RULES: tuple[Rule, ...] = (
             "botocore",
             "aws_tui.infra.aws_session",
             "aws_tui.infra.connection_resolver",
+            "aws_tui.composition",
         ),
     ),
     # services/ is the service-composition boundary: it may import concrete VM

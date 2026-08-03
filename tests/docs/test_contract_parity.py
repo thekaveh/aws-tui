@@ -5,7 +5,74 @@ import re
 import tomllib
 from pathlib import Path
 
+import botocore.session
+
 ROOT = Path(__file__).parents[2]
+
+_MODELED_OPERATIONS = {
+    "athena": {
+        "ListWorkGroups",
+        "GetWorkGroup",
+        "ListDataCatalogs",
+        "ListDatabases",
+        "ListTableMetadata",
+        "ListQueryExecutions",
+        "GetQueryExecution",
+        "GetQueryRuntimeStatistics",
+        "StartQueryExecution",
+        "StopQueryExecution",
+        "GetQueryResults",
+        "ListNamedQueries",
+        "BatchGetNamedQuery",
+        "ListPreparedStatements",
+        "GetPreparedStatement",
+    },
+    "emr-serverless": {"ListApplications", "ListJobRuns", "GetJobRun", "StartJobRun"},
+    "glue": {
+        "GetDatabases",
+        "GetTables",
+        "GetTable",
+        "GetPartitions",
+        "GetColumnStatisticsForTable",
+        "GetJobs",
+        "GetJobRuns",
+        "GetCrawlers",
+        "GetCrawler",
+        "GetCrawlerMetrics",
+        "GetTags",
+    },
+    "s3": {
+        "ListBuckets",
+        "ListObjectsV2",
+        "HeadObject",
+        "GetObject",
+        "PutObject",
+        "CopyObject",
+        "DeleteObject",
+        "DeleteObjects",
+        "CreateMultipartUpload",
+        "UploadPart",
+        "CompleteMultipartUpload",
+        "AbortMultipartUpload",
+    },
+    "sts": {"GetCallerIdentity"},
+}
+
+_CONSUMED_INPUT_MEMBERS = {
+    ("athena", "StartQueryExecution"): {
+        "QueryString",
+        "ClientRequestToken",
+        "QueryExecutionContext",
+        "WorkGroup",
+        "ResultConfiguration",
+    },
+    ("emr-serverless", "ListJobRuns"): {"applicationId", "nextToken", "states"},
+    ("emr-serverless", "GetJobRun"): {"applicationId", "jobRunId"},
+    ("glue", "GetTables"): {"CatalogId", "DatabaseName", "NextToken"},
+    ("glue", "GetCrawlerMetrics"): {"CrawlerNameList"},
+    ("s3", "ListObjectsV2"): {"Bucket", "Prefix", "Delimiter", "ContinuationToken"},
+    ("s3", "DeleteObjects"): {"Bucket", "Delete"},
+}
 
 
 def _text(path: str) -> str:
@@ -137,11 +204,72 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
     project = tomllib.loads(_text("pyproject.toml"))
     ledger = _text("docs/contract-ledger.md")
 
-    for name in ("textual", "vmx", "hatchling"):
+    for name in ("textual", "vmx", "hatchling", "testcontainers"):
         assert f"`{name}=={versions[name]}`" in ledger
 
     build_requirement = project["build-system"]["requires"][0]
     assert f"`build-system.requires` constrained to `{build_requirement}`" in ledger
+
+
+def test_credential_docs_match_keychain_reference_storage() -> None:
+    security = re.sub(r"\s+", " ", _text("SECURITY.md"))
+    cookbook = re.sub(r"\s+", " ", _text("docs/cookbook.md"))
+    connections = re.sub(r"\s+", " ", _text("docs/connections.md"))
+    ledger = re.sub(r"\s+", " ", _text("docs/contract-ledger.md"))
+
+    assert "Settings form stores secrets in the OS keychain" in security
+    assert "persists only a `keychain:` reference" in security
+    assert "stores the secret fields in the OS keychain" in cookbook
+    assert "persists only a `keychain:` reference" in cookbook
+    assert "The in-TUI Settings form writes credentials to the OS keychain" in connections
+    assert "keychain:aws-tui:connections/<url-escaped-name>" in connections
+    assert "keychain:aws-tui:connection-revisions/<url-escaped-name>/0" in connections
+    assert "keychain:aws-tui:connection-revisions/<url-escaped-name>/1" in connections
+    assert 'credentials = "keychain:aws-tui:connections/minio-local"' in cookbook
+    assert "under the namespaced service `aws-tui:<connection>`" not in connections
+    assert "Production Settings saves store only" in ledger
+    assert "two bounded revision slots" in ledger
+
+    retired_claims = (
+        "default written by the in-TUI add form",
+        "That writes a `static` entry to `config.toml`",
+        "Settings and first-run forms write credentials",
+        "Settings and first-run saves store only",
+    )
+    combined = " ".join((security, cookbook, connections, ledger))
+    for claim in retired_claims:
+        assert claim not in combined
+
+
+def test_consumed_aws_operations_and_inputs_exist_in_locked_botocore_models() -> None:
+    session = botocore.session.get_session()
+    for service_name, operations in _MODELED_OPERATIONS.items():
+        model = session.get_service_model(service_name)
+        assert operations <= set(model.operation_names)
+
+    for (service_name, operation_name), members in _CONSUMED_INPUT_MEMBERS.items():
+        operation = session.get_service_model(service_name).operation_model(operation_name)
+        assert operation.input_shape is not None
+        assert members <= set(operation.input_shape.members)
+
+
+def test_emr_job_run_state_filter_matches_locked_model_constraint() -> None:
+    model = botocore.session.get_session().get_service_model("emr-serverless")
+    operation = model.operation_model("ListJobRuns")
+    assert operation.input_shape is not None
+    states = operation.input_shape.members["states"]
+    assert states.metadata["max"] == 8
+    assert set(states.member.enum) == {
+        "SUBMITTED",
+        "PENDING",
+        "SCHEDULED",
+        "RUNNING",
+        "SUCCESS",
+        "FAILED",
+        "CANCELLING",
+        "CANCELLED",
+        "QUEUED",
+    }
 
 
 def test_workflow_metadata_avoids_stale_e2e_counts() -> None:

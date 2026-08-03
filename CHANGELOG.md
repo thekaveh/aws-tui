@@ -10,14 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The Unreleased section is the promotion queue for the next package release.
 Entries may reside on ``develop`` before promotion to ``main``; inclusion here
 does not by itself claim that every entry has landed on ``main``. Changes
-already promoted to ``main`` are tracked relative to the v0.8.0 cut commit
-(``cd2c9e8``). The v0.8.0 PyPI publish is gated on
+already promoted to ``main`` are tracked relative to the historical v0.8.0
+staging commit (``cd2c9e8``). That staging build was not published. The PyPI
+project-name request remains gated on
 [pypi/support#11264](https://github.com/pypi/support/issues/11264)
 (name-similarity exception for ``aws-tui`` vs ``awstui``). Glue, Athena, and
 Iceberg integration target v0.9.0: they are new minor-version feature work
 under SemVer, not a v0.8.0
-headline or a v0.8.1 patch candidate. The package version remains ``0.8.0``
-until the release cut.
+headline or a v0.8.1 patch candidate. The package metadata remains ``0.8.0``
+until a v0.9.0 release-preparation PR bumps it and cuts a dated changelog
+section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.1. Added
 
@@ -113,21 +115,47 @@ until the release cut.
 
 ### 1.1.2. Changed
 
+- Pin Textual to the audited `8.2.8` runtime because aws-tui's isolated
+  priority-binding, crash-recovery, and mount-lifecycle adapters consume
+  private Textual contracts. Supporting another release now requires an
+  explicit adapter review before the dependency pin is broadened.
+- Align AWS startup resolution with botocore: `AWS_DEFAULT_PROFILE` precedes
+  `AWS_PROFILE`, `AWS_DEFAULT_REGION` supplies the final configured-region
+  fallback, and `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` override
+  expanded shared-file paths.
+
 - **Interaction-surface parity.** Restored configured keymap overlays at
   startup, filtered contextual palette commands by active service, clarified
   CSS ownership for shared selectors and tabs, and aligned the canonical
-  documentation with the shipped Glue and Athena workflows.
+  documentation with the implemented Glue and Athena workflows.
 
 - ``docs/`` + ``ui/widgets/settings_view.py``: retargeted the
   ``Deferred / v0.8 roadmap`` references to ``Deferred / v0.9
   roadmap`` (and ``coming in v0.8`` placeholders to
-  ``coming in v0.9``) since v0.8.0 shipped without those items.
+  ``coming in v0.9``) because the v0.8.0 release candidate excludes those items.
   Historical CHANGELOG entries kept their original wording.
 - ``assets/screenshots/aws-tui-running.png``: refreshed the README
   hero image to a current EMR + demo-mode capture (PR #106).
 
 ### 1.1.3. Fixed
 
+- **Maintenance reliability and data-integrity pass.** Cross-filesystem moves
+  retain sources that were skipped, S3 batch deletion reports partial service
+  failures, gzip log reads enforce decompressed-size and line bounds, and AWS
+  clients plus content-host setup tasks now drain cleanly during teardown.
+  Overwrites stage files and complete directory trees before replacing an
+  existing destination; S3, EMR log, and EMR Serverless pagination raises a
+  typed provider error on missing or repeated continuation tokens instead of
+  returning partial data. Keychain updates stage new credentials before
+  switching the config reference, preserving the active credentials when a
+  write fails.
+  Failed source rebuilds restore the prior source, EMR run refreshes clear
+  stale detail state, command-palette failures reach the toast/log surfaces,
+  modal keyboard activation follows the visible safe default, and release/CI
+  gates now enforce documentation contracts alongside the runtime tiers.
+- **S3-compatible secrets use the configured keychain.** Settings and
+  first-run persistence store credentials by reference, remove superseded
+  entries, and roll back cleanly when config persistence fails.
 - **EMR + UI polish train.** Eight follow-up PRs (#96, #98, #99,
   #100, #102, #103, #104, #105) addressed user-reported issues
   found while exercising the EMR + nav-rail surface:
@@ -153,10 +181,14 @@ until the release cut.
   provider returns ``IsTruncated=True`` without a
   ``NextContinuationToken`` (MinIO has historically shipped this
   edge case). Pattern now matches ``emr_logs.py::list_log_files``.
-- **Resume modal no longer advertises unwired resume-all.** Automatic
-  transfer resume remains deferred, so resume-all is removed; abort all
-  and keep-for-later are wired, while decide-each remains a deferred
-  no-op placeholder.
+- **Transfer journals describe shipped behavior.** Automatic resume, startup
+  prompting, and remote abort controls remain deferred. Unfinished journal
+  files are retained as local diagnostic evidence; terminal outcomes remove
+  their own journal promptly.
+- **Recovered service failures are durably logged.** S3/local, EMR Serverless,
+  Glue/Iceberg, and Athena view models publish redacted operation diagnostics
+  through the shared VMx message hub while preserving their user-facing error
+  states.
 - **First-run S3-compatible save failures no longer crash the error
   handler.** The modal now uses supported Textual notification kwargs in
   test harnesses and the unified toast taxonomy in production.
@@ -203,6 +235,9 @@ until the release cut.
 
 ### 1.1.4. Docs
 
+- Added an installation guide, corrected the documentation inventory and
+  implementation-status records, and made `docs-check` reject stale or
+  unexpected committed architecture-diagram assets.
 - ``docs/superpowers/specs/`` — added the demo-mode and
   cross-platform-readiness design specs (in ``fc55c6a``).
 - ``SECURITY.md`` — supported-version table now distinguishes the
@@ -227,6 +262,11 @@ until the release cut.
 
 ### 1.1.5. Build
 
+- Removed blanket integration-test reruns so failures remain observable,
+  added a stable aggregate `ci gate`, expanded installed-wheel smoke tests,
+  and gated Homebrew publication until the tap is explicitly enabled.
+- Updated `platformdirs` to 4.11.0 and `sqlglot` to 30.14.0, and aligned
+  botocore retry configuration on an explicit total-attempt budget.
 - Dependabot bumps for ``actions/upload-artifact`` (4→7, PR #1) and
   ``astral-sh/setup-uv`` (3→7, PR #2). Follow-up alignment commit
   brought ``release.yml`` to the same versions (``download-artifact``
@@ -245,7 +285,7 @@ until the release cut.
 - Pre-commit now includes ShellCheck for repository shell scripts via
   `shellcheck-py`, matching the maintenance verification path.
 
-## 1.2. [0.8.0] - 2026-06-27
+## 1.2. [0.8.0] - Pending
 
 ### 1.2.1. Added
 
@@ -286,8 +326,8 @@ until the release cut.
   ``EmrServerlessPage.action_open_application_picker``; with the
   popover now actually visible the keystroke produces the
   expected affordance.
-- **EMR Serverless icon settled back on ``🔥`` FIRE.** PR #83
-  tried ``💥`` after earlier ``⚡`` / ``⚡️`` experiments, but the
+- **EMR Serverless icon settled back on ``U+1F525 FIRE``.** PR #83
+  tried ``U+1F4A5 COLLISION`` after earlier ``U+26A1 HIGH VOLTAGE`` experiments, but the
   collision glyph rendered too small beside the S3 bucket icon. The
   shipped descriptor uses the PR #79 fire glyph: SMP single-codepoint,
   2-cell colour reliably, and full bounding box. Updated at the
@@ -329,7 +369,7 @@ until the release cut.
 ### 1.2.3. Added (prior entries)
 
 - **EMR Serverless read-only browser** (PR #76, service PR-A). New
-  ``🔥`` nav-rail entry next to S3, gated to AWS-only connections.
+  ``U+1F525 FIRE`` nav-rail entry next to S3, gated to AWS-only connections.
   Applications dropdown, master-detail Job Runs pane + Job Run Detail
   pane with multi-select state-filter chips, three independent
   pollers (apps 30 s / runs 10 s with 6:1 decay when no active runs /
@@ -360,15 +400,15 @@ until the release cut.
   "Commands"; the strip is also split into a service-actions row
   (focused-pane block) and a global row, with hamburger margin /
   border alignment tightened in the same PR.
-- **EMR Serverless icon — the ⚡️ ↔ 🔥 ↔ ⚡ ↔ 💥 ↔ 🔥 saga** (PR #77 /
+- **EMR Serverless icon revisions** (PR #77 /
   #79 / #81 / #83). Bare `⚡` (PR #76) rendered as a narrow 1-cell
   text-style stroke in SF Mono / JetBrains Mono / Fira Code,
   mis-aligning the nav-rail's 2-cell emoji column. PR #77 forced
   emoji presentation with `⚡️` (BMP U+26A1 + U+FE0F VS-16);
-  PR #79 briefly tried `🔥` (SMP, reliable 2-cell colour);
+  PR #79 briefly tried `U+1F525 FIRE` (SMP, reliable 2-cell colour);
   PR #81 returned to `⚡️` with VS-16 per user ask; PR #83 picked
-  `💥` (SMP U+1F4A5 COLLISION), then the shipped descriptor returned
-  to `🔥` after collision rendered too small beside the S3 bucket. The
+  `U+1F4A5 COLLISION`, then the shipped descriptor returned
+  to `U+1F525 FIRE` after collision rendered too small beside the S3 bucket. The
   documented icon contract is codified in
   `nav_menu.py::_format_collapsed_prompt` /
   `_format_expanded_prompt` — SMP single-codepoint, no VS-16.
@@ -590,8 +630,8 @@ until the release cut.
   flushes stdio buffers without forcing the FS journal/metadata
   to disk. On power loss between a ``mark_completed`` write and
   the OS's background flush (~30s), the journal would lose the
-  terminal marker and the resume modal would replay the whole
-  transfer on relaunch. fsync closes that window for one syscall
+  terminal marker and diagnostic replay would classify the transfer as
+  unfinished. fsync closes that window for one syscall
   per append — negligible against the network I/O the surrounding
   multipart upload pays per part.
 - **(third maintenance loop, pass 9)** ``TransfersOverlay._arm_linger``
@@ -762,8 +802,7 @@ until the release cut.
   marked aborted before the re-raise), the for-loop exited and
   any UNREACHED entries had no terminal marker — those journal
   files sat in ``~/.cache/aws-tui/transfers/`` indefinitely and
-  would resurface in the deferred resume modal as phantom
-  pending transfers on next launch. Tracked entries via a
+  would remain as phantom unfinished diagnostics. Tracked entries via a
   ``consumed: set[str]`` that the loop adds to BEFORE awaiting
   ``_run_one_transfer`` (so a raise still counts as consumed —
   ``_run_one_transfer`` already marked that id), and in the
@@ -1139,8 +1178,7 @@ until the release cut.
   `aws_session.aclose_all_clients`, `transfers_vm.cancel_all_command`,
   and `log_sink.flush()` — Textual's sync `App.action_quit` was
   called instead. Each leaked aioboto3 sockets, abandoned in-flight
-  copy tasks (left their journal entries as 'crashed' so the next
-  launch's resume modal would surface them), and dropped buffered
+  copy tasks (leaving unfinished journal diagnostics), and dropped buffered
   log records.
 - **(second maintenance loop, passes 1–4)** `S3FS.delete` and
   `S3FS.rename` now wrap their outer `try` with
@@ -1509,14 +1547,11 @@ until the release cut.
   reach their configured theme each session. Composition now loads
   the config at startup and falls back to carbon only if the file is
   absent or malformed.
-- **Transfer journal silently destroyed on S3
-  `AbortMultipartUpload` failure.** When the resume modal's "abort
-  all" path hit any S3 error (network, expired creds, throttle, 5xx)
-  the code suppressed the exception and unconditionally purged the
-  journal anyway — so the MPU continued to live on S3 (consuming
-  storage quota) with no local record of it, no recovery path. Now
-  the journal is only purged after a successful abort; failures
-  leave the journal intact for next-session retry.
+- **Historical transfer-recovery claim corrected.** The v0.8 tree never
+  shipped a startup resume/abort modal or remote `AbortMultipartUpload`
+  control. Unfinished journal files remain local diagnostic evidence; remote
+  multipart cleanup is deferred and should be backed by bucket lifecycle
+  policy.
 - **`.content-placeholder` no-connection screen ignored user theme
   overrides.** All four built-in themes declared the placeholder
   background and foreground as hex literals matching their own

@@ -12,7 +12,6 @@ from vmx import (
     MessageHub,
     PropertyChangedMessage,
 )
-from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -25,16 +24,17 @@ from aws_tui.domain.query import (
     ResultPage,
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     optional_non_empty_exact_string,
     valid_result_column,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
-from aws_tui.vm.athena._pager_compat import seed_token_pager
+from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _RESULTS_ERROR = "Athena results request failed"
 _COLUMN_ERROR = "Athena returned inconsistent result columns"
@@ -81,7 +81,7 @@ class _PagerGeneration:
     columns: tuple[ResultColumn, ...] = field(default=(), repr=False)
     tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
     retired: bool = False
-    pager: TokenPagedComposition[ResultRow, str] = field(init=False, repr=False)
+    pager: SnapshotTokenPager[ResultRow, str] = field(init=False, repr=False)
     load_more_command: AsyncRelayCommand = field(init=False, repr=False)
 
 
@@ -206,9 +206,12 @@ class AthenaResultsVM:
             self._notify("state")
             self._notify("error_text")
             return
-        except Exception:
+        except Exception as exc:
             if not self._is_current(worker):
                 return
+            report_unexpected_service_error(
+                self._hub, service="athena", operation="get_query_results", error=exc
+            )
             self._state, self._error_text = map_unexpected_error(
                 fallback=_RESULTS_ERROR,
             )
@@ -335,7 +338,15 @@ class AthenaResultsVM:
         execution_id = self._execution_id
         try:
             detail = await self._client.get_query_execution(execution_id)
-        except Exception:
+        except ProviderError:
+            return False
+        except Exception as exc:
+            report_unexpected_service_error(
+                self._hub,
+                service="athena",
+                operation="get_query_execution",
+                error=exc,
+            )
             return False
         if (
             self._disposed
@@ -436,9 +447,12 @@ class AthenaResultsVM:
             self._notify("state")
             self._notify("error_text")
             return
-        except Exception:
+        except Exception as exc:
             if not self._is_current(worker):
                 return
+            report_unexpected_service_error(
+                self._hub, service="athena", operation="get_query_results", error=exc
+            )
             self._state, self._error_text = map_unexpected_error(
                 fallback=_RESULTS_ERROR,
             )
@@ -497,7 +511,7 @@ class AthenaResultsVM:
                 raise _ResultColumnsChangedError
             return list(page.rows), page.next_token
 
-        worker.pager = TokenPagedComposition(fetch)
+        worker.pager = SnapshotTokenPager(fetch)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more(worker))

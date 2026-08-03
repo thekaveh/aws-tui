@@ -3,9 +3,8 @@
 Inline-expanding dropdown. The picker uses ``height: auto`` so it
 grows to wrap whatever children are visible: just the trigger row
 when closed, trigger + OptionList when open. The parent
-``emr-app-box`` is ``height: auto, min-height: 3`` so it grows
-in lockstep; the sibling ``JobRunsPane`` (``height: 1fr``)
-shrinks to make room.
+``emr-app-box`` grows in lockstep; the sibling ``JobRunsPane``
+(``height: 1fr``) shrinks to make room.
 
 Why not a floating overlay: the prior layered-overlay approaches
 (PR #83 declaring ``dropdown`` on Screen, PR #85 mounting the
@@ -25,6 +24,7 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from rich.markup import escape as _escape_markup
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Horizontal
@@ -39,23 +39,36 @@ from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 #: Colored Rich-markup glyphs per application state. The glyph SHAPE
-#: alone is distinguishable on monochrome terminals (●/◐/◑/○/◌/✗
+#: alone is distinguishable on monochrome terminals (●/◐/◑/◇/○/◌/✗
 #: are all visually different); the colour is icing for the colour-
-#: capable case. User feedback: "show a green block circle to denote
-#: they have already been started … similarly apt status indicator
-#: for the rest … we don't need to show the STARTED OR STOPPED text".
-_APP_STATE_MARKER: dict[ApplicationState, str] = {
-    ApplicationState.STARTED: "[green]●[/green]",
-    ApplicationState.STARTING: "[yellow]◐[/yellow]",
-    ApplicationState.STOPPING: "[yellow]◑[/yellow]",
-    ApplicationState.CREATING: "[dim]◌[/dim]",
-    ApplicationState.CREATED: "[white]○[/white]",
-    ApplicationState.STOPPED: "[dim]○[/dim]",
-    ApplicationState.TERMINATED: "[red]✗[/red]",
+#: capable case. Option rows pair this compact marker with literal state
+#: text; the selected trigger stays compact and exposes its state by tooltip.
+_APP_STATE_MARKER: dict[ApplicationState, tuple[str, str]] = {
+    ApplicationState.STARTED: ("green", "●"),
+    ApplicationState.STARTING: ("yellow", "◐"),
+    ApplicationState.STOPPING: ("yellow", "◑"),
+    ApplicationState.CREATING: ("dim", "◌"),
+    ApplicationState.CREATED: ("white", "◇"),
+    ApplicationState.STOPPED: ("dim", "○"),
+    ApplicationState.TERMINATED: ("red", "✗"),
 }
 
 
-class ApplicationPicker(Widget):
+def _state_marker(state: ApplicationState) -> str:
+    style, glyph = _APP_STATE_MARKER.get(state, ("white", "?"))
+    return f"[{style}]{glyph}[/{style}]"
+
+
+def _state_option(state: ApplicationState, name: str) -> Text:
+    """Render a styled row with a literal state for non-color access."""
+    style, glyph = _APP_STATE_MARKER.get(state, ("white", "?"))
+    prompt = Text(no_wrap=True, overflow="ellipsis")
+    prompt.append(f"{glyph} {state.value}", style=style)
+    prompt.append(f" · {name}")
+    return prompt
+
+
+class ApplicationPicker(Widget, can_focus=True):
     """Top-strip application selector — inline-expanding."""
 
     DEFAULT_CSS: ClassVar[str] = """
@@ -65,18 +78,25 @@ class ApplicationPicker(Widget):
         min-height: 3;
         layout: vertical;
     }
-    /* The trigger row is always 3 cells tall (matches the apps-box
-       minimum). Wrapped in a Horizontal so its width takes the full
-       picker; the Static fills that Horizontal. */
-    ApplicationPicker > Horizontal {
-        width: 1fr;
-        height: 3;
-    }
-    ApplicationPicker > Horizontal > .app-trigger {
-        width: 1fr;
+    /* Keep the state marker and application name in separate cells.
+       Rich's styled marker segment can otherwise consume the compact
+       one-row render while leaving the following name clipped. */
+    ApplicationPicker > .app-trigger {
+        width: 100%;
         height: 3;
         padding: 0 1;
-        content-align: left middle;
+    }
+    ApplicationPicker > .app-trigger > .app-marker {
+        width: 1;
+        min-width: 1;
+        height: 1;
+    }
+    ApplicationPicker > .app-trigger > .app-value {
+        width: 1fr;
+        min-width: 0;
+        height: 1;
+        padding-left: 1;
+        text-overflow: ellipsis;
         text-style: bold;
     }
     /* OptionList is collapsed by default; ``-open`` flips display
@@ -86,10 +106,12 @@ class ApplicationPicker(Widget):
        up to the column's available space; the sibling JobRunsPane
        with ``height: 1fr`` shrinks to make room). */
     ApplicationPicker > OptionList {
-        width: 1fr;
+        width: 100%;
         height: auto;
         max-height: 16;
         display: none;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
     }
     ApplicationPicker.-open > OptionList {
         display: block;
@@ -98,7 +120,7 @@ class ApplicationPicker(Widget):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "close", "Close"),
-        ("enter", "commit", "Pick"),
+        ("enter,space", "activate", "Open application selector"),
     ]
 
     class ApplicationCommitted(TextualMessage):
@@ -126,11 +148,13 @@ class ApplicationPicker(Widget):
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
-        # Trigger row + OptionList both as children of the picker.
+        # Trigger row + OptionList are direct children of the picker.
         # The OptionList is hidden by default via ``display: none``
         # and revealed when the picker gains the ``-open`` class.
-        with Horizontal():
-            yield Static(self._trigger_label(), classes="app-trigger")
+        marker, value = self._trigger_fragments()
+        with Horizontal(classes="app-trigger"):
+            yield Static(marker, classes="app-marker")
+            yield Static(value, classes="app-value")
         yield OptionList(*self._build_options(), id="app-options")
 
     def on_mount(self) -> None:
@@ -140,6 +164,7 @@ class ApplicationPicker(Widget):
         # this subscription only fires for THIS ApplicationsVM
         # instance.
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
+        self._refresh_accessibility_text()
 
     def on_unmount(self) -> None:
         if self._sub is not None:
@@ -153,15 +178,26 @@ class ApplicationPicker(Widget):
             self.remove_class("-open")
         else:
             self.add_class("-open")
-            # Focus the dropdown so arrow keys / Enter / Esc are
-            # routed there immediately. ``call_after_refresh`` waits
-            # for the layout-pass that the ``-open`` class triggered
-            # so the OptionList is laid out and focusable.
-            self.call_after_refresh(self._focus_dropdown)
-            self._refresh_options()
+            # Rebuild after the ``-open`` width/layout pass. Building at
+            # the closed width leaves OptionList's cached lines clipped
+            # to the status glyph even after the picker expands.
+            self.call_after_refresh(self._prepare_open_dropdown)
 
     def action_close(self) -> None:
+        self.close()
+
+    def close(self, *, refocus: bool = True) -> None:
+        """Collapse the list without stealing an in-progress focus transfer."""
+
         self.remove_class("-open")
+        if refocus:
+            self.call_after_refresh(self.focus)
+
+    def action_activate(self) -> None:
+        if self.has_class("-open"):
+            self.action_commit()
+        else:
+            self.toggle_open()
 
     def action_commit(self) -> None:
         try:
@@ -178,6 +214,7 @@ class ApplicationPicker(Widget):
             # ``ApplicationCommitted`` docstring.
             self.post_message(self.ApplicationCommitted(opt.id))
         self.remove_class("-open")
+        self.call_after_refresh(self.focus)
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -199,6 +236,7 @@ class ApplicationPicker(Widget):
             self._vm.select(event.option.id)
             self.post_message(self.ApplicationCommitted(event.option.id))
         self.remove_class("-open")
+        self.call_after_refresh(self.focus)
 
     def _on_vm_property_changed(self, prop: str) -> None:
         """Round-3 directive: per-VM Observable subscription. The
@@ -218,10 +256,49 @@ class ApplicationPicker(Widget):
 
     def _refresh_trigger(self) -> None:
         try:
-            trigger = self.query_one(".app-trigger", Static)
+            marker = self.query_one(".app-marker", Static)
+            value = self.query_one(".app-value", Static)
         except Exception:
             return
-        trigger.update(self._trigger_label())
+        marker_text, value_text = self._trigger_fragments()
+        marker.update(marker_text)
+        value.update(value_text)
+        self._refresh_accessibility_text(marker=marker, value=value)
+
+    def _refresh_accessibility_text(
+        self,
+        *,
+        marker: Static | None = None,
+        value: Static | None = None,
+    ) -> None:
+        """Expose the selected application's full name and literal state."""
+
+        selected = next(
+            (app for app in self._vm.applications if app.id == self._vm.selected_id),
+            None,
+        )
+        tooltip = None if selected is None else f"{selected.name} · {selected.state.value}"
+        self.tooltip = tooltip
+        with contextlib.suppress(Exception):
+            (marker or self.query_one(".app-marker", Static)).tooltip = tooltip
+            (value or self.query_one(".app-value", Static)).tooltip = tooltip
+
+    def _trigger_fragments(self) -> tuple[str, str]:
+        """Split the selected-state marker from the trigger text."""
+        if self._vm.state in {
+            PaneState.LOADING,
+            PaneState.UNREACHABLE,
+            PaneState.AUTH_REQUIRED,
+            PaneState.FORBIDDEN,
+            PaneState.ERROR,
+        }:
+            return "", self._trigger_label()
+        apps = self._vm.applications
+        sid = self._vm.selected_id
+        match = next((app for app in apps if app.id == sid), None)
+        if match is None:
+            return "", self._trigger_label()
+        return _state_marker(match.state), _escape_markup(match.name)
 
     def _refresh_options(self) -> None:
         try:
@@ -233,21 +310,32 @@ class ApplicationPicker(Widget):
         # (spec §9.bis.11 + §9.bis.9 / Q-A): the VM no-ops on a no-change
         # poll, so a PropertyChangedMessage reaching this handler means
         # the data actually changed. The View just rebuilds.
+        options = self._build_options()
         opts.clear_options()
-        for opt in self._build_options():
+        for opt in options:
             opts.add_option(opt)
+        # ``height: auto`` on an OptionList inside an auto-height
+        # Horizontal can resolve to the parent's full available height.
+        # Give the open list a content-derived bound instead: one row per
+        # option plus its border, capped so the runs pane remains usable.
+        opts.styles.height = min(len(options) + 2, 8)
 
     def _focus_dropdown(self) -> None:
         with contextlib.suppress(Exception):
             opts = self.query_one("#app-options", OptionList)
             opts.focus()
 
+    def _prepare_open_dropdown(self) -> None:
+        self._refresh_options()
+        self._focus_dropdown()
+
     def _trigger_label(self) -> str:
         """Render the trigger row.
 
         Format: ``<colored-glyph>  <name>``. The colored glyph
         encodes the state visually (green ● = STARTED, yellow ◐ /
-        ◑ = transitional, dim ○ / ◌ = idle, red ✗ = terminated) so
+        ◑ = transitional, white ◇ = CREATED, dim ○ = STOPPED,
+        dim ◌ = CREATING, red ✗ = terminated) so
         the textual STATE pill is no longer needed. User feedback
         (post-PR-#92): "the dropdown … shows the fire emoji at the
         beginning of every application name, followed by the name
@@ -286,7 +374,7 @@ class ApplicationPicker(Widget):
         match = next((a for a in apps if a.id == sid), None)
         if match is None:
             return "(select application)"
-        marker = _APP_STATE_MARKER.get(match.state, "?")
+        marker = _state_marker(match.state)
         # Application name is AWS-controlled — escape any Rich
         # markup characters so a name like ``my-app [v2]`` doesn't
         # crash the parser. The leading marker is the only
@@ -301,11 +389,10 @@ class ApplicationPicker(Widget):
         the order the user reads in the dropdown is the order they
         cycle through with the keybinding.
 
-        Prompt: ``<colored-glyph>  <name>`` — no fire emoji, no
-        textual state name. The colour + shape of the glyph carries
-        the state semantics. User feedback drove the fire-emoji
-        drop; the colored-glyph + name format keeps the row short
-        and visually grouped.
+        Prompt: ``<colored-glyph> <STATE> · <name>`` — no fire emoji.
+        State-first ordering keeps the literal state visible when a narrow
+        selector must ellipsize the application name; matching marker/state
+        styling preserves fast scanning.
 
         Error states (UNREACHABLE / AUTH_REQUIRED / FORBIDDEN /
         ERROR) and LOADING surface as a single non-selectable
@@ -341,7 +428,7 @@ class ApplicationPicker(Widget):
                 # characters so a name like ``my-app [v2]`` doesn't
                 # crash the OptionList renderer. Marker is the only
                 # intentional markup in the prompt.
-                prompt=f"{_APP_STATE_MARKER.get(a.state, '?')}  {_escape_markup(a.name)}",
+                prompt=_state_option(a.state, a.name),
                 id=a.id,
             )
             for a in self._vm.sorted_applications

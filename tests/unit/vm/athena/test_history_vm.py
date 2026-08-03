@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
+from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
@@ -17,6 +17,7 @@ from aws_tui.domain.query import (
     QueryState,
     QueryStatistics,
 )
+from aws_tui.vm.athena._pager_compat import SnapshotTokenPager
 from aws_tui.vm.athena.history_vm import AthenaHistoryVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
@@ -163,7 +164,7 @@ async def test_history_hydrates_only_the_current_token_page() -> None:
 
     await vm.setup()
 
-    assert isinstance(vm._pager, TokenPagedComposition)  # type: ignore[attr-defined]
+    assert isinstance(vm._pager, SnapshotTokenPager)  # type: ignore[attr-defined]
     assert tuple(row.ref.execution_id for row in vm.items) == ("q-2",)
     assert vm.has_more
     assert client.list_calls == [("analysts", None)]
@@ -381,6 +382,50 @@ async def test_history_shutdown_cancels_and_drains_all_detail_siblings() -> None
     assert client.active_detail_ids == set()
     assert vm.items == ()
     assert vm.state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
+async def test_repeated_setup_cancellation_keeps_detail_tasks_tracked_for_shutdown() -> None:
+    client = _seeded_client()
+    client.block_detail_ids = set(client.details)
+    client.pages[("analysts", None)] = (
+        [detail.summary.ref for detail in client.details.values()],
+        None,
+    )
+    client.ignore_detail_cancellation = True
+    vm = make_history_vm(client)
+    setup = asyncio.create_task(vm.setup())
+    await asyncio.gather(
+        *(
+            client.detail_started.setdefault(execution_id, asyncio.Event()).wait()
+            for execution_id in client.block_detail_ids
+        )
+    )
+
+    setup.cancel()
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if client.detail_cancelled == client.block_detail_ids:
+            break
+    setup.cancel()
+    shutdown = asyncio.create_task(vm.shutdown())
+    try:
+        await asyncio.sleep(0)
+
+        assert not shutdown.done()
+        assert client.active_detail_ids == client.block_detail_ids
+        assert any(
+            not task.done()
+            for worker in vm._workers  # type: ignore[attr-defined]
+            for task in worker.tasks
+        )
+    finally:
+        client.release_details.set()
+        await asyncio.gather(setup, return_exceptions=True)
+        await shutdown
+
+    assert client.active_detail_ids == set()
+    assert vm.items == ()
 
 
 @pytest.mark.asyncio

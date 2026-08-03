@@ -1,11 +1,11 @@
-# BindingResolver Keystone — Design Spec
+# 1. BindingResolver Keystone — Design Spec
 
 **Date:** 2026-07-21
-**Status:** Approved (design brief) — pending implementation
+**Status:** Implemented; retained as the historical design record
 **Scope:** Keystone increment only. Quick Look, command palette, and the
 other deferred `*_requested` wirings are explicitly out of scope.
 
-## Goal
+## 1.1. Goal
 
 Route `AwsTuiApp`'s key bindings through the already-built
 `BindingResolver` + `KeymapStore` + `ActionRegistry` at runtime, so that
@@ -14,7 +14,7 @@ behavior byte-identical to today's hard-coded `BINDINGS`** (same keys,
 same handlers, same `priority`, same footer visibility, modulo one
 documented dedup).
 
-## Background / current state (verified in code)
+## 1.2. Background / current state (verified in code)
 
 - `src/aws_tui/ui/bindings.py` — `BindingResolver` is fully built and
   unit-tested: `to_textual_bindings()`, `resolve_action_id()`,
@@ -29,7 +29,7 @@ documented dedup).
   comment at `app.py:213` documents that the overlay is parsed but not
   routed.
 
-### The drift (the crux)
+### 1.2.1. The drift (the crux)
 
 `KeymapStore.DEFAULT_BINDINGS` and the live `BINDINGS` disagree. Wiring
 the resolver naively would regress behavior:
@@ -41,9 +41,9 @@ the resolver naively would regress behavior:
 | `comma`, `shift+up`, `shift+down` | `open_settings`, `mark_up`, `mark_down` | **absent** | add `app.open_settings`, `pane.mark_up`, `pane.mark_down` |
 | `space`,`/`,`v`,`a`,`m`,`n`,`ctrl+p`,`ctrl+k` | unbound | quick_look/filter/fuzzy_find/multiselect/select/move/new/palette | **handlerless → resolver skips them** (stay unbound, as today) |
 
-## Design
+## 1.3. Design
 
-### 1. `ActionRegistry` is the set of actually-handled actions
+### 1.3.1. `ActionRegistry` is the set of actually-handled actions
 
 At composition, register each live action id → its existing `action_*`
 handler (bound method). The registry becomes the authority on "what the
@@ -74,7 +74,7 @@ app can do."
 **Priority rule:** every handled action is `priority=True` **except**
 `app.quit`. (Matches today: only `q`/`ctrl+c` lack priority.)
 
-### 2. Resolver materializes only handled actions
+### 1.3.2. Resolver materializes only handled actions
 
 `to_textual_bindings()` gains a guard: emit a `Binding` for `action_id`
 **only when `ActionRegistry.has(action_id)`**. Deferred/handlerless
@@ -85,7 +85,7 @@ actions (`app.command_palette`, `pane.quick_look`, `pane.filter`,
 the runtime. `modal.cancel`, `emr.clone`, `emr.logs.filter` are
 widget/modal-scoped and untouched by this app-level keystone.
 
-### 3. Single dispatch entry point
+### 1.3.3. Single dispatch entry point
 
 Replace `_textual_action_name` (`pane.copy` → `pane_copy`, which would
 need ~20 `action_*` forwarders) with a **parameterized dispatch action**.
@@ -100,7 +100,7 @@ def action_dispatch(self, action_id: str) -> None | Awaitable[None]:
 `ActionRegistry.invoke` already returns `None | Awaitable[None]`; Textual
 awaits awaitable action returns, so async handlers keep working.
 
-### 4. Priority / show metadata
+### 1.3.4. Priority / show metadata
 
 `to_textual_bindings()` sets, per binding:
 - `show = (index == 0) and (action_id in _VISIBLE_ACTIONS)`
@@ -110,7 +110,7 @@ awaits awaitable action returns, so async handlers keep working.
 `bindings.py` derived from the table above (`_PRIORITY_ACTIONS` = all
 handled ids minus `app.quit`).
 
-### 5. Align `KeymapStore.DEFAULT_BINDINGS` to reproduce today's behavior
+### 1.3.5. Align `KeymapStore.DEFAULT_BINDINGS` to reproduce today's behavior
 
 Edits (handled actions only; deferred entries kept as documented):
 - `app.help`: `("?",)` → `("?", ":")`  *(`:` aliased to help until the
@@ -123,20 +123,20 @@ Edits (handled actions only; deferred entries kept as documented):
 - add `pane.mark_up`: `("shift+up",)`
 - add `pane.mark_down`: `("shift+down",)`
 
-### 6. Install resolver bindings at runtime
+### 1.3.6. Install resolver bindings at runtime
 
 `AwsTuiApp.BINDINGS` ClassVar becomes `[]` (or is removed). After the
 resolver is built in `__init__`, install its bindings via Textual's
 binding API (`self._bindings` / `bind()`), before first render. A test
 asserts Tab/arrow nav still fire (priority preserved).
 
-### 7. Overlays go live
+### 1.3.7. Overlays go live
 
 `AwsTuiApp` already loads the `[keybindings]` overlay into `KeymapStore`.
 Once the resolver drives `BINDINGS`, an overlay that remaps a handled
 action (e.g. `pane.copy = "ctrl+y"`) takes effect with no further work.
 
-## Backward-compatibility guarantee
+## 1.4. Backward-compatibility guarantee
 
 Every key that works today still works and invokes the same handler;
 `priority` preserved for all nav keys. **One documented deviation:** today
@@ -144,7 +144,7 @@ both `?` and `:` show a "Help" footer chip; under the single-visible-key
 model only `?` shows the chip (both keys still open help). This removes a
 duplicate chip — accepted, not a regression.
 
-## Testing (TDD)
+## 1.5. Testing (TDD)
 
 1. **Default fidelity** — build the resolver on a default `KeymapStore` +
    fully-registered `ActionRegistry`; assert `to_textual_bindings()`
@@ -166,7 +166,7 @@ Existing `bindings.py`/`keymap_store.py`/`actions.py` unit suites must
 stay green (adjust the resolver tests for the new skip/priority/dispatch
 behavior).
 
-## Out of scope
+## 1.6. Out of scope
 
 Quick Look (`space` + `preview_requested` subscriber), command palette
 (`:`/`ctrl+k` + `CommandPaletteVM` opening), `pane.enter_multiselect`,
@@ -174,7 +174,7 @@ Quick Look (`space` + `preview_requested` subscriber), command palette
 wirings — each a later gitflow increment. This keystone only makes the
 **currently-handled** actions overlay-driven.
 
-## Files touched
+## 1.7. Files touched
 
 - `src/aws_tui/ui/bindings.py` — skip-unregistered guard; `_VISIBLE_ACTIONS`
   / `_PRIORITY_ACTIONS`; dispatch-action emission.

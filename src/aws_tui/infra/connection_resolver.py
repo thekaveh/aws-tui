@@ -88,11 +88,21 @@ class Connection:
 
 
 def _default_aws_config_path() -> Path:
+    configured = os.environ.get("AWS_CONFIG_FILE")
+    if configured is not None:
+        return Path(os.path.expandvars(configured)).expanduser()
     return Path.home() / ".aws" / "config"
 
 
 def _default_aws_credentials_path() -> Path:
+    configured = os.environ.get("AWS_SHARED_CREDENTIALS_FILE")
+    if configured is not None:
+        return Path(os.path.expandvars(configured)).expanduser()
     return Path.home() / ".aws" / "credentials"
+
+
+def _default_aws_region() -> str:
+    return (os.environ.get("AWS_DEFAULT_REGION") or "").strip() or _DEFAULT_REGION
 
 
 class ConnectionResolver:
@@ -172,7 +182,7 @@ class ConnectionResolver:
                         kind="aws",
                         region=entry.region
                         or self._profile_region(entry.profile)
-                        or _DEFAULT_REGION,
+                        or _default_aws_region(),
                         source=SOURCE_CONFIG,
                         profile=entry.profile,
                     )
@@ -207,7 +217,7 @@ class ConnectionResolver:
             Connection(
                 name=name,
                 kind="aws",
-                region=region or _DEFAULT_REGION,
+                region=region or _default_aws_region(),
                 source=SOURCE_AUTO,
                 profile=name,
             )
@@ -262,12 +272,15 @@ class ConnectionResolver:
             service = spec[len("keychain:") :]
             if self._keychain is None:
                 return None, None, None
-            token = self._keychain.get(service, "session_token")
-            return (
-                self._keychain.get(service, "access_key_id"),
-                self._keychain.get(service, "secret_access_key"),
-                _blank_to_none(token),
-            )
+            try:
+                token = self._keychain.get(service, "session_token")
+                return (
+                    self._keychain.get(service, "access_key_id"),
+                    self._keychain.get(service, "secret_access_key"),
+                    _blank_to_none(token),
+                )
+            except Exception:
+                return None, None, None
         if spec.startswith("env:"):
             prefix = spec[len("env:") :]
             return (

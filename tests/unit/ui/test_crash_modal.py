@@ -50,11 +50,9 @@ async def test_crash_modal_continue_button_disabled_when_unsafe() -> None:
             assert "-danger" in modal.classes
             buttons = list(modal.query(ModalButton))
             cont = next(b for b in buttons if b.button_id == "crash-continue-btn")
-            # When can_continue=False the button gets the ``-disabled``
-            # class instead of Textual's stock ``Button.disabled`` —
-            # ModalButton is a structural Static with no built-in
-            # disabled state; ``action_continue`` guards via the VM.
             assert "-disabled" in cont.classes
+            assert cont.disabled is True
+            assert cont.can_focus is False
     finally:
         vm.dispose()
         hub.dispose()
@@ -86,6 +84,7 @@ async def test_crash_modal_continue_button_enabled_when_safe() -> None:
             # styling); the ``-disabled`` class must NOT be present.
             assert "-primary" in cont.classes
             assert "-disabled" not in cont.classes
+            assert cont.disabled is False
     finally:
         vm.dispose()
         hub.dispose()

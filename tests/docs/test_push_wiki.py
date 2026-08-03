@@ -1,7 +1,16 @@
+import os
 import subprocess
 from pathlib import Path
 
-from scripts.docs.push_wiki import DEFAULT_REMOTE, authenticated_remote, sync_wiki
+import pytest
+from scripts.docs.push_wiki import (
+    DEFAULT_REMOTE,
+    GITHUB_ED25519_KNOWN_HOST,
+    _ssh_host,
+    _write_github_known_hosts,
+    authenticated_remote,
+    sync_wiki,
+)
 
 
 def test_default_remote_targets_wiki_git():
@@ -9,15 +18,82 @@ def test_default_remote_targets_wiki_git():
 
 
 def test_authenticated_remote_uses_key_path():
-    cmd = authenticated_remote(DEFAULT_REMOTE, "/home/runner/.ssh/wiki_key")
+    cmd = authenticated_remote(
+        DEFAULT_REMOTE,
+        "/home/runner/.ssh/wiki_key",
+        "/home/runner/.ssh/github_known_hosts",
+    )
     assert "ssh" in cmd
     assert "/home/runner/.ssh/wiki_key" in cmd
     assert "IdentitiesOnly=yes" in cmd
+    assert "StrictHostKeyChecking=yes" in cmd
+    assert "UserKnownHostsFile=/home/runner/.ssh/github_known_hosts" in cmd
+    assert "GlobalKnownHostsFile=/dev/null" in cmd
+    assert "accept-new" not in cmd
 
 
 def test_authenticated_remote_quotes_key_path_with_space():
-    cmd = authenticated_remote(DEFAULT_REMOTE, "/tmp/my key/wiki_key")
+    cmd = authenticated_remote(
+        DEFAULT_REMOTE,
+        "/tmp/my key/wiki_key",
+        "/tmp/my key/known hosts",
+    )
     assert "'/tmp/my key/wiki_key'" in cmd  # shlex.quote wraps the spaced path
+    assert "UserKnownHostsFile='/tmp/my key/known hosts'" in cmd
+
+
+def test_bundled_github_host_key_is_written_privately(tmp_path):
+    known_hosts = tmp_path / "known_hosts"
+
+    _write_github_known_hosts(known_hosts)
+
+    assert known_hosts.read_text(encoding="utf-8") == GITHUB_ED25519_KNOWN_HOST
+    assert GITHUB_ED25519_KNOWN_HOST.startswith("github.com ssh-ed25519 ")
+    if os.name == "posix":
+        assert known_hosts.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    ("remote", "host"),
+    [
+        ("git@github.com:other/wiki.git", "github.com"),
+        ("ssh://git@github.com/other/wiki.git", "github.com"),
+        ("https://github.com/other/wiki.git", None),
+        ("git@example.com:docs/wiki.git", "example.com"),
+    ],
+)
+def test_ssh_host_detection(remote: str, host: str | None) -> None:
+    assert _ssh_host(remote) == host
+
+
+def test_non_github_ssh_remote_requires_an_explicit_trust_file(tmp_path):
+    from scripts.docs.push_wiki import push_wiki
+
+    src = tmp_path / "wiki"
+    src.mkdir()
+
+    with pytest.raises(ValueError, match="non-GitHub SSH"):
+        push_wiki(
+            src,
+            "git@example.com:docs/wiki.git",
+            "/tmp/wiki-key",
+            push=True,
+        )
+
+
+def test_push_rejects_non_ssh_remote(tmp_path):
+    from scripts.docs.push_wiki import push_wiki
+
+    src = tmp_path / "wiki"
+    src.mkdir()
+
+    with pytest.raises(ValueError, match="must be an SSH remote"):
+        push_wiki(
+            src,
+            "https://github.com/other/wiki.git",
+            "/tmp/wiki-key",
+            push=True,
+        )
 
 
 def test_sync_wiki_preserves_git_and_removes_stale(tmp_path):

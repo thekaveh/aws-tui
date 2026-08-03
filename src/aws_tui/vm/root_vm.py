@@ -16,6 +16,7 @@ caller so we can keep the test surface free of boto3.
 
 from __future__ import annotations
 
+from reactivex.abc import DisposableBase
 from vmx import ComponentVM, Message, MessageHub, RxDispatcher
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
@@ -30,6 +31,7 @@ from aws_tui.vm.content_host_vm import ContentHostVM
 from aws_tui.vm.messages import (
     ConnectionChangedMessage,
     FocusChangedMessage,
+    ServiceOperationFailedMessage,
     ThemeChangedMessage,
 )
 from aws_tui.vm.nav_menu_vm import NavMenuVM
@@ -68,12 +70,40 @@ class RootVM:
             registry=registry, hub=self._hub, dispatcher=self._dispatcher
         )
         self._content_host: ContentHostVM = ContentHostVM(
-            hub=self._hub, dispatcher=self._dispatcher
+            hub=self._hub,
+            dispatcher=self._dispatcher,
+            on_setup_error=self._report_content_setup_error,
         )
         self._chrome: ChromeVM = ChromeVM(hub=self._hub, dispatcher=self._dispatcher, keymap=keymap)
 
         self._inner: ComponentVM = (
             ComponentVM.builder().name("root").services(self._hub, self._dispatcher).build()
+        )
+        self._operation_failure_sub: DisposableBase | None = None
+
+    def _report_content_setup_error(self, error: BaseException) -> None:
+        self._log.error(
+            "content.setup.failed",
+            error_type=type(error).__name__,
+            error=str(error),
+        )
+
+    def _report_service_operation_failure(self, message: Message) -> None:
+        if not isinstance(message, ServiceOperationFailedMessage):
+            return
+        connection = self._connection
+        source = message.source or (connection.name if connection is not None else None)
+        region = message.region
+        if region is None and connection is not None and source == connection.name:
+            region = connection.region
+        self._log.error(
+            "service.operation.unexpected_failure",
+            service=message.service,
+            operation=message.operation,
+            source=source,
+            region=region,
+            error_type=message.error_type,
+            error=message.safe_error,
         )
 
     # ── Children accessors ──────────────────────────────────────────────────
@@ -127,6 +157,10 @@ class RootVM:
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:
+        if self._operation_failure_sub is None:
+            self._operation_failure_sub = self._hub.messages.subscribe(
+                on_next=self._report_service_operation_failure
+            )
         self._inner.construct()
         # Depth-first child construction so the chrome can listen to messages
         # the menu / content publish during their own construct.
@@ -135,17 +169,25 @@ class RootVM:
         self._content_host.construct()
 
     def destruct(self) -> None:
+        self._dispose_operation_failure_subscription()
         self._content_host.destruct()
         self._services_menu.destruct()
         self._chrome.destruct()
         self._inner.destruct()
 
     def dispose(self) -> None:
+        self._dispose_operation_failure_subscription()
         self._content_host.dispose()
         self._services_menu.dispose()
         self._chrome.dispose()
         self._inner.dispose()
         self._hub.dispose()
+
+    def _dispose_operation_failure_subscription(self) -> None:
+        subscription = self._operation_failure_sub
+        if subscription is not None:
+            subscription.dispose()
+            self._operation_failure_sub = None
 
     # ── Orchestration commands ─────────────────────────────────────────────
 
@@ -220,10 +262,12 @@ class RootVM:
         self._services_menu.switch_service_command.execute(service_id)
         try:
             await self._content_host.set_content(vm, service_id=service_id)
-        except Exception:
+        except BaseException:
             # Revert — host failed to adopt, ribbon must not advance.
             if prior_selection is not None:
                 self._services_menu.switch_service_command.execute(prior_selection)
+            if self._content_host.current is not vm:
+                vm.dispose()
             raise
 
     async def switch_theme(self, name: str) -> None:

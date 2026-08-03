@@ -8,7 +8,7 @@ sections:
   - id: getting-started
     title: Getting Started
     children:
-      - { id: install, title: Installation, source: docs/homebrew-bootstrap.md }
+      - { id: install, title: Installation, source: docs/install.md }
       - { id: platforms, title: Platforms, source: docs/platforms.md }
       - { id: connections, title: Connections, source: docs/connections.md }
   - id: using
@@ -20,9 +20,13 @@ sections:
   - id: development
     title: Development
     children:
-      - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture] }
+      - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture, operations-flow, deployment, lifecycle] }
       - { id: adding-service, title: Adding a Service, source: docs/adding-a-service.md }
       - { id: contract-ledger, title: Contract Ledger, source: docs/contract-ledger.md }
   - { id: releasing, title: Releasing, source: docs/RELEASING.md }
+  - { id: homebrew-bootstrap, title: Homebrew Bootstrap, source: docs/homebrew-bootstrap.md }
 diagrams:
   - { id: architecture, master: docs/diagrams/architecture.html }
+  - { id: operations-flow, master: docs/diagrams/operations-flow.html }
+  - { id: deployment, master: docs/diagrams/deployment.html }
+  - { id: lifecycle, master: docs/diagrams/lifecycle.html }

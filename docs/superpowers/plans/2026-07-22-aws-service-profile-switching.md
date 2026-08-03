@@ -1,4 +1,4 @@
-# Shared AWS Service Profile Switching Implementation Plan
+# 1. Shared AWS Service Profile Switching Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11-3.13, Textual 8.x, VMx 3.1.x, aioboto3/botocore, pytest, pytest-textual-snapshot.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Branch from `develop`; do not implement on `main` or `develop` directly.
 - S3 keeps one independent source per pane.
@@ -22,7 +22,7 @@
 
 ---
 
-### Task 1: Add the Shared Service Source Context
+### 1.1.1. Task 1: Add the Shared Service Source Context
 
 **Files:**
 - Create: `src/aws_tui/vm/service_source_vm.py`
@@ -189,7 +189,7 @@ git add src/aws_tui/vm/service_source_vm.py src/aws_tui/vm/emr_serverless/page_v
 git commit -m "feat: add shared AWS service source context"
 ```
 
-### Task 2: Make Connection and Service Switching Atomic in RootVM
+### 1.1.2. Task 2: Make Connection and Service Switching Atomic in RootVM
 
 **Files:**
 - Modify: `src/aws_tui/vm/root_vm.py`
@@ -337,7 +337,7 @@ git add src/aws_tui/vm/root_vm.py src/aws_tui/vm/content_host_vm.py tests/unit/v
 git commit -m "feat: switch AWS connection and service atomically"
 ```
 
-### Task 3: Route Service Widgets Through One View Factory
+### 1.1.3. Task 3: Route Service Widgets Through One View Factory
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/service_view_factory.py`
@@ -454,7 +454,7 @@ git add src/aws_tui/ui/widgets/service_view_factory.py src/aws_tui/app.py tests/
 git commit -m "refactor: centralize service view construction"
 ```
 
-### Task 4: Make Shift+S Cycle Single-Context AWS Connections
+### 1.1.4. Task 4: Make Shift+S Cycle Single-Context AWS Connections
 
 **Files:**
 - Modify: `src/aws_tui/app.py`
@@ -594,7 +594,7 @@ git add src/aws_tui/app.py tests/integration/test_service_source_swap.py tests/i
 git commit -m "feat: switch profiles within AWS service pages"
 ```
 
-### Task 5: Separate EMR Application Cycling From Source Switching
+### 1.1.5. Task 5: Separate EMR Application Cycling From Source Switching
 
 **Files:**
 - Modify: `src/aws_tui/infra/keymap_store.py`
@@ -689,7 +689,7 @@ git add src/aws_tui/infra/keymap_store.py src/aws_tui/vm/chrome/hint_legend_vm.p
 git commit -m "feat: separate EMR app and profile switching"
 ```
 
-### Task 6: Render the EMR Source Header and Complete Foundation Verification
+### 1.1.6. Task 6: Render the EMR Source Header and Complete Foundation Verification
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/service_source_header.py`

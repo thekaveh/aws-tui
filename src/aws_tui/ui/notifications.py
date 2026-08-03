@@ -63,6 +63,7 @@ Subject = Literal[
     "Transfer",
     "Settings",
     "Auth",
+    "Command",
     "Job",
 ]
 """Canonical subject vocabulary.

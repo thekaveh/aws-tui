@@ -1,4 +1,4 @@
-# AWS Glue Service Implementation Plan
+# 1. AWS Glue Service Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11-3.13, Textual 8.x, VMx 3.1.x (`TokenPagedComposition`), aioboto3/botocore Glue API, pytest, pytest-textual-snapshot.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Requires the completed shared profile-switching plan.
 - Glue supports only `Connection.kind == "aws"`.
@@ -23,7 +23,7 @@
 
 ---
 
-### Task 1: Define Shared Catalog Domain Models
+### 1.1.1. Task 1: Define Shared Catalog Domain Models
 
 **Files:**
 - Create: `src/aws_tui/domain/data_catalog.py`
@@ -235,7 +235,7 @@ git add src/aws_tui/domain/data_catalog.py tests/unit/domain/test_data_catalog.p
 git commit -m "feat: add shared data catalog models"
 ```
 
-### Task 2: Implement the Paginated Glue Domain Client
+### 1.1.2. Task 2: Implement the Paginated Glue Domain Client
 
 **Files:**
 - Create: `src/aws_tui/domain/glue.py`
@@ -440,7 +440,7 @@ git add src/aws_tui/domain/glue.py tests/unit/domain/test_glue.py tests/unit/dom
 git commit -m "feat: add paginated Glue domain client"
 ```
 
-### Task 3: Build Glue Catalog, Jobs, and Crawlers ViewModels
+### 1.1.3. Task 3: Build Glue Catalog, Jobs, and Crawlers ViewModels
 
 **Files:**
 - Create: `src/aws_tui/vm/glue/__init__.py`
@@ -554,7 +554,7 @@ git add src/aws_tui/vm/glue tests/unit/vm/glue
 git commit -m "feat: add Glue catalog jobs and crawlers viewmodels"
 ```
 
-### Task 4: Build the Glue Textual Page
+### 1.1.4. Task 4: Build the Glue Textual Page
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/glue/__init__.py`
@@ -649,7 +649,7 @@ git add src/aws_tui/ui/widgets/glue src/aws_tui/ui/widgets/service_view_factory.
 git commit -m "feat: add Glue service page"
 ```
 
-### Task 5: Register Glue and Add Multi-Profile Demo Data
+### 1.1.5. Task 5: Register Glue and Add Multi-Profile Demo Data
 
 **Files:**
 - Create: `src/aws_tui/services/glue/__init__.py`
@@ -708,7 +708,7 @@ GlueClientFactory = Callable[[Connection], GlueClientProtocol]
 
 
 class GlueService:
-    descriptor = ServiceDescriptor(id="glue", label="Glue", icon="🔗")
+    descriptor = ServiceDescriptor(id="glue", label="Glue", icon="\U0001f517")
 
     def build_vm(self, connection: Connection) -> GluePageVM:
         client = (
@@ -746,7 +746,7 @@ git add src/aws_tui/services/glue src/aws_tui/demo/in_memory_glue.py src/aws_tui
 git commit -m "feat: register Glue service and demo data"
 ```
 
-### Task 6: Add Glue-to-S3 Handoff, Documentation, and Full Verification
+### 1.1.6. Task 6: Add Glue-to-S3 Handoff, Documentation, and Full Verification
 
 **Files:**
 - Modify: `src/aws_tui/vm/messages.py`

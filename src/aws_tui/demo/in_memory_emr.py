@@ -19,10 +19,11 @@ production polishes over the original test fake:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import datetime
 
-from aws_tui.domain.emr_logs import EmrServerlessLogsClient
+from aws_tui.domain.emr_logs import LogChunk, LogFile, LogFileKind, LogFilter
 from aws_tui.domain.emr_serverless import (
     EMR_BOTO_CONFIG,
     ApplicationState,
@@ -62,23 +63,70 @@ class InMemoryEmr:
         # Dummy attributes for JobRunLogsVM constructor (not used by fake).
         self._session = None
         self._region_name = None
+        self.boto_config = EMR_BOTO_CONFIG
         # Active state-walk tasks scheduled by ``start_job_run``.
         # Tracked so ``dispose()`` can cancel them on demo shutdown
         # (otherwise asyncio surfaces "Task was destroyed but it is
         # pending" warnings).
         self._state_tasks: set[asyncio.Task[None]] = set()
+        self._log_files: dict[str, tuple[LogFile, tuple[str, ...]]] = {}
 
-    def make_logs_client(self) -> EmrServerlessLogsClient:
+    def make_logs_client(self) -> InMemoryEmr:
         """Build the logs facade paired with this in-memory client.
 
-        Demo/test EMR jobs never fetch real S3 logs, but the page VM
-        still owns a JobRunLogsVM. Returning an explicit facade keeps
-        service composition from reaching into the fake's internals.
+        The fake implements the logs-client protocol directly so demo jobs can
+        exercise log discovery, filtering, and rendering without network I/O.
         """
-        return EmrServerlessLogsClient(
-            session=self._session,
-            region_name=self._region_name,
-            boto_config=EMR_BOTO_CONFIG,
+        return self
+
+    def add_log_file(
+        self,
+        *,
+        application_id: str,
+        job_run_id: str,
+        kind: LogFileKind,
+        lines: tuple[str, ...],
+    ) -> LogFile:
+        worker, filename = {
+            LogFileKind.DRIVER_STDOUT: ("SPARK_DRIVER", "stdout.gz"),
+            LogFileKind.DRIVER_STDERR: ("SPARK_DRIVER", "stderr.gz"),
+            LogFileKind.EXECUTOR_STDOUT: ("SPARK_EXECUTOR/1", "stdout.gz"),
+            LogFileKind.EXECUTOR_STDERR: ("SPARK_EXECUTOR/1", "stderr.gz"),
+            LogFileKind.HIVE_DRIVER_STDOUT: ("HIVE_DRIVER", "stdout.gz"),
+            LogFileKind.HIVE_DRIVER_STDERR: ("HIVE_DRIVER", "stderr.gz"),
+            LogFileKind.TEZ_TASK_STDOUT: ("TEZ_TASK/1", "stdout.gz"),
+            LogFileKind.TEZ_TASK_STDERR: ("TEZ_TASK/1", "stderr.gz"),
+        }[kind]
+        key = f"logs/applications/{application_id}/jobs/{job_run_id}/{worker}/{filename}"
+        log_file = LogFile(key=key, kind=kind, size=sum(len(line) + 1 for line in lines))
+        self._log_files[key] = (log_file, lines)
+        return log_file
+
+    async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]:
+        await asyncio.sleep(_DEMO_LATENCY_SEC)
+        _ = bucket
+        prefix = run_prefix.rstrip("/") + "/"
+        return [file for key, (file, _lines) in self._log_files.items() if key.startswith(prefix)]
+
+    async def stream(
+        self,
+        *,
+        log_file: LogFile,
+        bucket: str,
+        max_bytes: int,
+        filter_: LogFilter,
+    ) -> AsyncIterator[LogChunk]:
+        await asyncio.sleep(_DEMO_LATENCY_SEC)
+        _ = bucket
+        _file, lines = self._log_files[log_file.key]
+        matched = tuple(line for line in lines if filter_.matches(line))
+        bytes_read = min(log_file.size or 0, max_bytes)
+        yield LogChunk(
+            lines=matched,
+            bytes_read=bytes_read,
+            lines_scanned=len(lines),
+            matched_count=len(matched),
+            truncated=(log_file.size or 0) > max_bytes,
         )
 
     # ── Test seeding ────────────────────────────────────────────────────────

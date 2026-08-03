@@ -4,7 +4,6 @@ import asyncio
 from typing import Any
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
@@ -12,9 +11,11 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueJobRunSummary, GlueJobSummary
+from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 
 class GlueJobsVM:
@@ -34,7 +35,7 @@ class GlueJobsVM:
         self._shutdown_lock = asyncio.Lock()
         self._operations = _operations or GlueOperationOwner()
         self._owns_operations = _operations is None
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -179,6 +180,9 @@ class GlueJobsVM:
             if generation != self._job_generation:
                 return
             state, self._jobs_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_jobs", error=exc
+            )
             self._set_state("_jobs_state", state, "state")
             return
         if generation != self._job_generation:
@@ -211,6 +215,9 @@ class GlueJobsVM:
             if generation != self._job_generation:
                 return
             state, self._jobs_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_jobs", error=exc
+            )
             self._set_state("_jobs_state", state, "state")
             return
         if generation == self._job_generation:
@@ -259,6 +266,9 @@ class GlueJobsVM:
             if generation != self._run_generation:
                 return
             state, self._runs_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_job_runs", error=exc
+            )
             self._set_state("_runs_state", state, "runs_state")
             return
         if generation == self._run_generation:
@@ -293,6 +303,9 @@ class GlueJobsVM:
             if generation != self._run_generation:
                 return
             state, self._runs_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_job_runs", error=exc
+            )
             self._set_state("_runs_state", state, "runs_state")
             return
         if generation != self._run_generation:

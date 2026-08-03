@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from textual.widgets import DataTable
+from textual.worker import WorkerCancelled
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
@@ -75,7 +76,8 @@ async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
         workers = list(pilot.app.workers._workers)  # type: ignore[attr-defined]
         if not workers:
             break
-        await pilot.app.workers.wait_for_complete(workers)
+        with contextlib.suppress(WorkerCancelled):
+            await pilot.app.workers.wait_for_complete(workers)
         await pilot.pause()
 
     # Layer 2: await the ContentHostVM._setup_task directly.
@@ -149,11 +151,11 @@ async def _show_profile_iceberg(  # type: ignore[no-untyped-def]
     app = pilot.app
     ctx = app.app_ctx
     connection = ctx.connection_resolver.resolve(profile)
-    await ctx.root_vm.switch_connection_and_service(
+    await ctx.root_vm.switch_connection_with(
         connection,
         TokenState.CONNECTED,
-        "glue",
     )
+    ctx.root_vm.services_menu.switch_service_command.execute("glue")
     await _drain_workers(pilot)
     page = ctx.root_vm.content_host.current
     assert isinstance(page, GluePageVM)

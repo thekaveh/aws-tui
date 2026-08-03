@@ -31,6 +31,7 @@ from aws_tui.domain.query import (
     QueryStatistics,
 )
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     valid_athena_query_error,
@@ -39,9 +40,9 @@ from aws_tui.vm.athena._domain_validation import (
     valid_query_statistics,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _QUERY_ERROR = "Athena query request failed"
 _CONTEXT_ERROR = "Athena returned a query outside the active context"
@@ -536,9 +537,9 @@ class AthenaQueryVM:
                 if generation == self._generation:
                     self._apply_provider_error(exc)
                 return
-            except Exception:
+            except Exception as exc:
                 if generation == self._generation:
-                    self._apply_unexpected_error()
+                    self._apply_unexpected_error("start_query", exc)
                 return
             finally:
                 if generation == self._generation:
@@ -567,9 +568,9 @@ class AthenaQueryVM:
             except ProviderError as exc:
                 if generation == self._generation:
                     self._apply_provider_error(exc)
-            except Exception:
+            except Exception as exc:
                 if generation == self._generation:
-                    self._apply_unexpected_error()
+                    self._apply_unexpected_error("get_query_execution", exc)
         finally:
             if self._execution_task is task:
                 self._execution_task = None
@@ -636,9 +637,9 @@ class AthenaQueryVM:
             if report_error:
                 self._apply_provider_error(exc)
             return False
-        except Exception:
+        except Exception as exc:
             if report_error:
-                self._apply_unexpected_error()
+                self._apply_unexpected_error("stop_query_execution", exc)
             return False
         return True
 
@@ -744,7 +745,8 @@ class AthenaQueryVM:
         self._notify("pane_state")
         self._notify("error_text")
 
-    def _apply_unexpected_error(self) -> None:
+    def _apply_unexpected_error(self, operation: str, exc: BaseException) -> None:
+        report_unexpected_service_error(self._hub, service="athena", operation=operation, error=exc)
         self._pane_state, self._error_text = map_unexpected_error(
             fallback=_QUERY_ERROR,
         )

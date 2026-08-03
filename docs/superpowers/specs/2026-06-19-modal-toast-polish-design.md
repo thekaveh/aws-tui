@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-19
 **Author:** Kaveh (with Claude pair-design)
-**Status:** Approved for implementation
+**Status:** Implemented; retained as a historical design record
 **Tracks:** `ConfirmModal`, `ThemePickerModal`, `ServicesMenu` rail + `ServicesHamburger`, `TransfersOverlay` + `TransferRowWidget`, `ToastStack` + `Toast`
 
 ## 1.1. Motivation

@@ -4,15 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>aws-tui Integrated AWS Architecture</title>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Regular.ttf") format("truetype"); font-style: normal; font-weight: 400; }
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Bold.ttf") format("truetype"); font-style: normal; font-weight: 600 700; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       min-height: 100vh;
       padding: 32px;
       background: #020617;
       color: #f8fafc;
-      font-family: "JetBrains Mono", monospace;
+      font-family: "Fira Code Embedded", monospace;
     }
     .container { width: min(1600px, 100%); margin: 0 auto; }
     .header { margin-bottom: 24px; }
@@ -68,8 +69,8 @@
 
     <section class="diagram-container">
       <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diagram-title diagram-desc">
-        <title id="diagram-title">aws-tui Glue, Athena, Iceberg, and S3 architecture</title>
-        <desc id="diagram-desc">Five enforced application layers connect Textual service pages to VMx viewmodels, service plugins, typed domain adapters, and infrastructure. Immutable table and S3 messages preserve exact connection and region identity across Glue, Athena, Iceberg metadata, and S3 workflows.</desc>
+        <title id="diagram-title">aws-tui EMR Serverless, Glue, Athena, Iceberg, and S3 architecture</title>
+        <desc id="diagram-desc">Five enforced application layers connect Textual S3, EMR Serverless, Glue, and Athena pages to VMx viewmodels, service plugins, typed domain adapters, and infrastructure. Immutable table and S3 messages preserve exact connection and region identity across Glue, Athena, Iceberg metadata, and S3 workflows.</desc>
         <defs>
           <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
             <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
@@ -116,20 +117,20 @@
           <path data-route="orthogonal" d="M 710 310 L 750 310" stroke="#34d399" marker-end="url(#arrow-emerald)"/>
           <path data-route="orthogonal" d="M 940 310 L 1080 310 L 1080 110 L 1070 110" stroke="#22d3ee" marker-end="url(#arrow-cyan)"/>
 
-          <path data-route="orthogonal" d="M 168 432 L 168 462 L 195 462 L 195 515" stroke="#a78bfa" marker-end="url(#arrow-violet)"/>
-          <path data-route="orthogonal" d="M 598 432 L 598 462 L 470 462 L 470 515" stroke="#a78bfa" marker-end="url(#arrow-violet)"/>
-          <path data-route="orthogonal" d="M 813 432 L 813 462 L 755 462 L 755 515" stroke="#a78bfa" marker-end="url(#arrow-violet)"/>
+          <path data-route="orthogonal" d="M 168 432 L 168 462 L 160 462 L 160 515" stroke="#a78bfa" marker-end="url(#arrow-violet)"/>
+          <path data-route="orthogonal" d="M 383 432 L 383 462 L 360 462 L 360 515" stroke="#a78bfa" marker-end="url(#arrow-violet)"/>
+          <path data-route="orthogonal" d="M 598 432 L 598 462 L 760 462 L 760 515" stroke="#a78bfa" marker-end="url(#arrow-violet)"/>
+          <path data-route="orthogonal" d="M 813 432 L 813 462 L 970 462 L 970 515" stroke="#a78bfa" marker-end="url(#arrow-violet)"/>
 
-          <path data-route="orthogonal" d="M 340 590 L 340 625 L 250 625 L 250 664" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-          <path data-route="orthogonal" d="M 660 590 L 660 625 L 565 625 L 565 664" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-          <path data-route="orthogonal" d="M 930 590 L 930 625 L 890 625 L 890 664" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+          <path data-route="orthogonal" d="M 160 590 L 160 625 L 250 625 L 250 664" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+          <path data-route="orthogonal" d="M 360 590 L 360 620 L 290 620 L 290 664" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+          <path data-route="orthogonal" d="M 760 590 L 760 625 L 565 625 L 565 664" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+          <path data-route="orthogonal" d="M 970 590 L 970 625 L 890 625 L 890 664" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
 
-          <path data-route="orthogonal" d="M 595 545 L 605 545 L 605 596 L 1140 596 L 1140 105 L 1190 105" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-          <path data-route="orthogonal" d="M 890 545 L 900 545 L 900 600 L 1125 600 L 1125 235 L 1190 235" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-          <path data-route="orthogonal" d="M 890 570 L 895 570 L 895 606 L 1110 606 L 1110 365 L 1190 365" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-          <path data-route="orthogonal" d="M 1070 545 L 1095 545 L 1095 260 L 1190 260" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
-          <path data-route="orthogonal" d="M 1380 145 L 1380 195" stroke="#fb7185" stroke-dasharray="5,4" marker-end="url(#arrow-rose)"/>
-          <path data-route="orthogonal" d="M 1380 275 L 1380 325" stroke="#fb7185" stroke-dasharray="5,4" marker-end="url(#arrow-rose)"/>
+          <path data-route="orthogonal" d="M 250 545 L 260 545 L 260 608 L 1140 608 L 1140 282 L 1190 282" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+          <path data-route="orthogonal" d="M 450 545 L 460 545 L 460 600 L 1120 600 L 1120 377 L 1190 377" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+          <path data-route="orthogonal" d="M 850 545 L 860 545 L 860 596 L 1150 596 L 1150 92 L 1190 92" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
+          <path data-route="orthogonal" d="M 1070 545 L 1090 545 L 1090 187 L 1190 187" stroke="#fbbf24" marker-end="url(#arrow-amber)"/>
 
           <path data-route="orthogonal" d="M 1288 694 L 1300 694" stroke="#fb923c" marker-end="url(#arrow-slate)"/>
           <path data-route="orthogonal" d="M 1416 694 L 1428 694" stroke="#fb923c" marker-end="url(#arrow-slate)"/>
@@ -165,15 +166,15 @@
           <rect x="70" y="210" width="205" height="118" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
           <text x="173" y="233" fill="#f8fafc" font-size="10" font-weight="600" text-anchor="middle">RootVM + ContentHostVM</text>
           <text x="173" y="252" fill="#a7f3d0" font-size="6.5" text-anchor="middle">ServiceSelectionStore · service_source_vm.py</text>
-          <text x="173" y="282" fill="#fda4af" font-size="7" text-anchor="middle">await Athena shutdown</text>
+          <text x="173" y="282" fill="#fda4af" font-size="7" text-anchor="middle">await hosted VM shutdown</text>
           <text x="173" y="299" fill="#fda4af" font-size="7" text-anchor="middle">then dispose outgoing VM</text>
           <rect x="300" y="210" width="200" height="65" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
           <text x="400" y="232" fill="#f8fafc" font-size="10" font-weight="600" text-anchor="middle">GluePageVM</text>
-          <text x="400" y="250" fill="#94a3b8" font-size="6.5" text-anchor="middle">GlueCatalogVM · JobsVM · CrawlersVM</text>
+          <text x="400" y="250" fill="#94a3b8" font-size="6.5" text-anchor="middle">GlueCatalogVM · GlueJobsVM · GlueCrawlersVM</text>
           <text x="400" y="266" fill="#a7f3d0" font-size="8" text-anchor="middle">GlueIcebergVM</text>
           <rect x="520" y="210" width="310" height="65" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
           <text x="675" y="230" fill="#f8fafc" font-size="10" font-weight="600" text-anchor="middle">AthenaPageVM</text>
-          <text x="675" y="246" fill="#94a3b8" font-size="7" text-anchor="middle">QueryVM · HistoryVM · ResultsVM · SavedVM</text>
+          <text x="675" y="246" fill="#94a3b8" font-size="6.5" text-anchor="middle">AthenaQueryVM · AthenaHistoryVM · AthenaResultsVM · AthenaSavedVM</text>
           <text x="675" y="260" fill="#a7f3d0" font-size="7" text-anchor="middle">explicit editor execution</text>
           <text x="675" y="271" fill="#94a3b8" font-size="6.5" text-anchor="middle">transactional snapshot + restore</text>
           <rect x="850" y="210" width="220" height="65" rx="6" fill="#0f172a" stroke="#fb923c" stroke-width="1.5"/>
@@ -213,22 +214,27 @@
         <text x="58" y="497" fill="#fbbf24" font-size="12" font-weight="700">DOMAIN</text>
         <g id="domain-models">
           <text x="1080" y="500" fill="#94a3b8" font-size="6.5" text-anchor="end">runtime AWS + filesystem I/O</text>
-          <rect x="70" y="515" width="250" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
-          <text x="195" y="537" fill="#f8fafc" font-size="10" font-weight="600" text-anchor="middle">TableRef + QueryContext</text>
-          <text x="195" y="554" fill="#fde68a" font-size="7" text-anchor="middle">catalog · database · table · workgroup</text>
-          <text x="195" y="570" fill="#94a3b8" font-size="7" text-anchor="middle">exact connection + region</text>
-          <rect x="345" y="515" width="250" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
-          <text x="470" y="537" fill="#f8fafc" font-size="10" font-weight="600" text-anchor="middle">GlueClient</text>
-          <text x="470" y="554" fill="#94a3b8" font-size="7" text-anchor="middle">catalog · jobs · crawlers</text>
-          <text x="470" y="570" fill="#fde68a" font-size="7" text-anchor="middle">TableFormat detection</text>
-          <rect x="620" y="515" width="270" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
-          <text x="755" y="537" fill="#f8fafc" font-size="10" font-weight="600" text-anchor="middle">AthenaClient + AthenaQueryRunner</text>
-          <text x="755" y="554" fill="#94a3b8" font-size="7" text-anchor="middle">start · poll · stop · bounded results</text>
-          <text x="755" y="570" fill="#fde68a" font-size="7" text-anchor="middle">ReadOnlySqlPolicy</text>
-          <rect x="915" y="515" width="155" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
-          <text x="993" y="537" fill="#f8fafc" font-size="10" font-weight="600" text-anchor="middle">IcebergInspector</text>
-          <text x="993" y="554" fill="#fde68a" font-size="7" text-anchor="middle">bounded metadata SQL</text>
-          <text x="993" y="570" fill="#94a3b8" font-size="7" text-anchor="middle">snapshots → refs</text>
+          <rect x="70" y="515" width="180" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="160" y="537" fill="#f8fafc" font-size="9" font-weight="600" text-anchor="middle">S3FS + LocalFS</text>
+          <text x="160" y="554" fill="#fde68a" font-size="6.5" text-anchor="middle">CrossFsCopy / Move</text>
+          <text x="160" y="570" fill="#94a3b8" font-size="6.5" text-anchor="middle">TransferJournal</text>
+          <rect x="270" y="515" width="180" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="360" y="537" fill="#f8fafc" font-size="8.5" font-weight="600" text-anchor="middle">EMR Serverless Client</text>
+          <text x="360" y="554" fill="#fde68a" font-size="6.5" text-anchor="middle">applications · job runs</text>
+          <text x="360" y="570" fill="#94a3b8" font-size="6.5" text-anchor="middle">S3 log adapter</text>
+          <rect x="470" y="515" width="180" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="560" y="537" fill="#f8fafc" font-size="8.5" font-weight="600" text-anchor="middle">TableRef + QueryContext</text>
+          <text x="560" y="554" fill="#fde68a" font-size="6.5" text-anchor="middle">catalog · table · workgroup</text>
+          <text x="560" y="570" fill="#94a3b8" font-size="6.5" text-anchor="middle">exact connection + region</text>
+          <rect x="670" y="515" width="180" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="760" y="537" fill="#f8fafc" font-size="9" font-weight="600" text-anchor="middle">GlueClient</text>
+          <text x="760" y="554" fill="#94a3b8" font-size="6.5" text-anchor="middle">catalog · jobs · crawlers</text>
+          <text x="760" y="570" fill="#fde68a" font-size="6.5" text-anchor="middle">TableFormat detection</text>
+          <rect x="870" y="515" width="200" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="970" y="535" fill="#f8fafc" font-size="8" font-weight="600" text-anchor="middle">AthenaClient + AthenaQueryRunner</text>
+          <text x="970" y="551" fill="#fde68a" font-size="6.5" text-anchor="middle">ReadOnlySqlPolicy</text>
+          <text x="970" y="566" fill="#f8fafc" font-size="7" font-weight="600" text-anchor="middle">IcebergInspector</text>
+          <text x="970" y="580" fill="#94a3b8" font-size="6.5" text-anchor="middle">bounded metadata SQL</text>
         </g>
 
         <rect x="40" y="640" width="1060" height="95" rx="8" fill="#30101b" fill-opacity="0.45" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="8,4"/>
@@ -246,18 +252,18 @@
         <rect x="1150" y="20" width="430" height="590" rx="12" fill="#171307" fill-opacity="0.35" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
         <text x="1170" y="43" fill="#fbbf24" font-size="10" font-weight="700">AWS ACCOUNT / REGION BOUNDARY</text>
         <g id="aws-services">
-          <rect x="1190" y="70" width="350" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
-          <text x="1365" y="95" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">AWS Glue</text>
-          <text x="1365" y="113" fill="#fde68a" font-size="8" text-anchor="middle">Catalog · Jobs · Crawlers</text>
-          <text x="1365" y="129" fill="#94a3b8" font-size="7" text-anchor="middle">read-only boto operations</text>
-          <rect x="1190" y="200" width="350" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
-          <text x="1365" y="225" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Amazon Athena</text>
-          <text x="1365" y="243" fill="#fde68a" font-size="8" text-anchor="middle">query execution + Iceberg metadata tables</text>
-          <text x="1365" y="259" fill="#94a3b8" font-size="7" text-anchor="middle">workgroup limits + bytes scanned</text>
-          <rect x="1190" y="330" width="350" height="75" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
-          <text x="1365" y="355" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Amazon S3</text>
-          <text x="1365" y="373" fill="#fde68a" font-size="8" text-anchor="middle">table data · manifests · result artifacts</text>
-          <text x="1365" y="389" fill="#94a3b8" font-size="7" text-anchor="middle">exact-profile browse and reveal</text>
+          <rect x="1190" y="60" width="350" height="65" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="1365" y="85" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">AWS Glue</text>
+          <text x="1365" y="104" fill="#fde68a" font-size="8" text-anchor="middle">Catalog · Jobs · Crawlers</text>
+          <rect x="1190" y="155" width="350" height="65" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="1365" y="180" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Amazon Athena</text>
+          <text x="1365" y="199" fill="#fde68a" font-size="8" text-anchor="middle">query execution + Iceberg metadata</text>
+          <rect x="1190" y="250" width="350" height="65" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="1365" y="275" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Amazon S3</text>
+          <text x="1365" y="294" fill="#fde68a" font-size="8" text-anchor="middle">objects · logs · result artifacts</text>
+          <rect x="1190" y="345" width="350" height="65" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="1365" y="370" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">EMR Serverless</text>
+          <text x="1365" y="389" fill="#fde68a" font-size="8" text-anchor="middle">applications · job runs · S3 logs</text>
           <rect x="1190" y="460" width="350" height="75" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="1.5"/>
           <text x="1365" y="485" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Lake Formation + IAM + KMS</text>
           <text x="1365" y="503" fill="#fda4af" font-size="8" text-anchor="middle">authorization remains authoritative</text>
@@ -294,7 +300,7 @@
           <rect x="720" y="802" width="22" height="16" rx="3" fill="#0f172a" stroke="#fbbf24"/>
           <text x="754" y="815" fill="#94a3b8" font-size="8">opaque component mask; arrows remain behind boxes</text>
           <text x="35" y="855" fill="#64748b" font-size="8">All table handoffs preserve catalog, database, table, connection name, and region. Iceberg metadata and generated table SQL are read-only.</text>
-          <text x="35" y="873" fill="#64748b" font-size="8">Every diagram element maps to src/aws_tui; no service imports another service's Textual view.</text>
+          <text x="35" y="873" fill="#64748b" font-size="8">Internal elements map to src/aws_tui; external boundaries identify consumed systems and APIs.</text>
         </g>
       </svg>
     </section>

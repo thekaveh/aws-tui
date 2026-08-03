@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import cast
 
@@ -64,7 +65,10 @@ class _EndpointSecretFailureFS:
     async def mkdir(self, _path: PathRef) -> None:
         raise NotImplementedError
 
-    async def delete(self, _path: PathRef) -> None:
+    async def delete(self, _path: PathRef, *, expected_etag: str | None = None) -> None:
+        raise NotImplementedError
+
+    async def delete_empty_directory(self, _path: PathRef) -> None:
         raise NotImplementedError
 
     async def rename(self, _src: PathRef, _dst: PathRef) -> None:
@@ -82,6 +86,7 @@ class _EndpointSecretFailureFS:
         *,
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
+        overwrite: bool = False,
     ) -> None:
         raise NotImplementedError
 
@@ -108,6 +113,35 @@ async def test_pane_dispose_clears_filtered_projection_before_entries() -> None:
 
     assert pane.entries == ()
     assert pane.filtered_entries == ()
+
+
+@pytest.mark.asyncio
+async def test_stale_reload_cannot_publish_after_provider_swap() -> None:
+    old = InMemoryFS()
+    new = InMemoryFS()
+    await old.write_stream(PathRef(("old.txt",)), _astream(b"old"))
+    await new.write_stream(PathRef(("new.txt",)), _astream(b"new"))
+    old_list = old.list
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_list(path: PathRef) -> list[FileEntry]:
+        started.set()
+        await release.wait()
+        return await old_list(path)
+
+    old.list = blocked_list  # type: ignore[method-assign]
+    pane = PaneVM(provider=old, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane.construct()
+    stale = asyncio.create_task(pane.refresh())
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await pane.swap_provider(new, identity_label="new")
+    release.set()
+    await stale
+
+    assert [entry.entry.name for entry in pane.entries] == ["new.txt"]
+    pane.dispose()
 
 
 @pytest.mark.asyncio
@@ -224,9 +258,9 @@ async def test_pane_delete_marked_ignores_manually_marked_parent_link() -> None:
             super().__init__()
             self.deleted: list[PathRef] = []
 
-        async def delete(self, path: PathRef) -> None:
+        async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
             self.deleted.append(path)
-            await super().delete(path)
+            await super().delete(path, expected_etag=expected_etag)
 
     fs = _RecordingFS()
     await fs.mkdir(PathRef(("b",)))
@@ -254,12 +288,12 @@ async def test_pane_delete_marked_partial_failure_aggregates_and_reloads() -> No
     though the first N-1 were already gone."""
 
     class _FailOnAlpha(InMemoryFS):
-        async def delete(self, path: PathRef) -> None:
+        async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
             # Refuse to delete ``a.txt`` specifically; the other
             # marked entries still complete.
             if path.name == "a.txt":
                 raise PermissionDeniedError("forbidden a.txt")
-            await super().delete(path)
+            await super().delete(path, expected_etag=expected_etag)
 
     fs = _FailOnAlpha()
     await fs.mkdir(PathRef(("b",)))
@@ -338,14 +372,14 @@ class _UnreachableFS:
         raise NotFoundError("never")
 
     async def mkdir(self, _path: PathRef) -> None: ...
-    async def delete(self, _path: PathRef) -> None: ...
+    async def delete(self, _path: PathRef, *, expected_etag: str | None = None) -> None: ...
+    async def delete_empty_directory(self, _path: PathRef) -> None: ...
     async def rename(self, _s: PathRef, _d: PathRef) -> None: ...
 
     async def read_stream(
         self, _path: PathRef, *, chunk_size: int = 8 * 1024 * 1024
     ) -> AsyncIterator[bytes]:  # pragma: no cover
         raise NotFoundError("never")
-        yield b""
 
     async def write_stream(  # pragma: no cover
         self,
@@ -354,6 +388,7 @@ class _UnreachableFS:
         *,
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
+        overwrite: bool = False,
     ) -> None: ...
 
 

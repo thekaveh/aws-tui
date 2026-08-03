@@ -22,11 +22,11 @@ and PR #100(a) (single ``on_current_changed`` on selection move).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from typing import Any
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import (
     ComponentVMOf,
     CompositeVM,
@@ -41,8 +41,10 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
+from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _ALL_STATES: frozenset[JobRunState] = frozenset(JobRunState)
 
@@ -127,11 +129,12 @@ class JobRunsVM:
         self._error_text: str | None = None
         self._state_filter: frozenset[JobRunState] = _ALL_STATES
         self._disposed: bool = False
+        self._paging_lock = asyncio.Lock()
         # Per-VM Observable (round-3 / PR #103 retirement path): fires
         # the name of the property that just changed, scoped to THIS
         # VM instance. Views can subscribe here instead of filtering
         # ``MessageHub`` events by ``sender_object``.
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         # CompositeVM owns the per-row VMs + the canonical ``current``
         # slot. ``selected_id`` is derived; the composite is NOT
         # exposed in the public surface (round-3 directive §9.bis.11).
@@ -258,6 +261,10 @@ class JobRunsVM:
         self.set_state_filter(frozenset(states))
 
     async def refresh(self) -> None:
+        async with self._paging_lock:
+            await self._refresh_locked()
+
+    async def _refresh_locked(self) -> None:
         """Reset paging and fetch the first page of runs.
 
         Wipes the accumulated cache + next-token, then drains one
@@ -302,6 +309,9 @@ class JobRunsVM:
             if self._application_id != target_app_id:
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
+            report_unexpected_service_error(
+                self._hub, service="emr-serverless", operation="list_job_runs", error=exc
+            )
             self._set_state(PaneState.ERROR)
             return
         finally:
@@ -323,6 +333,10 @@ class JobRunsVM:
         self._set_state(PaneState.IDLE if self.runs else PaneState.EMPTY)
 
     async def load_more(self) -> None:
+        async with self._paging_lock:
+            await self._load_more_locked()
+
+    async def _load_more_locked(self) -> None:
         """Fetch the next page using ``next_token`` and append to
         the accumulator. No-op when ``has_more`` is False or no
         application is selected. Errors map the same way as
@@ -373,6 +387,9 @@ class JobRunsVM:
             ):
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
+            report_unexpected_service_error(
+                self._hub, service="emr-serverless", operation="list_job_runs", error=exc
+            )
             self._has_more_suppressed = True
             self._notify("runs")
             return
@@ -438,6 +455,8 @@ class JobRunsVM:
             start_token=token,
             states=None,
         )
+        if token is not None and next_token == token:
+            raise ProviderError("EMR Serverless repeated a job-run continuation token")
         if self._paging_identity is not None:
             app_id, expected_token = self._paging_identity
             if token is None and self._application_id != app_id:

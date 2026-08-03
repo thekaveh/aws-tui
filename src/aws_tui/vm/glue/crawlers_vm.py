@@ -4,7 +4,6 @@ import asyncio
 from typing import Any
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
@@ -12,9 +11,11 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueCrawlerDetail, GlueCrawlerSummary
+from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 
 class GlueCrawlersVM:
@@ -34,7 +35,7 @@ class GlueCrawlersVM:
         self._shutdown_lock = asyncio.Lock()
         self._operations = _operations or GlueOperationOwner()
         self._owns_operations = _operations is None
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -154,6 +155,9 @@ class GlueCrawlersVM:
             if generation != self._crawler_generation:
                 return
             state, self._error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_crawlers", error=exc
+            )
             self._set_state(state)
             return
         if generation == self._crawler_generation:
@@ -185,6 +189,9 @@ class GlueCrawlersVM:
             if generation != self._detail_generation:
                 return
             state, self._detail_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="get_crawler", error=exc
+            )
             self._set_detail_state(state)
             return
         if generation != self._detail_generation:
@@ -223,6 +230,9 @@ class GlueCrawlersVM:
             if generation != self._crawler_generation:
                 return
             state, self._error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_crawlers", error=exc
+            )
             self._set_state(state)
             return
         if generation != self._crawler_generation:

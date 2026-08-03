@@ -1,11 +1,11 @@
-# Quick Look Wiring — Design Spec
+# 1. Quick Look Wiring — Design Spec
 
 **Date:** 2026-07-21
-**Status:** Approved (design brief) — pending implementation
+**Status:** Implemented; retained as the historical design record
 **Depends on:** BindingResolver keystone (PR #135) — `pane.quick_look` is a
 handlerless action the resolver skips until this increment registers it.
 
-## Goal
+## 1.1. Goal
 
 Wire the built-but-unreached Quick Look modal so pressing `Space` on a file
 opens a scrollable 64 KB preview. Registers a `pane.quick_look` handler,
@@ -13,7 +13,7 @@ builds `QuickLookContent` from the focused file via the FS provider's
 `read_stream`, and pushes the existing `QuickLook` modal driven by the
 existing `QuickLookVM`.
 
-## Background (verified in code)
+## 1.2. Background (verified in code)
 
 - `QuickLookVM` (`vm/chrome/quick_look_vm.py`) — `open_command:
   RelayCommandOf[QuickLookContent]`, `close_command`, `scroll_command`,
@@ -31,9 +31,9 @@ existing `QuickLookVM`.
 - `PaneVM` emits `preview_requested` (payload-less) at two sites; no
   subscriber today.
 
-## Design
+## 1.3. Design
 
-### 1. `action_quick_look` (bound to `Space` via the keystone)
+### 1.3.1. `action_quick_look` (bound to `Space` via the keystone)
 
 Register `pane.quick_look` → `self.action_quick_look` in `AwsTuiApp.__init__`
 (alongside the other keystone registrations). Behavior:
@@ -57,7 +57,7 @@ def action_quick_look(self) -> None:
 `_focused_file_pane()` is a small helper mirroring `action_copy`'s
 `self._dual_pane()` + `focused_pane` lookup (returns `PaneVM | None`).
 
-### 2. `_build_quick_look_content` (module-level helper)
+### 1.3.2. `_build_quick_look_content` (module-level helper)
 
 ```python
 _QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
@@ -89,7 +89,7 @@ async def _first_bytes(source, limit) -> AsyncIterator[bytes]:
 `read_stream` with `chunk_size=64 KB` already yields ≤64 KB chunks; the
 `_first_bytes` cap makes the 64 KB bound explicit and provider-independent.
 
-### 3. `preview_requested` orphan
+### 1.3.3. `preview_requested` orphan
 
 Investigate whether `preview_requested` has a live runtime trigger (the
 keystone's priority bindings may grab the keys before the pane emits). If a
@@ -98,7 +98,7 @@ if it is currently dead, leave the emitter untouched (do NOT modify the
 `Enter`/`action_descend` path) and note it. The `Space` binding is the
 primary, reliable trigger regardless.
 
-## Scope
+## 1.4. Scope
 
 **In:** `Space` opens a 64 KB streaming preview modal for the cursor file;
 open/scroll/find/close via the existing `QuickLookVM` commands and modal.
@@ -107,7 +107,7 @@ open/scroll/find/close via the existing `QuickLookVM` commands and modal.
 out of a Textual app requires `App.suspend()` + terminal save/restore and its
 own error handling — a distinct follow-on increment.
 
-## Testing (TDD)
+## 1.5. Testing (TDD)
 
 1. **Content builder** — `_build_quick_look_content` sets `title`=filename,
    `mime` from extension (e.g. `.txt` → `text/plain`, unknown →
@@ -121,7 +121,7 @@ own error handling — a distinct follow-on increment.
 4. Reuse existing `tests/unit/vm/chrome/test_quick_look.py` and the QuickLook
    snapshot tests (unchanged).
 
-## Files touched
+## 1.6. Files touched
 
 - `src/aws_tui/app.py` — `action_quick_look`, `_focused_file_pane`,
   `_build_quick_look_content`, `_first_bytes`, register `pane.quick_look`,

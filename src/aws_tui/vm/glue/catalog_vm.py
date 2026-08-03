@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
@@ -23,6 +22,7 @@ from aws_tui.domain.data_catalog import (
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
+from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
@@ -36,6 +36,7 @@ from aws_tui.vm.messages import (
     OpenAthenaTableRequest,
     OpenS3LocationRequest,
 )
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _DISCOVERY_PAGE_LIMIT = 64
 _DISCOVERY_EMPTY_PAGE_LIMIT = 3
@@ -84,7 +85,7 @@ class GlueCatalogVM:
         self._shutdown_lock = asyncio.Lock()
         self._operations = _operations or GlueOperationOwner()
         self._owns_operations = _operations is None
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -281,6 +282,12 @@ class GlueCatalogVM:
             if generation != self._database_generation:
                 return
             state, self._databases_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub,
+                service="glue",
+                operation="list_databases",
+                error=exc,
+            )
             self._set_state("_databases_state", state, "state")
             return
         if generation != self._database_generation:
@@ -315,6 +322,9 @@ class GlueCatalogVM:
             if generation != self._database_generation:
                 return
             state, self._databases_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_databases", error=exc
+            )
             self._set_state("_databases_state", state, "state")
             return
         if generation == self._database_generation:
@@ -373,6 +383,9 @@ class GlueCatalogVM:
             if not self._is_catalog_operation_current(operation):
                 return
             state, self._tables_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_tables", error=exc
+            )
             self._set_state("_tables_state", state, "tables_state")
             return
         if not self._is_catalog_operation_current(operation):
@@ -403,6 +416,9 @@ class GlueCatalogVM:
             if not self._is_table_identity_current(generation):
                 return
             state, self._tables_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_tables", error=exc
+            )
             self._set_state("_tables_state", state, "tables_state")
             return
         if self._is_table_identity_current(generation):
@@ -606,6 +622,9 @@ class GlueCatalogVM:
             if not self._is_partition_identity_current(generation):
                 return
             state, self._partitions_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_partitions", error=exc
+            )
             self._set_state("_partitions_state", state, "partitions_state")
             return
         if self._is_partition_identity_current(generation):
@@ -658,6 +677,9 @@ class GlueCatalogVM:
             if not self._is_catalog_operation_current(operation):
                 return None
             state, self._detail_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="get_table", error=exc
+            )
             self._set_state("_detail_state", state, "detail_state")
         return None
 
@@ -676,6 +698,9 @@ class GlueCatalogVM:
             if not self._is_catalog_operation_current(operation):
                 return
             state, self._partitions_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="list_partitions", error=exc
+            )
             self._set_state("_partitions_state", state, "partitions_state")
             return
         if not self._is_catalog_operation_current(operation):
@@ -718,6 +743,12 @@ class GlueCatalogVM:
             if not self._is_catalog_operation_current(operation):
                 return
             state, self._statistics_error_text = map_unexpected_error(exc)
+            report_unexpected_service_error(
+                self._hub,
+                service="glue",
+                operation="get_column_statistics",
+                error=exc,
+            )
             self._set_state("_statistics_state", state, "statistics_state")
             return
         if not self._is_catalog_operation_current(operation):

@@ -1,4 +1,4 @@
-"""HintLegendVM — derives the bottom contextual hint row.
+"""HintLegendVM — derives the bottom contextual command sequence.
 
 The legend lists action chips (``<key> <label>``) appropriate to the focused
 VM, followed by always-visible app-level fallbacks (theme, help, quit).
@@ -24,8 +24,7 @@ from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
 # Always-visible global chips — shown regardless of which service is
 # active and what is selected. Themes / help / quit / etc. — the "app
 # chrome" controls. User feedback after PR #80 asked for these on the
-# RIGHT side of the Commands pane while the service-specific chips
-# (S3 / EMR / etc.) sit on the LEFT.
+# same Commands pane after the service-specific chips.
 _GLOBAL_ACTIONS: tuple[str, ...] = (
     "app.themes",
     "app.cycle_theme",
@@ -33,8 +32,8 @@ _GLOBAL_ACTIONS: tuple[str, ...] = (
     "app.quit",
 )
 
-# Per-service chip sets — what the user sees on the LEFT side of the
-# Commands pane depends on which service is active. Refresh stays on
+# Per-service chip sets — the leading Commands-pane entries depend on
+# which service is active. Refresh stays on
 # every service. PR-B/C will extend the EMR set with the cancel / clone
 # / submit / lifecycle action ids once those handlers ship.
 _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
@@ -91,8 +90,7 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
 # tests, and the early boot window before the first nav selection
 # fires). Keeps the existing S3-shaped chip row visible so the
 # bottom legend isn't blank — same set the pre-PR-81 hardcoded
-# ``_FALLBACK_ACTIONS`` exposed minus the globals (which now own
-# their own right-hand column).
+# ``_FALLBACK_ACTIONS`` exposed minus the globals.
 _FALLBACK_SERVICE_ACTIONS: tuple[str, ...] = _SERVICE_ACTIONS["s3"]
 
 # Human-readable labels per action id. Anything not listed falls back to the
@@ -210,7 +208,7 @@ class HintLegendVM:
 
     @property
     def actions(self) -> tuple[HintAction, ...]:
-        """Service-specific chips — LEFT side of the Commands pane.
+        """Service-specific chips shown before the global commands.
 
         Includes any focused-VM-registered ids and the active
         service's chip set (S3 / EMR / Settings / fallback)."""
@@ -218,7 +216,7 @@ class HintLegendVM:
 
     @property
     def global_actions(self) -> tuple[HintAction, ...]:
-        """Always-visible globals — RIGHT side of the Commands pane.
+        """Always-visible globals shown after the service commands.
 
         Themes / help / quit / etc. — the app-chrome controls that
         apply regardless of which service is active."""

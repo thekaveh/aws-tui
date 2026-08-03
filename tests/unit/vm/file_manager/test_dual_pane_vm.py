@@ -12,6 +12,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
+from aws_tui.domain.cross_fs import ConflictResolution
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
@@ -459,7 +460,170 @@ async def test_dual_copy_across_outer_cancellation_aborts_current_journal(
 
 
 @pytest.mark.asyncio
-async def test_dual_dispose_cancels_detached_refresh_tasks(tmp_path: Path) -> None:
+async def test_outer_cancellation_preserves_copy_that_already_completed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dp, hub = await _make_dual(tmp_path)
+    progress_states: list[TransferState] = []
+    finished: list[str] = []
+    aborted: list[str] = []
+    subscription = hub.messages.subscribe(
+        on_next=lambda message: (
+            progress_states.append(message.state)
+            if isinstance(message, TransferProgressMessage)
+            else None
+        )
+    )
+    original_mark_finished = dp._journal.mark_finished
+    original_mark_aborted = dp._journal.mark_aborted
+
+    def _mark_finished(transfer_id: str) -> None:
+        finished.append(transfer_id)
+        original_mark_finished(transfer_id)
+
+    def _mark_aborted(transfer_id: str) -> None:
+        aborted.append(transfer_id)
+        original_mark_aborted(transfer_id)
+
+    async def _cancel_waiter_after_copy_settles(
+        tasks: set[asyncio.Task[object]],
+        *,
+        return_when: object,
+    ) -> tuple[set[asyncio.Task[object]], set[asyncio.Task[object]]]:
+        del return_when
+        while not any(task.done() for task in tasks):
+            await asyncio.sleep(0)
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        await asyncio.sleep(0)
+        raise AssertionError("task cancellation should interrupt the wait")
+
+    monkeypatch.setattr(dp._journal, "mark_finished", _mark_finished)
+    monkeypatch.setattr(dp._journal, "mark_aborted", _mark_aborted)
+    monkeypatch.setattr(asyncio, "wait", _cancel_waiter_after_copy_settles)
+
+    try:
+        dp.left.enter_multiselect_command.execute()
+        dp.left.toggle_select_command.execute()
+
+        transfer = asyncio.create_task(dp.copy_across())
+        await transfer
+
+        copied = b"".join(
+            [chunk async for chunk in await dp.right.provider.read_stream(PathRef(("alpha.txt",)))]
+        )
+        assert copied == b"alpha-bytes"
+        assert progress_states[-1] is TransferState.COMPLETED
+        assert TransferState.CANCELLED not in progress_states
+        assert len(finished) == 1
+        assert aborted == []
+        assert dp._journal.find_unfinished() == []
+    finally:
+        subscription.dispose()
+        dp.dispose()
+
+
+@pytest.mark.asyncio
+async def test_transfer_repeated_cancellation_durably_drains_copy_task(tmp_path: Path) -> None:
+    dp, _hub = await _make_dual(tmp_path)
+    entry = dp.left.entries[0]
+    transfer_id = dp._journal.begin(  # type: ignore[attr-defined]
+        source_uri="local:///alpha.txt",
+        destination_uri="local:///copy.txt",
+        bytes_total=entry.entry.size,
+    )
+    dp._cancel_events[transfer_id] = asyncio.Event()  # type: ignore[attr-defined]
+    operation_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def _blocking_operation(*_args: object, **_kwargs: object) -> bool:
+        operation_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await release_cleanup.wait()
+            raise
+
+    transfer = asyncio.create_task(
+        dp._run_one_transfer(  # type: ignore[attr-defined]
+            operation=_blocking_operation,
+            src_path=object(),
+            dst_path=object(),
+            on_conflict=ConflictResolution.OVERWRITE,
+            transfer_id=transfer_id,
+            entry=entry,
+        )
+    )
+    await operation_started.wait()
+
+    transfer.cancel()
+    await cleanup_started.wait()
+    transfer.cancel()
+    await asyncio.sleep(0)
+    assert not transfer.done()
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await transfer
+
+    assert dp._journal.find_unfinished() == []  # type: ignore[attr-defined]
+    dp.dispose()
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_then_worker_cancel_durably_drains_copy_task(tmp_path: Path) -> None:
+    dp, _hub = await _make_dual(tmp_path)
+    entry = dp.left.entries[0]
+    transfer_id = dp._journal.begin(  # type: ignore[attr-defined]
+        source_uri="local:///alpha.txt",
+        destination_uri="local:///copy.txt",
+        bytes_total=entry.entry.size,
+    )
+    cancel_event = asyncio.Event()
+    dp._cancel_events[transfer_id] = cancel_event  # type: ignore[attr-defined]
+    operation_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def _blocking_operation(*_args: object, **_kwargs: object) -> bool:
+        operation_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await release_cleanup.wait()
+            raise
+
+    transfer = asyncio.create_task(
+        dp._run_one_transfer(  # type: ignore[attr-defined]
+            operation=_blocking_operation,
+            src_path=object(),
+            dst_path=object(),
+            on_conflict=ConflictResolution.OVERWRITE,
+            transfer_id=transfer_id,
+            entry=entry,
+        )
+    )
+    await operation_started.wait()
+    cancel_event.set()
+    await cleanup_started.wait()
+
+    transfer.cancel()
+    await asyncio.sleep(0)
+    assert not transfer.done()
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await transfer
+
+    assert dp._journal.find_unfinished() == []  # type: ignore[attr-defined]
+    dp.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dual_dispose_cancels_owned_refresh_tasks(tmp_path: Path) -> None:
     """Post-transfer refresh tasks are owned by the DualPaneVM lifecycle."""
     dp, _hub = await _make_dual(tmp_path)
     refresh_started = asyncio.Event()
@@ -475,10 +639,41 @@ async def test_dual_dispose_cancels_detached_refresh_tasks(tmp_path: Path) -> No
 
     dp.right.refresh = _blocking_refresh  # type: ignore[method-assign]
 
-    dp._schedule_detached_refresh(dp.right)
+    dp._schedule_owned_refresh(dp.right)
     await asyncio.wait_for(refresh_started.wait(), timeout=2.0)
     dp.dispose()
     await asyncio.wait_for(refresh_cancelled.wait(), timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_dual_shutdown_cancels_and_drains_owned_refresh_tasks(tmp_path: Path) -> None:
+    dp, _hub = await _make_dual(tmp_path)
+    refresh_started = asyncio.Event()
+    refresh_cancelled = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def _blocking_refresh() -> None:
+        refresh_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            refresh_cancelled.set()
+            await release_cleanup.wait()
+            raise
+
+    dp.right.refresh = _blocking_refresh  # type: ignore[method-assign]
+    dp._schedule_owned_refresh(dp.right)
+    await refresh_started.wait()
+
+    shutdown = asyncio.create_task(dp.shutdown())
+    await refresh_cancelled.wait()
+    assert not shutdown.done()
+    release_cleanup.set()
+    await shutdown
+
+    assert not dp._refresh_tasks  # type: ignore[attr-defined]
+    assert dp._schedule_owned_refresh(dp.right) is None
+    dp.dispose()
 
 
 @pytest.mark.asyncio

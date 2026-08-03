@@ -17,7 +17,7 @@ from aws_tui.ui.widgets.settings.connection_form import (
     ConnectionFormSubmitted,
 )
 from aws_tui.ui.widgets.settings.s3_connections_panel import S3ConnectionsPanel
-from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 

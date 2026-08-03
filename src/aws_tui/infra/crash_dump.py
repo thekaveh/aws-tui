@@ -161,11 +161,21 @@ class CrashDump:
 
 
 def _tail_text(path: Path, max_lines: int) -> str:
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return ""
+    backups: list[tuple[int, Path]] = []
+    for candidate in path.parent.glob(f"{path.name}.*"):
+        try:
+            generation = int(candidate.suffix[1:])
+        except ValueError:
+            continue
+        backups.append((generation, candidate))
+    candidates = [candidate for _, candidate in sorted(backups, reverse=True)] + [path]
+    lines: list[str] = []
+    for candidate in candidates:
+        try:
+            with candidate.open("r", encoding="utf-8") as fh:
+                lines.extend(fh.readlines())
+        except OSError:
+            continue
     return "".join(lines[-max_lines:])
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -12,7 +13,6 @@ from vmx import (
     MessageHub,
     PropertyChangedMessage,
 )
-from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -25,6 +25,7 @@ from aws_tui.domain.query import (
     QueryState,
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     optional_non_empty_exact_string,
@@ -33,10 +34,10 @@ from aws_tui.vm.athena._domain_validation import (
     valid_query_execution_summary,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
-from aws_tui.vm.athena._pager_compat import seed_token_pager
+from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _HISTORY_ERROR = "Athena history request failed"
 
@@ -59,7 +60,7 @@ class _HistoryWorker:
     tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
     details: dict[str, QueryExecutionDetail] = field(default_factory=dict, repr=False)
     retired: bool = False
-    pager: TokenPagedComposition[QueryExecutionSummary, str] = field(
+    pager: SnapshotTokenPager[QueryExecutionSummary, str] = field(
         init=False,
         repr=False,
     )
@@ -396,8 +397,14 @@ class AthenaHistoryVM:
                 self._notify("state")
                 self._notify("error_text")
             return
-        except Exception:
+        except Exception as exc:
             if self._is_current(worker):
+                report_unexpected_service_error(
+                    self._hub,
+                    service="athena",
+                    operation="list_query_executions",
+                    error=exc,
+                )
                 self._state, self._error_text = map_unexpected_error(
                     fallback=_HISTORY_ERROR,
                 )
@@ -437,7 +444,7 @@ class AthenaHistoryVM:
                 worker.details[ref.execution_id] = detail
             return [detail.summary for detail in details], next_token
 
-        worker.pager = TokenPagedComposition(fetch)
+        worker.pager = SnapshotTokenPager(fetch)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more(worker))
@@ -472,20 +479,45 @@ class AthenaHistoryVM:
                 for task in tasks:
                     if not task.done():
                         task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await self._drain_detail_tasks(tasks, cancel=False)
             if failed is not None:
                 error = failed.exception()
                 assert error is not None
                 raise error
             return [task.result() for task in tasks]
         except BaseException:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await self._drain_detail_tasks(tasks, cancel=True)
             raise
         finally:
             worker.tasks.difference_update(tasks)
+
+    async def _drain_detail_tasks(
+        self,
+        tasks: list[asyncio.Task[QueryExecutionDetail]],
+        *,
+        cancel: bool,
+    ) -> None:
+        current = asyncio.current_task()
+        cancellation_count = current.cancelling() if current is not None else 0
+        cancelled = False
+        if cancel:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+        for task in tasks:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    current_count = current.cancelling() if current is not None else 0
+                    if current_count > cancellation_count:
+                        cancelled = True
+                        cancellation_count = current_count
+            if not task.cancelled():
+                with contextlib.suppress(Exception):
+                    task.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     def _replace_worker(self, workgroup: str, generation: int) -> _HistoryWorker:
         old_worker = self._worker

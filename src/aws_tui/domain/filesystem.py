@@ -37,8 +37,8 @@ class EntryKind(StrEnum):
 class FileEntry:
     """One entry in a directory listing or a stat result.
 
-    ``size`` is ``None`` for directories. ``etag`` is populated for S3
-    objects and ``None`` elsewhere (LocalFS does not synthesize one).
+    ``size`` is ``None`` for directories. ``etag`` is an opaque provider
+    revision token when available; callers may use it for conditional mutation.
     """
 
     name: str
@@ -132,8 +132,12 @@ class FileSystemProvider(Protocol):
         """Create a directory (or no-op marker for object stores)."""
         ...
 
-    async def delete(self, path: PathRef) -> None:
-        """Delete a file or recursively delete a directory."""
+    async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
+        """Delete a path, optionally only if its revision is unchanged."""
+        ...
+
+    async def delete_empty_directory(self, path: PathRef) -> None:
+        """Delete ``path`` only when it has no children."""
         ...
 
     async def rename(self, src: PathRef, dst: PathRef) -> None:
@@ -158,8 +162,85 @@ class FileSystemProvider(Protocol):
         *,
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
+        overwrite: bool = True,
     ) -> None:
-        """Consume ``source`` and write to ``path``. Overwrites if it exists."""
+        """Consume ``source`` and write to ``path``.
+
+        When ``overwrite`` is false, creation must be conditional and raise
+        :class:`ConflictError` if the destination already exists.
+        """
+        ...
+
+
+@runtime_checkable
+class AtomicNoReplacePublisher(Protocol):
+    """Provider capability for atomic publication of a staged entry."""
+
+    def supports_atomic_publish(self, kind: EntryKind) -> bool:
+        """Return whether ``kind`` can be published with the required guarantees."""
+        ...
+
+    async def capture_stage_revision(self, path: PathRef) -> str:
+        """Return an opaque ownership revision for a completed file stage."""
+        ...
+
+    async def atomic_publish_no_replace(
+        self,
+        staged: PathRef,
+        destination: PathRef,
+        *,
+        expected_source_revision: str,
+    ) -> str:
+        """Atomically move ``staged`` to an absent ``destination``.
+
+        The destination must be claimed without replacing any entry that appears
+        concurrently, and the staged source must still match its opaque expected
+        revision. On :class:`ConflictError`, neither a replaced stage nor a
+        concurrent destination may be mutated. The returned revision identifies
+        the published destination.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class StageManifestEntry:
+    """One provider-opaque revision in a staged directory tree."""
+
+    relative_path: PathRef
+    kind: EntryKind
+    revision: str
+
+
+@runtime_checkable
+class AtomicDirectoryPublisher(Protocol):
+    """Provider capability for manifest-conditioned directory publication."""
+
+    async def atomic_publish_directory_no_replace(
+        self,
+        staged: PathRef,
+        destination: PathRef,
+        *,
+        expected_manifest: tuple[StageManifestEntry, ...],
+    ) -> str:
+        """Publish only when the complete staged tree matches ``expected_manifest``."""
+        ...
+
+
+@runtime_checkable
+class ExclusiveDirectoryClaimer(Protocol):
+    """Provider capability for claiming one exact directory path exclusively."""
+
+    async def claim_directory(self, path: PathRef) -> str:
+        """Create only ``path`` and return its opaque ownership revision."""
+        ...
+
+
+@runtime_checkable
+class MoveRevisionPreflight(Protocol):
+    """Provider hook for validating an opaque source revision before a move."""
+
+    async def preflight_move_revision(self, path: PathRef, revision: str | None) -> None:
+        """Reject revisions that cannot later be deleted conditionally."""
         ...
 
 
@@ -204,17 +285,22 @@ class ValidationError(ProviderError):
 
 
 __all__ = [
+    "AtomicDirectoryPublisher",
+    "AtomicNoReplacePublisher",
     "AuthRequiredError",
     "ConflictError",
     "EntryKind",
+    "ExclusiveDirectoryClaimer",
     "FileEntry",
     "FileSystemProvider",
+    "MoveRevisionPreflight",
     "NotFoundError",
     "PathRef",
     "PermissionDeniedError",
     "ProgressCallback",
     "ProviderError",
     "ProviderUnreachableError",
+    "StageManifestEntry",
     "ThrottledError",
     "TransferProgress",
     "ValidationError",

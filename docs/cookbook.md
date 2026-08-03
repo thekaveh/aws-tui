@@ -6,7 +6,7 @@
 1. [Connect to and switch between data sources](#11-connect-to-and-switch-between-data-sources)
 2. [Switch the theme on the fly](#12-switch-the-theme-on-the-fly)
 3. [Customize a keybinding](#13-customize-a-keybinding)
-4. [Resume after a crash](#14-resume-after-a-crash)
+4. [Diagnose an interrupted transfer after a crash](#14-diagnose-an-interrupted-transfer-after-a-crash)
 5. [Browse AWS Glue safely](#15-browse-aws-glue-safely)
 6. [Run Athena queries safely](#16-run-athena-queries-safely)
 7. [Inspect and query Glue tables through Athena](#17-inspect-and-query-glue-tables-through-athena)
@@ -24,8 +24,9 @@ Walks through three setups people hit on day one:
 - **§1.7** — run several `s3-compatible` endpoints side-by-side.
 
 You have a MinIO running on `http://localhost:9000` with the dev
-credentials `minioadmin / minioadmin`. Goal: a `minio-local`
-connection in aws-tui that points at it.
+credentials `minioadmin / minioadmin`. The shipped harness creates the
+canonical `dev-s3` connection; the manual examples below use `minio-local`
+to show that connection names are user-defined.
 
 ### 1.1.1. Start MinIO (skip if already running)
 
@@ -37,8 +38,9 @@ navigate):
 scripts/test-services/s3/up.sh
 ```
 
-This wraps `docker compose` + `seed.py` and prints the config snippet
-to add to `<config-dir>/config.toml`. Teardown is
+This wraps `docker compose` + `seed.py` and prints the path to
+`scripts/test-services/s3/config-snippet.toml`; add that snippet to
+`<config-dir>/config.toml` to create `dev-s3`. Teardown is
 `scripts/test-services/s3/down.sh` (add `--purge` to wipe the data
 volume). See `scripts/test-services/README.md` for the seeded
 dataset and how to extend it.
@@ -92,20 +94,17 @@ form:
 | Secret access key | `minioadmin` |
 | Session token | Optional; only for temporary credentials |
 
-That writes a `static` entry to `config.toml`. Note: every launch with
-a `static`-credentials connection emits a warning toast, per the
-credential-source preference order documented in
-[connections.md §1.2](connections.md#12-credential-sources-for-s3-compatible-connections);
-the recommended path is to migrate to a `keychain:` source once
-you've verified the connection works. To do that, edit your config
-file (see [docs/platforms.md](platforms.md) for the path on each OS)
-and change:
+The form stores the secret fields in the OS keychain through `keyring` and
+persists only a `keychain:` reference in `config.toml`. New saves use the
+URL-escaped `aws-tui:connections/<url-escaped-name>` namespace; later edits
+alternate between the `aws-tui:connection-revisions/<url-escaped-name>/0` and
+`/1` services. The resulting entry is equivalent to the following shape:
 
 ```toml
 [connections.minio-local]
 kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
-credentials = "keychain:minio-local"
+credentials = "keychain:aws-tui:connections/minio-local"
 force_path_style = true
 verify_tls = false              # http:// MinIO -> no cert to verify
 ```
@@ -195,7 +194,7 @@ the cycle immediately, no relaunch.
 
 > Expired SSO tokens are detected offline at launch via the SSO
 > cache freshness probe (see
-> [connections.md §3](connections.md#13-auto-discovery-sso-cache-probe));
+> [connections.md §3](connections.md#13-auto-discovery-and-sso-cache-probe));
 > expired or missing SSO profiles are skipped by the boot chain,
 > marked unreachable for the session, and surfaced through a recovery
 > toast while the app mounts local panes instead of hanging. Run
@@ -364,47 +363,36 @@ action id to fix.
 
 ---
 
-## 1.4. Resume after a crash
-Long-running transfers leave local journals so interrupted work can be
-inspected or cleaned up. Full startup resume and explicit S3 multipart
-replay remain deferred in v0.8.x; this recipe documents the current
-journal shape plus the planned modal flow.
+## 1.4. Diagnose an interrupted transfer after a crash
+Long-running transfers keep a local journal while work is active so a process
+crash leaves evidence of the interrupted operation. Automatic replay and
+persisted S3 multipart state remain deferred; this recipe documents the
+current journal and manual cleanup flow.
 
 ### 1.4.1. What gets saved
-The production transfer path writes a `begin` line and a terminal
-`finished` or `aborted` line to `<cache-dir>/transfers/<id>.jsonl`:
+The production transfer path writes a durable `begin` line to
+`<cache-dir>/transfers/<id>.jsonl`:
 
 ```jsonl
-{"kind":"begin","transfer_id":"abc123","source_uri":"local:///x.bin","destination_uri":"s3://bucket/x.bin","bytes_total":104857600,"upload_id":null,"ts":"2026-06-13T23:45:11Z"}
-{"kind":"finished","ts":"2026-06-13T23:45:18Z"}
+{"kind":"begin","transfer_id":"abc123abc123abcd","source_uri":"local:///x.bin","destination_uri":"s3://bucket/x.bin","bytes_total":104857600,"upload_id":null,"ts":"2026-06-13T23:45:11Z"}
 ```
 
-The journal schema can also replay optional `part` lines and an
-`upload_id` for future explicit-MPU flows, but the current S3 transfer
-path delegates multipart internals to boto and does not record those
-values.
+On success, skip, failure, or cancellation, aws-tui records the terminal state
+and immediately removes that journal. The schema can replay optional `part`
+lines and an `upload_id`, but the current explicit S3 multipart implementation
+does not persist those values across process restarts.
 
 ### 1.4.2. What happens on next launch
-v0.8.x writes durable transfer journals, but startup scanning and the
-resume modal are not wired yet. The planned modal flow will scan
-`TransferJournal.find_unfinished()` after the connection resolves and
-surface entries that lack a terminal record:
+Startup does not scan or display interrupted journals today. Files that remain
+lack a terminal record and can be inspected as JSONL to identify source,
+destination, size, and start time:
 
 ```
-2 transfers from a previous session were not finished.
-  - api-2026-06-13.json  (3.4 M / 4.2 M, 82%)
-  - db-slowq-06-13.csv   (279 k / 892 k, 31%)
-  [abort all] [decide each] [keep for later]
+{"kind":"begin","transfer_id":"abc123abc123abcd","source_uri":"local:///x.bin","destination_uri":"s3://bucket/x.bin","bytes_total":104857600,"upload_id":null,"ts":"2026-06-13T23:45:11Z"}
 ```
-
-| Choice | What it does |
-|---|---|
-| **abort all** | Planned: mark journals `aborted`, purge them, and call `AbortMultipartUpload` only for entries that carry an `upload_id`. The current production transfer path does not record S3 MPU IDs yet, so bucket lifecycle cleanup remains the server-side backstop. |
-| **decide each** | Deferred in v0.8.x: equivalent to **keep for later** until the per-entry modal lands. |
-| **keep for later** | Planned: no mutation; once startup scanning is wired, the modal will show again on next launch. |
 
 ### 1.4.3. Manual cleanup
-If you want to nuke the journals without going through the modal:
+To remove journals after inspecting them:
 
 ```bash
 rm -f "<cache-dir>"/transfers/*.jsonl

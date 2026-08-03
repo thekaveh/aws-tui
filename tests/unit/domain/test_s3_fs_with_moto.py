@@ -15,9 +15,11 @@ import aioboto3
 import pytest
 
 from aws_tui.domain.filesystem import (
+    ConflictError,
     EntryKind,
     NotFoundError,
     PathRef,
+    ProviderError,
     TransferProgress,
 )
 from aws_tui.domain.s3_fs import S3FS
@@ -114,6 +116,29 @@ async def test_list_subprefix(s3_endpoint: str) -> None:
     assert sorted(e.name for e in entries) == ["x.txt", "y.txt"]
 
 
+async def test_delete_empty_directory_removes_only_marker(s3_endpoint: str) -> None:
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "empty/", b"")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    await fs.delete_empty_directory(PathRef.from_posix("/empty"))
+
+    with pytest.raises(NotFoundError):
+        await fs.stat(PathRef.from_posix("/empty"))
+
+
+async def test_delete_empty_directory_preserves_late_child(s3_endpoint: str) -> None:
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "folder/", b"")
+    await _put(s3_endpoint, "mybkt", "folder/late.txt", b"keep")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    with pytest.raises(ConflictError, match="not empty"):
+        await fs.delete_empty_directory(PathRef.from_posix("/folder"))
+
+    assert await _drain(await fs.read_stream(PathRef.from_posix("/folder/late.txt"))) == b"keep"
+
+
 # ---------------------------------------------------------------------------
 # stat
 # ---------------------------------------------------------------------------
@@ -150,7 +175,7 @@ async def test_write_then_read_small(s3_endpoint: str) -> None:
 
 
 async def test_write_then_read_16mb(s3_endpoint: str) -> None:
-    """16 MiB round-trip — exercises the upload_fileobj path."""
+    """A 16 MiB round-trip exercises the explicit multipart path."""
     await _make_bucket(s3_endpoint, "mybkt")
     fs = _fs(s3_endpoint, bucket="mybkt")
     payload = os.urandom(16 * 1024 * 1024)
@@ -225,6 +250,20 @@ async def test_delete_missing_raises(s3_endpoint: str) -> None:
         await fs.delete(PathRef.from_posix("/nope"))
 
 
+@pytest.mark.parametrize(("bucket", "prefix"), [("mybkt", ""), ("mybkt", "production"), (None, "")])
+async def test_delete_rejects_provider_root(bucket: str | None, prefix: str) -> None:
+    fs = S3FS(session=_session(), bucket=bucket, prefix=prefix)
+    with pytest.raises(ProviderError, match="provider root"):
+        await fs.delete(PathRef(()))
+
+
+async def test_bucketless_delete_rejects_bucket_root_with_configured_prefix() -> None:
+    fs = S3FS(session=_session(), bucket=None, prefix="production")
+
+    with pytest.raises(ProviderError, match="cannot delete a bucket"):
+        await fs.delete(PathRef(("mybkt",)))
+
+
 async def test_rename_preserves_content(s3_endpoint: str) -> None:
     await _make_bucket(s3_endpoint, "mybkt")
     await _put(s3_endpoint, "mybkt", "a", b"hello")
@@ -234,6 +273,30 @@ async def test_rename_preserves_content(s3_endpoint: str) -> None:
         await fs.stat(PathRef.from_posix("/a"))
     out = await _drain(await fs.read_stream(PathRef.from_posix("/b")))
     assert out == b"hello"
+
+
+async def test_rename_directory_is_rejected_explicitly(s3_endpoint: str) -> None:
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "folder/a.txt", b"hello")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    with pytest.raises(ProviderError, match="directory rename"):
+        await fs.rename(
+            PathRef.from_posix("/folder"),
+            PathRef.from_posix("/renamed"),
+        )
+
+
+async def test_rename_file_rejects_existing_virtual_directory(s3_endpoint: str) -> None:
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "source", b"source")
+    await _put(s3_endpoint, "mybkt", "target/child", b"child")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    with pytest.raises(ConflictError):
+        await fs.rename(PathRef.from_posix("/source"), PathRef.from_posix("/target"))
+
+    assert await _drain(await fs.read_stream(PathRef.from_posix("/source"))) == b"source"
 
 
 # ---------------------------------------------------------------------------

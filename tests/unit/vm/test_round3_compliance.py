@@ -56,24 +56,6 @@ def test_crash_vm_composes_componentvm_internally() -> None:
     vm.dispose()
 
 
-def test_resume_vm_composes_componentvm_internally() -> None:
-    from aws_tui.vm.chrome.resume_vm import ResumeVM
-
-    vm = ResumeVM([], hub=_hub(), dispatcher=NULL_DISPATCHER)
-    assert hasattr(vm, "_inner")
-    assert not any("inner" in name for name in dir(vm) if not name.startswith("_"))
-    vm.dispose()
-
-
-def test_first_run_vm_composes_componentvm_internally() -> None:
-    from aws_tui.vm.chrome.first_run_vm import FirstRunVM
-
-    vm = FirstRunVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
-    assert hasattr(vm, "_inner")
-    assert not any("inner" in name for name in dir(vm) if not name.startswith("_"))
-    vm.dispose()
-
-
 def test_toast_stack_vm_composes_compositevm_internally() -> None:
     from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 
@@ -112,7 +94,7 @@ def test_command_palette_vm_composes_scored_filter_internally() -> None:
 def test_s3_connection_form_vm_composes_vmx_form_vm_internally() -> None:
     from vmx import FormVM
 
-    from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+    from aws_tui.vm.settings.s3_compat_form import S3CompatForm
     from aws_tui.vm.settings.s3_connection_form_vm import S3ConnectionFormVM
 
     async def _persist(_m: S3CompatForm) -> None:

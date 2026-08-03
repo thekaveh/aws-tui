@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.widgets import Static
 from vmx import MessageHub, RxDispatcher
 
 from aws_tui.infra.aws_session import TokenState
@@ -103,10 +104,9 @@ async def test_hint_legend_renders_with_registered_actions() -> None:
         async with app.run_test() as pilot:
             await pilot.pause()
             widget = app.query_one(HintLegend)
+
             # Each chip is its own Static child now (so theme tcss can
             # color it). Aggregate via .render() against the chip strip.
-            from textual.widgets import Static
-
             def _strip_text(host: HintLegend) -> str:
                 return " ".join(str(s.render()) for s in host.query(Static))
 
@@ -119,6 +119,34 @@ async def test_hint_legend_renders_with_registered_actions() -> None:
             hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
             await pilot.pause()
             assert "copy" in _strip_text(app.query_one(HintLegend))
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_wraps_every_glue_command_inside_standard_viewport() -> None:
+    hub: MessageHub = MessageHub()
+    vm = HintLegendVM(hub=hub, dispatcher=RxDispatcher.immediate(), keymap=KeymapStore())
+    vm.set_current_service("glue")
+    vm.construct()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield HintLegend(vm, hub=hub)
+
+        app = _App()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            legend = app.query_one(HintLegend)
+            chips = list(legend.query(".hint-chip"))
+            assert len(chips) == len(vm.actions) + len(vm.global_actions)
+            assert all(chip.region.right <= legend.content_region.right for chip in chips)
+            assert all(chip.region.bottom <= legend.content_region.bottom for chip in chips)
+            rendered = " ".join(str(item.render()) for item in legend.query(Static))
+            assert "switch source" in rendered
+            assert "quit" in rendered
     finally:
         vm.dispose()
         hub.dispose()

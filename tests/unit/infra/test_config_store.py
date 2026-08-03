@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -182,6 +186,14 @@ def test_connection_optional_string_fields_reject_non_strings(
         store.load()
 
 
+@pytest.mark.parametrize("field", ["connection", "theme"])
+def test_default_string_fields_reject_non_strings(config_path: Path, field: str) -> None:
+    config_path.write_text(f"[defaults]\n{field} = 42\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=rf"defaults.*{field}"):
+        ConfigStore(path=config_path).load()
+
+
 def test_add_connection_persists(config_path: Path) -> None:
     store = ConfigStore(path=config_path)
     store.add_connection(ConnectionEntry(name="dev", kind="aws", profile="dev", region="us-west-2"))
@@ -249,9 +261,7 @@ def test_atomic_save_leaves_original_intact_on_replace_failure(
 
     assert config_path.read_bytes() == original
     # No leftover temp files in the same directory.
-    leftovers = [
-        p for p in config_path.parent.iterdir() if p.name != config_path.name and p.is_file()
-    ]
+    leftovers = list(config_path.parent.glob(".config-*.toml.tmp"))
     assert leftovers == []
 
 
@@ -260,6 +270,25 @@ def test_save_creates_parent_directory(tmp_path: Path) -> None:
     store = ConfigStore(path=nested)
     store.save(Config(connections={}, defaults=Defaults(), keybindings=Keybindings()))
     assert nested.is_file()
+
+
+def test_save_fsyncs_file_and_parent_directory(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        calls.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+
+    ConfigStore(path=config_path).save(
+        Config(connections={}, defaults=Defaults(), keybindings=Keybindings())
+    )
+
+    assert len(calls) >= 2
 
 
 def test_static_credentials_round_trip(config_path: Path) -> None:
@@ -481,3 +510,145 @@ def test_read_only_property(tmp_path: Path) -> None:
     """ConfigStore.read_only reflects the constructor flag."""
     assert ConfigStore(path=tmp_path / "c.toml").read_only is False
     assert ConfigStore(path=tmp_path / "c.toml", read_only=True).read_only is True
+
+
+def test_transaction_lock_times_out_with_actionable_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    holder = ConfigStore(path=path, lock_timeout=1.0)
+    contender = ConfigStore(path=path, lock_timeout=0.05)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hold_lock() -> None:
+        with holder.transaction():
+            entered.set()
+            assert release.wait(timeout=2.0)
+
+    thread = threading.Thread(target=hold_lock)
+    thread.start()
+    assert entered.wait(timeout=1.0)
+    try:
+        with (
+            pytest.raises(
+                ConfigError,
+                match=r"timed out.*config transaction lock.*retry",
+            ),
+            contender.transaction(),
+        ):
+            pytest.fail("contender unexpectedly acquired the held config lock")
+    finally:
+        release.set()
+        thread.join(timeout=2.0)
+
+    assert not thread.is_alive()
+
+
+def test_transaction_lock_excludes_an_independent_process(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    store = ConfigStore(path=path)
+    script = """
+import sys
+from pathlib import Path
+from aws_tui.infra.config_store import ConfigError, ConfigStore
+
+try:
+    with ConfigStore(path=Path(sys.argv[1]), lock_timeout=0.05).transaction():
+        pass
+except ConfigError as exc:
+    print(exc, file=sys.stderr)
+    raise SystemExit(23)
+raise SystemExit(0)
+"""
+
+    with store.transaction():
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+
+    assert result.returncode == 23
+    assert "timed out" in result.stderr
+    assert "retry" in result.stderr
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX fork")
+def test_transaction_lock_is_not_reentrant_in_forked_child(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    store = ConfigStore(path=path, lock_timeout=0.05)
+    read_fd, write_fd = os.pipe()
+
+    with store.transaction():
+        child_pid = os.fork()
+        if child_pid == 0:
+            os.close(read_fd)
+            try:
+                with store.transaction():
+                    result = b"acquired"
+            except ConfigError:
+                result = b"blocked"
+            os.write(write_fd, result)
+            os.close(write_fd)
+            os._exit(0)
+
+        os.close(write_fd)
+        result = os.read(read_fd, 32)
+        os.close(read_fd)
+        _, status = os.waitpid(child_pid, 0)
+
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert result == b"blocked"
+
+
+def test_transaction_lock_reports_os_acquisition_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aws_tui.infra import config_store
+
+    def deny_lock(_path: Path, _timeout: float) -> object:
+        raise PermissionError("lock directory is read-only")
+
+    monkeypatch.setattr(config_store, "_acquire_os_file_lock", deny_lock)
+
+    with (
+        pytest.raises(ConfigError, match=r"unable to acquire.*read-only"),
+        ConfigStore(path=tmp_path / "config.toml").transaction(),
+    ):
+        pytest.fail("transaction unexpectedly acquired an unavailable lock")
+
+
+def test_concurrent_store_instances_preserve_both_mutations(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    first = ConfigStore(path=path)
+    second = ConfigStore(path=path)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+
+    def add_first() -> None:
+        with first.transaction():
+            first_entered.set()
+            assert release_first.wait(timeout=2.0)
+            first.add_connection(ConnectionEntry(name="first", kind="aws", profile="first"))
+
+    thread = threading.Thread(target=add_first)
+    thread.start()
+    assert first_entered.wait(timeout=1.0)
+
+    second_done = threading.Event()
+
+    def add_second() -> None:
+        second.add_connection(ConnectionEntry(name="second", kind="aws", profile="second"))
+        second_done.set()
+
+    contender = threading.Thread(target=add_second)
+    contender.start()
+    assert not second_done.wait(timeout=0.05)
+    release_first.set()
+    thread.join(timeout=2.0)
+    contender.join(timeout=2.0)
+
+    assert not thread.is_alive()
+    assert not contender.is_alive()
+    assert set(first.load().connections) == {"first", "second"}

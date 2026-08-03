@@ -10,6 +10,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM, PaletteEntry
+from aws_tui.vm.messages import PaletteActionFailedMessage
 
 
 def _hub() -> MessageHub[Message]:
@@ -133,12 +134,108 @@ async def test_execute_selected_awaits_coroutine_callable() -> None:
     vm.dispose()
 
 
+async def test_shutdown_cancels_and_drains_pending_actions() -> None:
+    import asyncio
+
+    vm = _build()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def pending_action() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    vm.register_entry(_entry("pending", "Pending"), pending_action)
+    vm.open_command.execute()
+    vm.execute_selected_command.execute()
+    await started.wait()
+
+    await vm.shutdown()
+
+    assert cancelled.is_set()
+    assert vm._pending_tasks == {}
+    vm.dispose()
+
+
+@pytest.mark.parametrize("async_action", [False, True])
+async def test_execute_failure_publishes_entry_identity(async_action: bool) -> None:
+    hub = _hub()
+    vm = CommandPaletteVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    messages: list[PaletteActionFailedMessage] = []
+    subscription = hub.messages.subscribe(
+        on_next=lambda message: (
+            messages.append(message) if isinstance(message, PaletteActionFailedMessage) else None
+        )
+    )
+
+    if async_action:
+
+        async def fail() -> None:
+            raise RuntimeError("sensitive details")
+
+    else:
+
+        def fail() -> None:
+            raise RuntimeError("sensitive details")
+
+    vm.register_entry(_entry("dangerous.action", "Fail"), fail)
+    vm.open_command.execute()
+    vm.execute_selected_command.execute()
+    if async_action:
+        import asyncio
+
+        for _ in range(20):
+            if messages:
+                break
+            await asyncio.sleep(0.01)
+
+    assert messages == [
+        PaletteActionFailedMessage(
+            entry_id="dangerous.action",
+            error_type="RuntimeError",
+        )
+    ]
+    subscription.dispose()
+    vm.dispose()
+
+
 def test_execute_with_empty_filtered_is_noop() -> None:
     vm = _build()
     vm.open_command.execute()
     # No entries registered.
     vm.execute_selected_command.execute()
     assert vm.is_open  # remained open (no-op)
+    vm.dispose()
+
+
+def test_async_action_without_running_loop_is_closed_and_reported() -> None:
+    hub = _hub()
+    vm = CommandPaletteVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    messages: list[PaletteActionFailedMessage] = []
+    subscription = hub.messages.subscribe(
+        on_next=lambda message: (
+            messages.append(message) if isinstance(message, PaletteActionFailedMessage) else None
+        )
+    )
+
+    async def action() -> None:
+        return None
+
+    coroutine = action()
+    vm.register_entry(_entry("async.action", "Async"), lambda: coroutine)
+    vm.open_command.execute()
+    vm.execute_selected_command.execute()
+
+    assert coroutine.cr_frame is None
+    assert messages == [
+        PaletteActionFailedMessage(entry_id="async.action", error_type="RuntimeError")
+    ]
+    subscription.dispose()
     vm.dispose()
 
 

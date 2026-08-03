@@ -1,7 +1,7 @@
 # 1. AWS Glue and Amazon Athena services design
 
-**Status:** Accepted in brainstorming on 2026-07-22. This document is the
-source of truth for implementation planning. It adds AWS Glue and Amazon
+**Status:** Implemented on 2026-07-30. This document is the historical
+source of truth for the implementation. It adds AWS Glue and Amazon
 Athena as separate first-class services, makes AWS profile switching
 consistent across single-context AWS services, and treats Apache Iceberg as a
 shared Glue/Athena/S3 capability rather than a third navigation service.
@@ -53,9 +53,9 @@ The first release does not:
 - add CloudWatch Logs as a first-class service;
 - redesign the existing S3 dual-pane source model.
 
-# 2. Connection and source model
+## 1.4. Connection and source model
 
-## 2.1. Two intentional source scopes
+### 1.4.1. Two intentional source scopes
 
 S3 remains the only multi-context page. Each S3 pane independently owns a
 source and can point at local storage, an AWS S3 profile, or an S3-compatible
@@ -70,7 +70,7 @@ This means a user can select `analytics-prod / us-west-2` in Glue, open an
 Athena query for a table, and continue under `analytics-prod / us-west-2`
 without another credential or region selection.
 
-## 2.2. Eligible connections
+### 1.4.2. Eligible connections
 
 The source ring for EMR Serverless, Glue, and Athena contains every resolved
 connection where `connection.kind == "aws"` and the active service's
@@ -82,7 +82,7 @@ Connection identity is the configured connection name plus region, not only
 the underlying profile string. Two configured connections may intentionally
 reference the same profile in different regions.
 
-## 2.3. Switching behavior
+### 1.4.3. Switching behavior
 
 `Shift+S` remains `app.swap_source` and means "switch source" everywhere:
 
@@ -111,7 +111,7 @@ For a single-context service switch, the app must:
 The page clears old rows before an asynchronous request for the new source is
 started. No old-profile rows may remain visible while the new source loads.
 
-## 2.4. Access failures are service-scoped
+### 1.4.4. Access failures are service-scoped
 
 An `AccessDenied` response from Glue or Athena means the selected connection
 lacks access to that service or resource. It does not mark the connection
@@ -122,7 +122,7 @@ Credential expiration and missing credentials continue through the existing
 authentication message path. Endpoint and network failures remain retryable
 for the active service without poisoning other services.
 
-## 2.5. State and cache isolation
+### 1.4.5. State and cache isolation
 
 Every cache, selection memory, continuation token, request generation, and
 in-flight task is scoped by a stable connection key and region. Athena state
@@ -136,9 +136,9 @@ Per-connection selection memory is retained for the process lifetime:
 Returning to a connection may restore identifiers, but it must revalidate
 them against newly loaded resources before selecting them.
 
-# 3. Layered architecture
+## 1.5. Layered architecture
 
-## 3.1. Existing boundaries remain authoritative
+### 1.5.1. Existing boundaries remain authoritative
 
 The implementation follows the repository's enforced dependency direction:
 
@@ -150,7 +150,7 @@ View (Textual) -> ViewModel (VMx) -> Service plugins -> Domain -> Infrastructure
 compose domain clients and concrete VMs but may not import Textual or
 `aws_tui.ui`. Views do not import boto, services, or domain AWS clients.
 
-## 3.2. Shared domain vocabulary
+### 1.5.2. Shared domain vocabulary
 
 Glue and Athena share immutable domain values instead of translating between
 service-specific dictionaries:
@@ -171,7 +171,7 @@ service-specific dictionaries:
 Models expose only fields used by the first-release UI. Raw boto response
 objects never escape domain clients.
 
-## 3.3. Client boundaries
+### 1.5.3. Client boundaries
 
 `GlueClient` owns Glue API mapping and pagination:
 
@@ -209,7 +209,7 @@ storage metadata from Glue and uses read-only Athena metadata-table queries
 for `$snapshots`, `$history`, `$manifests`, `$files`, `$partitions`, and
 `$refs`. It depends on client protocols, never on Glue or Athena VMs.
 
-## 3.4. Service plugins
+### 1.5.4. Service plugins
 
 `GlueService` and `AthenaService` implement the existing `Service` protocol.
 Both return `supports(connection) == (connection.kind == "aws")` and build a
@@ -224,7 +224,7 @@ inspection and "Query in Athena" report their scoped unavailability.
 
 The service registry remains ordered: S3, EMR Serverless, Glue, Athena.
 
-## 3.5. Cross-service messages
+### 1.5.5. Cross-service messages
 
 Cross-navigation travels through immutable VMx message envelopes. Messages
 carry plain identifiers and connection identity, never clients or VMs:
@@ -238,9 +238,9 @@ must first switch to the message's connection and region, then select the
 target resource. If the source connection no longer exists, the request
 fails visibly without silently substituting another profile.
 
-# 4. Glue service
+## 1.6. Glue service
 
-## 4.1. Page structure
+### 1.6.1. Page structure
 
 The Glue page has a compact source header and three views selected through
 the established tab/action patterns:
@@ -252,7 +252,7 @@ the established tab/action patterns:
 The source header displays configured connection name, profile when present,
 and region. It is status, not a second navigation card.
 
-## 4.2. Catalog view
+### 1.6.2. Catalog view
 
 The Catalog view is a master-detail workflow:
 
@@ -277,7 +277,7 @@ references, manifests, files, and partition summaries. These views are
 loaded on demand because metadata tables may be large and Athena queries
 incur latency and scan cost.
 
-## 4.3. Jobs view
+### 1.6.3. Jobs view
 
 The Jobs view lists Glue job definitions and recent runs. Selecting a job
 loads runs newest first; selecting a run loads detail. The UI surfaces:
@@ -291,7 +291,7 @@ loads runs newest first; selecting a run loads detail. The UI surfaces:
 
 The view does not start, stop, retry, or edit jobs.
 
-## 4.4. Crawlers view
+### 1.6.4. Crawlers view
 
 The Crawlers view lists crawler identity and state, then provides:
 
@@ -303,9 +303,9 @@ The Crawlers view lists crawler identity and state, then provides:
 
 The view does not run, stop, schedule, or edit crawlers.
 
-# 5. Athena service
+## 1.7. Athena service
 
-## 5.1. Page structure
+### 1.7.1. Page structure
 
 The Athena page has four views:
 
@@ -318,7 +318,7 @@ The header selects workgroup, catalog, and database within the active AWS
 connection. Changing any context invalidates result state that is not valid
 under the new context.
 
-## 5.2. Query view
+### 1.7.2. Query view
 
 The query view provides a practical multiline SQL editor, execute command,
 cancel command, and compact execution status. Glue-to-Athena navigation
@@ -330,7 +330,7 @@ Submitting a query records the exact connection, region, workgroup, catalog,
 database, and client request token. A repeated command caused by UI retry must
 not accidentally start a second execution.
 
-## 5.3. Read-only SQL policy
+### 1.7.3. Read-only SQL policy
 
 The app fails closed before calling Athena. SQL is parsed with
 `sqlglot>=30.13.0,<31` using `dialect="athena"`; regular expressions or
@@ -349,7 +349,7 @@ IAM, Lake Formation, workgroup configuration, and S3 bucket policies remain
 the authoritative security boundary. The parser is defense in depth and a
 product contract, not a substitute for least privilege.
 
-## 5.4. Query execution
+### 1.7.4. Query execution
 
 Execution follows this state machine:
 
@@ -369,7 +369,7 @@ Only queries started by the active app page are eligible for
 `StopQueryExecution` on explicit cancel or source disposal. Viewing history
 never grants authority to cancel another actor's query.
 
-## 5.5. History view
+### 1.7.5. History view
 
 History is scoped to the selected workgroup and lists executions newest
 first. Detail includes:
@@ -385,7 +385,7 @@ first. Detail includes:
 The UI may display query text returned by AWS but must not write full query
 text to application logs or crash reports.
 
-## 5.6. Results view
+### 1.7.6. Results view
 
 Results are typed from Athena result metadata and paginated without loading
 the complete result set. The first header row is not duplicated as data.
@@ -396,23 +396,23 @@ Export copies or streams an existing Athena result object through the
 application's filesystem workflow. Export does not rerun the query and does
 not materialize the entire result in memory.
 
-## 5.7. Saved view
+### 1.7.7. Saved view
 
 Saved exposes named queries and prepared statements for the selected
 workgroup. Selecting one shows its name, description where available,
 database, workgroup, and SQL. "Open in editor" copies the SQL into the query
 view but does not execute it.
 
-# 6. Iceberg integration
+## 1.8. Iceberg integration
 
-## 6.1. Detection
+### 1.8.1. Detection
 
 Glue table metadata is mapped to `TableFormat.ICEBERG` using documented table
 parameters and storage metadata. Detection logic is centralized and tested
 against representative Glue responses. Views never inspect raw parameter
 dictionaries.
 
-## 6.2. Metadata queries
+### 1.8.2. Metadata queries
 
 Iceberg metadata is queried on demand through Athena using fully quoted
 catalog, database, and table identifiers. Supported metadata tables are:
@@ -428,7 +428,7 @@ Every metadata request is constrained with an explicit column projection and
 reasonable row limit where Athena supports it. Large file and partition sets
 remain paginated.
 
-## 6.3. Time travel
+### 1.8.3. Time travel
 
 A user can select a snapshot and open an Athena editor containing a read-only
 query using `FOR VERSION AS OF <snapshot_id>`. Timestamp travel may be added
@@ -437,23 +437,23 @@ using `FOR TIMESTAMP AS OF` when a committed timestamp is available.
 The generated query is never executed automatically. The user reviews and
 explicitly runs it.
 
-## 6.4. No separate Iceberg nav item
+### 1.8.4. No separate Iceberg nav item
 
 Iceberg appears as richer behavior on qualifying Glue tables and Athena
 queries. S3 remains the byte/object view of the same table location. A third
 Iceberg navigation row would duplicate catalog and query state and is out of
 scope.
 
-# 7. Data flow and concurrency
+## 1.9. Data flow and concurrency
 
-## 7.1. Paginated loads
+### 1.9.1. Paginated loads
 
 List VMs use VMx's token-paged composition pattern already adopted by EMR job
 runs. Each loader returns domain objects plus an opaque next token. Filters
 that alter request semantics create a new pager rather than reusing old
 tokens.
 
-## 7.2. Request generations
+### 1.9.2. Request generations
 
 Each page increments a generation when connection, region, workgroup,
 catalog, database, or selected parent resource changes. Completion handlers
@@ -464,14 +464,14 @@ or command availability.
 Generation checks complement cancellation because SDK calls may finish after
 local task cancellation.
 
-## 7.3. Polling and disposal
+### 1.9.3. Polling and disposal
 
 VM-owned workers are registered with their owning VM lifecycle. `destruct`
 stops subscriptions and workers; `dispose` releases commands, pagers, and
 clients. Athena polling and Glue refresh loops cannot survive a page or
 connection switch.
 
-# 8. Error model
+## 1.10. Error model
 
 Glue and Athena map SDK failures to stable categories:
 
@@ -492,7 +492,7 @@ Errors belong to the smallest affected pane. A failed Iceberg metadata query
 does not blank the Glue table schema; a failed query result fetch does not
 erase query execution detail. `r` retries the focused failed pane.
 
-# 9. Security, privacy, and cost controls
+## 1.11. Security, privacy, and cost controls
 
 - Reuse the current AWS profile and credential chain. Do not persist resolved
   credentials or session tokens.
@@ -511,7 +511,7 @@ erase query execution detail. `r` retries the focused failed pane.
 - Athena `SELECT` is source-read-only but still creates result artifacts.
   Documentation must state this clearly.
 
-# 10. Demo mode
+## 1.12. Demo mode
 
 Demo mode supplies deterministic Glue and Athena clients with at least two
 AWS profiles whose resources do not overlap.
@@ -529,9 +529,9 @@ Profile B uses different database, table, job, crawler, workgroup, and query
 identifiers. Switching profiles must visibly clear Profile A before rendering
 Profile B, proving isolation without real AWS access.
 
-# 11. Test strategy
+## 1.13. Test strategy
 
-## 11.1. Unit tests
+### 1.13.1. Unit tests
 
 - Glue and Athena response mapping, missing optional fields, enum fallbacks,
   timestamps, pagination tokens, and error mapping.
@@ -546,7 +546,7 @@ Profile B, proving isolation without real AWS access.
 - Result header removal, null rendering, pagination, and export handoff.
 - Cross-service messages preserve connection and resource identity.
 
-## 11.2. Service and integration tests
+### 1.13.2. Service and integration tests
 
 - Service descriptors, AWS-only support, client construction, and fresh VM
   ownership.
@@ -559,7 +559,7 @@ Profile B, proving isolation without real AWS access.
 - Iceberg inspection remains optional when Athena access is unavailable.
 - Deterministic multi-profile fake services prove no cross-profile leakage.
 
-## 11.3. View and end-to-end tests
+### 1.13.3. View and end-to-end tests
 
 - Snapshot every new pane and modal state across all shipped themes, with
   paired SVG content-presence assertions.
@@ -570,14 +570,14 @@ Profile B, proving isolation without real AWS access.
 - Update the action registry, keymap, command palette, hint legend, and
   keybinding documentation together.
 
-## 11.4. Contract and live smoke tests
+### 1.13.4. Contract and live smoke tests
 
 The contract ledger records the locked boto/botocore service models and every
 Glue/Athena operation used. An optional, explicitly configured live smoke
 test uses a least-privilege profile, a dedicated Athena workgroup, and a
 bounded `SELECT 1` or small `LIMIT` query. It never runs in default CI.
 
-# 12. Documentation
+## 1.14. Documentation
 
 Update these surfaces together:
 
@@ -593,13 +593,13 @@ Update these surfaces together:
   documentation policy;
 - architecture diagram regenerated after the service and VM topology lands.
 
-# 13. Delivery decomposition
+## 1.15. Delivery decomposition
 
 This design is deliberately delivered as four independently reviewable
 subprojects. Each produces working, tested software and receives its own
 implementation plan and PR-sized checkpoints.
 
-## 13.1. Foundation: shared AWS service source switching
+### 1.15.1. Foundation: shared AWS service source switching
 
 - Add the generic single-context source switch orchestration.
 - Move EMR application cycling to `emr.next_application`.
@@ -608,7 +608,7 @@ implementation plan and PR-sized checkpoints.
   values.
 - Prove S3 behavior is unchanged.
 
-## 13.2. Glue service
+### 1.15.2. Glue service
 
 - Add shared catalog models and Glue client.
 - Add Catalog, Jobs, and Crawlers VMs and views.
@@ -616,7 +616,7 @@ implementation plan and PR-sized checkpoints.
 - Add demo data, tests, and documentation.
 - Include Glue-to-S3 navigation.
 
-## 13.3. Athena service
+### 1.15.3. Athena service
 
 - Add query models, Athena client, and read-only SQL policy.
 - Add Query, History, Results, and Saved VMs and views.
@@ -624,14 +624,14 @@ implementation plan and PR-sized checkpoints.
 - Add demo data, tests, and documentation.
 - Include Athena-to-S3 navigation.
 
-## 13.4. Cross-service Iceberg integration
+### 1.15.4. Cross-service Iceberg integration
 
 - Add format detection and `IcebergInspector`.
 - Add Glue-to-Athena and Athena-to-Glue navigation.
 - Add Iceberg metadata views and generated time-travel queries.
 - Complete integrated demo, E2E, docs, and architecture diagram updates.
 
-# 14. Acceptance criteria
+## 1.16. Acceptance criteria
 
 The feature is complete when:
 

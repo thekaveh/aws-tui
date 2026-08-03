@@ -6,7 +6,8 @@ import asyncio
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, DialogService, MessageHub, ModalVM, NotificationSeverity
+from vmx.dialogs.dialog_service import FileFilter
 from vmx.messages.protocols import Message
 
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
@@ -32,6 +33,42 @@ def _req(*, danger: bool = False) -> ConfirmRequest:
     )
 
 
+class _AcceptingDialogService(DialogService):
+    def __init__(self) -> None:
+        self.presented: ModalVM[bool] | None = None
+
+    async def pick_file_to_open(
+        self,
+        filter: FileFilter | None = None,
+        title: str | None = None,
+    ) -> str | None:
+        return None
+
+    async def pick_file_to_save(
+        self,
+        filter: FileFilter | None = None,
+        title: str | None = None,
+        suggested_name: str | None = None,
+    ) -> str | None:
+        return None
+
+    async def confirm(self, message: str, title: str | None = None) -> bool:
+        return False
+
+    async def notify(
+        self,
+        message: str,
+        title: str | None = None,
+        severity: NotificationSeverity = NotificationSeverity.INFO,
+    ) -> None:
+        return None
+
+    async def present(self, modal_vm: ModalVM[bool]) -> bool:
+        self.presented = modal_vm
+        modal_vm.dismiss(True)
+        return await modal_vm.wait_result()
+
+
 def test_initial_state() -> None:
     vm = _build()
     assert not vm.is_open
@@ -52,6 +89,20 @@ async def test_ask_resolves_true_on_confirm() -> None:
     result = await task
     assert result is True
     assert not vm.is_open
+    vm.dispose()
+
+
+async def test_ask_delegates_modal_ownership_to_dialog_service() -> None:
+    vm = _build()
+    dialogs = _AcceptingDialogService()
+
+    result = await vm.ask(_req(), dialog_service=dialogs)
+
+    assert result is True
+    assert dialogs.presented is not None
+    assert dialogs.presented.is_dismissed
+    assert not vm.is_open
+    assert vm.request is None
     vm.dispose()
 
 

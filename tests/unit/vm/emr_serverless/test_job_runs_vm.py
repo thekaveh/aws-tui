@@ -293,6 +293,31 @@ async def test_load_more_error_suppresses_has_more_without_mutating_pager_token(
     assert vm.error_text == "next page failed"
 
 
+@pytest.mark.asyncio
+async def test_load_more_rejects_repeated_continuation_token() -> None:
+    class _RepeatingTokenClient(_InMemoryEmr):
+        async def list_job_runs_page(self, *args: object, **kwargs: object) -> object:
+            page, token = await super().list_job_runs_page(*args, **kwargs)  # type: ignore[arg-type]
+            start_token = kwargs.get("start_token")
+            return page, start_token if start_token is not None else token
+
+    fake = _RepeatingTokenClient()
+    hub: MessageHub[Message] = MessageHub()
+    vm = JobRunsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    fake.add_application(app_id="a1", name="etl")
+    fake.page_size = 1
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
+    vm.set_application("a1")
+    await vm.refresh()
+
+    await vm.load_more()
+
+    assert vm.has_more is False
+    assert vm.error_text == "EMR Serverless repeated a job-run continuation token"
+
+
 # -------------------- Phase 2: composite-backed selection (§4.2.1) --------------------
 
 

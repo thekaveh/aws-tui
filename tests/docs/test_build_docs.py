@@ -17,7 +17,10 @@ from scripts.docs.render_diagrams import render_all
 def _fixture(tmp_path: Path):
     docs = tmp_path / "docs"
     (docs / "stylesheets").mkdir(parents=True)
-    (docs / "javascripts").mkdir(parents=True)
+    font_dir = tmp_path / "assets" / "fonts" / "fira-code"
+    font_dir.mkdir(parents=True)
+    (font_dir / "FiraCode-Regular.ttf").write_bytes(b"test-regular-font")
+    (font_dir / "FiraCode-Bold.ttf").write_bytes(b"test-bold-font")
     (docs / "index.md").write_text("# 1. aws-tui\n\nWelcome.\n")
     (docs / "architecture.md").write_text(
         "# 1. Architecture\n\n![arch](diagrams/img/architecture.png)\n\n"
@@ -25,7 +28,6 @@ def _fixture(tmp_path: Path):
     )
     (docs / "keybindings.md").write_text("# 1. Keybindings\n\nKeys.\n")
     (docs / "stylesheets" / "extra.css").write_text("/* theme */\n")
-    (docs / "javascripts" / "mathjax.js").write_text("window.MathJax = {};\n")
     (docs / "diagrams" / "img").mkdir(parents=True)
     (docs / "diagrams" / "img" / "architecture.png").write_bytes(b"\x89PNG\r\n\x1a\nX")
     (docs / "diagrams" / "architecture.html").write_text(
@@ -59,7 +61,7 @@ def test_render_site_emits_pages_assets_and_rewrites(tmp_path):
     assert (out / "index.md").is_file()
     assert (out / "architecture.md").is_file()
     assert (out / "stylesheets" / "extra.css").is_file()
-    assert (out / "javascripts" / "mathjax.js").is_file()
+    assert not (out / "javascripts").exists()
     body = (out / "architecture.md").read_text()
     assert "assets/img/architecture.svg" in body  # image rewritten to SVG
     assert "[keys](keybindings.md)" in body  # internal .md kept
@@ -79,9 +81,9 @@ def test_render_wiki_emits_special_pages_and_images(tmp_path):
     body = (out / "Architecture.md").read_text()
     assert "img/architecture.png" in body
     sidebar = (out / "_Sidebar.md").read_text()
-    assert "[Overview](Home)" in sidebar
-    assert "Development" in sidebar
-    assert "[Architecture](Architecture)" in sidebar
+    assert "[1. Overview](Home)" in sidebar
+    assert "2. Development" in sidebar
+    assert "[2.1. Architecture](Architecture)" in sidebar
 
 
 def test_three_surface_build_keeps_svg_assets_byte_identical(tmp_path, monkeypatch):
@@ -111,9 +113,13 @@ def test_render_mkdocs_yml_has_nav_and_no_repo_url(tmp_path):
     assert "repo_url" not in text
     assert "edit_uri" not in text
     assert "docs_dir: generated/site" in text
-    assert "Overview: index.md" in text
-    assert "Development:" in text
-    assert "Architecture: architecture.md" in text
+    assert "1. Overview: index.md" in text
+    assert "2. Development:" in text
+    assert "2.1. Architecture: architecture.md" in text
+    assert "arithmatex" not in text
+    assert "MathJax" not in text
+    assert "mathjax" not in text
+    assert "cdn.jsdelivr.net" not in text
 
 
 def test_build_check_is_deterministic(tmp_path):

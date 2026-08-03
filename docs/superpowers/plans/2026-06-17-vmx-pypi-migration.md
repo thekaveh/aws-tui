@@ -776,7 +776,6 @@ Replace the `vendor/vmx` git submodule + `[tool.uv.sources]` path dependency wit
 - [x] `git submodule status` → empty
 - [x] `grep -rn "vendor/vmx" .` → no live references (only historical-plan banners)
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```

@@ -1,4 +1,4 @@
-# Iceberg Cross-Service Integration Implementation Plan
+# 1. Iceberg Cross-Service Integration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11-3.13, Textual 8.x, VMx 3.1.x, aioboto3/botocore Glue and Athena APIs, sqlglot 30.x, pytest, pytest-textual-snapshot, repository architecture-diagram tooling.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Requires the completed profile-switching, Glue, and Athena plans.
 - Iceberg is not a separate navigation service.
@@ -23,7 +23,7 @@
 
 ---
 
-### Task 1: Detect Table Formats and Define Iceberg Metadata Records
+### 1.1.1. Task 1: Detect Table Formats and Define Iceberg Metadata Records
 
 **Files:**
 - Modify: `src/aws_tui/domain/data_catalog.py`
@@ -205,7 +205,7 @@ git add src/aws_tui/domain/data_catalog.py src/aws_tui/domain/iceberg.py src/aws
 git commit -m "feat: detect Iceberg catalog tables"
 ```
 
-### Task 2: Extract a Bounded Athena Runner and Implement IcebergInspector
+### 1.1.2. Task 2: Extract a Bounded Athena Runner and Implement IcebergInspector
 
 **Files:**
 - Create: `src/aws_tui/domain/athena_runner.py`
@@ -309,7 +309,7 @@ git add src/aws_tui/domain/athena_runner.py src/aws_tui/domain/iceberg.py src/aw
 git commit -m "feat: inspect Iceberg metadata through Athena"
 ```
 
-### Task 3: Add Connection-Preserving Glue and Athena Cross-Navigation
+### 1.1.3. Task 3: Add Connection-Preserving Glue and Athena Cross-Navigation
 
 **Files:**
 - Modify: `src/aws_tui/vm/messages.py`
@@ -405,7 +405,7 @@ git add src/aws_tui/vm/messages.py src/aws_tui/vm/glue/catalog_vm.py src/aws_tui
 git commit -m "feat: link Glue tables and Athena queries"
 ```
 
-### Task 4: Add Iceberg Metadata ViewModels and Glue UI
+### 1.1.4. Task 4: Add Iceberg Metadata ViewModels and Glue UI
 
 **Files:**
 - Create: `src/aws_tui/vm/glue/iceberg_vm.py`
@@ -487,7 +487,7 @@ git add src/aws_tui/vm/glue/iceberg_vm.py src/aws_tui/vm/glue/catalog_vm.py src/
 git commit -m "feat: browse Iceberg metadata from Glue"
 ```
 
-### Task 5: Complete Integrated Demo and End-to-End Journeys
+### 1.1.5. Task 5: Complete Integrated Demo and End-to-End Journeys
 
 **Files:**
 - Modify: `src/aws_tui/demo/in_memory_glue.py`
@@ -555,7 +555,7 @@ git add src/aws_tui/demo/in_memory_glue.py src/aws_tui/demo/in_memory_athena.py 
 git commit -m "test: add integrated Iceberg demo journeys"
 ```
 
-### Task 6: Synchronize Documentation, Diagram, Contracts, and Release Checks
+### 1.1.6. Task 6: Synchronize Documentation, Diagram, Contracts, and Release Checks
 
 **Files:**
 - Modify: `README.md`

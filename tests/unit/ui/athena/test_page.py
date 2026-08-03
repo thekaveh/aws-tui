@@ -427,6 +427,57 @@ async def test_named_context_action_focuses_and_opens_picker(
 
 
 @pytest.mark.asyncio
+async def test_named_context_actions_close_previously_open_picker() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+
+        page.action_choose_workgroup()
+        await pilot.pause()
+        workgroup = app.query_one("#athena-workgroup", ContextPicker)
+        assert workgroup.is_open
+
+        page.action_choose_catalog()
+        await pilot.pause()
+        catalog = app.query_one("#athena-catalog", ContextPicker)
+        assert not workgroup.is_open
+        assert catalog.is_open
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reverse", "expected_id"),
+    [(False, "athena-database"), (True, "athena-workgroup")],
+)
+async def test_tab_cycle_closes_departed_context_picker(
+    reverse: bool,
+    expected_id: str,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        page.action_choose_catalog()
+        await pilot.pause()
+        picker = app.query_one("#athena-catalog", ContextPicker)
+        assert picker.is_open
+
+        page.cycle_focus(reverse=reverse)
+        await pilot.pause()
+
+        assert not picker.is_open
+        assert app.focused is not None
+        assert app.focused.id == expected_id
+
+
+@pytest.mark.asyncio
 async def test_context_picker_changed_routes_through_page_vm() -> None:
     vm, client = _build_vm()
     await vm.setup()

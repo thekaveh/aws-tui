@@ -5,11 +5,12 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
+from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import NamedQuery, PreparedStatement, PreparedStatementSummary
+from aws_tui.vm.athena._pager_compat import SnapshotTokenPager
 from aws_tui.vm.athena.saved_vm import AthenaSavedVM, SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -147,8 +148,8 @@ async def test_saved_lists_use_independent_token_pagers_without_fetch_all() -> N
 
     await vm.setup()
 
-    assert isinstance(vm._named_pager, TokenPagedComposition)  # type: ignore[attr-defined]
-    assert isinstance(vm._prepared_pager, TokenPagedComposition)  # type: ignore[attr-defined]
+    assert isinstance(vm._named_pager, SnapshotTokenPager)  # type: ignore[attr-defined]
+    assert isinstance(vm._prepared_pager, SnapshotTokenPager)  # type: ignore[attr-defined]
     assert tuple(query.query_id for query in vm.named_queries) == ("named-1",)
     assert tuple(row.name for row in vm.prepared_statements) == ("prepared-1",)
     assert client.named_list_calls == [("analysts", None)]

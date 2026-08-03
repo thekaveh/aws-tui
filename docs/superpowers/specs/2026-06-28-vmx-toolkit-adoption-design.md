@@ -1528,7 +1528,7 @@ collection). Each migration must audit ownership semantics before
 flipping the switch.
 
 In particular, `TransfersVM` and `transfer_journal` interact in the
-crash-recovery flow: a transfer journal entry can outlive the
+interruption-diagnostics flow: a transfer journal entry can outlive the
 `TransfersVM` that originally tracked it. `ServicedObservableCollection`
 must NOT dispose the journal entry when the transfer leaves the live
 list. Verify with `test_transfer_journal` suite as the acceptance gate.

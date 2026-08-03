@@ -17,6 +17,7 @@ action_swap_source) or Bug 2 (initial mount UNREACHABLE silently missed).
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -25,8 +26,10 @@ from vmx import Message, MessageHub, PropertyChangedMessage
 from aws_tui.app import AwsTuiApp, _build_swap_candidates
 from aws_tui.composition import build_app_context
 from aws_tui.domain.filesystem import (
+    FileEntry,
     FileSystemProvider,
     PathRef,
+    ProgressCallback,
     ProviderUnreachableError,
 )
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
@@ -35,32 +38,80 @@ from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 class _UnreachableFS(FileSystemProvider):
     """Fake provider that always raises ProviderUnreachableError from list()."""
 
-    async def list(self, path: PathRef):  # type: ignore[override]
+    async def list(self, path: PathRef) -> list[FileEntry]:
         raise ProviderUnreachableError("test endpoint down")
 
-    async def delete(self, path: PathRef) -> None:
+    async def stat(self, path: PathRef) -> FileEntry:
+        raise ProviderUnreachableError("test endpoint down")
+
+    async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
+        raise ProviderUnreachableError("test endpoint down")
+
+    async def delete_empty_directory(self, path: PathRef) -> None:
         raise ProviderUnreachableError("test endpoint down")
 
     async def mkdir(self, path: PathRef) -> None:
         raise ProviderUnreachableError("test endpoint down")
 
     async def rename(self, src: PathRef, dst: PathRef) -> None:
+        raise ProviderUnreachableError("test endpoint down")
+
+    async def read_stream(
+        self, path: PathRef, *, chunk_size: int = 8 * 1024 * 1024
+    ) -> AsyncIterator[bytes]:
+        raise ProviderUnreachableError("test endpoint down")
+
+    async def write_stream(
+        self,
+        path: PathRef,
+        source: AsyncIterator[bytes],
+        *,
+        total_size: int | None = None,
+        progress: ProgressCallback | None = None,
+        overwrite: bool = False,
+    ) -> None:
         raise ProviderUnreachableError("test endpoint down")
 
 
 class _ReachableFS(FileSystemProvider):
     """Fake provider that returns an empty listing (EMPTY state)."""
 
-    async def list(self, path: PathRef):  # type: ignore[override]
-        return iter([])
+    async def list(self, path: PathRef) -> list[FileEntry]:
+        return []
 
-    async def delete(self, path: PathRef) -> None:
+    async def stat(self, path: PathRef) -> FileEntry:
+        raise NotImplementedError
+
+    async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
+        pass
+
+    async def delete_empty_directory(self, path: PathRef) -> None:
         pass
 
     async def mkdir(self, path: PathRef) -> None:
         pass
 
     async def rename(self, src: PathRef, dst: PathRef) -> None:
+        pass
+
+    async def read_stream(
+        self, path: PathRef, *, chunk_size: int = 8 * 1024 * 1024
+    ) -> AsyncIterator[bytes]:
+        async def empty_stream() -> AsyncIterator[bytes]:
+            if False:
+                yield b""
+
+        return empty_stream()
+
+    async def write_stream(
+        self,
+        path: PathRef,
+        source: AsyncIterator[bytes],
+        *,
+        total_size: int | None = None,
+        progress: ProgressCallback | None = None,
+        overwrite: bool = False,
+    ) -> None:
         pass
 
 
@@ -75,7 +126,7 @@ async def test_hub_subscription_marks_unreachable_via_pane_state(
     app = AwsTuiApp(ctx)
 
     # Build a real PaneVM with connection_key set and the unreachable provider.
-    hub: MessageHub[Message] = ctx.hub  # type: ignore[assignment]
+    hub: MessageHub[Message] = ctx.hub
     pane = PaneVM(
         provider=_UnreachableFS(),
         hub=hub,
@@ -125,7 +176,7 @@ async def test_hub_subscription_ignores_local_pane(tmp_path: Path) -> None:
     ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
     app = AwsTuiApp(ctx)
 
-    hub: MessageHub[Message] = ctx.hub  # type: ignore[assignment]
+    hub: MessageHub[Message] = ctx.hub
     local_pane = PaneVM(
         provider=_UnreachableFS(),
         hub=hub,

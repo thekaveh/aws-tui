@@ -1,4 +1,4 @@
-"""HintLegend widget — bottom contextual hint row bound to :class:`HintLegendVM`.
+"""HintLegend widget — responsive command grid bound to :class:`HintLegendVM`.
 
 Each chip is rendered as a pair of Static widgets (key + label) with
 distinct CSS classes (``.hint-key`` / ``.hint-label``). Coloring now
@@ -10,7 +10,7 @@ adopt the new accent the moment the user switches themes.
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal
+from textual.containers import Horizontal, ItemGrid
 from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub
@@ -20,7 +20,7 @@ from aws_tui.vm.chrome.hint_legend_vm import HintAction, HintLegendVM
 
 
 class HintLegend(HubSubscriberMixin, Widget):
-    """Bottom hint-legend row."""
+    """Bottom hint legend that wraps commands to fit the viewport."""
 
     # Structural only — colors / border come from the theme stylesheet
     # so that a runtime theme swap repaints the footer immediately.
@@ -28,20 +28,20 @@ class HintLegend(HubSubscriberMixin, Widget):
     # on the chip strip centers the row even when chips don't fill it.
     DEFAULT_CSS = """
     HintLegend {
-        height: 3;
+        height: auto;
+        min-height: 3;
         margin: 0 1 1 1;
-        layout: horizontal;
         border-title-align: left;
     }
     HintLegend > #hint-strip {
-        height: 1;
+        height: auto;
+        min-height: 1;
         width: 1fr;
-        layout: horizontal;
-        /* Centre the concatenated chip row horizontally inside the
-           Commands pane. User feedback: "the commands at the bottom
-           are now aligned left whereas I wanted them to be aligned
-           center". The strip itself stays 1fr-wide so the centre
-           alignment applies to the chip group within it. */
+        grid-gutter: 0 1;
+    }
+    HintLegend .hint-chip {
+        width: 1fr;
+        height: 1;
         align-horizontal: center;
     }
     HintLegend .hint-key {
@@ -55,15 +55,10 @@ class HintLegend(HubSubscriberMixin, Widget):
     HintLegend .hint-label {
         width: auto;
         height: 1;
-        padding: 0 1 0 1;
+        padding-left: 1;
     }
     HintLegend .hint-label.-disabled {
         text-style: dim;
-    }
-    HintLegend .hint-sep {
-        width: auto;
-        height: 1;
-        padding: 0 1 0 1;
     }
     """
 
@@ -90,14 +85,19 @@ class HintLegend(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        # Single concatenated strip — service-specific chips first
+        # One responsive grid — service-specific chips first
         # (S3 copy/delete etc., EMR switch-app etc.), then the
         # always-visible app-chrome globals (themes / help / quit).
         # The split into left/right docks was reverted at user's
         # explicit ask ("I want their concatenation displayed at the
-        # bottom"); one ordered row reads as a single command list,
-        # which matches user mental model better.
-        with Horizontal(id="hint-strip"):
+        # bottom"). ItemGrid preserves that order while wrapping the
+        # full command list instead of clipping later actions.
+        with ItemGrid(
+            id="hint-strip",
+            min_column_width=22,
+            stretch_height=False,
+            regular=True,
+        ):
             yield from self._build_chips(self._all_chips())
 
     def on_mount(self) -> None:
@@ -122,7 +122,7 @@ class HintLegend(HubSubscriberMixin, Widget):
 
     def _rebuild_chips(self) -> None:
         try:
-            strip = self.query_one("#hint-strip", Horizontal)
+            strip = self.query_one("#hint-strip", ItemGrid)
         except Exception:
             return
         for child in list(strip.children):
@@ -132,9 +132,7 @@ class HintLegend(HubSubscriberMixin, Widget):
 
     def _build_chips(self, chips: tuple[HintAction, ...]) -> list[Widget]:
         widgets: list[Widget] = []
-        for i, chip in enumerate(chips):
-            if i > 0:
-                widgets.append(Static("·", classes="hint-sep"))
+        for chip in chips:
             # Wrap the key in ``[...]`` brackets — same visual treatment
             # as the genai-vanilla reference (``[a] all  ·  [e] errors  ·  …``)
             # so the bound key is unambiguous even when an action label
@@ -148,14 +146,13 @@ class HintLegend(HubSubscriberMixin, Widget):
             # markup disabled, every chip prints its bracketed key as
             # plain text.
             disabled_suffix = " -disabled" if not chip.enabled else ""
-            widgets.append(
-                Static(
-                    f"[{chip.key_label}]",
-                    classes=f"hint-key{disabled_suffix}",
-                    markup=False,
-                )
+            key = Static(
+                f"[{chip.key_label}]",
+                classes=f"hint-key{disabled_suffix}",
+                markup=False,
             )
-            widgets.append(Static(chip.action_label, classes=f"hint-label{disabled_suffix}"))
+            label = Static(chip.action_label, classes=f"hint-label{disabled_suffix}")
+            widgets.append(Horizontal(key, label, classes="hint-chip"))
         return widgets
 
 

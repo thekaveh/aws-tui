@@ -12,7 +12,7 @@ default_language_version:
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: 2c9f875913ee60ca25ce70243dc24d5b6415598c # v4.6.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
     hooks:
       - id: end-of-file-fixer
         exclude: "tests/snapshot/__snapshots__/"
@@ -28,7 +28,7 @@ repos:
         args: ["--fix=lf"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 3b3f7c3f57fe9925356faf5fe6230835138be230 # v0.15.17
+    rev: 39d9ac5938dadb73df0564a45f163e25ff9fa6e2 # v0.16.1
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -42,7 +42,7 @@ repos:
         language: system
         types_or: [python, pyi]
         require_serial: true
-        files: ^src/
+        files: ^(src/|tests/e2e/test_journeys\.py$|tests/integration/test_swap_source_recovery\.py$|tests/unit/ui/test_pane_widgets\.py$|tests/unit/vm/file_manager/test_pane_vm\.py$)
 
       # Architectural-layer enforcement. CI already runs this via
       # ``ci.yml::lint-type`` and ``release.yml::verify``; mirroring

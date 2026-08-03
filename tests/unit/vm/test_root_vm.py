@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 from vmx import NULL_DISPATCHER, ComponentVM
 from vmx.lifecycle.status import ConstructionStatus
@@ -118,6 +121,22 @@ async def test_switch_service_builds_and_hosts() -> None:
     root.dispose()
 
 
+async def test_cancelled_switch_disposes_unadopted_vm() -> None:
+    s3 = _FakeService("s3")
+    root = _build_root(s3)
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+    await root.content_host._swap_lock.acquire()  # type: ignore[attr-defined]
+    switch = asyncio.create_task(root.switch_service("s3"))
+    await asyncio.sleep(0)
+    switch.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await switch
+    root.content_host._swap_lock.release()  # type: ignore[attr-defined]
+
+    assert s3.constructed[0].status is ConstructionStatus.DISPOSED
+    root.dispose()
+
+
 async def test_switch_service_same_id_is_noop() -> None:
     s3 = _FakeService("s3")
     root = _build_root(s3)
@@ -220,6 +239,89 @@ async def test_switch_theme_publishes_message() -> None:
     await root.switch_theme("voidline")
     sub.dispose()
     assert "voidline" in seen
+    root.dispose()
+
+
+def test_unexpected_service_failure_is_logged_with_active_source() -> None:
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    root = _build_root()
+    entries: list[tuple[str, dict[str, object]]] = []
+    root._connection = _aws_conn("prod")  # type: ignore[attr-defined]
+    root._log = SimpleNamespace(  # type: ignore[attr-defined]
+        error=lambda event, **fields: entries.append((event, fields))
+    )
+
+    root.message_hub.send(
+        ServiceOperationFailedMessage.from_error(
+            service="athena",
+            operation="list_catalogs",
+            error=RuntimeError("Authorization: Bearer TOP_SECRET"),
+        )
+    )
+
+    assert entries == [
+        (
+            "service.operation.unexpected_failure",
+            {
+                "service": "athena",
+                "operation": "list_catalogs",
+                "source": "prod",
+                "region": "us-east-1",
+                "error_type": "RuntimeError",
+                "error": "Authorization: Bearer [REDACTED]",
+            },
+        )
+    ]
+    root.dispose()
+
+
+def test_service_failure_logging_tracks_root_lifecycle() -> None:
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    root = _build_root()
+    entries: list[str] = []
+    root._log = SimpleNamespace(  # type: ignore[attr-defined]
+        error=lambda event, **_fields: entries.append(event)
+    )
+    message = ServiceOperationFailedMessage.from_error(
+        service="localfs",
+        operation="list",
+        error=RuntimeError("disk failed"),
+        source="local",
+    )
+
+    root.destruct()
+    root.message_hub.send(message)
+    assert entries == []
+
+    root.construct()
+    root.message_hub.send(message)
+    assert entries == ["service.operation.unexpected_failure"]
+    root.dispose()
+
+
+def test_explicit_service_source_does_not_inherit_another_connections_region() -> None:
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    root = _build_root()
+    entries: list[dict[str, object]] = []
+    root._connection = _aws_conn("account-a")  # type: ignore[attr-defined]
+    root._log = SimpleNamespace(  # type: ignore[attr-defined]
+        error=lambda _event, **fields: entries.append(fields)
+    )
+
+    root.message_hub.send(
+        ServiceOperationFailedMessage.from_error(
+            service="s3",
+            operation="list",
+            error=RuntimeError("request failed"),
+            source="account-b",
+        )
+    )
+
+    assert entries[0]["source"] == "account-b"
+    assert entries[0]["region"] is None
     root.dispose()
 
 

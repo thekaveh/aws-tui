@@ -63,7 +63,7 @@ registry.register(cast("Service", emr_service))
 ServiceDescriptor(
     id="emr-serverless",
     label="EMR",
-    icon="🔥",                   # U+1F525 FIRE — SMP single-codepoint, 2 cells, reliable colour
+    icon="\U0001f525",          # U+1F525 FIRE; SMP single-codepoint, 2 cells
 )
 ```
 
@@ -71,15 +71,16 @@ ServiceDescriptor(
 > original `⚡` (bare U+26A1) shipped in PR #76 but rendered as a
 > 1-cell text-style stroke in monospace terminals, mis-aligning the
 > nav-rail's 2-cell emoji column. PR #77 forced emoji presentation
-> with `⚡️` (BMP+VS-16); PR #79 briefly switched to `🔥`; PR #81
-> returned to `⚡️`; PR #83 tried `💥` (SMP single-codepoint) but it
+> with `U+26A1 HIGH VOLTAGE` (BMP+VS-16); PR #79 briefly switched to
+> `U+1F525 FIRE`; PR #81 returned to HIGH VOLTAGE; PR #83 tried
+> `U+1F4A5 COLLISION` (SMP single-codepoint) but it
 > rendered too small beside the S3 bucket icon, so the shipped
-> descriptor returned to `🔥`. The documented "icon contract" for
+> descriptor returned to `U+1F525 FIRE`. The documented "icon contract" for
 > future services: **SMP single-codepoint, no variation selector** —
 > pick a glyph that reliably occupies 2 cells in monospace terminals
 > without a VS-16 trick. Symmetric with the rail's literal-object
-> naming: 🪣 = bucket, 🔥 = compute/spark, ⚙️ = gear (kept on BMP+VS-16
-> because it's worked on the user's stack), 🖥️ = computer (same).
+> naming: U+1FAA3 BUCKET = storage, U+1F525 FIRE = compute/Spark,
+> U+2699 GEAR = settings, and U+1F5A5 DESKTOP COMPUTER = EC2.
 
 ### 1.1.5. VMx lifecycle
 

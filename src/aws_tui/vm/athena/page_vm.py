@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Generic, Literal, TypeAlias, TypeVar
 
 import anyio
 import reactivex as rx
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
-from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -23,6 +23,7 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy, select_starter_sql
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     optional_non_empty_exact_string,
@@ -34,14 +35,14 @@ from aws_tui.vm.athena._domain_validation import (
     valid_table_ref,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
-from aws_tui.vm.athena._pager_compat import seed_token_pager
+from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
 from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
 from aws_tui.vm.athena.saved_vm import AthenaSavedSnapshot, AthenaSavedVM, SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.messages import OpenGlueTableRequest
+from aws_tui.vm.messages import OpenGlueTableRequest, ServiceOperationFailedMessage
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 from aws_tui.vm.service_source_vm import (
     SelectionScope,
     ServiceSelectionStore,
@@ -95,7 +96,7 @@ class _SnapshotRestoreStage:
 @dataclass(eq=False)
 class _PageWorker(Generic[T]):
     generation: int
-    pager: TokenPagedComposition[T, str] = field(init=False, repr=False)
+    pager: SnapshotTokenPager[T, str] = field(init=False, repr=False)
 
 
 class AthenaPageVM:
@@ -558,7 +559,17 @@ class AthenaPageVM:
             )
             if database_page is None:
                 return None
-        except Exception:
+        except ProviderError:
+            return None
+        except Exception as exc:
+            report_unexpected_service_error(
+                self._hub,
+                service="athena",
+                operation="restore_snapshot_context",
+                error=exc,
+                source=context.connection_name,
+                region=context.region,
+            )
             return None
         return _SnapshotContextStage(
             context=context,
@@ -576,6 +587,19 @@ class AthenaPageVM:
         snapshot: AthenaPageSnapshot,
     ) -> tuple[AthenaHistorySnapshot, AthenaSavedSnapshot] | None:
         staging_hub: MessageHub[Message] = MessageHub()
+        diagnostic_sub = staging_hub.messages.subscribe(
+            lambda message: (
+                self._hub.send(
+                    replace(
+                        message,
+                        source=snapshot.context.connection_name,
+                        region=snapshot.context.region,
+                    )
+                )
+                if isinstance(message, ServiceOperationFailedMessage)
+                else None
+            )
+        )
         history = AthenaHistoryVM(
             client=self._client,
             context=snapshot.context,
@@ -626,11 +650,23 @@ class AthenaPageVM:
                 ):
                     return None
             return history.export_snapshot(), saved.export_snapshot()
-        except Exception:
+        except ProviderError:
+            return None
+        except Exception as exc:
+            report_unexpected_service_error(
+                self._hub,
+                service="athena",
+                operation="restore_snapshot_children",
+                error=exc,
+                source=snapshot.context.connection_name,
+                region=snapshot.context.region,
+            )
             return None
         finally:
             history.dispose()
             saved.dispose()
+            diagnostic_sub.dispose()
+            staging_hub.dispose()
 
     async def _collect_snapshot_pages(
         self,
@@ -1301,8 +1337,16 @@ class AthenaPageVM:
                 self._workgroup_detail_error_text = error_text
                 self._notify_workgroup_detail()
             return False
-        except Exception:
+        except Exception as exc:
             if self._is_current_context(context_generation):
+                report_unexpected_service_error(
+                    self._hub,
+                    service="athena",
+                    operation="get_workgroup",
+                    error=exc,
+                    source=self._connection.name,
+                    region=self._connection.region,
+                )
                 state, error_text = map_unexpected_error(
                     fallback=_WORKGROUP_DETAIL_ERROR,
                 )
@@ -1435,10 +1479,18 @@ class AthenaPageVM:
                 )
                 self._set_list_error(kind, state, error_text)
             return
-        except Exception:
+        except Exception as exc:
             if self._is_current_worker(worker, kind):
                 state, error_text = map_unexpected_error(
                     fallback=_CONTEXT_ERROR,
+                )
+                report_unexpected_service_error(
+                    self._hub,
+                    service="athena",
+                    operation=f"list_{kind}",
+                    error=exc,
+                    source=self._connection.name,
+                    region=self._connection.region,
                 )
                 self._set_list_error(kind, state, error_text)
             return
@@ -1479,7 +1531,7 @@ class AthenaPageVM:
                 return [], None
             return rows, next_token
 
-        worker.pager = TokenPagedComposition(fetch)
+        worker.pager = SnapshotTokenPager(fetch)
         return worker
 
     def _make_catalog_worker(
@@ -1510,7 +1562,7 @@ class AthenaPageVM:
                 return [], None
             return rows, next_token
 
-        worker.pager = TokenPagedComposition(fetch)
+        worker.pager = SnapshotTokenPager(fetch)
         return worker
 
     def _make_database_worker(
@@ -1550,7 +1602,7 @@ class AthenaPageVM:
                     raise ValueError("Athena database response identity mismatch")
             return rows, next_token
 
-        worker.pager = TokenPagedComposition(fetch)
+        worker.pager = SnapshotTokenPager(fetch)
         return worker
 
     def _replace_workgroup_worker(
@@ -1645,11 +1697,29 @@ class AthenaPageVM:
 
     async def _drain_page_tasks(self) -> None:
         current = asyncio.current_task()
+        cancellation_count = current.cancelling() if current is not None else 0
+        cancelled = False
         while True:
             tasks = {task for task in self._page_tasks if task is not current and not task.done()}
             if not tasks:
+                if cancelled:
+                    raise asyncio.CancelledError
                 return
-            await asyncio.gather(*tasks, return_exceptions=True)
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        current_count = current.cancelling() if current is not None else 0
+                        if current_count > cancellation_count:
+                            cancelled = True
+                            cancellation_count = current_count
+                        continue
+                if not task.cancelled():
+                    with contextlib.suppress(Exception):
+                        task.result()
 
     def _set_list_error(
         self,

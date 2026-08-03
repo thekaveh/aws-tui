@@ -12,6 +12,7 @@ from typing import Any, NoReturn, TypeVar, cast
 
 import botocore.exceptions
 
+from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
 from aws_tui.domain.data_catalog import (
     Column,
     ColumnStatistics,
@@ -136,14 +137,6 @@ class _GlueResponseError(ValueError):
 
 
 _ACCESS_DENIED_CODES = frozenset({"AccessDenied", "AccessDeniedException"})
-_AUTH_CODES = frozenset(
-    {
-        "ExpiredToken",
-        "ExpiredTokenException",
-        "InvalidClientTokenId",
-        "UnrecognizedClientException",
-    }
-)
 _NOT_FOUND_CODES = frozenset({"EntityNotFoundException", "ResourceNotFoundException"})
 _THROTTLED_CODES = frozenset({"Throttling", "ThrottlingException", "TooManyRequestsException"})
 _UNREACHABLE_CODES = frozenset(
@@ -157,15 +150,6 @@ _UNREACHABLE_CODES = frozenset(
 _VALIDATION_CODES = frozenset(
     {"InvalidInputException", "InvalidParameterValueException", "ValidationException"}
 )
-_CREDENTIAL_EXCEPTIONS = (
-    botocore.exceptions.NoCredentialsError,
-    botocore.exceptions.PartialCredentialsError,
-    botocore.exceptions.ProfileNotFound,
-    botocore.exceptions.TokenRetrievalError,
-    botocore.exceptions.CredentialRetrievalError,
-    botocore.exceptions.UnauthorizedSSOTokenError,
-    botocore.exceptions.SSOTokenLoadError,
-)
 _TRANSPORT_EXCEPTIONS = (
     botocore.exceptions.EndpointConnectionError,
     botocore.exceptions.ConnectTimeoutError,
@@ -177,7 +161,7 @@ _TRANSPORT_EXCEPTIONS = (
 
 def map_glue_error(exc: BaseException) -> ProviderError | None:
     """Map botocore and Glue wire failures to the provider error taxonomy."""
-    if isinstance(exc, _CREDENTIAL_EXCEPTIONS):
+    if isinstance(exc, AWS_CREDENTIAL_EXCEPTIONS):
         return AuthRequiredError("AWS credentials unavailable")
     if isinstance(exc, _TRANSPORT_EXCEPTIONS):
         return ProviderUnreachableError("Glue endpoint unavailable")
@@ -257,7 +241,7 @@ async def _run_glue_operation(operation: Callable[[], Awaitable[_T]]) -> _T:
 def _glue_error_message(code: str) -> str:
     if code in _ACCESS_DENIED_CODES:
         return "Glue access denied"
-    if code in _AUTH_CODES:
+    if code in AWS_AUTH_ERROR_CODES:
         return "AWS credentials unavailable"
     if code in _NOT_FOUND_CODES:
         return "Glue resource not found"
@@ -337,7 +321,7 @@ def _provider_error_for_code(
         if lake_formation:
             return LakeFormationPermissionError(message)
         return PermissionDeniedError(message)
-    if code in _AUTH_CODES:
+    if code in AWS_AUTH_ERROR_CODES:
         return AuthRequiredError(message)
     if code in _NOT_FOUND_CODES:
         return NotFoundError(message)

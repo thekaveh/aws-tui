@@ -20,12 +20,11 @@ state distinction that every other EMR pane gets for free.
 
 from __future__ import annotations
 
-import gzip
 import re
+import zlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum
-from io import BytesIO
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -120,6 +119,10 @@ class LogFileKind(StrEnum):
     DRIVER_STDERR = "DRIVER_STDERR"
     EXECUTOR_STDOUT = "EXECUTOR_STDOUT"
     EXECUTOR_STDERR = "EXECUTOR_STDERR"
+    HIVE_DRIVER_STDOUT = "HIVE_DRIVER_STDOUT"
+    HIVE_DRIVER_STDERR = "HIVE_DRIVER_STDERR"
+    TEZ_TASK_STDOUT = "TEZ_TASK_STDOUT"
+    TEZ_TASK_STDERR = "TEZ_TASK_STDERR"
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +157,8 @@ class LogChunk:
 
 _LINE_BUFFER_BATCH: int = 200
 _STREAM_CHUNK_BYTES: int = 64 * 1024
+_MAX_DECOMPRESSED_BYTES: int = 256 * 1024 * 1024
+_MAX_LINE_BYTES: int = 1024 * 1024
 
 
 def _classify_key(key: str) -> tuple[LogFileKind | None, int]:
@@ -164,25 +169,42 @@ def _classify_key(key: str) -> tuple[LogFileKind | None, int]:
     Keys that don't match the expected pattern return ``(None, 0)``
     so the caller skips them silently.
     """
-    if "/SPARK_DRIVER/" in key:
-        if key.endswith("stdout.gz"):
-            return LogFileKind.DRIVER_STDOUT, 0
-        if key.endswith("stderr.gz"):
-            return LogFileKind.DRIVER_STDERR, 1
+    segments = key.split("/")
+    filename = segments[-1]
+    stream = (
+        "stdout"
+        if filename.startswith("stdout")
+        else "stderr"
+        if filename.startswith("stderr")
+        else None
+    )
+    if stream is None or not filename.endswith(".gz"):
         return None, 0
-    if "/SPARK_EXECUTOR_" in key:
-        # Extract the executor index from the path segment.
-        seg = next((s for s in key.split("/") if s.startswith("SPARK_EXECUTOR_")), None)
-        if seg is None:
-            return None, 0
+
+    for worker, stdout_kind, stderr_kind, base_sort in (
+        ("SPARK_DRIVER", LogFileKind.DRIVER_STDOUT, LogFileKind.DRIVER_STDERR, 0),
+        ("HIVE_DRIVER", LogFileKind.HIVE_DRIVER_STDOUT, LogFileKind.HIVE_DRIVER_STDERR, 2),
+    ):
+        if worker in segments:
+            return (stdout_kind if stream == "stdout" else stderr_kind), base_sort + (
+                stream == "stderr"
+            )
+
+    for worker, stdout_kind, stderr_kind, base_sort in (
+        ("SPARK_EXECUTOR", LogFileKind.EXECUTOR_STDOUT, LogFileKind.EXECUTOR_STDERR, 10),
+        ("TEZ_TASK", LogFileKind.TEZ_TASK_STDOUT, LogFileKind.TEZ_TASK_STDERR, 1000),
+    ):
+        if worker not in segments:
+            continue
+        worker_index = segments.index(worker)
         try:
-            idx = int(seg.removeprefix("SPARK_EXECUTOR_"))
-        except ValueError:
+            instance = int(segments[worker_index + 1])
+        except (IndexError, ValueError):
             return None, 0
-        if key.endswith("stdout.gz"):
-            return LogFileKind.EXECUTOR_STDOUT, 2 + idx * 2
-        if key.endswith("stderr.gz"):
-            return LogFileKind.EXECUTOR_STDERR, 2 + idx * 2 + 1
+        return (
+            stdout_kind if stream == "stdout" else stderr_kind,
+            base_sort + instance * 2 + (stream == "stderr"),
+        )
     return None, 0
 
 
@@ -205,6 +227,7 @@ async def list_log_files(
     try:
         async with session.client("s3", **kwargs) as s3:
             next_token: str | None = None
+            seen_tokens: set[str] = set()
             while True:
                 list_kwargs: dict[str, object] = {"Bucket": bucket, "Prefix": run_prefix}
                 if next_token is not None:
@@ -217,21 +240,13 @@ async def list_log_files(
                         continue
                     files.append((sort_idx, LogFile(key=key, kind=kind, size=obj.get("Size"))))
                 next_token = resp.get("NextContinuationToken")
-                if not next_token:
-                    # Defensive: catches both ``None`` (well-behaved S3
-                    # signal that this was the final page) AND the
-                    # ``""`` shape some S3-compatible providers return
-                    # alongside ``IsTruncated`` — without this guard,
-                    # an empty-string token would re-issue the same
-                    # ``list_objects_v2`` request forever (the
-                    # ``if next_token is not None`` guard above keeps
-                    # ``ContinuationToken`` ON the kwargs with an
-                    # empty value, which most providers treat as
-                    # "start from the beginning" → same response →
-                    # infinite loop). Matches the defensive pattern
-                    # in ``s3_fs.py::S3FS.list`` /
-                    # ``S3FS.delete`` (post-PR-#107 / pass-2).
+                if not resp.get("IsTruncated"):
                     break
+                if not next_token or next_token in seen_tokens:
+                    raise ProviderError(
+                        "S3 returned a truncated log listing without a new continuation token"
+                    )
+                seen_tokens.add(next_token)
     except Exception as exc:
         mapped = map_boto_error(exc)
         if mapped is None:
@@ -265,34 +280,43 @@ async def stream_log(
         async with session.client("s3", **kwargs) as s3:
             resp = await s3.get_object(Bucket=bucket, Key=log_file.key)
             body = resp["Body"]
-            buf = BytesIO()
             bytes_read = 0
+            decompressed_bytes = 0
             truncated = False
+            decompressor = zlib.decompressobj(wbits=31)
+            pending = bytearray()
+            lines_scanned = 0
+            matched: list[str] = []
             while True:
-                chunk = await body.read(_STREAM_CHUNK_BYTES)
+                remaining_compressed = max_bytes - bytes_read
+                if remaining_compressed <= 0:
+                    truncated = not decompressor.eof
+                    break
+                chunk = await body.read(min(_STREAM_CHUNK_BYTES, remaining_compressed))
                 if not chunk:
                     break
                 bytes_read += len(chunk)
-                buf.write(chunk)
-                if bytes_read >= max_bytes:
+                remaining_decompressed = _MAX_DECOMPRESSED_BYTES - decompressed_bytes
+                if remaining_decompressed <= 0:
                     truncated = True
                     break
-            buf.seek(0)
-            decompressed = gzip.GzipFile(fileobj=buf, mode="rb")
-            lines_scanned = 0
-            matched: list[str] = []
-            # When ``truncated=True`` the buffer ends mid-deflate-block,
-            # so iterating ``decompressed`` raises ``EOFError`` (or
-            # ``gzip.BadGzipFile`` from CPython internals) once it
-            # walks off the end of the legible prefix. Catch BOTH
-            # around the loop body so the partial matches collected so
-            # far still surface as the final TRUNCATED chunk — without
-            # this, every log larger than ``max_bytes`` surfaces as
-            # ``LogsState.ERROR`` and the user loses the matched lines
-            # the design intended to show.
-            try:
-                for raw in decompressed:
-                    line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                raw_output = decompressor.decompress(chunk, remaining_decompressed + 1)
+                if len(raw_output) > remaining_decompressed:
+                    raw_output = raw_output[:remaining_decompressed]
+                    truncated = True
+                decompressed_bytes += len(raw_output)
+                pending.extend(raw_output)
+
+                while True:
+                    newline = pending.find(b"\n")
+                    if newline < 0:
+                        break
+                    raw_line = bytes(pending[:newline])
+                    del pending[: newline + 1]
+                    if len(raw_line) > _MAX_LINE_BYTES:
+                        truncated = True
+                        break
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r")
                     lines_scanned += 1
                     if filter_.matches(line):
                         matched.append(line)
@@ -305,10 +329,37 @@ async def stream_log(
                             truncated=False,
                         )
                         matched = []
-            except (EOFError, gzip.BadGzipFile):
-                # Mid-deflate truncation. Force the truncated flag on
-                # the final chunk so the View paints the truncation
-                # banner; the matches we DID collect are still valid.
+                if truncated:
+                    break
+                if len(pending) > _MAX_LINE_BYTES:
+                    pending.clear()
+                    truncated = True
+                    break
+                if decompressed_bytes >= _MAX_DECOMPRESSED_BYTES:
+                    truncated = True
+                    break
+                if bytes_read >= max_bytes and not decompressor.eof:
+                    truncated = True
+                    break
+
+            if not truncated:
+                try:
+                    tail = decompressor.flush(_MAX_DECOMPRESSED_BYTES - decompressed_bytes)
+                except zlib.error:
+                    truncated = True
+                else:
+                    pending.extend(tail)
+                    decompressed_bytes += len(tail)
+            if pending and not truncated:
+                if len(pending) > _MAX_LINE_BYTES:
+                    pending.clear()
+                    truncated = True
+                else:
+                    line = bytes(pending).decode("utf-8", errors="replace").rstrip("\r")
+                    lines_scanned += 1
+                    if filter_.matches(line):
+                        matched.append(line)
+            if not decompressor.eof:
                 truncated = True
             yield LogChunk(
                 lines=tuple(matched),

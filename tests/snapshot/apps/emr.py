@@ -14,8 +14,11 @@ from vmx.messages.protocols import Message
 from aws_tui.domain.emr_serverless import ApplicationState, JobRunState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.theme_store import ThemeStore
+from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 _FIXED_TS = datetime(2026, 6, 25, 12, 0, 0, tzinfo=UTC)
@@ -93,6 +96,7 @@ class EmrPageApp(App[None]):
         self.CSS = _load_css(theme)
         self._theme = theme
         self._page_vm: EmrServerlessPageVM = _build_page_vm(_seeded_fake())
+        self._source_candidates: tuple[ServiceSourceContext, ...] = ()
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -103,6 +107,7 @@ class EmrPageApp(App[None]):
         page = EmrServerlessPage(
             self._page_vm,
             hub=self._page_vm.hub,
+            source_candidates=self._source_candidates,
             id="emr-page",
         )
         await host.mount(page)
@@ -131,4 +136,39 @@ class EmrPageEmptyApp(App[None]):
         await host.mount(page)
 
 
-__all__ = ["EmrPageApp", "EmrPageEmptyApp"]
+class EmrPageOpenPickerApp(EmrPageApp):
+    """Renders populated EMR with the application selector expanded."""
+
+    def on_mount(self) -> None:
+        # Textual also dispatches the inherited mount handler, which
+        # asynchronously mounts the page. Open after that refresh instead
+        # of calling ``super()`` and mounting a duplicate ``#emr-page``.
+        self.call_after_refresh(self._open_picker)
+
+    def _open_picker(self) -> None:
+        self.query_one(ApplicationPicker).toggle_open()
+
+
+class EmrPageOpenSourcePickerApp(EmrPageApp):
+    """Renders similarly prefixed AWS profiles with the source list expanded."""
+
+    def __init__(self, theme: str) -> None:
+        super().__init__(theme)
+        self._source_candidates = (
+            ServiceSourceContext("demo-prod-east", "demo-prod-east", "us-east-1"),
+            ServiceSourceContext("demo-prod-west", "demo-prod-west", "us-west-2"),
+        )
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._open_source_picker)
+
+    def _open_source_picker(self) -> None:
+        self.query_one(ServiceSourceHeader).open()
+
+
+__all__ = [
+    "EmrPageApp",
+    "EmrPageEmptyApp",
+    "EmrPageOpenPickerApp",
+    "EmrPageOpenSourcePickerApp",
+]

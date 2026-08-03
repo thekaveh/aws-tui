@@ -29,7 +29,7 @@ from textual.widgets import Input, Static
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.modal_button import ModalButton
-from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 from aws_tui.vm.settings.s3_connection_form_vm import S3ConnectionFormVM
 
 if TYPE_CHECKING:

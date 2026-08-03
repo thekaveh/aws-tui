@@ -51,6 +51,8 @@ class FocusSlot(StrEnum):
     NAV_MENU = "nav_menu"
     S3_LEFT = "s3.left"
     S3_RIGHT = "s3.right"
+    EMR_SOURCE = "emr.source"
+    EMR_APPLICATION = "emr.application"
     EMR_RUNS = "emr.runs"
     EMR_DETAIL = "emr.detail"
     EMR_LOGS = "emr.logs"

@@ -13,6 +13,7 @@ import contextlib
 import mimetypes
 import os
 import sys
+import weakref
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass, field
@@ -34,7 +35,8 @@ from textual.binding import BindingsMap, BindingType
 from textual.containers import Container, Horizontal
 from textual.css.errors import StylesheetError
 from textual.css.tokenizer import TokenError
-from textual.widgets import OptionList, Static
+from textual.widget import Widget
+from textual.widgets import Static, TextArea
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.data_catalog import TableRef
@@ -51,13 +53,14 @@ from aws_tui.ui.bindings import BindingResolver
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.command_palette import CommandPalette
-from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+from aws_tui.ui.widgets.confirm_modal import TextualDialogService
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
+from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
@@ -83,6 +86,7 @@ from aws_tui.vm.messages import (
     OpenAthenaTableRequest,
     OpenGlueTableRequest,
     OpenS3LocationRequest,
+    PaletteActionFailedMessage,
     ThemeChangedMessage,
 )
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
@@ -127,6 +131,7 @@ class _ThemeApplyFailure:
 _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
 _GLUE_SERVICE_IDS = frozenset({"glue"})
 _ATHENA_SERVICE_IDS = frozenset({"athena"})
+_EMR_SERVICE_IDS = frozenset({"emr-serverless"})
 
 _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
     PaletteEntry("app.themes", "Theme picker", "app"),
@@ -137,6 +142,15 @@ _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
         "source",
         service_ids=_SOURCE_SERVICE_IDS,
     ),
+    PaletteEntry(
+        "emr.next_application",
+        "Next EMR application",
+        "emr",
+        service_ids=_EMR_SERVICE_IDS,
+    ),
+    PaletteEntry("glue.catalog", "Glue catalog", "glue", service_ids=_GLUE_SERVICE_IDS),
+    PaletteEntry("glue.jobs", "Glue jobs", "glue", service_ids=_GLUE_SERVICE_IDS),
+    PaletteEntry("glue.crawlers", "Glue crawlers", "glue", service_ids=_GLUE_SERVICE_IDS),
     PaletteEntry(
         "glue.choose_run_state",
         "Choose Glue run state",
@@ -233,14 +247,19 @@ async def _first_bytes(source: AsyncIterator[bytes], limit: int) -> AsyncIterato
     provider's chunk size, truncating the final chunk if it would overshoot.
     """
     remaining = limit
-    async for chunk in source:
-        if remaining <= 0:
-            break
-        if len(chunk) > remaining:
-            yield chunk[:remaining]
-            break
-        yield chunk
-        remaining -= len(chunk)
+    try:
+        async for chunk in source:
+            if remaining <= 0:
+                break
+            if len(chunk) > remaining:
+                yield chunk[:remaining]
+                break
+            yield chunk
+            remaining -= len(chunk)
+    finally:
+        aclose = getattr(source, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 async def _stream_preview(
@@ -578,23 +597,35 @@ class AwsTuiApp(App[None]):
         # ``super().__init__``. ``ctrl+c`` is overridden by the resolver's
         # ``app.quit`` binding (Textual's default maps it to help_quit).
         installed = list(self._resolver.to_textual_bindings())
-        for key, binds in BindingsMap(installed).key_to_bindings.items():
-            self._bindings.key_to_bindings[key] = list(binds)
+        # Textual has no dynamic API that both replaces a key and preserves
+        # Binding.priority. App.bind() appends and drops priority, so isolate
+        # this compatibility point and guard the resulting map in integration
+        # tests until Textual exposes an equivalent supported operation.
+        for key, bindings in BindingsMap(installed).key_to_bindings.items():
+            self._bindings.key_to_bindings[key] = list(bindings)
         # Action ring buffer feeds the crash dump per spec §7.10. Each entry
         # is a short ISO-timestamped action id string; we keep the most
         # recent ``_ACTION_RING_SIZE`` to bound memory.
         self._action_ring: deque[str] = deque(maxlen=_ACTION_RING_SIZE)
         self._last_action_id: str | None = None
+        self._confirmation_pending = False
         # Populated by ``_handle_exception`` when Textual surfaces an
         # unhandled exception so ``main()`` can print the dump path and
         # re-raise after the app has torn down.
         self._crash_report: CrashReport | None = None
+        self._content_mount_hosts: weakref.WeakKeyDictionary[Widget, Container] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._content_mount_recovering: weakref.WeakSet[Widget] = weakref.WeakSet()
+        self._shutdown_task: asyncio.Task[None] | None = None
+        self._shutdown_complete = False
         self._command_palette_populated: bool = False
         self._pane_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
         self._nav_selection_sub: DisposableBase | None = None
         self._cursor_sub: DisposableBase | None = None
         self._service_navigation_sub: DisposableBase | None = None
+        self._palette_failure_sub: DisposableBase | None = None
         self._table_clipboard_sub: DisposableBase | None = None
         self._service_navigation_closed = False
         self._table_navigation_generation = 0
@@ -708,6 +739,9 @@ class AwsTuiApp(App[None]):
         self._service_navigation_sub = ctx.hub.messages.subscribe(
             on_next=self._on_service_navigation_message
         )
+        self._palette_failure_sub = ctx.hub.messages.subscribe(
+            on_next=self._on_palette_action_message
+        )
         self._table_clipboard_sub = ctx.table_clipboard_vm.on_property_changed.subscribe(
             on_next=self._on_table_clipboard_changed
         )
@@ -772,8 +806,8 @@ class AwsTuiApp(App[None]):
             # silently undone by it.
             self.call_after_refresh(lambda: self.set_focus(None))
 
-    def on_unmount(self) -> None:
-        self._dispose_table_clipboard_subscription()
+    async def on_unmount(self) -> None:
+        await self._aws_tui_shutdown()
 
     def _dispose_table_clipboard_subscription(self) -> None:
         subscription = self._table_clipboard_sub
@@ -978,7 +1012,8 @@ class AwsTuiApp(App[None]):
                     error_type=type(exc).__name__,
                 )
                 return "error"
-            await self._mount_initial_service_view()
+            if not await self._mount_initial_service_view():
+                return "error"
             try:
                 return await asyncio.wait_for(self._attempt_future, timeout=90.0)
             except TimeoutError:
@@ -1115,11 +1150,11 @@ class AwsTuiApp(App[None]):
         # skips it (consistent with the reactive auto-fallback path).
         self._mark_connection_unreachable(initial_conn.kind, initial_conn.name)
 
-        # Reach into the S3Service for its local_root configuration through
-        # _make_local_provider. Tests inject a custom root via this field,
-        # production defaults to None (current working dir). Without this
-        # the LocalFS would always start at CWD even in tests.
-        s3_service = ctx.registry.get("s3")
+        # Use the registered service's public local-provider factory so the
+        # fallback keeps the same configured root as ordinary S3 views.
+        from aws_tui.services.s3.service import S3Service
+
+        s3_service = cast("S3Service", ctx.registry.get("s3"))
 
         def _make_local() -> FileSystemProvider:
             return self._make_local_provider()
@@ -1142,13 +1177,8 @@ class AwsTuiApp(App[None]):
             path_protocol="",
             connection_key=None,
         )
-        # Pull the transfer journal from the S3Service the same way
-        # build_vm does so cross-pane copy/move journals stay
-        # consistent across the fallback.
-        journal = getattr(s3_service, "_journal", None)
+        journal = s3_service.transfer_journal
         if journal is None:
-            # Shouldn't happen — S3Service always has a journal — but
-            # bail cleanly if it does.
             ctx.log_sink.error("app.local_only_mount.missing_journal")
             return False
         dual = DualPaneVM(
@@ -1186,14 +1216,14 @@ class AwsTuiApp(App[None]):
         # Mount the widget.
         try:
             host = self.query_one("#content-host", Container)
-            await host.remove_children()
-            await host.mount(
+            await self._replace_content_widget(
+                host,
                 DualPane(
                     dual,
                     hub=ctx.hub,
                     focus_coordinator=ctx.focus_coordinator,
                     id="content-dual-pane",
-                )
+                ),
             )
         except Exception as exc:
             ctx.log_sink.error(
@@ -1348,7 +1378,9 @@ class AwsTuiApp(App[None]):
                 None,
             )
         if initial_conn is None:
-            env_profile = (os.environ.get("AWS_PROFILE") or "").strip()
+            env_profile = (
+                os.environ.get("AWS_DEFAULT_PROFILE") or os.environ.get("AWS_PROFILE") or ""
+            ).strip()
             if env_profile:
                 initial_conn = next(
                     (c for c in connections if c.profile == env_profile),
@@ -1358,7 +1390,7 @@ class AwsTuiApp(App[None]):
             initial_conn = connections[0]
         return initial_conn
 
-    async def _mount_initial_service_view(self) -> None:
+    async def _mount_initial_service_view(self) -> bool:
         """Mount the current service's view widget into the content host.
 
         ``switch_service`` updates the VM tree; the View layer has to follow
@@ -1374,26 +1406,25 @@ class AwsTuiApp(App[None]):
             _svc_id = ctx.root_vm.content_host.current_id
             if current_vm is not None:
                 host = self.query_one("#content-host", Container)
-                await host.remove_children()
-                await host.mount(
-                    build_service_view(
+                replacement = build_service_view(
+                    _svc_id or "unknown",
+                    current_vm,
+                    hub=ctx.hub,
+                    keymap=getattr(ctx, "keymap_store", None),
+                    source_candidates=_service_source_contexts(
+                        ctx,
                         _svc_id or "unknown",
-                        current_vm,
-                        hub=ctx.hub,
-                        keymap=getattr(ctx, "keymap_store", None),
-                        source_candidates=_service_source_contexts(
-                            ctx,
-                            _svc_id or "unknown",
-                        ),
-                        focus_coordinator=ctx.focus_coordinator,
-                        dual_pane_class=DualPane,
-                        emr_page_class=EmrServerlessPage,
-                        glue_page_class=GluePage,
-                        athena_page_class=AthenaPage,
-                    )
+                    ),
+                    focus_coordinator=ctx.focus_coordinator,
+                    dual_pane_class=DualPane,
+                    emr_page_class=EmrServerlessPage,
+                    glue_page_class=GluePage,
+                    athena_page_class=AthenaPage,
                 )
+                await self._replace_content_widget(host, replacement)
                 if _svc_id in {"glue", "athena"}:
                     self._recompute_hint_disables()
+            return True
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.failed",
@@ -1413,6 +1444,7 @@ class AwsTuiApp(App[None]):
                     action=f"see {ctx.log_sink.path}",
                     toast_id="mount-service-failed",
                 )
+            return False
 
     async def _mount_no_connection_placeholder(self) -> None:
         """Render a clear "configure one and relaunch" message when no
@@ -1420,24 +1452,23 @@ class AwsTuiApp(App[None]):
         """
         ctx = self._app_ctx
         config_path = escape(str(ctx.config_store.path))
-        with contextlib.suppress(Exception):
-            host = self.query_one("#content-host", Container)
-            await host.remove_children()
-            await host.mount(
-                Static(
-                    "\n  No AWS profile or S3-compatible connection found.\n\n"
-                    "  To get started, do ONE of the following and relaunch:\n\n"
-                    "    1. Run [b]aws configure[/]                      (interactive AWS keys setup)\n"
-                    "    2. Run [b]aws configure sso[/]                  (interactive SSO setup)\n"
-                    f"    3. Edit [b]{config_path}[/]     (add an AWS or S3-compatible connection)\n\n"
-                    "  See [b]docs/connections.md[/] in the repo for the [b][connections.<name>][/] schema and\n"
-                    "  vendor quirks (MinIO, R2, B2, Wasabi).\n\n"
-                    "  Press [b]q[/] to quit.",
-                    id="content-placeholder",
-                    classes="content-placeholder",
-                    markup=True,
-                )
-            )
+        host = self.query_one("#content-host", Container)
+        await self._replace_content_widget(
+            host,
+            Static(
+                "\n  No AWS profile or S3-compatible connection found.\n\n"
+                "  To get started, do ONE of the following and relaunch:\n\n"
+                "    1. Run [b]aws configure[/]                      (interactive AWS keys setup)\n"
+                "    2. Run [b]aws configure sso[/]                  (interactive SSO setup)\n"
+                f"    3. Edit [b]{config_path}[/]     (add an AWS or S3-compatible connection)\n\n"
+                "  See [b]docs/connections.md[/] in the repo for the [b][connections.<name>][/] schema and\n"
+                "  vendor quirks (MinIO, R2, B2, Wasabi).\n\n"
+                "  Press [b]q[/] to quit.",
+                id="content-placeholder",
+                classes="content-placeholder",
+                markup=True,
+            ),
+        )
 
     async def _cancel_transfer_workers_before_content_swap(self) -> None:
         """Stop copy/delete workers before disposing the active file panes."""
@@ -1453,8 +1484,8 @@ class AwsTuiApp(App[None]):
     async def action_quit(self) -> None:
         """Override Textual's built-in ``action_quit`` so every exit path
         (the ``q`` and ``ctrl+c`` BINDINGS above, plus Textual's own
-        SIGINT handler, plus the action-registry ``app.quit`` bridge
-        once the input-router lands) flows through the async shutdown
+        SIGINT handler, plus the action-registry ``app.quit`` bridge)
+        flows through the async shutdown
         defined at :meth:`_aws_tui_shutdown`.
 
         Previously ``BINDINGS`` mapped ``q`` / ``ctrl+c`` to the bare
@@ -1470,11 +1501,8 @@ class AwsTuiApp(App[None]):
         await self._aws_tui_shutdown()
         self.exit()
 
-    # Retained for the deferred BindingResolver's ``app.quit`` bridge
-    # so user-defined ``[keybindings].app.quit`` entries reach the
-    # same shutdown path. Production today goes through ``action_quit``
-    # above; this alias becomes load-bearing when the input-router
-    # ships.
+    # BindingResolver maps user-defined ``[keybindings].app.quit`` entries
+    # through this alias so every route reaches the same shutdown path.
     async def action_app_quit(self) -> None:
         await self.action_quit()
 
@@ -1484,7 +1512,7 @@ class AwsTuiApp(App[None]):
         # so cleanup still runs instead of being silently dropped.
         self.run_worker(self.action_quit(), exclusive=True, group="shutdown")
 
-    def action_dispatch(self, action_id: str) -> None | Awaitable[None]:
+    def action_dispatch(self, action_id: str) -> Awaitable[None] | None:
         """Single Textual action behind every resolver-materialized binding.
 
         Each installed ``Binding`` uses ``dispatch('<action_id>')``; Textual
@@ -1493,6 +1521,21 @@ class AwsTuiApp(App[None]):
         lets Textual await async actions.
         """
         return self._actions.invoke(action_id)
+
+    def _on_palette_action_message(self, message: object) -> None:
+        if not isinstance(message, PaletteActionFailedMessage):
+            return
+        self._app_ctx.log_sink.error(
+            "command_palette.action_failed",
+            entry_id=message.entry_id,
+            error_type=message.error_type,
+        )
+        notifications.error(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Command",
+            message=f"{message.entry_id} failed ({message.error_type})",
+            toast_id="command-palette-action-failed",
+        )
 
     def _focused_file_pane(self) -> PaneVM | None:
         """Return the focused file-manager pane, or None when not applicable.
@@ -1515,6 +1558,9 @@ class AwsTuiApp(App[None]):
         self.record_action("pane.quick_look")
         glue_page = self._glue_page()
         if glue_page is not None and glue_page.activate_focused(space=True):
+            return
+        emr_page = self._emr_page()
+        if emr_page is not None and emr_page.activate_focused():
             return
         pane = self._focused_file_pane()
         if pane is None:
@@ -1588,16 +1634,7 @@ class AwsTuiApp(App[None]):
         return None
 
     def _emr_active_pane(self, emr_page: EmrServerlessPage) -> object | None:
-        """Return whichever EMR pane should receive
-        the next cursor/refresh action.
-
-        Logic: if Textual focus is currently inside one of the three
-        focusable panes (runs, detail, logs), return that pane.
-        Otherwise default to LEFT — the S3 page's analogue is
-        ``dual.focused_pane`` defaulting to LEFT before the user has
-        Tabbed; mirroring that gives the same "arrow keys work
-        immediately after clicking ⚡ in the rail" UX as S3.
-        """
+        """Return the focused EMR pane for refresh routing."""
         focused = self.focused
         if focused is not None:
             for pane in (emr_page.left_pane, emr_page.right_detail, emr_page.right_pane):
@@ -1664,12 +1701,17 @@ class AwsTuiApp(App[None]):
         if slot.value.startswith("glue."):
             page = self._glue_page()
             if page is not None:
-                page._project_focus_slot(slot)
+                page.project_focus_slot(slot)
             return
         if slot.value.startswith("athena."):
             athena_page = self._athena_page()
             if athena_page is not None:
-                athena_page._project_focus_slot(slot)
+                athena_page.project_focus_slot(slot)
+            return
+        if slot.value.startswith("emr."):
+            with contextlib.suppress(Exception):
+                emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
+                emr_page.project_focus_slot(slot)
 
     def _focus_demo_launch_nav(self) -> None:
         self._app_ctx.focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
@@ -1708,6 +1750,7 @@ class AwsTuiApp(App[None]):
                 dual_widget.focus_left_pane()
             return
         if current_id == "emr-serverless":
+            self._app_ctx.focus_coordinator.set_focused_slot(FocusSlot.EMR_RUNS)
             with contextlib.suppress(Exception):
                 emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
                 left = emr_page.left_pane
@@ -1771,21 +1814,6 @@ class AwsTuiApp(App[None]):
         self._move_cursor(1)
 
     def _move_cursor(self, delta: int) -> None:
-        # EMR page: if the application picker dropdown is open, Up/
-        # Down navigate the picker's OptionList rather than the
-        # pane cursor. Without this, the App's ``priority=True`` Up/
-        # Down binding steals the keystroke and moves the runs-pane
-        # cursor instead — user feedback: "When the list of
-        # applications is expanded, I can't use arrow keys and enter
-        # to choose a new app". Same hijack-pattern PR #77/#78 used
-        # for the nav-rail.
-        picker_opts = self._open_emr_picker_optionlist()
-        if picker_opts is not None:
-            if delta < 0:
-                picker_opts.action_cursor_up()
-            else:
-                picker_opts.action_cursor_down()
-            return
         # If Textual focus is in the NavMenu's OptionList, Up/Down
         # should navigate THAT list, not the pane cursor. Textual's
         # ``priority=True`` on the App binding steals the keystroke
@@ -1815,32 +1843,9 @@ class AwsTuiApp(App[None]):
         if athena_page is not None:
             athena_page.move_focused(delta)
             return
-        # EMR page: forward Up/Down to the active EMR pane's cursor
-        # or scroll action. Mirrors the S3 path's ``dual.focused_pane``
-        # lookup. LEFT pane uses cursor actions; RIGHT-bottom pane
-        # (logs) uses scroll actions. The detail pane supports neither,
-        # so ``getattr(..., None)`` swallows the key cleanly.
         emr_page = self._emr_page()
         if emr_page is not None:
-            emr_pane = self._emr_active_pane(emr_page)
-            if emr_pane is not None:
-                # Try cursor action first (LEFT pane), then scroll action (RIGHT pane).
-                action = getattr(
-                    emr_pane,
-                    "action_cursor_up" if delta < 0 else "action_cursor_down",
-                    None,
-                )
-                if action is not None:
-                    action()
-                    return
-                # Fallback to scroll action for logs pane.
-                action = getattr(
-                    emr_pane,
-                    "action_scroll_up" if delta < 0 else "action_scroll_down",
-                    None,
-                )
-                if action is not None:
-                    action()
+            emr_page.move_focused(delta)
             return
         dual = self._dual_pane()
         if dual is None:
@@ -1851,26 +1856,6 @@ class AwsTuiApp(App[None]):
         cmd = getattr(pane, "move_cursor_command", None)
         if cmd is not None:
             cmd.execute(delta)
-
-    def _open_emr_picker_optionlist(self) -> OptionList | None:
-        """Return the EMR application picker's OptionList if and only
-        if the picker dropdown is open. Used by the priority-binding
-        forwards (``_move_cursor`` / ``action_descend``) so Up/Down/
-        Enter route to the dropdown when it's expanded.
-        """
-        emr_page = self._emr_page()
-        if emr_page is None:
-            return None
-        picker = getattr(emr_page, "_picker", None)
-        if picker is None:
-            return None
-        if "-open" not in picker.classes:
-            return None
-        try:
-            opts: OptionList = picker.query_one("#app-options", OptionList)
-        except Exception:
-            return None
-        return opts
 
     def _nav_has_focus(self) -> bool:
         """True if Textual focus is currently on the NavMenu.
@@ -1895,14 +1880,6 @@ class AwsTuiApp(App[None]):
             return False
         return focused is nav or nav in focused.ancestors_with_self
 
-    def _focused_optionlist(self) -> OptionList | None:
-        """Vestigial — kept so the EMR application picker's
-        dropdown OptionList resolver path (``_open_emr_picker_optionlist``)
-        is the only OptionList we still need to address. NavMenu
-        no longer hosts an OptionList post-PR-#94; returns None for
-        the nav case."""
-        return None
-
     async def action_descend(self) -> None:
         self.record_action("pane.descend")
         # Forward Enter to the active modal first. Most of our modals
@@ -1913,21 +1890,32 @@ class AwsTuiApp(App[None]):
         # confirm-modal handler that commits whichever button has
         # arrow-key focus — checked first so it wins over the plain
         # ``confirm`` fallback.
-        if self._forward_to_modal("action_commit_focused", "action_confirm", "action_apply"):
-            return
-        # EMR page: if the application picker dropdown is open,
-        # Enter commits the highlighted row — drive the picker's
-        # ``action_commit`` directly so it fires the
-        # ``ApplicationCommitted`` message + cascades through
-        # ``page_vm.select_application`` (the JobRuns + Detail
-        # panes refresh in lockstep). Same priority-binding-hijack
-        # rationale as the Up/Down forward in ``_move_cursor``.
-        picker_opts = self._open_emr_picker_optionlist()
-        if picker_opts is not None:
-            emr_page = self._emr_page()
-            if emr_page is not None and emr_page._picker is not None:
-                emr_page._picker.action_commit()
-            return
+        if len(self.screen_stack) > 1:
+            focused = self.focused
+            if isinstance(focused, TextArea):
+                focused.insert("\n")
+                return
+            if isinstance(self.screen, CrashModal):
+                self.screen.action_default()
+                return
+            if isinstance(focused, ModalButton):
+                focused.press()
+                return
+            for action_name in (
+                "action_commit_focused",
+                "action_confirm",
+                "action_apply",
+                "action_execute",
+                "action_submit",
+                "action_default",
+            ):
+                action = getattr(self.screen, action_name, None)
+                if action is None:
+                    continue
+                result = action()
+                if isinstance(result, Awaitable):
+                    await result
+                return
         # If Textual focus is in the NavMenu, forward Enter to its
         # own commit action (re-fires the switch on the
         # currently-highlighted row). Post-PR-#94 NavMenu is the
@@ -1945,25 +1933,9 @@ class AwsTuiApp(App[None]):
         athena_page = self._athena_page()
         if athena_page is not None and athena_page.activate_focused():
             return
-        # EMR page: Enter on the LEFT pane commits the focused row
-        # (posts ``JobRunsPane.RunSelected`` → page VM forwards to
-        # ``select_job_run``). Enter on the RIGHT-bottom pane (logs)
-        # triggers ``action_load`` to fetch logs. Detail has no Enter
-        # action, and the ``getattr(..., None)`` guard mirrors the S3
-        # path.
         emr_page = self._emr_page()
         if emr_page is not None:
-            emr_pane = self._emr_active_pane(emr_page)
-            if emr_pane is not None:
-                # Try commit action first (LEFT pane), then load action (RIGHT pane).
-                commit = getattr(emr_pane, "action_commit_selection", None)
-                if commit is not None:
-                    commit()
-                    return
-                # Fallback to load action for logs pane.
-                load = getattr(emr_pane, "action_load", None)
-                if load is not None:
-                    load()
+            emr_page.activate_focused()
             return
         dual = self._dual_pane()
         if dual is None:
@@ -2124,31 +2096,33 @@ class AwsTuiApp(App[None]):
         )
 
         ctx = self._app_ctx
-        modal = ConfirmModal(ctx.confirm_vm, request, hub=ctx.hub)
+        if ctx.confirm_vm.is_open or self._confirmation_pending:
+            return
+        self._confirmation_pending = True
+        self.run_worker(
+            self._confirm_copy(dual, list(targets), used_cursor_fallback, request),
+            group="confirmation",
+        )
 
-        # Why ``push_screen`` with a callback instead of
-        # ``push_screen_wait``: the latter requires a Textual worker
-        # context, which actions invoked through bindings don't have —
-        # calling it raised ``NoActiveWorker`` and popped the crash
-        # modal. Schedule the actual copy as a worker after the user
-        # decides.
-        def _after_decision(decision: bool | None) -> None:
-            if not decision:
+    async def _confirm_copy(
+        self,
+        dual: object,
+        targets: list[object],
+        used_cursor_fallback: bool,
+        request: ConfirmRequest,
+    ) -> None:
+        ctx = self._app_ctx
+        try:
+            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
+            if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
-            # Serialize against the delete worker — both mutate the
-            # focused pane's mark state and the shared transfer journal.
-            # Without exclusive+group, a user pressing `c` then `d` in
-            # quick succession can interleave the two flows on the same
-            # DualPaneVM._journal / pane entries (see Textual worker race
-            # rule: shared-state workers must use exclusive=True,
-            # group="<name>").
             self.run_worker(
-                self._run_copy(dual, list(targets), used_cursor_fallback),
+                self._run_copy(dual, targets, used_cursor_fallback),
                 exclusive=True,
                 group="transfer-ops",
             )
-
-        self.push_screen(modal, _after_decision)
+        finally:
+            self._confirmation_pending = False
 
     async def _run_copy(
         self,
@@ -2231,23 +2205,33 @@ class AwsTuiApp(App[None]):
             cancel_label="Cancel",
             danger=True,
         )
-        modal = ConfirmModal(ctx.confirm_vm, request, hub=ctx.hub)
+        if ctx.confirm_vm.is_open or self._confirmation_pending:
+            return
+        self._confirmation_pending = True
+        self.run_worker(
+            self._confirm_delete(dual, list(targets), used_cursor_fallback, request),
+            group="confirmation",
+        )
 
-        # Same worker-deferral as action_copy — bindings don't run in a
-        # worker, so push_screen_wait would raise NoActiveWorker and
-        # crash the app. Push, then kick off the delete in a worker.
-        def _after_decision(decision: bool | None) -> None:
-            if not decision:
+    async def _confirm_delete(
+        self,
+        dual: object,
+        targets: list[object],
+        used_cursor_fallback: bool,
+        request: ConfirmRequest,
+    ) -> None:
+        ctx = self._app_ctx
+        try:
+            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
+            if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
-            # Shares the "transfer-ops" group with copy so the two flows
-            # can't interleave on the focused pane's mark state.
             self.run_worker(
-                self._run_delete(dual, list(targets), used_cursor_fallback),
+                self._run_delete(dual, targets, used_cursor_fallback),
                 exclusive=True,
                 group="transfer-ops",
             )
-
-        self.push_screen(modal, _after_decision)
+        finally:
+            self._confirmation_pending = False
 
     async def _run_delete(
         self,
@@ -2749,17 +2733,18 @@ class AwsTuiApp(App[None]):
             target.region,
         ):
             return True
-        await self._rebuild_single_context_source(service_id, target)
-        return True
+        return await self._rebuild_single_context_source(service_id, target)
 
     async def _rebuild_single_context_source(
         self,
         service_id: str,
         target: Connection,
-    ) -> None:
-        """Rebuild a service under an already validated AWS connection."""
+    ) -> bool:
+        """Rebuild under ``target`` and restore the prior source on failure."""
 
         ctx = self._app_ctx
+        prior_connection = ctx.root_vm.active_connection
+        prior_auth_state = ctx.root_vm.active_auth_state
         try:
             auth_state = ctx.aws_session.probe_token(target).state
         except Exception as exc:
@@ -2770,8 +2755,46 @@ class AwsTuiApp(App[None]):
                 error_type=type(exc).__name__,
             )
             auth_state = TokenState.MISSING
-        await ctx.root_vm.switch_connection_and_service(target, auth_state, service_id)
-        await self._mount_service_view(service_id)
+        try:
+            await ctx.root_vm.switch_connection_and_service(target, auth_state, service_id)
+            if await self._mount_service_view(service_id, required_connection=target):
+                return True
+        except Exception as exc:
+            ctx.log_sink.error(
+                "service_source.rebuild_failed",
+                service_id=service_id,
+                connection=target.name,
+                error_type=type(exc).__name__,
+            )
+
+        restored = False
+        if prior_connection is not None and prior_auth_state is not None:
+            try:
+                await ctx.root_vm.switch_connection_and_service(
+                    prior_connection,
+                    prior_auth_state,
+                    service_id,
+                )
+                restored = await self._mount_service_view(
+                    service_id,
+                    required_connection=prior_connection,
+                )
+            except Exception as exc:
+                ctx.log_sink.error(
+                    "service_source.rollback_failed",
+                    service_id=service_id,
+                    connection=prior_connection.name,
+                    error_type=type(exc).__name__,
+                )
+        notifications.error(
+            ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message=(
+                f"couldn't switch to {target.name}; "
+                + ("restored the previous source" if restored else "source restore failed")
+            ),
+        )
+        return False
 
     def _make_s3_provider_for_connection(self, conn: Connection) -> FileSystemProvider:
         """Build the S3 pane provider through the registered S3 service.
@@ -2783,16 +2806,12 @@ class AwsTuiApp(App[None]):
         ``AwsTuiApp`` via ``object.__new__`` working.
         """
         from aws_tui.domain.s3_fs import S3FS
-        from aws_tui.services.s3.service import _aioboto3_session_for
+        from aws_tui.services.s3.service import S3Service, _aioboto3_session_for
 
         ctx = getattr(self, "_app_ctx", None)
         if ctx is not None:
-            with contextlib.suppress(Exception):
-                service = ctx.registry.get("s3")
-                make_provider = getattr(service, "_make_s3_provider", None)
-                if make_provider is not None:
-                    return cast("FileSystemProvider", make_provider(conn))
-
+            service = cast("S3Service", ctx.registry.get("s3"))
+            return service.build_remote_provider(conn)
         session = _aioboto3_session_for(conn)
         return S3FS(
             session=session,
@@ -2805,19 +2824,18 @@ class AwsTuiApp(App[None]):
     def _make_local_provider(self) -> FileSystemProvider:
         """Build a LocalFS using the registered S3 service's local root."""
         from aws_tui.domain.local_fs import LocalFS
+        from aws_tui.services.s3.service import S3Service
 
         ctx = getattr(self, "_app_ctx", None)
         if ctx is not None:
-            with contextlib.suppress(Exception):
-                local_root = getattr(ctx.registry.get("s3"), "_local_root", None)
-                if local_root is not None:
-                    return LocalFS(root=local_root)
+            service = cast("S3Service", ctx.registry.get("s3"))
+            return service.build_local_provider()
         return LocalFS()
 
     def action_open_settings(self) -> None:
         """Select the Settings entry in the nav menu (programmatic equivalent
         of clicking it). Bound to ``,`` (comma)."""
-        self.record_action("app.settings")
+        self.record_action("app.open_settings")
         self._app_ctx.root_vm.services_menu.switch_service_command.execute(SETTINGS_NAV_ID)
 
     async def _rebind_pane_to_local(self, pane: object) -> None:
@@ -3001,12 +3019,10 @@ class AwsTuiApp(App[None]):
 
         self.stylesheet = candidate
         try:
-            self._invalidate_css()
             self.refresh_css(animate=False)
         except Exception as exc:
             self.stylesheet = previous_stylesheet
             try:
-                self._invalidate_css()
                 self.refresh_css(animate=False)
             except Exception as rollback_exc:
                 self._app_ctx.log_sink.error(
@@ -3999,7 +4015,7 @@ class AwsTuiApp(App[None]):
         # Push the active service id down to the HintLegend so the
         # bottom Commands pane re-renders its service-specific chips
         # (S3 → copy/delete/swap-src; EMR → switch-app/refresh; …).
-        # The legend's right-hand globals (themes/help/quit) are
+        # The legend's trailing globals (themes/help/quit) are
         # independent of this.
         ctx.root_vm.chrome.hint_legend.set_current_service(selected)
         suppression = self._service_navigation_suppressed_selection
@@ -4101,8 +4117,19 @@ class AwsTuiApp(App[None]):
         await self._cancel_transfer_workers_before_content_swap()
         settings_vm = SettingsVM(s3=ctx.s3_connections_vm, hub=ctx.hub, dispatcher=ctx.dispatcher)
         try:
+            host = self.query_one("#content-host", Container)
             await ctx.root_vm.content_host.set_content(settings_vm, service_id=SETTINGS_NAV_ID)
-        except Exception as exc:
+            replacement = SettingsView(
+                vm=settings_vm,
+                hub=ctx.hub,
+                focus_coordinator=ctx.focus_coordinator,
+            )
+        except BaseException as exc:
+            if ctx.root_vm.content_host.current is not settings_vm:
+                with contextlib.suppress(Exception):
+                    settings_vm.dispose()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             ctx.log_sink.error(
                 "app.mount_settings_view.set_content_failed",
                 error=str(exc),
@@ -4110,7 +4137,6 @@ class AwsTuiApp(App[None]):
             )
             return
         try:
-            host = self.query_one("#content-host", Container)
             # ``await`` both the remove and the mount so a cancelled
             # worker (e.g. user toggling Settings ↔ S3 rapidly) can't
             # leave the host with a half-attached widget. Without the
@@ -4119,14 +4145,7 @@ class AwsTuiApp(App[None]):
             # mount completion, the pending mount still fires after the
             # next worker's remove_children, leaving BOTH widgets in
             # the DOM.
-            await host.remove_children()
-            await host.mount(
-                SettingsView(
-                    vm=settings_vm,
-                    hub=ctx.hub,
-                    focus_coordinator=ctx.focus_coordinator,
-                )
-            )
+            await self._replace_content_widget(host, replacement)
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_settings_view.mount_failed",
@@ -4204,6 +4223,7 @@ class AwsTuiApp(App[None]):
                 reason="chain-exhausted",
             )
         try:
+            host = self.query_one("#content-host", Container)
             await ctx.root_vm.switch_service(service_id)
         except Exception as exc:
             ctx.log_sink.error(
@@ -4213,7 +4233,6 @@ class AwsTuiApp(App[None]):
             )
             return False
         try:
-            host = self.query_one("#content-host", Container)
             current_vm = ctx.root_vm.content_host.current
             if current_vm is None:
                 ctx.log_sink.error(
@@ -4221,40 +4240,137 @@ class AwsTuiApp(App[None]):
                     service_id=service_id,
                 )
                 return False
-            await host.remove_children()
-            await host.mount(
-                build_service_view(
-                    service_id,
-                    current_vm,
-                    hub=ctx.hub,
-                    keymap=ctx.keymap_store,
-                    source_candidates=_service_source_contexts(ctx, service_id),
-                    focus_coordinator=ctx.focus_coordinator,
-                    dual_pane_class=DualPane,
-                    emr_page_class=EmrServerlessPage,
-                    glue_page_class=GluePage,
-                    athena_page_class=AthenaPage,
-                )
+            replacement = build_service_view(
+                service_id,
+                current_vm,
+                hub=ctx.hub,
+                keymap=ctx.keymap_store,
+                source_candidates=_service_source_contexts(ctx, service_id),
+                focus_coordinator=ctx.focus_coordinator,
+                dual_pane_class=DualPane,
+                emr_page_class=EmrServerlessPage,
+                glue_page_class=GluePage,
+                athena_page_class=AthenaPage,
             )
+            await self._replace_content_widget(host, replacement)
             if service_id in {"glue", "athena"}:
                 self._recompute_hint_disables()
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.mount_failed",
                 service_id=service_id,
+                error=str(exc),
                 error_type=type(exc).__name__,
+                notes=getattr(exc, "__notes__", ()),
             )
             return False
         return True
+
+    async def _replace_content_widget(self, host: Container, replacement: Widget) -> None:
+        """Mount a content replacement or leave a coherent error surface."""
+        if any(candidate is host for candidate in self._content_mount_hosts.values()):
+            host = await self._reset_content_host(host)
+        await host.remove_children()
+        self._content_mount_hosts[replacement] = host
+        try:
+            await host.mount(replacement)
+            self.call_after_refresh(lambda: self._expire_content_mount_registration(replacement))
+        except Exception as exc:
+            self._content_mount_hosts.pop(replacement, None)
+            try:
+                host = await self._reset_content_host(host)
+                await host.mount(
+                    Static(
+                        "Unable to render this view.",
+                        id="content-mount-error",
+                        markup=False,
+                    )
+                )
+            except Exception as recovery_exc:
+                exc.add_note(f"content error surface also failed to mount: {recovery_exc}")
+            raise
+
+    def _expire_content_mount_registration(self, replacement: Widget) -> None:
+        if replacement not in self._content_mount_recovering:
+            self._content_mount_hosts.pop(replacement, None)
+
+    async def _reset_content_host(self, host: Container) -> Container:
+        """Replace the host boundary, including children unable to process pruning."""
+        parent = host.parent
+        if not isinstance(parent, Widget):
+            raise RuntimeError("content host has no mounted widget parent")
+        siblings = list(parent.children)
+        index = siblings.index(host)
+        next_sibling = siblings[index + 1] if index + 1 < len(siblings) else None
+        await host.remove()
+        replacement = Container(id="content-host")
+        await parent.mount(replacement, before=next_sibling)
+        return replacement
+
+    def _content_mount_owner(self, error: Exception) -> tuple[Widget, Container] | None:
+        """Find a registered replacement implicated in a lifecycle traceback."""
+        hosts = getattr(self, "_content_mount_hosts", None)
+        if hosts is None:
+            return None
+        recovering = getattr(self, "_content_mount_recovering", ())
+        frames: list[Any] = []
+        traceback = error.__traceback__
+        saw_pre_process = False
+        while traceback is not None:
+            frame = traceback.tb_frame
+            frames.append(frame)
+            saw_pre_process |= frame.f_code.co_name == "_pre_process"
+            traceback = traceback.tb_next
+        if not saw_pre_process:
+            return None
+        for frame in reversed(frames):
+            widget = frame.f_locals.get("self")
+            if not isinstance(widget, Widget):
+                continue
+            current: Widget | None = widget
+            while current is not None:
+                host = hosts.get(current)
+                if host is not None and current not in recovering:
+                    return current, host
+                parent = current.parent
+                current = parent if isinstance(parent, Widget) else None
+        return None
+
+    async def _recover_content_mount_lifecycle(
+        self,
+        replacement: Widget,
+        host: Container,
+        error: Exception,
+    ) -> None:
+        try:
+            current_host = self.query_one("#content-host", Container)
+            if current_host is not host:
+                return
+            self._app_ctx.log_sink.error(
+                "app.content_mount.lifecycle_failed",
+                error=str(error),
+                error_type=type(error).__name__,
+            )
+            recovered_host = await self._reset_content_host(host)
+            await recovered_host.mount(
+                Static(
+                    "Unable to render this view.",
+                    id="content-mount-error",
+                    markup=False,
+                )
+            )
+        finally:
+            self._content_mount_hosts.pop(replacement, None)
+            self._content_mount_recovering.discard(replacement)
 
     # ── Crash handling ─────────────────────────────────────────────────────
 
     def record_action(self, action_id: str) -> None:
         """Record an action id in the ring buffer and track it as the latest.
 
-        Intended for the deferred input-router / action-invoker wiring so
-        the crash modal can decide whether ``continue`` is safe and the dump
-        can include the last 100 user actions per spec §7.10.
+        The shipped binding dispatcher and action registry call this so the
+        crash modal can decide whether ``continue`` is safe and the dump can
+        include the last 100 user actions per spec §7.10.
         """
         ts = datetime.now(UTC).isoformat()
         self._action_ring.append(f"{ts} {action_id}")
@@ -4281,7 +4397,8 @@ class AwsTuiApp(App[None]):
                 action_ring=list(self._action_ring),
             )
         except Exception as dump_exc:
-            dump_path = log_path.parent / "crash-fallback.txt"
+            fallback_stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S-%f")
+            dump_path = log_path.parent / f"crash-fallback-{fallback_stamp}.txt"
             fallback_body = redact_text(
                 "\n".join(
                     [
@@ -4328,6 +4445,19 @@ class AwsTuiApp(App[None]):
         and tears down) — the dump and report are the only thing we add
         before the app exits.
         """
+        mount_owner = self._content_mount_owner(error)
+        if mount_owner is not None:
+            replacement, host = mount_owner
+            # Claim recovery before yielding to the worker. Textual may surface
+            # more than one lifecycle exception while unwinding a failed mount.
+            self._content_mount_recovering.add(replacement)
+            self.run_worker(
+                self._recover_content_mount_lifecycle(replacement, host, error),
+                name="content mount recovery",
+                group="content-mount-recovery",
+                exclusive=True,
+            )
+            return
         try:
             self._crash_report = self._build_crash_report(error)
         finally:
@@ -4417,6 +4547,22 @@ class AwsTuiApp(App[None]):
                 task.result()
 
     async def _aws_tui_shutdown(self) -> None:
+        """Run shutdown once and let every caller await the same task."""
+        if getattr(self, "_shutdown_complete", False):
+            return
+        task = getattr(self, "_shutdown_task", None)
+        if task is None:
+            task = asyncio.create_task(self._perform_aws_tui_shutdown())
+            self._shutdown_task = task
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        task.result()
+        self._shutdown_complete = True
+
+    async def _perform_aws_tui_shutdown(self) -> None:
         """Graceful shutdown per spec sec 5.4.
 
         Renamed away from ``_shutdown`` to avoid colliding with the
@@ -4424,9 +4570,18 @@ class AwsTuiApp(App[None]):
         """
         ctx = self._app_ctx
         self._close_service_navigation_intake()
+        self.workers.cancel_group(self, "content-mount")
+        navigation_lock = getattr(self, "_service_navigation_lock", None)
+        if navigation_lock is not None:
+            async with navigation_lock:
+                pass
         await self._drain_table_navigation()
         with contextlib.suppress(Exception):
             ctx.transfers_vm.cancel_all_command.execute()
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await self._cancel_transfer_workers_before_content_swap()
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await ctx.command_palette_vm.shutdown()
         # Keep the hosted VM's graceful shutdown alive through caller
         # cancellation. Remote cleanup must complete while its AWS client is open.
         with contextlib.suppress(Exception, asyncio.CancelledError):
@@ -4469,6 +4624,10 @@ class AwsTuiApp(App[None]):
             if self._service_navigation_sub is not None:
                 self._service_navigation_sub.dispose()
                 self._service_navigation_sub = None
+        with contextlib.suppress(Exception):
+            if self._palette_failure_sub is not None:
+                self._palette_failure_sub.dispose()
+                self._palette_failure_sub = None
         with contextlib.suppress(Exception):
             self._dispose_table_clipboard_subscription()
         with contextlib.suppress(Exception):
@@ -4572,6 +4731,7 @@ def main() -> None:
                 f"  dump: {report.dump_path}\n",
                 file=sys.stderr,
             )
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

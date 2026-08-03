@@ -63,7 +63,7 @@ class JobRunCloneVM:
         self._entry_point_arguments: tuple[str, ...] = detail.entry_point_arguments
         self._spark_submit_parameters: str | None = detail.spark_submit_parameters
         # Caller may call :meth:`cancel` for symmetry with the other
-        # modal VMs (Confirm / Resume / FirstRun); the page widget
+        # modal VMs (Confirm / Crash); the page widget
         # itself reads the modal's dismiss value rather than awaiting
         # a VM-side future, so there's no Future to resolve here.
         self._cancelled: bool = False

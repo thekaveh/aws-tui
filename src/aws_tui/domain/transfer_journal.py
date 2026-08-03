@@ -1,4 +1,4 @@
-"""Crash-resume journal for long-running transfers.
+"""Crash-diagnostics journal for long-running transfers.
 
 Each transfer owns one append-only JSONL file at
 ``~/.cache/aws-tui/transfers/<id>.jsonl``. The journal records:
@@ -7,11 +7,11 @@ Each transfer owns one append-only JSONL file at
   optional S3 multipart ``upload_id`` for future explicit-MPU flows,
 - optional ``part`` lines when a transfer implementation supplies
   completed part metadata,
-- a terminal ``finished`` or ``aborted`` marker.
+- an optional terminal ``finished`` or ``aborted`` marker for replay
+  compatibility; current terminal operations purge the file immediately.
 
-On startup, :meth:`TransferJournal.find_unfinished` scans the directory
-and replays each file, returning the in-flight entries so future
-startup resume machinery can pick them up.
+:meth:`TransferJournal.find_unfinished` can replay files left by an interrupted
+process. Startup does not currently surface or resume them.
 
 The journal is intentionally sync-only — file writes are cheap and
 fsync semantics are clearer without async indirection. Domain layer
@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import secrets
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -58,7 +59,7 @@ def _parse_iso(value: str) -> datetime:
 
 @dataclass(frozen=True, slots=True)
 class TransferJournalEntry:
-    """One transfer's replayed state, suitable for resume decisions."""
+    """One transfer's replayed state, suitable for diagnostics."""
 
     transfer_id: str
     source_uri: str
@@ -74,7 +75,7 @@ class TransferJournalEntry:
 
 
 class TransferJournal:
-    """Append-only JSONL journal for resumable transfers."""
+    """Append-only JSONL journal for interrupted-transfer diagnostics."""
 
     def __init__(self, *, base_dir: Path | None = None) -> None:
         self._dir = base_dir if base_dir is not None else _default_journal_dir()
@@ -134,9 +135,11 @@ class TransferJournal:
 
     def mark_finished(self, transfer_id: str) -> None:
         self._append(transfer_id, {"kind": "finished", "ts": _now_iso()})
+        self.purge(transfer_id)
 
     def mark_aborted(self, transfer_id: str) -> None:
         self._append(transfer_id, {"kind": "aborted", "ts": _now_iso()})
+        self.purge(transfer_id)
 
     def purge(self, transfer_id: str) -> None:
         """Remove the journal file for a transfer. Safe to call on missing."""
@@ -153,7 +156,7 @@ class TransferJournal:
         for path in sorted(self._dir.glob("*.jsonl")):
             try:
                 entry = self._replay(path)
-            except (_JournalReplayError, json.JSONDecodeError, KeyError, ValueError):
+            except (_JournalReplayError, json.JSONDecodeError, KeyError, TypeError, ValueError):
                 # Corrupt or malformed journal — skip and let the caller
                 # decide whether to purge it manually.
                 continue
@@ -167,6 +170,8 @@ class TransferJournal:
     # ------------------------------------------------------------------
 
     def _path_for(self, transfer_id: str) -> Path:
+        if re.fullmatch(r"[0-9a-f]{16}", transfer_id) is None:
+            raise ValueError("transfer_id must be exactly 16 lowercase hexadecimal characters")
         return self._dir / f"{transfer_id}.jsonl"
 
     def _append(self, transfer_id: str, record: dict[str, Any]) -> None:
@@ -186,8 +191,11 @@ class TransferJournal:
         if os.name == "posix":
             with contextlib.suppress(OSError, NotImplementedError):
                 path.chmod(0o600)
+        _fsync_directory(path.parent)
 
     def _replay(self, path: Path) -> TransferJournalEntry | None:
+        filename_id = path.stem
+        self._path_for(filename_id)
         lines = _iter_jsonl(path)
         try:
             begin = next(lines)
@@ -195,6 +203,8 @@ class TransferJournal:
             return None
         if begin.get("kind") != "begin":
             raise _JournalReplayError(f"{path}: first line is not 'begin'")
+        if begin.get("transfer_id") != filename_id:
+            raise _JournalReplayError(f"{path}: transfer_id does not match filename")
 
         completed_parts: list[int] = []
         completed_etags: list[str] = []
@@ -233,10 +243,17 @@ class TransferJournal:
 def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as fh:
         for raw in fh:
-            raw = raw.strip()
-            if not raw:
+            stripped = raw.strip()
+            if not stripped:
                 continue
-            record: dict[str, Any] = json.loads(raw)
+            try:
+                record = json.loads(stripped)
+            except json.JSONDecodeError:
+                if not raw.endswith("\n"):
+                    return
+                raise
+            if not isinstance(record, dict):
+                raise _JournalReplayError(f"{path}: record is not a JSON object")
             yield record
 
 
@@ -274,6 +291,21 @@ def _write_journal_line(fh: TextIO, line: str) -> None:
     # upload pays per part.
     fh.flush()
     os.fsync(fh.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 __all__ = ["TransferJournal", "TransferJournalEntry"]

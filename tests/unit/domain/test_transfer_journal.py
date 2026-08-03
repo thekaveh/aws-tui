@@ -109,6 +109,29 @@ def test_purge_missing_is_safe(tmp_path: Path) -> None:
     assert survivor in post
 
 
+def test_rejects_invalid_transfer_id_path(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="16 lowercase hexadecimal"):
+        TransferJournal(base_dir=tmp_path).purge("../../outside")
+
+
+def test_replay_skips_embedded_id_that_does_not_match_filename(tmp_path: Path) -> None:
+    path = tmp_path / "0123456789abcdef.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "begin",
+                "transfer_id": "fedcba9876543210",
+                "source_uri": "s",
+                "destination_uri": "d",
+                "ts": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert TransferJournal(base_dir=tmp_path).find_unfinished() == []
+
+
 def test_base_dir_is_created_when_missing(tmp_path: Path) -> None:
     nested = tmp_path / "deep" / "down"
     j = TransferJournal(base_dir=nested)
@@ -165,6 +188,39 @@ def test_corrupt_file_is_skipped(tmp_path: Path) -> None:
     j = TransferJournal(base_dir=tmp_path)
     # Should not raise.
     assert j.find_unfinished() == []
+
+
+@pytest.mark.parametrize("record", [None, [], "text", 42])
+def test_valid_json_non_object_record_is_skipped(tmp_path: Path, record: object) -> None:
+    (tmp_path / "0123456789abcdef.jsonl").write_text(
+        json.dumps(record) + "\n",
+        encoding="utf-8",
+    )
+
+    assert TransferJournal(base_dir=tmp_path).find_unfinished() == []
+
+
+def test_malformed_part_field_type_is_skipped(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(source_uri="s", destination_uri="d")
+    path = tmp_path / f"{transfer_id}.jsonl"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"kind": "part", "part_index": [], "etag": "e"}) + "\n")
+
+    assert journal.find_unfinished() == []
+
+
+def test_replay_preserves_valid_records_before_torn_trailing_line(tmp_path: Path) -> None:
+    j = TransferJournal(base_dir=tmp_path)
+    tid = j.begin(source_uri="s", destination_uri="d", bytes_total=10)
+    path = tmp_path / f"{tid}.jsonl"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"kind":"part"')
+
+    [entry] = j.find_unfinished()
+
+    assert entry.transfer_id == tid
+    assert entry.bytes_total == 10
 
 
 def test_replay_preserves_upload_id_and_bytes_total(tmp_path: Path) -> None:

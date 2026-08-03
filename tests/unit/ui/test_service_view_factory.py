@@ -80,10 +80,12 @@ def test_factory_builds_emr_page() -> None:
         emr_page_vm,
         hub=hub,
         focus_coordinator=focus_coordinator,
+        source_candidates=_SOURCE_CANDIDATES,
     )
 
     assert isinstance(view, EmrServerlessPage)
     assert view.id == "content-emr-page"
+    assert view._source_candidates == _SOURCE_CANDIDATES  # type: ignore[attr-defined]
 
 
 def test_factory_builds_glue_page() -> None:

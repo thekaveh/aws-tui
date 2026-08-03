@@ -10,6 +10,7 @@ from typing import Any, NoReturn
 
 import botocore.exceptions
 
+from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
 from aws_tui.domain.data_catalog import (
     DatabaseRef,
     DatabaseSummary,
@@ -87,14 +88,6 @@ class ResultConfigurationRequiredError(ValidationError):
 
 
 _ACCESS_DENIED_CODES = frozenset({"AccessDenied", "AccessDeniedException"})
-_AUTH_CODES = frozenset(
-    {
-        "ExpiredToken",
-        "ExpiredTokenException",
-        "InvalidClientTokenId",
-        "UnrecognizedClientException",
-    }
-)
 _NOT_FOUND_CODES = frozenset({"ResourceNotFoundException"})
 _THROTTLED_CODES = frozenset(
     {
@@ -116,15 +109,6 @@ _VALIDATION_CODES = frozenset(
         "ValidationException",
     }
 )
-_CREDENTIAL_EXCEPTIONS = (
-    botocore.exceptions.NoCredentialsError,
-    botocore.exceptions.PartialCredentialsError,
-    botocore.exceptions.ProfileNotFound,
-    botocore.exceptions.TokenRetrievalError,
-    botocore.exceptions.CredentialRetrievalError,
-    botocore.exceptions.UnauthorizedSSOTokenError,
-    botocore.exceptions.SSOTokenLoadError,
-)
 _TRANSPORT_EXCEPTIONS = (
     botocore.exceptions.EndpointConnectionError,
     botocore.exceptions.ConnectTimeoutError,
@@ -144,7 +128,7 @@ def _map_athena_error(
     *,
     sensitive_values: Sequence[str],
 ) -> ProviderError | None:
-    if isinstance(exc, _CREDENTIAL_EXCEPTIONS):
+    if isinstance(exc, AWS_CREDENTIAL_EXCEPTIONS):
         if isinstance(exc, botocore.exceptions.CredentialRetrievalError):
             return AuthRequiredError("credential process failed")
         return AuthRequiredError(
@@ -186,7 +170,7 @@ def _raise_mapped_athena_error(
 def _provider_error_for_code(code: str, message: str) -> ProviderError:
     if code in _ACCESS_DENIED_CODES:
         return PermissionDeniedError(message)
-    if code in _AUTH_CODES:
+    if code in AWS_AUTH_ERROR_CODES:
         return AuthRequiredError(message)
     if code in _NOT_FOUND_CODES:
         return NotFoundError(message)

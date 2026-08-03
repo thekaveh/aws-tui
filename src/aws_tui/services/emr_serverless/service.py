@@ -1,10 +1,9 @@
 """EmrServerlessService — second concrete :class:`Service` implementation.
 
-PR-A ships the read-only browser. PR-B adds log surface + cancel +
-lifecycle. PR-C adds submit. Each PR extends this service's
-``build_vm`` return shape additively — no breaking changes
-between PRs because :class:`EmrServerlessPageVM` always remains the
-hosted root VM.
+The service composes the read-mostly application, job-run detail, and log
+browser, including focused clone submission for an existing run. Generic job
+submission and cancellation are intentionally not exposed;
+:class:`EmrServerlessPageVM` remains the hosted root VM.
 
 Construction strategy mirrors :class:`S3Service`: the service holds
 the long-lived :class:`MessageHub` and :class:`Dispatcher` and

@@ -188,14 +188,14 @@ class ContextPicker(Widget, can_focus=True):
         self._refresh_trigger()
         self.call_after_refresh(self._focus_options)
 
-    def close(self, *, restore: bool = True) -> None:
+    def close(self, *, restore: bool = True, refocus: bool = True) -> None:
         """Hide the option list and optionally restore its cursor to the value."""
 
         self.remove_class("-open")
         self._refresh_trigger()
         if restore:
             self._restore_highlight()
-        if not self.disabled:
+        if refocus and not self.disabled:
             self.call_after_refresh(self.focus)
 
     def action_toggle_picker(self) -> None:

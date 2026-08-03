@@ -13,7 +13,6 @@ from vmx import (
     MessageHub,
     PropertyChangedMessage,
 )
-from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -24,6 +23,7 @@ from aws_tui.domain.query import (
     PreparedStatement,
     PreparedStatementSummary,
 )
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     optional_non_empty_exact_string,
@@ -33,9 +33,9 @@ from aws_tui.vm.athena._domain_validation import (
     valid_prepared_statement_summary,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._observable import ObserverSafeSubject, send_value_free
-from aws_tui.vm.athena._pager_compat import seed_token_pager
+from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _SAVED_ERROR = "Athena saved query request failed"
 _PREPARED_ERROR = "Athena prepared statement request failed"
@@ -78,7 +78,7 @@ class _SavedWorker(Generic[T]):
         repr=False,
     )
     retired: bool = False
-    pager: TokenPagedComposition[T, str] = field(init=False, repr=False)
+    pager: SnapshotTokenPager[T, str] = field(init=False, repr=False)
     load_more_command: AsyncRelayCommand = field(init=False, repr=False)
 
 
@@ -325,8 +325,14 @@ class AthenaSavedVM:
                 self._notify("detail_state")
                 self._notify("detail_error_text")
             return
-        except Exception:
+        except Exception as exc:
             if self._is_current_detail(generation, context_generation, name):
+                report_unexpected_service_error(
+                    self._hub,
+                    service="athena",
+                    operation="get_prepared_statement",
+                    error=exc,
+                )
                 self._detail_state, self._detail_error_text = map_unexpected_error(
                     fallback=_PREPARED_ERROR,
                 )
@@ -653,8 +659,11 @@ class AthenaSavedVM:
                 self._notify("named_state")
                 self._notify("named_error_text")
             return
-        except Exception:
+        except Exception as exc:
             if self._is_current_named(worker):
+                report_unexpected_service_error(
+                    self._hub, service="athena", operation="list_named_queries", error=exc
+                )
                 self._named_state, self._named_error_text = map_unexpected_error(
                     fallback=_SAVED_ERROR,
                 )
@@ -689,8 +698,14 @@ class AthenaSavedVM:
                 self._notify("prepared_state")
                 self._notify("prepared_error_text")
             return
-        except Exception:
+        except Exception as exc:
             if self._is_current_prepared(worker):
+                report_unexpected_service_error(
+                    self._hub,
+                    service="athena",
+                    operation="list_prepared_statements",
+                    error=exc,
+                )
                 self._prepared_state, self._prepared_error_text = map_unexpected_error(
                     fallback=_PREPARED_ERROR,
                 )
@@ -736,7 +751,7 @@ class AthenaSavedVM:
             worker.named_query_details.update(by_id)
             return [_named_query_summary(by_id[query_id]) for query_id in ids], next_token
 
-        worker.pager = TokenPagedComposition(fetch)
+        worker.pager = SnapshotTokenPager(fetch)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more_named(worker))
@@ -769,7 +784,7 @@ class AthenaSavedVM:
                 return [], None
             return rows, next_token
 
-        worker.pager = TokenPagedComposition(fetch)
+        worker.pager = SnapshotTokenPager(fetch)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more_prepared(worker))

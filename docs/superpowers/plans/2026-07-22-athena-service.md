@@ -1,4 +1,4 @@
-# Amazon Athena Service Implementation Plan
+# 1. Amazon Athena Service Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11-3.13, Textual 8.x (`TextArea`, `DataTable`), VMx 3.1.x, aioboto3/botocore Athena API, `sqlglot>=30.13.0,<31`, pytest, pytest-textual-snapshot.
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Requires the completed shared profile-switching plan.
 - Athena supports only `Connection.kind == "aws"`.
@@ -24,7 +24,7 @@
 
 ---
 
-### Task 1: Add Query Models and Fail-Closed SQL Validation
+### 1.1.1. Task 1: Add Query Models and Fail-Closed SQL Validation
 
 **Files:**
 - Modify: `pyproject.toml`
@@ -270,7 +270,7 @@ git add pyproject.toml uv.lock src/aws_tui/domain/query.py src/aws_tui/domain/sq
 git commit -m "feat: add read-only Athena SQL policy"
 ```
 
-### Task 2: Implement the Paginated Athena Domain Client
+### 1.1.2. Task 2: Implement the Paginated Athena Domain Client
 
 **Files:**
 - Create: `src/aws_tui/domain/athena.py`
@@ -419,7 +419,7 @@ git add src/aws_tui/domain/athena.py tests/unit/domain/test_athena.py tests/unit
 git commit -m "feat: add paginated Athena domain client"
 ```
 
-### Task 3: Build Query and Result ViewModels
+### 1.1.3. Task 3: Build Query and Result ViewModels
 
 **Files:**
 - Create: `src/aws_tui/vm/athena/__init__.py`
@@ -519,7 +519,7 @@ git add src/aws_tui/vm/athena tests/unit/vm/athena/test_query_vm.py tests/unit/v
 git commit -m "feat: add Athena query and result viewmodels"
 ```
 
-### Task 4: Build History, Saved, and Page ViewModels
+### 1.1.4. Task 4: Build History, Saved, and Page ViewModels
 
 **Files:**
 - Create: `src/aws_tui/vm/athena/history_vm.py`
@@ -623,7 +623,7 @@ git add src/aws_tui/vm/athena tests/unit/vm/athena
 git commit -m "feat: add Athena history and saved query viewmodels"
 ```
 
-### Task 5: Build and Register the Athena Textual Service
+### 1.1.5. Task 5: Build and Register the Athena Textual Service
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/athena/__init__.py`
@@ -714,7 +714,7 @@ git add src/aws_tui/ui/widgets/athena src/aws_tui/services/athena src/aws_tui/ui
 git commit -m "feat: add Athena service page"
 ```
 
-### Task 6: Add Multi-Profile Athena Demo Data and S3 Result Handoff
+### 1.1.6. Task 6: Add Multi-Profile Athena Demo Data and S3 Result Handoff
 
 **Files:**
 - Create: `src/aws_tui/demo/in_memory_athena.py`
@@ -784,7 +784,7 @@ git add src/aws_tui/demo/in_memory_athena.py src/aws_tui/demo/seeds.py src/aws_t
 git commit -m "feat: add Athena demo and result handoff"
 ```
 
-### Task 7: Document and Verify Standalone Athena Support
+### 1.1.7. Task 7: Document and Verify Standalone Athena Support
 
 **Files:**
 - Modify: `README.md`

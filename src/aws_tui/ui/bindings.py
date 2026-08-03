@@ -93,7 +93,9 @@ _VISIBLE_ACTIONS: frozenset[str] = frozenset(
 
 #: Actions that must yield to a focused widget even when their configured key
 #: is non-printable.
-_NON_PRIORITY_ACTIONS: frozenset[str] = frozenset({"app.quit", "athena.cancel"})
+_NON_PRIORITY_ACTIONS: frozenset[str] = frozenset(
+    {"app.quit", "athena.cancel", "pane.modal_left", "pane.modal_right"}
+)
 
 
 def _binding_priority(action_id: str, key: str) -> bool:

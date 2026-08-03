@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from collections.abc import Callable
 from typing import Any
 
 from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
@@ -36,6 +37,7 @@ class ContentHostVM:
         *,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
+        on_setup_error: Callable[[BaseException], None] | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
 
@@ -45,6 +47,8 @@ class ContentHostVM:
         # next ``set_content`` (or by ``dispose``) so a stale setup
         # doesn't outlive its VM.
         self._setup_task: asyncio.Task[None] | None = None
+        self._on_setup_error = on_setup_error
+        self._swap_lock = asyncio.Lock()
 
         self._inner: ComponentVM = (
             ComponentVM.builder().name("content_host").services(hub, dispatcher).build()
@@ -94,6 +98,10 @@ class ContentHostVM:
     # ── Public API ─────────────────────────────────────────────────────────
 
     async def set_content(self, vm: Any | None, *, service_id: str | None) -> None:
+        async with self._swap_lock:
+            await self._set_content_locked(vm, service_id=service_id)
+
+    async def _set_content_locked(self, vm: Any | None, *, service_id: str | None) -> None:
         """Swap the hosted VM. Idempotent on equal ``service_id``.
 
         Adoption + the ``"current"`` :class:`PropertyChangedMessage`
@@ -106,23 +114,38 @@ class ContentHostVM:
         the host having to gate the swap on setup completion. A
         subsequent ``set_content`` cancels the prior setup task.
         """
-        if self._current_id == service_id and service_id is not None:
-            # Same active service — no-op per spec §5.4.
+        if self._current is vm and vm is not None:
+            # Re-adopting the identical VM instance is a true no-op.
             return
+        if vm is not None:
+            # Construction is the only synchronous adoption step that can
+            # fail. Complete it while the outgoing VM is still intact so a
+            # bad replacement cannot empty the content host.
+            vm.construct()
         # Cancel any in-flight setup for the OUTGOING VM before we
         # dispose it (the task holds a reference to the VM; if we
         # dispose first the task may dereference disposed state).
-        self._cancel_pending_setup()
-        await self._shutdown_current()
+        try:
+            await self._cancel_and_drain_setup()
+            await self._shutdown_current()
+        except BaseException:
+            if vm is not None:
+                vm.dispose()
+            raise
         # Dispose the previous content first so its subscriptions / tasks
         # tear down before the new one wires up.
         if self._current is not None:
-            self._current.dispose()
+            try:
+                self._current.dispose()
+            except BaseException:
+                if vm is not None:
+                    vm.dispose()
+                raise
             self._current = None
             self._current_id = None
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
 
         if vm is None:
+            self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
             return
 
         # Construct the new one and adopt it before driving setup. Adopting
@@ -131,7 +154,6 @@ class ContentHostVM:
         # to mount — every pane renders its own error placeholder per spec
         # §7.7. If we adopted only on setup success, an auth failure would
         # leave the content host entirely blank instead.
-        vm.construct()
         self._current = vm
         self._current_id = service_id
         self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
@@ -173,8 +195,9 @@ class ContentHostVM:
 
     async def shutdown(self) -> None:
         """Await the current VM's optional graceful-shutdown hook."""
-        self._cancel_pending_setup()
-        await self._shutdown_current()
+        async with self._swap_lock:
+            await self._cancel_and_drain_setup()
+            await self._shutdown_current()
 
     async def _shutdown_current(self) -> None:
         if self._current is None:
@@ -209,6 +232,36 @@ class ContentHostVM:
             return
         task.cancel()
 
+    async def _cancel_and_drain_setup(self) -> None:
+        task = self._setup_task
+        self._setup_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        caller = asyncio.current_task()
+        caller_cancellation_count = 0 if caller is None else caller.cancelling()
+        cancellation_requested = caller_cancellation_count > 0
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                current_count = 0 if caller is None else caller.cancelling()
+                if current_count > caller_cancellation_count:
+                    # Keep draining setup cleanup even when this owner is
+                    # cancelled repeatedly. Re-raise only after the stale task
+                    # cannot touch the outgoing VM anymore.
+                    cancellation_requested = True
+                    caller_cancellation_count = current_count
+                elif task.done():
+                    # The shield surfaced cancellation of the setup task
+                    # itself; the caller remains live and may complete its swap.
+                    break
+            except Exception:
+                break
+        if cancellation_requested:
+            raise asyncio.CancelledError
+
     def _on_setup_done(self, task: asyncio.Task[None]) -> None:
         """Done-callback drain — see add_done_callback site for
         rationale. Pops the task reference if it's still the current
@@ -217,7 +270,9 @@ class ContentHostVM:
             self._setup_task = None
         if task.cancelled():
             return
-        _ = task.exception()
+        error = task.exception()
+        if error is not None and self._on_setup_error is not None:
+            self._on_setup_error(error)
 
 
 __all__ = ["ContentHostVM"]

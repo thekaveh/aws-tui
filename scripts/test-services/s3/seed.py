@@ -224,7 +224,11 @@ async def main() -> int:
     started = datetime.now(UTC)
     print(f"==> seeding MinIO at {ENDPOINT}")
     session = aioboto3.Session()
-    config = Config(retries={"max_attempts": 6, "mode": "adaptive"})
+    config = Config(
+        retries={"total_max_attempts": 6, "mode": "adaptive"},
+        connect_timeout=2,
+        read_timeout=5,
+    )
     async with session.client(
         "s3",
         endpoint_url=ENDPOINT,

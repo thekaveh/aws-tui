@@ -11,7 +11,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from vmx import ComponentVM, Message, MessageHub, ModalVM, PropertyChangedMessage, RelayCommand
+from vmx import (
+    ComponentVM,
+    DialogService,
+    Message,
+    MessageHub,
+    ModalVM,
+    PropertyChangedMessage,
+    RelayCommand,
+)
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -124,7 +132,12 @@ class ConfirmationVM:
 
     # ── Async API ──────────────────────────────────────────────────────────
 
-    async def ask(self, request: ConfirmRequest) -> bool:
+    async def ask(
+        self,
+        request: ConfirmRequest,
+        *,
+        dialog_service: DialogService | None = None,
+    ) -> bool:
         """Open the modal with ``request`` and await the user's choice."""
         if self._is_open or self._modal is not None:
             raise RuntimeError("confirmation is already open")
@@ -134,9 +147,12 @@ class ConfirmationVM:
         self._set_request(request)
         self._set_open(True)
         try:
+            if dialog_service is not None:
+                return await dialog_service.present(self._modal)
             return await self._modal.wait_result()
         finally:
             # Always clear UI state on resolution.
+            self._modal.dispose()
             self._modal = None
             self._set_open(False)
             self._set_request(None)

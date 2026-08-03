@@ -12,7 +12,7 @@ Bindings: ``Esc`` and ``q`` quit, ``Enter`` selects the default action
 (``view trace`` if continue is disabled, ``continue`` otherwise).
 
 Buttons use :class:`ModalButton` (the themable Static-based replacement
-shared with ConfirmModal / ResumeModal / FirstRunModal / ThemePickerModal)
+shared with ConfirmModal / ThemePickerModal)
 instead of Textual's stock ``Button`` — the latter ships with ANSI color
 defaults that fight ``.tcss`` palette tokens.
 """
@@ -87,6 +87,7 @@ class CrashModal(ModalScreen[CrashChoice]):
                     "continue",
                     button_id="crash-continue-btn",
                     classes=continue_classes,
+                    disabled=not self._vm.can_continue,
                 )
                 yield ModalButton("quit", button_id="crash-quit-btn", classes="-danger")
 

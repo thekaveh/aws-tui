@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from textual.app import App, ComposeResult
-from vmx import MessageHub, RxDispatcher
+from vmx import Message, MessageHub, RxDispatcher
 
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
@@ -33,7 +34,7 @@ async def _seed() -> InMemoryFS:
 
 @pytest.mark.asyncio
 async def test_pane_mounts_and_populates_rows() -> None:
-    hub: MessageHub = MessageHub()
+    hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
@@ -65,7 +66,7 @@ async def test_pane_mounts_and_populates_rows() -> None:
 @pytest.mark.asyncio
 async def test_pane_renders_loading_placeholder_for_state() -> None:
     """Asserts the empty-state placeholder lands when the pane has no entries."""
-    hub: MessageHub = MessageHub()
+    hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
     fs = InMemoryFS()  # empty
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
@@ -126,6 +127,7 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
     from aws_tui.domain.filesystem import (
         FileEntry,
         FileSystemProvider,
+        ProgressCallback,
         ProviderUnreachableError,
     )
     from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -137,20 +139,34 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
         R2, etc.) that's offline at app boot.
         """
 
-        async def list(self, _path: PathRef) -> tuple[FileEntry, ...]:
+        async def list(self, _path: PathRef) -> list[FileEntry]:
             raise ProviderUnreachableError("Could not connect to the endpoint URL")
 
         async def stat(self, _path: PathRef) -> FileEntry:  # pragma: no cover
             raise ProviderUnreachableError("Could not connect")
 
-        async def read_stream(self, _path: PathRef):  # pragma: no cover
-            raise ProviderUnreachableError("Could not connect")
-            yield b""
-
-        async def write_stream(self, _path, _chunks, *, _progress=None) -> None:  # pragma: no cover
+        async def read_stream(
+            self, _path: PathRef, *, chunk_size: int = 8 * 1024 * 1024
+        ) -> AsyncIterator[bytes]:  # pragma: no cover
             raise ProviderUnreachableError("Could not connect")
 
-        async def delete(self, _path: PathRef) -> None:  # pragma: no cover
+        async def write_stream(
+            self,
+            _path: PathRef,
+            _chunks: AsyncIterator[bytes],
+            *,
+            total_size: int | None = None,
+            progress: ProgressCallback | None = None,
+            overwrite: bool = False,
+        ) -> None:  # pragma: no cover
+            raise ProviderUnreachableError("Could not connect")
+
+        async def delete(
+            self, _path: PathRef, *, expected_etag: str | None = None
+        ) -> None:  # pragma: no cover
+            raise ProviderUnreachableError("Could not connect")
+
+        async def delete_empty_directory(self, _path: PathRef) -> None:  # pragma: no cover
             raise ProviderUnreachableError("Could not connect")
 
         async def mkdir(self, _path: PathRef) -> None:  # pragma: no cover
@@ -159,7 +175,7 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
         async def rename(self, _src: PathRef, _dst: PathRef) -> None:  # pragma: no cover
             raise ProviderUnreachableError("Could not connect")
 
-    hub: MessageHub = MessageHub()
+    hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
     left_vm = PaneVM(
         provider=_UnreachableProvider(),
@@ -227,7 +243,7 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
 
 @pytest.mark.asyncio
 async def test_pane_set_focused_adds_class() -> None:
-    hub: MessageHub = MessageHub()
+    hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
@@ -253,8 +269,8 @@ async def test_pane_set_focused_adds_class() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dual_pane_mounts_with_two_panes(tmp_path) -> None:
-    hub: MessageHub = MessageHub()
+async def test_dual_pane_mounts_with_two_panes(tmp_path: Path) -> None:
+    hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
     left_fs = await _seed()
     right_fs = InMemoryFS()

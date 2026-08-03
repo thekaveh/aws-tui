@@ -6,6 +6,7 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
+from textual.await_remove import AwaitRemove
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import Button, OptionList
@@ -59,6 +60,7 @@ class AthenaHistoryView(Widget):
         self._page_vm = vm
         self._vm = vm.history
         self._sub: DisposableBase | None = None
+        self._removal_started = False
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="athena-history-list"):
@@ -82,6 +84,7 @@ class AthenaHistoryView(Widget):
             )
 
     def on_mount(self) -> None:
+        self._removal_started = False
         self._refresh()
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
 
@@ -89,6 +92,10 @@ class AthenaHistoryView(Widget):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+    def remove(self) -> AwaitRemove:
+        self._removal_started = True
+        return super().remove()
 
     def on_option_list_option_highlighted(
         self,
@@ -130,7 +137,7 @@ class AthenaHistoryView(Widget):
         self.call_after_refresh(self._refresh)
 
     def _refresh(self) -> None:
-        if self._pruning:
+        if self._removal_started or not self.is_attached:
             return
         try:
             listing = self.query_one("#athena-history-pane", ResourceListPane)

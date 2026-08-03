@@ -64,6 +64,8 @@ class ResourceListPane(Widget):
     ResourceListPane > OptionList {
         height: 1fr;
         scrollbar-size: 1 1;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
     }
     ResourceListPane > .glue-list-footer {
         height: 1;

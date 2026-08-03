@@ -1,8 +1,10 @@
 name: pages
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
+      - "assets/screenshots/aws-tui-running.png"
       - "docs/**"
       - "scripts/docs/**"
       - "Makefile"
@@ -12,8 +14,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
+
+env:
+  UV_VERSION: 0.11.19
 
 concurrency:
   group: pages
@@ -21,25 +24,35 @@ concurrency:
 
 jobs:
   build:
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install libcairo2
         run: sudo apt-get update && sudo apt-get install -y libcairo2
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
       - run: uv python install 3.12
       - run: uv sync --frozen --group docs
-      - run: uv run python -m scripts.docs.render_diagrams
-      - run: uv run python -m scripts.docs.build_docs --site
-      - run: uv run mkdocs build --strict
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+      - name: documentation drift and strict build
+        run: make docs-check
+      - name: documentation contract tests
+        run: uv run pytest tests/docs -v
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
 
   deploy:
+    timeout-minutes: 10
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -48,14 +61,17 @@ jobs:
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
 
   wiki:
+    timeout-minutes: 15
     needs: deploy
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install libcairo2
         run: sudo apt-get update && sudo apt-get install -y libcairo2
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
       - run: uv python install 3.12
       - run: uv sync --frozen --group docs
       - name: write wiki deploy key
