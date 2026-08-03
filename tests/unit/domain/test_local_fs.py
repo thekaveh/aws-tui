@@ -170,7 +170,7 @@ def test_windows_revision_uses_change_time_not_creation_time() -> None:
     assert "999" not in revision
 
 
-def test_windows_rename_handle_uses_absolute_destination() -> None:
+def test_windows_rename_handle_uses_complete_relative_buffer() -> None:
     from aws_tui.domain import local_fs
 
     captured: dict[str, object] = {}
@@ -190,6 +190,7 @@ def test_windows_rename_handle_uses_absolute_destination() -> None:
         captured.update(
             handle=handle,
             information_class=information_class,
+            buffer_size=buffer_size,
             root=information.RootDirectory,
             name=raw[name_offset : name_offset + information.FileNameLength].decode("utf-16-le"),
         )
@@ -197,15 +198,15 @@ def test_windows_rename_handle_uses_absolute_destination() -> None:
 
     api = object.__new__(local_fs._WindowsAPI)
     api._dll = SimpleNamespace(SetFileInformationByHandle=set_file_information)
-    api.final_path = lambda handle, path: r"C:\locked\destination"  # type: ignore[method-assign]
-
     api.rename_handle(22, 11, "published.txt", r"C:\source\stage.txt")
 
     assert captured == {
         "handle": 22,
         "information_class": local_fs._WINDOWS_FILE_RENAME_INFO,
-        "root": None,
-        "name": r"C:\locked\destination\published.txt",
+        "buffer_size": ctypes.sizeof(local_fs._WindowsRenameInformation)
+        + len("published.txt".encode("utf-16-le")),
+        "root": 11,
+        "name": "published.txt",
     }
 
 

@@ -928,22 +928,18 @@ class _WindowsAPI:
         return buffer.value
 
     def rename_handle(self, handle: int, parent_handle: int, name: str, path: str) -> None:
-        # SetFileInformationByHandle accepts an absolute destination with a
-        # NULL RootDirectory across Windows filesystems. Keep the parent
-        # handle open as the race-prevention lock, but avoid the less broadly
-        # supported handle-relative form (which returns ERROR_INVALID_PARAMETER
-        # on GitHub's Windows runners).
-        parent = self.final_path(parent_handle, path)
-        encoded_name = ntpath.join(parent, name).encode("utf-16-le")
+        encoded_name = name.encode("utf-16-le")
         name_offset = _WindowsRenameInformation.FileName.offset
-        buffer_size = name_offset + len(encoded_name)
+        # Windows requires the allocation to include the complete base
+        # structure in addition to the variable-length filename payload.
+        buffer_size = ctypes.sizeof(_WindowsRenameInformation) + len(encoded_name)
         buffer = ctypes.create_string_buffer(buffer_size)
         information = ctypes.cast(
             buffer,
             ctypes.POINTER(_WindowsRenameInformation),
         ).contents
         information.ReplaceIfExists = 0
-        information.RootDirectory = None
+        information.RootDirectory = parent_handle
         information.FileNameLength = len(encoded_name)
         ctypes.memmove(ctypes.addressof(buffer) + name_offset, encoded_name, len(encoded_name))
         if not self._dll.SetFileInformationByHandle(

@@ -18,7 +18,7 @@ async def test_tab_cycle_closes_departed_application_picker() -> None:
         page = app.query_one(EmrServerlessPage)
         picker = app.query_one(ApplicationPicker)
         picker.toggle_open()
-        await pilot.pause()
+        await pilot.pause(0.05)
         assert picker.has_class("-open")
         assert page.has_class("-application-picker-open")
         assert app.focused is not None
