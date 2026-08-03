@@ -741,8 +741,8 @@ _WINDOWS_FILE_SHARE_READ = 0x00000001
 _WINDOWS_CREATE_NEW = 1
 _WINDOWS_OPEN_EXISTING = 3
 _WINDOWS_FILE_BASIC_INFO = 0
-_WINDOWS_FILE_RENAME_INFO = 3
 _WINDOWS_FILE_DISPOSITION_INFO = 4
+_WINDOWS_FILE_RENAME_INFORMATION = 10
 _WINDOWS_FILE_NAME_OPENED = 0x00000008
 _WINDOWS_INVALID_HANDLE = ctypes.c_void_p(-1).value
 _WINDOWS_RESERVED_NAMES = {
@@ -795,10 +795,15 @@ class _WindowsDispositionInformation(ctypes.Structure):
     _fields_ = [("DeleteFile", ctypes.c_ubyte)]
 
 
-def _raise_windows_error(path: str) -> None:
-    get_last_error = cast(Callable[[], int], ctypes.__dict__["get_last_error"])
+class _WindowsIOStatusBlock(ctypes.Structure):
+    _fields_ = [
+        ("Status", wintypes.LONG),
+        ("Information", ctypes.c_size_t),
+    ]
+
+
+def _raise_windows_error_code(code: int, path: str) -> None:
     format_error = cast(Callable[[int], str], ctypes.__dict__["FormatError"])
-    code = get_last_error()
     message = format_error(code)
     if code in {2, 3}:
         raise FileNotFoundError(errno.ENOENT, message, path)
@@ -815,6 +820,11 @@ def _raise_windows_error(path: str) -> None:
     raise OSError(errno.EIO, f"WinError {code}: {message}", path)
 
 
+def _raise_windows_error(path: str) -> None:
+    get_last_error = cast(Callable[[], int], ctypes.__dict__["get_last_error"])
+    _raise_windows_error_code(get_last_error(), path)
+
+
 class _WindowsAPI:
     """Typed, minimal wrapper around the Win32 calls LocalFS requires."""
 
@@ -823,6 +833,7 @@ class _WindowsAPI:
         if dll_factory is None:  # pragma: no cover - guarded by _WINDOWS
             raise ProviderError("Win32 APIs are unavailable on this platform")
         self._dll: Any = dll_factory("kernel32", use_last_error=True)
+        self._ntdll: Any = dll_factory("ntdll")
         self._dll.CreateFileW.argtypes = [
             wintypes.LPCWSTR,
             wintypes.DWORD,
@@ -863,6 +874,16 @@ class _WindowsAPI:
         self._dll.GetFinalPathNameByHandleW.restype = wintypes.DWORD
         self._dll.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, wintypes.LPVOID]
         self._dll.CreateDirectoryW.restype = wintypes.BOOL
+        self._ntdll.NtSetInformationFile.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_WindowsIOStatusBlock),
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            ctypes.c_int,
+        ]
+        self._ntdll.NtSetInformationFile.restype = wintypes.LONG
+        self._ntdll.RtlNtStatusToDosError.argtypes = [wintypes.LONG]
+        self._ntdll.RtlNtStatusToDosError.restype = wintypes.ULONG
 
     def open(self, path: str, *, access: int, disposition: int) -> int:
         handle = self._dll.CreateFileW(
@@ -942,13 +963,19 @@ class _WindowsAPI:
         information.RootDirectory = parent_handle
         information.FileNameLength = len(encoded_name)
         ctypes.memmove(ctypes.addressof(buffer) + name_offset, encoded_name, len(encoded_name))
-        if not self._dll.SetFileInformationByHandle(
-            handle,
-            _WINDOWS_FILE_RENAME_INFO,
-            buffer,
-            buffer_size,
-        ):
-            _raise_windows_error(path)
+        io_status = _WindowsIOStatusBlock()
+        status = int(
+            self._ntdll.NtSetInformationFile(
+                handle,
+                ctypes.byref(io_status),
+                buffer,
+                buffer_size,
+                _WINDOWS_FILE_RENAME_INFORMATION,
+            )
+        )
+        if status < 0:
+            code = int(self._ntdll.RtlNtStatusToDosError(status))
+            _raise_windows_error_code(code, path)
 
     def delete_handle(self, handle: int, path: str) -> None:
         information = _WindowsDispositionInformation(DeleteFile=1)

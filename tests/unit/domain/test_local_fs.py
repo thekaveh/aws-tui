@@ -177,9 +177,10 @@ def test_windows_rename_handle_uses_complete_relative_buffer() -> None:
 
     def set_file_information(
         handle: int,
-        information_class: int,
+        _io_status: object,
         buffer: object,
         buffer_size: int,
+        information_class: int,
     ) -> int:
         raw = ctypes.string_at(buffer, buffer_size)
         information = ctypes.cast(
@@ -197,12 +198,15 @@ def test_windows_rename_handle_uses_complete_relative_buffer() -> None:
         return 1
 
     api = object.__new__(local_fs._WindowsAPI)
-    api._dll = SimpleNamespace(SetFileInformationByHandle=set_file_information)
+    api._ntdll = SimpleNamespace(
+        NtSetInformationFile=set_file_information,
+        RtlNtStatusToDosError=lambda status: status,
+    )
     api.rename_handle(22, 11, "published.txt", r"C:\source\stage.txt")
 
     assert captured == {
         "handle": 22,
-        "information_class": local_fs._WINDOWS_FILE_RENAME_INFO,
+        "information_class": local_fs._WINDOWS_FILE_RENAME_INFORMATION,
         "buffer_size": ctypes.sizeof(local_fs._WindowsRenameInformation)
         + len("published.txt".encode("utf-16-le")),
         "root": 11,
