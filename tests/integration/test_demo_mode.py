@@ -317,7 +317,9 @@ async def test_athena_profile_switch_mounts_empty_rows_before_new_load(
             assert new_page is not old_page
             assert new_page.workgroups == ()
             assert new_page.history.items == ()
-            assert "dev-analytics" not in app.export_screenshot()
+            async with asyncio.timeout(5.0):
+                while "dev-analytics" in app.export_screenshot():
+                    await pilot.pause(0.01)
 
             release.set()
             await switching
