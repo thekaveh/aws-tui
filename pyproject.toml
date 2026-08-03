@@ -96,9 +96,9 @@ dev = [
   "pytest-asyncio>=0.24",
   "pytest-cov>=4",
   "pytest-xdist>=3",
-  "pytest-textual-snapshot>=1",
+  "pytest-textual-snapshot>=1.1.0",
   "moto[server,s3]>=5",
-  "testcontainers[minio]>=4",
+  "testcontainers[minio]>=4.15.0",
   "types-aiofiles>=23",
   # Installed so CI/release can build with `uv build --no-build-isolation`
   # against the locked backend instead of resolving hatchling at build time.
