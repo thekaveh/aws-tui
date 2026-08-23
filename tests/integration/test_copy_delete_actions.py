@@ -90,6 +90,15 @@ async def _wait_until_names(
     return names
 
 
+async def _wait_until_entry_rows(app: AwsTuiApp) -> list[EntryRow]:
+    for _ in range(100):
+        rows = list(app.query(EntryRow))
+        if rows:
+            return rows
+        await asyncio.sleep(0.01)
+    return rows
+
+
 @pytest.mark.asyncio
 async def test_copy_action_with_confirm_does_not_crash(
     app_context_factory: AppContextBuilder,
@@ -107,7 +116,7 @@ async def test_copy_action_with_confirm_does_not_crash(
         # Make sure the panes mounted with entries.
         panes = list(app.query(Pane))
         assert len(panes) == 2
-        rows = list(app.query(EntryRow))
+        rows = await _wait_until_entry_rows(app)
         assert len(rows) > 0
 
         # Press 'c' — this opens ConfirmModal.

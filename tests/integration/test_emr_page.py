@@ -4,7 +4,9 @@ EmrServerlessPage in the content host."""
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -52,6 +54,12 @@ async def _await_emr_mount(pilot: object, app: AwsTuiApp) -> None:
     if setup_task is not None and not setup_task.done():
         await setup_task
     await pilot.pause()  # type: ignore[attr-defined]
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
 
 
 _AWS_TOML = (
@@ -219,14 +227,19 @@ async def test_emr_focus_projects_bidirectionally_through_coordinator(tmp_path: 
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
             await _await_emr_mount(pilot, app)
 
+            left = app.query_one(JobRunsPane)
+            await _wait_until(lambda: left.has_focus_within)
+
             source = app.query_one(ServiceSourceHeader)
             source.focus()
-            await pilot.pause()
+            await _wait_until(lambda: ctx.focus_coordinator.focused_slot is FocusSlot.EMR_SOURCE)
             assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_SOURCE
 
             application = app.query_one(ApplicationPicker)
             application.focus()
-            await pilot.pause()
+            await _wait_until(
+                lambda: ctx.focus_coordinator.focused_slot is FocusSlot.EMR_APPLICATION
+            )
             assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_APPLICATION
 
             app._project_focus_slot(FocusSlot.EMR_DETAIL)
