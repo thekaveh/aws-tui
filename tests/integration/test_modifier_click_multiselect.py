@@ -155,6 +155,7 @@ async def test_modifier_click_marks_the_row(
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
+        await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
         panes = list(app.query(Pane))
         focused = panes[0]
