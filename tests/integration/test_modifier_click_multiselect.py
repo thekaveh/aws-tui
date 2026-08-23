@@ -8,7 +8,8 @@ Locks in:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Callable
 
 import pytest
 
@@ -21,6 +22,12 @@ from tests.unit.domain._in_memory_fs import InMemoryFS
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:
     yield data
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
 
 
 async def _seed_local() -> InMemoryFS:
@@ -161,10 +168,13 @@ async def test_modifier_click_marks_the_row(
         focused = panes[0]
         before = sum(1 for e in focused.vm.filtered_entries if e.is_marked)
 
+        await _wait_until(
+            lambda: any(not row.entry_vm.is_parent_link for row in focused.query(EntryRow))
+        )
         rows = list(focused.query(EntryRow))
         # Click on a real entry row (not the ".." parent link, which
         # the click handler intentionally won't mark).
-        target = next((r for r in rows if not r._entry_vm.is_parent_link), None)  # type: ignore[attr-defined]
+        target = next((row for row in rows if not row.entry_vm.is_parent_link), None)
         assert target is not None, "no markable entry row found"
 
         await pilot.click(target, control=True)  # Ctrl+Click — universal modifier
