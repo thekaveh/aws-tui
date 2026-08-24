@@ -26,6 +26,8 @@ from tests.snapshot.conftest import THEMES
 # advisory that our content-presence guard checks for.  30 rows keeps
 # both the BrandBanner "DEMO MODE" chip and the toast overlay in frame.
 TERMINAL_SIZE = (120, 30)
+_SERVICE_TAB_LABELS = ("3 crawlers", "1 catalog", "2 jobs")
+_DEMO_STARTUP_ADVISORY = "Demo mode active — AWS data resets; local pane is real"
 
 
 async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
@@ -138,6 +140,19 @@ async def _wait_for_rendered_iceberg(
     )
 
 
+async def _dismiss_demo_startup_advisory(pilot) -> None:  # type: ignore[no-untyped-def]
+    """Capture Iceberg documentation after the one-shot demo advisory clears."""
+    toast_stack = pilot.app.app_ctx.root_vm.chrome.toast_stack
+    matching = [toast for toast in toast_stack.toasts if _DEMO_STARTUP_ADVISORY in toast.model.text]
+    assert len(matching) == 1, "expected exactly one startup demo advisory"
+
+    toast_stack.dismiss(matching[0].model.id)
+    await _drain_workers(pilot)
+    assert not any(_DEMO_STARTUP_ADVISORY in toast.model.text for toast in toast_stack.toasts), (
+        "startup demo advisory did not dismiss"
+    )
+
+
 async def _show_profile_iceberg(  # type: ignore[no-untyped-def]
     pilot,
     *,
@@ -170,7 +185,12 @@ async def _show_profile_iceberg(  # type: ignore[no-untyped-def]
     )
     assert await page.catalog.iceberg.select_view(view)
     await _wait_for_rendered_iceberg(pilot, page.catalog.iceberg, view)
-    await pilot.wait_for_scheduled_animations()
+    await _dismiss_demo_startup_advisory(pilot)
+
+
+def _assert_service_tab_labels(svg: str, path: Path) -> None:
+    for label in _SERVICE_TAB_LABELS:
+        assert label in svg, f"{label!r} is not visibly rendered in {path.name}"
 
 
 @pytest.mark.parametrize("theme", THEMES)
@@ -301,20 +321,26 @@ def test_demo_iceberg_snapshot_content(theme: str) -> None:
     assert "4202" in svg
     assert "4201" in svg
     assert "append" in svg
+    _assert_service_tab_labels(svg, path)
 
 
-def test_demo_iceberg_metadata_snapshot_content() -> None:
+@pytest.mark.parametrize(
+    ("view", "required"),
+    [
+        ("history", "4201"),
+        ("manifests", "s3://demo-dev/dev_analytics/dev_events_iceberg/met"),
+        ("files", "s3://demo-dev/dev_analytics/dev_events_iceberg/dat"),
+        ("partitions", "event_date=2026-07-24"),
+        ("refs", "dev-main"),
+    ],
+)
+def test_demo_iceberg_metadata_snapshot_content(view: str, required: str) -> None:
     root = Path(__file__).parent / "__snapshots__" / "test_demo_mode"
+    path = root / f"test_demo_iceberg_metadata_snapshot[{view}].raw"
+    svg = html_lib.unescape(path.read_text()).replace("\xa0", " ")
 
-    def read(view: str) -> str:
-        path = root / f"test_demo_iceberg_metadata_snapshot[{view}].raw"
-        return html_lib.unescape(path.read_text()).replace("\xa0", " ")
-
-    assert "4201" in read("history")
-    assert "s3://demo-dev/dev_analytics/dev_events_iceberg/met" in read("manifests")
-    assert "s3://demo-dev/dev_analytics/dev_events_iceberg/dat" in read("files")
-    assert "event_date=2026-07-24" in read("partitions")
-    assert "dev-main" in read("refs")
+    assert required in svg
+    _assert_service_tab_labels(svg, path)
 
 
 @pytest.mark.parametrize(
@@ -353,3 +379,4 @@ def test_demo_iceberg_profile_snapshot_content(
     assert "4202" not in svg
     for marker in required:
         assert marker in svg
+    _assert_service_tab_labels(svg, path)

@@ -176,7 +176,7 @@ class TestLoad:
 
         assert (
             content.index("$bg:")
-            < content.index("Glue / Athena operational pane hierarchy")
+            < content.index("ServiceTabStrip > .service-tab")
             < content.index("user overlay")
         )
 
@@ -201,7 +201,7 @@ class TestLoad:
         (user_themes / "carbon.tcss").write_text("/* replacement */", encoding="utf-8")
         store = ThemeStore(user_themes_dir=user_themes)
 
-        assert "Glue / Athena operational pane hierarchy" not in store.load("carbon")
+        assert "ServiceTabStrip > .service-tab" not in store.load("carbon")
 
     def test_builtin_load_bypasses_replacement_and_overlay(self, tmp_path: Path) -> None:
         user_themes = tmp_path / "themes"
@@ -215,7 +215,7 @@ class TestLoad:
 
         assert "replacement" not in content
         assert "user-overlay-marker" not in content
-        assert "Glue / Athena operational pane hierarchy" in content
+        assert "ServiceTabStrip > .service-tab" in content
 
     @pytest.mark.parametrize("inside_root", [False, True])
     def test_overlay_symlink_is_rejected(self, tmp_path: Path, inside_root: bool) -> None:

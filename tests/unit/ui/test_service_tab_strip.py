@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.widgets import Button
 
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 
@@ -16,6 +17,7 @@ class TabHost(App[None]):
 
     def compose(self) -> ComposeResult:
         yield self.tabs
+        yield Button("After", id="after-tabs")
 
     def on_service_tab_strip_changed(self, event: ServiceTabStrip.Changed) -> None:
         self.changes.append(event.value)
@@ -88,3 +90,35 @@ async def test_service_tab_strip_set_active_updates_without_emitting() -> None:
 
         assert tabs.active == "crawlers"
         assert pilot.app.changes == []
+
+
+@pytest.mark.asyncio
+async def test_service_tab_strip_keeps_selection_and_adds_soft_focus_fill() -> None:
+    tabs = _tabs()
+
+    async with TabHost(tabs).run_test() as pilot:
+        after = pilot.app.query_one("#after-tabs", Button)
+        active = tabs.query_one("#service-tab-catalog")
+        inactive = tabs.query_one("#service-tab-jobs")
+        after.focus()
+        await pilot.pause()
+
+        resting_size = tabs.region.size
+        assert tabs.border_title is None
+        assert active.has_class("-active")
+        assert active.styles.border_bottom != inactive.styles.border_bottom
+        assert active.styles.background == inactive.styles.background
+
+        tabs.focus()
+        await pilot.pause()
+
+        assert active.styles.background != inactive.styles.background
+        assert tabs.region.size == resting_size
+
+        after.focus()
+        await pilot.pause()
+
+        assert active.has_class("-active")
+        assert active.styles.border_bottom != inactive.styles.border_bottom
+        assert active.styles.background == inactive.styles.background
+        assert tabs.region.size == resting_size

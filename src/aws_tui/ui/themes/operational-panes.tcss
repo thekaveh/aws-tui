@@ -1,12 +1,10 @@
-/* ── Glue / Athena operational pane hierarchy ─────────────────────────── */
-GluePage > #glue-context-pane,
+/* Athena grouped context header */
 AthenaPage > #athena-context-header {
     background: $bg;
     color: $text;
     border: solid $rule-dim;
     border-title-color: $text;
 }
-GluePage > #glue-context-pane:focus-within,
 AthenaPage > #athena-context-header:focus-within {
     border: solid $accent;
     border-title-color: $accent;
@@ -30,4 +28,23 @@ AthenaPage #athena-results-summary:focus-within,
 AthenaPage DataTable:focus {
     border: solid $accent;
     border-title-color: $accent;
+}
+
+/* Shared service-local underline tab rail */
+ServiceTabStrip {
+    background: $bg;
+    color: $text-muted;
+}
+ServiceTabStrip > .service-tab {
+    color: $text-muted;
+    border-bottom: solid $rule-dim;
+}
+ServiceTabStrip > .service-tab.-active {
+    color: $text;
+    border-bottom: solid $accent;
+    text-style: bold;
+}
+ServiceTabStrip:focus > .service-tab.-active {
+    background: $bg-sel;
+    color: $text;
 }

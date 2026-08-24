@@ -16,6 +16,7 @@ from aws_tui.domain.query import (
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.athena.page import AthenaPage
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_source_vm import ServiceSourceContext
@@ -119,7 +120,7 @@ class AthenaPageApp(App[None]):
         if self._open_picker:
             self.query_one("#athena-database").open()
         if self._fixture == "focused-rebound-tabs":
-            self.query_one("#athena-tab-query").focus()
+            self.query_one("#athena-view-tabs", ServiceTabStrip).focus()
 
     async def _seed_fixture(self) -> None:
         fixture = self._fixture

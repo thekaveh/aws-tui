@@ -13,6 +13,7 @@ from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.service_source_vm import ServiceSourceContext
@@ -61,6 +62,7 @@ class GluePageApp(App[None]):
         fixture: GlueFixture = "populated",
         iceberg_view: IcebergView = "snapshots",
         open_picker: bool = False,
+        focus_tabs: bool = False,
     ) -> None:
         super().__init__()
         self.CSS = ThemeStore().load(theme)
@@ -82,6 +84,7 @@ class GluePageApp(App[None]):
         self._view = view
         self._iceberg_view = iceberg_view
         self._open_picker = open_picker
+        self._focus_tabs = focus_tabs
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -105,6 +108,8 @@ class GluePageApp(App[None]):
         )
         if self._open_picker:
             self.query_one("#glue-run-state-filter").open()
+        if self._focus_tabs:
+            self.query_one("#glue-view-tabs", ServiceTabStrip).focus()
 
 
 __all__ = ["GluePageApp"]
