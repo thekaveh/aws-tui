@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import OptionList, Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
@@ -277,6 +278,50 @@ async def test_glue_page_composes_source_tabs_and_three_views() -> None:
         assert page.query_one(GlueCatalogView).display
         assert not page.query_one(GlueJobsView).display
         assert not page.query_one(GlueCrawlersView).display
+
+
+@pytest.mark.asyncio
+async def test_glue_context_controls_use_an_unframed_layout_row() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        row = page.query_one("#glue-context-row", Horizontal)
+        source = page.query_one("#glue-source-header-picker", ContextPicker)
+
+        assert row.border_title is None
+        assert row.styles.border_top[0] in {"", "none"}
+        assert source.border_title == "AWS source"
+        assert source.styles.border_top[0] in {"solid", "heavy"}
+        with pytest.raises(NoMatches):
+            page.query_one("#glue-context-pane")
+
+
+@pytest.mark.asyncio
+async def test_open_glue_filter_stays_inside_layout_flow_at_narrow_width() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    await vm.select_view("jobs")
+    app = _GlueApp(vm)
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        row = page.query_one("#glue-context-row", Horizontal)
+        source = page.query_one("#glue-source-header")
+        run_filter = page.query_one("#glue-run-state-filter", ContextPicker)
+        tabs = page.query_one("#glue-view-tabs", ServiceTabStrip)
+        view_host = page.query_one("#glue-view-host")
+
+        run_filter.open()
+        await pilot.pause()
+
+        assert source.region.right <= run_filter.region.x
+        assert row.region.bottom <= tabs.region.y
+        assert tabs.region.bottom <= view_host.region.y
 
 
 @pytest.mark.asyncio

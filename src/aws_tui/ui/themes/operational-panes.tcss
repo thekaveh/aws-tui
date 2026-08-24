@@ -1,12 +1,10 @@
-/* ── Glue / Athena operational pane hierarchy ─────────────────────────── */
-GluePage > #glue-context-pane,
+/* Athena grouped context header */
 AthenaPage > #athena-context-header {
     background: $bg;
     color: $text;
     border: solid $rule-dim;
     border-title-color: $text;
 }
-GluePage > #glue-context-pane:focus-within,
 AthenaPage > #athena-context-header:focus-within {
     border: solid $accent;
     border-title-color: $accent;

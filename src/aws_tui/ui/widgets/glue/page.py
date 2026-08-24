@@ -81,15 +81,15 @@ class GluePage(HubSubscriberMixin, Widget):
         height: 1fr;
         layout: vertical;
     }
-    GluePage > #glue-context-pane {
+    GluePage > #glue-context-row {
         width: 1fr;
         height: auto;
-        min-height: 5;
+        min-height: 3;
         layout: horizontal;
-        border-title-align: left;
+        border: none;
     }
-    GluePage > #glue-context-pane > ServiceSourceHeader,
-    GluePage > #glue-context-pane > ContextPicker {
+    GluePage > #glue-context-row > ServiceSourceHeader,
+    GluePage > #glue-context-row > ContextPicker {
         width: 1fr;
         height: auto;
         min-height: 3;
@@ -128,7 +128,7 @@ class GluePage(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="glue-context-pane"):
+        with Horizontal(id="glue-context-row"):
             yield ServiceSourceHeader(
                 self._vm.source,
                 candidates=self._source_candidates,
@@ -169,7 +169,6 @@ class GluePage(HubSubscriberMixin, Widget):
             yield GlueCrawlersView(self._vm, id="glue-crawlers-view")
 
     def on_mount(self) -> None:
-        self.query_one("#glue-context-pane").border_title = "AWS context"
         self._sync_view()
         self._sync_context()
         self.subscribe_to_vm(

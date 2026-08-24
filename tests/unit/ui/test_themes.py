@@ -292,7 +292,6 @@ def test_operational_pane_structure_is_shared_theme_owned() -> None:
     )
 
     for content, selector in (
-        (shared, "GluePage > #glue-context-pane"),
         (shared, "GluePage GlueIcebergView"),
         (shared, "AthenaPage > #athena-context-header"),
         (shared, "AthenaPage TextArea"),
@@ -306,7 +305,6 @@ def test_operational_pane_structure_is_shared_theme_owned() -> None:
         assert any("border: solid $rule-dim;" in body for body in bodies)
 
     for content, selector in (
-        (shared, "GluePage > #glue-context-pane:focus-within"),
         (shared, "GluePage GlueIcebergView:focus-within"),
         (shared, "AthenaPage > #athena-context-header:focus-within"),
         (shared, "AthenaPage TextArea:focus"),
@@ -329,13 +327,25 @@ def test_operational_pane_structure_is_shared_theme_owned() -> None:
         assert any("border: solid $accent;" in body for body in bodies)
 
 
+def test_glue_context_layout_has_no_theme_owned_frame() -> None:
+    shared = (
+        resources.files("aws_tui.ui.themes")
+        .joinpath("operational-panes.tcss")
+        .read_text(encoding="utf-8")
+    )
+
+    assert not _bodies_for_selector(shared, "GluePage > #glue-context-pane")
+    assert not _bodies_for_selector(shared, "GluePage > #glue-context-row")
+    assert _bodies_for_selector(shared, "AthenaPage > #athena-context-header")
+    assert _bodies_for_selector(shared, "AthenaPage > #athena-context-header:focus-within")
+
+
 @pytest.mark.parametrize("name", ALL_THEMES)
 def test_builtin_themes_do_not_duplicate_operational_structure(name: str) -> None:
     content = _raw_builtin_theme(name)
     assert "Glue / Athena operational pane hierarchy" not in content
 
     for selector in (
-        "GluePage > #glue-context-pane",
         "GluePage GlueIcebergView",
         "AthenaPage > #athena-context-header",
         "AthenaPage TextArea",
@@ -350,7 +360,6 @@ def test_builtin_themes_do_not_duplicate_operational_structure(name: str) -> Non
         )
 
     for selector in (
-        "GluePage > #glue-context-pane:focus-within",
         "GluePage GlueIcebergView:focus-within",
         "AthenaPage > #athena-context-header:focus-within",
         "AthenaPage TextArea:focus",

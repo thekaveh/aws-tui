@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.containers import Horizontal
 from textual.css.query import NoMatches
 from textual.widgets import Button, DataTable, OptionList, Static, TextArea
 from vmx import NULL_DISPATCHER
@@ -364,6 +365,23 @@ async def test_saved_refresh_uses_current_ring_forward_tie_for_disappearing_cont
 def _build_vm(client: PageClient | None = None) -> tuple[AthenaPageVM, PageClient]:
     fake = client or PageClient()
     return make_page_vm(fake), fake
+
+
+@pytest.mark.asyncio
+async def test_athena_retains_its_grouped_context_header() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        header = app.query_one("#athena-context-header", Horizontal)
+
+        assert header.border_title == "AWS context"
+        assert app.query_one("#athena-source-header") in header.children
+        assert app.query_one("#athena-workgroup") in header.children
+        assert app.query_one("#athena-catalog") in header.children
+        assert app.query_one("#athena-database") in header.children
 
 
 @pytest.mark.asyncio
