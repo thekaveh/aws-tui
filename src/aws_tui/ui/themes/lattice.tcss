@@ -646,7 +646,7 @@ EmrServerlessPage {
     color: $text;
 }
 
-ServiceSourceHeader {
+EmrServerlessPage ServiceSourceHeader {
     background: $bg-elev;
     color: $text-muted;
     border-left: solid $rule-dim;

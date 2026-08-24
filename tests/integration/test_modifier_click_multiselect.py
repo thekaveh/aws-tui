@@ -177,8 +177,13 @@ async def test_modifier_click_marks_the_row(
         target = next((row for row in rows if not row.entry_vm.is_parent_link), None)
         assert target is not None, "no markable entry row found"
 
-        await pilot.click(target, control=True)  # Ctrl+Click — universal modifier
-        await pilot.pause()
+        click_landed = await pilot.click(
+            target,
+            offset=(1, 0),
+            control=True,
+        )  # Ctrl+Click — universal modifier
+        assert click_landed, "pilot click did not land on the target entry row"
+        await _wait_until(lambda: target.entry_vm.is_marked)
 
         after = sum(1 for e in focused.vm.filtered_entries if e.is_marked)
         assert after == before + 1, (

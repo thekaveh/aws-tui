@@ -90,13 +90,14 @@ class HintLegend(HubSubscriberMixin, Widget):
         # always-visible app-chrome globals (themes / help / quit).
         # The split into left/right docks was reverted at user's
         # explicit ask ("I want their concatenation displayed at the
-        # bottom"). ItemGrid preserves that order while wrapping the
-        # full command list instead of clipping later actions.
+        # bottom"). Non-regular ItemGrid packing preserves source order
+        # while preventing prime command counts from collapsing to one
+        # column.
         with ItemGrid(
             id="hint-strip",
             min_column_width=22,
             stretch_height=False,
-            regular=True,
+            regular=False,
         ):
             yield from self._build_chips(self._all_chips())
 

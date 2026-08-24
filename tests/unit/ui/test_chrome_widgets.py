@@ -142,11 +142,94 @@ async def test_hint_legend_wraps_every_glue_command_inside_standard_viewport() -
             legend = app.query_one(HintLegend)
             chips = list(legend.query(".hint-chip"))
             assert len(chips) == len(vm.actions) + len(vm.global_actions)
+            assert len({chip.region.x for chip in chips}) > 1
+            assert all(chip.region.x >= legend.content_region.x for chip in chips)
+            assert all(chip.region.y >= legend.content_region.y for chip in chips)
             assert all(chip.region.right <= legend.content_region.right for chip in chips)
             assert all(chip.region.bottom <= legend.content_region.bottom for chip in chips)
             rendered = " ".join(str(item.render()) for item in legend.query(Static))
             assert "switch source" in rendered
             assert "quit" in rendered
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_packs_prime_athena_commands_across_wide_rows() -> None:
+    hub: MessageHub = MessageHub()
+    vm = HintLegendVM(hub=hub, dispatcher=RxDispatcher.immediate(), keymap=KeymapStore())
+    vm.set_current_service("athena")
+    vm.construct()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield HintLegend(vm, hub=hub)
+
+        app = _App()
+        async with app.run_test(size=(245, 62)) as pilot:
+            await pilot.pause()
+            legend = app.query_one(HintLegend)
+            chips = list(legend.query(".hint-chip"))
+            columns = {chip.region.x for chip in chips}
+            rows = {chip.region.y for chip in chips}
+
+            assert len(chips) == 17
+            assert len(columns) > 1
+            assert len(rows) <= 2
+            assert all(chip.region.x >= legend.content_region.x for chip in chips)
+            assert all(chip.region.y >= legend.content_region.y for chip in chips)
+            assert all(chip.region.right <= legend.content_region.right for chip in chips)
+            assert all(chip.region.bottom <= legend.content_region.bottom for chip in chips)
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_packs_athena_commands_without_overlap_at_narrow_width() -> None:
+    hub: MessageHub = MessageHub()
+    vm = HintLegendVM(hub=hub, dispatcher=RxDispatcher.immediate(), keymap=KeymapStore())
+    vm.set_current_service("athena")
+    vm.construct()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield HintLegend(vm, hub=hub)
+
+        app = _App()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            legend = app.query_one(HintLegend)
+            chips = list(legend.query(".hint-chip"))
+            rows = {chip.region.y for chip in chips}
+
+            assert len({chip.region.x for chip in chips}) > 1
+            assert len(rows) <= 6
+            assert all(chip.region.x >= legend.content_region.x for chip in chips)
+            assert all(chip.region.y >= legend.content_region.y for chip in chips)
+            assert all(chip.region.right <= legend.content_region.right for chip in chips)
+            assert all(chip.region.bottom <= legend.content_region.bottom for chip in chips)
+            for index, chip in enumerate(chips):
+                for other in chips[index + 1 :]:
+                    assert not (
+                        chip.region.x < other.region.right
+                        and other.region.x < chip.region.right
+                        and chip.region.y < other.region.bottom
+                        and other.region.y < chip.region.bottom
+                    )
+            assert [
+                (
+                    str(chip.query_one(".hint-key", Static).render()),
+                    str(chip.query_one(".hint-label", Static).render()),
+                )
+                for chip in chips
+            ] == [
+                (f"[{action.key_label}]", action.action_label)
+                for action in (*vm.actions, *vm.global_actions)
+            ]
     finally:
         vm.dispose()
         hub.dispose()

@@ -30,18 +30,20 @@ AthenaPage DataTable:focus {
     border-title-color: $accent;
 }
 
-/* Shared service-local underline tab rail */
+/* Shared service-local segmented tab frame */
 ServiceTabStrip {
     background: $bg;
     color: $text-muted;
+    border: solid $rule-dim;
 }
 ServiceTabStrip > .service-tab {
     color: $text-muted;
-    border-bottom: solid $rule-dim;
+}
+ServiceTabStrip > .service-tab.-divided {
+    border-left: solid $rule-dim;
 }
 ServiceTabStrip > .service-tab.-active {
-    color: $text;
-    border-bottom: solid $accent;
+    color: $accent;
     text-style: bold;
 }
 ServiceTabStrip:focus > .service-tab.-active {

@@ -192,14 +192,15 @@ def test_service_tab_strip_structure_is_shared_theme_owned() -> None:
         .read_text(encoding="utf-8")
     )
     expected = {
-        "ServiceTabStrip": ("background: $bg;", "color: $text-muted;"),
-        "ServiceTabStrip > .service-tab": (
+        "ServiceTabStrip": (
+            "background: $bg;",
             "color: $text-muted;",
-            "border-bottom: solid $rule-dim;",
+            "border: solid $rule-dim;",
         ),
+        "ServiceTabStrip > .service-tab": ("color: $text-muted;",),
+        "ServiceTabStrip > .service-tab.-divided": ("border-left: solid $rule-dim;",),
         "ServiceTabStrip > .service-tab.-active": (
-            "color: $text;",
-            "border-bottom: solid $accent;",
+            "color: $accent;",
             "text-style: bold;",
         ),
         "ServiceTabStrip:focus > .service-tab.-active": (
@@ -212,6 +213,16 @@ def test_service_tab_strip_structure_is_shared_theme_owned() -> None:
         bodies = _bodies_for_selector(shared, selector)
         assert bodies, f"shared stylesheet missing {selector}"
         assert any(all(declaration in body for declaration in declarations) for body in bodies)
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_source_header_edge_is_scoped_to_emr(name: str) -> None:
+    content = _raw_builtin_theme(name)
+
+    assert not _bodies_for_selector(content, "ServiceSourceHeader")
+    bodies = _bodies_for_selector(content, "EmrServerlessPage ServiceSourceHeader")
+    assert bodies
+    assert any("border-left: solid $rule-dim;" in body for body in bodies)
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)

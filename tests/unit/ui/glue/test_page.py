@@ -10,6 +10,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
@@ -17,6 +18,7 @@ from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.nav_menu import NavMenu
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -281,21 +283,28 @@ async def test_glue_page_composes_source_tabs_and_three_views() -> None:
 
 
 @pytest.mark.asyncio
-async def test_glue_context_controls_use_an_unframed_layout_row() -> None:
+async def test_glue_context_controls_keep_source_border_inside_themed_header() -> None:
     vm, _fake = _build_vm()
     await vm.setup()
-    app = _GlueApp(vm)
+
+    class _BuiltinThemeGlueApp(_GlueApp):
+        CSS = _GlueApp.CSS + "\n" + ThemeStore().load_builtin("carbon")
+
+    app = _BuiltinThemeGlueApp(vm)
 
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(GluePage)
         row = page.query_one("#glue-context-row", Horizontal)
+        header = page.query_one("#glue-source-header", ServiceSourceHeader)
         source = page.query_one("#glue-source-header-picker", ContextPicker)
 
         assert row.border_title is None
         assert row.styles.border_top[0] in {"", "none"}
+        assert header.styles.border_left[0] in {"", "none"}
         assert source.border_title == "AWS source"
         assert source.styles.border_top[0] in {"solid", "heavy"}
+        assert source.styles.border_left[0] in {"solid", "heavy"}
         with pytest.raises(NoMatches):
             page.query_one("#glue-context-pane")
 

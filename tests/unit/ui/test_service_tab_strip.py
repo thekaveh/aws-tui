@@ -93,6 +93,24 @@ async def test_service_tab_strip_set_active_updates_without_emitting() -> None:
 
 
 @pytest.mark.asyncio
+async def test_service_tab_strip_renders_one_stable_segmented_frame() -> None:
+    tabs = _tabs()
+
+    async with TabHost(tabs).run_test(size=(90, 12)) as pilot:
+        await pilot.pause()
+        children = list(tabs.query(".service-tab"))
+
+        assert tabs.border_title is None
+        assert tabs.styles.border_top[0] in {"solid", "heavy"}
+        assert tabs.styles.border_right[0] in {"solid", "heavy"}
+        assert tabs.styles.border_bottom[0] in {"solid", "heavy"}
+        assert tabs.styles.border_left[0] in {"solid", "heavy"}
+        assert [child.has_class("-divided") for child in children] == [False, True, True]
+        assert all(child.region.height == 1 for child in children)
+        assert len({child.region.width for child in children}) <= 2
+
+
+@pytest.mark.asyncio
 async def test_service_tab_strip_keeps_selection_and_adds_soft_focus_fill() -> None:
     tabs = _tabs()
 
@@ -106,7 +124,6 @@ async def test_service_tab_strip_keeps_selection_and_adds_soft_focus_fill() -> N
         resting_size = tabs.region.size
         assert tabs.border_title is None
         assert active.has_class("-active")
-        assert active.styles.border_bottom != inactive.styles.border_bottom
         assert active.styles.background == inactive.styles.background
 
         tabs.focus()
@@ -119,6 +136,5 @@ async def test_service_tab_strip_keeps_selection_and_adds_soft_focus_fill() -> N
         await pilot.pause()
 
         assert active.has_class("-active")
-        assert active.styles.border_bottom != inactive.styles.border_bottom
         assert active.styles.background == inactive.styles.background
         assert tabs.region.size == resting_size
