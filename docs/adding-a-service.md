@@ -102,8 +102,8 @@ needs a `construct → destruct → dispose` surface.
       `ListPaneVM` under `vm/<service>/` and a corresponding widget
       family under `ui/widgets/<service>/`.
     - Reuse `ServiceSourceHeader` and `ContextPicker` for shared source and
-      context controls, and `ServiceTabStrip` for a one-stop underline view
-      rail. Extend `FocusCoordinatorVM` instead of creating another focus
+      context controls, and `ServiceTabStrip` for a one-stop segmented view
+      selector. Extend `FocusCoordinatorVM` instead of creating another focus
       authority. Add an enclosing context frame only when multiple dependent
       controls form one coherent region; a standalone source control does not
       require a second frame.
