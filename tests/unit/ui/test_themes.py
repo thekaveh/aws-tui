@@ -216,6 +216,16 @@ def test_service_tab_strip_structure_is_shared_theme_owned() -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
+def test_source_header_edge_is_scoped_to_emr(name: str) -> None:
+    content = _raw_builtin_theme(name)
+
+    assert not _bodies_for_selector(content, "ServiceSourceHeader")
+    bodies = _bodies_for_selector(content, "EmrServerlessPage ServiceSourceHeader")
+    assert bodies
+    assert any("border-left: solid $rule-dim;" in body for body in bodies)
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
 def test_focused_service_tab_uses_contrast_safe_tokens(name: str) -> None:
     content = ThemeStore().load(name)
     tokens = _theme_tokens(content)

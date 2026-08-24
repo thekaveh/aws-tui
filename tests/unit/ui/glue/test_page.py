@@ -17,6 +17,7 @@ from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.nav_menu import NavMenu
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -290,12 +291,15 @@ async def test_glue_context_controls_use_an_unframed_layout_row() -> None:
         await pilot.pause()
         page = app.query_one(GluePage)
         row = page.query_one("#glue-context-row", Horizontal)
+        header = page.query_one("#glue-source-header", ServiceSourceHeader)
         source = page.query_one("#glue-source-header-picker", ContextPicker)
 
         assert row.border_title is None
         assert row.styles.border_top[0] in {"", "none"}
+        assert header.styles.border_left[0] in {"", "none"}
         assert source.border_title == "AWS source"
         assert source.styles.border_top[0] in {"solid", "heavy"}
+        assert source.styles.border_left[0] in {"solid", "heavy"}
         with pytest.raises(NoMatches):
             page.query_one("#glue-context-pane")
 
