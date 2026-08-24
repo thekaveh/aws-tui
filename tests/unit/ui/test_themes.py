@@ -192,14 +192,15 @@ def test_service_tab_strip_structure_is_shared_theme_owned() -> None:
         .read_text(encoding="utf-8")
     )
     expected = {
-        "ServiceTabStrip": ("background: $bg;", "color: $text-muted;"),
-        "ServiceTabStrip > .service-tab": (
+        "ServiceTabStrip": (
+            "background: $bg;",
             "color: $text-muted;",
-            "border-bottom: solid $rule-dim;",
+            "border: solid $rule-dim;",
         ),
+        "ServiceTabStrip > .service-tab": ("color: $text-muted;",),
+        "ServiceTabStrip > .service-tab.-divided": ("border-left: solid $rule-dim;",),
         "ServiceTabStrip > .service-tab.-active": (
-            "color: $text;",
-            "border-bottom: solid $accent;",
+            "color: $accent;",
             "text-style: bold;",
         ),
         "ServiceTabStrip:focus > .service-tab.-active": (

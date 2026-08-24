@@ -15,8 +15,9 @@ from textual.widgets import Static
 class _ServiceTab(Static):
     """Non-focusable visual child owned by :class:`ServiceTabStrip`."""
 
-    def __init__(self, value: str, label: str, *, id_prefix: str) -> None:
-        super().__init__(label, id=f"{id_prefix}-{value}", classes="service-tab", markup=False)
+    def __init__(self, value: str, label: str, *, id_prefix: str, divided: bool) -> None:
+        classes = "service-tab -divided" if divided else "service-tab"
+        super().__init__(label, id=f"{id_prefix}-{value}", classes=classes, markup=False)
         self.value = value
 
 
@@ -26,25 +27,27 @@ class ServiceTabStrip(Widget, can_focus=True):
     DEFAULT_CSS: ClassVar[str] = """
     ServiceTabStrip {
         width: 1fr;
-        height: 2;
-        min-height: 2;
+        height: 3;
+        min-height: 3;
         layout: horizontal;
-        border: none;
+        border: solid $accent;
     }
     ServiceTabStrip > .service-tab {
         width: 1fr;
-        height: 2;
+        height: 1;
         content-align: center middle;
         color: $text-muted;
-        border-bottom: solid transparent;
+    }
+    ServiceTabStrip > .service-tab.-divided {
+        border-left: solid $accent;
     }
     ServiceTabStrip > .service-tab.-active {
-        color: $text;
+        color: $accent;
         text-style: bold;
-        border-bottom: solid $accent;
     }
     ServiceTabStrip:focus > .service-tab.-active {
         background: $accent 20%;
+        color: $text;
     }
     """
 
@@ -89,8 +92,13 @@ class ServiceTabStrip(Widget, can_focus=True):
         return self._active
 
     def compose(self) -> ComposeResult:
-        for value, label in self._tabs:
-            yield _ServiceTab(value, label, id_prefix=self._tab_id_prefix)
+        for index, (value, label) in enumerate(self._tabs):
+            yield _ServiceTab(
+                value,
+                label,
+                id_prefix=self._tab_id_prefix,
+                divided=index > 0,
+            )
 
     def on_mount(self) -> None:
         self._sync_tabs()
