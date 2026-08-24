@@ -10,6 +10,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
@@ -282,10 +283,14 @@ async def test_glue_page_composes_source_tabs_and_three_views() -> None:
 
 
 @pytest.mark.asyncio
-async def test_glue_context_controls_use_an_unframed_layout_row() -> None:
+async def test_glue_context_controls_keep_source_border_inside_themed_header() -> None:
     vm, _fake = _build_vm()
     await vm.setup()
-    app = _GlueApp(vm)
+
+    class _BuiltinThemeGlueApp(_GlueApp):
+        CSS = _GlueApp.CSS + "\n" + ThemeStore().load_builtin("carbon")
+
+    app = _BuiltinThemeGlueApp(vm)
 
     async with app.run_test() as pilot:
         await pilot.pause()
