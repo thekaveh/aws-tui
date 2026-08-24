@@ -29,8 +29,8 @@ VMs to build service pages, but it cannot import Textual widgets.
   `src/aws_tui/ui/widgets/dual_pane.py`, mounted through
   `src/aws_tui/ui/widgets/service_view_factory.py`; there is no `S3Page` class.
   `ContextPicker` provides bordered keyboard-focusable context selection, and
-  `ServiceTabStrip` provides one predictable focus stop for service-local
-  views.
+  `ServiceTabStrip` renders a persistent underline rail while providing one
+  predictable focus stop for service-local views.
 - **ViewModel** — VMx-based viewmodels with reactive commands and
   property-changed messages (`src/aws_tui/vm/`). Never imports
   Textual; tests run headless. `ServiceSelectionStore` is a VM-layer type in

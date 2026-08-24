@@ -127,10 +127,13 @@ App-level `priority=True` and short-circuit through
 ### 1.1.9. AWS Glue
 
 Glue is a single-context AWS service. It keeps one active connection
-and region for the whole page; S3-compatible connections are excluded. Its
-source and active filters are bordered selectors in the **AWS context** pane.
-Focus a selector and press `Enter` or `Space` to open it; use the arrow keys
-and `Enter` to commit a value, or `Esc` to close it without changing the value.
+and region for the whole page; S3-compatible connections are excluded. The
+bordered **AWS source** selector stands on its own. Jobs and Crawlers add an
+adjacent bordered state selector without an enclosing context frame. The
+underline view rail is one Tab stop; its active view remains underlined after
+focus moves into content. Focus a selector and press `Enter` or `Space` to open
+it; use the arrow keys and `Enter` to commit a value, or `Esc` to close it
+without changing the value.
 
 | Action | Default | Notes |
 |---|---|---|
@@ -164,6 +167,10 @@ Athena is a single-context AWS service; its controls do not appear for
 S3-compatible connections. Source, Workgroup, Catalog, and Database are
 bordered selectors in the **AWS context** pane. Focus one and press `Enter` or
 `Space` to open it.
+
+The underline view rail uses the same persistent selected state and single
+keyboard focus stop as Glue; Athena's grouped **AWS context** frame remains
+because its selectors form one dependent control region.
 
 | Action | Default | Notes |
 |---|---|---|

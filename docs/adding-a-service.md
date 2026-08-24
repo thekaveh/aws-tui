@@ -101,9 +101,12 @@ needs a `construct → destruct → dispose` surface.
     - For flat resource lists (EC2 instances, IAM users): write a new
       `ListPaneVM` under `vm/<service>/` and a corresponding widget
       family under `ui/widgets/<service>/`.
-    - Reuse `ServiceSourceHeader`, `ContextPicker`, and `ServiceTabStrip`
-      for shared source, context, and view focus behavior. Extend
-      `FocusCoordinatorVM` instead of creating another focus authority.
+    - Reuse `ServiceSourceHeader` and `ContextPicker` for shared source and
+      context controls, and `ServiceTabStrip` for a one-stop underline view
+      rail. Extend `FocusCoordinatorVM` instead of creating another focus
+      authority. Add an enclosing context frame only when multiple dependent
+      controls form one coherent region; a standalone source control does not
+      require a second frame.
 
 6. **Layer rules.** Services live one layer above domain, so they may
     import from `domain/`, `infra/`, and the public VM surface

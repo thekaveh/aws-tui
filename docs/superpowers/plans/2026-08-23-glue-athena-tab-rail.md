@@ -1,4 +1,4 @@
-# Glue and Athena Tab Rail Implementation Plan
+# 1. Glue and Athena Tab Rail Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11-3.13, Textual 8.2.8, VMx, TCSS, pytest, pytest-asyncio, pytest-textual-snapshot, MkDocs Material
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Work on `codex/glue-athena-tab-rail-design`, based on current `develop`.
 - The approved design is `docs/superpowers/specs/2026-08-23-glue-athena-tab-rail-design.md`.
@@ -24,7 +24,7 @@
 
 ---
 
-## File Structure
+## 1.2. File Structure
 
 - `src/aws_tui/ui/widgets/service_tab_strip.py`: one-stop tab interaction plus structural and custom-theme fallback styling.
 - `src/aws_tui/ui/themes/operational-panes.tcss`: canonical built-in-theme styling for the shared tab rail and operational panes.
@@ -46,7 +46,7 @@
 
 ---
 
-### Task 1: Build the shared underline tab rail and remove legacy theme rules
+## 1.3. Task 1: Build the shared underline tab rail and remove legacy theme rules
 
 **Files:**
 - Modify: `tests/unit/ui/test_service_tab_strip.py`
@@ -297,7 +297,7 @@ git commit -m "refactor(ui): render service views as tab rail"
 
 ---
 
-### Task 2: Replace Glue's context pane with an unframed control row
+## 1.4. Task 2: Replace Glue's context pane with an unframed control row
 
 **Files:**
 - Modify: `tests/unit/ui/glue/test_page.py`
@@ -490,7 +490,7 @@ git commit -m "refactor(glue): unframe context controls"
 
 ---
 
-### Task 3: Prove focused, unfocused, open-picker, and responsive visual states
+## 1.5. Task 3: Prove focused, unfocused, open-picker, and responsive visual states
 
 **Files:**
 - Modify: `tests/snapshot/apps/glue.py`
@@ -656,7 +656,7 @@ git commit -m "test(ui): cover service tab rail states"
 
 ---
 
-### Task 4: Synchronize canonical docs and run the complete verification gate
+## 1.6. Task 4: Synchronize canonical docs and run the complete verification gate
 
 **Files:**
 - Modify: `docs/keybindings.md:127-182`
