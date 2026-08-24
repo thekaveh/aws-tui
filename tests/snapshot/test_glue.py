@@ -93,6 +93,21 @@ def test_glue_open_context_picker_snapshot(snap_compare) -> None:
     )
 
 
+@pytest.mark.parametrize("theme", THEMES)
+def test_glue_focused_tab_snapshot(theme: str, snap_compare) -> None:
+    assert snap_compare(
+        GluePageApp(theme=theme, focus_tabs=True),
+        terminal_size=WIDE,
+    )
+
+
+def test_glue_open_context_picker_narrow_snapshot(snap_compare) -> None:
+    assert snap_compare(
+        GluePageApp(theme="carbon", view="jobs", open_picker=True),
+        terminal_size=NARROW,
+    )
+
+
 @pytest.mark.parametrize(
     ("view", "fixture"),
     [
@@ -127,6 +142,9 @@ def test_glue_snapshot_content_guards(theme: str) -> None:
 
     source = "analytics-prod·us-west-2"
     assert source in catalog
+    assert "&#160;AWS&#160;source&#160;" in catalog
+    assert "&#160;AWS&#160;context&#160;" not in catalog
+    assert "&#160;Views&#160;" not in catalog
     assert "analytics" in catalog
     assert "events" in catalog
     assert "s3://warehouse/analytics/events/" in catalog

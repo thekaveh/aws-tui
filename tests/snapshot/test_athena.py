@@ -78,6 +78,17 @@ def test_athena_open_context_picker_snapshot(snap_compare) -> None:
     )
 
 
+def test_athena_open_context_picker_narrow_snapshot(snap_compare) -> None:
+    assert snap_compare(
+        AthenaPageApp(
+            theme="carbon",
+            fixture="empty-query",
+            open_picker=True,
+        ),
+        terminal_size=NARROW,
+    )
+
+
 def _snapshot(fixture: AthenaFixture, theme: str) -> str:
     path = (
         Path(__file__).parent
@@ -114,6 +125,8 @@ def test_athena_snapshot_content_guards(theme: str) -> None:
 
     source = "analytics-prod·us-west-2"
     assert source in empty
+    assert "&#160;AWS&#160;context&#160;" in empty
+    assert "&#160;Views&#160;" not in empty
     assert "Enter&#160;a&#160;read-only&#160;query" in empty
     assert "q-20260726-running" in running
     assert "RUNNING" in running
