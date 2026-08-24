@@ -26,24 +26,25 @@ class ServiceTabStrip(Widget, can_focus=True):
     DEFAULT_CSS: ClassVar[str] = """
     ServiceTabStrip {
         width: 1fr;
-        height: 3;
-        min-height: 3;
+        height: 2;
+        min-height: 2;
         layout: horizontal;
-        border: solid $accent;
-    }
-    ServiceTabStrip:focus {
-        border: heavy $accent;
+        border: none;
     }
     ServiceTabStrip > .service-tab {
         width: 1fr;
-        height: 1;
+        height: 2;
         content-align: center middle;
+        color: $text-muted;
+        border-bottom: solid transparent;
     }
     ServiceTabStrip > .service-tab.-active {
+        color: $text;
         text-style: bold;
+        border-bottom: solid $accent;
     }
-    ServiceTabStrip:focus > .service-tab.-highlighted {
-        background: $accent;
+    ServiceTabStrip:focus > .service-tab.-active {
+        background: $accent 20%;
     }
     """
 
@@ -76,7 +77,6 @@ class ServiceTabStrip(Widget, can_focus=True):
         if active not in values:
             raise ValueError("ServiceTabStrip active value must exist in tabs")
         super().__init__(id=id)
-        self.border_title = "Views"
         self._tabs = tabs
         self._active = active
         self._highlighted = active

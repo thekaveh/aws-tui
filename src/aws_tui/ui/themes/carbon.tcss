@@ -817,12 +817,6 @@ JobRunLogsPane > .logs-status {
 
 /* ── AWS Glue ──────────────────────────────────────────────────────────── */
 GluePage { background: $bg; color: $text; }
-GluePage > #glue-view-tabs { background: $bg-elev; color: $text-muted; }
-GluePage .glue-view-tab { border-left: solid $rule-dim; }
-GluePage .glue-view-tab.-active {
-    background: $bg-sel; color: $accent; text-style: bold;
-}
-GluePage .glue-view-tab:focus { background: $bg-sel; color: $accent-soft; }
 GluePage ResourceListPane,
 GluePage DetailRows {
     background: $bg; color: $text; border: solid $rule-dim;
@@ -864,18 +858,10 @@ GluePage .glue-detail-row.-state-ready { color: $success; }
 /* ── AWS Athena ────────────────────────────────────────────────────────── */
 AthenaPage { background: $bg; color: $text; }
 AthenaPage > #athena-context-header,
-AthenaPage > #athena-view-tabs,
 AthenaPage #athena-query-controls,
 AthenaPage #athena-results-status,
 AthenaPage #athena-results-footer {
     background: $bg-elev; color: $text-muted;
-}
-AthenaPage .athena-view-tab { border-left: solid $rule-dim; }
-AthenaPage .athena-view-tab.-active {
-    background: $bg-sel; color: $accent; text-style: bold;
-}
-AthenaPage .athena-view-tab:focus {
-    background: $bg-sel; color: $text;
 }
 AthenaPage ResourceListPane,
 AthenaPage DetailRows {

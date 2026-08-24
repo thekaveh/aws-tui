@@ -185,22 +185,61 @@ def test_selected_state_blocks_use_readable_text_token(name: str) -> None:
     )
 
 
+def test_service_tab_strip_structure_is_shared_theme_owned() -> None:
+    shared = (
+        resources.files("aws_tui.ui.themes")
+        .joinpath("operational-panes.tcss")
+        .read_text(encoding="utf-8")
+    )
+    expected = {
+        "ServiceTabStrip": ("background: $bg;", "color: $text-muted;"),
+        "ServiceTabStrip > .service-tab": (
+            "color: $text-muted;",
+            "border-bottom: solid $rule-dim;",
+        ),
+        "ServiceTabStrip > .service-tab.-active": (
+            "color: $text;",
+            "border-bottom: solid $accent;",
+            "text-style: bold;",
+        ),
+        "ServiceTabStrip:focus > .service-tab.-active": (
+            "background: $bg-sel;",
+            "color: $text;",
+        ),
+    }
+
+    for selector, declarations in expected.items():
+        bodies = _bodies_for_selector(shared, selector)
+        assert bodies, f"shared stylesheet missing {selector}"
+        assert any(all(declaration in body for declaration in declarations) for body in bodies)
+
+
 @pytest.mark.parametrize("name", ALL_THEMES)
-def test_focused_athena_tab_uses_contrast_safe_tokens(name: str) -> None:
+def test_focused_service_tab_uses_contrast_safe_tokens(name: str) -> None:
     content = ThemeStore().load(name)
     tokens = _theme_tokens(content)
-    focused = re.search(
-        r"AthenaPage\s+\.athena-view-tab:focus\s*\{([^}]*)\}",
+    bodies = _bodies_for_selector(
         content,
-        re.MULTILINE,
+        "ServiceTabStrip:focus > .service-tab.-active",
     )
 
-    assert focused is not None
-    body = focused.group(1)
-    assert "background: $bg-sel;" in body
-    assert "color: $text;" in body
+    assert bodies
+    assert any("background: $bg-sel;" in body and "color: $text;" in body for body in bodies)
     ratio = _contrast_ratio(tokens["$text"], tokens["$bg-sel"])
-    assert ratio >= 4.5, f"theme {name}: focused Athena tab contrast is {ratio:.2f}:1"
+    assert ratio >= 4.5, f"theme {name}: focused service tab contrast is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_builtin_themes_do_not_retain_legacy_service_tab_selectors(name: str) -> None:
+    content = _raw_builtin_theme(name)
+
+    for selector in (
+        "GluePage > #glue-view-tabs",
+        "GluePage .glue-view-tab",
+        "AthenaPage > #athena-view-tabs",
+        "AthenaPage .athena-view-tab",
+    ):
+        assert selector not in content
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)

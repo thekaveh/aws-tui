@@ -31,3 +31,22 @@ AthenaPage DataTable:focus {
     border: solid $accent;
     border-title-color: $accent;
 }
+
+/* Shared service-local underline tab rail */
+ServiceTabStrip {
+    background: $bg;
+    color: $text-muted;
+}
+ServiceTabStrip > .service-tab {
+    color: $text-muted;
+    border-bottom: solid $rule-dim;
+}
+ServiceTabStrip > .service-tab.-active {
+    color: $text;
+    border-bottom: solid $accent;
+    text-style: bold;
+}
+ServiceTabStrip:focus > .service-tab.-active {
+    background: $bg-sel;
+    color: $text;
+}
