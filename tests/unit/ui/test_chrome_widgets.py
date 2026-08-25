@@ -7,6 +7,7 @@ assert the widget renders without error and reacts to VM state changes.
 from __future__ import annotations
 
 import pytest
+from rich.cells import cell_len
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 from vmx import MessageHub, RxDispatcher
@@ -14,7 +15,7 @@ from vmx import MessageHub, RxDispatcher
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
-from aws_tui.ui.widgets.hint_legend import HintLegend, _fit_actions
+from aws_tui.ui.widgets.hint_legend import HintLegend, _action_width, _fit_actions
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.status_bar import StatusBar
 from aws_tui.ui.widgets.toast import ToastStack
@@ -210,6 +211,27 @@ def test_fit_actions_preserves_all_non_overflow_actions_that_fit() -> None:
     )
 
     assert _fit_actions(actions, width=80) == (actions[0], actions[1], actions[3])
+
+
+def test_fit_actions_activates_overflow_one_cell_below_exact_width() -> None:
+    actions = (
+        _hint("pane.copy", "c", "copy"),
+        _hint("pane.delete", "d", "delete"),
+        _hint("app.command_palette", ":", "more", overflow_only=True),
+        _hint("app.quit", "q", "quit"),
+    )
+    regular = tuple(action for action in actions if not action.overflow_only)
+    exact_width = sum(_action_width(action) for action in regular)
+
+    assert all(
+        _action_width(action) == cell_len(f"[{action.key_label}] {action.action_label}") + 1
+        for action in actions
+    )
+    assert _fit_actions(actions, width=exact_width) == regular
+
+    overflowed = _fit_actions(actions, width=exact_width - 1)
+    assert "app.command_palette" in {action.action_id for action in overflowed}
+    assert sum(_action_width(action) for action in overflowed) <= exact_width - 1
 
 
 def test_fit_actions_removes_later_duplicate_tab_hint_first() -> None:
