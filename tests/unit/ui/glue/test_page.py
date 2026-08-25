@@ -534,7 +534,9 @@ async def test_deferred_focus_projection_ignores_empty_teardown_ring(
 
 
 @pytest.mark.asyncio
-async def test_deferred_focus_projection_ignores_partially_pruned_teardown_ring() -> None:
+async def test_deferred_focus_projection_skips_target_collection_during_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     vm, _fake = _build_vm()
     await vm.setup()
     app = _GlueApp(vm)
@@ -542,24 +544,111 @@ async def test_deferred_focus_projection_ignores_partially_pruned_teardown_ring(
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(GluePage)
-        tables = page.query_one("#glue-tables-pane-options", OptionList)
-        tables.focus()
+        attempts = 0
+
+        def missing_focus_targets() -> tuple[tuple[FocusSlot, object], ...]:
+            nonlocal attempts
+            attempts += 1
+            raise NoMatches("focus ring unavailable during teardown")
+
+        monkeypatch.setattr(page, "_focus_targets", missing_focus_targets)
+        app.focus_coordinator.set_focused_slot(FocusSlot.GLUE_ICEBERG_TIME_TRAVEL)
+        page._on_child_vm_changed(  # type: ignore[attr-defined]
+            frozenset((FocusSlot.GLUE_ICEBERG_TIME_TRAVEL,)),
+            "selected_snapshot_id",
+        )
+        removal = app.screen.remove_children(GluePage)
+
+        await removal
         await pilot.pause()
+
+        assert attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_synchronous_view_projection_surfaces_missing_focus_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        def missing_focus_targets() -> tuple[tuple[FocusSlot, object], ...]:
+            raise NoMatches("live focus ring defect")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(page, "_focus_targets", missing_focus_targets)
+            with pytest.raises(NoMatches, match="live focus ring defect"):
+                await page.action_select_view("jobs")
+
+
+@pytest.mark.asyncio
+async def test_focus_cycle_skips_target_collection_during_page_pruning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
         focused = app.focused
         focused_slot = app.focus_coordinator.focused_slot
-        databases = page.query_one("#glue-databases-pane", ResourceListPane)
+        attempts = 0
 
-        await databases.option_list.remove()
-        assert databases.is_mounted
-        with pytest.raises(NoMatches):
-            _ = databases.option_list
+        def missing_focus_targets() -> tuple[tuple[FocusSlot, object], ...]:
+            nonlocal attempts
+            attempts += 1
+            raise NoMatches("focus ring unavailable during teardown")
 
-        page._maybe_focus_active(  # type: ignore[attr-defined]
-            FocusSlot.GLUE_ICEBERG_TIME_TRAVEL
-        )
+        monkeypatch.setattr(page, "_focus_targets", missing_focus_targets)
+        removal = app.screen.remove_children(GluePage)
+
+        page.cycle_focus(reverse=False)
 
         assert app.focused is focused
         assert app.focus_coordinator.focused_slot is focused_slot
+        assert attempts == 0
+        await removal
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry_point", ["descendant_focus", "direct_projection"])
+async def test_focus_entry_points_skip_target_collection_during_page_pruning(
+    monkeypatch: pytest.MonkeyPatch,
+    entry_point: str,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        focused = app.focused
+        assert focused is not None
+        attempts = 0
+
+        def missing_focus_targets() -> tuple[tuple[FocusSlot, object], ...]:
+            nonlocal attempts
+            attempts += 1
+            raise NoMatches("focus ring unavailable during teardown")
+
+        monkeypatch.setattr(page, "_focus_targets", missing_focus_targets)
+        removal = app.screen.remove_children(GluePage)
+
+        if entry_point == "descendant_focus":
+            page._sync_focused_widget(focused)  # type: ignore[attr-defined]
+        else:
+            page.project_focus_slot(FocusSlot.GLUE_PRIMARY)
+
+        assert attempts == 0
+        await removal
 
 
 @pytest.mark.asyncio

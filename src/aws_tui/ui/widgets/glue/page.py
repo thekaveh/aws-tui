@@ -191,7 +191,7 @@ class GluePage(HubSubscriberMixin, Widget):
                     )
                 )
             )
-        self.call_after_refresh(self._maybe_focus_active)
+        self.call_after_refresh(self._deferred_maybe_focus_active)
 
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()
@@ -253,7 +253,7 @@ class GluePage(HubSubscriberMixin, Widget):
                 )
 
     def cycle_focus(self, *, reverse: bool) -> None:
-        if self._focus_coordinator is None:
+        if self._focus_coordinator is None or not self._focus_projection_available():
             return
         focused = self.app.focused
         if focused is not None:
@@ -359,7 +359,7 @@ class GluePage(HubSubscriberMixin, Widget):
             return None
 
     def _sync_focused_widget(self, focused: Widget) -> None:
-        if self._focus_coordinator is None:
+        if self._focus_coordinator is None or not self._focus_projection_available():
             return
         ancestors = set(focused.ancestors_with_self)
         for slot, target in self._focus_targets():
@@ -373,6 +373,8 @@ class GluePage(HubSubscriberMixin, Widget):
         *,
         targets: tuple[tuple[FocusSlot, Widget], ...] | None = None,
     ) -> None:
+        if not self._focus_projection_available():
+            return
         target = dict(targets or self._focus_targets()).get(slot)
         if target is None:
             return
@@ -445,7 +447,7 @@ class GluePage(HubSubscriberMixin, Widget):
         ):
             return
         reference = self._focus_coordinator.focused_slot
-        self.call_after_refresh(partial(self._maybe_focus_active, reference))
+        self.call_after_refresh(partial(self._deferred_maybe_focus_active, reference))
 
     def _sync_view(self) -> None:
         active = self._vm.active_view
@@ -484,6 +486,14 @@ class GluePage(HubSubscriberMixin, Widget):
     def _job_filter_value(self) -> str:
         return next(iter(sorted(self._vm.jobs.run_state_filter)), "ALL")
 
+    def _focus_projection_available(self) -> bool:
+        return self.is_running and self.is_attached and self.display
+
+    def _deferred_maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
+        if not self._focus_projection_available():
+            return
+        self._maybe_focus_active(reference)
+
     def _maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
         focused = self.app.focused
         if (
@@ -496,10 +506,7 @@ class GluePage(HubSubscriberMixin, Widget):
             return
         if reference is None and focused is not None and not self.has_focus_within:
             return
-        try:
-            targets = self._focus_targets()
-        except NoMatches:
-            return
+        targets = self._focus_targets()
         if not targets:
             return
         current_slot = (
