@@ -191,16 +191,16 @@ class HintLegend(HubSubscriberMixin, Widget):
             strip = self.query_one("#hint-strip", Horizontal)
             actions = _fit_actions(self._all_actions(), self.content_region.width)
             old_chips = tuple(child for child in strip.children if isinstance(child, _HintChip))
-            with self.app.batch_update():
+            async with strip.batch():
                 mounted = strip.mount(*(_HintChip(action) for action in actions))
                 for chip in old_chips:
                     chip.retire()
                 removed = strip.remove_children(old_chips)
 
-            await mounted
+                await mounted
+                await removed
             if not self.is_attached:
                 return
-            await removed
             replacement_completed = True
         finally:
             self._rebuild_scheduled = False

@@ -206,12 +206,10 @@ async def test_hint_legend_rebuild_is_never_observably_empty_or_duplicated(
     vm, hub = _athena_hint_vm()
     mount = Horizontal.mount
     remove_children = Horizontal.remove_children
-    mount_boundary_reached = [asyncio.Event(), asyncio.Event()]
-    removal_boundary_reached = [asyncio.Event(), asyncio.Event()]
-    release_mount = [asyncio.Event(), asyncio.Event()]
-    release_removal = [asyncio.Event(), asyncio.Event()]
-    mount_count = 0
-    removal_count = 0
+    gated_rebuilds: dict[
+        asyncio.Task[None],
+        tuple[asyncio.Event, asyncio.Event, asyncio.Event, asyncio.Event],
+    ] = {}
 
     class _ManualHintLegend(HintLegend):
         def on_mount(self) -> None:
@@ -226,16 +224,15 @@ async def test_hint_legend_rebuild_is_never_observably_empty_or_duplicated(
         before: int | str | Widget | None = None,
         after: int | str | Widget | None = None,
     ) -> Awaitable[None]:
-        nonlocal mount_count
         pending = mount(strip, *widgets, before=before, after=after)
-        if strip.id != "hint-strip":
+        gate = gated_rebuilds.get(asyncio.current_task())
+        if gate is None:
             return pending
-        boundary_index = mount_count
-        mount_count += 1
+        mount_boundary_reached, _removal_boundary_reached, release_mount, _release_removal = gate
 
         async def wait_for_mount() -> None:
-            mount_boundary_reached[boundary_index].set()
-            await release_mount[boundary_index].wait()
+            mount_boundary_reached.set()
+            await release_mount.wait()
             await pending
 
         return wait_for_mount()
@@ -243,16 +240,15 @@ async def test_hint_legend_rebuild_is_never_observably_empty_or_duplicated(
     def remove_children_at_observable_boundary(
         strip: Horizontal, selector: str = "*"
     ) -> Awaitable[None]:
-        nonlocal removal_count
         pending = remove_children(strip, selector)
-        if strip.id != "hint-strip":
+        gate = gated_rebuilds.get(asyncio.current_task())
+        if gate is None:
             return pending
-        boundary_index = removal_count
-        removal_count += 1
+        _mount_boundary_reached, removal_boundary_reached, _release_mount, release_removal = gate
 
         async def wait_for_removal() -> None:
-            removal_boundary_reached[boundary_index].set()
-            await release_removal[boundary_index].wait()
+            removal_boundary_reached.set()
+            await release_removal.wait()
             await pending
 
         return wait_for_removal()
@@ -263,7 +259,10 @@ async def test_hint_legend_rebuild_is_never_observably_empty_or_duplicated(
         app = App[None]()
         async with app.run_test(size=(80, 24)) as pilot:
             legend = _ManualHintLegend(vm, hub=hub)
-            await pilot.app.mount(legend)
+            unrelated_legend = _ManualHintLegend(vm, hub=hub)
+            await pilot.app.mount(legend, unrelated_legend)
+
+            await asyncio.wait_for(unrelated_legend._rebuild_chips(), timeout=2)
 
             def assert_exact_state() -> None:
                 visible_ids = _visible_hint_ids(legend)
@@ -273,29 +272,107 @@ async def test_hint_legend_rebuild_is_never_observably_empty_or_duplicated(
                 ]
                 assert len(rendered) == 2 * len(visible_ids)
 
-            async def assert_boundary(boundary_index: int) -> None:
+            async def assert_boundary() -> None:
+                mount_boundary_reached = asyncio.Event()
+                removal_boundary_reached = asyncio.Event()
+                release_mount = asyncio.Event()
+                release_removal = asyncio.Event()
                 rebuild = asyncio.create_task(legend._rebuild_chips())
+                gated_rebuilds[rebuild] = (
+                    mount_boundary_reached,
+                    removal_boundary_reached,
+                    release_mount,
+                    release_removal,
+                )
                 try:
-                    await asyncio.wait_for(mount_boundary_reached[boundary_index].wait(), timeout=2)
+                    await asyncio.wait_for(mount_boundary_reached.wait(), timeout=2)
                     assert_exact_state()
-                    release_mount[boundary_index].set()
-                    await asyncio.wait_for(
-                        removal_boundary_reached[boundary_index].wait(), timeout=2
-                    )
+                    release_mount.set()
+                    await asyncio.wait_for(removal_boundary_reached.wait(), timeout=2)
                     assert_exact_state()
                 finally:
-                    release_mount[boundary_index].set()
-                    release_removal[boundary_index].set()
+                    release_mount.set()
+                    release_removal.set()
                     await rebuild
+                    gated_rebuilds.pop(rebuild)
 
-            await assert_boundary(0)
+            await assert_boundary()
             text = " ".join(str(static.render()) for static in legend.query(Static))
             assert "more" in text
             assert "quit" in text
 
             vm.set_current_service("settings")
-            await assert_boundary(1)
+            await assert_boundary()
             assert all("athena." not in action_id for action_id in _visible_hint_ids(legend))
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_holds_compositor_frame_until_replacement_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, hub = _athena_hint_vm()
+    mount = Horizontal.mount
+    mount_boundary_reached = asyncio.Event()
+    release_mount = asyncio.Event()
+
+    class _FrameHintApp(_HintApp):
+        def __init__(self, vm: HintLegendVM, hub: MessageHub) -> None:
+            super().__init__(vm, hub)
+            self.display_count = 0
+
+        def post_display_hook(self) -> None:
+            self.display_count += 1
+
+    try:
+        app = _FrameHintApp(vm, hub)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            legend = app.query_one(HintLegend)
+            strip = legend.query_one("#hint-strip", Horizontal)
+            gate_available = True
+
+            def mount_with_boundary(
+                host: Horizontal,
+                *widgets: Widget,
+                before: int | str | Widget | None = None,
+                after: int | str | Widget | None = None,
+            ) -> Awaitable[None]:
+                nonlocal gate_available
+                pending = mount(host, *widgets, before=before, after=after)
+                if host is not strip or not gate_available:
+                    return pending
+                gate_available = False
+
+                async def wait_for_mount() -> None:
+                    mount_boundary_reached.set()
+                    await release_mount.wait()
+                    await pending
+
+                return wait_for_mount()
+
+            monkeypatch.setattr(Horizontal, "mount", mount_with_boundary)
+            frame_count_before_rebuild = app.display_count
+
+            vm.set_current_service("settings")
+            await asyncio.wait_for(mount_boundary_reached.wait(), timeout=2)
+            try:
+                app.refresh(layout=True)
+                # Textual exposes refresh scheduling publicly, but its Pilot
+                # boundaries wait for this deliberately blocked callback. A
+                # direct timer tick is the only deterministic, delay-free way
+                # to offer the compositor a frame while AwaitMount is held.
+                app.screen._on_timer_update()
+
+                assert app.display_count == frame_count_before_rebuild
+            finally:
+                release_mount.set()
+
+            await pilot.pause()
+            assert app.display_count > frame_count_before_rebuild
+            assert _visible_hint_ids(legend) == _expected_hint_ids(legend)
     finally:
         vm.dispose()
         hub.dispose()
