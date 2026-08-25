@@ -1,6 +1,7 @@
 # 1. Overlay pickers, one-line commands, and Glue-to-Athena handoffs design
 
-**Status:** Approved for implementation on 2026-08-24.
+**Status:** Implemented on the feature branch on 2026-08-25; integration into
+`develop` remains pending independent review.
 
 This document is the source of truth for the interaction and presentation work
 requested after hands-on review of Glue and Athena on `develop`. It builds on the

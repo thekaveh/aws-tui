@@ -103,10 +103,14 @@ needs a `construct → destruct → dispose` surface.
       family under `ui/widgets/<service>/`.
     - Reuse `ServiceSourceHeader` and `ContextPicker` for shared source and
       context controls, and `ServiceTabStrip` for a one-stop segmented view
-      selector. Extend `FocusCoordinatorVM` instead of creating another focus
-      authority. Add an enclosing context frame only when multiple dependent
-      controls form one coherent region; a standalone source control does not
-      require a second frame.
+      selector. `ContextPicker` and specialized wrappers such as EMR's
+      `ApplicationPicker` must compose `OverlayOptionList`, retain their compact
+      trigger footprint while open, and leave parent and sibling regions
+      unchanged. Keep that transient overlay geometry in the Textual view.
+      Extend `FocusCoordinatorVM` instead of creating another focus authority.
+      Add an enclosing context frame only when multiple dependent controls form
+      one coherent region; a standalone source control does not require a
+      second frame.
 
 6. **Layer rules.** Services live one layer above domain, so they may
     import from `domain/`, `infra/`, and the public VM surface
@@ -124,10 +128,16 @@ needs a `construct → destruct → dispose` surface.
 8. **Update docs.** Add any vendor / API quirks to
    `docs/connections.md`. Update the README's features list.
 
-9. **Palette and cross-service state.** Declare the command-palette service
-   IDs for service-specific commands. Publish immutable typed requests for
-   app-level cross-service state; the composition root owns delivery and
-   Textual integration.
+9. **Commands, palette, and cross-service state.** Declare service-specific
+   action IDs in `HintLegendVM`, including compact labels, complete shortcut /
+   effect / execution / prerequisite tooltip metadata, and deterministic
+   fitting priorities. The Commands pane remains one content row; reserve the
+   protected `[:] more` command-palette hint and `[q] quit` at narrow widths,
+   while hidden actions remain bound and palette-visible. Publish immutable
+   typed requests for app-level cross-service state; the composition root owns
+   delivery and Textual integration. Buttons, keys, and palette entries must
+   dispatch the same registered action rather than calling a VM through a
+   separate path.
 
 For cross-service links, publish an immutable VM message carrying plain
 identifiers and source identity. The app composition root resolves the
@@ -137,7 +147,10 @@ intent. `OpenAthenaTableRequest` and `OpenGlueTableRequest` carry a shared
 `TableRef`; the Athena request may add a non-negative snapshot ID. `app.py`
 rejects missing connections or region mismatches, serializes table handoffs,
 and reuses registered service factories. Do not pass clients, VMs, widgets,
-raw SDK responses, or credentials in cross-service messages.
+raw SDK responses, or credentials in cross-service messages. A navigation
+handoff may prefill destination state, but it must document whether it executes
+or mutates anything; Glue's `Shift+Q` and `Shift+V` actions prefill bounded
+Athena SQL and do not execute it.
 
 ## 1.3. Layer rules cheat-sheet for services
 A service module **may** import from:
@@ -216,7 +229,9 @@ shipped service and demonstrates the richer per-service pattern:
 - UI widget tree at `ui/widgets/emr_serverless/`
   (`ApplicationPicker` + `JobRunsPane` + `JobRunDetailPane` +
   `JobRunLogsPane` + `EmrServerlessPage` composer +
-  `JobRunCloneModal` + `LogFilterModal`).
+  `JobRunCloneModal` + `LogFilterModal`). `ApplicationPicker` uses the shared
+  screen-overlaid option list, so opening or closing it leaves the runs, detail,
+  and logs regions unchanged.
 - Three independent production `set_interval` pollers (apps 60 s /
   runs 60 s with terminal-state suppression / detail 30 s). Demo mode
   uses shorter 30 s / 30 s / 5 s cadences so sample data feels live.
@@ -261,6 +276,12 @@ the compact read-only page reference:
   service-to-service import. Its app subscriber resolves the exact
   connection name, verifies the region, rebuilds S3 through `RootVM`,
   navigates the requested pane, and focuses it.
+- `Shift+Q` opens a visible selected table in Athena with exact bounded
+  `SELECT * ... LIMIT 100` SQL. `Shift+V`, the corresponding palette entry, and
+  the Iceberg arrow button open a visible selected snapshot with
+  `FOR VERSION AS OF <snapshot-id>`. Both actions use the same registered action
+  and typed request path, preserve exact source identity, and never execute the
+  generated query.
 
 ### 1.5.4. Amazon Athena
 `AthenaService` in `src/aws_tui/services/athena/service.py` is the
