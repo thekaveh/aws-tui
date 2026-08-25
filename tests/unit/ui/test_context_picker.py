@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 
 import pytest
@@ -78,6 +79,27 @@ class _ThemedPickerHost(PickerHost):
     CSS = ThemeStore().load_builtin("carbon")
 
 
+def _track_picker_focus(
+    picker: ContextPicker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> asyncio.Event:
+    focused = asyncio.Event()
+    options = picker.query_one(OverlayOptionList)
+    focus_options = picker._focus_options
+
+    def track_focus(epoch: int) -> None:
+        focus_options(epoch)
+        if picker.is_open and picker.app.focused is options:
+            focused.set()
+
+    monkeypatch.setattr(picker, "_focus_options", track_focus)
+    return focused
+
+
+async def _wait_for_picker_focus(focused: asyncio.Event) -> None:
+    await asyncio.wait_for(focused.wait(), timeout=2)
+
+
 @pytest.mark.asyncio
 async def test_context_picker_renders_its_label_and_selected_value() -> None:
     picker = _picker()
@@ -130,11 +152,14 @@ async def test_context_picker_overlay_never_reflows_its_host_or_sibling() -> Non
 
 
 @pytest.mark.asyncio
-async def test_context_picker_loses_open_state_without_refocusing_on_blur() -> None:
+async def test_context_picker_loses_open_state_without_refocusing_on_blur(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     picker = _picker()
     async with PickerHost(picker).run_test() as pilot:
+        focus_complete = _track_picker_focus(picker, monkeypatch)
         picker.open()
-        await pilot.pause()
+        await _wait_for_picker_focus(focus_complete)
         pilot.app.query_one("#after-picker", Static).focus()
         await pilot.pause()
 
@@ -256,13 +281,17 @@ async def test_context_picker_deduplicates_repeated_stable_values() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key", ["tab", "shift+tab"], ids=("forward", "reverse"))
-async def test_context_picker_focus_cycle_back_to_owner_closes_overlay(key: str) -> None:
+async def test_context_picker_focus_cycle_back_to_owner_closes_overlay(
+    key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     picker = _picker()
 
     async with _FocusCycleHost(picker).run_test() as pilot:
         picker.focus()
+        focus_complete = _track_picker_focus(picker, monkeypatch)
         await pilot.press("enter")
-        await pilot.pause()
+        await _wait_for_picker_focus(focus_complete)
 
         assert pilot.app.focused is picker.query_one(OverlayOptionList)
 
@@ -275,7 +304,9 @@ async def test_context_picker_focus_cycle_back_to_owner_closes_overlay(key: str)
 
 
 @pytest.mark.asyncio
-async def test_context_picker_outside_non_focusable_click_closes_without_swallowing_click() -> None:
+async def test_context_picker_outside_non_focusable_click_closes_without_swallowing_click(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     picker = _picker()
 
     async with PickerHost(picker).run_test(size=(60, 16)) as pilot:
@@ -283,8 +314,9 @@ async def test_context_picker_outside_non_focusable_click_closes_without_swallow
         outside = pilot.app.query_one("#outside-picker", _OutsideClickTarget)
         before = (picker.region, outside.region)
 
+        focus_complete = _track_picker_focus(picker, monkeypatch)
         picker.open()
-        await pilot.pause()
+        await _wait_for_picker_focus(focus_complete)
 
         assert not outside.can_focus
         assert pilot.app.focused is picker.query_one(OverlayOptionList)

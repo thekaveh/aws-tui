@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
 import pytest
 from textual.containers import Horizontal
@@ -15,16 +16,63 @@ from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from tests.snapshot.apps.emr import EmrPageApp, EmrPageOpenSourcePickerApp
 
 
+def _track_picker_focus(
+    picker: ContextPicker | ApplicationPicker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> asyncio.Event:
+    focused = asyncio.Event()
+    options = picker.query_one(OptionList)
+    if isinstance(picker, ContextPicker):
+        focus_callback = picker._focus_options
+        callback_name = "_focus_options"
+    else:
+        focus_callback = picker._prepare_open_dropdown
+        callback_name = "_prepare_open_dropdown"
+
+    def track_focus(epoch: int) -> None:
+        focus_callback(epoch)
+        if picker.is_open and picker.app.focused is options:
+            focused.set()
+
+    monkeypatch.setattr(picker, callback_name, track_focus)
+    return focused
+
+
+def _track_picker_reconcile(
+    page: EmrServerlessPage,
+    settled: Callable[[], bool],
+    monkeypatch: pytest.MonkeyPatch,
+) -> asyncio.Event:
+    reconciled = asyncio.Event()
+    reconcile = page._reconcile_open_pickers
+
+    def track_reconcile(epoch: int) -> None:
+        reconcile(epoch)
+        if page._picker_open_intent.is_current(epoch) and settled():
+            reconciled.set()
+
+    monkeypatch.setattr(page, "_reconcile_open_pickers", track_reconcile)
+    return reconciled
+
+
+async def _wait_for_completions(*completions: asyncio.Event) -> None:
+    async with asyncio.timeout(2):
+        await asyncio.gather(*(completion.wait() for completion in completions))
+
+
 @pytest.mark.asyncio
-async def test_tab_cycle_closes_departed_application_picker() -> None:
+async def test_tab_cycle_closes_departed_application_picker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = EmrPageApp(theme="carbon")
 
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(EmrServerlessPage)
         picker = app.query_one(ApplicationPicker)
+        focus_complete = _track_picker_focus(picker, monkeypatch)
         picker.toggle_open()
-        await pilot.pause()
+        await _wait_for_completions(focus_complete)
         assert picker.has_class("-open")
         assert app.focused is not None
         assert isinstance(app.focused, OptionList)
@@ -70,6 +118,7 @@ async def test_application_picker_overlay_preserves_page_geometry_through_escape
 @pytest.mark.parametrize("size", [(100, 30), (80, 24)], ids=("wide", "narrow"))
 async def test_source_picker_overlay_preserves_every_page_region(
     size: tuple[int, int],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = EmrPageApp(theme="carbon")
 
@@ -89,8 +138,9 @@ async def test_source_picker_overlay_preserves_every_page_region(
         )
         closed_regions = tuple(widget.region for widget in widgets)
 
+        focus_complete = _track_picker_focus(source_picker, monkeypatch)
         source_picker.open()
-        await pilot.pause()
+        await _wait_for_completions(focus_complete)
         assert source_picker.is_open
         assert app.focused is source_picker.query_one(OptionList)
         assert tuple(widget.region for widget in widgets) == closed_regions
@@ -128,14 +178,15 @@ async def test_application_picker_removal_closes_without_deferred_refocus() -> N
 
 
 @pytest.mark.asyncio
-async def test_application_picker_overlay_closes_when_focus_leaves() -> None:
+async def test_application_picker_overlay_closes_when_focus_leaves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = EmrPageApp(theme="carbon")
     async with app.run_test() as pilot:
         picker = app.query_one(ApplicationPicker)
+        focus_complete = _track_picker_focus(picker, monkeypatch)
         picker.toggle_open()
-        async with asyncio.timeout(1.0):
-            while not isinstance(app.focused, OptionList):
-                await pilot.pause()
+        await _wait_for_completions(focus_complete)
 
         app.query_one(JobRunsPane).focus()
         await pilot.pause()
@@ -144,7 +195,9 @@ async def test_application_picker_overlay_closes_when_focus_leaves() -> None:
 
 
 @pytest.mark.asyncio
-async def test_keyboard_opening_application_picker_closes_source_picker() -> None:
+async def test_keyboard_opening_application_picker_closes_source_picker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = EmrPageOpenSourcePickerApp(theme="carbon")
 
     async with app.run_test() as pilot:
@@ -162,10 +215,14 @@ async def test_keyboard_opening_application_picker_closes_source_picker() -> Non
         assert app.focused is application_picker
         assert not source_picker.is_open
 
+        focus_complete = _track_picker_focus(application_picker, monkeypatch)
+        reconcile_complete = _track_picker_reconcile(
+            page,
+            lambda: application_picker.is_open and not source_picker.is_open,
+            monkeypatch,
+        )
         await pilot.press("enter")
-        async with asyncio.timeout(1.0):
-            while source_picker.is_open or not application_picker.is_open:
-                await asyncio.sleep(0.01)
+        await _wait_for_completions(focus_complete, reconcile_complete)
 
         assert not source_picker.is_open
         assert application_picker.is_open
@@ -179,18 +236,26 @@ async def test_keyboard_opening_application_picker_closes_source_picker() -> Non
 async def test_same_turn_programmatic_opens_keep_newest_picker_focused(
     first: str,
     newest: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = EmrPageApp(theme="carbon")
 
     async with app.run_test() as pilot:
         await pilot.pause()
+        page = app.query_one(EmrServerlessPage)
         source = app.query_one("#emr-source-header-picker", ContextPicker)
         application = app.query_one(ApplicationPicker)
         pickers = {"source": source, "application": application}
 
+        focus_complete = _track_picker_focus(pickers[newest], monkeypatch)
+        reconcile_complete = _track_picker_reconcile(
+            page,
+            lambda: pickers[newest].is_open and not pickers[first].is_open,
+            monkeypatch,
+        )
         pickers[first].open()
         pickers[newest].open()
-        await pilot.pause()
+        await _wait_for_completions(focus_complete, reconcile_complete)
 
         assert pickers[newest].is_open
         assert not pickers[first].is_open
@@ -198,7 +263,9 @@ async def test_same_turn_programmatic_opens_keep_newest_picker_focused(
 
 
 @pytest.mark.asyncio
-async def test_same_turn_application_close_reopen_keeps_reopened_picker_focused() -> None:
+async def test_same_turn_application_close_reopen_keeps_reopened_picker_focused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = EmrPageApp(theme="carbon")
 
     async with app.run_test() as pilot:
@@ -206,10 +273,11 @@ async def test_same_turn_application_close_reopen_keeps_reopened_picker_focused(
         source = app.query_one("#emr-source-header-picker", ContextPicker)
         application = app.query_one(ApplicationPicker)
 
+        focus_complete = _track_picker_focus(application, monkeypatch)
         application.open()
         application.close()
         application.open()
-        await pilot.pause()
+        await _wait_for_completions(focus_complete)
 
         assert application.is_open
         assert not source.is_open
@@ -236,15 +304,18 @@ async def test_page_removal_closes_every_picker_without_refocus() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shift_tab_cycle_closes_departed_application_picker() -> None:
+async def test_shift_tab_cycle_closes_departed_application_picker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = EmrPageApp(theme="carbon")
 
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(EmrServerlessPage)
         picker = app.query_one(ApplicationPicker)
+        focus_complete = _track_picker_focus(picker, monkeypatch)
         picker.toggle_open()
-        await pilot.pause()
+        await _wait_for_completions(focus_complete)
         assert picker.has_class("-open")
 
         page.action_cycle_panes_back()

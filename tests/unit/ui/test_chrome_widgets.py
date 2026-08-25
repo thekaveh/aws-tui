@@ -486,19 +486,43 @@ async def test_hint_legend_holds_compositor_frame_until_replacement_finishes(
 
 
 @pytest.mark.asyncio
-async def test_hint_legend_coalesces_resize_and_vm_rebuild_requests() -> None:
+async def test_hint_legend_coalesces_resize_and_vm_rebuild_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     vm, hub = _athena_hint_vm()
+
+    class _BurstHintLegend(HintLegend):
+        def on_mount(self) -> None:
+            pass
+
+        def on_resize(self, _event: Resize) -> None:
+            pass
+
     try:
-        async with _HintApp(vm, hub).run_test(size=(80, 24)) as pilot:
-            legend = pilot.app.query_one(HintLegend)
+        async with App[None]().run_test(size=(80, 24)) as pilot:
+            legend = _BurstHintLegend(vm, hub=hub)
+            await pilot.app.mount(legend)
+            await legend._rebuild_chips()
             resize = Resize(Size(80, 24), Size(80, 24), Size(80, 24))
+            scheduled_rebuilds: list[Callable[[], Awaitable[None]]] = []
+
+            def capture_rebuild(callback: Callable[[], Awaitable[None]]) -> bool:
+                scheduled_rebuilds.append(callback)
+                return True
+
+            monkeypatch.setattr(legend, "call_after_refresh", capture_rebuild)
 
             for service_id in ("glue", "settings", "s3", "athena"):
                 vm.set_current_service(service_id)
-                await legend.on_resize(resize)
+                legend._on_vm_property_changed("actions")
+                await HintLegend.on_resize(legend, resize)
 
-            await pilot.pause()
+            assert len(scheduled_rebuilds) == 1
+            rebuild = scheduled_rebuilds.pop()
+            await rebuild()
 
+            assert not scheduled_rebuilds
+            assert not legend._rebuild_scheduled
             assert _visible_hint_ids(legend) == _expected_hint_ids(legend)
             assert _visible_hint_ids(legend)
             assert {"app.command_palette", "app.quit"} <= set(_visible_hint_ids(legend))
@@ -512,8 +536,15 @@ async def test_hint_legend_stale_rebuild_cannot_replace_newer_vm_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vm, hub = _athena_hint_vm()
+    rebuild_chips = HintLegend._rebuild_chips
     remove_children = Horizontal.remove_children
     changed_during_removal = False
+    latest_rebuild_complete = asyncio.Event()
+
+    async def track_rebuild(legend: HintLegend) -> None:
+        await rebuild_chips(legend)
+        if changed_during_removal and _visible_hint_ids(legend) == _expected_hint_ids(legend):
+            latest_rebuild_complete.set()
 
     def remove_children_with_newer_state(strip: Horizontal, selector: str = "*") -> Awaitable[None]:
         pending = remove_children(strip, selector)
@@ -527,10 +558,11 @@ async def test_hint_legend_stale_rebuild_cannot_replace_newer_vm_state(
 
         return wait_for_removal()
 
+    monkeypatch.setattr(HintLegend, "_rebuild_chips", track_rebuild)
     monkeypatch.setattr(Horizontal, "remove_children", remove_children_with_newer_state)
     try:
         async with _HintApp(vm, hub).run_test(size=(80, 24)) as pilot:
-            await pilot.pause()
+            await asyncio.wait_for(latest_rebuild_complete.wait(), timeout=2)
             legend = pilot.app.query_one(HintLegend)
 
             assert changed_during_removal
