@@ -11,6 +11,7 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
+from aws_tui.ui.widgets.overlay_option_list import PickerOpenIntent
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 
@@ -64,11 +65,13 @@ class ServiceSourceHeader(Widget, can_focus=True):
         *,
         candidates: tuple[ServiceSourceContext, ...] = (),
         selectable: bool = True,
+        open_intent: PickerOpenIntent | None = None,
         id: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=None if selectable else "-compact")
         self.can_focus = selectable
         self._selectable = selectable
+        self._open_intent = open_intent
         ordered = dict.fromkeys((*candidates, source))
         self._source = source
         self.tooltip = source.label
@@ -113,6 +116,7 @@ class ServiceSourceHeader(Widget, can_focus=True):
             "AWS source",
             self._picker_options(),
             selected=self._active_value(),
+            open_intent=self._open_intent,
             id=f"{self.id}-picker" if self.id is not None else None,
         )
         yield self._picker

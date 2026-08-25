@@ -8,6 +8,7 @@ from typing import ClassVar
 from textual.binding import Binding, BindingType
 from textual.events import Blur
 from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import OptionList
 
 
@@ -20,6 +21,29 @@ class PickerFocusIntent:
     def advance(self) -> int:
         self.epoch += 1
         return self.epoch
+
+    def is_current(self, epoch: int) -> bool:
+        return epoch == self.epoch
+
+
+@dataclass(slots=True)
+class PickerOpenIntent:
+    """Page-owned newest-open intent for deferred picker reconciliation."""
+
+    epoch: int = 0
+    desired: Widget | None = None
+
+    def observe(self, picker: Widget, is_open: bool) -> int:
+        if is_open:
+            self.desired = picker
+        elif self.desired is picker:
+            self.desired = None
+        self.epoch += 1
+        return self.epoch
+
+    def cancel(self) -> None:
+        self.desired = None
+        self.epoch += 1
 
     def is_current(self, epoch: int) -> bool:
         return epoch == self.epoch
@@ -45,4 +69,4 @@ class OverlayOptionList(OptionList):
             self.post_message(self.Dismissed(lost_focus=True))
 
 
-__all__ = ["OverlayOptionList", "PickerFocusIntent"]
+__all__ = ["OverlayOptionList", "PickerFocusIntent", "PickerOpenIntent"]

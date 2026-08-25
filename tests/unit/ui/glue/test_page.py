@@ -675,6 +675,57 @@ async def test_glue_sync_is_safe_during_page_teardown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_glue_picker_open_surfaces_missing_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        query_one = page.query_one
+
+        def missing_picker(selector: str, *args: object, **kwargs: object) -> object:
+            if selector == "#glue-run-state-filter":
+                raise NoMatches("live missing Glue picker")
+            return query_one(selector, *args, **kwargs)
+
+        monkeypatch.setattr(page, "query_one", missing_picker)
+        with pytest.raises(NoMatches, match="live missing Glue picker"):
+            page._focus_and_open_picker(  # type: ignore[attr-defined]
+                FocusSlot.GLUE_FILTER,
+                "#glue-run-state-filter",
+            )
+
+
+@pytest.mark.asyncio
+async def test_detached_glue_picker_open_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        removal = app.screen.remove_children(GluePage)
+        assert not page.display
+
+        def unexpected_query(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("detached Glue page queried its picker")
+
+        monkeypatch.setattr(page, "query_one", unexpected_query)
+        page._focus_and_open_picker(  # type: ignore[attr-defined]
+            FocusSlot.GLUE_FILTER,
+            "#glue-run-state-filter",
+        )
+        await removal
+
+
+@pytest.mark.asyncio
 async def test_focus_cycle_skips_target_collection_during_page_pruning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

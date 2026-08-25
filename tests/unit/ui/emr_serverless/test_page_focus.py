@@ -172,8 +172,13 @@ async def test_keyboard_opening_application_picker_closes_source_picker() -> Non
 
 
 @pytest.mark.asyncio
-async def test_programmatic_picker_opens_are_exclusive_in_both_directions(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("first", "newest"),
+    [("source", "application"), ("application", "source")],
+)
+async def test_same_turn_programmatic_opens_keep_newest_picker_focused(
+    first: str,
+    newest: str,
 ) -> None:
     app = EmrPageApp(theme="carbon")
 
@@ -181,20 +186,34 @@ async def test_programmatic_picker_opens_are_exclusive_in_both_directions(
         await pilot.pause()
         source = app.query_one("#emr-source-header-picker", ContextPicker)
         application = app.query_one(ApplicationPicker)
-        monkeypatch.setattr(source, "call_after_refresh", lambda _callback: None)
-        monkeypatch.setattr(application, "call_after_refresh", lambda _callback: None)
+        pickers = {"source": source, "application": application}
 
-        application.toggle_open()
+        pickers[first].open()
+        pickers[newest].open()
         await pilot.pause()
-        source.open()
-        await pilot.pause()
-        assert source.is_open
-        assert not application.is_open
 
-        application.toggle_open()
+        assert pickers[newest].is_open
+        assert not pickers[first].is_open
+        assert app.focused is pickers[newest].query_one(OptionList)
+
+
+@pytest.mark.asyncio
+async def test_same_turn_application_close_reopen_keeps_reopened_picker_focused() -> None:
+    app = EmrPageApp(theme="carbon")
+
+    async with app.run_test() as pilot:
         await pilot.pause()
+        source = app.query_one("#emr-source-header-picker", ContextPicker)
+        application = app.query_one(ApplicationPicker)
+
+        application.open()
+        application.close()
+        application.open()
+        await pilot.pause()
+
         assert application.is_open
         assert not source.is_open
+        assert app.focused is application.query_one(OptionList)
 
 
 @pytest.mark.asyncio

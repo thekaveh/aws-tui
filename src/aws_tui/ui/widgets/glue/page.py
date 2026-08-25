@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 from functools import partial
 from typing import ClassVar, cast
 
@@ -21,6 +20,7 @@ from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
+from aws_tui.ui.widgets.overlay_option_list import PickerOpenIntent
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
@@ -122,6 +122,7 @@ class GluePage(HubSubscriberMixin, Widget):
         self._source_candidates = source_candidates
         self._focus_coordinator = focus_coordinator
         self._focus_subscriptions: list[DisposableBase] = []
+        self._picker_open_intent = PickerOpenIntent()
 
     @property
     def vm(self) -> GluePageVM:
@@ -132,12 +133,14 @@ class GluePage(HubSubscriberMixin, Widget):
             yield ServiceSourceHeader(
                 self._vm.source,
                 candidates=self._source_candidates,
+                open_intent=self._picker_open_intent,
                 id="glue-source-header",
             )
             run_filter = ContextPicker(
                 "Run state",
                 tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
                 selected=self._job_filter_value(),
+                open_intent=self._picker_open_intent,
                 id="glue-run-state-filter",
             )
             run_filter.display = self._vm.active_view == "jobs"
@@ -146,6 +149,7 @@ class GluePage(HubSubscriberMixin, Widget):
                 "Crawler state",
                 tuple(ContextOption(label, value) for label, value in _CRAWLER_FILTERS),
                 selected=self._vm.crawlers.state_filter or "ALL",
+                open_intent=self._picker_open_intent,
                 id="glue-crawler-state-filter",
             )
             crawler_filter.display = self._vm.active_view == "crawlers"
@@ -194,6 +198,7 @@ class GluePage(HubSubscriberMixin, Widget):
         self.call_after_refresh(self._deferred_maybe_focus_active)
 
     def on_unmount(self) -> None:
+        self._picker_open_intent.cancel()
         self.unsubscribe_from_vm()
         for subscription in self._focus_subscriptions:
             subscription.dispose()
@@ -254,10 +259,24 @@ class GluePage(HubSubscriberMixin, Widget):
 
     def on_context_picker_open_changed(self, event: ContextPicker.OpenChanged) -> None:
         event.stop()
-        if not event.is_open:
+        if not self._focus_projection_available():
             return
-        for picker in self.query(ContextPicker):
-            if picker is not event.picker and picker.is_open:
+        epoch = event.intent_epoch
+        if epoch is None:
+            epoch = self._picker_open_intent.observe(event.picker, event.is_open)
+        self.call_after_refresh(partial(self._reconcile_open_pickers, epoch))
+
+    def _reconcile_open_pickers(self, epoch: int) -> None:
+        if not self._focus_projection_available() or not self._picker_open_intent.is_current(epoch):
+            return
+        pickers = tuple(self.query(ContextPicker))
+        desired = self._picker_open_intent.desired
+        if not isinstance(desired, ContextPicker) or (
+            not desired.is_attached or not desired.is_open
+        ):
+            desired = None
+        for picker in pickers:
+            if picker is not desired and picker.is_open:
                 picker.close(refocus=False)
 
     def cycle_focus(self, *, reverse: bool) -> None:
@@ -429,13 +448,11 @@ class GluePage(HubSubscriberMixin, Widget):
         return False
 
     def _focus_and_open_picker(self, slot: FocusSlot, selector: str) -> None:
-        with contextlib.suppress(NoMatches):
-            picker = self.query_one(selector, ContextPicker)
-            for sibling in self.query(ContextPicker):
-                if sibling is not picker:
-                    sibling.close(refocus=False)
-            self._project_focus_slot(slot)
-            picker.open()
+        if not self._focus_projection_available():
+            return
+        picker = self.query_one(selector, ContextPicker)
+        self._project_focus_slot(slot)
+        picker.open()
 
     def _contains_focus(self, focused: Widget | None) -> bool:
         return focused is not None and (focused is self or self in focused.ancestors_with_self)

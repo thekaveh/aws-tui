@@ -19,7 +19,11 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from aws_tui.domain.emr_serverless import ApplicationState
-from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList, PickerFocusIntent
+from aws_tui.ui.widgets.overlay_option_list import (
+    OverlayOptionList,
+    PickerFocusIntent,
+    PickerOpenIntent,
+)
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -118,12 +122,19 @@ class ApplicationPicker(Widget, can_focus=True):
             self.app_id = app_id
 
     class OpenChanged(TextualMessage):
-        """Posted whenever the option-list visibility changes."""
+        """Posted whenever option-list visibility intent changes."""
 
-        def __init__(self, picker: ApplicationPicker, is_open: bool) -> None:
+        def __init__(
+            self,
+            picker: ApplicationPicker,
+            is_open: bool,
+            *,
+            intent_epoch: int | None = None,
+        ) -> None:
             super().__init__()
             self.picker = picker
             self.is_open = is_open
+            self.intent_epoch = intent_epoch
 
         @property
         def control(self) -> ApplicationPicker:
@@ -133,6 +144,7 @@ class ApplicationPicker(Widget, can_focus=True):
         self,
         vm: ApplicationsVM,
         *,
+        open_intent: PickerOpenIntent | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
@@ -140,6 +152,7 @@ class ApplicationPicker(Widget, can_focus=True):
         self._vm: ApplicationsVM = vm
         self._sub: DisposableBase | None = None
         self._focus_intent = PickerFocusIntent()
+        self._open_intent = open_intent
         self._marker_widget: Static | None = None
         self._value_widget: Static | None = None
         self._option_list: OverlayOptionList | None = None
@@ -168,7 +181,10 @@ class ApplicationPicker(Widget, can_focus=True):
         self._focus_intent.advance()
         self.remove_class("-open")
         if was_open and self.parent is not None:
-            self.parent.post_message(self.OpenChanged(self, False))
+            intent_epoch = (
+                self._open_intent.observe(self, False) if self._open_intent is not None else None
+            )
+            self.parent.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
@@ -193,8 +209,11 @@ class ApplicationPicker(Widget, can_focus=True):
         was_open = self.is_open
         epoch = self._focus_intent.advance()
         self.add_class("-open")
-        if not was_open:
-            self.post_message(self.OpenChanged(self, True))
+        intent_epoch = (
+            self._open_intent.observe(self, True) if self._open_intent is not None else None
+        )
+        if not was_open or intent_epoch is not None:
+            self.post_message(self.OpenChanged(self, True, intent_epoch=intent_epoch))
         self.call_after_refresh(partial(self._prepare_open_dropdown, epoch))
 
     def action_close(self) -> None:
@@ -207,7 +226,10 @@ class ApplicationPicker(Widget, can_focus=True):
         epoch = self._focus_intent.advance()
         self.remove_class("-open")
         if was_open:
-            self.post_message(self.OpenChanged(self, False))
+            intent_epoch = (
+                self._open_intent.observe(self, False) if self._open_intent is not None else None
+            )
+            self.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
         if was_open and refocus and self.is_attached:
             self.call_after_refresh(partial(self._refocus, epoch))
 

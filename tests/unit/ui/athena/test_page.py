@@ -515,7 +515,34 @@ async def test_named_context_actions_close_previously_open_picker() -> None:
 
 
 @pytest.mark.asyncio
-async def test_programmatic_context_opens_keep_only_the_newest_picker(
+@pytest.mark.parametrize(
+    ("first_id", "newest_id"),
+    [("athena-workgroup", "athena-catalog"), ("athena-catalog", "athena-workgroup")],
+)
+async def test_same_turn_context_opens_keep_only_newest_picker_focused(
+    first_id: str,
+    newest_id: str,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        first = app.query_one(f"#{first_id}", ContextPicker)
+        newest = app.query_one(f"#{newest_id}", ContextPicker)
+
+        first.open()
+        newest.open()
+        await pilot.pause()
+
+        assert newest.is_open
+        assert not first.is_open
+        assert app.focused is newest.query_one(OptionList)
+
+
+@pytest.mark.asyncio
+async def test_live_athena_picker_open_surfaces_missing_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vm, _client = _build_vm()
@@ -524,22 +551,45 @@ async def test_programmatic_context_opens_keep_only_the_newest_picker(
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        workgroup = app.query_one("#athena-workgroup", ContextPicker)
-        catalog = app.query_one("#athena-catalog", ContextPicker)
-        monkeypatch.setattr(workgroup, "call_after_refresh", lambda _callback: None)
-        monkeypatch.setattr(catalog, "call_after_refresh", lambda _callback: None)
+        page = app.query_one(AthenaPage)
+        query_one = page.query_one
 
-        workgroup.open()
-        await pilot.pause()
-        catalog.open()
-        await pilot.pause()
-        assert catalog.is_open
-        assert not workgroup.is_open
+        def missing_picker(selector: str, *args: object, **kwargs: object) -> object:
+            if selector == "#athena-workgroup":
+                raise NoMatches("live missing Athena picker")
+            return query_one(selector, *args, **kwargs)
 
-        workgroup.open()
+        monkeypatch.setattr(page, "query_one", missing_picker)
+        with pytest.raises(NoMatches, match="live missing Athena picker"):
+            page._focus_and_open_picker(  # type: ignore[attr-defined]
+                FocusSlot.ATHENA_WORKGROUP,
+                "#athena-workgroup",
+            )
+
+
+@pytest.mark.asyncio
+async def test_detached_athena_picker_open_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
         await pilot.pause()
-        assert workgroup.is_open
-        assert not catalog.is_open
+        page = app.query_one(AthenaPage)
+        removal = app.screen.remove_children(AthenaPage)
+        assert not page.display
+
+        def unexpected_query(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("detached Athena page queried its picker")
+
+        monkeypatch.setattr(page, "query_one", unexpected_query)
+        page._focus_and_open_picker(  # type: ignore[attr-defined]
+            FocusSlot.ATHENA_WORKGROUP,
+            "#athena-workgroup",
+        )
+        await removal
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ ships the static cadences from spec §6)."""
 from __future__ import annotations
 
 import contextlib
+from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
@@ -20,7 +21,6 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
-from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList
 from vmx import Message, MessageHub
@@ -32,6 +32,7 @@ from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
 from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
+from aws_tui.ui.widgets.overlay_option_list import PickerOpenIntent
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
@@ -149,15 +150,21 @@ class EmrServerlessPage(Widget):
         self._right_detail: JobRunDetailPane | None = None
         self._right_logs: JobRunLogsPane | None = None
         self._runs_tick_counter: int = 0
+        self._picker_open_intent = PickerOpenIntent()
 
     def compose(self) -> ComposeResult:
-        self._picker = ApplicationPicker(self._vm.applications, id="emr-app-picker")
+        self._picker = ApplicationPicker(
+            self._vm.applications,
+            open_intent=self._picker_open_intent,
+            id="emr-app-picker",
+        )
         self._left = JobRunsPane(self._vm.job_runs, id="emr-runs-pane")
         self._right_detail = JobRunDetailPane(self._vm.job_run_detail, id="emr-detail-pane")
         self._right_logs = JobRunLogsPane(self._vm.job_run_logs, id="emr-logs-pane")
         self._source_header = ServiceSourceHeader(
             self._vm.source,
             candidates=self._source_candidates,
+            open_intent=self._picker_open_intent,
             id="emr-source-header",
         )
         # Page layout — 1fr:2fr horizontal split with LEFT column
@@ -235,6 +242,7 @@ class EmrServerlessPage(Widget):
             self.call_after_refresh(self._maybe_focus_left)
 
     def on_unmount(self) -> None:
+        self._picker_open_intent.cancel()
         if self._source_header is not None:
             self._source_header.picker.close(refocus=False)
         if self._picker is not None:
@@ -275,13 +283,6 @@ class EmrServerlessPage(Widget):
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         if event.widget is self.app.focused:
-            if self._picker is not None and self._picker.is_open:
-                with contextlib.suppress(NoMatches):
-                    option_list = self._picker.query_one(OptionList)
-                    if event.widget is not option_list and not self._is_within(
-                        event.widget, self._picker
-                    ):
-                        self._picker.close(refocus=False)
             self._sync_focused_widget(event.widget)
 
     # ── Public accessors ────────────────────────────────────────────────────
@@ -344,13 +345,40 @@ class EmrServerlessPage(Widget):
 
     def on_context_picker_open_changed(self, event: ContextPicker.OpenChanged) -> None:
         event.stop()
-        if not event.is_open:
+        self._queue_picker_reconcile(event.picker, event.is_open, event.intent_epoch)
+
+    def _queue_picker_reconcile(
+        self,
+        picker: Widget,
+        is_open: bool,
+        intent_epoch: int | None,
+    ) -> None:
+        if not self._picker_coordination_available():
             return
-        for picker in self.query(ContextPicker):
-            if picker is not event.picker and picker.is_open:
+        epoch = intent_epoch
+        if epoch is None:
+            epoch = self._picker_open_intent.observe(picker, is_open)
+        self.call_after_refresh(partial(self._reconcile_open_pickers, epoch))
+
+    def _reconcile_open_pickers(self, epoch: int) -> None:
+        if not self._picker_coordination_available() or not self._picker_open_intent.is_current(
+            epoch
+        ):
+            return
+        pickers: tuple[ContextPicker | ApplicationPicker, ...] = tuple(self.query(ContextPicker))
+        if self._picker is not None:
+            pickers = (*pickers, self._picker)
+        desired = self._picker_open_intent.desired
+        if not isinstance(desired, ContextPicker | ApplicationPicker) or (
+            not desired.is_attached or not desired.is_open
+        ):
+            desired = None
+        for picker in pickers:
+            if picker is not desired and picker.is_open:
                 picker.close(refocus=False)
-        if self._picker is not None and self._picker.is_open:
-            self._picker.close(refocus=False)
+
+    def _picker_coordination_available(self) -> bool:
+        return self.is_running and self.is_attached and self.display
 
     def on_application_picker_application_committed(
         self, event: ApplicationPicker.ApplicationCommitted
@@ -372,11 +400,7 @@ class EmrServerlessPage(Widget):
 
     def on_application_picker_open_changed(self, event: ApplicationPicker.OpenChanged) -> None:
         event.stop()
-        if not event.is_open:
-            return
-        for picker in self.query(ContextPicker):
-            if picker.is_open:
-                picker.close(refocus=False)
+        self._queue_picker_reconcile(event.picker, event.is_open, event.intent_epoch)
 
     def action_cycle_panes_forward(self) -> None:
         self._cycle("right")

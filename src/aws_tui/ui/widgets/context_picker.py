@@ -17,7 +17,11 @@ from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
-from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList, PickerFocusIntent
+from aws_tui.ui.widgets.overlay_option_list import (
+    OverlayOptionList,
+    PickerFocusIntent,
+    PickerOpenIntent,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,12 +103,19 @@ class ContextPicker(Widget, can_focus=True):
             return self.picker
 
     class OpenChanged(Message):
-        """Posted whenever the option-list visibility changes."""
+        """Posted whenever option-list visibility intent changes."""
 
-        def __init__(self, picker: ContextPicker, is_open: bool) -> None:
+        def __init__(
+            self,
+            picker: ContextPicker,
+            is_open: bool,
+            *,
+            intent_epoch: int | None = None,
+        ) -> None:
             super().__init__()
             self.picker = picker
             self.is_open = is_open
+            self.intent_epoch = intent_epoch
 
         @property
         def control(self) -> ContextPicker:
@@ -116,6 +127,7 @@ class ContextPicker(Widget, can_focus=True):
         options: tuple[ContextOption, ...],
         *,
         selected: str | None,
+        open_intent: PickerOpenIntent | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
@@ -130,6 +142,7 @@ class ContextPicker(Widget, can_focus=True):
         self._warning = False
         self._error = False
         self._focus_intent = PickerFocusIntent()
+        self._open_intent = open_intent
         self._value_widget: Static | None = None
         self._indicator_widget: Static | None = None
         self._option_list: OverlayOptionList | None = None
@@ -167,7 +180,10 @@ class ContextPicker(Widget, can_focus=True):
         self._focus_intent.advance()
         self.remove_class("-open")
         if was_open and self.parent is not None:
-            self.parent.post_message(self.OpenChanged(self, False))
+            intent_epoch = (
+                self._open_intent.observe(self, False) if self._open_intent is not None else None
+            )
+            self.parent.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
 
     def set_options(
         self,
@@ -217,8 +233,11 @@ class ContextPicker(Widget, can_focus=True):
         self._refresh_options()
         self.add_class("-open")
         self._refresh_trigger()
-        if not was_open:
-            self.post_message(self.OpenChanged(self, True))
+        intent_epoch = (
+            self._open_intent.observe(self, True) if self._open_intent is not None else None
+        )
+        if not was_open or intent_epoch is not None:
+            self.post_message(self.OpenChanged(self, True, intent_epoch=intent_epoch))
         self.call_after_refresh(partial(self._focus_options, epoch))
 
     def close(self, *, restore: bool = True, refocus: bool = True) -> None:
@@ -231,7 +250,10 @@ class ContextPicker(Widget, can_focus=True):
         if restore:
             self._restore_highlight()
         if was_open:
-            self.post_message(self.OpenChanged(self, False))
+            intent_epoch = (
+                self._open_intent.observe(self, False) if self._open_intent is not None else None
+            )
+            self.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
         if was_open and refocus and not self.disabled and self.is_attached:
             self.call_after_refresh(partial(self._refocus, epoch))
 
