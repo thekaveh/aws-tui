@@ -201,6 +201,30 @@ async def test_closed_picker_cannot_run_stale_deferred_dropdown_focus() -> None:
         assert pilot.app.focused is outside
 
 
+async def test_deferred_application_focus_yields_to_newer_outside_focus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, hub = _make_vm()
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        picker = pilot.app.query_one(ApplicationPicker)
+        outside = pilot.app.query_one("#after-picker", Static)
+        picker.focus()
+        await pilot.pause()
+        assert pilot.app.focused is picker
+        callbacks: list[Callable[[], None]] = []
+        monkeypatch.setattr(picker, "call_after_refresh", callbacks.append)
+
+        picker.open()
+        assert len(callbacks) == 1
+        outside.focus()
+        callbacks[0]()
+        await pilot.pause()
+
+        assert not picker.is_open
+        assert pilot.app.focused is outside
+
+
 async def test_close_reopen_invalidates_stale_application_refocus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -341,7 +341,7 @@ class ContextPicker(Widget, can_focus=True):
             or not option_list.is_attached
         ):
             return
-        option_list.focus()
+        self.app.set_focus(option_list)
 
     def _refocus(self, epoch: int) -> None:
         if self._focus_intent.is_current(epoch) and not self.is_open and self.is_attached:

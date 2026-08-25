@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 from textual.app import App, ComposeResult
 from textual.color import Color
@@ -589,6 +591,33 @@ async def test_detached_athena_picker_open_is_safe(
             FocusSlot.ATHENA_WORKGROUP,
             "#athena-workgroup",
         )
+        await removal
+
+
+@pytest.mark.asyncio
+async def test_hidden_removing_athena_page_ignores_queued_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        callbacks: list[Callable[[], None]] = []
+        monkeypatch.setattr(page, "call_after_refresh", callbacks.append)
+        page._on_page_changed("active_view")  # type: ignore[attr-defined]
+        assert len(callbacks) == 1
+
+        removal = app.screen.remove_children(AthenaPage)
+        assert not page.display
+
+        def unexpected_query(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("hidden removing Athena page queried its controls")
+
+        monkeypatch.setattr(page, "query_one", unexpected_query)
+        callbacks[0]()
         await removal
 
 

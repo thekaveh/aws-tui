@@ -381,7 +381,7 @@ class ApplicationPicker(Widget, can_focus=True):
             or not opts.is_attached
         ):
             return
-        opts.focus()
+        self.app.set_focus(opts)
 
     def _prepare_open_dropdown(self, epoch: int) -> None:
         if not self._focus_intent.is_current(epoch) or not self.is_open:

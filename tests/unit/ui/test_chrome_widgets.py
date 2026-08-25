@@ -200,6 +200,108 @@ def _expected_hint_ids(legend: HintLegend) -> tuple[str, ...]:
 
 
 @pytest.mark.asyncio
+async def test_hint_legend_rebuild_is_never_observably_empty_or_duplicated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, hub = _athena_hint_vm()
+    mount = Horizontal.mount
+    remove_children = Horizontal.remove_children
+    mount_boundary_reached = [asyncio.Event(), asyncio.Event()]
+    removal_boundary_reached = [asyncio.Event(), asyncio.Event()]
+    release_mount = [asyncio.Event(), asyncio.Event()]
+    release_removal = [asyncio.Event(), asyncio.Event()]
+    mount_count = 0
+    removal_count = 0
+
+    class _ManualHintLegend(HintLegend):
+        def on_mount(self) -> None:
+            pass
+
+        def on_resize(self, _event: Resize) -> None:
+            pass
+
+    def mount_at_observable_boundary(
+        strip: Horizontal,
+        *widgets: Widget,
+        before: int | str | Widget | None = None,
+        after: int | str | Widget | None = None,
+    ) -> Awaitable[None]:
+        nonlocal mount_count
+        pending = mount(strip, *widgets, before=before, after=after)
+        if strip.id != "hint-strip":
+            return pending
+        boundary_index = mount_count
+        mount_count += 1
+
+        async def wait_for_mount() -> None:
+            mount_boundary_reached[boundary_index].set()
+            await release_mount[boundary_index].wait()
+            await pending
+
+        return wait_for_mount()
+
+    def remove_children_at_observable_boundary(
+        strip: Horizontal, selector: str = "*"
+    ) -> Awaitable[None]:
+        nonlocal removal_count
+        pending = remove_children(strip, selector)
+        if strip.id != "hint-strip":
+            return pending
+        boundary_index = removal_count
+        removal_count += 1
+
+        async def wait_for_removal() -> None:
+            removal_boundary_reached[boundary_index].set()
+            await release_removal[boundary_index].wait()
+            await pending
+
+        return wait_for_removal()
+
+    monkeypatch.setattr(Horizontal, "mount", mount_at_observable_boundary)
+    monkeypatch.setattr(Horizontal, "remove_children", remove_children_at_observable_boundary)
+    try:
+        app = App[None]()
+        async with app.run_test(size=(80, 24)) as pilot:
+            legend = _ManualHintLegend(vm, hub=hub)
+            await pilot.app.mount(legend)
+
+            def assert_exact_state() -> None:
+                visible_ids = _visible_hint_ids(legend)
+                assert visible_ids == _expected_hint_ids(legend)
+                rendered = [
+                    text for static in legend.query(Static) if (text := str(static.render()))
+                ]
+                assert len(rendered) == 2 * len(visible_ids)
+
+            async def assert_boundary(boundary_index: int) -> None:
+                rebuild = asyncio.create_task(legend._rebuild_chips())
+                try:
+                    await asyncio.wait_for(mount_boundary_reached[boundary_index].wait(), timeout=2)
+                    assert_exact_state()
+                    release_mount[boundary_index].set()
+                    await asyncio.wait_for(
+                        removal_boundary_reached[boundary_index].wait(), timeout=2
+                    )
+                    assert_exact_state()
+                finally:
+                    release_mount[boundary_index].set()
+                    release_removal[boundary_index].set()
+                    await rebuild
+
+            await assert_boundary(0)
+            text = " ".join(str(static.render()) for static in legend.query(Static))
+            assert "more" in text
+            assert "quit" in text
+
+            vm.set_current_service("settings")
+            await assert_boundary(1)
+            assert all("athena." not in action_id for action_id in _visible_hint_ids(legend))
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
 async def test_hint_legend_coalesces_resize_and_vm_rebuild_requests() -> None:
     vm, hub = _athena_hint_vm()
     try:
@@ -349,6 +451,9 @@ async def test_hint_legend_live_missing_strip_is_strict() -> None:
             yield Horizontal(id="not-hint-strip")
 
         def on_mount(self) -> None:
+            pass
+
+        def on_resize(self, _event: Resize) -> None:
             pass
 
     try:

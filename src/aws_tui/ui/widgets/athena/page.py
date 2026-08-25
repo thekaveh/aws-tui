@@ -708,7 +708,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self.call_after_refresh(partial(self._maybe_focus_active, reference))
 
     def _refresh_page(self) -> None:
-        if not self.is_running or not self.is_attached:
+        if not self.is_running or not self.is_attached or not self.display:
             return
         reference = (
             self._focus_coordinator.focused_slot if self._focus_coordinator is not None else None

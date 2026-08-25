@@ -61,21 +61,29 @@ class _HintChip(Horizontal):
     can_focus = False
 
     def __init__(self, action: HintAction) -> None:
-        super().__init__(classes="hint-chip")
-        self.action = action
-        self.tooltip = action.tooltip
-
-    def compose(self) -> ComposeResult:
-        disabled_suffix = " -disabled" if not self.action.enabled else ""
-        yield Static(
-            f"[{self.action.key_label}]",
+        disabled_suffix = " -disabled" if not action.enabled else ""
+        key = Static(
+            f"[{action.key_label}]",
             classes=f"hint-key{disabled_suffix}",
             markup=False,
         )
-        yield Static(
-            self.action.action_label,
+        label = Static(
+            action.action_label,
             classes=f"hint-label{disabled_suffix}",
         )
+        super().__init__(key, label, classes="hint-chip")
+        self.action = action
+        self._key = key
+        self._label = label
+        self.tooltip = action.tooltip
+
+    def retire(self) -> None:
+        """Remove this chip from layout and semantic queries before pruning."""
+        self.display = False
+        self.remove_class("hint-chip")
+        self.tooltip = None
+        self._key.update("")
+        self._label.update("")
 
 
 class HintLegend(HubSubscriberMixin, Widget):
@@ -181,12 +189,18 @@ class HintLegend(HubSubscriberMixin, Widget):
         replacement_completed = False
         try:
             strip = self.query_one("#hint-strip", Horizontal)
-            await strip.remove_children()
+            actions = _fit_actions(self._all_actions(), self.content_region.width)
+            old_chips = tuple(child for child in strip.children if isinstance(child, _HintChip))
+            with self.app.batch_update():
+                mounted = strip.mount(*(_HintChip(action) for action in actions))
+                for chip in old_chips:
+                    chip.retire()
+                removed = strip.remove_children(old_chips)
+
+            await mounted
             if not self.is_attached:
                 return
-
-            actions = _fit_actions(self._all_actions(), self.content_region.width)
-            await strip.mount(*(_HintChip(action) for action in actions))
+            await removed
             replacement_completed = True
         finally:
             self._rebuild_scheduled = False

@@ -158,6 +158,29 @@ async def test_context_picker_closed_before_deferred_focus_cannot_reclaim_focus(
 
 
 @pytest.mark.asyncio
+async def test_context_picker_deferred_focus_yields_to_newer_outside_focus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test() as pilot:
+        await pilot.pause()
+        outside = pilot.app.query_one("#after-picker", Static)
+        picker.focus()
+        assert pilot.app.focused is picker
+        callbacks: list[Callable[[], None]] = []
+        monkeypatch.setattr(picker, "call_after_refresh", callbacks.append)
+
+        picker.open()
+        assert len(callbacks) == 1
+        outside.focus()
+        callbacks[0]()
+        await pilot.pause()
+
+        assert not picker.is_open
+        assert pilot.app.focused is outside
+
+
+@pytest.mark.asyncio
 async def test_context_picker_close_reopen_invalidates_stale_refocus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
