@@ -14,11 +14,11 @@ from vmx import MessageHub, RxDispatcher
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
-from aws_tui.ui.widgets.hint_legend import HintLegend
+from aws_tui.ui.widgets.hint_legend import HintLegend, _fit_actions
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.status_bar import StatusBar
 from aws_tui.ui.widgets.toast import ToastStack
-from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
+from aws_tui.vm.chrome.hint_legend_vm import HintAction, HintLegendVM
 from aws_tui.vm.chrome.status_bar_vm import StatusBarVM
 from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
@@ -92,7 +92,7 @@ async def test_hint_legend_renders_with_registered_actions() -> None:
     dispatcher = RxDispatcher.immediate()
     keymap = KeymapStore()
     vm = HintLegendVM(hub=hub, dispatcher=dispatcher, keymap=keymap)
-    vm.register_focusable("pane.left", ("pane.copy", "pane.move", "pane.delete"))
+    vm.register_focusable("pane.left", ("pane.copy", "pane.delete"))
     vm.construct()
     try:
 
@@ -111,8 +111,8 @@ async def test_hint_legend_renders_with_registered_actions() -> None:
                 return " ".join(str(s.render()) for s in host.query(Static))
 
             strip = _strip_text(widget)
-            assert "themes" in strip
-            assert "help" in strip
+            assert "more" in strip
+            assert "quit" in strip
             assert "cmd" not in strip
             from aws_tui.vm.messages import FocusChangedMessage
 
@@ -124,112 +124,160 @@ async def test_hint_legend_renders_with_registered_actions() -> None:
         hub.dispose()
 
 
-@pytest.mark.asyncio
-async def test_hint_legend_wraps_every_glue_command_inside_standard_viewport() -> None:
+def _athena_hint_vm() -> tuple[HintLegendVM, MessageHub]:
     hub: MessageHub = MessageHub()
     vm = HintLegendVM(hub=hub, dispatcher=RxDispatcher.immediate(), keymap=KeymapStore())
-    vm.set_current_service("glue")
+    vm.set_current_service("athena")
     vm.construct()
+    return vm, hub
+
+
+class _HintApp(App[None]):
+    def __init__(self, vm: HintLegendVM, hub: MessageHub) -> None:
+        super().__init__()
+        self._hint_vm = vm
+        self._hint_hub = hub
+
+    def compose(self) -> ComposeResult:
+        yield HintLegend(self._hint_vm, hub=self._hint_hub)
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_is_one_compact_row_at_wide_athena_width() -> None:
+    vm, hub = _athena_hint_vm()
     try:
-
-        class _App(App[None]):
-            def compose(self) -> ComposeResult:
-                yield HintLegend(vm, hub=hub)
-
-        app = _App()
-        async with app.run_test(size=(120, 40)) as pilot:
+        async with _HintApp(vm, hub).run_test(size=(245, 62)) as pilot:
             await pilot.pause()
-            legend = app.query_one(HintLegend)
+            legend = pilot.app.query_one(HintLegend)
             chips = list(legend.query(".hint-chip"))
-            assert len(chips) == len(vm.actions) + len(vm.global_actions)
-            assert len({chip.region.x for chip in chips}) > 1
-            assert all(chip.region.x >= legend.content_region.x for chip in chips)
-            assert all(chip.region.y >= legend.content_region.y for chip in chips)
-            assert all(chip.region.right <= legend.content_region.right for chip in chips)
-            assert all(chip.region.bottom <= legend.content_region.bottom for chip in chips)
-            rendered = " ".join(str(item.render()) for item in legend.query(Static))
-            assert "switch source" in rendered
-            assert "quit" in rendered
+            assert {chip.region.y for chip in chips} == {legend.content_region.y}
+            assert legend.region.height == 3
+            assert not any(chip.action.overflow_only for chip in chips)
+            assert all(chip.tooltip == chip.action.tooltip for chip in chips)
+            assert all(not chip.can_focus for chip in chips)
     finally:
         vm.dispose()
         hub.dispose()
 
 
 @pytest.mark.asyncio
-async def test_hint_legend_packs_prime_athena_commands_across_wide_rows() -> None:
-    hub: MessageHub = MessageHub()
-    vm = HintLegendVM(hub=hub, dispatcher=RxDispatcher.immediate(), keymap=KeymapStore())
-    vm.set_current_service("athena")
-    vm.construct()
+async def test_hint_legend_uses_more_instead_of_wrapping_when_narrow() -> None:
+    vm, hub = _athena_hint_vm()
     try:
-
-        class _App(App[None]):
-            def compose(self) -> ComposeResult:
-                yield HintLegend(vm, hub=hub)
-
-        app = _App()
-        async with app.run_test(size=(245, 62)) as pilot:
+        async with _HintApp(vm, hub).run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            legend = app.query_one(HintLegend)
-            chips = list(legend.query(".hint-chip"))
-            columns = {chip.region.x for chip in chips}
-            rows = {chip.region.y for chip in chips}
-
-            assert len(chips) == 17
-            assert len(columns) > 1
-            assert len(rows) <= 2
-            assert all(chip.region.x >= legend.content_region.x for chip in chips)
-            assert all(chip.region.y >= legend.content_region.y for chip in chips)
-            assert all(chip.region.right <= legend.content_region.right for chip in chips)
-            assert all(chip.region.bottom <= legend.content_region.bottom for chip in chips)
-    finally:
-        vm.dispose()
-        hub.dispose()
-
-
-@pytest.mark.asyncio
-async def test_hint_legend_packs_athena_commands_without_overlap_at_narrow_width() -> None:
-    hub: MessageHub = MessageHub()
-    vm = HintLegendVM(hub=hub, dispatcher=RxDispatcher.immediate(), keymap=KeymapStore())
-    vm.set_current_service("athena")
-    vm.construct()
-    try:
-
-        class _App(App[None]):
-            def compose(self) -> ComposeResult:
-                yield HintLegend(vm, hub=hub)
-
-        app = _App()
-        async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.pause()
-            legend = app.query_one(HintLegend)
-            chips = list(legend.query(".hint-chip"))
-            rows = {chip.region.y for chip in chips}
-
-            assert len({chip.region.x for chip in chips}) > 1
-            assert len(rows) <= 6
-            assert all(chip.region.x >= legend.content_region.x for chip in chips)
-            assert all(chip.region.y >= legend.content_region.y for chip in chips)
-            assert all(chip.region.right <= legend.content_region.right for chip in chips)
-            assert all(chip.region.bottom <= legend.content_region.bottom for chip in chips)
-            for index, chip in enumerate(chips):
-                for other in chips[index + 1 :]:
-                    assert not (
-                        chip.region.x < other.region.right
-                        and other.region.x < chip.region.right
-                        and chip.region.y < other.region.bottom
-                        and other.region.y < chip.region.bottom
-                    )
-            assert [
-                (
-                    str(chip.query_one(".hint-key", Static).render()),
-                    str(chip.query_one(".hint-label", Static).render()),
-                )
+            chips = list(pilot.app.query(".hint-chip"))
+            assert len({chip.region.y for chip in chips}) == 1
+            assert {chip.action.action_id for chip in chips} >= {
+                "app.command_palette",
+                "app.quit",
+            }
+            assert all(
+                chip.region.right <= pilot.app.query_one(HintLegend).content_region.right
                 for chip in chips
-            ] == [
-                (f"[{action.key_label}]", action.action_label)
-                for action in (*vm.actions, *vm.global_actions)
-            ]
+            )
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+def _hint(
+    action_id: str,
+    key_label: str,
+    action_label: str,
+    *,
+    priority: int = 50,
+    overflow_only: bool = False,
+    enabled: bool = True,
+) -> HintAction:
+    return HintAction(
+        action_id=action_id,
+        key_label=key_label,
+        action_label=action_label,
+        tooltip=action_id,
+        priority=priority,
+        overflow_only=overflow_only,
+        enabled=enabled,
+    )
+
+
+def test_fit_actions_preserves_all_non_overflow_actions_that_fit() -> None:
+    actions = (
+        _hint("pane.copy", "c", "copy"),
+        _hint("pane.delete", "d", "delete"),
+        _hint("app.command_palette", ":", "more", overflow_only=True),
+        _hint("app.quit", "q", "quit"),
+    )
+
+    assert _fit_actions(actions, width=80) == (actions[0], actions[1], actions[3])
+
+
+def test_fit_actions_removes_later_duplicate_tab_hint_first() -> None:
+    actions = (
+        _hint("pane.first", "tab", "first", priority=1),
+        _hint("pane.second", "tab", "second", priority=1),
+        _hint("pane.keep", "a", "keep", priority=99),
+        _hint("app.command_palette", ":", "more", overflow_only=True),
+        _hint("app.quit", "q", "quit"),
+    )
+
+    assert [action.action_id for action in _fit_actions(actions, width=39)] == [
+        "pane.first",
+        "pane.keep",
+        "app.command_palette",
+        "app.quit",
+    ]
+
+
+def test_fit_actions_removes_disabled_action_before_enabled_action_at_same_priority() -> None:
+    actions = (
+        _hint("pane.enabled", "e", "enabled", priority=10),
+        _hint("pane.disabled", "d", "disabled", priority=10, enabled=False),
+        _hint("app.command_palette", ":", "more", overflow_only=True),
+        _hint("app.quit", "q", "quit"),
+    )
+
+    assert [action.action_id for action in _fit_actions(actions, width=31)] == [
+        "pane.enabled",
+        "app.command_palette",
+        "app.quit",
+    ]
+
+
+def test_fit_actions_keeps_more_and_quit_at_minimum_supported_width() -> None:
+    actions = (
+        _hint("pane.copy", "c", "copy longer", priority=99),
+        _hint("app.command_palette", ":", "more", overflow_only=True),
+        _hint("app.quit", "q", "quit"),
+    )
+
+    assert [action.action_id for action in _fit_actions(actions, width=18)] == [
+        "app.command_palette",
+        "app.quit",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_refits_after_resize_and_vm_action_change() -> None:
+    vm, hub = _athena_hint_vm()
+    try:
+        async with _HintApp(vm, hub).run_test(size=(245, 62)) as pilot:
+            await pilot.pause()
+            legend = pilot.app.query_one(HintLegend)
+            assert "app.command_palette" not in {
+                chip.action.action_id for chip in legend.query(".hint-chip")
+            }
+
+            await pilot.resize_terminal(80, 24)
+            assert "app.command_palette" in {
+                chip.action.action_id for chip in legend.query(".hint-chip")
+            }
+
+            vm.set_current_service("settings")
+            await pilot.pause()
+            assert "app.command_palette" not in {
+                chip.action.action_id for chip in legend.query(".hint-chip")
+            }
     finally:
         vm.dispose()
         hub.dispose()
