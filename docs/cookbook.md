@@ -916,7 +916,7 @@ diagnostic logs.
 
 ### 1.7.2. Snapshot time travel
 
-In **Snapshots**, highlight a visible snapshot and press `V`, click the
+In **Snapshots**, highlight a visible snapshot and press `Shift+V`, click the
 time-travel control, or choose **Query Iceberg snapshot in Athena**. The
 destination editor receives:
 
@@ -941,7 +941,7 @@ S3 artifact, so the command remains on Athena.
 Launch `aws-tui --demo` and follow this no-network path:
 
 1. On `demo-dev`, open Glue table `dev_analytics.dev_events_iceberg`.
-2. Inspect its metadata tabs, choose snapshot `4201`, and press `V`.
+2. Inspect its metadata tabs, choose snapshot `4201`, and press `Shift+V`.
 3. Confirm Athena contains `FOR VERSION AS OF 4201` and has not started an
    execution.
 4. Press `Ctrl+Enter`, inspect the two profile-specific result rows, then open
