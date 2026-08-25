@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from functools import partial
+from inspect import isawaitable
 from typing import ClassVar, cast
 
 from reactivex.abc import DisposableBase
@@ -23,6 +24,7 @@ from aws_tui.domain.iceberg import (
     IcebergReference,
     IcebergSnapshot,
 )
+from aws_tui.ui.actions import ActionDispatcher
 from aws_tui.ui.widgets.glue.detail_rows import display_time, display_value, state_placeholder
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergRow, IcebergView
@@ -333,8 +335,13 @@ class GlueIcebergView(Widget):
         self._suppress_highlight = False
 
     def _time_travel_selected(self) -> None:
-        if self._vm.can_time_travel_in_athena:
-            self._vm.time_travel_in_athena()
+        result = cast(ActionDispatcher, self.app).action_dispatch("glue.time_travel_in_athena")
+        if isawaitable(result):
+            self.run_worker(
+                result,
+                exclusive=True,
+                group="glue-iceberg-time-travel",
+            )
 
 
 def _columns(view: IcebergView) -> tuple[str, ...]:

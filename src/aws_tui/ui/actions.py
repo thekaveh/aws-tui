@@ -15,11 +15,15 @@ Handlers may be synchronous (returns ``None``) or asynchronous (returns
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TypeAlias
+from typing import Protocol, TypeAlias
 
 #: Handler signature for an action id. Sync returns ``None``; async
 #: returns ``Awaitable[None]`` which the caller may schedule on the loop.
 ActionHandler: TypeAlias = Callable[[], Awaitable[None] | None]
+
+
+class ActionDispatcher(Protocol):
+    def action_dispatch(self, action_id: str) -> Awaitable[None] | None: ...
 
 
 class UnknownAction(Exception):
@@ -66,4 +70,4 @@ class ActionRegistry:
         return tuple(self._handlers)
 
 
-__all__ = ["ActionHandler", "ActionRegistry", "UnknownAction"]
+__all__ = ["ActionDispatcher", "ActionHandler", "ActionRegistry", "UnknownAction"]

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from dataclasses import replace
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.data_catalog import TableRef
+from aws_tui.domain.data_catalog import TableFormat, TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -29,6 +30,7 @@ from tests.unit.vm.glue._fake_glue import (
     seeded_cancellation_resistant_glue,
     seeded_glue,
 )
+from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
 
 class OwnedSelectionStore(ServiceSelectionStore):
@@ -46,10 +48,12 @@ def make_page_vm(
     connection_name: str = "dev",
     region: str = "us-east-1",
     selection_store: ServiceSelectionStore | None = None,
+    iceberg_inspector: RecordingInspector | None = None,
 ) -> GluePageVM:
     hub: MessageHub[Message] = MessageHub()
     page = GluePageVM(
         client=fake,
+        iceberg_inspector=iceberg_inspector,
         connection=Connection(
             name=connection_name,
             kind="aws",
@@ -281,6 +285,51 @@ async def test_page_handoffs_preserve_selected_table_identity() -> None:
         ),
         OpenAthenaTableRequest(ref),
     ]
+
+
+@pytest.mark.asyncio
+async def test_page_athena_handoff_capabilities_are_catalog_scoped_and_guarded() -> None:
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.table_details[ref] = replace(
+        fake.table_details[ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    page = make_page_vm(fake, iceberg_inspector=RecordingInspector())
+    await page.setup()
+    messages: list[OpenAthenaTableRequest] = []
+    subscription = page.hub.messages.subscribe(
+        on_next=lambda message: (
+            messages.append(message) if isinstance(message, OpenAthenaTableRequest) else None
+        )
+    )
+
+    try:
+        assert page.can_query_in_athena is (
+            page.active_view == "catalog" and page.catalog.can_copy_table_reference
+        )
+        assert page.can_time_travel_in_athena is (
+            page.active_view == "catalog" and page.catalog.iceberg.can_time_travel_in_athena
+        )
+        assert page.query_in_athena()
+
+        assert await page.catalog.iceberg.select_view("snapshots")
+        assert page.catalog.iceberg.select_snapshot(43)
+        assert page.can_time_travel_in_athena
+        assert page.time_travel_in_athena()
+
+        await page.select_view("jobs")
+        assert not page.can_query_in_athena
+        assert not page.can_time_travel_in_athena
+        assert not page.query_in_athena()
+        assert not page.time_travel_in_athena()
+    finally:
+        subscription.dispose()
+
+    assert messages == [OpenAthenaTableRequest(ref), OpenAthenaTableRequest(ref, snapshot_id=43)]
+    page.dispose()
+    assert not page.can_query_in_athena
+    assert not page.can_time_travel_in_athena
 
 
 @pytest.mark.asyncio

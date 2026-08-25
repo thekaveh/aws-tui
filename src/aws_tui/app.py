@@ -3906,6 +3906,7 @@ class AwsTuiApp(App[None]):
         if glue_page is not None and msg.sender_object in {
             glue_page.vm,
             glue_page.vm.catalog,
+            glue_page.vm.catalog.iceberg,
         }:
             self._recompute_hint_disables()
             return
@@ -3961,12 +3962,14 @@ class AwsTuiApp(App[None]):
             return
         glue_page = self._glue_page()
         if glue_page is not None:
-            glue_disabled = (
-                frozenset()
-                if glue_page.vm.can_copy_table_reference
-                else frozenset({"glue.copy_table_ref"})
-            )
-            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(glue_disabled)
+            glue_disabled: set[str] = set()
+            if not glue_page.vm.can_copy_table_reference:
+                glue_disabled.add("glue.copy_table_ref")
+            if not glue_page.vm.can_query_in_athena:
+                glue_disabled.add("glue.query_in_athena")
+            if not glue_page.vm.can_time_travel_in_athena:
+                glue_disabled.add("glue.time_travel_in_athena")
+            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset(glue_disabled))
             return
         dual = self._dual_pane()
         if dual is None:

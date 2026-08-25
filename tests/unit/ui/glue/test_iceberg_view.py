@@ -18,7 +18,6 @@ from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.glue.page_vm import GluePageVM
-from aws_tui.vm.messages import OpenAthenaTableRequest
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
@@ -65,6 +64,7 @@ class _GlueIcebergApp(App[None]):
     def __init__(self, vm: GluePageVM) -> None:
         super().__init__()
         self._vm = vm
+        self.action_ids: list[str] = []
         self.focus_coordinator = FocusCoordinatorVM(
             hub=vm.hub,
             dispatcher=NULL_DISPATCHER,
@@ -86,6 +86,9 @@ class _GlueIcebergApp(App[None]):
 
     def action_activate_space(self) -> None:
         self.query_one(GluePage).activate_focused(space=True)
+
+    def action_dispatch(self, action_id: str) -> None:
+        self.action_ids.append(action_id)
 
 
 @pytest.mark.asyncio
@@ -136,6 +139,21 @@ async def test_selecting_snapshot_tab_loads_rows_and_enables_time_travel() -> No
 
         assert vm.catalog.iceberg.selected_snapshot_id == 43
         assert not pilot.app.query_one("#glue-iceberg-time-travel", Button).disabled
+
+
+@pytest.mark.asyncio
+async def test_time_travel_button_dispatches_the_registry_action_once() -> None:
+    vm, _inspector = _build_vm()
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(140, 42)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-time-travel")
+        await pilot.pause()
+
+        assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
 
 
 @pytest.mark.asyncio
@@ -223,13 +241,6 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
     vm.catalog.iceberg._page_size = 1  # type: ignore[attr-defined]
     inspector.errors["snapshots"] = PermissionError("denied")
     await vm.setup()
-    messages: list[OpenAthenaTableRequest] = []
-    subscription = vm.hub.messages.subscribe(
-        on_next=lambda message: (
-            messages.append(message) if isinstance(message, OpenAthenaTableRequest) else None
-        )
-    )
-
     async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
         snapshot_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
         pilot.app.set_focus(snapshot_tab)
@@ -259,13 +270,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         pilot.app.set_focus(time_travel)
         await pilot.press(key)
         await pilot.pause()
-        assert messages == [
-            OpenAthenaTableRequest(
-                table_ref=vm.catalog.table_detail.summary.ref,
-                snapshot_id=43,
-            )
-        ]
-    subscription.dispose()
+        assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
 
 
 @pytest.mark.asyncio
@@ -307,12 +312,6 @@ async def test_switching_from_snapshots_disables_time_travel_control() -> None:
 async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel() -> None:
     vm, _inspector = _build_vm()
     await vm.setup()
-    messages: list[OpenAthenaTableRequest] = []
-    subscription = vm.hub.messages.subscribe(
-        on_next=lambda message: (
-            messages.append(message) if isinstance(message, OpenAthenaTableRequest) else None
-        )
-    )
     notifications: list[str] = []
     selection_subscription = vm.catalog.iceberg.on_property_changed.subscribe(
         on_next=lambda name: notifications.append(name)
@@ -337,14 +336,8 @@ async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel(
         assert notifications.count("selected_snapshot_id") == selection_notifications
         await pilot.click("#glue-iceberg-time-travel")
         assert vm.catalog.iceberg.selected_snapshot_id == 42
-        assert messages == [
-            OpenAthenaTableRequest(
-                table_ref=vm.catalog.table_detail.summary.ref,
-                snapshot_id=42,
-            )
-        ]
+        assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
     selection_subscription.dispose()
-    subscription.dispose()
 
 
 @pytest.mark.asyncio
