@@ -131,7 +131,6 @@ class MainScreenApp(App[None]):
             (
                 "pane.descend",
                 "pane.copy",
-                "pane.move",
                 "pane.delete",
                 "pane.refresh",
             ),

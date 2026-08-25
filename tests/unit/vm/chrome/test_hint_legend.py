@@ -61,10 +61,6 @@ _EXPECTED_ACTION_EFFECTS = {
     "pane.switch_focus": "Move keyboard focus to the next operational pane.",
     "pane.descend": "Open the selected item or descend into the selected location.",
     "pane.copy": "Copy the selected item through the existing transfer workflow.",
-    "pane.move": (
-        "Move the selected item through the existing transfer workflow. "
-        "This removes the source item after a successful transfer."
-    ),
     "pane.delete": "Delete the selected item through the existing confirmation workflow.",
     "pane.refresh": "Reload the active operational surface from its current source.",
     "emr.next_application": (
@@ -365,7 +361,7 @@ def test_service_and_global_metadata_exactly_matches_the_task_contract() -> None
         assert _ACTION_EFFECTS == _EXPECTED_ACTION_EFFECTS
         assert _ACTION_REQUIREMENTS == _EXPECTED_ACTION_REQUIREMENTS
         assert _ACTION_PRIORITIES == _EXPECTED_ACTION_PRIORITIES
-        assert set(_ACTION_EFFECTS) == action_ids | {"pane.move"}
+        assert set(_ACTION_EFFECTS) == action_ids
         assert action_ids <= set(_ACTION_LABELS)
         assert {action_id: _ACTION_LABELS[action_id] for action_id in _COMPACT_LABELS} == (
             _COMPACT_LABELS
