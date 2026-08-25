@@ -57,6 +57,7 @@ from aws_tui.ui.widgets.confirm_modal import TextualDialogService
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
+from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.help_modal import HelpModal
@@ -3991,6 +3992,10 @@ class AwsTuiApp(App[None]):
     def on_mouse_down(self, event: events.MouseDown) -> None:
         ContextPicker.close_open_for_outside_mouse_down(
             self.screen.query(ContextPicker),
+            event.widget,
+        )
+        ApplicationPicker.close_open_for_outside_mouse_down(
+            self.screen.query(ApplicationPicker),
             event.widget,
         )
 

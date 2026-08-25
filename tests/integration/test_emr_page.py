@@ -17,6 +17,7 @@ from aws_tui.composition import build_app_context
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
@@ -441,7 +442,7 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
 
     app = AwsTuiApp(ctx)
     try:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 30)) as pilot:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
@@ -468,6 +469,109 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
             assert detail_vm.detail.job_run_id == "r-002", (
                 f"Click did not re-point detail. Got {detail_vm.detail.job_run_id!r}."
             )
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_application_picker_closes_on_outside_click(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path, _MULTI_PROFILE_AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(80, 30)) as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            picker = app.query_one(ApplicationPicker)
+            picker.toggle_open()
+            await pilot.pause()
+            assert picker.is_open
+
+            source_picker = app.query_one("#emr-source-header-picker", ContextPicker)
+            await pilot.click(source_picker)
+            await pilot.pause()
+
+            assert not picker.is_open
+            assert source_picker.is_open
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_application_picker_overlay_preserves_global_geometry(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            widgets = (
+                app.query_one(ApplicationPicker),
+                app.query_one("#emr-app-box"),
+                app.query_one(".emr-context-row"),
+                app.query_one(ServiceSourceHeader),
+                app.query_one(JobRunsPane),
+                app.query_one(JobRunDetailPane),
+                app.query_one(NavMenu),
+                app.query_one("#content-host"),
+            )
+            closed_regions = tuple(widget.region for widget in widgets)
+            picker = app.query_one(ApplicationPicker)
+
+            picker.toggle_open()
+            await pilot.pause()
+            assert tuple(widget.region for widget in widgets) == closed_regions
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert tuple(widget.region for widget in widgets) == closed_regions
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_switching_away_from_emr_closes_open_application_picker(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(80, 30)) as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            page = app.query_one(EmrServerlessPage)
+            picker = app.query_one(ApplicationPicker)
+            refocus_calls = 0
+
+            def record_refocus() -> None:
+                nonlocal refocus_calls
+                refocus_calls += 1
+
+            picker._refocus = record_refocus  # type: ignore[method-assign]
+            picker.toggle_open()
+            await pilot.pause()
+            assert page.has_class("-application-picker-open")
+
+            ctx.root_vm.services_menu.switch_service_command.execute("s3")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            assert not picker.is_open
+            assert not picker.is_running
+            assert not page.has_class("-application-picker-open")
+            assert refocus_calls == 0
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
