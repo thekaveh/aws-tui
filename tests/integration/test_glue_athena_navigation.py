@@ -16,6 +16,7 @@ from aws_tui.domain.query import QueryState, ResultColumn
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
+from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.messages import (
@@ -106,6 +107,122 @@ async def _invoke(app: AwsTuiApp, action_id: str) -> None:
     result = app.action_dispatch(action_id)
     if inspect.isawaitable(result):
         await result
+
+
+async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> None:
+    if key is not None:
+        await pilot.press(key)  # type: ignore[attr-defined]
+        return
+    await pilot.press("colon")  # type: ignore[attr-defined]
+    await pilot.pause()  # type: ignore[attr-defined]
+    assert isinstance(pilot.app.screen, CommandPalette)  # type: ignore[attr-defined]
+    await pilot.press(*label)  # type: ignore[attr-defined]
+    await pilot.pause()  # type: ignore[attr-defined]
+    assert tuple(
+        entry.label
+        for entry in pilot.app._app_ctx.command_palette_vm.filtered_entries  # type: ignore[attr-defined]
+    ) == (label,)
+    await pilot.press("enter")  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("table_name", "snapshot_id", "key", "palette_label", "expected_sql"),
+    [
+        pytest.param(
+            "dev_events",
+            None,
+            "Q",
+            "Query table in Athena",
+            'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 100',
+            id="table-key-Q",
+        ),
+        pytest.param(
+            "dev_events",
+            None,
+            None,
+            "Query table in Athena",
+            'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 100',
+            id="table-palette",
+        ),
+        pytest.param(
+            "dev_events_iceberg",
+            4201,
+            "V",
+            "Query Iceberg snapshot in Athena",
+            (
+                'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
+                "FOR VERSION AS OF 4201 LIMIT 100"
+            ),
+            id="snapshot-key-V",
+        ),
+        pytest.param(
+            "dev_events_iceberg",
+            4201,
+            None,
+            "Query Iceberg snapshot in Athena",
+            (
+                'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
+                "FOR VERSION AS OF 4201 LIMIT 100"
+            ),
+            id="snapshot-palette",
+        ),
+    ],
+)
+async def test_glue_handoff_surfaces_preserve_source_and_prefill_without_execution(
+    tmp_path: Path,
+    table_name: str,
+    snapshot_id: int | None,
+    key: str | None,
+    palette_label: str,
+    expected_sql: str,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+            await glue.open_table(
+                TableRef(
+                    "AwsDataCatalog",
+                    "dev_analytics",
+                    table_name,
+                    "demo-dev",
+                    "us-east-1",
+                )
+            )
+            if snapshot_id is not None:
+                assert await glue.catalog.iceberg.select_view("snapshots")
+                assert glue.catalog.iceberg.select_snapshot(snapshot_id)
+            await pilot.pause()
+            client = _athena_client(ctx, "demo-dev")
+            client.calls.clear()
+
+            await _activate_handoff(pilot, key=key, label=palette_label)
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            athena = ctx.root_vm.content_host.current
+            assert isinstance(athena, AthenaPageVM)
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            assert ctx.root_vm.active_connection.region == "us-east-1"
+            assert athena.context.connection_name == "demo-dev"
+            assert athena.context.region == "us-east-1"
+            assert athena.context.workgroup == "dev-analytics"
+            assert athena.context.catalog == "AwsDataCatalog"
+            assert athena.context.database == "dev_analytics"
+            assert athena.query.sql == expected_sql
+            assert athena.query.execution_ref is None
+            assert athena.results.rows == ()
+            assert not any(call.method == "start_query" for call in client.calls)
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
 
 
 @pytest.mark.asyncio
@@ -1350,6 +1467,7 @@ async def test_table_handoff_rollback_survives_repeated_cancellation_and_restore
             )
             assert isinstance(page, AthenaPageVM)
             await page.select_view("saved")
+            await pilot.pause()
             page.query.set_sql("SELECT prior_state_marker FROM events")
             prior_context = page.context
 

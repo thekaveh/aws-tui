@@ -4,16 +4,23 @@ from dataclasses import replace
 from typing import Literal
 
 from textual.app import App, ComposeResult
-from textual.containers import Container
+from textual.containers import Container, Horizontal
+from textual.pilot import Pilot
+from textual.widgets import DataTable
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.ui.widgets.hint_legend import HintLegend
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
+from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.service_source_vm import ServiceSourceContext
@@ -63,10 +70,14 @@ class GluePageApp(App[None]):
         iceberg_view: IcebergView = "snapshots",
         open_picker: bool = False,
         focus_tabs: bool = False,
+        show_legend: bool = False,
     ) -> None:
         super().__init__()
         self.CSS = ThemeStore().load(theme)
-        hub: MessageHub[Message] = MessageHub()
+        if show_legend:
+            self.CSS += "\n#content-host { width: 1fr; height: 1fr; }"
+        self._hub: MessageHub[Message] = MessageHub()
+        self._keymap = KeymapStore()
         self._vm = GluePageVM(
             client=_client(fixture),
             iceberg_inspector=RecordingInspector() if fixture == "iceberg" else None,
@@ -77,10 +88,22 @@ class GluePageApp(App[None]):
                 source="test",
                 profile="analytics-prod",
             ),
-            hub=hub,
+            hub=self._hub,
             dispatcher=NULL_DISPATCHER,
         )
         self._vm.construct()
+        self._hint_vm = (
+            HintLegendVM(
+                hub=self._hub,
+                dispatcher=NULL_DISPATCHER,
+                keymap=self._keymap,
+            )
+            if show_legend
+            else None
+        )
+        if self._hint_vm is not None:
+            self._hint_vm.construct()
+            self._hint_vm.set_current_service("glue")
         self._view = view
         self._iceberg_view = iceberg_view
         self._open_picker = open_picker
@@ -88,6 +111,8 @@ class GluePageApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
+        if self._hint_vm is not None:
+            yield HintLegend(self._hint_vm, hub=self._hub, id="hint-legend")
 
     async def on_mount(self) -> None:
         await self._vm.setup()
@@ -99,6 +124,7 @@ class GluePageApp(App[None]):
             GluePage(
                 self._vm,
                 hub=self._vm.hub,
+                keymap=self._keymap,
                 source_candidates=(
                     self._vm.source,
                     ServiceSourceContext("analytics-dev", "dev-sso", "us-east-1"),
@@ -110,6 +136,57 @@ class GluePageApp(App[None]):
             self.query_one("#glue-run-state-filter").open()
         if self._focus_tabs:
             self.query_one("#glue-view-tabs", ServiceTabStrip).focus()
+
+    async def focus_iceberg_table(self, pilot: Pilot) -> None:
+        await pilot.pause()
+        table = self.query_one("#glue-iceberg-table", DataTable)
+        source = self.query_one("#glue-source-header", ServiceSourceHeader)
+        table.focus()
+        await pilot.pause()
+        assert self.focused is table
+        assert table.has_focus
+        assert not source.has_focus_within
+
+    async def open_run_state_picker_with_geometry_check(self, pilot: Pilot) -> None:
+        await pilot.pause()
+        row = self.query_one("#glue-context-row", Horizontal)
+        source = self.query_one("#glue-source-header", ServiceSourceHeader)
+        picker = self.query_one("#glue-run-state-filter", ContextPicker)
+        tabs = self.query_one("#glue-view-tabs", ServiceTabStrip)
+        view_host = self.query_one("#glue-view-host")
+        widgets = (row, source, picker, tabs, view_host)
+        closed_regions = tuple(widget.region for widget in widgets)
+
+        picker.open()
+        await pilot.pause()
+        assert picker.is_open
+        assert tuple(widget.region for widget in widgets) == closed_regions
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not picker.is_open
+        assert tuple(widget.region for widget in widgets) == closed_regions
+
+        picker.open()
+        await pilot.pause()
+        assert picker.is_open
+        assert tuple(widget.region for widget in widgets) == closed_regions
+        self._assert_one_row_legend()
+
+    def _assert_one_row_legend(self) -> None:
+        if self._hint_vm is None:
+            return
+        legend = self.query_one(HintLegend)
+        chips = list(legend.query(".hint-chip"))
+        assert legend.region.height == 3
+        assert chips
+        assert {chip.region.y for chip in chips} == {legend.content_region.y}
+        assert all(chip.region.right <= legend.content_region.right for chip in chips)
+        if self.size.width <= 80:
+            assert {chip.action.action_id for chip in chips} >= {
+                "app.command_palette",
+                "app.quit",
+            }
 
 
 __all__ = ["GluePageApp"]

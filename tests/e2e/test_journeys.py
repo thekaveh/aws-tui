@@ -21,10 +21,11 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import pytest
-from textual.widgets import Static
+from textual.widgets import Button, Static
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import (
     FileSystemProvider,
@@ -33,6 +34,7 @@ from aws_tui.domain.filesystem import (
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.services.athena.service import AthenaService
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
@@ -481,16 +483,35 @@ async def test_journey_9_iceberg_snapshot_runs_only_on_explicit_execute(
             )
             await glue.catalog.iceberg.select_view("snapshots")
             assert glue.catalog.iceberg.select_snapshot(4201)
+            await pilot.pause()
+            service = ctx.registry.get("athena")
+            assert isinstance(service, AthenaService)
+            assert service._client_factory is not None
+            client = service._client_factory(ctx.connection_resolver.resolve("demo-dev"))
+            assert isinstance(client, InMemoryAthena)
+            client.calls.clear()
 
-            result = app.action_dispatch("glue.time_travel_in_athena")
-            if inspect.isawaitable(result):
-                await result
+            button = app.query_one("#glue-iceberg-time-travel", Button)
+            assert not button.disabled
+            await pilot.click("#glue-iceberg-time-travel")
             await _await_service_mount(pilot, app)
             athena = ctx.root_vm.content_host.current
             assert isinstance(athena, AthenaPageVM)
-            assert athena.query.sql.endswith("FOR VERSION AS OF 4201 LIMIT 100")
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            assert ctx.root_vm.active_connection.region == "us-east-1"
+            assert athena.context.connection_name == "demo-dev"
+            assert athena.context.region == "us-east-1"
+            assert athena.context.workgroup == "dev-analytics"
+            assert athena.context.catalog == "AwsDataCatalog"
+            assert athena.context.database == "dev_analytics"
+            assert athena.query.sql == (
+                'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
+                "FOR VERSION AS OF 4201 LIMIT 100"
+            )
             assert athena.query.execution_ref is None
             assert athena.results.rows == ()
+            assert not any(call.method == "start_query" for call in client.calls)
 
             await app.action_execute_athena()
             assert athena.query.execution_ref is not None

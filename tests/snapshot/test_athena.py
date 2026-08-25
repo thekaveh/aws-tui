@@ -68,24 +68,28 @@ def test_athena_query_narrow_snapshot(snap_compare) -> None:
 
 
 def test_athena_open_context_picker_snapshot(snap_compare) -> None:
+    app = AthenaPageApp(
+        theme="carbon",
+        fixture="empty-query",
+        show_legend=True,
+    )
     assert snap_compare(
-        AthenaPageApp(
-            theme="carbon",
-            fixture="empty-query",
-            open_picker=True,
-        ),
+        app,
         terminal_size=WIDE,
+        run_before=app.open_catalog_picker_with_geometry_check,
     )
 
 
 def test_athena_open_context_picker_narrow_snapshot(snap_compare) -> None:
+    app = AthenaPageApp(
+        theme="carbon",
+        fixture="empty-query",
+        show_legend=True,
+    )
     assert snap_compare(
-        AthenaPageApp(
-            theme="carbon",
-            fixture="empty-query",
-            open_picker=True,
-        ),
+        app,
         terminal_size=NARROW,
+        run_before=app.open_catalog_picker_with_geometry_check,
     )
 
 
@@ -109,6 +113,29 @@ def _compact_snapshot(fixture: AthenaFixture, theme: str) -> str:
     )
     assert path.is_file(), f"missing snapshot {path.name}; run --snapshot-update"
     return path.read_text()
+
+
+def _named_snapshot(test_name: str) -> str:
+    path = Path(__file__).parent / "__snapshots__" / "test_athena" / f"{test_name}.raw"
+    assert path.is_file(), f"missing snapshot {path.name}; run --snapshot-update"
+    return path.read_text()
+
+
+def test_athena_picker_and_legend_snapshot_content_guards() -> None:
+    for test_name in (
+        "test_athena_open_context_picker_snapshot",
+        "test_athena_open_context_picker_narrow_snapshot",
+    ):
+        opened = _named_snapshot(test_name)
+        assert "Catalog" in opened
+        assert "AwsDataCatalog" in opened
+        assert "Commands" in opened
+
+    narrow = _named_snapshot("test_athena_open_context_picker_narrow_snapshot")
+    assert "[:]" in narrow
+    assert "more" in narrow
+    assert "[q]" in narrow
+    assert "quit" in narrow
 
 
 @pytest.mark.parametrize("theme", THEMES)
