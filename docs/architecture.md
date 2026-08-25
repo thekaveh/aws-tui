@@ -73,10 +73,11 @@ VMs to build service pages, but it cannot import Textual widgets.
     The page shares `ServiceSourceContext` and
     connection/region-scoped selection memory with the other
     single-context AWS services. `GluePageVM` owns page-scoped table and snapshot
-    handoff capability checks; `GlueCatalogVM` and `GlueIcebergVM` publish the
-    immutable service-neutral `OpenS3LocationRequest` and
-    `OpenAthenaTableRequest` from the selected table or visible snapshot. They
-    never mount a Textual view or construct a destination service themselves.
+    handoff capability checks. `GlueCatalogVM` publishes immutable,
+    service-neutral `OpenS3LocationRequest` and table `OpenAthenaTableRequest`
+    messages from the selected table; `GlueIcebergVM` publishes snapshot
+    `OpenAthenaTableRequest` messages from the visible snapshot. They never mount
+    a Textual view or construct a destination service themselves.
   - `vm/athena/` — `AthenaPageVM` with Query, History, Results, and Saved
     child VMs. Its context and remembered selections are scoped by connection
     name and region; changing workgroup, catalog, or database invalidates the
