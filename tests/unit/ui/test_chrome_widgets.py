@@ -6,6 +6,7 @@ assert the widget renders without error and reacts to VM state changes.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable
 
 import pytest
@@ -15,6 +16,7 @@ from textual.containers import Horizontal
 from textual.css.query import NoMatches
 from textual.events import Resize
 from textual.geometry import Size
+from textual.widget import Widget
 from textual.widgets import Static
 from vmx import MessageHub, RxDispatcher
 
@@ -248,6 +250,90 @@ async def test_hint_legend_stale_rebuild_cannot_replace_newer_vm_state(
             assert changed_during_removal
             assert _visible_hint_ids(legend) == _expected_hint_ids(legend)
             assert _visible_hint_ids(legend)
+            assert all("athena." not in action_id for action_id in _visible_hint_ids(legend))
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_yields_between_reentrant_rebuilds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, hub = _athena_hint_vm()
+    rebuild_chips = HintLegend._rebuild_chips
+    remove_children = Horizontal.remove_children
+    mount = Horizontal.mount
+    remove_churn = {1: "glue", 3: "s3"}
+    mount_churn = {2: "settings", 3: "glue"}
+    callback_count = 0
+    active_callback: int | None = None
+    remove_counts: dict[int, int] = {}
+    mount_counts: dict[int, int] = {}
+    completed_ids: list[tuple[str, ...]] = []
+    settled = asyncio.Event()
+
+    async def counted_rebuild(legend: HintLegend) -> None:
+        nonlocal active_callback, callback_count
+        callback_count += 1
+        active_callback = callback_count
+        try:
+            await rebuild_chips(legend)
+        finally:
+            active_callback = None
+        completed_ids.append(_visible_hint_ids(legend))
+        if callback_count == 4:
+            settled.set()
+
+    def remove_children_with_churn(strip: Horizontal, selector: str = "*") -> Awaitable[None]:
+        pending = remove_children(strip, selector)
+        if strip.id != "hint-strip":
+            return pending
+        assert active_callback is not None
+        callback_id = active_callback
+        remove_counts[callback_id] = remove_counts.get(callback_id, 0) + 1
+
+        async def wait_for_removal() -> None:
+            if service_id := remove_churn.pop(callback_id, None):
+                vm.set_current_service(service_id)
+            await pending
+
+        return wait_for_removal()
+
+    def mount_with_churn(
+        strip: Horizontal,
+        *widgets: Widget,
+        before: int | str | Widget | None = None,
+        after: int | str | Widget | None = None,
+    ) -> Awaitable[None]:
+        pending = mount(strip, *widgets, before=before, after=after)
+        if strip.id != "hint-strip":
+            return pending
+        assert active_callback is not None
+        callback_id = active_callback
+        mount_counts[callback_id] = mount_counts.get(callback_id, 0) + 1
+
+        async def wait_for_mount() -> None:
+            if service_id := mount_churn.pop(callback_id, None):
+                vm.set_current_service(service_id)
+            await pending
+
+        return wait_for_mount()
+
+    monkeypatch.setattr(HintLegend, "_rebuild_chips", counted_rebuild)
+    monkeypatch.setattr(Horizontal, "remove_children", remove_children_with_churn)
+    monkeypatch.setattr(Horizontal, "mount", mount_with_churn)
+    try:
+        async with _HintApp(vm, hub).run_test(size=(80, 24)) as pilot:
+            await asyncio.wait_for(settled.wait(), timeout=2)
+            await pilot.pause()
+            legend = pilot.app.query_one(HintLegend)
+
+            assert callback_count == 4
+            assert remove_counts == {1: 1, 2: 1, 3: 1, 4: 1}
+            assert mount_counts == {1: 1, 2: 1, 3: 1, 4: 1}
+            assert all(completed_ids)
+            assert _visible_hint_ids(legend) == _expected_hint_ids(legend)
             assert all("athena." not in action_id for action_id in _visible_hint_ids(legend))
     finally:
         vm.dispose()

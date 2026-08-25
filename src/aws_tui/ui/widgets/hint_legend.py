@@ -166,6 +166,9 @@ class HintLegend(HubSubscriberMixin, Widget):
 
     def _request_rebuild(self) -> None:
         self._rebuild_generation += 1
+        self._schedule_rebuild()
+
+    def _schedule_rebuild(self) -> None:
         if self._rebuild_scheduled or not self.is_attached:
             return
         self._rebuild_scheduled = self.call_after_refresh(self._rebuild_chips)
@@ -174,24 +177,25 @@ class HintLegend(HubSubscriberMixin, Widget):
         if not self.is_attached:
             self._rebuild_scheduled = False
             return
+        started_generation = self._rebuild_generation
+        replacement_completed = False
         try:
-            while self.is_attached:
-                generation = self._rebuild_generation
-                actions = _fit_actions(self._all_actions(), self.content_region.width)
-                chips = tuple(_HintChip(action) for action in actions)
-                strip = self.query_one("#hint-strip", Horizontal)
+            strip = self.query_one("#hint-strip", Horizontal)
+            await strip.remove_children()
+            if not self.is_attached:
+                return
 
-                await strip.remove_children()
-                if not self.is_attached:
-                    return
-                if generation != self._rebuild_generation:
-                    continue
-
-                await strip.mount(*chips)
-                if generation == self._rebuild_generation:
-                    return
+            actions = _fit_actions(self._all_actions(), self.content_region.width)
+            await strip.mount(*(_HintChip(action) for action in actions))
+            replacement_completed = True
         finally:
             self._rebuild_scheduled = False
+            if (
+                self.is_attached
+                and replacement_completed
+                and started_generation != self._rebuild_generation
+            ):
+                self._schedule_rebuild()
 
 
 __all__ = ["HintLegend"]
