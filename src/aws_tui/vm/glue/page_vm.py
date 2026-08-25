@@ -122,6 +122,7 @@ class GluePageVM:
         self._operations.close()
         self._disposed = True
         self._lifecycle_generation += 1
+        self._hub.send(PropertyChangedMessage.create(self, "glue.page", "actions_available"))
         self.crawlers.dispose()
         self.jobs.dispose()
         self.catalog.dispose()

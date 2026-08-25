@@ -1041,6 +1041,26 @@ async def test_actions_available_tracks_page_terminal_lifecycle(termination: str
     assert not page.actions_available
 
 
+def test_dispose_emits_one_terminal_actions_available_notification() -> None:
+    page = make_page_vm(seeded_glue())
+    notifications: list[PropertyChangedMessage] = []
+    subscription = page.hub.messages.subscribe(
+        on_next=lambda message: (
+            notifications.append(message) if isinstance(message, PropertyChangedMessage) else None
+        )
+    )
+
+    try:
+        page.dispose()
+        page.dispose()
+    finally:
+        subscription.dispose()
+
+    assert [(message.sender_object, message.property_name) for message in notifications] == [
+        (page, "actions_available")
+    ]
+
+
 def test_dispose_cascades_once_without_disposing_service_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

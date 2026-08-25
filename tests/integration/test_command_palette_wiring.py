@@ -241,3 +241,70 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
             assert len(ctx.root_vm.chrome.toast_stack.toasts) == toast_count
     finally:
         vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toasts(
+    app_context_factory,
+) -> None:  # type: ignore[no-untyped-def]
+    ctx = app_context_factory()
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.table_details[ref] = replace(
+        fake.table_details[ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    vm = GluePageVM(
+        client=fake,
+        iceberg_inspector=RecordingInspector(),
+        connection=Connection(
+            name="dev",
+            kind="aws",
+            region="us-east-1",
+            source="test",
+            profile="dev",
+        ),
+        hub=ctx.hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    vm.construct()
+    await vm.setup()
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            host = app.query_one("#content-host", Container)
+            await host.remove_children()
+            await host.mount(
+                GluePage(
+                    vm,
+                    hub=ctx.hub,
+                    focus_coordinator=ctx.focus_coordinator,
+                    id="content-glue-page",
+                )
+            )
+            legend = ctx.root_vm.chrome.hint_legend
+            legend.set_current_service("glue")
+
+            def disabled_actions() -> set[str]:
+                return {hint.action_id for hint in legend.actions if not hint.enabled}
+
+            assert await vm.catalog.iceberg.select_view("snapshots")
+            assert vm.catalog.iceberg.select_snapshot(43)
+            await pilot.pause()
+            assert disabled_actions() == set()
+
+            vm.dispose()
+            await pilot.pause()
+            assert disabled_actions() == {
+                "glue.copy_table_ref",
+                "glue.query_in_athena",
+                "glue.time_travel_in_athena",
+            }
+
+            toast_count = len(ctx.root_vm.chrome.toast_stack.toasts)
+            app.action_copy_glue_table_reference()
+            await app.action_query_glue_table_in_athena()
+            await app.action_time_travel_glue_table_in_athena()
+            assert len(ctx.root_vm.chrome.toast_stack.toasts) == toast_count
+    finally:
+        vm.dispose()
