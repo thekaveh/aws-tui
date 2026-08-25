@@ -129,6 +129,8 @@ class HintLegend(HubSubscriberMixin, Widget):
         super().__init__(id=id, classes=classes)
         self._vm = vm
         self._hub = hub
+        self._rebuild_generation = 0
+        self._rebuild_scheduled = False
         self.border_title = "Commands"
 
     @property
@@ -145,30 +147,51 @@ class HintLegend(HubSubscriberMixin, Widget):
             property_names=("actions",),
             on_property_changed=self._on_vm_property_changed,
         )
-        self.call_after_refresh(self._rebuild_chips)
+        self._request_rebuild()
 
     def on_unmount(self) -> None:
+        self._rebuild_generation += 1
+        self._rebuild_scheduled = False
         self.unsubscribe_from_vm()
 
     def on_resize(self, _event: Resize) -> None:
-        self.call_after_refresh(self._rebuild_chips)
+        self._request_rebuild()
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name == "actions":
-            self.call_after_refresh(self._rebuild_chips)
+            self._request_rebuild()
 
     def _all_actions(self) -> tuple[HintAction, ...]:
         return tuple(self._vm.actions) + tuple(self._vm.global_actions)
 
-    def _rebuild_chips(self) -> None:
-        try:
-            strip = self.query_one("#hint-strip", Horizontal)
-        except Exception:
+    def _request_rebuild(self) -> None:
+        self._rebuild_generation += 1
+        if self._rebuild_scheduled or not self.is_attached:
             return
-        for child in list(strip.children):
-            child.remove()
-        for action in _fit_actions(self._all_actions(), self.content_region.width):
-            strip.mount(_HintChip(action))
+        self._rebuild_scheduled = self.call_after_refresh(self._rebuild_chips)
+
+    async def _rebuild_chips(self) -> None:
+        if not self.is_attached:
+            self._rebuild_scheduled = False
+            return
+        try:
+            while self.is_attached:
+                generation = self._rebuild_generation
+                actions = _fit_actions(self._all_actions(), self.content_region.width)
+                chips = tuple(_HintChip(action) for action in actions)
+                strip = self.query_one("#hint-strip", Horizontal)
+
+                await strip.remove_children()
+                if not self.is_attached:
+                    return
+                if generation != self._rebuild_generation:
+                    continue
+
+                await strip.mount(*chips)
+                if generation == self._rebuild_generation:
+                    return
+        finally:
+            self._rebuild_scheduled = False
 
 
 __all__ = ["HintLegend"]

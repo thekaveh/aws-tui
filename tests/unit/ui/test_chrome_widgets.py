@@ -6,9 +6,15 @@ assert the widget renders without error and reacts to VM state changes.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
+
 import pytest
 from rich.cells import cell_len
 from textual.app import App, ComposeResult
+from textual.containers import Horizontal
+from textual.css.query import NoMatches
+from textual.events import Resize
+from textual.geometry import Size
 from textual.widgets import Static
 from vmx import MessageHub, RxDispatcher
 
@@ -177,6 +183,107 @@ async def test_hint_legend_uses_more_instead_of_wrapping_when_narrow() -> None:
                 chip.region.right <= pilot.app.query_one(HintLegend).content_region.right
                 for chip in chips
             )
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+def _visible_hint_ids(legend: HintLegend) -> tuple[str, ...]:
+    return tuple(chip.action.action_id for chip in legend.query(".hint-chip"))
+
+
+def _expected_hint_ids(legend: HintLegend) -> tuple[str, ...]:
+    actions = (*legend.vm.actions, *legend.vm.global_actions)
+    return tuple(action.action_id for action in _fit_actions(actions, legend.content_region.width))
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_coalesces_resize_and_vm_rebuild_requests() -> None:
+    vm, hub = _athena_hint_vm()
+    try:
+        async with _HintApp(vm, hub).run_test(size=(80, 24)) as pilot:
+            legend = pilot.app.query_one(HintLegend)
+            resize = Resize(Size(80, 24), Size(80, 24), Size(80, 24))
+
+            for service_id in ("glue", "settings", "s3", "athena"):
+                vm.set_current_service(service_id)
+                legend.on_resize(resize)
+
+            await pilot.pause()
+
+            assert _visible_hint_ids(legend) == _expected_hint_ids(legend)
+            assert _visible_hint_ids(legend)
+            assert {"app.command_palette", "app.quit"} <= set(_visible_hint_ids(legend))
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_stale_rebuild_cannot_replace_newer_vm_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, hub = _athena_hint_vm()
+    remove_children = Horizontal.remove_children
+    changed_during_removal = False
+
+    def remove_children_with_newer_state(strip: Horizontal, selector: str = "*") -> Awaitable[None]:
+        pending = remove_children(strip, selector)
+
+        async def wait_for_removal() -> None:
+            nonlocal changed_during_removal
+            if strip.id == "hint-strip" and not changed_during_removal:
+                changed_during_removal = True
+                vm.set_current_service("settings")
+            await pending
+
+        return wait_for_removal()
+
+    monkeypatch.setattr(Horizontal, "remove_children", remove_children_with_newer_state)
+    try:
+        async with _HintApp(vm, hub).run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            legend = pilot.app.query_one(HintLegend)
+
+            assert changed_during_removal
+            assert _visible_hint_ids(legend) == _expected_hint_ids(legend)
+            assert _visible_hint_ids(legend)
+            assert all("athena." not in action_id for action_id in _visible_hint_ids(legend))
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_live_missing_strip_is_strict() -> None:
+    vm, hub = _athena_hint_vm()
+
+    class _MissingStripLegend(HintLegend):
+        def compose(self) -> ComposeResult:
+            yield Horizontal(id="not-hint-strip")
+
+        def on_mount(self) -> None:
+            pass
+
+    try:
+        app = App[None]()
+        async with app.run_test() as pilot:
+            legend = _MissingStripLegend(vm, hub=hub)
+            await pilot.app.mount(legend)
+
+            with pytest.raises(NoMatches):
+                await legend._rebuild_chips()
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hint_legend_detached_rebuild_callback_is_safe() -> None:
+    vm, hub = _athena_hint_vm()
+    try:
+        legend = HintLegend(vm, hub=hub)
+        await legend._rebuild_chips()
     finally:
         vm.dispose()
         hub.dispose()
