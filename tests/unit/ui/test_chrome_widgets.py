@@ -7,7 +7,7 @@ assert the widget renders without error and reacts to VM state changes.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 
 import pytest
 from rich.cells import cell_len
@@ -762,7 +762,9 @@ def test_fit_actions_keeps_more_and_quit_at_minimum_supported_width() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hint_legend_refits_after_resize_and_vm_action_change() -> None:
+async def test_hint_legend_refits_after_resize_and_vm_action_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     vm, hub = _athena_hint_vm()
     try:
         async with _HintApp(vm, hub).run_test(size=(245, 62)) as pilot:
@@ -772,13 +774,26 @@ async def test_hint_legend_refits_after_resize_and_vm_action_change() -> None:
                 chip.action.action_id for chip in legend.query(".hint-chip")
             }
 
+            scheduled_rebuilds: asyncio.Queue[Callable[[], Awaitable[None]]] = asyncio.Queue()
+
+            def capture_rebuild(callback: Callable[[], Awaitable[None]]) -> bool:
+                scheduled_rebuilds.put_nowait(callback)
+                return True
+
+            async def complete_scheduled_rebuild() -> None:
+                callback = await asyncio.wait_for(scheduled_rebuilds.get(), timeout=2)
+                await callback()
+
+            monkeypatch.setattr(legend, "call_after_refresh", capture_rebuild)
+
             await pilot.resize_terminal(80, 24)
+            await complete_scheduled_rebuild()
             assert "app.command_palette" in {
                 chip.action.action_id for chip in legend.query(".hint-chip")
             }
 
             vm.set_current_service("settings")
-            await pilot.pause()
+            await complete_scheduled_rebuild()
             assert "app.command_palette" not in {
                 chip.action.action_id for chip in legend.query(".hint-chip")
             }
