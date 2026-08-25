@@ -534,6 +534,35 @@ async def test_deferred_focus_projection_ignores_empty_teardown_ring(
 
 
 @pytest.mark.asyncio
+async def test_deferred_focus_projection_ignores_partially_pruned_teardown_ring() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        tables = page.query_one("#glue-tables-pane-options", OptionList)
+        tables.focus()
+        await pilot.pause()
+        focused = app.focused
+        focused_slot = app.focus_coordinator.focused_slot
+        databases = page.query_one("#glue-databases-pane", ResourceListPane)
+
+        await databases.option_list.remove()
+        assert databases.is_mounted
+        with pytest.raises(NoMatches):
+            _ = databases.option_list
+
+        page._maybe_focus_active(  # type: ignore[attr-defined]
+            FocusSlot.GLUE_ICEBERG_TIME_TRAVEL
+        )
+
+        assert app.focused is focused
+        assert app.focus_coordinator.focused_slot is focused_slot
+
+
+@pytest.mark.asyncio
 async def test_refresh_action_refreshes_only_the_active_view() -> None:
     vm, fake = _build_vm()
     await vm.setup()
