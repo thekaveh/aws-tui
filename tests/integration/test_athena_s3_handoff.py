@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from textual.css.query import NoMatches
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
@@ -225,6 +226,7 @@ async def test_results_handoff_reloads_authoritative_execution_output(
 @pytest.mark.asyncio
 async def test_pruning_history_view_ignores_queued_refresh(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = build_app_context(
         config_dir=tmp_path / "config",
@@ -237,11 +239,26 @@ async def test_pruning_history_view_ignores_queued_refresh(
             await _open_athena(ctx, app, pilot)
             history = app.query_one(AthenaHistoryView)
             listing = history.query_one("#athena-history-pane", ResourceListPane)
-            await listing.option_list.remove()
+            option_list = listing.option_list
+            refreshes = 0
+            refresh = history._refresh
+
+            def observe_pruned_refresh() -> None:
+                nonlocal refreshes
+                refreshes += 1
+                with pytest.raises(NoMatches):
+                    _ = listing.option_list
+                refresh()
+
+            monkeypatch.setattr(history, "_refresh", observe_pruned_refresh)
+            removal = option_list.remove()
+            history._vm._notify("items")
+            await removal
+            await pilot.pause()
 
             assert history.is_mounted
             assert listing.is_mounted
-            history._refresh()
+            assert refreshes == 1
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
