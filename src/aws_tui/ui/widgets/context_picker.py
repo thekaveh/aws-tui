@@ -1,8 +1,9 @@
-"""Shared bordered, inline-expanding picker for service context values."""
+"""Shared bordered picker for service context values."""
 
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -10,11 +11,13 @@ from rich.markup import escape as escape_markup
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
-from textual.events import Click
+from textual.events import MouseDown
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
+
+from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +29,7 @@ class ContextOption:
 
 
 class ContextPicker(Widget, can_focus=True):
-    """A titled selector which expands its option list in normal layout flow."""
+    """A titled selector with a screen-overlaid option list."""
 
     DEFAULT_CSS: ClassVar[str] = """
     ContextPicker {
@@ -34,19 +37,9 @@ class ContextPicker(Widget, can_focus=True):
         height: 3;
         min-height: 3;
         layout: vertical;
-        border: solid $accent;
-    }
-    ContextPicker:focus {
-        border: heavy $accent;
     }
     ContextPicker.-disabled {
         opacity: 0.6;
-    }
-    ContextPicker.-warning {
-        border: solid $warning;
-    }
-    ContextPicker.-error {
-        border: solid $error;
     }
     ContextPicker > .context-picker-trigger {
         width: 1fr;
@@ -68,16 +61,15 @@ class ContextPicker(Widget, can_focus=True):
         height: 1;
         content-align: right middle;
     }
-    ContextPicker > OptionList {
+    ContextPicker > OverlayOptionList {
         width: 1fr;
         height: auto;
         max-height: 12;
         display: none;
+        overlay: screen;
+        constrain: none inside;
     }
-    ContextPicker.-open {
-        height: auto;
-    }
-    ContextPicker.-open > OptionList {
+    ContextPicker.-open > OverlayOptionList {
         display: block;
     }
     """
@@ -137,7 +129,7 @@ class ContextPicker(Widget, can_focus=True):
         with Horizontal(classes="context-picker-trigger"):
             yield Static(classes="context-picker-value", markup=False)
             yield Static(classes="context-picker-indicator", markup=False)
-        yield OptionList(id=self._options_id)
+        yield OverlayOptionList(id=self._options_id)
 
     def on_mount(self) -> None:
         self._refresh()
@@ -196,7 +188,7 @@ class ContextPicker(Widget, can_focus=True):
         if restore:
             self._restore_highlight()
         if refocus and not self.disabled:
-            self.call_after_refresh(self.focus)
+            self.call_after_refresh(self._refocus)
 
     def action_toggle_picker(self) -> None:
         if self.is_open:
@@ -207,10 +199,30 @@ class ContextPicker(Widget, can_focus=True):
     def action_close(self) -> None:
         self.close()
 
-    def on_click(self, event: Click) -> None:
+    def focus_on_click(self) -> bool:
+        """Keep the overlay focused while its owner trigger is clicked."""
+
+        return not self.is_open
+
+    def on_mouse_down(self, event: MouseDown) -> None:
         if isinstance(event.widget, OptionList):
             return
         self.action_toggle_picker()
+
+    def on_overlay_option_list_dismissed(self, event: OverlayOptionList.Dismissed) -> None:
+        self.close(refocus=not event.lost_focus)
+
+    @classmethod
+    def close_open_for_outside_mouse_down(
+        cls,
+        pickers: Iterable[ContextPicker],
+        target: Widget | None,
+    ) -> None:
+        """Close open pickers that don't own a mouse-down target."""
+
+        for picker in pickers:
+            if picker.is_open and (target is None or picker not in target.ancestors_with_self):
+                picker.close(refocus=False)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option.id is not None:
@@ -235,7 +247,7 @@ class ContextPicker(Widget, can_focus=True):
 
     def _refresh_options(self) -> None:
         with contextlib.suppress(Exception):
-            option_list = self.query_one(OptionList)
+            option_list = self.query_one(OverlayOptionList)
             option_list.clear_options()
             for option in self._build_options():
                 option_list.add_option(option)
@@ -243,7 +255,7 @@ class ContextPicker(Widget, can_focus=True):
 
     def _restore_highlight(self) -> None:
         with contextlib.suppress(Exception):
-            option_list = self.query_one(OptionList)
+            option_list = self.query_one(OverlayOptionList)
             option_list.highlighted = next(
                 (
                     index
@@ -255,7 +267,11 @@ class ContextPicker(Widget, can_focus=True):
 
     def _focus_options(self) -> None:
         with contextlib.suppress(Exception):
-            self.query_one(OptionList).focus()
+            self.query_one(OverlayOptionList).focus()
+
+    def _refocus(self) -> None:
+        if self.is_mounted:
+            self.focus()
 
     def _trigger_value(self) -> str:
         if self._loading:

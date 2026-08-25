@@ -25,11 +25,8 @@ class ServiceSourceHeader(Widget, can_focus=True):
     }
     ServiceSourceHeader > ContextPicker {
         width: 1fr;
-        height: auto;
+        height: 3;
         min-height: 3;
-    }
-    ServiceSourceHeader:focus > ContextPicker {
-        border: heavy $accent;
     }
     ServiceSourceHeader.-compact {
         height: 1;

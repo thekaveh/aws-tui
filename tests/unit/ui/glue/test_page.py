@@ -324,13 +324,17 @@ async def test_open_glue_filter_stays_inside_layout_flow_at_narrow_width() -> No
         run_filter = page.query_one("#glue-run-state-filter", ContextPicker)
         tabs = page.query_one("#glue-view-tabs", ServiceTabStrip)
         view_host = page.query_one("#glue-view-host")
+        before = (row.region, source.region, tabs.region, view_host.region)
 
         run_filter.open()
         await pilot.pause()
 
-        assert source.region.right <= run_filter.region.x
-        assert row.region.bottom <= tabs.region.y
-        assert tabs.region.bottom <= view_host.region.y
+        assert (row.region, source.region, tabs.region, view_host.region) == before
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert (row.region, source.region, tabs.region, view_host.region) == before
 
 
 @pytest.mark.asyncio

@@ -54,6 +54,7 @@ from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.confirm_modal import TextualDialogService
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
@@ -3986,6 +3987,12 @@ class AwsTuiApp(App[None]):
             )
         else:
             self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset())
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        ContextPicker.close_open_for_outside_mouse_down(
+            self.screen.query(ContextPicker),
+            event.widget,
+        )
 
     def on_descendant_focus(self, _event: events.DescendantFocus) -> None:
         if self._athena_page() is not None:

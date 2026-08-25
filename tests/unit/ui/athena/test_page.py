@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.color import Color
 from textual.containers import Horizontal
 from textual.css.query import NoMatches
 from textual.widgets import Button, DataTable, OptionList, Static, TextArea
 from vmx import NULL_DISPATCHER
 
 from aws_tui.domain.query import ResultColumn, ResultPage
+from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
@@ -442,6 +444,52 @@ async def test_named_context_action_focuses_and_opens_picker(
         picker = app.query_one(f"#{picker_id}", ContextPicker)
         assert picker.is_open
         assert app.focus_coordinator.focused_slot is slot
+
+
+@pytest.mark.asyncio
+async def test_open_athena_context_picker_preserves_page_regions() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        header = page.query_one("#athena-context-header", Horizontal)
+        tabs = page.query_one("#athena-view-tabs", ServiceTabStrip)
+        view_host = page.query_one("#athena-view-host")
+        before = (header.region, tabs.region, view_host.region)
+
+        page.action_choose_catalog()
+        await pilot.pause()
+
+        assert (header.region, tabs.region, view_host.region) == before
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert (header.region, tabs.region, view_host.region) == before
+
+
+@pytest.mark.asyncio
+async def test_unfocused_source_picker_is_dim_while_focused_content_uses_accent() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+
+    class _BuiltinThemeAthenaApp(_AthenaApp):
+        CSS = _AthenaApp.CSS + "\n" + ThemeStore().load_builtin("carbon")
+
+    app = _BuiltinThemeAthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        source = app.query_one("#athena-source-header-picker", ContextPicker)
+        editor = app.query_one("#athena-editor", TextArea)
+        editor.focus()
+        await pilot.pause()
+
+        assert source.styles.border_top == ("solid", Color.parse("#2a2d33"))
+        assert editor.styles.border_top == ("solid", Color.parse("#6fb8ff"))
 
 
 @pytest.mark.asyncio

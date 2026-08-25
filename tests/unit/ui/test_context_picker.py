@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.color import Color
 from textual.containers import Horizontal
+from textual.events import Click, MouseDown
 from textual.widgets import OptionList, Static
 
+from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
+from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList
 
 _OPTIONS = (
     ContextOption("primary", "primary"),
@@ -16,6 +20,12 @@ _OPTIONS = (
 
 
 class PickerHost(App[None]):
+    CSS = """
+    #outside-picker {
+        margin-top: 3;
+    }
+    """
+
     def __init__(self, picker: ContextPicker) -> None:
         super().__init__()
         self.picker = picker
@@ -23,13 +33,47 @@ class PickerHost(App[None]):
 
     def compose(self) -> ComposeResult:
         yield self.picker
+        yield _FocusableStatic(id="after-picker")
+        yield _OutsideClickTarget(id="outside-picker")
 
     def on_context_picker_changed(self, event: ContextPicker.Changed) -> None:
         self.changes.append(event.value)
 
+    def on_mouse_down(self, event: MouseDown) -> None:
+        ContextPicker.close_open_for_outside_mouse_down(
+            self.screen.query(ContextPicker),
+            event.widget,
+        )
+
 
 def _picker(*, selected: str | None = "primary") -> ContextPicker:
     return ContextPicker("Workgroup", _OPTIONS, selected=selected, id="workgroup-picker")
+
+
+class _FocusableStatic(Static, can_focus=True):
+    pass
+
+
+class _OutsideClickTarget(Static):
+    def __init__(self, *, id: str) -> None:
+        super().__init__("outside", id=id)
+        self.clicks = 0
+
+    def on_click(self, _event: Click) -> None:
+        self.clicks += 1
+
+
+class _FocusCycleHost(App[None]):
+    def __init__(self, picker: ContextPicker) -> None:
+        super().__init__()
+        self.picker = picker
+
+    def compose(self) -> ComposeResult:
+        yield self.picker
+
+
+class _ThemedPickerHost(PickerHost):
+    CSS = ThemeStore().load_builtin("carbon")
 
 
 @pytest.mark.asyncio
@@ -59,6 +103,121 @@ async def test_context_picker_indicator_tracks_open_state() -> None:
         await pilot.pause()
 
         assert str(indicator.render()) == "▴"
+
+
+@pytest.mark.asyncio
+async def test_context_picker_overlay_never_reflows_its_host_or_sibling() -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test(size=(60, 16)) as pilot:
+        await pilot.pause()
+        sibling = pilot.app.query_one("#after-picker", Static)
+        before = (picker.region, sibling.region)
+
+        picker.open()
+        await pilot.pause()
+
+        options = picker.query_one(OverlayOptionList)
+        assert options.display
+        assert options.styles.overlay == "screen"
+        assert options.region.width == picker.content_region.width
+        assert (picker.region, sibling.region) == before
+
+        picker.close()
+        await pilot.pause()
+        assert (picker.region, sibling.region) == before
+
+
+@pytest.mark.asyncio
+async def test_context_picker_loses_open_state_without_refocusing_on_blur() -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test() as pilot:
+        picker.open()
+        await pilot.pause()
+        pilot.app.query_one("#after-picker", Static).focus()
+        await pilot.pause()
+
+        assert not picker.is_open
+        assert pilot.app.focused.id == "after-picker"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["tab", "shift+tab"], ids=("forward", "reverse"))
+async def test_context_picker_focus_cycle_back_to_owner_closes_overlay(key: str) -> None:
+    picker = _picker()
+
+    async with _FocusCycleHost(picker).run_test() as pilot:
+        picker.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert pilot.app.focused is picker.query_one(OverlayOptionList)
+
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert pilot.app.focused is picker
+        assert not picker.is_open
+        assert not picker.query_one(OverlayOptionList).display
+
+
+@pytest.mark.asyncio
+async def test_context_picker_outside_non_focusable_click_closes_without_swallowing_click() -> None:
+    picker = _picker()
+
+    async with PickerHost(picker).run_test(size=(60, 16)) as pilot:
+        await pilot.pause()
+        outside = pilot.app.query_one("#outside-picker", _OutsideClickTarget)
+        before = (picker.region, outside.region)
+
+        picker.open()
+        await pilot.pause()
+
+        assert not outside.can_focus
+        assert pilot.app.focused is picker.query_one(OverlayOptionList)
+
+        assert await pilot.click(outside)
+        await pilot.pause()
+
+        assert outside.clicks == 1
+        assert not picker.is_open
+        assert not picker.query_one(OverlayOptionList).display
+        assert (picker.region, outside.region) == before
+
+
+@pytest.mark.asyncio
+async def test_context_picker_semantic_and_disabled_states_override_active_theme_accent() -> None:
+    picker = _picker()
+
+    async with _ThemedPickerHost(picker).run_test() as pilot:
+        picker.focus()
+        picker.open()
+        await pilot.pause()
+
+        assert picker.styles.border_top == ("heavy", Color.parse("#6fb8ff"))
+
+        picker.set_state(loading=True)
+        await pilot.pause()
+
+        assert picker.has_focus
+        assert picker.has_class("-loading")
+        assert picker.styles.border_top == ("solid", Color.parse("#2a2d33"))
+
+        picker.set_state(disabled=True)
+        await pilot.pause()
+
+        assert picker.has_class("-disabled")
+        assert picker.styles.border_top == ("solid", Color.parse("#2a2d33"))
+
+        picker.set_state(warning=True)
+        picker.focus()
+        await pilot.pause()
+
+        assert picker.styles.border_top == ("solid", Color.parse("#f0c674"))
+
+        picker.set_state(error=True)
+        await pilot.pause()
+
+        assert picker.styles.border_top == ("solid", Color.parse("#ff6b7a"))
 
 
 @pytest.mark.asyncio
@@ -102,6 +261,10 @@ async def test_context_picker_whole_trigger_toggles_from_value_and_indicator() -
         await pilot.click(".context-picker-value")
         await pilot.pause()
         assert picker.is_open
+
+        indicator = picker.query_one(".context-picker-indicator", Static)
+        options = picker.query_one(OverlayOptionList)
+        assert options.region.y > indicator.region.y
 
         await pilot.click(".context-picker-indicator")
         await pilot.pause()
