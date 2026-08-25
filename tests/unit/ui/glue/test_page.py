@@ -8,6 +8,7 @@ from textual.widgets import OptionList, Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.app import AwsTuiApp
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
@@ -119,6 +120,15 @@ def _cycle_target_ids(
     assert app.focused is not None
     assert app.focused.id == visited[0]
     return tuple(visited)
+
+
+async def _prune_database_option_list(page: GluePage) -> None:
+    databases = page.query_one("#glue-databases-pane", ResourceListPane)
+    await databases.option_list.remove()
+
+    assert databases.is_mounted
+    with pytest.raises(NoMatches, match="OptionList"):
+        _ = databases.option_list
 
 
 @pytest.mark.asyncio
@@ -544,25 +554,34 @@ async def test_deferred_focus_projection_skips_target_collection_during_teardown
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(GluePage)
-        attempts = 0
+        nav = app.query_one("#nav-menu", NavMenu)
+        nav.focus()
+        await pilot.pause()
+        await _prune_database_option_list(page)
+        executions: list[FocusSlot | None] = []
+        original_deferred_projection = page._deferred_maybe_focus_active  # type: ignore[attr-defined]
 
-        def missing_focus_targets() -> tuple[tuple[FocusSlot, object], ...]:
-            nonlocal attempts
-            attempts += 1
-            raise NoMatches("focus ring unavailable during teardown")
+        def tracked_deferred_projection(reference: FocusSlot | None = None) -> None:
+            executions.append(reference)
+            original_deferred_projection(reference)
 
-        monkeypatch.setattr(page, "_focus_targets", missing_focus_targets)
+        monkeypatch.setattr(
+            page,
+            "_deferred_maybe_focus_active",
+            tracked_deferred_projection,
+        )
         app.focus_coordinator.set_focused_slot(FocusSlot.GLUE_ICEBERG_TIME_TRAVEL)
         page._on_child_vm_changed(  # type: ignore[attr-defined]
             frozenset((FocusSlot.GLUE_ICEBERG_TIME_TRAVEL,)),
             "selected_snapshot_id",
         )
         removal = app.screen.remove_children(GluePage)
+        assert not page.display
 
         await removal
         await pilot.pause()
 
-        assert attempts == 0
+        assert executions == [FocusSlot.GLUE_ICEBERG_TIME_TRAVEL]
 
 
 @pytest.mark.asyncio
@@ -597,30 +616,35 @@ async def test_focus_cycle_skips_target_collection_during_page_pruning(
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(GluePage)
+        nav = app.query_one("#nav-menu", NavMenu)
+        nav.focus()
+        await pilot.pause()
+        await _prune_database_option_list(page)
         focused = app.focused
         focused_slot = app.focus_coordinator.focused_slot
-        attempts = 0
+        cycle_calls: list[bool] = []
+        original_cycle_focus = page.cycle_focus
 
-        def missing_focus_targets() -> tuple[tuple[FocusSlot, object], ...]:
-            nonlocal attempts
-            attempts += 1
-            raise NoMatches("focus ring unavailable during teardown")
+        def tracked_cycle_focus(*, reverse: bool) -> None:
+            cycle_calls.append(reverse)
+            original_cycle_focus(reverse=reverse)
 
-        monkeypatch.setattr(page, "_focus_targets", missing_focus_targets)
+        monkeypatch.setattr(page, "cycle_focus", tracked_cycle_focus)
+        monkeypatch.setattr(app, "_glue_page", lambda: page, raising=False)
         removal = app.screen.remove_children(GluePage)
+        assert not page.display
 
-        page.cycle_focus(reverse=False)
+        AwsTuiApp._cycle_focus(app, reverse=False)  # type: ignore[arg-type]
 
         assert app.focused is focused
         assert app.focus_coordinator.focused_slot is focused_slot
-        assert attempts == 0
+        assert cycle_calls == [False]
         await removal
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entry_point", ["descendant_focus", "direct_projection"])
 async def test_focus_entry_points_skip_target_collection_during_page_pruning(
-    monkeypatch: pytest.MonkeyPatch,
     entry_point: str,
 ) -> None:
     vm, _fake = _build_vm()
@@ -630,24 +654,23 @@ async def test_focus_entry_points_skip_target_collection_during_page_pruning(
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(GluePage)
+        nav = app.query_one("#nav-menu", NavMenu)
+        nav.focus()
+        await pilot.pause()
+        await _prune_database_option_list(page)
         focused = app.focused
         assert focused is not None
-        attempts = 0
-
-        def missing_focus_targets() -> tuple[tuple[FocusSlot, object], ...]:
-            nonlocal attempts
-            attempts += 1
-            raise NoMatches("focus ring unavailable during teardown")
-
-        monkeypatch.setattr(page, "_focus_targets", missing_focus_targets)
+        focused_slot = app.focus_coordinator.focused_slot
         removal = app.screen.remove_children(GluePage)
+        assert not page.display
 
         if entry_point == "descendant_focus":
             page._sync_focused_widget(focused)  # type: ignore[attr-defined]
         else:
             page.project_focus_slot(FocusSlot.GLUE_PRIMARY)
 
-        assert attempts == 0
+        assert app.focused is focused
+        assert app.focus_coordinator.focused_slot is focused_slot
         await removal
 
 
