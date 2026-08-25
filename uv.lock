@@ -3057,14 +3057,14 @@ wheels = [
 
 [[package]]
 name = "vmx"
-version = "3.1.0"
+version = "3.23.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "reactivex" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ce/fd/e1ddac43bda036ca9adc3c609c2db3eb2387f3a3a3cb17580d79fb0fc473/vmx-3.1.0.tar.gz", hash = "sha256:788f6a8fd7b769a2425ca66713804eda4447ce51ce3e57a27825c2d74bc9a97d", size = 206508, upload-time = "2026-07-02T00:32:12.511Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/18/719592414c48cc38ac71326f1289e3599c3b4438c65f9a98dd697c01111e/vmx-3.23.0.tar.gz", hash = "sha256:5045490c50f81dd5ce374000c45e5fb7402e1828611c0a513678b0afe7c7eb83", size = 340838, upload-time = "2026-08-12T04:09:28.552Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/9b/e13febc03ed9eba1829b48bc3240c2b6f430c7c920ce16e7880b1215629d/vmx-3.1.0-py3-none-any.whl", hash = "sha256:aab6343d2d0fe41e44ee417bed738819ce92fb713b7496279a6835641a38430c", size = 133233, upload-time = "2026-07-02T00:32:11.083Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/3d/ff8c649185ecb80a7936b3301e319930c11949af3744a1b8f4f0631301ad/vmx-3.23.0-py3-none-any.whl", hash = "sha256:7521aa5823714dcce7de8b4c6a0cb1c9b9025a8e6ec437dbd9764ac49a35efe4", size = 176294, upload-time = "2026-08-12T04:09:27.081Z" },
 ]
 
 [[package]]
