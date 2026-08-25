@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import gc
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import ClassVar
 
@@ -9,6 +10,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Button, DataTable
+from textual.worker import NoActiveWorker, Worker, get_current_worker
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
@@ -61,9 +63,15 @@ class _GlueIcebergApp(App[None]):
         Binding("space", "activate_space", "", show=False, priority=True),
     ]
 
-    def __init__(self, vm: GluePageVM) -> None:
+    def __init__(
+        self,
+        vm: GluePageVM,
+        *,
+        dispatcher: Callable[[str], Awaitable[None] | None] | None = None,
+    ) -> None:
         super().__init__()
         self._vm = vm
+        self._dispatcher = dispatcher
         self.action_ids: list[str] = []
         self.focus_coordinator = FocusCoordinatorVM(
             hub=vm.hub,
@@ -87,8 +95,11 @@ class _GlueIcebergApp(App[None]):
     def action_activate_space(self) -> None:
         self.query_one(GluePage).activate_focused(space=True)
 
-    def action_dispatch(self, action_id: str) -> None:
+    def action_dispatch(self, action_id: str) -> Awaitable[None] | None:
         self.action_ids.append(action_id)
+        if self._dispatcher is not None:
+            return self._dispatcher(action_id)
+        return None
 
 
 @pytest.mark.asyncio
@@ -154,6 +165,124 @@ async def test_time_travel_button_dispatches_the_registry_action_once() -> None:
         await pilot.pause()
 
         assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
+
+
+@pytest.mark.asyncio
+async def test_time_travel_async_dispatch_is_created_and_completed_by_its_worker(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    vm, _inspector = _build_vm()
+    await vm.setup()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    created_by: list[Worker[object] | None] = []
+    completed: list[str] = []
+
+    def dispatch(action_id: str) -> Awaitable[None]:
+        try:
+            created_by.append(get_current_worker())
+        except NoActiveWorker:
+            created_by.append(None)
+
+        async def complete() -> None:
+            started.set()
+            await release.wait()
+            completed.append(action_id)
+
+        return complete()
+
+    async with _GlueIcebergApp(vm, dispatcher=dispatch).run_test(size=(140, 42)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await pilot.pause()
+        await pilot.click("#glue-iceberg-time-travel")
+        await asyncio.wait_for(started.wait(), timeout=2)
+
+        release.set()
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
+        assert len(created_by) == 1
+        assert created_by[0] is not None
+        assert completed == ["glue.time_travel_in_athena"]
+
+    gc.collect()
+    assert not [
+        warning
+        for warning in recwarn
+        if issubclass(warning.category, RuntimeWarning)
+        and "was never awaited" in str(warning.message)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_replaced_time_travel_async_dispatch_cancels_only_the_superseded_worker(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    vm, _inspector = _build_vm()
+    await vm.setup()
+    first_started = asyncio.Event()
+    first_cancelled = asyncio.Event()
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+    created_by: list[Worker[object] | None] = []
+    completed: list[str] = []
+    calls = 0
+
+    def dispatch(action_id: str) -> Awaitable[None]:
+        nonlocal calls
+        calls += 1
+        try:
+            created_by.append(get_current_worker())
+        except NoActiveWorker:
+            created_by.append(None)
+        current_call = calls
+
+        async def complete() -> None:
+            if current_call == 1:
+                first_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    first_cancelled.set()
+                    raise
+            else:
+                second_started.set()
+                await release_second.wait()
+                completed.append(action_id)
+
+        return complete()
+
+    async with _GlueIcebergApp(vm, dispatcher=dispatch).run_test(size=(140, 42)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await pilot.pause()
+        view = pilot.app.query_one(GlueIcebergView)
+        view._time_travel_selected()
+        await asyncio.wait_for(first_started.wait(), timeout=2)
+
+        view._time_travel_selected()
+        await asyncio.wait_for(first_cancelled.wait(), timeout=2)
+        await asyncio.wait_for(second_started.wait(), timeout=2)
+
+        release_second.set()
+        await _wait_until(lambda: completed == ["glue.time_travel_in_athena"])
+        await pilot.pause()
+
+        assert pilot.app.action_ids == [
+            "glue.time_travel_in_athena",
+            "glue.time_travel_in_athena",
+        ]
+        assert len(created_by) == 2
+        assert all(worker is not None for worker in created_by)
+        assert completed == ["glue.time_travel_in_athena"]
+
+    gc.collect()
+    assert not [
+        warning
+        for warning in recwarn
+        if issubclass(warning.category, RuntimeWarning)
+        and "was never awaited" in str(warning.message)
+    ]
 
 
 @pytest.mark.asyncio

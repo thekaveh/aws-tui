@@ -335,13 +335,23 @@ class GlueIcebergView(Widget):
         self._suppress_highlight = False
 
     def _time_travel_selected(self) -> None:
-        result = cast(ActionDispatcher, self.app).action_dispatch("glue.time_travel_in_athena")
-        if isawaitable(result):
-            self.run_worker(
-                result,
-                exclusive=True,
-                group="glue-iceberg-time-travel",
-            )
+        self._run_dispatch_worker(
+            lambda: cast(ActionDispatcher, self.app).action_dispatch("glue.time_travel_in_athena"),
+            group="glue-iceberg-time-travel",
+        )
+
+    def _run_dispatch_worker(
+        self,
+        dispatch: Callable[[], Awaitable[None] | None],
+        *,
+        group: str,
+    ) -> Worker[None]:
+        async def deferred() -> None:
+            result = dispatch()
+            if isawaitable(result):
+                await result
+
+        return self.run_worker(deferred, exclusive=True, group=group)
 
 
 def _columns(view: IcebergView) -> tuple[str, ...]:

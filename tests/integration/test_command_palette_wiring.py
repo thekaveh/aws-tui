@@ -135,6 +135,7 @@ async def test_enter_executes_filtered_palette_entry_with_production_bindings(
 @pytest.mark.asyncio
 async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
     app_context_factory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:  # type: ignore[no-untyped-def]
     ctx = app_context_factory()
     fake = seeded_glue()
@@ -157,6 +158,7 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
         dispatcher=NULL_DISPATCHER,
     )
     vm.construct()
+    vm.catalog.iceberg._page_size = 1  # type: ignore[attr-defined]
     await vm.setup()
     app = AwsTuiApp(ctx)
     try:
@@ -173,11 +175,28 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
             )
             legend = ctx.root_vm.chrome.hint_legend
             legend.set_current_service("glue")
-            app._recompute_hint_disables()
+            projections: list[frozenset[str]] = []
+            original_set_disabled_actions = legend.set_disabled_actions
+
+            def record_projection(disabled: frozenset[str]) -> None:
+                projections.append(disabled)
+                original_set_disabled_actions(disabled)
+
+            monkeypatch.setattr(legend, "set_disabled_actions", record_projection)
 
             def disabled_actions() -> set[str]:
                 return {hint.action_id for hint in legend.actions if not hint.enabled}
 
+            await vm.select_view("jobs")
+            await pilot.pause()
+            assert disabled_actions() == {
+                "glue.copy_table_ref",
+                "glue.query_in_athena",
+                "glue.time_travel_in_athena",
+            }
+
+            await vm.select_view("catalog")
+            await pilot.pause()
             assert disabled_actions() == {"glue.time_travel_in_athena"}
 
             fake.add_database("empty")
@@ -196,8 +215,29 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
             await pilot.pause()
             assert disabled_actions() == set()
 
+            projections.clear()
+            assert await vm.catalog.iceberg.load_more()
+            await pilot.pause()
+            assert frozenset() in projections
+            assert disabled_actions() == set()
+
             assert await vm.catalog.iceberg.select_view("history")
             await pilot.pause()
             assert disabled_actions() == {"glue.time_travel_in_athena"}
+
+            projections.clear()
+            await vm.shutdown()
+            await pilot.pause()
+            assert projections
+            assert disabled_actions() == {
+                "glue.copy_table_ref",
+                "glue.query_in_athena",
+                "glue.time_travel_in_athena",
+            }
+
+            toast_count = len(ctx.root_vm.chrome.toast_stack.toasts)
+            await app.action_query_glue_table_in_athena()
+            await app.action_time_travel_glue_table_in_athena()
+            assert len(ctx.root_vm.chrome.toast_stack.toasts) == toast_count
     finally:
         vm.dispose()
