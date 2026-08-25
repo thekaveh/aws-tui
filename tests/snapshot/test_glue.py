@@ -74,6 +74,15 @@ def test_glue_iceberg_narrow_snapshot(snap_compare) -> None:
     )
 
 
+def test_glue_iceberg_table_focus_snapshot(snap_compare) -> None:
+    app = GluePageApp(theme="carbon", fixture="iceberg")
+    assert snap_compare(
+        app,
+        terminal_size=WIDE,
+        run_before=app.focus_iceberg_table,
+    )
+
+
 @pytest.mark.parametrize("view", ["catalog", "jobs", "crawlers"])
 def test_glue_service_narrow_snapshot(view: GlueView, snap_compare) -> None:
     assert snap_compare(
@@ -83,13 +92,15 @@ def test_glue_service_narrow_snapshot(view: GlueView, snap_compare) -> None:
 
 
 def test_glue_open_context_picker_snapshot(snap_compare) -> None:
+    app = GluePageApp(
+        theme="carbon",
+        view="jobs",
+        show_legend=True,
+    )
     assert snap_compare(
-        GluePageApp(
-            theme="carbon",
-            view="jobs",
-            open_picker=True,
-        ),
+        app,
         terminal_size=WIDE,
+        run_before=app.open_run_state_picker_with_geometry_check,
     )
 
 
@@ -102,9 +113,11 @@ def test_glue_focused_tab_snapshot(theme: str, snap_compare) -> None:
 
 
 def test_glue_open_context_picker_narrow_snapshot(snap_compare) -> None:
+    app = GluePageApp(theme="carbon", view="jobs", show_legend=True)
     assert snap_compare(
-        GluePageApp(theme="carbon", view="jobs", open_picker=True),
+        app,
         terminal_size=NARROW,
+        run_before=app.open_run_state_picker_with_geometry_check,
     )
 
 
@@ -130,6 +143,29 @@ def _snapshot(test_name: str, theme: str | None = None) -> str:
     path = Path(__file__).parent / "__snapshots__" / "test_glue" / f"{test_name}{suffix}.raw"
     assert path.is_file(), f"missing snapshot {path.name}; run --snapshot-update"
     return path.read_text()
+
+
+def test_glue_overlay_and_focus_snapshot_content_guards() -> None:
+    focused = _snapshot("test_glue_iceberg_table_focus_snapshot")
+    assert "analytics-prod·us-west-2" in focused
+    assert "Iceberg&#160;metadata" in focused
+    assert "Snapshot" in focused
+    assert "43" in focused
+
+    for test_name in (
+        "test_glue_open_context_picker_snapshot",
+        "test_glue_open_context_picker_narrow_snapshot",
+    ):
+        opened = _snapshot(test_name)
+        assert "All&#160;states" in opened
+        assert "Stopped" in opened
+        assert "Commands" in opened
+
+    narrow = _snapshot("test_glue_open_context_picker_narrow_snapshot")
+    assert "[:]" in narrow
+    assert "more" in narrow
+    assert "[q]" in narrow
+    assert "quit" in narrow
 
 
 @pytest.mark.parametrize("theme", THEMES)

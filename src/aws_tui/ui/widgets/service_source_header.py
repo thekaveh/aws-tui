@@ -11,6 +11,7 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
+from aws_tui.ui.widgets.overlay_option_list import PickerOpenIntent
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 
@@ -25,11 +26,8 @@ class ServiceSourceHeader(Widget, can_focus=True):
     }
     ServiceSourceHeader > ContextPicker {
         width: 1fr;
-        height: auto;
+        height: 3;
         min-height: 3;
-    }
-    ServiceSourceHeader:focus > ContextPicker {
-        border: heavy $accent;
     }
     ServiceSourceHeader.-compact {
         height: 1;
@@ -67,11 +65,13 @@ class ServiceSourceHeader(Widget, can_focus=True):
         *,
         candidates: tuple[ServiceSourceContext, ...] = (),
         selectable: bool = True,
+        open_intent: PickerOpenIntent | None = None,
         id: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=None if selectable else "-compact")
         self.can_focus = selectable
         self._selectable = selectable
+        self._open_intent = open_intent
         ordered = dict.fromkeys((*candidates, source))
         self._source = source
         self.tooltip = source.label
@@ -79,10 +79,13 @@ class ServiceSourceHeader(Widget, can_focus=True):
         self._candidate_values = {
             str(index): candidate for index, candidate in enumerate(self._candidates)
         }
+        self._picker: ContextPicker | None = None
 
     @property
     def picker(self) -> ContextPicker:
-        return self.query_one(ContextPicker)
+        if self._picker is None:
+            raise RuntimeError("source picker is unavailable for this header")
+        return self._picker
 
     def _picker_options(self) -> tuple[ContextOption, ...]:
         return tuple(
@@ -109,12 +112,14 @@ class ServiceSourceHeader(Widget, can_focus=True):
                 markup=False,
             )
             return
-        yield ContextPicker(
+        self._picker = ContextPicker(
             "AWS source",
             self._picker_options(),
             selected=self._active_value(),
+            open_intent=self._open_intent,
             id=f"{self.id}-picker" if self.id is not None else None,
         )
+        yield self._picker
 
     def action_open_picker(self) -> None:
         self.open()

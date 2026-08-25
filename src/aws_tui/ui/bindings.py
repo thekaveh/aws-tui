@@ -34,6 +34,7 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
     "glue.choose_run_state": "Choose Glue run state",
     "glue.choose_crawler_state": "Choose Glue crawler state",
     "glue.copy_table_ref": "Copy Glue table reference",
+    "glue.query_in_athena": "Open selected Glue table in Athena",
     "athena.choose_workgroup": "Choose Athena workgroup",
     "athena.choose_catalog": "Choose Athena catalog",
     "athena.choose_database": "Choose Athena database",

@@ -1,16 +1,13 @@
-"""HintLegend widget — responsive command grid bound to :class:`HintLegendVM`.
-
-Each chip is rendered as a pair of Static widgets (key + label) with
-distinct CSS classes (``.hint-key`` / ``.hint-label``). Coloring now
-comes from the theme tcss (``$accent`` for keys, ``$text-muted`` for
-labels) instead of hard-coded Rich styles — that's what makes the bar
-adopt the new accent the moment the user switches themes.
-"""
+"""One-row command hints bound to :class:`HintLegendVM`."""
 
 from __future__ import annotations
 
+from collections import Counter
+
+from rich.cells import cell_len
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ItemGrid
+from textual.containers import Horizontal
+from textual.events import Resize
 from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub
@@ -19,30 +16,97 @@ from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.vm.chrome.hint_legend_vm import HintAction, HintLegendVM
 
 
-class HintLegend(HubSubscriberMixin, Widget):
-    """Bottom hint legend that wraps commands to fit the viewport."""
+def _action_width(action: HintAction) -> int:
+    return cell_len(f"[{action.key_label}] {action.action_label}") + 1
 
-    # Structural only — colors / border come from the theme stylesheet
-    # so that a runtime theme swap repaints the footer immediately.
-    # ``align: center middle`` on the host + ``align-horizontal: center``
-    # on the chip strip centers the row even when chips don't fill it.
+
+def _fit_actions(actions: tuple[HintAction, ...], width: int) -> tuple[HintAction, ...]:
+    """Return the source-ordered action hints that fit in one row."""
+    regular = tuple(action for action in actions if not action.overflow_only)
+    if sum(_action_width(action) for action in regular) <= width:
+        return regular
+
+    visible = list(actions)
+    protected_ids = {"app.command_palette", "app.quit"}
+
+    while sum(_action_width(action) for action in visible) > width:
+        tab_counts = Counter(action.key_label.casefold() for action in visible)
+        removable = [
+            (index, action)
+            for index, action in enumerate(visible)
+            if action.action_id not in protected_ids
+        ]
+        if not removable:
+            break
+        index, _action = min(
+            removable,
+            key=lambda item: (
+                0
+                if item[1].key_label.casefold() == "tab"
+                and tab_counts[item[1].key_label.casefold()] > 1
+                else 1,
+                -item[1].priority,
+                0 if not item[1].enabled else 1,
+                -item[0],
+            ),
+        )
+        visible.pop(index)
+
+    return tuple(visible)
+
+
+class _HintChip(Horizontal):
+    """Content-sized, non-focusable presentation for one hint action."""
+
+    can_focus = False
+
+    def __init__(self, action: HintAction) -> None:
+        disabled_suffix = " -disabled" if not action.enabled else ""
+        key = Static(
+            f"[{action.key_label}]",
+            classes=f"hint-key{disabled_suffix}",
+            markup=False,
+        )
+        label = Static(
+            action.action_label,
+            classes=f"hint-label{disabled_suffix}",
+        )
+        super().__init__(key, label, classes="hint-chip")
+        self.action = action
+        self._key = key
+        self._label = label
+        self.tooltip = action.tooltip
+
+    def retire(self) -> None:
+        """Remove this chip from layout and semantic queries before pruning."""
+        self.display = False
+        self.remove_class("hint-chip")
+        self.tooltip = None
+        self._key.update("")
+        self._label.update("")
+
+
+class HintLegend(HubSubscriberMixin, Widget):
+    """Bottom command legend that always renders as one compact row."""
+
     DEFAULT_CSS = """
     HintLegend {
-        height: auto;
+        height: 3;
         min-height: 3;
         margin: 0 1 1 1;
         border-title-align: left;
     }
     HintLegend > #hint-strip {
-        height: auto;
-        min-height: 1;
-        width: 1fr;
-        grid-gutter: 0 1;
-    }
-    HintLegend .hint-chip {
         width: 1fr;
         height: 1;
-        align-horizontal: center;
+        layout: horizontal;
+        overflow: hidden hidden;
+    }
+    HintLegend .hint-chip {
+        width: auto;
+        min-width: 0;
+        height: 1;
+        margin-right: 1;
     }
     HintLegend .hint-key {
         width: auto;
@@ -71,13 +135,11 @@ class HintLegend(HubSubscriberMixin, Widget):
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
-        self._vm: HintLegendVM = vm
-        self._hub: MessageHub[Message] = hub
-        # Border title at top-left — renamed from "Shortcuts" to
-        # "Commands" per user feedback ("I want the Bottom pane fr
-        # Shortcuts to be renamed to 'Commands'"). The chips are
-        # actionable commands, not keyboard shortcuts as such — the
-        # name "Commands" reads honestly.
+        self._vm = vm
+        self._hub = hub
+        self._rebuild_generation = 0
+        self._rebuild_scheduled = False
+        self._initialized = False
         self.border_title = "Commands"
 
     @property
@@ -85,21 +147,7 @@ class HintLegend(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        # One responsive grid — service-specific chips first
-        # (S3 copy/delete etc., EMR switch-app etc.), then the
-        # always-visible app-chrome globals (themes / help / quit).
-        # The split into left/right docks was reverted at user's
-        # explicit ask ("I want their concatenation displayed at the
-        # bottom"). Non-regular ItemGrid packing preserves source order
-        # while preventing prime command counts from collapsing to one
-        # column.
-        with ItemGrid(
-            id="hint-strip",
-            min_column_width=22,
-            stretch_height=False,
-            regular=False,
-        ):
-            yield from self._build_chips(self._all_chips())
+        yield Horizontal(id="hint-strip")
 
     def on_mount(self) -> None:
         self.subscribe_to_vm(
@@ -108,53 +156,68 @@ class HintLegend(HubSubscriberMixin, Widget):
             property_names=("actions",),
             on_property_changed=self._on_vm_property_changed,
         )
+        self._request_rebuild()
 
     def on_unmount(self) -> None:
+        self._rebuild_generation += 1
+        self._rebuild_scheduled = False
+        self._initialized = False
         self.unsubscribe_from_vm()
+
+    async def on_resize(self, _event: Resize) -> None:
+        if not self._initialized:
+            self._rebuild_generation += 1
+            await self._rebuild_chips()
+            return
+        self._request_rebuild()
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name == "actions":
-            self.call_after_refresh(self._rebuild_chips)
+            self._request_rebuild()
 
-    def _all_chips(self) -> tuple[HintAction, ...]:
-        """Service-specific chips followed by the app-chrome globals
-        in a single ordered tuple."""
+    def _all_actions(self) -> tuple[HintAction, ...]:
         return tuple(self._vm.actions) + tuple(self._vm.global_actions)
 
-    def _rebuild_chips(self) -> None:
-        try:
-            strip = self.query_one("#hint-strip", ItemGrid)
-        except Exception:
-            return
-        for child in list(strip.children):
-            child.remove()
-        for chip in self._build_chips(self._all_chips()):
-            strip.mount(chip)
+    def _request_rebuild(self) -> None:
+        self._rebuild_generation += 1
+        if self._initialized:
+            self._schedule_rebuild()
 
-    def _build_chips(self, chips: tuple[HintAction, ...]) -> list[Widget]:
-        widgets: list[Widget] = []
-        for chip in chips:
-            # Wrap the key in ``[...]`` brackets — same visual treatment
-            # as the genai-vanilla reference (``[a] all  ·  [e] errors  ·  …``)
-            # so the bound key is unambiguous even when an action label
-            # itself looks key-like.
-            #
-            # ``markup=False`` is CRITICAL: Static parses its content as
-            # Rich markup by default, and ``[tab]`` / ``[c]`` / ``[d]``
-            # etc. would get parsed as (unknown) style tags and silently
-            # stripped — so only the chips whose key isn't a valid Rich
-            # tag name (``:``, ``?``, …) would render correctly. With
-            # markup disabled, every chip prints its bracketed key as
-            # plain text.
-            disabled_suffix = " -disabled" if not chip.enabled else ""
-            key = Static(
-                f"[{chip.key_label}]",
-                classes=f"hint-key{disabled_suffix}",
-                markup=False,
-            )
-            label = Static(chip.action_label, classes=f"hint-label{disabled_suffix}")
-            widgets.append(Horizontal(key, label, classes="hint-chip"))
-        return widgets
+    def _schedule_rebuild(self) -> None:
+        if self._rebuild_scheduled or not self.is_attached:
+            return
+        self._rebuild_scheduled = self.call_after_refresh(self._rebuild_chips)
+
+    async def _rebuild_chips(self) -> None:
+        if not self.is_attached:
+            self._rebuild_scheduled = False
+            return
+        started_generation = self._rebuild_generation
+        replacement_completed = False
+        try:
+            strip = self.query_one("#hint-strip", Horizontal)
+            actions = _fit_actions(self._all_actions(), self.content_region.width)
+            old_chips = tuple(child for child in strip.children if isinstance(child, _HintChip))
+            async with strip.batch():
+                mounted = strip.mount(*(_HintChip(action) for action in actions))
+                for chip in old_chips:
+                    chip.retire()
+                removed = strip.remove_children(old_chips)
+
+                await mounted
+                await removed
+            if not self.is_attached:
+                return
+            replacement_completed = True
+            self._initialized = True
+        finally:
+            self._rebuild_scheduled = False
+            if (
+                self.is_attached
+                and replacement_completed
+                and started_generation != self._rebuild_generation
+            ):
+                self._schedule_rebuild()
 
 
 __all__ = ["HintLegend"]

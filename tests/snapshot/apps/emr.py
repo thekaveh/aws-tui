@@ -7,7 +7,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from textual.app import App, ComposeResult
-from textual.containers import Container
+from textual.containers import Container, Horizontal
+from textual.pilot import Pilot
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
@@ -15,6 +16,9 @@ from aws_tui.domain.emr_serverless import ApplicationState, JobRunState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
+from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
+from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
+from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
@@ -139,14 +143,33 @@ class EmrPageEmptyApp(App[None]):
 class EmrPageOpenPickerApp(EmrPageApp):
     """Renders populated EMR with the application selector expanded."""
 
-    def on_mount(self) -> None:
-        # Textual also dispatches the inherited mount handler, which
-        # asynchronously mounts the page. Open after that refresh instead
-        # of calling ``super()`` and mounting a duplicate ``#emr-page``.
-        self.call_after_refresh(self._open_picker)
+    async def open_picker_with_geometry_check(self, pilot: Pilot) -> None:
+        await pilot.pause()
+        picker = self.query_one(ApplicationPicker)
+        app_box = self.query_one("#emr-app-box")
+        context_row = self.query_one(".emr-context-row", Horizontal)
+        source = self.query_one(ServiceSourceHeader)
+        runs = self.query_one(JobRunsPane)
+        detail = self.query_one(JobRunDetailPane)
+        logs = self.query_one(JobRunLogsPane)
+        host = self.query_one("#content-host")
+        widgets = (picker, app_box, context_row, source, runs, detail, logs, host)
+        closed_regions = tuple(widget.region for widget in widgets)
 
-    def _open_picker(self) -> None:
-        self.query_one(ApplicationPicker).toggle_open()
+        picker.toggle_open()
+        await pilot.pause()
+        assert picker.is_open
+        assert tuple(widget.region for widget in widgets) == closed_regions
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not picker.is_open
+        assert tuple(widget.region for widget in widgets) == closed_regions
+
+        picker.toggle_open()
+        await pilot.pause()
+        assert picker.is_open
+        assert tuple(widget.region for widget in widgets) == closed_regions
 
 
 class EmrPageOpenSourcePickerApp(EmrPageApp):

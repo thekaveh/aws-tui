@@ -43,10 +43,12 @@ inspection workflows.
   On a selected Catalog table, `y` copies the fully quoted table reference
   into the VMx-backed app clipboard and best-effort OS clipboard.
   From a selected Catalog table, the command palette can open its exact
-  location in S3 or prefill an Athena query. Iceberg tables add bounded,
+  location in S3. Press `Shift+Q` to open that table in Athena and prefill the
+  bounded `SELECT * ... LIMIT 100` statement. Iceberg tables add bounded,
   on-demand Snapshots, History, Manifests, Files, Partitions, and References
-  views. Select a snapshot and press `V` to prepare a time-travel query.
-  Generated SQL is review-only and never runs automatically. Every handoff
+  views. Select a visible snapshot and press `Shift+V`, or activate the real
+  arrow button, to open Athena with the same statement plus
+  `FOR VERSION AS OF`. Neither handoff executes the query. Every handoff
   preserves the exact Glue connection name and region; it never substitutes
   another profile. Glue is AWS-only and does not appear for S3-compatible
   connections.
@@ -100,8 +102,10 @@ inspection workflows.
   ``start_job_run`` on save (PR #83 — landed ahead of the rest
   of PR-C). Job-run logs are streamable on demand; cancel and the
   vanilla submit form remain deferred. AWS-only (does not surface
-  for s3-compatible connections). `Tab` and `Shift+Tab` traverse the source
-  selector, application selector, runs, detail, logs, and service rail.
+  for s3-compatible connections). The source and application dropdowns overlay
+  the current layout, so opening or closing either picker does not resize the
+  runs or detail panes. `Tab` and `Shift+Tab` traverse the source selector,
+  application selector, runs, detail, logs, and service rail.
 - **Silent SSO.** Auto-discovers every AWS profile from
   `~/.aws/{config,credentials}`. SSO-backed profiles get a cheap
   token-cache freshness probe on launch (one `stat`, one ~1 KB JSON
@@ -156,6 +160,11 @@ inspection workflows.
   Integrated commands include **Query table in Athena**, **Query Iceberg
   snapshot in Athena**, and **Open query table in Glue**; each preserves the
   active connection name and region.
+- **Compact command guidance.** The bottom Commands pane is always one compact
+  content row. Hover a visible command to see its full shortcut, effect,
+  execution or mutation behavior, and any unmet prerequisite. At narrow widths,
+  lower-priority hints are hidden deterministically while `[:] more` opens the
+  active service's command palette and `[q] quit` remains visible.
 - **Layered architecture with enforced forbidden edges.** View ▸ ViewModel
   ▸ Service ▸ Domain ▸ Infra, with `app.py` / `composition.py` as trusted
   composition roots and services allowed to compose concrete VMs; enforced

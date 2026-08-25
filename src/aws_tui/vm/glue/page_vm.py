@@ -122,6 +122,7 @@ class GluePageVM:
         self._operations.close()
         self._disposed = True
         self._lifecycle_generation += 1
+        self._hub.send(PropertyChangedMessage.create(self, "glue.page", "actions_available"))
         self.crawlers.dispose()
         self.jobs.dispose()
         self.catalog.dispose()
@@ -298,9 +299,17 @@ class GluePageVM:
         return self.catalog.open_s3_location(preferred_pane=preferred_pane)
 
     def query_in_athena(self) -> bool:
-        if not self._is_alive():
+        if not self.can_query_in_athena:
             return False
         return self.catalog.query_in_athena()
+
+    @property
+    def can_query_in_athena(self) -> bool:
+        return (
+            self._is_alive()
+            and self._active_view == "catalog"
+            and self.catalog.can_copy_table_reference
+        )
 
     @property
     def can_copy_table_reference(self) -> bool:
@@ -316,9 +325,17 @@ class GluePageVM:
         return self.catalog.copy_table_reference()
 
     def time_travel_in_athena(self) -> bool:
-        if not self._is_alive():
+        if not self.can_time_travel_in_athena:
             return False
         return self.catalog.iceberg.time_travel_in_athena()
+
+    @property
+    def can_time_travel_in_athena(self) -> bool:
+        return (
+            self._is_alive()
+            and self._active_view == "catalog"
+            and self.catalog.iceberg.can_time_travel_in_athena
+        )
 
     async def _setup_view(self, view: GlueView, generation: int) -> None:
         if not self._is_current(generation) or view in self._loaded_views:

@@ -1,3 +1,28 @@
+$error: $danger;
+
+/* Shared service context picker borders */
+ContextPicker {
+    border: solid $rule-dim;
+}
+ContextPicker:focus,
+ContextPicker:focus-within,
+ContextPicker.-open,
+ServiceSourceHeader:focus > ContextPicker {
+    border: heavy $accent;
+}
+ContextPicker.-disabled,
+ContextPicker.-loading {
+    border: solid $rule-dim;
+}
+ContextPicker.-warning,
+ContextPicker.-warning:focus-within {
+    border: solid $warning;
+}
+ContextPicker.-error,
+ContextPicker.-error:focus-within {
+    border: solid $error;
+}
+
 /* Athena grouped context header */
 AthenaPage > #athena-context-header {
     background: $bg;

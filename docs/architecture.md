@@ -29,8 +29,13 @@ VMs to build service pages, but it cannot import Textual widgets.
   `src/aws_tui/ui/widgets/dual_pane.py`, mounted through
   `src/aws_tui/ui/widgets/service_view_factory.py`; there is no `S3Page` class.
   `ContextPicker` provides bordered keyboard-focusable context selection, and
-  `ServiceTabStrip` renders a persistent segmented frame while providing one
-  predictable focus stop for service-local views.
+  EMR's specialized `ApplicationPicker` preserves its Rich application-state
+  rendering. Both compose the shared `OverlayOptionList`: the trigger keeps its
+  compact footprint while the choices use Textual's screen overlay, so opening
+  or closing a picker does not resize adjacent regions. Overlay geometry and
+  dismissal remain view state rather than entering VMx. `ServiceTabStrip`
+  renders a persistent segmented frame while providing one predictable focus
+  stop for service-local views.
 - **ViewModel** — VMx-based viewmodels with reactive commands and
   property-changed messages (`src/aws_tui/vm/`). Never imports
   Textual; tests run headless. `ServiceSelectionStore` is a VM-layer type in
@@ -41,7 +46,11 @@ VMs to build service pages, but it cannot import Textual widgets.
     first-run, plus dormant transfer-recovery scaffolding and a retained
     `StatusBarVM` subscriber for
     legacy status bookkeeping even though no `StatusBar` widget is
-    mounted in the production chrome).
+    mounted in the production chrome). `HintLegendVM` owns service-scoped action
+    membership, configured shortcut labels, complete effect/prerequisite
+    tooltips, availability, and fitting priority. The `HintLegend` view performs
+    terminal-width measurement and renders exactly one compact command row;
+    lower-priority hints yield to `[:] more` and `[q] quit` rather than wrapping.
   - `vm/file_manager/` — pane / dual-pane / entry / transfer VMs.
   - `vm/table_clipboard_vm.py` — `TableClipboardVM`, an app-lifetime VMx
     component that retains one typed, replaceable table reference.
@@ -63,10 +72,12 @@ VMs to build service pages, but it cannot import Textual widgets.
     History, Manifests, Files, Partitions, and References independently.
     The page shares `ServiceSourceContext` and
     connection/region-scoped selection memory with the other
-    single-context AWS services. `GlueCatalogVM` emits the immutable
-    service-neutral `OpenS3LocationRequest` and
-    `OpenAthenaTableRequest`; it never mounts a Textual view or constructs a
-    destination service itself.
+    single-context AWS services. `GluePageVM` owns page-scoped table and snapshot
+    handoff capability checks. `GlueCatalogVM` publishes immutable,
+    service-neutral `OpenS3LocationRequest` and table `OpenAthenaTableRequest`
+    messages from the selected table; `GlueIcebergVM` publishes snapshot
+    `OpenAthenaTableRequest` messages from the visible snapshot. They never mount
+    a Textual view or construct a destination service themselves.
   - `vm/athena/` — `AthenaPageVM` with Query, History, Results, and Saved
     child VMs. Its context and remembered selections are scoped by connection
     name and region; changing workgroup, catalog, or database invalidates the
@@ -123,7 +134,10 @@ handlers.
 
 `composition.py` also constructs the app-lifetime `TableClipboardVM`. `app.py` owns the
 best-effort OS clipboard copy after it receives the typed request; the VM
-remains the authoritative in-app clipboard.
+remains the authoritative in-app clipboard. `ActionRegistry` is also rooted in
+`app.py`: `Shift+Q`, `Shift+V`, command-palette entries, and the Iceberg arrow
+button dispatch the same registered Glue actions before the Glue VMs publish a
+single typed Athena request path.
 
 ## 1.3. Lifecycle
 VMs implement `construct → run → destruct → dispose` (VMx convention).
@@ -158,8 +172,11 @@ Cross-service navigation stays service-neutral. `OpenAthenaTableRequest` and
 connection name, and region; the Athena request may add a validated snapshot
 ID. `app.py` serializes table handoffs, resolves the exact connection, rejects
 region drift, snapshots the outgoing Glue/Athena state for rollback, and
-mounts the destination through `RootVM`. Athena receives generated SQL in the
-editor but does not execute it. For S3, `OpenS3LocationRequest` carries the
+mounts the destination through `RootVM`. A table request prefills the exact
+bounded `SELECT * FROM "catalog"."database"."table" LIMIT 100`; a snapshot
+request adds `FOR VERSION AS OF <snapshot-id>` before the limit. Athena receives
+that generated SQL in the editor but does not execute it. For S3,
+`OpenS3LocationRequest` carries the
 exact connection, region, URI, pane, and reveal-object intent. The Results VM
 reloads an execution and publishes only when it succeeded, belongs to the
 active context, and has a valid `s3://` output location. Missing, malformed,

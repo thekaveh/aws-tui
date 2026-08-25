@@ -84,10 +84,10 @@ Review the PR like any other change. Merge when CI is green.
 - **Glue/Athena/Iceberg release smoke.** On `demo-dev`, open
   `dev_analytics.dev_events_iceberg` in Glue. Inspect Snapshots, History,
   Manifests, Files, Partitions, and References. Select snapshot `4201`, press
-  `V`, and verify Athena is mounted under the same connection and region with
-  `FOR VERSION AS OF 4201 LIMIT 100` in the editor and no execution started.
-  Execute explicitly with `Ctrl+Enter`, compare displayed rows with the
-  downloaded CSV, and hand the artifact to S3. Verify **Open query table in
+  `Shift+V`, and verify Athena is mounted under the same connection and region
+  with `FOR VERSION AS OF 4201 LIMIT 100` in the editor, while no query starts
+  automatically. Execute explicitly with `Ctrl+Enter`, compare displayed rows
+  with the downloaded CSV, and hand the artifact to S3. Verify **Open query table in
   Glue** returns only for one unambiguous table. Repeat enough of the flow on
   `demo-prod` to prove disjoint content, then confirm `demo-shared` stays a
   scoped access state. Review bytes scanned and remember that every metadata

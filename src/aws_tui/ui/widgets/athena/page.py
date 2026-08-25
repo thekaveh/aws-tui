@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar, cast
@@ -24,6 +23,7 @@ from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.athena.saved_view import AthenaSavedView
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
+from aws_tui.ui.widgets.overlay_option_list import PickerOpenIntent
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM, AthenaView
@@ -131,6 +131,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self._focus_coordinator = focus_coordinator
         self._syncing_context = False
         self._focus_subscriptions: list[DisposableBase] = []
+        self._picker_open_intent = PickerOpenIntent()
 
     @property
     def vm(self) -> AthenaPageVM:
@@ -141,12 +142,14 @@ class AthenaPage(HubSubscriberMixin, Widget):
             yield ServiceSourceHeader(
                 self._vm.source,
                 candidates=self._source_candidates,
+                open_intent=self._picker_open_intent,
                 id="athena-source-header",
             )
             yield ContextPicker(
                 "Workgroup",
                 (),
                 selected=None,
+                open_intent=self._picker_open_intent,
                 id="athena-workgroup",
             )
             yield AthenaLoadMoreButton(
@@ -157,6 +160,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 "Catalog",
                 (),
                 selected=None,
+                open_intent=self._picker_open_intent,
                 id="athena-catalog",
             )
             yield AthenaLoadMoreButton(
@@ -167,6 +171,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 "Database",
                 (),
                 selected=None,
+                open_intent=self._picker_open_intent,
                 id="athena-database",
             )
             yield AthenaLoadMoreButton(
@@ -256,6 +261,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self.call_after_refresh(self._maybe_focus_active)
 
     def on_unmount(self) -> None:
+        self._picker_open_intent.cancel()
         self.unsubscribe_from_vm()
         for subscription in self._focus_subscriptions:
             subscription.dispose()
@@ -287,6 +293,33 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 partial(self._vm.select_database, value),
                 group="athena-context",
             )
+
+    def on_context_picker_open_changed(self, event: ContextPicker.OpenChanged) -> None:
+        event.stop()
+        if not self._picker_coordination_available():
+            return
+        epoch = event.intent_epoch
+        if epoch is None:
+            epoch = self._picker_open_intent.observe(event.picker, event.is_open)
+        self.call_after_refresh(partial(self._reconcile_open_pickers, epoch))
+
+    def _reconcile_open_pickers(self, epoch: int) -> None:
+        if not self._picker_coordination_available() or not self._picker_open_intent.is_current(
+            epoch
+        ):
+            return
+        pickers = tuple(self.query(ContextPicker))
+        desired = self._picker_open_intent.desired
+        if not isinstance(desired, ContextPicker) or (
+            not desired.is_attached or not desired.is_open
+        ):
+            desired = None
+        for picker in pickers:
+            if picker is not desired and picker.is_open:
+                picker.close(refocus=False)
+
+    def _picker_coordination_available(self) -> bool:
+        return self.is_running and self.is_attached and self.display
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         loaders = {
@@ -604,13 +637,11 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 return
 
     def _focus_and_open_picker(self, slot: FocusSlot, selector: str) -> None:
-        with contextlib.suppress(NoMatches):
-            picker = self.query_one(selector, ContextPicker)
-            for sibling in self.query(ContextPicker):
-                if sibling is not picker:
-                    sibling.close(refocus=False)
-            self._project_focus_slot(slot)
-            picker.open()
+        if not self._picker_coordination_available():
+            return
+        picker = self.query_one(selector, ContextPicker)
+        self._project_focus_slot(slot)
+        picker.open()
 
     def move_focused(self, delta: int) -> None:
         focused = self.app.focused
@@ -677,7 +708,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self.call_after_refresh(partial(self._maybe_focus_active, reference))
 
     def _refresh_page(self) -> None:
-        if not self.is_running or not self.is_attached:
+        if not self.is_running or not self.is_attached or not self.display:
             return
         reference = (
             self._focus_coordinator.focused_slot if self._focus_coordinator is not None else None

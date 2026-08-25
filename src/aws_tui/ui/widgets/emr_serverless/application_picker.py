@@ -1,25 +1,9 @@
-"""ApplicationPicker — top-strip application selector for the EMR page.
-
-Inline-expanding dropdown. The picker uses ``height: auto`` so it
-grows to wrap whatever children are visible: just the trigger row
-when closed, trigger + OptionList when open. The parent
-``emr-app-box`` grows in lockstep; the sibling ``JobRunsPane``
-(``height: 1fr``) shrinks to make room.
-
-Why not a floating overlay: the prior layered-overlay approaches
-(PR #83 declaring ``dropdown`` on Screen, PR #85 mounting the
-OptionList directly to the Screen) both broke the popover —
-layers are z-order only (don't escape parent clipping in PR #83)
-and Screen-mount put the popover after Screen's vertical-flow
-children (so it ended up below the Commands pane in PR #85).
-The inline-expanding pattern is simpler and reliable: the
-OptionList stays a normal child of the picker, no layers, no
-absolute positioning, no cross-widget message routing.
-"""
+"""ApplicationPicker — screen-overlaid application selector for the EMR page."""
 
 from __future__ import annotations
 
-import contextlib
+from collections.abc import Iterable
+from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -35,6 +19,11 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from aws_tui.domain.emr_serverless import ApplicationState
+from aws_tui.ui.widgets.overlay_option_list import (
+    OverlayOptionList,
+    PickerFocusIntent,
+    PickerOpenIntent,
+)
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -69,12 +58,12 @@ def _state_option(state: ApplicationState, name: str) -> Text:
 
 
 class ApplicationPicker(Widget, can_focus=True):
-    """Top-strip application selector — inline-expanding."""
+    """Top-strip application selector with a screen-overlaid option list."""
 
     DEFAULT_CSS: ClassVar[str] = """
     ApplicationPicker {
         width: 1fr;
-        height: auto;
+        height: 3;
         min-height: 3;
         layout: vertical;
     }
@@ -99,21 +88,17 @@ class ApplicationPicker(Widget, can_focus=True):
         text-overflow: ellipsis;
         text-style: bold;
     }
-    /* OptionList is collapsed by default; ``-open`` flips display
-       to block AND the picker's ``height: auto`` grows to wrap the
-       newly-visible OptionList. Parent ``emr-app-box`` grows in
-       lockstep (its ``height: auto, min-height: 3`` lets it expand
-       up to the column's available space; the sibling JobRunsPane
-       with ``height: 1fr`` shrinks to make room). */
-    ApplicationPicker > OptionList {
-        width: 100%;
+    ApplicationPicker > OverlayOptionList {
+        width: 1fr;
         height: auto;
         max-height: 16;
         display: none;
+        overlay: screen;
+        constrain: none inside;
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }
-    ApplicationPicker.-open > OptionList {
+    ApplicationPicker.-open > OverlayOptionList {
         display: block;
     }
     """
@@ -136,26 +121,51 @@ class ApplicationPicker(Widget, can_focus=True):
             super().__init__()
             self.app_id = app_id
 
+    class OpenChanged(TextualMessage):
+        """Posted whenever option-list visibility intent changes."""
+
+        def __init__(
+            self,
+            picker: ApplicationPicker,
+            is_open: bool,
+            *,
+            intent_epoch: int | None = None,
+        ) -> None:
+            super().__init__()
+            self.picker = picker
+            self.is_open = is_open
+            self.intent_epoch = intent_epoch
+
+        @property
+        def control(self) -> ApplicationPicker:
+            return self.picker
+
     def __init__(
         self,
         vm: ApplicationsVM,
         *,
+        open_intent: PickerOpenIntent | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: ApplicationsVM = vm
         self._sub: DisposableBase | None = None
+        self._focus_intent = PickerFocusIntent()
+        self._open_intent = open_intent
+        self._marker_widget: Static | None = None
+        self._value_widget: Static | None = None
+        self._option_list: OverlayOptionList | None = None
 
     def compose(self) -> ComposeResult:
-        # Trigger row + OptionList are direct children of the picker.
-        # The OptionList is hidden by default via ``display: none``
-        # and revealed when the picker gains the ``-open`` class.
         marker, value = self._trigger_fragments()
+        self._marker_widget = Static(marker, classes="app-marker")
+        self._value_widget = Static(value, classes="app-value")
+        self._option_list = OverlayOptionList(*self._build_options(), id="app-options")
         with Horizontal(classes="app-trigger"):
-            yield Static(marker, classes="app-marker")
-            yield Static(value, classes="app-value")
-        yield OptionList(*self._build_options(), id="app-options")
+            yield self._marker_widget
+            yield self._value_widget
+        yield self._option_list
 
     def on_mount(self) -> None:
         # Round-3 directive §9.bis.11 / PR #103 retirement: subscribe
@@ -167,21 +177,44 @@ class ApplicationPicker(Widget, can_focus=True):
         self._refresh_accessibility_text()
 
     def on_unmount(self) -> None:
+        was_open = self.is_open
+        self._focus_intent.advance()
+        self.remove_class("-open")
+        if was_open and self.parent is not None:
+            intent_epoch = (
+                self._open_intent.observe(self, False) if self._open_intent is not None else None
+            )
+            self.parent.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
 
     # ── Public API ──────────────────────────────────────────────────────────
 
+    @property
+    def is_open(self) -> bool:
+        """Whether the application option list is currently visible."""
+
+        return self.has_class("-open")
+
     def toggle_open(self) -> None:
-        if "-open" in self.classes:
-            self.remove_class("-open")
+        if self.is_open:
+            self.close()
         else:
-            self.add_class("-open")
-            # Rebuild after the ``-open`` width/layout pass. Building at
-            # the closed width leaves OptionList's cached lines clipped
-            # to the status glyph even after the picker expands.
-            self.call_after_refresh(self._prepare_open_dropdown)
+            self.open()
+
+    def open(self) -> None:
+        """Show and focus the application option list."""
+
+        was_open = self.is_open
+        epoch = self._focus_intent.advance()
+        self.add_class("-open")
+        intent_epoch = (
+            self._open_intent.observe(self, True) if self._open_intent is not None else None
+        )
+        if not was_open or intent_epoch is not None:
+            self.post_message(self.OpenChanged(self, True, intent_epoch=intent_epoch))
+        self.call_after_refresh(partial(self._prepare_open_dropdown, epoch))
 
     def action_close(self) -> None:
         self.close()
@@ -189,9 +222,16 @@ class ApplicationPicker(Widget, can_focus=True):
     def close(self, *, refocus: bool = True) -> None:
         """Collapse the list without stealing an in-progress focus transfer."""
 
+        was_open = self.is_open
+        epoch = self._focus_intent.advance()
         self.remove_class("-open")
-        if refocus:
-            self.call_after_refresh(self.focus)
+        if was_open:
+            intent_epoch = (
+                self._open_intent.observe(self, False) if self._open_intent is not None else None
+            )
+            self.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
+        if was_open and refocus and self.is_attached:
+            self.call_after_refresh(partial(self._refocus, epoch))
 
     def action_activate(self) -> None:
         if self.has_class("-open"):
@@ -200,9 +240,8 @@ class ApplicationPicker(Widget, can_focus=True):
             self.toggle_open()
 
     def action_commit(self) -> None:
-        try:
-            opts = self.query_one("#app-options", OptionList)
-        except Exception:
+        opts = self._option_list
+        if opts is None or not opts.is_attached:
             return
         if opts.highlighted is None:
             return
@@ -213,18 +252,37 @@ class ApplicationPicker(Widget, can_focus=True):
             # ``page_vm.select_application(id)`` — see the
             # ``ApplicationCommitted`` docstring.
             self.post_message(self.ApplicationCommitted(opt.id))
-        self.remove_class("-open")
-        self.call_after_refresh(self.focus)
+        self.close()
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    def focus_on_click(self) -> bool:
+        """Keep the option list focused while its owner trigger is clicked."""
+
+        return not self.is_open
 
     def on_click(self, event: Click) -> None:
         # Click on the trigger row toggles open/closed. Click on a
         # row inside the dropdown is handled by Textual's OptionList
         # which posts ``OptionSelected`` — see the handler below.
-        if event.widget is not None and getattr(event.widget, "id", None) == "app-options":
+        if isinstance(event.widget, OptionList):
             return
         self.toggle_open()
+
+    def on_overlay_option_list_dismissed(self, event: OverlayOptionList.Dismissed) -> None:
+        self.close(refocus=not event.lost_focus)
+
+    @classmethod
+    def close_open_for_outside_mouse_down(
+        cls,
+        pickers: Iterable[ApplicationPicker],
+        target: Widget | None,
+    ) -> None:
+        """Close open pickers that don't own a mouse-down target."""
+
+        for picker in pickers:
+            if picker.is_open and (target is None or picker not in target.ancestors_with_self):
+                picker.close(refocus=False)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         # ``__placeholder__`` is the synthetic disabled row used for
@@ -235,8 +293,7 @@ class ApplicationPicker(Widget, can_focus=True):
         if event.option.id is not None and event.option.id != "__placeholder__":
             self._vm.select(event.option.id)
             self.post_message(self.ApplicationCommitted(event.option.id))
-        self.remove_class("-open")
-        self.call_after_refresh(self.focus)
+        self.close()
 
     def _on_vm_property_changed(self, prop: str) -> None:
         """Round-3 directive: per-VM Observable subscription. The
@@ -255,10 +312,9 @@ class ApplicationPicker(Widget, can_focus=True):
             self.call_after_refresh(self._refresh_options)
 
     def _refresh_trigger(self) -> None:
-        try:
-            marker = self.query_one(".app-marker", Static)
-            value = self.query_one(".app-value", Static)
-        except Exception:
+        marker = self._marker_widget
+        value = self._value_widget
+        if marker is None or value is None or not marker.is_attached or not value.is_attached:
             return
         marker_text, value_text = self._trigger_fragments()
         marker.update(marker_text)
@@ -279,9 +335,12 @@ class ApplicationPicker(Widget, can_focus=True):
         )
         tooltip = None if selected is None else f"{selected.name} · {selected.state.value}"
         self.tooltip = tooltip
-        with contextlib.suppress(Exception):
-            (marker or self.query_one(".app-marker", Static)).tooltip = tooltip
-            (value or self.query_one(".app-value", Static)).tooltip = tooltip
+        marker = marker or self._marker_widget
+        value = value or self._value_widget
+        if marker is not None and marker.is_attached:
+            marker.tooltip = tooltip
+        if value is not None and value.is_attached:
+            value.tooltip = tooltip
 
     def _trigger_fragments(self) -> tuple[str, str]:
         """Split the selected-state marker from the trigger text."""
@@ -301,9 +360,8 @@ class ApplicationPicker(Widget, can_focus=True):
         return _state_marker(match.state), _escape_markup(match.name)
 
     def _refresh_options(self) -> None:
-        try:
-            opts = self.query_one("#app-options", OptionList)
-        except Exception:
+        opts = self._option_list
+        if opts is None or not opts.is_attached:
             return
         # The dedup-on-set guard that used to live here (PR #100(b)) has
         # moved into ApplicationsVM.refresh() per the round-3 directive
@@ -311,23 +369,29 @@ class ApplicationPicker(Widget, can_focus=True):
         # poll, so a PropertyChangedMessage reaching this handler means
         # the data actually changed. The View just rebuilds.
         options = self._build_options()
-        opts.clear_options()
-        for opt in options:
-            opts.add_option(opt)
-        # ``height: auto`` on an OptionList inside an auto-height
-        # Horizontal can resolve to the parent's full available height.
-        # Give the open list a content-derived bound instead: one row per
-        # option plus its border, capped so the runs pane remains usable.
-        opts.styles.height = min(len(options) + 2, 8)
+        opts.set_options(options)
 
-    def _focus_dropdown(self) -> None:
-        with contextlib.suppress(Exception):
-            opts = self.query_one("#app-options", OptionList)
-            opts.focus()
+    def _focus_dropdown(self, epoch: int) -> None:
+        opts = self._option_list
+        if (
+            not self._focus_intent.is_current(epoch)
+            or not self.is_open
+            or not self.is_attached
+            or opts is None
+            or not opts.is_attached
+        ):
+            return
+        self.app.set_focus(opts)
 
-    def _prepare_open_dropdown(self) -> None:
+    def _prepare_open_dropdown(self, epoch: int) -> None:
+        if not self._focus_intent.is_current(epoch) or not self.is_open:
+            return
         self._refresh_options()
-        self._focus_dropdown()
+        self._focus_dropdown(epoch)
+
+    def _refocus(self, epoch: int) -> None:
+        if self._focus_intent.is_current(epoch) and not self.is_open and self.is_attached:
+            self.focus()
 
     def _trigger_label(self) -> str:
         """Render the trigger row.

@@ -104,7 +104,7 @@ App-level `priority=True` and short-circuit through
 
 | Action | Default | Notes |
 |---|---|---|
-| Open application picker | `a` | Opens the applications dropdown above the LEFT pane. The picker is also reachable with `Tab` and opens with `Enter` or `Space`. |
+| Open application picker | `a` | Opens the applications dropdown above the LEFT pane. The picker overlays the current layout without resizing the runs or detail panes. It is also reachable with `Tab` and opens with `Enter` or `Space`. |
 | Select AWS source | `Tab`, then `Enter` / `Space` | The bordered source selector chooses an exact configured profile and region; `Shift+S` remains the resolver-order shortcut. |
 | Cycle next application | `Shift+A` | Cycles to the next EMR application without opening the picker. `Shift+S` remains available to switch the EMR page to the next configured AWS profile. |
 | State filter chips | `1` `2` `3` `4` `5` | Multi-select toggles, one chip per state in this key order: `SUCCESS` / `RUNNING` / `PENDING` / `FAILED` / `CANCELLED`. Source of truth: ``_KEY_TO_STATE`` in ``ui/widgets/emr_serverless/job_runs_pane.py``. The transient pre-terminal states `SUBMITTED` / `SCHEDULED` / `QUEUED` / `CANCELLING` are NOT chip-filterable — they always render (they're members of the initial all-on default filter set and have no toggle key). |
@@ -134,7 +134,9 @@ untitled segmented view frame is one Tab stop; its active view keeps accent
 text after focus moves into content and gains a soft fill while the frame is
 focused. Focus a selector and press `Enter` or `Space` to open it; use the
 arrow keys and `Enter` to commit a value, or `Esc` to close it without changing
-the value.
+the value. Every selector dropdown overlays the current layout; opening or
+closing it leaves the context row, view tabs, and adjacent content panes at the
+same size.
 
 | Action | Default | Notes |
 |---|---|---|
@@ -147,8 +149,8 @@ the value.
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Glue under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard; OS clipboard delivery is best effort. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
-| Query selected table in Athena | `:` / `Ctrl+K`, then **Query table in Athena** | `glue.query_in_athena` is palette-only. It prefills exact, bounded SQL in Athena and never executes it automatically. |
-| Query selected Iceberg snapshot in Athena | `V` or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It prefills `FOR VERSION AS OF` SQL without executing. |
+| Query selected table in Athena | `Shift+Q` (`Q`) or `:` / `Ctrl+K`, then **Query table in Athena** | Runs `glue.query_in_athena` for a visible selected Glue table. It opens Athena and prefills the exact bounded `SELECT * FROM "catalog"."database"."table" LIMIT 100`; it does not execute the query. |
+| Query selected Iceberg snapshot in Athena | `Shift+V` (`V`), `:` / `Ctrl+K`, then **Query Iceberg snapshot in Athena**, or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It opens Athena with the same exact source and bounded SQL plus `FOR VERSION AS OF <snapshot-id>` before `LIMIT 100`; it does not execute the query. |
 
 Glue's forward focus order is:
 
@@ -167,7 +169,8 @@ walks the same active ring in reverse.
 Athena is a single-context AWS service; its controls do not appear for
 S3-compatible connections. Source, Workgroup, Catalog, and Database are
 bordered selectors in the **AWS context** pane. Focus one and press `Enter` or
-`Space` to open it.
+`Space` to open it. Each option list overlays the current layout; opening or
+closing a picker does not resize the context pane, view tabs, or query surface.
 
 The untitled segmented view frame uses the same persistent active accent text,
 focused soft fill, and single keyboard focus stop as Glue; Athena's grouped
@@ -223,6 +226,7 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "glue.choose_run_state" = "F"
 "glue.choose_crawler_state" = "G"
 "glue.copy_table_ref" = "y"
+"glue.query_in_athena" = "Q"
 "glue.time_travel_in_athena" = "V"
 "athena.query" = "1"
 "athena.history" = "2"
@@ -248,7 +252,7 @@ The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
 `Backspace`, `left`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
 `c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
-`1` / `2` / `3` / `4`, `F`, `G`, `y`, `W`, `C`, `D`, `i`, `V`,
+`1` / `2` / `3` / `4`, `F`, `G`, `y`, `Q`, `W`, `C`, `D`, `i`, `V`,
 `Ctrl+Enter`, `Esc`, `l`,
 `Shift+↑`, and `Shift+↓`.
 
@@ -297,8 +301,8 @@ unbound until a handler ships.
 | `glue.choose_crawler_state` | `G` (`shift+g`) | yes | Focus and open the Crawlers state selector |
 | `glue.copy_table_ref` | `y` | yes | Copy the selected table's canonical identifier and source identity |
 | `glue.open_s3_location` | none (command palette) | yes | Open the selected Glue table's S3 location under the exact source connection and region |
-| `glue.query_in_athena` | none (command palette) | yes | Prefill a bounded query for the selected Glue table in Athena |
-| `glue.time_travel_in_athena` | `V` | yes | Prefill a bounded Athena query for the selected visible Iceberg snapshot |
+| `glue.query_in_athena` | `Q` (`shift+q`) | yes | Open the selected Glue table in Athena and prefill exact `SELECT * ... LIMIT 100` SQL without executing it |
+| `glue.time_travel_in_athena` | `V` (`shift+v`) | yes | Open the selected visible Iceberg snapshot in Athena and prefill exact bounded `FOR VERSION AS OF` SQL without executing it |
 | `athena.query` | `1` | yes | Select the Athena Query view |
 | `athena.history` | `2` | yes | Select the Athena History view |
 | `athena.results` | `3` | yes | Select the Athena Results view |
@@ -318,8 +322,8 @@ unbound until a handler ships.
 
 Rows with a default key are registered by
 `KeymapStore.DEFAULT_BINDINGS` and may be overlaid in
-`[keybindings]`. `glue.open_s3_location`, `glue.query_in_athena`,
-`athena.open_result_location`, and `athena.open_in_glue` are palette-only,
+`[keybindings]`. `glue.open_s3_location`, `athena.open_result_location`, and
+`athena.open_in_glue` are palette-only,
 registered in `ActionRegistry`, and absent from
 `KeymapStore.DEFAULT_BINDINGS`; assigning them a key is not currently
 supported.
@@ -331,15 +335,13 @@ including `Shift+↑` / `Shift+↓` for extend-selection. Their
 `pane.mark_up` / `pane.mark_down` entries may be rebound through
 `[keybindings]`.
 
-> **Commands strip layout (PR #83)** — the bottom legend is now ONE
-> concatenated row (single `#hint-strip` container), service-specific
-> chips first, globals after. The L/R dock split that PR #81
-> introduced (with `_hint-strip-service` / `_hint-strip-global` ids)
-> was reverted per user feedback "I want their concatenation
-> displayed at the bottom". Chips disable dynamically: a chip whose
-> action no-ops in the current selection state (e.g. `copy` /
-> `delete` when the cursor is on the `..` parent row) renders with
-> the `-disabled` class (`text-style: dim`) without losing its slot.
+> **Commands pane** — the bottom legend has exactly one compact content row at
+> wide and narrow supported widths. Service commands precede global commands,
+> and each content-sized chip exposes a tooltip with the full shortcut, effect,
+> execution or mutation behavior, and any unmet prerequisite. When all hints do
+> not fit, lower-priority entries are removed deterministically instead of
+> wrapping; `[:] more` and `[q] quit` remain visible, and `[:] more` opens the
+> service-scoped command palette. Hidden actions remain bound and palette-visible.
 
 ## 1.4. Modal Forwarding for Enter Escape and Arrow Keys
 
@@ -363,4 +365,6 @@ VM messages handle cross-service requests. Keep new keyed actions in
 `KeymapStore` and `ActionRegistry` together. Palette-only commands such
 as `glue.open_s3_location` belong in `ActionRegistry` and the curated
 palette, but do not need a default key. The same rule applies to
-`athena.open_result_location`.
+`athena.open_result_location`. The Glue table and snapshot Athena handoffs are
+keyed, palette-visible actions; keyboard, palette, and button entry points all
+dispatch their registered action IDs before the VM publishes the typed request.

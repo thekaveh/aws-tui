@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 from textual.app import App, ComposeResult
+from textual.color import Color
 from textual.containers import Horizontal
 from textual.css.query import NoMatches
 from textual.widgets import Button, DataTable, OptionList, Static, TextArea
 from vmx import NULL_DISPATCHER
 
 from aws_tui.domain.query import ResultColumn, ResultPage
+from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
@@ -445,6 +449,52 @@ async def test_named_context_action_focuses_and_opens_picker(
 
 
 @pytest.mark.asyncio
+async def test_open_athena_context_picker_preserves_page_regions() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        header = page.query_one("#athena-context-header", Horizontal)
+        tabs = page.query_one("#athena-view-tabs", ServiceTabStrip)
+        view_host = page.query_one("#athena-view-host")
+        before = (header.region, tabs.region, view_host.region)
+
+        page.action_choose_catalog()
+        await pilot.pause()
+
+        assert (header.region, tabs.region, view_host.region) == before
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert (header.region, tabs.region, view_host.region) == before
+
+
+@pytest.mark.asyncio
+async def test_unfocused_source_picker_is_dim_while_focused_content_uses_accent() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+
+    class _BuiltinThemeAthenaApp(_AthenaApp):
+        CSS = _AthenaApp.CSS + "\n" + ThemeStore().load_builtin("carbon")
+
+    app = _BuiltinThemeAthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        source = app.query_one("#athena-source-header-picker", ContextPicker)
+        editor = app.query_one("#athena-editor", TextArea)
+        editor.focus()
+        await pilot.pause()
+
+        assert source.styles.border_top == ("solid", Color.parse("#2a2d33"))
+        assert editor.styles.border_top == ("solid", Color.parse("#6fb8ff"))
+
+
+@pytest.mark.asyncio
 async def test_named_context_actions_close_previously_open_picker() -> None:
     vm, _client = _build_vm()
     await vm.setup()
@@ -464,6 +514,111 @@ async def test_named_context_actions_close_previously_open_picker() -> None:
         catalog = app.query_one("#athena-catalog", ContextPicker)
         assert not workgroup.is_open
         assert catalog.is_open
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_id", "newest_id"),
+    [("athena-workgroup", "athena-catalog"), ("athena-catalog", "athena-workgroup")],
+)
+async def test_same_turn_context_opens_keep_only_newest_picker_focused(
+    first_id: str,
+    newest_id: str,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        first = app.query_one(f"#{first_id}", ContextPicker)
+        newest = app.query_one(f"#{newest_id}", ContextPicker)
+
+        first.open()
+        newest.open()
+        await pilot.pause()
+
+        assert newest.is_open
+        assert not first.is_open
+        assert app.focused is newest.query_one(OptionList)
+
+
+@pytest.mark.asyncio
+async def test_live_athena_picker_open_surfaces_missing_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        query_one = page.query_one
+
+        def missing_picker(selector: str, *args: object, **kwargs: object) -> object:
+            if selector == "#athena-workgroup":
+                raise NoMatches("live missing Athena picker")
+            return query_one(selector, *args, **kwargs)
+
+        monkeypatch.setattr(page, "query_one", missing_picker)
+        with pytest.raises(NoMatches, match="live missing Athena picker"):
+            page._focus_and_open_picker(  # type: ignore[attr-defined]
+                FocusSlot.ATHENA_WORKGROUP,
+                "#athena-workgroup",
+            )
+
+
+@pytest.mark.asyncio
+async def test_detached_athena_picker_open_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        removal = app.screen.remove_children(AthenaPage)
+        assert not page.display
+
+        def unexpected_query(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("detached Athena page queried its picker")
+
+        monkeypatch.setattr(page, "query_one", unexpected_query)
+        page._focus_and_open_picker(  # type: ignore[attr-defined]
+            FocusSlot.ATHENA_WORKGROUP,
+            "#athena-workgroup",
+        )
+        await removal
+
+
+@pytest.mark.asyncio
+async def test_hidden_removing_athena_page_ignores_queued_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        callbacks: list[Callable[[], None]] = []
+        monkeypatch.setattr(page, "call_after_refresh", callbacks.append)
+        page._on_page_changed("active_view")  # type: ignore[attr-defined]
+        assert len(callbacks) == 1
+
+        removal = app.screen.remove_children(AthenaPage)
+        assert not page.display
+
+        def unexpected_query(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("hidden removing Athena page queried its controls")
+
+        monkeypatch.setattr(page, "query_one", unexpected_query)
+        callbacks[0]()
+        await removal
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ ships the static cadences from spec §6)."""
 from __future__ import annotations
 
 import contextlib
+from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
@@ -31,6 +32,7 @@ from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
 from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
+from aws_tui.ui.widgets.overlay_option_list import PickerOpenIntent
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
@@ -53,9 +55,7 @@ class EmrServerlessPage(Widget):
         height: 1fr;
         layout: vertical;
     }
-    /* Source + application share one bordered context box. Their
-       one-row triggers preserve scarce vertical space at 80x24;
-       either inline OptionList expands the box in normal flow. */
+    /* Source + application share one bordered context box. */
     EmrServerlessPage > .emr-left-column > .emr-app-box {
         height: auto;
         min-height: 2;
@@ -73,36 +73,11 @@ class EmrServerlessPage(Widget):
     }
     EmrServerlessPage .emr-context-row > ApplicationPicker {
         width: 3fr;
-        height: auto;
-        min-height: 1;
-    }
-    /* Let the expanded source list use the complete narrow column.
-       The application trigger moves below it but remains visible and
-       keyboard reachable while profiles with shared prefixes can be
-       distinguished. */
-    EmrServerlessPage.-source-picker-open .emr-context-row,
-    EmrServerlessPage.-application-picker-open .emr-context-row {
-        layout: vertical;
-    }
-    EmrServerlessPage.-source-picker-open
-        .emr-context-row > ServiceSourceHeader,
-    EmrServerlessPage.-source-picker-open
-        .emr-context-row > ApplicationPicker {
-        width: 1fr;
-    }
-    EmrServerlessPage.-application-picker-open
-        .emr-context-row > ServiceSourceHeader,
-    EmrServerlessPage.-application-picker-open
-        .emr-context-row > ApplicationPicker {
-        width: 1fr;
     }
     EmrServerlessPage .emr-context-row > ServiceSourceHeader > ContextPicker {
         height: 1;
         min-height: 1;
         border: none;
-    }
-    EmrServerlessPage .emr-context-row > ServiceSourceHeader > ContextPicker.-open {
-        height: auto;
     }
     EmrServerlessPage .emr-app-box ContextPicker > .context-picker-trigger,
     EmrServerlessPage .emr-app-box ApplicationPicker > .app-trigger {
@@ -113,6 +88,10 @@ class EmrServerlessPage(Widget):
     EmrServerlessPage .emr-app-box ServiceSourceHeader
         > ContextPicker > .context-picker-trigger {
         padding: 0;
+    }
+    EmrServerlessPage .emr-context-row > ServiceSourceHeader
+        ContextPicker > OverlayOptionList {
+        width: 30;
     }
     EmrServerlessPage .emr-app-box ApplicationPicker > .app-trigger > Static {
         height: 1;
@@ -171,15 +150,21 @@ class EmrServerlessPage(Widget):
         self._right_detail: JobRunDetailPane | None = None
         self._right_logs: JobRunLogsPane | None = None
         self._runs_tick_counter: int = 0
+        self._picker_open_intent = PickerOpenIntent()
 
     def compose(self) -> ComposeResult:
-        self._picker = ApplicationPicker(self._vm.applications, id="emr-app-picker")
+        self._picker = ApplicationPicker(
+            self._vm.applications,
+            open_intent=self._picker_open_intent,
+            id="emr-app-picker",
+        )
         self._left = JobRunsPane(self._vm.job_runs, id="emr-runs-pane")
         self._right_detail = JobRunDetailPane(self._vm.job_run_detail, id="emr-detail-pane")
         self._right_logs = JobRunLogsPane(self._vm.job_run_logs, id="emr-logs-pane")
         self._source_header = ServiceSourceHeader(
             self._vm.source,
             candidates=self._source_candidates,
+            open_intent=self._picker_open_intent,
             id="emr-source-header",
         )
         # Page layout — 1fr:2fr horizontal split with LEFT column
@@ -256,6 +241,13 @@ class EmrServerlessPage(Widget):
         if self._left is not None:
             self.call_after_refresh(self._maybe_focus_left)
 
+    def on_unmount(self) -> None:
+        self._picker_open_intent.cancel()
+        if self._source_header is not None:
+            self._source_header.picker.close(refocus=False)
+        if self._picker is not None:
+            self._picker.close(refocus=False)
+
     def _maybe_focus_left(self) -> None:
         """Auto-focus the LEFT pane on initial page mount UNLESS a
         widget outside this page (typically the NavMenu rail) already
@@ -291,10 +283,6 @@ class EmrServerlessPage(Widget):
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         if event.widget is self.app.focused:
-            source_open = self._source_header is not None and self._source_header.picker.is_open
-            self.set_class(source_open, "-source-picker-open")
-            application_open = self._picker is not None and self._picker.has_class("-open")
-            self.set_class(application_open, "-application-picker-open")
             self._sync_focused_widget(event.widget)
 
     # ── Public accessors ────────────────────────────────────────────────────
@@ -355,6 +343,43 @@ class EmrServerlessPage(Widget):
         if self._picker is not None:
             self._picker.toggle_open()
 
+    def on_context_picker_open_changed(self, event: ContextPicker.OpenChanged) -> None:
+        event.stop()
+        self._queue_picker_reconcile(event.picker, event.is_open, event.intent_epoch)
+
+    def _queue_picker_reconcile(
+        self,
+        picker: Widget,
+        is_open: bool,
+        intent_epoch: int | None,
+    ) -> None:
+        if not self._picker_coordination_available():
+            return
+        epoch = intent_epoch
+        if epoch is None:
+            epoch = self._picker_open_intent.observe(picker, is_open)
+        self.call_after_refresh(partial(self._reconcile_open_pickers, epoch))
+
+    def _reconcile_open_pickers(self, epoch: int) -> None:
+        if not self._picker_coordination_available() or not self._picker_open_intent.is_current(
+            epoch
+        ):
+            return
+        pickers: tuple[ContextPicker | ApplicationPicker, ...] = tuple(self.query(ContextPicker))
+        if self._picker is not None:
+            pickers = (*pickers, self._picker)
+        desired = self._picker_open_intent.desired
+        if not isinstance(desired, ContextPicker | ApplicationPicker) or (
+            not desired.is_attached or not desired.is_open
+        ):
+            desired = None
+        for picker in pickers:
+            if picker is not desired and picker.is_open:
+                picker.close(refocus=False)
+
+    def _picker_coordination_available(self) -> bool:
+        return self.is_running and self.is_attached and self.display
+
     def on_application_picker_application_committed(
         self, event: ApplicationPicker.ApplicationCommitted
     ) -> None:
@@ -372,6 +397,10 @@ class EmrServerlessPage(Widget):
             exclusive=True,
             group="emr-select-app",
         )
+
+    def on_application_picker_open_changed(self, event: ApplicationPicker.OpenChanged) -> None:
+        event.stop()
+        self._queue_picker_reconcile(event.picker, event.is_open, event.intent_epoch)
 
     def action_cycle_panes_forward(self) -> None:
         self._cycle("right")

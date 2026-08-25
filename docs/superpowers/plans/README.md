@@ -35,6 +35,9 @@ current code, tests, README, and focused specs for the live behavior contract.
 17. [Iceberg cross-service integration](2026-07-22-iceberg-cross-service-integration.md) — Glue metadata inspection and bounded Athena/S3 handoffs.
 18. [Glue and Athena interaction polish](2026-07-30-glue-athena-interaction-polish.md) — selectors, focus rings, borders, and typed table transfer.
 19. [Post-merge audit remediation](2026-07-30-post-merge-audit-remediation.md) — runtime, documentation, and verification corrections.
+20. [Glue and Athena tab rail](2026-08-23-glue-athena-tab-rail.md) — standalone Glue source framing and selected/focused service tab presentation.
+21. [Glue and Athena segmented tabs and layout fixes](2026-08-23-glue-athena-segmented-tabs-layout-fixes.md) — segmented tab frames, scoped source edges, and responsive command packing.
+22. [Overlay pickers, one-line commands, and Athena handoffs](2026-08-24-overlay-pickers-command-handoffs.md) — implemented stable overlay selectors, compact tooltip-rich commands, and unified Glue-to-Athena table/snapshot actions.
 
 ## 1.3. VMx 3.1 Adoption Plans
 

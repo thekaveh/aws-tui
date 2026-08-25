@@ -42,6 +42,10 @@ class TestDefaults:
         assert store.resolve("glue.crawlers") == ("3",)
         assert store.resolve("glue.time_travel_in_athena") == ("V",)
 
+    def test_glue_query_in_athena_has_a_dedicated_binding(self) -> None:
+        store = KeymapStore()
+        assert store.resolve("glue.query_in_athena") == ("Q",)
+
     def test_athena_controls_have_dedicated_bindings(self) -> None:
         store = KeymapStore()
         assert store.resolve("athena.query") == ("1",)

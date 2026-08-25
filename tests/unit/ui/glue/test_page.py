@@ -8,6 +8,7 @@ from textual.widgets import OptionList, Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.app import AwsTuiApp
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
@@ -119,6 +120,15 @@ def _cycle_target_ids(
     assert app.focused is not None
     assert app.focused.id == visited[0]
     return tuple(visited)
+
+
+async def _prune_database_option_list(page: GluePage) -> None:
+    databases = page.query_one("#glue-databases-pane", ResourceListPane)
+    await databases.option_list.remove()
+
+    assert databases.is_mounted
+    with pytest.raises(NoMatches, match="OptionList"):
+        _ = databases.option_list
 
 
 @pytest.mark.asyncio
@@ -324,13 +334,17 @@ async def test_open_glue_filter_stays_inside_layout_flow_at_narrow_width() -> No
         run_filter = page.query_one("#glue-run-state-filter", ContextPicker)
         tabs = page.query_one("#glue-view-tabs", ServiceTabStrip)
         view_host = page.query_one("#glue-view-host")
+        before = (row.region, source.region, tabs.region, view_host.region)
 
         run_filter.open()
         await pilot.pause()
 
-        assert source.region.right <= run_filter.region.x
-        assert row.region.bottom <= tabs.region.y
-        assert tabs.region.bottom <= view_host.region.y
+        assert (row.region, source.region, tabs.region, view_host.region) == before
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert (row.region, source.region, tabs.region, view_host.region) == before
 
 
 @pytest.mark.asyncio
@@ -527,6 +541,257 @@ async def test_deferred_focus_projection_ignores_empty_teardown_ring(
         monkeypatch.setattr(page, "_focus_targets", lambda: ())
 
         page._maybe_focus_active(FocusSlot.NAV_MENU)  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_deferred_focus_projection_skips_target_collection_during_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        nav = app.query_one("#nav-menu", NavMenu)
+        nav.focus()
+        await pilot.pause()
+        await _prune_database_option_list(page)
+        executions: list[FocusSlot | None] = []
+        original_deferred_projection = page._deferred_maybe_focus_active  # type: ignore[attr-defined]
+
+        def tracked_deferred_projection(reference: FocusSlot | None = None) -> None:
+            executions.append(reference)
+            original_deferred_projection(reference)
+
+        monkeypatch.setattr(
+            page,
+            "_deferred_maybe_focus_active",
+            tracked_deferred_projection,
+        )
+        app.focus_coordinator.set_focused_slot(FocusSlot.GLUE_ICEBERG_TIME_TRAVEL)
+        page._on_child_vm_changed(  # type: ignore[attr-defined]
+            frozenset((FocusSlot.GLUE_ICEBERG_TIME_TRAVEL,)),
+            "selected_snapshot_id",
+        )
+        removal = app.screen.remove_children(GluePage)
+        assert not page.display
+
+        await removal
+        await pilot.pause()
+
+        assert executions == [FocusSlot.GLUE_ICEBERG_TIME_TRAVEL]
+
+
+@pytest.mark.asyncio
+async def test_synchronous_view_projection_surfaces_missing_focus_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        def missing_focus_targets() -> tuple[tuple[FocusSlot, object], ...]:
+            raise NoMatches("live focus ring defect")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(page, "_focus_targets", missing_focus_targets)
+            with pytest.raises(NoMatches, match="live focus ring defect"):
+                await page.action_select_view("jobs")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "missing_selector"),
+    [
+        ("_sync_view", "#glue-jobs-view"),
+        ("_sync_context", "#glue-run-state-filter"),
+    ],
+)
+async def test_live_glue_sync_surfaces_missing_widget(
+    method_name: str,
+    missing_selector: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        query_one = page.query_one
+
+        def missing_widget(selector: str, *args: object, **kwargs: object) -> object:
+            if selector == missing_selector:
+                raise NoMatches(f"live missing widget: {selector}")
+            return query_one(selector, *args, **kwargs)
+
+        monkeypatch.setattr(page, "query_one", missing_widget)
+        with pytest.raises(NoMatches, match="live missing widget"):
+            getattr(page, method_name)()
+
+
+@pytest.mark.asyncio
+async def test_live_glue_view_sync_surfaces_unexpected_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        def broken_query(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("live glue sync defect")
+
+        monkeypatch.setattr(page, "query_one", broken_query)
+        with pytest.raises(RuntimeError, match="live glue sync defect"):
+            page._sync_view()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_glue_sync_is_safe_during_page_teardown() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        removal = app.screen.remove_children(GluePage)
+        assert not page.display
+
+        page._sync_view()  # type: ignore[attr-defined]
+        page._sync_context()  # type: ignore[attr-defined]
+        await removal
+
+
+@pytest.mark.asyncio
+async def test_live_glue_picker_open_surfaces_missing_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        query_one = page.query_one
+
+        def missing_picker(selector: str, *args: object, **kwargs: object) -> object:
+            if selector == "#glue-run-state-filter":
+                raise NoMatches("live missing Glue picker")
+            return query_one(selector, *args, **kwargs)
+
+        monkeypatch.setattr(page, "query_one", missing_picker)
+        with pytest.raises(NoMatches, match="live missing Glue picker"):
+            page._focus_and_open_picker(  # type: ignore[attr-defined]
+                FocusSlot.GLUE_FILTER,
+                "#glue-run-state-filter",
+            )
+
+
+@pytest.mark.asyncio
+async def test_detached_glue_picker_open_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        removal = app.screen.remove_children(GluePage)
+        assert not page.display
+
+        def unexpected_query(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("detached Glue page queried its picker")
+
+        monkeypatch.setattr(page, "query_one", unexpected_query)
+        page._focus_and_open_picker(  # type: ignore[attr-defined]
+            FocusSlot.GLUE_FILTER,
+            "#glue-run-state-filter",
+        )
+        await removal
+
+
+@pytest.mark.asyncio
+async def test_focus_cycle_skips_target_collection_during_page_pruning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        nav = app.query_one("#nav-menu", NavMenu)
+        nav.focus()
+        await pilot.pause()
+        await _prune_database_option_list(page)
+        focused = app.focused
+        focused_slot = app.focus_coordinator.focused_slot
+        cycle_calls: list[bool] = []
+        original_cycle_focus = page.cycle_focus
+
+        def tracked_cycle_focus(*, reverse: bool) -> None:
+            cycle_calls.append(reverse)
+            original_cycle_focus(reverse=reverse)
+
+        monkeypatch.setattr(page, "cycle_focus", tracked_cycle_focus)
+        monkeypatch.setattr(app, "_glue_page", lambda: page, raising=False)
+        removal = app.screen.remove_children(GluePage)
+        assert not page.display
+
+        AwsTuiApp._cycle_focus(app, reverse=False)  # type: ignore[arg-type]
+
+        assert app.focused is focused
+        assert app.focus_coordinator.focused_slot is focused_slot
+        assert cycle_calls == [False]
+        await removal
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry_point", ["descendant_focus", "direct_projection"])
+async def test_focus_entry_points_skip_target_collection_during_page_pruning(
+    entry_point: str,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        nav = app.query_one("#nav-menu", NavMenu)
+        nav.focus()
+        await pilot.pause()
+        await _prune_database_option_list(page)
+        focused = app.focused
+        assert focused is not None
+        focused_slot = app.focus_coordinator.focused_slot
+        removal = app.screen.remove_children(GluePage)
+        assert not page.display
+
+        if entry_point == "descendant_focus":
+            page._sync_focused_widget(focused)  # type: ignore[attr-defined]
+        else:
+            page.project_focus_slot(FocusSlot.GLUE_PRIMARY)
+
+        assert app.focused is focused
+        assert app.focus_coordinator.focused_slot is focused_slot
+        await removal
 
 
 @pytest.mark.asyncio

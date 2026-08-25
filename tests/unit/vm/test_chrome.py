@@ -67,5 +67,5 @@ def test_chrome_hint_legend_starts_with_global_help_and_theme_controls() -> None
     global_ids = {a.action_id for a in chrome.hint_legend.global_actions}
     assert "app.themes" in global_ids
     assert "app.help" in global_ids
-    assert "app.command_palette" not in global_ids
+    assert "app.command_palette" in global_ids
     chrome.dispose()

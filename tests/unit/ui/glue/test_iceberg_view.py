@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import gc
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import ClassVar
 
@@ -9,6 +10,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Button, DataTable
+from textual.worker import NoActiveWorker, Worker, get_current_worker
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
@@ -18,7 +20,6 @@ from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.glue.page_vm import GluePageVM
-from aws_tui.vm.messages import OpenAthenaTableRequest
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
@@ -62,9 +63,16 @@ class _GlueIcebergApp(App[None]):
         Binding("space", "activate_space", "", show=False, priority=True),
     ]
 
-    def __init__(self, vm: GluePageVM) -> None:
+    def __init__(
+        self,
+        vm: GluePageVM,
+        *,
+        dispatcher: Callable[[str], Awaitable[None] | None] | None = None,
+    ) -> None:
         super().__init__()
         self._vm = vm
+        self._dispatcher = dispatcher
+        self.action_ids: list[str] = []
         self.focus_coordinator = FocusCoordinatorVM(
             hub=vm.hub,
             dispatcher=NULL_DISPATCHER,
@@ -86,6 +94,12 @@ class _GlueIcebergApp(App[None]):
 
     def action_activate_space(self) -> None:
         self.query_one(GluePage).activate_focused(space=True)
+
+    def action_dispatch(self, action_id: str) -> Awaitable[None] | None:
+        self.action_ids.append(action_id)
+        if self._dispatcher is not None:
+            return self._dispatcher(action_id)
+        return None
 
 
 @pytest.mark.asyncio
@@ -136,6 +150,139 @@ async def test_selecting_snapshot_tab_loads_rows_and_enables_time_travel() -> No
 
         assert vm.catalog.iceberg.selected_snapshot_id == 43
         assert not pilot.app.query_one("#glue-iceberg-time-travel", Button).disabled
+
+
+@pytest.mark.asyncio
+async def test_time_travel_button_dispatches_the_registry_action_once() -> None:
+    vm, _inspector = _build_vm()
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(140, 42)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-time-travel")
+        await pilot.pause()
+
+        assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
+
+
+@pytest.mark.asyncio
+async def test_time_travel_async_dispatch_is_created_and_completed_by_its_worker(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    vm, _inspector = _build_vm()
+    await vm.setup()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    created_by: list[Worker[object] | None] = []
+    completed: list[str] = []
+
+    def dispatch(action_id: str) -> Awaitable[None]:
+        try:
+            created_by.append(get_current_worker())
+        except NoActiveWorker:
+            created_by.append(None)
+
+        async def complete() -> None:
+            started.set()
+            await release.wait()
+            completed.append(action_id)
+
+        return complete()
+
+    async with _GlueIcebergApp(vm, dispatcher=dispatch).run_test(size=(140, 42)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await pilot.pause()
+        await pilot.click("#glue-iceberg-time-travel")
+        await asyncio.wait_for(started.wait(), timeout=2)
+
+        release.set()
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
+        assert len(created_by) == 1
+        assert created_by[0] is not None
+        assert completed == ["glue.time_travel_in_athena"]
+
+    gc.collect()
+    assert not [
+        warning
+        for warning in recwarn
+        if issubclass(warning.category, RuntimeWarning)
+        and "was never awaited" in str(warning.message)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_replaced_time_travel_async_dispatch_cancels_only_the_superseded_worker(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    vm, _inspector = _build_vm()
+    await vm.setup()
+    first_started = asyncio.Event()
+    first_cancelled = asyncio.Event()
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+    created_by: list[Worker[object] | None] = []
+    completed: list[str] = []
+    calls = 0
+
+    def dispatch(action_id: str) -> Awaitable[None]:
+        nonlocal calls
+        calls += 1
+        try:
+            created_by.append(get_current_worker())
+        except NoActiveWorker:
+            created_by.append(None)
+        current_call = calls
+
+        async def complete() -> None:
+            if current_call == 1:
+                first_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    first_cancelled.set()
+                    raise
+            else:
+                second_started.set()
+                await release_second.wait()
+                completed.append(action_id)
+
+        return complete()
+
+    async with _GlueIcebergApp(vm, dispatcher=dispatch).run_test(size=(140, 42)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await pilot.pause()
+        view = pilot.app.query_one(GlueIcebergView)
+        view._time_travel_selected()
+        await asyncio.wait_for(first_started.wait(), timeout=2)
+
+        view._time_travel_selected()
+        await asyncio.wait_for(first_cancelled.wait(), timeout=2)
+        await asyncio.wait_for(second_started.wait(), timeout=2)
+
+        release_second.set()
+        await _wait_until(lambda: completed == ["glue.time_travel_in_athena"])
+        await pilot.pause()
+
+        assert pilot.app.action_ids == [
+            "glue.time_travel_in_athena",
+            "glue.time_travel_in_athena",
+        ]
+        assert len(created_by) == 2
+        assert all(worker is not None for worker in created_by)
+        assert completed == ["glue.time_travel_in_athena"]
+
+    gc.collect()
+    assert not [
+        warning
+        for warning in recwarn
+        if issubclass(warning.category, RuntimeWarning)
+        and "was never awaited" in str(warning.message)
+    ]
 
 
 @pytest.mark.asyncio
@@ -223,13 +370,6 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
     vm.catalog.iceberg._page_size = 1  # type: ignore[attr-defined]
     inspector.errors["snapshots"] = PermissionError("denied")
     await vm.setup()
-    messages: list[OpenAthenaTableRequest] = []
-    subscription = vm.hub.messages.subscribe(
-        on_next=lambda message: (
-            messages.append(message) if isinstance(message, OpenAthenaTableRequest) else None
-        )
-    )
-
     async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
         snapshot_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
         pilot.app.set_focus(snapshot_tab)
@@ -259,13 +399,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         pilot.app.set_focus(time_travel)
         await pilot.press(key)
         await pilot.pause()
-        assert messages == [
-            OpenAthenaTableRequest(
-                table_ref=vm.catalog.table_detail.summary.ref,
-                snapshot_id=43,
-            )
-        ]
-    subscription.dispose()
+        assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
 
 
 @pytest.mark.asyncio
@@ -307,12 +441,6 @@ async def test_switching_from_snapshots_disables_time_travel_control() -> None:
 async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel() -> None:
     vm, _inspector = _build_vm()
     await vm.setup()
-    messages: list[OpenAthenaTableRequest] = []
-    subscription = vm.hub.messages.subscribe(
-        on_next=lambda message: (
-            messages.append(message) if isinstance(message, OpenAthenaTableRequest) else None
-        )
-    )
     notifications: list[str] = []
     selection_subscription = vm.catalog.iceberg.on_property_changed.subscribe(
         on_next=lambda name: notifications.append(name)
@@ -337,14 +465,8 @@ async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel(
         assert notifications.count("selected_snapshot_id") == selection_notifications
         await pilot.click("#glue-iceberg-time-travel")
         assert vm.catalog.iceberg.selected_snapshot_id == 42
-        assert messages == [
-            OpenAthenaTableRequest(
-                table_ref=vm.catalog.table_detail.summary.ref,
-                snapshot_id=42,
-            )
-        ]
+        assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
     selection_subscription.dispose()
-    subscription.dispose()
 
 
 @pytest.mark.asyncio

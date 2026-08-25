@@ -115,6 +115,13 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.2. Changed
 
+- **Overlay pickers, compact commands, and unified Athena handoffs.** Inline
+  service-context and EMR application dropdowns now overlay without resizing
+  adjacent panes. The Commands pane is one tooltip-rich row with deterministic
+  `[:] more` overflow, and Glue exposes `Shift+Q` table and `Shift+V` visible
+  snapshot handoffs through the same key, palette, and button action paths.
+  Both preserve exact source identity, prefill bounded Athena SQL, and never
+  execute it.
 - Pin Textual to the audited `8.2.8` runtime because aws-tui's isolated
   priority-binding, crash-recovery, and mount-lifecycle adapters consume
   private Textual contracts. Supporting another release now requires an

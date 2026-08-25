@@ -128,6 +128,7 @@ class KeymapStore:
         "glue.choose_run_state": ("F",),
         "glue.choose_crawler_state": ("G",),
         "glue.copy_table_ref": ("y",),
+        "glue.query_in_athena": ("Q",),
         "glue.time_travel_in_athena": ("V",),
         "athena.query": ("1",),
         "athena.history": ("2",),
