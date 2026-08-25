@@ -9,6 +9,10 @@ tests lock the open/closed contract in place.
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Callable
+
+import pytest
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import OptionList, Static
@@ -34,10 +38,14 @@ class _PickerApp(App[None]):
         super().__init__()
         self._vm = vm
         self._hub = hub
+        self.open_states: list[bool] = []
 
     def compose(self) -> ComposeResult:
         yield ApplicationPicker(self._vm, id="picker")
         yield _FocusableStatic(id="after-picker")
+
+    def on_application_picker_open_changed(self, event: ApplicationPicker.OpenChanged) -> None:
+        self.open_states.append(event.is_open)
 
 
 class _FocusableStatic(Static, can_focus=True):
@@ -191,6 +199,93 @@ async def test_closed_picker_cannot_run_stale_deferred_dropdown_focus() -> None:
 
         assert not picker.is_open
         assert pilot.app.focused is outside
+
+
+async def test_close_reopen_invalidates_stale_application_refocus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, hub = _make_vm()
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        picker = pilot.app.query_one(ApplicationPicker)
+        callbacks: list[Callable[[], None]] = []
+        monkeypatch.setattr(picker, "call_after_refresh", callbacks.append)
+
+        picker.toggle_open()
+        picker.close()
+        picker.toggle_open()
+        await pilot.pause()
+
+        assert len(callbacks) == 3
+        callbacks[2]()
+        await pilot.pause()
+        assert pilot.app.focused is picker.query_one("#app-options", OptionList)
+
+        callbacks[1]()
+        callbacks[0]()
+        await pilot.pause()
+        assert picker.is_open
+        assert pilot.app.focused is picker.query_one("#app-options", OptionList)
+
+
+def test_application_picker_close_uses_no_private_textual_lifecycle_state() -> None:
+    assert "_pruning" not in inspect.getsource(ApplicationPicker.close)
+
+
+async def test_application_picker_normal_close_emits_once() -> None:
+    vm, hub = _make_vm()
+    app = _PickerApp(vm, hub)
+    async with app.run_test() as pilot:
+        picker = app.query_one(ApplicationPicker)
+
+        picker.toggle_open()
+        await pilot.pause()
+        picker.close()
+        picker.close()
+        await pilot.pause()
+
+        assert app.open_states == [True, False]
+
+
+async def test_application_picker_unmount_relays_one_close_to_parent() -> None:
+    vm, hub = _make_vm()
+    app = _PickerApp(vm, hub)
+    async with app.run_test() as pilot:
+        picker = app.query_one(ApplicationPicker)
+
+        picker.toggle_open()
+        await pilot.pause()
+        await picker.remove()
+        await pilot.pause()
+
+        assert app.open_states == [True, False]
+
+
+async def test_application_picker_live_refresh_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, hub = _make_vm()
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        picker = pilot.app.query_one(ApplicationPicker)
+        value = picker.query_one(".app-value", Static)
+
+        def fail_update(_value: object) -> None:
+            raise RuntimeError("live application trigger defect")
+
+        monkeypatch.setattr(value, "update", fail_update)
+        with pytest.raises(RuntimeError, match="live application trigger defect"):
+            picker._refresh_trigger()  # type: ignore[attr-defined]
+
+
+async def test_application_picker_refresh_is_safe_after_child_teardown() -> None:
+    vm, hub = _make_vm()
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        picker = pilot.app.query_one(ApplicationPicker)
+        options = picker.query_one("#app-options", OptionList)
+        await options.remove()
+
+        picker._refresh_options()  # type: ignore[attr-defined]
 
 
 # ── action_commit (highlighted option → vm.select) ────────────────────────────

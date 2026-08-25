@@ -73,15 +73,6 @@ class EmrServerlessPage(Widget):
     EmrServerlessPage .emr-context-row > ApplicationPicker {
         width: 3fr;
     }
-    EmrServerlessPage.-source-picker-open .emr-context-row {
-        layout: vertical;
-    }
-    EmrServerlessPage.-source-picker-open
-        .emr-context-row > ServiceSourceHeader,
-    EmrServerlessPage.-source-picker-open
-        .emr-context-row > ApplicationPicker {
-        width: 1fr;
-    }
     EmrServerlessPage .emr-context-row > ServiceSourceHeader > ContextPicker {
         height: 1;
         min-height: 1;
@@ -96,6 +87,10 @@ class EmrServerlessPage(Widget):
     EmrServerlessPage .emr-app-box ServiceSourceHeader
         > ContextPicker > .context-picker-trigger {
         padding: 0;
+    }
+    EmrServerlessPage .emr-context-row > ServiceSourceHeader
+        ContextPicker > OverlayOptionList {
+        width: 30;
     }
     EmrServerlessPage .emr-app-box ApplicationPicker > .app-trigger > Static {
         height: 1;
@@ -240,9 +235,10 @@ class EmrServerlessPage(Widget):
             self.call_after_refresh(self._maybe_focus_left)
 
     def on_unmount(self) -> None:
+        if self._source_header is not None:
+            self._source_header.picker.close(refocus=False)
         if self._picker is not None:
             self._picker.close(refocus=False)
-        self.remove_class("-application-picker-open")
 
     def _maybe_focus_left(self) -> None:
         """Auto-focus the LEFT pane on initial page mount UNLESS a
@@ -286,10 +282,6 @@ class EmrServerlessPage(Widget):
                         event.widget, self._picker
                     ):
                         self._picker.close(refocus=False)
-            source_open = self._source_header is not None and self._source_header.picker.is_open
-            self.set_class(source_open, "-source-picker-open")
-            application_open = self._picker is not None and self._picker.is_open
-            self.set_class(application_open, "-application-picker-open")
             self._sync_focused_widget(event.widget)
 
     # ── Public accessors ────────────────────────────────────────────────────
@@ -348,9 +340,17 @@ class EmrServerlessPage(Widget):
 
     def action_open_application_picker(self) -> None:
         if self._picker is not None:
-            if self._source_header is not None:
-                self._source_header.picker.close(refocus=False)
             self._picker.toggle_open()
+
+    def on_context_picker_open_changed(self, event: ContextPicker.OpenChanged) -> None:
+        event.stop()
+        if not event.is_open:
+            return
+        for picker in self.query(ContextPicker):
+            if picker is not event.picker and picker.is_open:
+                picker.close(refocus=False)
+        if self._picker is not None and self._picker.is_open:
+            self._picker.close(refocus=False)
 
     def on_application_picker_application_committed(
         self, event: ApplicationPicker.ApplicationCommitted
@@ -371,10 +371,12 @@ class EmrServerlessPage(Widget):
         )
 
     def on_application_picker_open_changed(self, event: ApplicationPicker.OpenChanged) -> None:
-        if event.is_open and self._source_header is not None:
-            self._source_header.picker.close(refocus=False)
-            self.set_class(False, "-source-picker-open")
-        self.set_class(event.is_open, "-application-picker-open")
+        event.stop()
+        if not event.is_open:
+            return
+        for picker in self.query(ContextPicker):
+            if picker.is_open:
+                picker.close(refocus=False)
 
     def action_cycle_panes_forward(self) -> None:
         self._cycle("right")

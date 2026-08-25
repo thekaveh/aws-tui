@@ -252,6 +252,14 @@ class GluePage(HubSubscriberMixin, Widget):
                     group="glue-filter-crawlers",
                 )
 
+    def on_context_picker_open_changed(self, event: ContextPicker.OpenChanged) -> None:
+        event.stop()
+        if not event.is_open:
+            return
+        for picker in self.query(ContextPicker):
+            if picker is not event.picker and picker.is_open:
+                picker.close(refocus=False)
+
     def cycle_focus(self, *, reverse: bool) -> None:
         if self._focus_coordinator is None or not self._focus_projection_available():
             return
@@ -450,38 +458,38 @@ class GluePage(HubSubscriberMixin, Widget):
         self.call_after_refresh(partial(self._deferred_maybe_focus_active, reference))
 
     def _sync_view(self) -> None:
+        if not self._focus_projection_available():
+            return
         active = self._vm.active_view
-        for view in _VIEW_ORDER:
-            try:
-                child = self.query_one(f"#glue-{view}-view")
-            except Exception:
-                continue
+        children = tuple(self.query_one(f"#glue-{view}-view") for view in _VIEW_ORDER)
+        tabs = self.query_one("#glue-view-tabs", ServiceTabStrip)
+        for view, child in zip(_VIEW_ORDER, children, strict=True):
             child.display = view == active
-        with contextlib.suppress(Exception):
-            self.query_one("#glue-view-tabs", ServiceTabStrip).set_active(active)
+        tabs.set_active(active)
         self._sync_context()
 
     def _sync_context(self) -> None:
-        with contextlib.suppress(NoMatches):
-            run_filter = self.query_one("#glue-run-state-filter", ContextPicker)
-            run_filter.display = self._vm.active_view == "jobs"
-            if not run_filter.display:
-                run_filter.close(refocus=False)
-            run_filter.set_options(
-                tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
-                selected=self._job_filter_value(),
-            )
-            crawler_filter = self.query_one(
-                "#glue-crawler-state-filter",
-                ContextPicker,
-            )
-            crawler_filter.display = self._vm.active_view == "crawlers"
-            if not crawler_filter.display:
-                crawler_filter.close(refocus=False)
-            crawler_filter.set_options(
-                tuple(ContextOption(label, value) for label, value in _CRAWLER_FILTERS),
-                selected=self._vm.crawlers.state_filter or "ALL",
-            )
+        if not self._focus_projection_available():
+            return
+        run_filter = self.query_one("#glue-run-state-filter", ContextPicker)
+        crawler_filter = self.query_one(
+            "#glue-crawler-state-filter",
+            ContextPicker,
+        )
+        run_filter.display = self._vm.active_view == "jobs"
+        if not run_filter.display:
+            run_filter.close(refocus=False)
+        run_filter.set_options(
+            tuple(ContextOption(label, value) for label, value in _RUN_FILTERS),
+            selected=self._job_filter_value(),
+        )
+        crawler_filter.display = self._vm.active_view == "crawlers"
+        if not crawler_filter.display:
+            crawler_filter.close(refocus=False)
+        crawler_filter.set_options(
+            tuple(ContextOption(label, value) for label, value in _CRAWLER_FILTERS),
+            selected=self._vm.crawlers.state_filter or "ALL",
+        )
 
     def _job_filter_value(self) -> str:
         return next(iter(sorted(self._vm.jobs.run_state_filter)), "ALL")

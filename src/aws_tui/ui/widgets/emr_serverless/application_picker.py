@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Iterable
+from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -19,7 +19,7 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from aws_tui.domain.emr_serverless import ApplicationState
-from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList
+from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList, PickerFocusIntent
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -120,9 +120,14 @@ class ApplicationPicker(Widget, can_focus=True):
     class OpenChanged(TextualMessage):
         """Posted whenever the option-list visibility changes."""
 
-        def __init__(self, is_open: bool) -> None:
+        def __init__(self, picker: ApplicationPicker, is_open: bool) -> None:
             super().__init__()
+            self.picker = picker
             self.is_open = is_open
+
+        @property
+        def control(self) -> ApplicationPicker:
+            return self.picker
 
     def __init__(
         self,
@@ -134,13 +139,20 @@ class ApplicationPicker(Widget, can_focus=True):
         super().__init__(id=id, classes=classes)
         self._vm: ApplicationsVM = vm
         self._sub: DisposableBase | None = None
+        self._focus_intent = PickerFocusIntent()
+        self._marker_widget: Static | None = None
+        self._value_widget: Static | None = None
+        self._option_list: OverlayOptionList | None = None
 
     def compose(self) -> ComposeResult:
         marker, value = self._trigger_fragments()
+        self._marker_widget = Static(marker, classes="app-marker")
+        self._value_widget = Static(value, classes="app-value")
+        self._option_list = OverlayOptionList(*self._build_options(), id="app-options")
         with Horizontal(classes="app-trigger"):
-            yield Static(marker, classes="app-marker")
-            yield Static(value, classes="app-value")
-        yield OverlayOptionList(*self._build_options(), id="app-options")
+            yield self._marker_widget
+            yield self._value_widget
+        yield self._option_list
 
     def on_mount(self) -> None:
         # Round-3 directive §9.bis.11 / PR #103 retirement: subscribe
@@ -153,12 +165,10 @@ class ApplicationPicker(Widget, can_focus=True):
 
     def on_unmount(self) -> None:
         was_open = self.is_open
-        self.close(refocus=False)
+        self._focus_intent.advance()
+        self.remove_class("-open")
         if was_open and self.parent is not None:
-            # A pruned picker can no longer bubble its own queued message.
-            # Route the close signal through its still-attached parent so the
-            # page clears its lifecycle class before the picker detaches.
-            self.parent.post_message(self.OpenChanged(False))
+            self.parent.post_message(self.OpenChanged(self, False))
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
@@ -175,9 +185,17 @@ class ApplicationPicker(Widget, can_focus=True):
         if self.is_open:
             self.close()
         else:
-            self.add_class("-open")
-            self.post_message(self.OpenChanged(True))
-            self.call_after_refresh(self._prepare_open_dropdown)
+            self.open()
+
+    def open(self) -> None:
+        """Show and focus the application option list."""
+
+        was_open = self.is_open
+        epoch = self._focus_intent.advance()
+        self.add_class("-open")
+        if not was_open:
+            self.post_message(self.OpenChanged(self, True))
+        self.call_after_refresh(partial(self._prepare_open_dropdown, epoch))
 
     def action_close(self) -> None:
         self.close()
@@ -186,11 +204,12 @@ class ApplicationPicker(Widget, can_focus=True):
         """Collapse the list without stealing an in-progress focus transfer."""
 
         was_open = self.is_open
+        epoch = self._focus_intent.advance()
         self.remove_class("-open")
-        if was_open and not self._pruning:
-            self.post_message(self.OpenChanged(False))
-        if refocus:
-            self.call_after_refresh(self._refocus)
+        if was_open:
+            self.post_message(self.OpenChanged(self, False))
+        if was_open and refocus and self.is_attached:
+            self.call_after_refresh(partial(self._refocus, epoch))
 
     def action_activate(self) -> None:
         if self.has_class("-open"):
@@ -199,9 +218,8 @@ class ApplicationPicker(Widget, can_focus=True):
             self.toggle_open()
 
     def action_commit(self) -> None:
-        try:
-            opts = self.query_one("#app-options", OptionList)
-        except Exception:
+        opts = self._option_list
+        if opts is None or not opts.is_attached:
             return
         if opts.highlighted is None:
             return
@@ -272,10 +290,9 @@ class ApplicationPicker(Widget, can_focus=True):
             self.call_after_refresh(self._refresh_options)
 
     def _refresh_trigger(self) -> None:
-        try:
-            marker = self.query_one(".app-marker", Static)
-            value = self.query_one(".app-value", Static)
-        except Exception:
+        marker = self._marker_widget
+        value = self._value_widget
+        if marker is None or value is None or not marker.is_attached or not value.is_attached:
             return
         marker_text, value_text = self._trigger_fragments()
         marker.update(marker_text)
@@ -296,9 +313,12 @@ class ApplicationPicker(Widget, can_focus=True):
         )
         tooltip = None if selected is None else f"{selected.name} · {selected.state.value}"
         self.tooltip = tooltip
-        with contextlib.suppress(Exception):
-            (marker or self.query_one(".app-marker", Static)).tooltip = tooltip
-            (value or self.query_one(".app-value", Static)).tooltip = tooltip
+        marker = marker or self._marker_widget
+        value = value or self._value_widget
+        if marker is not None and marker.is_attached:
+            marker.tooltip = tooltip
+        if value is not None and value.is_attached:
+            value.tooltip = tooltip
 
     def _trigger_fragments(self) -> tuple[str, str]:
         """Split the selected-state marker from the trigger text."""
@@ -318,9 +338,8 @@ class ApplicationPicker(Widget, can_focus=True):
         return _state_marker(match.state), _escape_markup(match.name)
 
     def _refresh_options(self) -> None:
-        try:
-            opts = self.query_one("#app-options", OptionList)
-        except Exception:
+        opts = self._option_list
+        if opts is None or not opts.is_attached:
             return
         # The dedup-on-set guard that used to live here (PR #100(b)) has
         # moved into ApplicationsVM.refresh() per the round-3 directive
@@ -328,23 +347,28 @@ class ApplicationPicker(Widget, can_focus=True):
         # poll, so a PropertyChangedMessage reaching this handler means
         # the data actually changed. The View just rebuilds.
         options = self._build_options()
-        opts.clear_options()
-        for opt in options:
-            opts.add_option(opt)
+        opts.set_options(options)
 
-    def _focus_dropdown(self) -> None:
-        if not self.is_open or not self.is_mounted:
+    def _focus_dropdown(self, epoch: int) -> None:
+        opts = self._option_list
+        if (
+            not self._focus_intent.is_current(epoch)
+            or not self.is_open
+            or not self.is_attached
+            or opts is None
+            or not opts.is_attached
+        ):
             return
-        with contextlib.suppress(Exception):
-            opts = self.query_one("#app-options", OptionList)
-            opts.focus()
+        opts.focus()
 
-    def _prepare_open_dropdown(self) -> None:
+    def _prepare_open_dropdown(self, epoch: int) -> None:
+        if not self._focus_intent.is_current(epoch) or not self.is_open:
+            return
         self._refresh_options()
-        self._focus_dropdown()
+        self._focus_dropdown(epoch)
 
-    def _refocus(self) -> None:
-        if self.is_mounted:
+    def _refocus(self, epoch: int) -> None:
+        if self._focus_intent.is_current(epoch) and not self.is_open and self.is_attached:
             self.focus()
 
     def _trigger_label(self) -> str:

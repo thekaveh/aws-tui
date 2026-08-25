@@ -606,6 +606,75 @@ async def test_synchronous_view_projection_surfaces_missing_focus_target(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "missing_selector"),
+    [
+        ("_sync_view", "#glue-jobs-view"),
+        ("_sync_context", "#glue-run-state-filter"),
+    ],
+)
+async def test_live_glue_sync_surfaces_missing_widget(
+    method_name: str,
+    missing_selector: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        query_one = page.query_one
+
+        def missing_widget(selector: str, *args: object, **kwargs: object) -> object:
+            if selector == missing_selector:
+                raise NoMatches(f"live missing widget: {selector}")
+            return query_one(selector, *args, **kwargs)
+
+        monkeypatch.setattr(page, "query_one", missing_widget)
+        with pytest.raises(NoMatches, match="live missing widget"):
+            getattr(page, method_name)()
+
+
+@pytest.mark.asyncio
+async def test_live_glue_view_sync_surfaces_unexpected_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        def broken_query(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("live glue sync defect")
+
+        monkeypatch.setattr(page, "query_one", broken_query)
+        with pytest.raises(RuntimeError, match="live glue sync defect"):
+            page._sync_view()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_glue_sync_is_safe_during_page_teardown() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        removal = app.screen.remove_children(GluePage)
+        assert not page.display
+
+        page._sync_view()  # type: ignore[attr-defined]
+        page._sync_context()  # type: ignore[attr-defined]
+        await removal
+
+
+@pytest.mark.asyncio
 async def test_focus_cycle_skips_target_collection_during_page_pruning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

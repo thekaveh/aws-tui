@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 from textual.app import App, ComposeResult
 from textual.color import Color
@@ -153,6 +155,80 @@ async def test_context_picker_closed_before_deferred_focus_cannot_reclaim_focus(
 
         assert not picker.is_open
         assert pilot.app.focused is outside
+
+
+@pytest.mark.asyncio
+async def test_context_picker_close_reopen_invalidates_stale_refocus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test() as pilot:
+        callbacks: list[Callable[[], None]] = []
+        monkeypatch.setattr(picker, "call_after_refresh", callbacks.append)
+
+        picker.open()
+        picker.close()
+        picker.open()
+        await pilot.pause()
+
+        assert len(callbacks) == 3
+        callbacks[2]()
+        await pilot.pause()
+        assert pilot.app.focused is picker.query_one(OverlayOptionList)
+
+        callbacks[1]()
+        callbacks[0]()
+        await pilot.pause()
+        assert picker.is_open
+        assert pilot.app.focused is picker.query_one(OverlayOptionList)
+
+
+@pytest.mark.asyncio
+async def test_context_picker_live_refresh_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test() as pilot:
+        await pilot.pause()
+        value = picker.query_one(".context-picker-value", Static)
+
+        def fail_update(_value: object) -> None:
+            raise RuntimeError("live context trigger defect")
+
+        monkeypatch.setattr(value, "update", fail_update)
+        with pytest.raises(RuntimeError, match="live context trigger defect"):
+            picker._refresh_trigger()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_context_picker_refresh_is_safe_after_child_teardown() -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test() as pilot:
+        await pilot.pause()
+        value = picker.query_one(".context-picker-value", Static)
+        await value.remove()
+
+        picker._refresh_trigger()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_context_picker_deduplicates_repeated_stable_values() -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test() as pilot:
+        await pilot.pause()
+
+        picker.set_options(
+            (
+                ContextOption("Primary", "primary"),
+                ContextOption("Duplicate primary", "primary"),
+                ContextOption("Analytics", "analytics"),
+            ),
+            selected="primary",
+        )
+
+        options = picker.query_one(OverlayOptionList).options
+        assert [option.id for option in options] == ["primary", "analytics"]
+        assert str(options[0].prompt) == "Primary"
 
 
 @pytest.mark.asyncio

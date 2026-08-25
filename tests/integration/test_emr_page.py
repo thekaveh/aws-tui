@@ -551,7 +551,6 @@ async def test_switching_away_from_emr_closes_open_application_picker(tmp_path: 
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
             await _await_emr_mount(pilot, app)
 
-            page = app.query_one(EmrServerlessPage)
             picker = app.query_one(ApplicationPicker)
             refocus_calls = 0
 
@@ -562,7 +561,7 @@ async def test_switching_away_from_emr_closes_open_application_picker(tmp_path: 
             picker._refocus = record_refocus  # type: ignore[method-assign]
             picker.toggle_open()
             await pilot.pause()
-            assert page.has_class("-application-picker-open")
+            assert picker.is_open
 
             ctx.root_vm.services_menu.switch_service_command.execute("s3")
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
@@ -570,7 +569,6 @@ async def test_switching_away_from_emr_closes_open_application_picker(tmp_path: 
 
             assert not picker.is_open
             assert not picker.is_running
-            assert not page.has_class("-application-picker-open")
             assert refocus_calls == 0
     finally:
         with contextlib.suppress(Exception):

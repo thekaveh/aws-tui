@@ -288,6 +288,14 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 group="athena-context",
             )
 
+    def on_context_picker_open_changed(self, event: ContextPicker.OpenChanged) -> None:
+        event.stop()
+        if not event.is_open:
+            return
+        for picker in self.query(ContextPicker):
+            if picker is not event.picker and picker.is_open:
+                picker.close(refocus=False)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         loaders = {
             "athena-more-workgroups": self._vm.load_more_workgroups,

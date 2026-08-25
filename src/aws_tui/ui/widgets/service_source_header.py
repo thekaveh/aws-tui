@@ -76,10 +76,13 @@ class ServiceSourceHeader(Widget, can_focus=True):
         self._candidate_values = {
             str(index): candidate for index, candidate in enumerate(self._candidates)
         }
+        self._picker: ContextPicker | None = None
 
     @property
     def picker(self) -> ContextPicker:
-        return self.query_one(ContextPicker)
+        if self._picker is None:
+            raise RuntimeError("source picker is unavailable for this header")
+        return self._picker
 
     def _picker_options(self) -> tuple[ContextOption, ...]:
         return tuple(
@@ -106,12 +109,13 @@ class ServiceSourceHeader(Widget, can_focus=True):
                 markup=False,
             )
             return
-        yield ContextPicker(
+        self._picker = ContextPicker(
             "AWS source",
             self._picker_options(),
             selected=self._active_value(),
             id=f"{self.id}-picker" if self.id is not None else None,
         )
+        yield self._picker
 
     def action_open_picker(self) -> None:
         self.open()

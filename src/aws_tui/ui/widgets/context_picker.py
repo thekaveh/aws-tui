@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import partial
 from typing import ClassVar
 
 from rich.markup import escape as escape_markup
@@ -17,7 +17,7 @@ from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
-from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList
+from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList, PickerFocusIntent
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +26,13 @@ class ContextOption:
 
     label: str
     value: str
+
+
+def _deduplicate_options(options: tuple[ContextOption, ...]) -> tuple[ContextOption, ...]:
+    by_value: dict[str, ContextOption] = {}
+    for option in options:
+        by_value.setdefault(option.value, option)
+    return tuple(by_value.values())
 
 
 class ContextPicker(Widget, can_focus=True):
@@ -91,6 +98,18 @@ class ContextPicker(Widget, can_focus=True):
         def control(self) -> ContextPicker:
             return self.picker
 
+    class OpenChanged(Message):
+        """Posted whenever the option-list visibility changes."""
+
+        def __init__(self, picker: ContextPicker, is_open: bool) -> None:
+            super().__init__()
+            self.picker = picker
+            self.is_open = is_open
+
+        @property
+        def control(self) -> ContextPicker:
+            return self.picker
+
     def __init__(
         self,
         label: str,
@@ -103,11 +122,17 @@ class ContextPicker(Widget, can_focus=True):
         super().__init__(id=id, classes=classes)
         self.border_title = label
         self._label = label
-        self._options = options
-        self._value = selected if any(option.value == selected for option in options) else None
+        self._options = _deduplicate_options(options)
+        self._value = (
+            selected if any(option.value == selected for option in self._options) else None
+        )
         self._loading = False
         self._warning = False
         self._error = False
+        self._focus_intent = PickerFocusIntent()
+        self._value_widget: Static | None = None
+        self._indicator_widget: Static | None = None
+        self._option_list: OverlayOptionList | None = None
 
     @property
     def value(self) -> str | None:
@@ -126,13 +151,23 @@ class ContextPicker(Widget, can_focus=True):
         return f"{self.id}-options" if self.id is not None else "context-picker-options"
 
     def compose(self) -> ComposeResult:
+        self._value_widget = Static(classes="context-picker-value", markup=False)
+        self._indicator_widget = Static(classes="context-picker-indicator", markup=False)
+        self._option_list = OverlayOptionList(id=self._options_id)
         with Horizontal(classes="context-picker-trigger"):
-            yield Static(classes="context-picker-value", markup=False)
-            yield Static(classes="context-picker-indicator", markup=False)
-        yield OverlayOptionList(id=self._options_id)
+            yield self._value_widget
+            yield self._indicator_widget
+        yield self._option_list
 
     def on_mount(self) -> None:
         self._refresh()
+
+    def on_unmount(self) -> None:
+        was_open = self.is_open
+        self._focus_intent.advance()
+        self.remove_class("-open")
+        if was_open and self.parent is not None:
+            self.parent.post_message(self.OpenChanged(self, False))
 
     def set_options(
         self,
@@ -142,8 +177,10 @@ class ContextPicker(Widget, can_focus=True):
     ) -> None:
         """Replace choices and synchronize the committed service value."""
 
-        self._options = options
-        self._value = selected if any(option.value == selected for option in options) else None
+        self._options = _deduplicate_options(options)
+        self._value = (
+            selected if any(option.value == selected for option in self._options) else None
+        )
         self._refresh()
 
     def set_state(
@@ -175,20 +212,28 @@ class ContextPicker(Widget, can_focus=True):
 
         if self.disabled or self._loading:
             return
+        was_open = self.is_open
+        epoch = self._focus_intent.advance()
         self._refresh_options()
         self.add_class("-open")
         self._refresh_trigger()
-        self.call_after_refresh(self._focus_options)
+        if not was_open:
+            self.post_message(self.OpenChanged(self, True))
+        self.call_after_refresh(partial(self._focus_options, epoch))
 
     def close(self, *, restore: bool = True, refocus: bool = True) -> None:
         """Hide the option list and optionally restore its cursor to the value."""
 
+        was_open = self.is_open
+        epoch = self._focus_intent.advance()
         self.remove_class("-open")
         self._refresh_trigger()
         if restore:
             self._restore_highlight()
-        if refocus and not self.disabled:
-            self.call_after_refresh(self._refocus)
+        if was_open:
+            self.post_message(self.OpenChanged(self, False))
+        if was_open and refocus and not self.disabled and self.is_attached:
+            self.call_after_refresh(partial(self._refocus, epoch))
 
     def action_toggle_picker(self) -> None:
         if self.is_open:
@@ -241,38 +286,43 @@ class ContextPicker(Widget, can_focus=True):
         self._refresh_options()
 
     def _refresh_trigger(self) -> None:
-        with contextlib.suppress(Exception):
-            self.query_one(".context-picker-value", Static).update(self._trigger_value())
-            self.query_one(".context-picker-indicator", Static).update("▴" if self.is_open else "▾")
+        value = self._value_widget
+        indicator = self._indicator_widget
+        if value is None or indicator is None or not value.is_attached or not indicator.is_attached:
+            return
+        value.update(self._trigger_value())
+        indicator.update("▴" if self.is_open else "▾")
 
     def _refresh_options(self) -> None:
-        with contextlib.suppress(Exception):
-            option_list = self.query_one(OverlayOptionList)
-            option_list.clear_options()
-            for option in self._build_options():
-                option_list.add_option(option)
-            self._restore_highlight()
+        option_list = self._option_list
+        if option_list is None or not option_list.is_attached:
+            return
+        option_list.set_options(self._build_options())
+        self._restore_highlight()
 
     def _restore_highlight(self) -> None:
-        with contextlib.suppress(Exception):
-            option_list = self.query_one(OverlayOptionList)
-            option_list.highlighted = next(
-                (
-                    index
-                    for index, option in enumerate(self._options)
-                    if option.value == self._value
-                ),
-                None,
-            )
-
-    def _focus_options(self) -> None:
-        if not self.is_open or not self.is_mounted:
+        option_list = self._option_list
+        if option_list is None or not option_list.is_attached:
             return
-        with contextlib.suppress(Exception):
-            self.query_one(OverlayOptionList).focus()
+        option_list.highlighted = next(
+            (index for index, option in enumerate(self._options) if option.value == self._value),
+            None,
+        )
 
-    def _refocus(self) -> None:
-        if self.is_mounted:
+    def _focus_options(self, epoch: int) -> None:
+        option_list = self._option_list
+        if (
+            not self._focus_intent.is_current(epoch)
+            or not self.is_open
+            or not self.is_attached
+            or option_list is None
+            or not option_list.is_attached
+        ):
+            return
+        option_list.focus()
+
+    def _refocus(self, epoch: int) -> None:
+        if self._focus_intent.is_current(epoch) and not self.is_open and self.is_attached:
             self.focus()
 
     def _trigger_value(self) -> str:

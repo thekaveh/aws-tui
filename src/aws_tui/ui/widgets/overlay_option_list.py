@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import ClassVar
 
 from textual.binding import Binding, BindingType
 from textual.events import Blur
 from textual.message import Message
 from textual.widgets import OptionList
+
+
+@dataclass(slots=True)
+class PickerFocusIntent:
+    """Monotonic guard for picker focus callbacks deferred by Textual."""
+
+    epoch: int = 0
+
+    def advance(self) -> int:
+        self.epoch += 1
+        return self.epoch
+
+    def is_current(self, epoch: int) -> bool:
+        return epoch == self.epoch
 
 
 class OverlayOptionList(OptionList):
@@ -30,4 +45,4 @@ class OverlayOptionList(OptionList):
             self.post_message(self.Dismissed(lost_focus=True))
 
 
-__all__ = ["OverlayOptionList"]
+__all__ = ["OverlayOptionList", "PickerFocusIntent"]

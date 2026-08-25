@@ -515,6 +515,34 @@ async def test_named_context_actions_close_previously_open_picker() -> None:
 
 
 @pytest.mark.asyncio
+async def test_programmatic_context_opens_keep_only_the_newest_picker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        workgroup = app.query_one("#athena-workgroup", ContextPicker)
+        catalog = app.query_one("#athena-catalog", ContextPicker)
+        monkeypatch.setattr(workgroup, "call_after_refresh", lambda _callback: None)
+        monkeypatch.setattr(catalog, "call_after_refresh", lambda _callback: None)
+
+        workgroup.open()
+        await pilot.pause()
+        catalog.open()
+        await pilot.pause()
+        assert catalog.is_open
+        assert not workgroup.is_open
+
+        workgroup.open()
+        await pilot.pause()
+        assert workgroup.is_open
+        assert not catalog.is_open
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("reverse", "expected_id"),
     [(False, "athena-database"), (True, "athena-workgroup")],
