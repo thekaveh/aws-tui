@@ -139,6 +139,7 @@ class HintLegend(HubSubscriberMixin, Widget):
         self._hub = hub
         self._rebuild_generation = 0
         self._rebuild_scheduled = False
+        self._initialized = False
         self.border_title = "Commands"
 
     @property
@@ -160,9 +161,14 @@ class HintLegend(HubSubscriberMixin, Widget):
     def on_unmount(self) -> None:
         self._rebuild_generation += 1
         self._rebuild_scheduled = False
+        self._initialized = False
         self.unsubscribe_from_vm()
 
-    def on_resize(self, _event: Resize) -> None:
+    async def on_resize(self, _event: Resize) -> None:
+        if not self._initialized:
+            self._rebuild_generation += 1
+            await self._rebuild_chips()
+            return
         self._request_rebuild()
 
     def _on_vm_property_changed(self, property_name: str) -> None:
@@ -174,7 +180,8 @@ class HintLegend(HubSubscriberMixin, Widget):
 
     def _request_rebuild(self) -> None:
         self._rebuild_generation += 1
-        self._schedule_rebuild()
+        if self._initialized:
+            self._schedule_rebuild()
 
     def _schedule_rebuild(self) -> None:
         if self._rebuild_scheduled or not self.is_attached:
@@ -202,6 +209,7 @@ class HintLegend(HubSubscriberMixin, Widget):
             if not self.is_attached:
                 return
             replacement_completed = True
+            self._initialized = True
         finally:
             self._rebuild_scheduled = False
             if (

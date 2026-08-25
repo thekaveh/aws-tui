@@ -152,6 +152,105 @@ class _HintApp(App[None]):
 
 
 @pytest.mark.asyncio
+async def test_hint_legend_initializes_before_test_driver_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, hub = _athena_hint_vm()
+    mount = Horizontal.mount
+    mount_boundary_reached = asyncio.Event()
+    release_mount = asyncio.Event()
+    initial_rebuild_complete = asyncio.Event()
+    context_entered = asyncio.Event()
+    driver_control = asyncio.Event()
+    allow_driver_exit = asyncio.Event()
+    scheduled_after_refresh: list[object] = []
+    ordering: list[str] = []
+    observed_ids: tuple[str, ...] = ()
+    expected_ids: tuple[str, ...] = ()
+    rebuild_chips = HintLegend._rebuild_chips
+
+    def capture_after_refresh(
+        _legend: HintLegend,
+        callback: object,
+        *_args: object,
+        **_kwargs: object,
+    ) -> bool:
+        scheduled_after_refresh.append(callback)
+        return True
+
+    def mount_with_boundary(
+        host: Horizontal,
+        *widgets: Widget,
+        before: int | str | Widget | None = None,
+        after: int | str | Widget | None = None,
+    ) -> Awaitable[None]:
+        pending = mount(host, *widgets, before=before, after=after)
+        if host.id != "hint-strip":
+            return pending
+        ordering.append("initial-rebuild")
+
+        async def wait_for_mount() -> None:
+            mount_boundary_reached.set()
+            await release_mount.wait()
+            await pending
+
+        return wait_for_mount()
+
+    async def track_initial_rebuild(legend: HintLegend) -> None:
+        await rebuild_chips(legend)
+        initial_rebuild_complete.set()
+
+    monkeypatch.setattr(HintLegend, "call_after_refresh", capture_after_refresh)
+    monkeypatch.setattr(HintLegend, "_rebuild_chips", track_initial_rebuild)
+    monkeypatch.setattr(Horizontal, "mount", mount_with_boundary)
+
+    async def run_driver() -> None:
+        nonlocal expected_ids, observed_ids
+        async with _HintApp(vm, hub).run_test(size=(80, 24)) as pilot:
+            ordering.append("driver-context")
+            context_entered.set()
+            await initial_rebuild_complete.wait()
+            legend = pilot.app.query_one(HintLegend)
+            observed_ids = _visible_hint_ids(legend)
+            expected_ids = _expected_hint_ids(legend)
+            driver_control.set()
+            await allow_driver_exit.wait()
+
+    driver_task = asyncio.create_task(run_driver())
+    mount_waiter = asyncio.create_task(mount_boundary_reached.wait())
+    context_waiter = asyncio.create_task(context_entered.wait())
+    try:
+        completed, _pending = await asyncio.wait(
+            (mount_waiter, context_waiter),
+            timeout=2,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        assert mount_waiter in completed
+        assert ordering[0] == "initial-rebuild"
+        assert not initial_rebuild_complete.is_set()
+        assert not driver_control.is_set()
+        assert not scheduled_after_refresh
+
+        release_mount.set()
+        await asyncio.wait_for(driver_control.wait(), timeout=2)
+
+        assert observed_ids == expected_ids
+        assert observed_ids
+    finally:
+        release_mount.set()
+        initial_rebuild_complete.set()
+        allow_driver_exit.set()
+        for waiter in (mount_waiter, context_waiter):
+            if not waiter.done():
+                waiter.cancel()
+        await asyncio.gather(mount_waiter, context_waiter, return_exceptions=True)
+        await driver_task
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
 async def test_hint_legend_is_one_compact_row_at_wide_athena_width() -> None:
     vm, hub = _athena_hint_vm()
     try:
@@ -322,9 +421,13 @@ async def test_hint_legend_holds_compositor_frame_until_replacement_finishes(
         def __init__(self, vm: HintLegendVM, hub: MessageHub) -> None:
             super().__init__(vm, hub)
             self.display_count = 0
+            self.probing_compositor = False
+            self.probe_display_count = 0
 
         def post_display_hook(self) -> None:
             self.display_count += 1
+            if self.probing_compositor:
+                self.probe_display_count += 1
 
     try:
         app = _FrameHintApp(vm, hub)
@@ -354,7 +457,6 @@ async def test_hint_legend_holds_compositor_frame_until_replacement_finishes(
                 return wait_for_mount()
 
             monkeypatch.setattr(Horizontal, "mount", mount_with_boundary)
-            frame_count_before_rebuild = app.display_count
 
             vm.set_current_service("settings")
             await asyncio.wait_for(mount_boundary_reached.wait(), timeout=2)
@@ -364,14 +466,19 @@ async def test_hint_legend_holds_compositor_frame_until_replacement_finishes(
                 # boundaries wait for this deliberately blocked callback. A
                 # direct timer tick is the only deterministic, delay-free way
                 # to offer the compositor a frame while AwaitMount is held.
-                app.screen._on_timer_update()
+                app.probing_compositor = True
+                try:
+                    app.screen._on_timer_update()
+                finally:
+                    app.probing_compositor = False
 
-                assert app.display_count == frame_count_before_rebuild
+                assert app.probe_display_count == 0
+                frame_count_before_release = app.display_count
             finally:
                 release_mount.set()
 
             await pilot.pause()
-            assert app.display_count > frame_count_before_rebuild
+            assert app.display_count > frame_count_before_release
             assert _visible_hint_ids(legend) == _expected_hint_ids(legend)
     finally:
         vm.dispose()
@@ -388,7 +495,7 @@ async def test_hint_legend_coalesces_resize_and_vm_rebuild_requests() -> None:
 
             for service_id in ("glue", "settings", "s3", "athena"):
                 vm.set_current_service(service_id)
-                legend.on_resize(resize)
+                await legend.on_resize(resize)
 
             await pilot.pause()
 
