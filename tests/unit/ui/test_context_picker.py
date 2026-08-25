@@ -141,6 +141,21 @@ async def test_context_picker_loses_open_state_without_refocusing_on_blur() -> N
 
 
 @pytest.mark.asyncio
+async def test_context_picker_closed_before_deferred_focus_cannot_reclaim_focus() -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test() as pilot:
+        outside = pilot.app.query_one("#after-picker", Static)
+
+        picker.open()
+        picker.close(refocus=False)
+        outside.focus()
+        await pilot.pause()
+
+        assert not picker.is_open
+        assert pilot.app.focused is outside
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("key", ["tab", "shift+tab"], ids=("forward", "reverse"))
 async def test_context_picker_focus_cycle_back_to_owner_closes_overlay(key: str) -> None:
     picker = _picker()

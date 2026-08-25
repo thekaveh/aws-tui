@@ -8,6 +8,7 @@ from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.await_remove import AwaitRemove
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, OptionList
 from textual.worker import Worker
@@ -149,33 +150,38 @@ class AthenaHistoryView(Widget):
             )
         except Exception:
             return
-        listing.replace(
-            tuple(
-                (
-                    row.ref.execution_id,
-                    f"{row.state.value:<10}  {row.ref.execution_id}",
-                )
-                for row in self._vm.items
-            ),
-            selected_id=self._vm.selected_execution_id,
-            state=self._vm.state,
-            error_text=self._vm.error_text,
-            has_more=self._vm.has_more,
-        )
-        detail.replace(
-            self._detail_values(),
-            state=self._vm.state,
-            error_text=self._vm.error_text,
-            empty_text="Select an execution",
-        )
-        selected = self._vm.detail
-        results.disabled = selected is None or selected.summary.state is not QueryState.SUCCEEDED
-        load_more.sync(
-            has_more=self._vm.has_more,
-            busy=self._vm.is_loading_more,
-            state=self._vm.state,
-            error_text=self._vm.error_text,
-        )
+        try:
+            listing.replace(
+                tuple(
+                    (
+                        row.ref.execution_id,
+                        f"{row.state.value:<10}  {row.ref.execution_id}",
+                    )
+                    for row in self._vm.items
+                ),
+                selected_id=self._vm.selected_execution_id,
+                state=self._vm.state,
+                error_text=self._vm.error_text,
+                has_more=self._vm.has_more,
+            )
+            detail.replace(
+                self._detail_values(),
+                state=self._vm.state,
+                error_text=self._vm.error_text,
+                empty_text="Select an execution",
+            )
+            selected = self._vm.detail
+            results.disabled = (
+                selected is None or selected.summary.state is not QueryState.SUCCEEDED
+            )
+            load_more.sync(
+                has_more=self._vm.has_more,
+                busy=self._vm.is_loading_more,
+                state=self._vm.state,
+                error_text=self._vm.error_text,
+            )
+        except NoMatches:
+            return
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         detail = self._vm.detail

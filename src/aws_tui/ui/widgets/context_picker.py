@@ -266,6 +266,8 @@ class ContextPicker(Widget, can_focus=True):
             )
 
     def _focus_options(self) -> None:
+        if not self.is_open or not self.is_mounted:
+            return
         with contextlib.suppress(Exception):
             self.query_one(OverlayOptionList).focus()
 

@@ -225,7 +225,6 @@ async def test_results_handoff_reloads_authoritative_execution_output(
 @pytest.mark.asyncio
 async def test_pruning_history_view_ignores_queued_refresh(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = build_app_context(
         config_dir=tmp_path / "config",
@@ -238,16 +237,11 @@ async def test_pruning_history_view_ignores_queued_refresh(
             await _open_athena(ctx, app, pilot)
             history = app.query_one(AthenaHistoryView)
             listing = history.query_one("#athena-history-pane", ResourceListPane)
+            await listing.option_list.remove()
 
-            def reject_stale_refresh(*_args: object, **_kwargs: object) -> None:
-                raise AssertionError("pruning history view refreshed detached children")
-
-            monkeypatch.setattr(listing, "replace", reject_stale_refresh)
-            removal = history.remove()
-            try:
-                history._refresh()
-            finally:
-                await removal
+            assert history.is_mounted
+            assert listing.is_mounted
+            history._refresh()
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

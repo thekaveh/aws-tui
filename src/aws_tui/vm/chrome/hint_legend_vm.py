@@ -162,6 +162,10 @@ _ACTION_EFFECTS: dict[str, str] = {
     "pane.switch_focus": "Move keyboard focus to the next operational pane.",
     "pane.descend": "Open the selected item or descend into the selected location.",
     "pane.copy": "Copy the selected item through the existing transfer workflow.",
+    "pane.move": (
+        "Move the selected item through the existing transfer workflow. "
+        "This removes the source item after a successful transfer."
+    ),
     "pane.delete": "Delete the selected item through the existing confirmation workflow.",
     "pane.refresh": "Reload the active operational surface from its current source.",
     "emr.next_application": (

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.widgets import OptionList
+from textual.widgets import OptionList, Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
@@ -37,6 +37,11 @@ class _PickerApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield ApplicationPicker(self._vm, id="picker")
+        yield _FocusableStatic(id="after-picker")
+
+
+class _FocusableStatic(Static, can_focus=True):
+    pass
 
 
 # ── _trigger_label (pure) ─────────────────────────────────────────────────────
@@ -171,6 +176,21 @@ async def test_action_close_removes_open_class() -> None:
         picker.action_close()
         await pilot.pause()
         assert "-open" not in picker.classes
+
+
+async def test_closed_picker_cannot_run_stale_deferred_dropdown_focus() -> None:
+    vm, hub = _make_vm()
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        picker = pilot.app.query_one(ApplicationPicker)
+        outside = pilot.app.query_one("#after-picker", Static)
+
+        picker.toggle_open()
+        picker.close(refocus=False)
+        outside.focus()
+        await pilot.pause()
+
+        assert not picker.is_open
+        assert pilot.app.focused is outside
 
 
 # ── action_commit (highlighted option → vm.select) ────────────────────────────

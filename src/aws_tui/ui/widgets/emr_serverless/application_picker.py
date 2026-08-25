@@ -333,6 +333,8 @@ class ApplicationPicker(Widget, can_focus=True):
             opts.add_option(opt)
 
     def _focus_dropdown(self) -> None:
+        if not self.is_open or not self.is_mounted:
+            return
         with contextlib.suppress(Exception):
             opts = self.query_one("#app-options", OptionList)
             opts.focus()

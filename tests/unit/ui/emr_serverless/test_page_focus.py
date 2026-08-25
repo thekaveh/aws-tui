@@ -118,12 +118,19 @@ async def test_keyboard_opening_application_picker_closes_source_picker() -> Non
 
     async with app.run_test() as pilot:
         await pilot.pause()
+        page = app.query_one(EmrServerlessPage)
         source_picker = app.query_one("#emr-source-header-picker", ContextPicker)
         application_picker = app.query_one(ApplicationPicker)
         assert source_picker.is_open
-
-        application_picker.focus()
+        app.set_focus(source_picker.query_one(OptionList))
         await pilot.pause()
+        assert app.focused is source_picker.query_one(OptionList)
+
+        page.action_cycle_panes_forward()
+        await pilot.pause()
+        assert app.focused is application_picker
+        assert not source_picker.is_open
+
         await pilot.press("enter")
         async with asyncio.timeout(1.0):
             while source_picker.is_open or not application_picker.is_open:
