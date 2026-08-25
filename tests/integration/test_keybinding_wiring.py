@@ -56,6 +56,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("F", "dispatch('glue.choose_run_state')", False, False),
     ("G", "dispatch('glue.choose_crawler_state')", False, False),
     ("y", "dispatch('glue.copy_table_ref')", False, False),
+    ("Q", "dispatch('glue.query_in_athena')", False, False),
     ("V", "dispatch('glue.time_travel_in_athena')", False, False),
     ("1", "dispatch('athena.query')", False, False),
     ("2", "dispatch('athena.history')", False, False),
@@ -92,6 +93,7 @@ def test_default_bindings_match_runtime_contract(app_context_factory) -> None:  
 def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     app = AwsTuiApp(app_context_factory())
     keys = set(app._bindings.key_to_bindings)
+    assert ("Q", "dispatch('glue.query_in_athena')", False, False) in _installed(app)
     # Deferred (handlerless) actions' keys must NOT be bound: filter (slash),
     # enter_multiselect (v), select_all/authenticate (a), move (m), new (n).
     # (`space`->quick_look and `:`/`ctrl+k`->command_palette are now wired.)

@@ -26,6 +26,7 @@ from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
 # chrome" controls. User feedback after PR #80 asked for these on the
 # same Commands pane after the service-specific chips.
 _GLOBAL_ACTIONS: tuple[str, ...] = (
+    "app.command_palette",
     "app.themes",
     "app.cycle_theme",
     "app.help",
@@ -60,6 +61,8 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "glue.choose_run_state",
         "glue.choose_crawler_state",
         "glue.copy_table_ref",
+        "glue.query_in_athena",
+        "glue.time_travel_in_athena",
         "pane.refresh",
         "app.swap_source",
     ),
@@ -97,6 +100,7 @@ _FALLBACK_SERVICE_ACTIONS: tuple[str, ...] = _SERVICE_ACTIONS["s3"]
 # tail-segment of the action id (e.g. "pane.copy" -> "copy"). Keeping this
 # inline avoids a separate config file and lines up with the spec §4.1 chips.
 _ACTION_LABELS: dict[str, str] = {
+    "app.command_palette": "more",
     "pane.descend": "open",
     "pane.ascend": "up",
     "pane.quick_look": "peek",
@@ -112,16 +116,10 @@ _ACTION_LABELS: dict[str, str] = {
     "pane.enter_multiselect": "multi",
     "app.help": "help",
     "app.themes": "themes",
-    # Both ``app.cycle_theme`` and ``app.swap_source`` semantically
-    # "switch X". User feedback: don't compress one to "cycle" and
-    # leave the other as "swap src" — make both read the same
-    # ("switch") with the noun differing. They sit far apart in the
-    # row so the parallel reads naturally; we don't shorten "switch"
-    # to "cycle" for either to avoid the "cycle theme is confusing"
-    # complaint (cycle theme reads as "cycle a theme attribute" not
-    # "rotate to the next theme").
-    "app.cycle_theme": "switch theme",
-    "app.swap_source": "switch source",
+    # Compact chrome labels leave room for the renderer's later
+    # width-aware selection.
+    "app.cycle_theme": "next theme",
+    "app.swap_source": "source",
     "emr.next_application": "switch app",
     "app.quit": "quit",
     "auth.authenticate": "sign in",
@@ -133,19 +131,126 @@ _ACTION_LABELS: dict[str, str] = {
     "glue.crawlers": "crawlers",
     "glue.choose_run_state": "run state",
     "glue.choose_crawler_state": "crawler state",
-    "glue.copy_table_ref": "copy table",
+    "glue.copy_table_ref": "copy",
+    "glue.query_in_athena": "Athena",
+    "glue.time_travel_in_athena": "snapshot",
     "athena.query": "query",
     "athena.history": "history",
     "athena.results": "results",
     "athena.saved": "saved",
-    "athena.choose_workgroup": "workgroup",
+    "athena.choose_workgroup": "group",
     "athena.choose_catalog": "catalog",
     "athena.choose_database": "database",
-    "athena.insert_table_ref": "insert table",
-    "athena.execute": "execute",
-    "athena.cancel": "cancel",
-    "athena.load_more": "load more",
+    "athena.insert_table_ref": "table",
+    "athena.execute": "run",
+    "athena.cancel": "stop",
+    "athena.load_more": "more",
 }
+
+_ACTION_EFFECTS: dict[str, str] = {
+    "app.command_palette": (
+        "Open commands available for the active service. This does not perform an AWS operation."
+    ),
+    "app.themes": "Open the theme picker. This changes presentation only.",
+    "app.cycle_theme": "Switch to the next theme. This changes presentation only.",
+    "app.help": "Open keyboard and workflow help. This does not perform an AWS operation.",
+    "app.quit": "Exit aws-tui after the application's normal shutdown sequence.",
+    "app.swap_source": (
+        "Switch to the next configured source and rebuild the active service context. "
+        "This does not write AWS resources."
+    ),
+    "pane.switch_focus": "Move keyboard focus to the next operational pane.",
+    "pane.descend": "Open the selected item or descend into the selected location.",
+    "pane.copy": "Copy the selected item through the existing transfer workflow.",
+    "pane.delete": "Delete the selected item through the existing confirmation workflow.",
+    "pane.refresh": "Reload the active operational surface from its current source.",
+    "emr.next_application": (
+        "Select the next EMR Serverless application and load its runs. This does not start a job."
+    ),
+    "emr.clone": "Open the clone workflow for the selected EMR Serverless job run.",
+    "glue.catalog": "Show the Glue Catalog view. This performs read-only discovery.",
+    "glue.jobs": "Show Glue jobs and their read-only run history.",
+    "glue.crawlers": "Show Glue crawlers and their read-only state.",
+    "glue.choose_run_state": "Open the Glue job-run state filter.",
+    "glue.choose_crawler_state": "Open the Glue crawler-state filter.",
+    "glue.copy_table_ref": "Copy the selected Glue table's fully qualified SQL identifier.",
+    "glue.query_in_athena": (
+        "Open the selected Glue table in Athena and prefill a bounded read-only SELECT. "
+        "This does not execute the query."
+    ),
+    "glue.time_travel_in_athena": (
+        "Open the selected Iceberg snapshot in Athena and prefill FOR VERSION AS OF SQL. "
+        "This does not execute the query."
+    ),
+    "athena.query": "Show the Athena query editor.",
+    "athena.history": "Show read-only Athena query history.",
+    "athena.results": "Show rows for the current Athena execution.",
+    "athena.saved": "Show saved Athena queries.",
+    "athena.choose_workgroup": "Open the Athena workgroup selector.",
+    "athena.choose_catalog": "Open the Athena catalog selector.",
+    "athena.choose_database": "Open the Athena database selector.",
+    "athena.insert_table_ref": "Insert the same-source copied Glue table at the editor cursor.",
+    "athena.execute": "Execute the validated read-only SQL in the active Athena context.",
+    "athena.cancel": "Stop the active app-owned Athena query execution.",
+    "athena.load_more": "Load the next available page for the active Athena view.",
+}
+
+_ACTION_REQUIREMENTS: dict[str, str] = {
+    "pane.copy": "Requires a copyable selected item.",
+    "pane.delete": "Requires a deletable selected item.",
+    "emr.clone": "Requires a selected cloneable job run.",
+    "glue.copy_table_ref": "Requires a visible selected Glue table.",
+    "glue.query_in_athena": "Requires a visible selected Glue table.",
+    "glue.time_travel_in_athena": "Requires a visible selected snapshot row.",
+    "athena.insert_table_ref": "Requires a copied table from the active Athena source.",
+    "athena.execute": "Requires valid non-empty read-only SQL and an idle query runner.",
+    "athena.cancel": "Requires an active app-owned Athena query.",
+    "athena.load_more": "Requires another result page in the active Athena view.",
+}
+
+_ACTION_PRIORITIES: dict[str, int] = {
+    "app.command_palette": 0,
+    "app.quit": 0,
+    "athena.execute": 10,
+    "athena.cancel": 10,
+    "glue.query_in_athena": 10,
+    "glue.time_travel_in_athena": 10,
+    "app.swap_source": 20,
+    "pane.refresh": 20,
+    "glue.catalog": 80,
+    "glue.jobs": 80,
+    "glue.crawlers": 80,
+    "athena.query": 80,
+    "athena.history": 80,
+    "athena.results": 80,
+    "athena.saved": 80,
+    "app.themes": 90,
+    "app.cycle_theme": 90,
+    "app.help": 90,
+}
+
+
+def _canonical_shortcut(key: str) -> str:
+    """Return the user-facing form of a configured key sequence."""
+    names = {
+        "ctrl": "Control",
+        "shift": "Shift",
+        "enter": "Enter",
+        "escape": "Escape",
+    }
+    parts = key.split("+")
+    implicit_shift = any(len(part) == 1 and part.isupper() for part in parts)
+    rendered = [names.get(part.lower(), part.upper() if len(part) == 1 else part) for part in parts]
+    if implicit_shift and "Shift" not in rendered:
+        rendered.insert(-1, "Shift")
+    return " + ".join(rendered)
+
+
+def _tooltip_for(action_id: str, key: str, *, enabled: bool) -> str:
+    lines = [f"Shortcut: {_canonical_shortcut(key)}", "", _ACTION_EFFECTS[action_id]]
+    if not enabled and action_id in _ACTION_REQUIREMENTS:
+        lines.extend(("", _ACTION_REQUIREMENTS[action_id]))
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +270,9 @@ class HintAction:
     action_id: str
     key_label: str
     action_label: str
+    tooltip: str
+    priority: int = 50
+    overflow_only: bool = False
     enabled: bool = True
 
 
@@ -368,6 +476,13 @@ class HintLegendVM:
             action_id=action_id,
             key_label=keys[0],
             action_label=label,
+            tooltip=_tooltip_for(
+                action_id,
+                keys[0],
+                enabled=action_id not in self._disabled_actions,
+            ),
+            priority=_ACTION_PRIORITIES.get(action_id, 50),
+            overflow_only=action_id == "app.command_palette",
             enabled=action_id not in self._disabled_actions,
         )
 

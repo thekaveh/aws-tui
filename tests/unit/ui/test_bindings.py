@@ -41,6 +41,17 @@ def test_source_and_emr_application_bindings_have_distinct_descriptions() -> Non
     assert by_key["A"].description == "Next EMR application"
 
 
+def test_glue_query_handoff_has_a_dedicated_binding_description() -> None:
+    resolver = BindingResolver(
+        keymap=KeymapStore(),
+        actions=_registry("glue.query_in_athena"),
+    )
+    by_key = {binding.key: binding for binding in resolver.to_textual_bindings()}
+
+    assert by_key["Q"].action == "dispatch('glue.query_in_athena')"
+    assert by_key["Q"].description == "Open selected Glue table in Athena"
+
+
 def test_priority_true_except_quit() -> None:
     actions = _registry(
         "app.quit",
@@ -85,9 +96,9 @@ def test_punctuation_keys_translate_to_textual_names() -> None:
 
 
 def test_overlay_keymap_reflects_in_bindings() -> None:
-    keymap = KeymapStore(overlay={"app.quit": "Q"})
+    keymap = KeymapStore(overlay={"app.quit": "X"})
     resolver = BindingResolver(keymap=keymap, actions=_registry("app.quit"))
-    quit_bindings = [b for b in resolver.to_textual_bindings() if b.key == "Q"]
+    quit_bindings = [b for b in resolver.to_textual_bindings() if b.key == "X"]
     # Single key now since overlay replaces wholesale.
     assert len(quit_bindings) == 1
     assert quit_bindings[0].action == "dispatch('app.quit')"
