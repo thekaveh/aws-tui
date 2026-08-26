@@ -107,6 +107,7 @@ class FocusCoordinatorVM:
         self._focus_sub: DisposableBase = self._focus_discriminator.active_changed.subscribe(
             on_next=self._emit_changed
         )
+        self._underlying_slot_override: FocusSlot | None = None
         self._disposed = False
         self._inner: ComponentVM = (
             ComponentVM.builder().name("focus_coordinator").services(hub, dispatcher).build()
@@ -161,6 +162,16 @@ class FocusCoordinatorVM:
     def project_focused_slot(self, slot: FocusSlot) -> None:
         """Project widget focus without breaking modal precedence."""
         if self.is_modal:
+            return
+        self.set_focused_slot(slot)
+
+    def set_underlying_slot(self, slot: FocusSlot) -> None:
+        """Change the slot restored after a modal without dismissing it."""
+        if slot is FocusSlot.MODAL:
+            self.modal_open()
+            return
+        if self.is_modal:
+            self._underlying_slot_override = slot
             return
         self.set_focused_slot(slot)
 
@@ -258,12 +269,18 @@ class FocusCoordinatorVM:
         slot so :meth:`modal_close` can restore it."""
         if self.focused_slot is FocusSlot.MODAL:
             return
+        self._underlying_slot_override = None
         self._focus_discriminator.modal_open(FocusSlot.MODAL)
 
     def modal_close(self) -> None:
         """Pop the MODAL precedence slot. Restores the prior
         non-modal slot. No-op when no modal is open."""
         if self.focused_slot is not FocusSlot.MODAL:
+            return
+        if self._underlying_slot_override is not None:
+            target = self._underlying_slot_override
+            self._underlying_slot_override = None
+            self._focus_discriminator.set_active_key(target)
             return
         self._focus_discriminator.modal_close()
 
@@ -279,6 +296,7 @@ class FocusCoordinatorVM:
         if self._disposed:
             return
         self._disposed = True
+        self._underlying_slot_override = None
         self._focus_sub.dispose()
         self._focus_discriminator.dispose()
         self._inner.dispose()

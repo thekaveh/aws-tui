@@ -350,6 +350,21 @@ def test_view_projection_cannot_overwrite_modal_restore_slot() -> None:
     vm.dispose()
 
 
+def test_underlying_slot_change_preserves_modal_until_close() -> None:
+    vm = _make()
+    vm.set_focused_slot(FocusSlot.GLUE_PRIMARY)
+    vm.modal_open()
+
+    vm.set_underlying_slot(FocusSlot.S3_RIGHT)
+
+    assert vm.focused_slot is FocusSlot.MODAL
+    assert vm.is_modal
+    vm.modal_close()
+    assert vm.focused_slot is FocusSlot.S3_RIGHT
+    assert not vm.is_modal
+    vm.dispose()
+
+
 def test_modal_restore_uses_public_discriminator_api() -> None:
     """VMx owns modal restore state through its public API."""
     vm = _make()

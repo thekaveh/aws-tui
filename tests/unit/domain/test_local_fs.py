@@ -1143,7 +1143,49 @@ async def test_progress_callback_called(tmp_path: Path) -> None:
 async def test_read_missing_raises(tmp_path: Path) -> None:
     fs = _make_fs(tmp_path)
     with pytest.raises(NotFoundError):
-        await fs.read_stream(PathRef.from_posix("/nope"))
+        await _drain(await fs.read_stream(PathRef.from_posix("/nope")))
+
+
+async def test_read_stream_does_not_open_until_iteration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import local_fs
+
+    (tmp_path / "payload.txt").write_bytes(b"payload")
+    calls = 0
+    real_open = local_fs._rooted_open
+
+    def _recording_open(*args: object, **kwargs: object) -> int:
+        nonlocal calls
+        calls += 1
+        return real_open(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(local_fs, "_rooted_open", _recording_open)
+    stream = await LocalFS(root=tmp_path).read_stream(PathRef.from_posix("/payload.txt"))
+
+    assert calls == 0
+    await stream.aclose()
+    assert calls == 0
+
+
+async def test_read_stream_closes_descriptor_when_fstat_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import local_fs
+
+    (tmp_path / "payload.txt").write_bytes(b"payload")
+    closed: list[int] = []
+    monkeypatch.setattr(local_fs, "_rooted_open", lambda *_args, **_kwargs: 777)
+    monkeypatch.setattr(local_fs.os, "fstat", lambda _fd: (_ for _ in ()).throw(OSError("boom")))
+    monkeypatch.setattr(local_fs.os, "close", closed.append)
+
+    stream = await LocalFS(root=tmp_path).read_stream(PathRef.from_posix("/payload.txt"))
+    with pytest.raises(ProviderError):
+        await _drain(stream)
+
+    assert closed == [777]
 
 
 # ---------------------------------------------------------------------------
@@ -1227,7 +1269,7 @@ async def test_read_refuses_leaf_replaced_with_external_symlink(
     monkeypatch.setattr(local_fs, "_open_nofollow", race)
 
     with pytest.raises(ConflictError, match="refusing symlink"):
-        await LocalFS(root=root).read_stream(PathRef.from_posix("/file"))
+        await _drain(await LocalFS(root=root).read_stream(PathRef.from_posix("/file")))
 
     assert outside.read_bytes() == b"outside"
 
@@ -1341,7 +1383,7 @@ async def test_rooted_read_fails_when_secure_relative_traversal_is_unavailable(
     monkeypatch.setattr(local_fs, "_supports_secure_dir_fd", lambda: False, raising=False)
 
     with pytest.raises(ProviderError, match="secure relative filesystem operations"):
-        await LocalFS(root=tmp_path).read_stream(PathRef.from_posix("/file"))
+        await _drain(await LocalFS(root=tmp_path).read_stream(PathRef.from_posix("/file")))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX no-follow capability contract")
@@ -1353,7 +1395,7 @@ async def test_unrooted_read_fails_when_no_follow_open_is_unavailable(
     monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
 
     with pytest.raises(ProviderError, match="no-follow file opens"):
-        await LocalFS().read_stream(PathRef.from_posix(target.as_posix()))
+        await _drain(await LocalFS().read_stream(PathRef.from_posix(target.as_posix())))
 
 
 # ---------------------------------------------------------------------------

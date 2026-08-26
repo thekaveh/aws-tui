@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -14,7 +15,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.cross_fs import ConflictResolution
-from aws_tui.domain.filesystem import PathRef
+from aws_tui.domain.filesystem import NotFoundError, PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneVM
@@ -70,6 +71,42 @@ async def test_dual_construct_dispose(tmp_path: Path) -> None:
     assert dp.focused == FocusedPane.LEFT
     dp.dispose()
     assert dp.status == ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_dual_setup_starts_both_panes_concurrently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dp, _ = await _make_dual(tmp_path)
+    left_started = asyncio.Event()
+    right_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _left_setup() -> None:
+        left_started.set()
+        await release.wait()
+
+    async def _right_setup() -> None:
+        right_started.set()
+        await release.wait()
+
+    monkeypatch.setattr(dp.left, "setup", _left_setup)
+    monkeypatch.setattr(dp.right, "setup", _right_setup)
+    setup_task = asyncio.create_task(dp.setup())
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(left_started.wait(), right_started.wait()),
+            timeout=0.5,
+        )
+        release.set()
+        await setup_task
+    finally:
+        release.set()
+        setup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await setup_task
+        dp.dispose()
 
 
 @pytest.mark.asyncio
@@ -506,19 +543,22 @@ async def test_outer_cancellation_preserves_copy_that_already_completed(
 
     try:
         dp.left.enter_multiselect_command.execute()
-        dp.left.toggle_select_command.execute()
+        dp.left.select_all_command.execute()
 
         transfer = asyncio.create_task(dp.copy_across())
-        await transfer
+        with pytest.raises(asyncio.CancelledError):
+            await transfer
 
         copied = b"".join(
             [chunk async for chunk in await dp.right.provider.read_stream(PathRef(("alpha.txt",)))]
         )
         assert copied == b"alpha-bytes"
-        assert progress_states[-1] is TransferState.COMPLETED
-        assert TransferState.CANCELLED not in progress_states
+        with pytest.raises(NotFoundError):
+            await dp.right.provider.stat(PathRef(("beta.txt",)))
+        assert TransferState.COMPLETED in progress_states
+        assert progress_states[-1] is TransferState.CANCELLED
         assert len(finished) == 1
-        assert aborted == []
+        assert len(aborted) == 1
         assert dp._journal.find_unfinished() == []
     finally:
         subscription.dispose()

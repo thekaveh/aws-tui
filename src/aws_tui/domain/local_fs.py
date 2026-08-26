@@ -17,7 +17,7 @@ import ntpath
 import os
 import shutil
 import stat
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from ctypes import wintypes
 from datetime import UTC, datetime
@@ -616,36 +616,57 @@ class LocalFS:
         self, path: PathRef, *, chunk_size: int = _DEFAULT_CHUNK_SIZE
     ) -> AsyncIterator[bytes]:
         host = self._resolve_leaf(path)
-        try:
-            if _WINDOWS:
-                fd = await anyio.to_thread.run_sync(
-                    _windows_open,
-                    self._root,
-                    path,
-                    os.O_RDONLY,
-                )
-            elif self._root is not None:
-                fd = await anyio.to_thread.run_sync(
-                    _rooted_open,
-                    self._root,
-                    path,
-                    os.O_RDONLY,
-                )
-            else:
-                fd = await anyio.to_thread.run_sync(_open_nofollow, host.as_posix(), os.O_RDONLY)
-            opened = os.fstat(fd)
-            if not stat.S_ISREG(opened.st_mode):
-                os.close(fd)
-                raise ConflictError(f"not a regular file: {host.as_posix()}")
-        except FileNotFoundError as exc:
-            raise NotFoundError(host.as_posix()) from exc
-        except PermissionError as exc:
-            raise PermissionDeniedError(host.as_posix()) from exc
-        except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                raise ConflictError(f"refusing symlink: {host.as_posix()}") from exc
-            raise _map_os_error(exc, host.as_posix()) from exc
-        return _read_chunks_fd(fd, host.as_posix(), chunk_size)
+
+        async def _iterate() -> AsyncIterator[bytes]:
+            fd: int | None = None
+            handed_off = False
+            try:
+                if _WINDOWS:
+                    fd = await anyio.to_thread.run_sync(
+                        _windows_open,
+                        self._root,
+                        path,
+                        os.O_RDONLY,
+                    )
+                elif self._root is not None:
+                    fd = await anyio.to_thread.run_sync(
+                        _rooted_open,
+                        self._root,
+                        path,
+                        os.O_RDONLY,
+                    )
+                else:
+                    fd = await anyio.to_thread.run_sync(
+                        _open_nofollow,
+                        host.as_posix(),
+                        os.O_RDONLY,
+                    )
+                opened = os.fstat(fd)
+                if not stat.S_ISREG(opened.st_mode):
+                    raise ConflictError(f"not a regular file: {host.as_posix()}")
+                handed_off = True
+            except FileNotFoundError as exc:
+                raise NotFoundError(host.as_posix()) from exc
+            except PermissionError as exc:
+                raise PermissionDeniedError(host.as_posix()) from exc
+            except OSError as exc:
+                if exc.errno == errno.ELOOP:
+                    raise ConflictError(f"refusing symlink: {host.as_posix()}") from exc
+                raise _map_os_error(exc, host.as_posix()) from exc
+            finally:
+                if fd is not None and not handed_off:
+                    with suppress(OSError):
+                        os.close(fd)
+
+            assert fd is not None
+            stream = _read_chunks_fd(fd, host.as_posix(), chunk_size)
+            try:
+                async for chunk in stream:
+                    yield chunk
+            finally:
+                await stream.aclose()
+
+        return _iterate()
 
     async def write_stream(
         self,
@@ -1696,7 +1717,7 @@ def _local_stable_identity(value: os.stat_result) -> tuple[int, int, int, int]:
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
 
 
-async def _read_chunks_fd(fd: int, filename: str, chunk_size: int) -> AsyncIterator[bytes]:
+async def _read_chunks_fd(fd: int, filename: str, chunk_size: int) -> AsyncGenerator[bytes, None]:
     """Async generator yielding ``chunk_size`` blocks from a local file."""
     try:
         async with aiofiles.open(fd, "rb", closefd=True) as fh:

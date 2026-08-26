@@ -136,6 +136,19 @@ _GLUE_SERVICE_IDS = frozenset({"glue"})
 _ATHENA_SERVICE_IDS = frozenset({"athena"})
 _EMR_SERVICE_IDS = frozenset({"emr-serverless"})
 
+_MODAL_ROUTED_ACTIONS = frozenset(
+    {
+        "pane.switch_focus",
+        "pane.switch_focus_back",
+        "pane.move_up",
+        "pane.move_down",
+        "pane.descend",
+        "pane.ascend",
+        "pane.modal_left",
+        "pane.modal_right",
+    }
+)
+
 _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
     PaletteEntry("app.themes", "Theme picker", "app"),
     PaletteEntry("app.cycle_theme", "Cycle theme", "app"),
@@ -1532,18 +1545,11 @@ class AwsTuiApp(App[None]):
         :meth:`App.action_quit` (just ``self.exit()``), bypassing
         :meth:`_aws_tui_shutdown` entirely — aioboto3 client closures,
         in-flight transfer cancellation, log-sink flush, and VM
-        disposal all leaked at exit. The async coroutine
-        :meth:`action_app_quit` was wired but never invoked because no
-        binding routed to it.
+        disposal all leaked at exit.
         """
         self.record_action("app.quit")
         await self._aws_tui_shutdown()
         self.exit()
-
-    # BindingResolver maps user-defined ``[keybindings].app.quit`` entries
-    # through this alias so every route reaches the same shutdown path.
-    async def action_app_quit(self) -> None:
-        await self.action_quit()
 
     def _handle_quit(self) -> None:
         # Synchronous fallback for the BindingResolver bridge that
@@ -1559,6 +1565,10 @@ class AwsTuiApp(App[None]):
         holds the real handler. Returning the handler's awaitable (if any)
         lets Textual await async actions.
         """
+        if (
+            len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal
+        ) and action_id not in _MODAL_ROUTED_ACTIONS:
+            return None
         return self._actions.invoke(action_id)
 
     def _on_palette_action_message(self, message: object) -> None:
@@ -3813,8 +3823,9 @@ class AwsTuiApp(App[None]):
             focused = FocusedPane.LEFT if request.preferred_pane == "left" else FocusedPane.RIGHT
             slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
             dual.set_focused(focused)
-            ctx.focus_coordinator.set_focused_slot(slot)
-            self._project_focus_slot(slot)
+            ctx.focus_coordinator.set_underlying_slot(slot)
+            if not ctx.focus_coordinator.is_modal:
+                self._project_focus_slot(slot)
         except asyncio.CancelledError:
             if not self._s3_handoff_was_superseded(snapshot):
                 await self._restore_s3_handoff_snapshot(snapshot)
@@ -4268,6 +4279,7 @@ class AwsTuiApp(App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            self._restore_navigation_after_failed_adoption("Settings")
             return
         try:
             # ``await`` both the remove and the mount so a cancelled
@@ -4364,6 +4376,7 @@ class AwsTuiApp(App[None]):
                 service_id=service_id,
                 error_type=type(exc).__name__,
             )
+            self._restore_navigation_after_failed_adoption(service_id)
             return False
         try:
             current_vm = ctx.root_vm.content_host.current
@@ -4398,6 +4411,36 @@ class AwsTuiApp(App[None]):
             )
             return False
         return True
+
+    def _restore_navigation_after_failed_adoption(self, requested_id: str) -> None:
+        """Realign tentative navigation chrome with the still-hosted content."""
+        ctx = self._app_ctx
+        current_id = ctx.root_vm.content_host.current_id
+        menu = ctx.root_vm.services_menu
+        if menu.selected_id != current_id:
+            current_task = asyncio.current_task()
+            suppression = (
+                (current_task, current_id)
+                if current_task is not None and current_id is not None
+                else None
+            )
+            self._service_navigation_suppressed_selection = suppression
+            try:
+                if current_id is None:
+                    menu.clear_selection()
+                else:
+                    menu.switch_service_command.execute(current_id)
+            finally:
+                if self._service_navigation_suppressed_selection is suppression:
+                    self._service_navigation_suppressed_selection = None
+        ctx.root_vm.chrome.hint_legend.set_current_service(current_id)
+        with contextlib.suppress(Exception):
+            notifications.error(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Mount",
+                message=f"Could not open {requested_id}; restored {current_id or 'current view'}",
+                toast_id="navigation-adoption-failed",
+            )
 
     async def _replace_content_widget(self, host: Container, replacement: Widget) -> None:
         """Mount a content replacement or leave a coherent error surface."""

@@ -301,8 +301,9 @@ class DualPaneVM:
                 self._journal.mark_aborted(msg.transfer_id)
 
     async def setup(self) -> None:
-        await self._left.setup()
-        await self._right.setup()
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(self._left.setup())
+            tasks.create_task(self._right.setup())
 
     def set_focused(self, pane: FocusedPane) -> None:
         """Explicitly set the active pane."""
@@ -352,15 +353,7 @@ class DualPaneVM:
                         entry=entry,
                     )
                     if completed:
-                        self._hub.send(
-                            TransferProgressMessage(
-                                transfer_id=transfer_id,
-                                bytes_transferred=entry.entry.size or 0,
-                                bytes_total=entry.entry.size,
-                                state=TransferState.COMPLETED,
-                            )
-                        )
-                        self._journal.mark_finished(transfer_id)
+                        self._mark_transfer_completed(transfer_id, entry)
                 finally:
                     self._active_transfer_ids.discard(transfer_id)
         finally:
@@ -431,15 +424,7 @@ class DualPaneVM:
                         entry=entry,
                     )
                     if completed:
-                        self._hub.send(
-                            TransferProgressMessage(
-                                transfer_id=transfer_id,
-                                bytes_transferred=entry.entry.size or 0,
-                                bytes_total=entry.entry.size,
-                                state=TransferState.COMPLETED,
-                            )
-                        )
-                        self._journal.mark_finished(transfer_id)
+                        self._mark_transfer_completed(transfer_id, entry)
                 finally:
                     self._active_transfer_ids.discard(transfer_id)
         finally:
@@ -474,6 +459,17 @@ class DualPaneVM:
         await self.focused_pane.delete_marked()
 
     # ── Transfer-batch helpers ─────────────────────────────────────────────
+
+    def _mark_transfer_completed(self, transfer_id: str, entry: EntryVM) -> None:
+        self._hub.send(
+            TransferProgressMessage(
+                transfer_id=transfer_id,
+                bytes_transferred=entry.entry.size or 0,
+                bytes_total=entry.entry.size,
+                state=TransferState.COMPLETED,
+            )
+        )
+        self._journal.mark_finished(transfer_id)
 
     def _pre_register_pending(
         self,
@@ -668,7 +664,10 @@ class DualPaneVM:
             # copy_task too, then re-raise so the caller's own
             # cancellation chain stays intact.
             if copy_task.done():
-                return _settled_copy_result()
+                completed = _settled_copy_result()
+                if completed:
+                    self._mark_transfer_completed(transfer_id, entry)
+                raise
             if not copy_task.done():
                 copy_task.cancel()
                 while not copy_task.done():

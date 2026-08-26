@@ -18,6 +18,7 @@ from vmx.messages.protocols import Message
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
 from aws_tui.domain.data_catalog import TableFormat
+from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM
 from aws_tui.vm.messages import OpenAthenaTableRequest
 from tests.unit.vm.glue.test_iceberg_vm import ICEBERG_REF, RecordingInspector
@@ -122,6 +123,40 @@ def test_dispatch_invokes_registered_handler(app_context_factory) -> None:  # ty
     app._actions.register("pane.copy", lambda: calls.append("copy"))
     app.action_dispatch("pane.copy")
     assert calls == ["copy"]
+
+
+@pytest.mark.asyncio
+async def test_priority_binding_does_not_dispatch_behind_modal(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    calls: list[str] = []
+    app._actions.register("athena.execute", lambda: calls.append("execute"))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpModal)
+
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+
+        assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["q", "ctrl+c"])
+async def test_quit_keys_dispatch_through_action_registry(
+    app_context_factory,  # type: ignore[no-untyped-def]
+    key: str,
+) -> None:
+    app = AwsTuiApp(app_context_factory())
+    calls: list[str] = []
+    app._actions.register("app.quit", lambda: calls.append("quit"))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert calls == ["quit"]
 
 
 @pytest.mark.asyncio

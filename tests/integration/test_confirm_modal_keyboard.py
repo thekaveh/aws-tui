@@ -279,10 +279,47 @@ async def test_failed_service_switch_keeps_existing_view_mounted(
             raise RuntimeError("service build failed")
 
         monkeypatch.setattr(ctx.root_vm, "switch_service", fail_switch)
-        result = await app._mount_service_view("emr-serverless")
+        current = asyncio.current_task()
+        assert current is not None
+        app._service_navigation_suppressed_selection = (current, "settings")
+        ctx.root_vm.services_menu.switch_service_command.execute("settings")
+        assert ctx.root_vm.services_menu.selected_id == "settings"
+        result = await app._mount_service_view("s3")
 
         assert result is False
         assert tuple(host.children) == prior_children
+        assert ctx.root_vm.services_menu.selected_id == "s3"
+        assert "pane.copy" in {
+            action.action_id for action in ctx.root_vm.chrome.hint_legend.actions
+        }
+
+
+@pytest.mark.asyncio
+async def test_failed_settings_adoption_restores_current_service_chrome(
+    app_context_factory: AppContextBuilder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        current = asyncio.current_task()
+        assert current is not None
+        app._service_navigation_suppressed_selection = (current, "settings")
+        ctx.root_vm.services_menu.switch_service_command.execute("settings")
+        assert ctx.root_vm.services_menu.selected_id == "settings"
+
+        async def fail_set_content(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            raise RuntimeError("settings build failed")
+
+        monkeypatch.setattr(ctx.root_vm.content_host, "set_content", fail_set_content)
+        await app._mount_settings_view()
+
+        assert ctx.root_vm.services_menu.selected_id == "s3"
+        assert "pane.copy" in {
+            action.action_id for action in ctx.root_vm.chrome.hint_legend.actions
+        }
 
 
 @pytest.mark.asyncio
