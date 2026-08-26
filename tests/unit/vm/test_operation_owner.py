@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -91,9 +92,12 @@ async def test_drain_continues_after_owned_task_cleanup_fails(
 
 
 @pytest.mark.asyncio
-async def test_closed_owner_translates_cancellation_cleanup_failure() -> None:
+async def test_closed_owner_translates_and_logs_cancellation_cleanup_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     owner = OperationOwner()
     operation_started = asyncio.Event()
+    caplog.set_level(logging.ERROR, logger="aws_tui.vm.operation_owner")
 
     async def operation() -> None:
         operation_started.set()
@@ -109,3 +113,10 @@ async def test_closed_owner_translates_cancellation_cleanup_failure() -> None:
 
     with pytest.raises(OperationSuperseded):
         await caller
+
+    records = [
+        record for record in caplog.records if record.msg == "operation_owner.cleanup_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "RuntimeError"
+    assert records[0].error == "cleanup failed"
