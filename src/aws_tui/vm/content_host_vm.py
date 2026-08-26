@@ -1,7 +1,7 @@
 """ContentHostVM — holds the active service's VM tree.
 
-``set_content(new_vm, service_id=...)`` disposes the previous content tree
-(synchronously, depth-first via VMx) and constructs the new one. Re-setting
+``set_content(new_vm, service_id=...)`` constructs the candidate before
+shutting down and disposing the previous content tree. Re-setting
 with the same ``service_id`` is a no-op so the menu can publish "selected
 service" updates without rebuilding the world.
 
@@ -171,7 +171,7 @@ class ContentHostVM:
             self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
             return
 
-        # Construct the new one and adopt it before driving setup. Adopting
+        # Adopt the already-constructed candidate before driving setup. Adopting
         # first means a setup failure (e.g. ``S3FS.list`` raising
         # ``NoCredentialsError``) still leaves the View layer with something
         # to mount — every pane renders its own error placeholder per spec

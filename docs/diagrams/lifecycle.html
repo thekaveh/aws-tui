@@ -19,11 +19,11 @@
 <body>
 <main>
   <h1>aws-tui Lifecycle and Cancellation</h1>
-  <p>Hosted-service replacement, source rebuild rollback, and one ordered shutdown path</p>
+  <p>Hosted-service replacement, candidate rollback, and one ordered shutdown path</p>
   <section class="frame">
     <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
       <title id="title">aws-tui lifecycle and cancellation</title>
-      <desc id="desc">The content host constructs a candidate, drains and disposes outgoing content, adopts the candidate, and starts setup in the background. Source rebuilds roll back structural failures, while setup errors are reported. Explicit quit and unmount share one ordered shutdown task.</desc>
+      <desc id="desc">The source switch resolves and builds a candidate while prior content stays authoritative. The content host constructs the candidate, drains and disposes outgoing content, commits identity during adoption, and starts setup in the background. Candidate construction failures keep the prior service. Explicit quit and unmount share one ordered shutdown task.</desc>
       <defs>
         <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
         <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
@@ -82,15 +82,15 @@
           <rect x="1270" y="375" width="240" height="100" rx="5" stroke="#22d3ee"/>
         </g>
         <g fill="#f8fafc" font-size="10.5" font-weight="700">
-          <text x="165" y="410">Root clears content</text><text x="460" y="410">Resolve target source</text>
-          <text x="770" y="410">Build + mount target</text><text x="1080" y="410">Commit target identity</text>
-          <text x="770" y="548">Structural failure</text><text x="1080" y="548">Rebuild prior service</text>
+          <text x="165" y="410">Resolve target source</text><text x="460" y="410">Build candidate VM</text>
+          <text x="770" y="410">Construct candidate tree</text><text x="1080" y="410">Drain + adopt candidate</text>
+          <text x="770" y="548">Construction failure</text><text x="1080" y="548">Keep prior service</text>
           <text x="1390" y="410">Background setup</text>
         </g>
         <g fill="#94a3b8" font-size="9">
-          <text x="165" y="438">old tree drains before rebuild</text><text x="460" y="438">exact connection + region</text>
-          <text x="770" y="438">ContentHostVM lifecycle</text><text x="1080" y="438">focus + selection continue</text>
-          <text x="770" y="575">rollback connection state</text><text x="1080" y="575">report restore outcome</text>
+          <text x="165" y="438">exact connection + region</text><text x="460" y="438">Prior content stays authoritative</text>
+          <text x="770" y="438">construction precedes teardown</text><text x="1080" y="438">drain · dispose · commit · publish</text>
+          <text x="770" y="575">dispose rejected candidate</text><text x="1080" y="575">selection + identity unchanged</text>
           <text x="1390" y="438">error is visible; no rollback</text>
         </g>
 

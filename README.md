@@ -267,6 +267,7 @@ are indexed below for contributors and repository review.
    1. [Architecture](docs/architecture.md) — five-layer model + composition root + lifecycle + messaging primer.
    2. [Adding a new service](docs/adding-a-service.md) — the `Service` protocol + per-layer wiring.
    3. [VMx Python cheatsheet](docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md) — facade pattern, message-protocol shape, lifecycle gotchas.
+   4. [Three-surface publish runbook](docs/superpowers/notes/2026-07-10-three-surface-docs-phase2-runbook.md) — gated Pages and wiki enablement, first publish, and verification steps.
 3. **Spec + plans**
 
    Historical superpowers specs, plans, and notes are indexed here for

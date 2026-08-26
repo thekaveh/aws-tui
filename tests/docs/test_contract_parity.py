@@ -93,6 +93,13 @@ def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def _numbered_section(text: str, heading: str) -> str:
+    marker = f"## {heading}"
+    _, separator, remainder = text.partition(marker)
+    assert separator, f"missing section: {heading}"
+    return remainder.partition("\n## ")[0]
+
+
 def _module(path: str) -> ast.Module:
     return ast.parse(_text(path), filename=path)
 
@@ -216,7 +223,10 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
         package["name"]: package["version"] for package in lock["package"] if "version" in package
     }
     project = tomllib.loads(_text("pyproject.toml"))
-    ledger = _text("docs/contract-ledger.md")
+    ledger = _numbered_section(
+        _text("docs/contract-ledger.md"),
+        "1.5. 2026-08-25 maintenance pass",
+    )
 
     for name in (
         "aioboto3",
@@ -234,6 +244,19 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
 
     build_requirement = project["build-system"]["requires"][0]
     assert f"`build-system.requires` constrained to `{build_requirement}`" in ledger
+    assert (
+        "`adobe/s3mock:5.1.0@sha256:"
+        "65cf60155a2e235fe7d5bf6c633747d6fc7ed93f9f5a6727d86470026b83c2a2`"
+    ) in ledger
+
+
+def test_numbered_section_excludes_historical_dependency_decoys() -> None:
+    ledger = "## 1.4. Old\n`package==1`\n\n## 1.5. Current\n`package==2`\n\n## 1.6. Next\n"
+
+    current = _numbered_section(ledger, "1.5. Current")
+
+    assert "`package==2`" in current
+    assert "`package==1`" not in current
 
 
 def test_s3_operation_ledger_matches_locked_model_contract() -> None:
@@ -257,7 +280,7 @@ def test_credential_docs_match_keychain_reference_storage() -> None:
     assert "keychain:aws-tui:connections/<url-escaped-name>" in connections
     assert "keychain:aws-tui:connection-revisions/<url-escaped-name>/0" in connections
     assert "keychain:aws-tui:connection-revisions/<url-escaped-name>/1" in connections
-    assert 'credentials = "keychain:aws-tui:connections/minio-local"' in cookbook
+    assert 'credentials = "keychain:aws-tui:connections/s3mock-local"' in cookbook
     assert "under the namespaced service `aws-tui:<connection>`" not in connections
     assert "Production Settings saves store only" in ledger
     assert "two bounded revision slots" in ledger

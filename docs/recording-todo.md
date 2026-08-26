@@ -1,7 +1,7 @@
 # 1. Recording TODO
 
 > Items the maintainer (i.e. **you**) needs to record manually before
-> the v0.8.0 docs feel done. A subagent cannot drive a real terminal
+> the v0.9.0 development docs feel complete. A subagent cannot drive a real terminal
 > to produce asciinema casts or PNG screenshots, so this file is a
 > hand-off list. Each item lists where it lands in the docs and the
 > rough recipe.
@@ -54,15 +54,15 @@ the config of the temp HOME for a more striking image.
 The current capture should show only shipped behavior; there is no separate
 welcome-modal recording.
 
-## 1.3. S3 → local copy walkthrough (cookbook: connect to MinIO)
+## 1.3. S3 to local copy walkthrough (cookbook: connect to S3Mock)
 
 Format: asciinema, 60 seconds, 120×40.
 
 Recipe:
 
 ```bash
-asciinema rec -t "aws-tui: MinIO -> local copy" \
-    docs/assets/minio-copy.cast
+asciinema rec -t "aws-tui: S3Mock to local copy" \
+    docs/assets/s3mock-copy.cast
 # inside:
 aws-tui
 # Shift+S until the left pane title shows dev-s3
@@ -74,7 +74,7 @@ aws-tui
 # q
 ```
 
-Embed below the "Use it" step of the MinIO recipe in
+Embed below the "Use it" step of the S3Mock recipe in
 [cookbook.md](cookbook.md#115-use-it).
 
 ## 1.4. Theme switch (cookbook: switch theme)
@@ -127,21 +127,20 @@ Cleanup after recording: `rm "$CACHE_DIR/transfers/5eedabc05eedabc0.jsonl"`.
 Do not imply that an interactive resume modal exists; recovery remains a
 journal and cleanup contract until a new user-facing flow is designed.
 
-## 1.6. Crash dump and modal (cookbook: diagnose after a crash)
+## 1.6. Crash dump (interactive modal deferred)
 
-Format: PNG screenshot.
+Format: terminal text or PNG screenshot of the generated dump path.
 
 Recipe:
 
-The crash dump writer and interactive crash modal are live. There is no
-built-in diagnostic command that deliberately triggers an unhandled exception
-short of editing the code, so the recommended approach is to
-temporarily add a `raise TypeError("demo")` inside e.g.
-`pane.action_open()`, launch, trigger the action, and screenshot the
-crash modal. Revert the change before committing.
+The crash dump writer is live. The interactive crash modal exists as UI
+scaffolding but is not wired into the unhandled exception path. Do not record
+or claim the modal until that hosting integration ships. To capture the current
+behavior, trigger an unhandled exception only in a disposable local checkout,
+record the redacted dump path written under `<cache-dir>/crash/`, and revert the
+temporary exception before committing.
 
-Save as `docs/assets/crash-modal-carbon.png`. Embed below the "What
-gets dumped on a crash" section.
+Embed the resulting artifact below the "What gets dumped on a crash" section.
 
 ## 1.7. When you're done
 

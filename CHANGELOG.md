@@ -119,6 +119,10 @@ section; the current tree must not be tagged as v0.8.0.
   its subscribed viewmodel, obsolete theme selectors, and the unused
   `pytest-xdist` development dependency. Connection identity remains in the
   service pane chrome where it is actually rendered.
+- **Independent S3-compatible test harness.** Replaced the vulnerable MinIO
+  community test image with the digest-pinned Adobe S3Mock 5.1.0 release while
+  preserving the same nine strict provider tests, Compose workflow, seeded
+  development data, and product support for user-configured MinIO endpoints.
 - **VMx 3.23 adoption.** Raised the VMx floor to 3.23.0, moved modal focus
   restoration to public `DiscriminatorVM` APIs, rebuilt S3 validation through
   immutable `FormVMBuilder` validators, and aligned Athena cancellation and
@@ -172,7 +176,7 @@ section; the current tree must not be tagged as v0.8.0.
 - **Resilient shutdown.** Teardown continues after individual cleanup errors,
   reports every failed step, and flushes/closes structured logging last.
 - **Maintenance correctness.** CI now verifies the lowest supported dependency
-  set, MinIO seeding creates only genuinely missing buckets, wiki publication
+  set, S3Mock seeding creates only genuinely missing buckets, wiki publication
   distinguishes changes from command failures, installed help uses published
   documentation URLs, dead status-bar references are rejected, and current
   command/contract guidance matches runtime behavior and VMx 3.23.
@@ -291,8 +295,8 @@ section; the current tree must not be tagged as v0.8.0.
 - ``SECURITY.md`` — supported-version table now distinguishes the
   pending 0.8.x line from the latest tagged 0.7.x release;
   ``docs/homebrew-bootstrap.md`` adopts the §3.9 numbered heading
-  mandate; ``docs/recording-todo.md`` retargets to "v0.8.0 docs feel
-  done".
+  mandate; ``docs/recording-todo.md`` tracks the v0.9.0 development
+  documentation captures.
 - README §4 — indexed three previously-orphaned post-tag specs
   (public-release-pipeline, cross-platform-readiness, demo-mode)
   and the maintainer-facing ``docs/RELEASING.md`` +
@@ -395,9 +399,9 @@ section; the current tree must not be tagged as v0.8.0.
   no-target paths now use ``notifications.error(...)`` /
   ``notifications.advise(...)`` instead of Textual's bare
   ``self.notify`` — the latter paints over the Commands strip
-  and disappears with the wrong glyph / wrong colour / wrong
-  countdown. Errors get the ✖ glyph + ``$danger`` colour + 30 s
-  countdown; advisories get the ⚠ glyph + ``$warning`` colour +
+  and disappears with the wrong icon, colour, and countdown.
+  Errors use the error icon + ``$danger`` colour + 30 s
+  countdown; advisories use the warning icon + ``$warning`` colour +
   8 s countdown. Same routing as every other toast in the app.
 - **HintLegend chips now reflect selection-state disable rules**
   (PR #83, item #5). ``HintAction`` gains an ``enabled: bool``
@@ -681,7 +685,7 @@ section; the current tree must not be tagged as v0.8.0.
   handle closes. The module docstring already promised "fsync
   semantics" but the code only relied on a natural close, which
   flushes stdio buffers without forcing the FS journal/metadata
-  to disk. On power loss between a ``mark_completed`` write and
+  to disk. On power loss between a ``mark_finished`` write and
   the OS's background flush (~30s), the journal would lose the
   terminal marker and diagnostic replay would classify the transfer as
   unfinished. fsync closes that window for one syscall

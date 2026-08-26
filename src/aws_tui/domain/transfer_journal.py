@@ -279,16 +279,9 @@ def _private_append_opener(path: str, flags: int) -> int:
 
 def _write_journal_line(fh: TextIO, line: str) -> None:
     fh.write(line + "\n")
-    # The module docstring promises "fsync semantics are clearer
-    # without async indirection" — deliver them. A natural file-close
-    # flushes stdio buffers but does NOT force the FS journal/metadata
-    # to disk. On power loss between an ``mark_completed`` write and
-    # the OS's background flush (~30s), the journal would lose the
-    # terminal marker and the resume-modal would replay the whole
-    # transfer on next launch. fsync is the durability primitive that
-    # closes that window. The cost is one syscall per append;
-    # negligible against the network I/O the surrounding multipart
-    # upload pays per part.
+    # A normal close flushes stdio buffers but does not force filesystem
+    # journal or metadata updates to disk. Make each diagnostic append durable
+    # across power loss; the syscall cost is negligible beside transfer I/O.
     fh.flush()
     os.fsync(fh.fileno())
 

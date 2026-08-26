@@ -10,9 +10,8 @@ The composition builds:
 
 - ``ConfigStore``, ``LogSink``, ``KeymapStore``, ``ThemeStore`` (infra)
 - ``ConnectionResolver``, ``AwsSession`` (infra; aware of boto3)
-- ``ServiceRegistry`` with ``S3Service`` registered (services)
-- ``RootVM`` with the four chrome VMs and the file-manager VMs ready
-  to be filled by ``RootVM.switch_service`` (vm)
+- ``ServiceRegistry`` with every built-in service registered (services)
+- ``RootVM`` with shared chrome and an active-service content host (vm)
 - ``AppContext`` — the bag the Textual ``AwsTuiApp`` consumes
 """
 

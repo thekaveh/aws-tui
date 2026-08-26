@@ -313,8 +313,8 @@ class HintLegendVM:
     def actions(self) -> tuple[HintAction, ...]:
         """Service-specific chips shown before the global commands.
 
-        Includes any focused-VM-registered ids and the active
-        service's chip set (S3 / EMR / Settings / fallback)."""
+        Includes any focused-VM-registered ids and the active service's
+        chip set (S3, EMR, Glue, Athena, Settings, or fallback)."""
         return self._actions
 
     @property

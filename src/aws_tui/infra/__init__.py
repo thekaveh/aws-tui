@@ -1,1 +1,1 @@
-"""Infrastructure / boundary layer — the only layer permitted to touch the OS or AWS APIs."""
+"""Infrastructure for sessions, credentials, configuration, and OS-backed stores."""

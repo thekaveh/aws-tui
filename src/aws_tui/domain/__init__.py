@@ -1,1 +1,1 @@
-"""Domain layer — Norton-Commander unifier (FileSystemProvider protocol + providers)."""
+"""Service-agnostic filesystem, transfer, SQL, and AWS domain contracts."""

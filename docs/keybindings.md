@@ -64,12 +64,12 @@ as the universal escape hatch.
 
 | Action | Default | Notes |
 |---|---|---|
-| Open Settings | `,` (comma) | Opens the in-app Settings nav page directly. Equivalent to arrow-keying down to the ⚙ Settings row in the rail and pressing `Enter`. |
+| Open Settings | `,` (comma) | Opens the in-app Settings nav page directly. Equivalent to arrow-keying down to the Settings row in the rail and pressing `Enter`. |
 | Switch source | `Shift+S` (`S`) | On S3, cycles the focused pane through `local` and resolver-ordered configured sources. On single-context AWS services such as EMR, Glue, and Athena, rebuilds the current service under the next supported AWS profile. |
 
 > **Nav-menu visibility:** the left rail is always visible at a single
-> fixed width and shows TEXT labels (Settings docked at the bottom as
-> the ⚙ glyph). The former `m`-key collapse/expand toggle was dropped because
+> fixed width and shows text labels (Settings is docked at the bottom with its
+> settings icon). The former `m`-key collapse/expand toggle was dropped because
 > there is no longer a collapsed mode to toggle into;
 > `BindingResolver` does not emit `m` because the deferred `pane.move`
 > action has no registered handler (§1.3).

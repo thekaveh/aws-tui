@@ -122,8 +122,9 @@ needs a `construct → destruct → dispose` surface.
 
 7. **Tests.** Add unit tests under `tests/unit/services/<name>/` and,
     if your service touches AWS, integration tests under
-    `tests/integration/services/<name>/` against `moto` or a vendor
-    container.
+    `tests/integration/test_<name>_*.py`. Use a modeled fake for deterministic
+    behavior and a vendor container only where an independent implementation
+    materially strengthens the contract.
 
 8. **Update docs.** Add any vendor / API quirks to
    `docs/connections.md`. Update the README's features list.
@@ -206,13 +207,9 @@ protocol applies.
 shipped service and demonstrates the richer per-service pattern:
 
 - `descriptor` declares `id = "emr-serverless"`, label `"EMR"`, icon
-  `U+1F525 FIRE` (SMP single-codepoint, 2 cells, in
-  colour reliably across SF Mono / JetBrains Mono / Fira Code). See
-  the ``services/emr_serverless/service.py`` module docstring for
-  the full icon saga (PR #76 bare ``⚡`` U+26A1 → PR #77 ``⚡️``
-  with VS-16, then U+1F525 FIRE, U+26A1 HIGH VOLTAGE, and U+1F4A5
-  COLLISION before reverting to U+1F525 FIRE after COLLISION rendered too small). The
-  documented "icon contract" future services should follow up front:
+  `U+1F525 FIRE` (an SMP single code point that reliably occupies two
+  cells across the supported terminal/font combinations). The documented
+  "icon contract" future services should follow up front:
   **SMP single-codepoint, no VS-16 dance** — the glyph must reliably
   occupy 2 cells in monospace terminals
   without a variation-selector trick.
