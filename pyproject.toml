@@ -80,6 +80,7 @@ exclude = [
   "/.github",
   "/.overnight-maint",
   "/.superpowers",
+  "/.uv-cache",
   "/docs/superpowers",
   "/scripts/test-services",
   "/tests",
@@ -110,6 +111,7 @@ dev = [
   "twine>=5",
   "pip-audit>=2.10.1",
   "shellcheck-py>=0.11.0.1",
+  "textual-dev>=1.8.0,<2",
 ]
 docs = [
   "mkdocs-material>=9.7.7,<10.0",

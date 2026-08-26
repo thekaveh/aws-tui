@@ -57,6 +57,7 @@ snapshot_report.html
 # mypy / ruff / type checkers
 .mypy_cache/
 .ruff_cache/
+.uv-cache/
 .pytype/
 .pyre/
 

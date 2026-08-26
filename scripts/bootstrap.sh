@@ -69,8 +69,8 @@ fi
 echo "==> uv python install 3.11"
 uv python install 3.11
 
-echo "==> uv sync --frozen"
-uv sync --frozen
+echo "==> uv sync --locked --all-groups"
+uv sync --locked --all-groups
 
 echo "==> installing pre-commit hooks"
 uv run pre-commit install

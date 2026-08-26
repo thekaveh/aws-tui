@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -65,7 +65,7 @@ jobs:
       - name: install libcairo2
         run: sudo apt-get update && sudo apt-get install -y libcairo2
       - name: sync
-        run: uv sync --frozen --python 3.12 --group docs
+        run: uv sync --locked --python 3.12 --group docs
 
       # Resolve the target channel: ``testpypi`` for the rehearsal
       # ``workflow_dispatch``, ``pypi`` for everything else (tag
@@ -129,10 +129,10 @@ jobs:
       - name: pytest supported Python edge versions
         run: |
           for py in 3.11 3.13; do
-            uv sync --frozen --python "$py" --group docs
+            uv sync --locked --python "$py" --group docs
             uv run --python "$py" pytest tests/unit tests/integration -v
           done
-          uv sync --frozen --python 3.12 --group docs
+          uv sync --locked --python 3.12 --group docs
 
       - name: pytest coverage (unit + in-process integration)
         run: uv run --python 3.12 pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml
@@ -149,7 +149,7 @@ jobs:
       - name: export locked requirements
         run: |
           for py in 3.11 3.12 3.13; do
-            uv export --frozen --python "$py" --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit-$py.txt"
+            uv export --locked --python "$py" --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit-$py.txt"
           done
 
       - name: pip-audit (locked dependencies)
@@ -173,6 +173,9 @@ jobs:
       - name: build wheel + sdist
         run: uv build --no-build-isolation
 
+      - name: validate artifact contents
+        run: uv run python -m scripts.check_dist dist/
+
       - name: twine check
         run: uv run twine check dist/*
 
@@ -195,14 +198,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --frozen --python 3.12
+        run: uv sync --locked --python 3.12
       - name: pytest platform behavior
         run: uv run --python 3.12 pytest tests/unit tests/integration -v
 
@@ -214,7 +217,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -272,7 +275,7 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -485,6 +488,7 @@ jobs:
           # ``Pull requests: read & write`` on the tap repo only.
           # See docs/RELEASING.md for the one-time setup.
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          persist-credentials: false
           path: tap
 
       - name: check formula exists

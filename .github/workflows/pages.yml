@@ -31,11 +31,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install libcairo2
         run: sudo apt-get update && sudo apt-get install -y libcairo2
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
       - run: uv python install 3.12
-      - run: uv sync --frozen --group docs
+      - run: uv sync --locked --group docs
       - name: documentation drift and strict build
         run: make docs-check
       - name: documentation contract tests
@@ -69,15 +69,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install libcairo2
         run: sudo apt-get update && sudo apt-get install -y libcairo2
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
       - run: uv python install 3.12
-      - run: uv sync --frozen --group docs
+      - run: uv sync --locked --group docs
       - name: write wiki deploy key
+        env:
+          WIKI_DEPLOY_KEY: ${{ secrets.WIKI_DEPLOY_KEY }}
         run: |
+          if [[ -z "${WIKI_DEPLOY_KEY:-}" ]]; then
+            echo "::error::WIKI_DEPLOY_KEY is not configured" >&2
+            exit 1
+          fi
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.WIKI_DEPLOY_KEY }}" > ~/.ssh/wiki_key
+          printf '%s\n' "$WIKI_DEPLOY_KEY" > ~/.ssh/wiki_key
           chmod 600 ~/.ssh/wiki_key
       - name: build + push wiki
         env:

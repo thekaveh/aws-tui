@@ -41,6 +41,8 @@ def test_cut_changelog_preserves_and_shifts_numbered_headings(tmp_path: Path) ->
                 "",
                 "- Previous release.",
                 "",
+                "[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.8.0...HEAD",
+                "[0.8.0]: https://github.com/thekaveh/aws-tui/compare/v0.7.0...v0.8.0",
             ]
         ),
         encoding="utf-8",
@@ -54,3 +56,5 @@ def test_cut_changelog_preserves_and_shifts_numbered_headings(tmp_path: Path) ->
     assert "### 1.2.1. Added" in text
     assert "## 1.3. [0.8.0] - 2026-06-30" in text
     assert "### 1.3.1. Fixed" in text
+    assert "[Unreleased]: https://github.com/thekaveh/aws-tui/compare/v0.9.0...HEAD" in text
+    assert "[0.9.0]: https://github.com/thekaveh/aws-tui/compare/v0.8.0...v0.9.0" in text

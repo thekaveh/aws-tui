@@ -189,10 +189,10 @@ def test_release_pytest_tiers_stay_wired() -> None:
         "verify",
         "pytest supported Python edge versions",
         "uv sync",
-        'uv sync --frozen --python "$py" --group docs',
+        'uv sync --locked --python "$py" --group docs',
     )
     matrix_run = _step(workflow, "verify", "pytest supported Python edge versions")["run"]
-    assert "uv sync --frozen --python 3.12 --group docs" in matrix_run
+    assert "uv sync --locked --python 3.12 --group docs" in matrix_run
     assert 'uv run --python "3.12" pytest' not in matrix_run
     _assert_step_has_command(
         workflow,
@@ -383,6 +383,55 @@ def test_pages_manual_dispatch_publishes_main_only() -> None:
     _assert_step_has_command(
         workflow, "build", "documentation contract tests", "uv run", "pytest", "tests/docs"
     )
+
+
+def test_workflows_reject_stale_lockfiles() -> None:
+    for workflow_path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/pages.yml",
+        ".github/workflows/release.yml",
+    ):
+        text = (REPO_ROOT / workflow_path).read_text(encoding="utf-8")
+        assert "--frozen" not in text, workflow_path
+        for line in text.splitlines():
+            if "uv sync " in line or "uv export " in line:
+                assert "--locked" in line, f"{workflow_path}: {line.strip()}"
+
+
+def test_package_workflows_reject_denied_artifact_members() -> None:
+    for workflow_path, job in (
+        (".github/workflows/ci.yml", "pkg"),
+        (".github/workflows/release.yml", "verify"),
+    ):
+        workflow = _workflow(workflow_path)
+        _assert_step_has_command(
+            workflow,
+            job,
+            "validate artifact contents",
+            "uv run",
+            "python",
+            "-m scripts.check_dist",
+            "dist/",
+        )
+
+
+def test_wiki_deploy_key_is_validated_before_write() -> None:
+    workflow = _workflow(".github/workflows/pages.yml")
+    run = _step(workflow, "wiki", "write wiki deploy key")["run"]
+
+    assert 'if [[ -z "${WIKI_DEPLOY_KEY:-}" ]]' in run
+    assert "::error::WIKI_DEPLOY_KEY is not configured" in run
+
+
+def test_homebrew_checkout_does_not_persist_cross_repo_token() -> None:
+    workflow = _workflow(".github/workflows/release.yml")
+    checkout = next(
+        step
+        for step in workflow["jobs"]["bump-homebrew"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    )
+
+    assert checkout["with"]["persist-credentials"] is False
 
 
 def test_ci_gate_rejects_every_non_success_result() -> None:

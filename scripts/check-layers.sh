@@ -111,21 +111,22 @@ RULES: tuple[Rule, ...] = (
 )
 
 
-def module_for(path: Path) -> str:
+def module_for(path: Path) -> tuple[str, bool]:
     rel = path.with_suffix("").relative_to("src")
     parts = rel.parts
-    if parts[-1] == "__init__":
+    is_package = parts[-1] == "__init__"
+    if is_package:
         parts = parts[:-1]
-    return ".".join(parts)
+    return ".".join(parts), is_package
 
 
-def resolve_from(module: str, node: ast.ImportFrom) -> str:
+def resolve_from(module: str, node: ast.ImportFrom, *, is_package: bool) -> str:
     if node.level == 0:
         return node.module or ""
     package_parts = module.split(".")
     if not package_parts:
         return node.module or ""
-    if module.rsplit(".", 1)[-1] != "__init__":
+    if not is_package:
         package_parts = package_parts[:-1]
     keep = max(0, len(package_parts) - (node.level - 1))
     base = package_parts[:keep]
@@ -146,13 +147,15 @@ for folder, label, banned_modules in RULES:
     for path in sorted(base.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
-        current_module = module_for(path)
+        current_module, is_package = module_for(path)
         for node in ast.walk(tree):
             imported_modules: list[str] = []
             if isinstance(node, ast.Import):
                 imported_modules.extend(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
-                imported_modules.append(resolve_from(current_module, node))
+                imported_modules.append(
+                    resolve_from(current_module, node, is_package=is_package)
+                )
             else:
                 continue
 
