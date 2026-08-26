@@ -22,7 +22,7 @@ region = "us-east-1"
 kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
 region = "us-east-1"
-credentials = "keychain:minio-local"      # or env:PREFIX_*, aws-profile:name, static
+credentials = "keychain:minio-local"      # or env:PREFIX_, aws-profile:name, static
 force_path_style = true
 verify_tls = false                        # http:// MinIO -> no cert to verify
 
@@ -53,7 +53,7 @@ The `credentials` field is dispatched at runtime:
 | Spec | Source |
 |---|---|
 | `keychain:<service>` | OS keychain via the Python `keyring` library; backend depends on platform. Accounts: `access_key_id`, `secret_access_key`, and optional `session_token` |
-| `env:PREFIX_*` | `${PREFIX}_ACCESS_KEY_ID` + `${PREFIX}_SECRET_ACCESS_KEY` + optional `${PREFIX}_SESSION_TOKEN` |
+| `env:PREFIX_` | `${PREFIX}_ACCESS_KEY_ID` + `${PREFIX}_SECRET_ACCESS_KEY` + optional `${PREFIX}_SESSION_TOKEN`; the trailing underscore is part of the configured prefix |
 | `aws-profile:<name>` | An existing entry in `~/.aws/credentials`, including optional `aws_session_token` for temporary credentials |
 | `static` | Inline `access_key_id` / `secret_access_key` / optional `session_token` in `config.toml` — startup warning toast |
 

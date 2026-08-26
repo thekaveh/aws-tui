@@ -52,10 +52,14 @@ def _map_session_construction_error(exc: BaseException) -> ProviderError:
 
 class _FailedEmrLogsClient:
     def __init__(self, error: ProviderError) -> None:
-        self._error = error
+        self._error_type = type(error)
+        self._error_args = error.args
+
+    def _fresh_error(self) -> ProviderError:
+        return self._error_type(*self._error_args)
 
     async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]:
-        raise self._error
+        raise self._fresh_error()
 
     async def stream(
         self,
@@ -65,16 +69,20 @@ class _FailedEmrLogsClient:
         max_bytes: int,
         filter_: LogFilter,
     ) -> AsyncIterator[LogChunk]:
-        raise self._error
+        raise self._fresh_error()
         yield  # pragma: no cover
 
 
 class _FailedEmrClient:
     def __init__(self, error: ProviderError) -> None:
-        self._error = error
+        self._error_type = type(error)
+        self._error_args = error.args
+
+    def _fresh_error(self) -> ProviderError:
+        return self._error_type(*self._error_args)
 
     async def list_applications(self) -> list[ApplicationSummary]:
-        raise self._error
+        raise self._fresh_error()
 
     async def list_job_runs_page(
         self,
@@ -83,7 +91,7 @@ class _FailedEmrClient:
         start_token: str | None = None,
         states: set[JobRunState] | None = None,
     ) -> tuple[list[JobRunSummary], str | None]:
-        raise self._error
+        raise self._fresh_error()
 
     async def list_job_runs(
         self,
@@ -92,10 +100,10 @@ class _FailedEmrClient:
         states: set[JobRunState] | None = None,
         max_results: int = 100,
     ) -> list[JobRunSummary]:
-        raise self._error
+        raise self._fresh_error()
 
     async def get_job_run(self, application_id: str, job_run_id: str) -> JobRunDetail:
-        raise self._error
+        raise self._fresh_error()
 
     async def start_job_run(
         self,
@@ -107,10 +115,10 @@ class _FailedEmrClient:
         spark_submit_parameters: str | None,
         name: str | None = None,
     ) -> str:
-        raise self._error
+        raise self._fresh_error()
 
     def make_logs_client(self) -> _FailedEmrLogsClient:
-        return _FailedEmrLogsClient(self._error)
+        return _FailedEmrLogsClient(self._fresh_error())
 
 
 class EmrServerlessService:

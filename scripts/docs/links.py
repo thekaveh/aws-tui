@@ -16,6 +16,8 @@ SITE_URL = "https://thekaveh.github.io/aws-tui/"
 
 # Matches both [text](target) links and ![alt](target) images.
 _LINK_RE = re.compile(r"!?\[[^\]]*\]\(\s*([^)\s]+)")
+_CODE_FENCE_RE = re.compile(r"^\s*(`{3,})([^`]*)$")
+_INLINE_CODE_RE = re.compile(r"(`+)(.+?)\1")
 
 _FORBIDDEN = {
     "site": {"repo", "wiki"},
@@ -30,7 +32,21 @@ class Link:
 
 
 def find_links(md: str) -> list[Link]:
-    return [Link(m.group(1)) for m in _LINK_RE.finditer(md)]
+    rendered_lines: list[str] = []
+    fence_length: int | None = None
+    for line in md.splitlines():
+        fence = _CODE_FENCE_RE.match(line)
+        if fence is not None:
+            ticks = len(fence.group(1))
+            if fence_length is None:
+                fence_length = ticks
+            elif ticks >= fence_length and not fence.group(2).strip():
+                fence_length = None
+            continue
+        if fence_length is None:
+            rendered_lines.append(_INLINE_CODE_RE.sub("", line))
+    rendered = "\n".join(rendered_lines)
+    return [Link(match.group(1)) for match in _LINK_RE.finditer(rendered)]
 
 
 def _classify(target: str) -> str | None:

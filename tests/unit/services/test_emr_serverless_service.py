@@ -173,3 +173,50 @@ async def test_build_vm_degrades_session_construction_auth_failure(
         await page.client.list_applications()
     with pytest.raises(AuthRequiredError):
         await page.job_run_logs._client.list_files(bucket="logs", run_prefix="runs/x")  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_degraded_clients_raise_fresh_errors_on_every_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_profile_not_found(*_args: object, **_kwargs: object) -> object:
+        raise botocore.exceptions.ProfileNotFound(profile="missing")
+
+    monkeypatch.setattr(service_module.aioboto3, "Session", _raise_profile_not_found)
+    svc = EmrServerlessService(hub=MessageHub(), dispatcher=NULL_DISPATCHER)
+    page = svc.build_vm(
+        Connection(
+            name="missing",
+            kind="aws",
+            region="us-west-2",
+            source="config",
+            profile="missing",
+        )
+    )
+
+    async def capture_application_error() -> AuthRequiredError:
+        try:
+            await page.client.list_applications()
+        except AuthRequiredError as exc:
+            return exc
+        raise AssertionError("degraded client did not raise")
+
+    async def capture_logs_error() -> AuthRequiredError:
+        try:
+            await page.job_run_logs._client.list_files(  # type: ignore[attr-defined]
+                bucket="logs",
+                run_prefix="runs/x",
+            )
+        except AuthRequiredError as exc:
+            return exc
+        raise AssertionError("degraded logs client did not raise")
+
+    first_application = await capture_application_error()
+    second_application = await capture_application_error()
+    first_logs = await capture_logs_error()
+    second_logs = await capture_logs_error()
+
+    assert first_application is not second_application
+    assert first_logs is not second_logs
+    assert str(first_application) == str(second_application)
+    assert str(first_logs) == str(second_logs)

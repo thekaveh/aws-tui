@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aws_tui.domain.emr_logs import LogChunk, LogFile, LogFileKind, LogFilter
 from aws_tui.domain.emr_serverless import (
@@ -56,6 +56,7 @@ class InMemoryEmr:
         # Monotonic suffix so multiple ``start_job_run`` calls produce
         # unique ids without the tests needing to seed them.
         self._next_run_seq: int = 1
+        self._clock = datetime.fromisoformat("2026-06-25T12:00:00+00:00")
         # Hook for tests that need ``start_job_run`` to raise — set
         # this to a ``ProviderError`` (or any exception) to drive the
         # error-path assertions on ``JobRunCloneVM.submit``.
@@ -70,6 +71,14 @@ class InMemoryEmr:
         # pending" warnings).
         self._state_tasks: set[asyncio.Task[None]] = set()
         self._log_files: dict[str, tuple[LogFile, tuple[str, ...]]] = {}
+
+    def _observe_timestamp(self, timestamp: datetime) -> None:
+        if timestamp > self._clock:
+            self._clock = timestamp
+
+    def _tick(self, seconds: int = 1) -> datetime:
+        self._clock += timedelta(seconds=seconds)
+        return self._clock
 
     def make_logs_client(self) -> InMemoryEmr:
         """Build the logs facade paired with this in-memory client.
@@ -157,6 +166,7 @@ class InMemoryEmr:
         )
         self._apps[app_id] = s
         self._runs.setdefault(app_id, {})
+        self._observe_timestamp(s.created_at)
         return s
 
     def add_job_run(
@@ -179,6 +189,7 @@ class InMemoryEmr:
             updated_at=updated_at or ts,
         )
         self._runs.setdefault(application_id, {})[job_run_id] = s
+        self._observe_timestamp(s.updated_at)
         return s
 
     def add_job_run_detail(
@@ -211,6 +222,7 @@ class InMemoryEmr:
             s3_monitoring_log_uri=s3_monitoring_log_uri,
         )
         self._details[(application_id, job_run_id)] = d
+        self._observe_timestamp(d.updated_at)
         return d
 
     def set_run_state(self, application_id: str, job_run_id: str, state: JobRunState) -> None:
@@ -323,7 +335,7 @@ class InMemoryEmr:
             raise self.start_job_run_exc
         new_id = f"r-clone-{self._next_run_seq:03d}"
         self._next_run_seq += 1
-        ts = datetime.fromisoformat("2026-06-26T12:00:00+00:00")
+        ts = self._tick()
         s = JobRunSummary(
             application_id=application_id,
             job_run_id=new_id,
@@ -381,13 +393,35 @@ class InMemoryEmr:
         # needed — the cancellation unwinds the coroutine naturally
         # and the task wrapper marks the task as cancelled.
         await asyncio.sleep(1.0)
-        self._set_run_state(application_id, job_run_id, JobRunState.SCHEDULED)
+        self._set_run_state(
+            application_id,
+            job_run_id,
+            JobRunState.SCHEDULED,
+            advance_seconds=1,
+        )
         await asyncio.sleep(1.0)
-        self._set_run_state(application_id, job_run_id, JobRunState.RUNNING)
+        self._set_run_state(
+            application_id,
+            job_run_id,
+            JobRunState.RUNNING,
+            advance_seconds=1,
+        )
         await asyncio.sleep(3.0)
-        self._set_run_state(application_id, job_run_id, JobRunState.SUCCESS)
+        self._set_run_state(
+            application_id,
+            job_run_id,
+            JobRunState.SUCCESS,
+            advance_seconds=3,
+        )
 
-    def _set_run_state(self, application_id: str, job_run_id: str, state: JobRunState) -> None:
+    def _set_run_state(
+        self,
+        application_id: str,
+        job_run_id: str,
+        state: JobRunState,
+        *,
+        advance_seconds: int,
+    ) -> None:
         """Mutate a run record's state by id.
 
         Uses ``dataclasses.replace`` — the idiomatic copy-with-changes
@@ -395,13 +429,22 @@ class InMemoryEmr:
         The brief proposed a ``__slots__``-reflection dict comprehension,
         but ``dataclasses.replace`` is cleaner and avoids the branch.
         """
+        updated_at = self._tick(advance_seconds)
         runs = self._runs.get(application_id, {})
         existing = runs.get(job_run_id)
         if existing is not None:
-            runs[job_run_id] = replace(existing, state=state)
+            runs[job_run_id] = replace(existing, state=state, updated_at=updated_at)
         detail = self._details.get((application_id, job_run_id))
         if detail is not None:
-            self._details[(application_id, job_run_id)] = replace(detail, state=state)
+            duration_ms = detail.duration_ms
+            if state in {JobRunState.SUCCESS, JobRunState.FAILED, JobRunState.CANCELLED}:
+                duration_ms = int((updated_at - detail.created_at).total_seconds() * 1000)
+            self._details[(application_id, job_run_id)] = replace(
+                detail,
+                state=state,
+                updated_at=updated_at,
+                duration_ms=duration_ms,
+            )
 
     async def aclose(self) -> None:
         """Cancel and drain any in-flight clone state-machine tasks.

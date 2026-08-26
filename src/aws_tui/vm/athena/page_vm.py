@@ -1247,6 +1247,7 @@ class AthenaPageVM:
             current_token=lambda: self._catalog_pager.current_token,
             item_count=lambda: len(self.catalogs),
             load_more=self.load_more_catalogs,
+            failed=lambda: self._catalogs_error_text is not None,
         )
         if discovery is None:
             raise ProviderError("Athena catalog discovery did not complete")
@@ -1268,6 +1269,7 @@ class AthenaPageVM:
             current_token=lambda: self._database_pager.current_token,
             item_count=lambda: len(self.databases),
             load_more=self.load_more_databases,
+            failed=lambda: self._databases_error_text is not None,
         )
         if discovery is None:
             raise ProviderError("Athena catalog discovery did not complete")
@@ -1281,6 +1283,7 @@ class AthenaPageVM:
         current_token: Callable[[], str | None],
         item_count: Callable[[], int],
         load_more: Callable[[], Awaitable[None]],
+        failed: Callable[[], bool],
     ) -> bool | None:
         seen_tokens: set[str] = set()
         empty_pages = 0
@@ -1293,6 +1296,8 @@ class AthenaPageVM:
             count_before = item_count()
             await load_more()
             request_count += 1
+            if failed():
+                return None
             if available():
                 return True
             count_after = item_count()

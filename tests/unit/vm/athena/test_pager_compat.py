@@ -5,6 +5,7 @@ from importlib.metadata import version
 
 import pytest
 
+from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 
 
@@ -239,6 +240,47 @@ async def test_snapshot_token_pager_restore_treats_snapshot_as_one_conservative_
     assert pager.items == ["a", "b"]
     assert pager.current_token == "page-2"
     assert len(resets) == 1
+
+
+@pytest.mark.asyncio
+async def test_snapshot_token_pager_rejects_immediate_token_repeat_without_appending() -> None:
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token is None:
+            return ["first"], "repeat"
+        return ["duplicate"], "repeat"
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch)
+    await pager.load_more_command.execute_async()
+
+    with pytest.raises(ProviderError, match=r"repeated.*continuation token"):
+        await pager.load_more_command.execute_async()
+
+    assert pager.items == ["first"]
+    assert pager.current_token is None
+    assert not pager.has_more
+
+
+@pytest.mark.asyncio
+async def test_snapshot_token_pager_rejects_multi_page_token_cycle_without_appending() -> None:
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token is None:
+            return ["first"], "page-a"
+        if token == "page-a":
+            return ["second"], "page-b"
+        if token == "page-b":
+            return ["duplicate"], "page-a"
+        raise AssertionError(f"unexpected token: {token}")
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch)
+    await pager.load_more_command.execute_async()
+    await pager.load_more_command.execute_async()
+
+    with pytest.raises(ProviderError, match=r"repeated.*continuation token"):
+        await pager.load_more_command.execute_async()
+
+    assert pager.items == ["first", "second"]
+    assert pager.current_token is None
+    assert not pager.has_more
 
 
 def test_seed_token_pager_uses_aws_tui_owned_public_restore_boundary() -> None:

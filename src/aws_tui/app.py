@@ -1721,10 +1721,18 @@ class AwsTuiApp(App[None]):
             return
 
         coordinator = self._app_ctx.focus_coordinator
-        if self._dual_pane() is None:
+        with contextlib.suppress(Exception):
+            settings = self.query_one(SettingsView)
+            if settings.cycle_focus(reverse=reverse):
+                coordinator.set_focused_slot(FocusSlot.SETTINGS)
+                return
             coordinator.cycle_settings_focus(reverse=reverse)
-        else:
-            coordinator.cycle_s3_focus(reverse=reverse)
+            if coordinator.focused_slot is FocusSlot.SETTINGS:
+                settings.focus_boundary(reverse=reverse)
+            else:
+                self._project_focus_slot(coordinator.focused_slot)
+            return
+        coordinator.cycle_s3_focus(reverse=reverse)
         self._project_focus_slot(coordinator.focused_slot)
 
     def _project_focus_slot(self, slot: FocusSlot) -> None:
@@ -1986,6 +1994,10 @@ class AwsTuiApp(App[None]):
                 return
             nav.action_commit()
             return
+        with contextlib.suppress(Exception):
+            settings = self.query_one(SettingsView)
+            if settings.activate_focused():
+                return
         glue_page = self._glue_page()
         if glue_page is not None and glue_page.activate_focused(space=False):
             return
@@ -2016,7 +2028,7 @@ class AwsTuiApp(App[None]):
 
     async def action_ascend(self) -> None:
         self.record_action("pane.ascend")
-        if len(self.screen_stack) > 1 and isinstance(self.focused, (Input, TextArea)):
+        if isinstance(self.focused, (Input, TextArea)):
             self.focused.action_delete_left()
             return
         # Forward Backspace to the active modal as a cancel-by-key
@@ -4922,10 +4934,13 @@ def main() -> None:
         print(f"aws-tui {__version__} (demo: {status})")
         return
 
+    context: AppContext | None = None
     try:
         context = build_app_context(demo=demo)
         app = AwsTuiApp(context=context)
     except Exception as exc:
+        if context is not None:
+            context.close_unstarted()
         message = redact_text(str(exc)) or "startup failed"
         print(
             f"\naws-tui failed to start.\n  {type(exc).__name__}: {message}\n",

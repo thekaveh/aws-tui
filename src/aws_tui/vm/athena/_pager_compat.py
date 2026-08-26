@@ -8,6 +8,8 @@ from reactivex import operators as ops
 from reactivex.subject import Subject
 from vmx import AsyncRelayCommand, CollectionChangedEvent
 
+from aws_tui.domain.filesystem import ProviderError
+
 T = TypeVar("T")
 TToken = TypeVar("TToken")
 
@@ -33,6 +35,7 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._loaded_once = False
         self._page_sizes: list[int] = []
         self._page_tokens: list[TToken | None] = []
+        self._consumed_tokens: set[TToken] = set()
         self._operation_generation = 0
         self._refreshing = False
         self._disposed = False
@@ -95,16 +98,27 @@ class SnapshotTokenPager(Generic[T, TToken]):
         # sequence as one page. A shorter refresh must replace it conservatively.
         self._page_sizes = [len(restored)]
         self._page_tokens = [next_token]
+        self._consumed_tokens = set()
         self._notify_reset()
 
     async def _load_more(self) -> None:
         generation = self._operation_generation
-        page, next_token = await self._fetch_next(self._current_token)
+        request_token = self._current_token
+        page, next_token = await self._fetch_next(request_token)
         if self._disposed or generation != self._operation_generation:
             return
+        consumed = set(self._consumed_tokens)
+        if request_token is not None:
+            consumed.add(request_token)
+        if next_token is not None and next_token in consumed:
+            self._current_token = None
+            self._loaded_once = True
+            self._notify_properties()
+            raise ProviderError("Athena returned a repeated continuation token")
         additions = list(page)
         self._items.extend(additions)
         self._current_token = next_token
+        self._consumed_tokens = consumed
         self._loaded_once = True
         self._page_sizes.append(len(additions))
         self._page_tokens.append(next_token)
@@ -141,6 +155,7 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._loaded_once = True
         self._page_sizes = [len(fresh)]
         self._page_tokens = [next_token]
+        self._consumed_tokens = set()
         self._notify_reset()
 
     def _notify_reset(self) -> None:

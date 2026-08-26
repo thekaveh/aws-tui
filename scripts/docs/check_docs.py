@@ -230,7 +230,7 @@ def check_local_anchors(repo_root: str | Path) -> list[Finding]:
         for line_number, line in _unfenced_lines(source_path.read_text(encoding="utf-8")):
             for link in find_links(line):
                 target = urlsplit(link.target)
-                if target.scheme or target.netloc or not target.fragment:
+                if target.scheme or target.netloc:
                     continue
                 target_path = source_path
                 if target.path:
@@ -239,11 +239,21 @@ def check_local_anchors(repo_root: str | Path) -> list[Finding]:
                     target_path.relative_to(repo_root)
                 except ValueError:
                     continue
+                if target.path and not target_path.exists():
+                    findings.append(
+                        Finding(
+                            "error",
+                            f"{source_rel}:{line_number}: local link target {target.path} does not exist",
+                        )
+                    )
+                    continue
+                if not target.fragment:
+                    continue
                 if not target_path.is_file():
                     findings.append(
                         Finding(
                             "error",
-                            f"{source_rel}:{line_number}: local anchor target {target.path} does not exist",
+                            f"{source_rel}:{line_number}: local anchor target {target.path} is not a file",
                         )
                     )
                     continue

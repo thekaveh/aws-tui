@@ -387,6 +387,91 @@ async def test_open_connection_form_owns_tab_traversal(
 
 
 @pytest.mark.asyncio
+async def test_settings_add_and_inline_form_are_keyboard_accessible(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+            await pilot.press("comma")
+            await _await_content_mount(app, "settings")
+
+            from textual.widgets import Button, Input
+
+            from aws_tui.ui.widgets.modal_button import ModalButton
+            from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+            from aws_tui.ui.widgets.settings_view import SettingsView
+
+            settings_controls = app.query_one(SettingsView)._focus_controls()
+            assert {"add-empty", "add-populated"} & {control.id for control in settings_controls}
+
+            await pilot.press("tab")
+            assert app._last_action_id == "pane.switch_focus"
+            assert isinstance(app.focused, Button)
+            assert app.focused.id == "add-empty"
+
+            await pilot.press("enter")
+            form = app.query_one(ConnectionFormInline)
+            assert form.has_class("-open")
+            assert app.focused is app.query_one("#form-name", Input)
+
+            await pilot.press("x")
+            assert app.query_one("#form-name", Input).value == "x"
+            await pilot.press("backspace")
+            assert app.query_one("#form-name", Input).value == ""
+
+            await pilot.press("shift+tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-cancel-btn"
+            await pilot.press("enter")
+            assert not form.has_class("-open")
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_settings_edit_and_delete_are_keyboard_accessible(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache", demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+            await pilot.press("comma")
+            await _await_content_mount(app, "settings")
+
+            from textual.widgets import Button
+
+            from aws_tui.ui.widgets.modal_button import ModalButton
+            from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+            from aws_tui.ui.widgets.settings_view import SettingsView
+
+            await pilot.press("tab", "tab")
+            assert isinstance(app.focused, Button)
+            assert app.focused.id == "edit-0"
+            await pilot.press("enter")
+            form = app.query_one(ConnectionFormInline)
+            assert form.has_class("-open")
+
+            await pilot.press("tab", "tab", "tab", "tab", "tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-cancel-btn"
+            await pilot.press("enter")
+            assert not form.has_class("-open")
+
+            app.query_one(SettingsView).focus_default()
+            await pilot.press("tab", "tab")
+            assert isinstance(app.focused, Button)
+            assert app.focused.id == "delete-0"
+            await pilot.press("enter")
+            assert isinstance(app.screen, ConfirmModal)
+            await pilot.press("escape")
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
 async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
     """Seed a connection → open Settings → click delete chip → confirm → TOML removed."""
     config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)

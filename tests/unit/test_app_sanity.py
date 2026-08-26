@@ -303,6 +303,35 @@ def test_cli_reports_redacted_startup_failure_before_app_construction(
     assert "SUPERSECRET" not in stderr
 
 
+def test_cli_closes_context_when_app_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui import app as app_module
+
+    class Context:
+        closed = False
+
+        def close_unstarted(self) -> None:
+            self.closed = True
+
+    context = Context()
+
+    class FailingApp:
+        def __init__(self, *, context: object) -> None:
+            del context
+            raise RuntimeError("app construction failed")
+
+    monkeypatch.setattr(sys, "argv", ["aws-tui"])
+    monkeypatch.setattr(app_module, "build_app_context", lambda *, demo: context)
+    monkeypatch.setattr(app_module, "AwsTuiApp", FailingApp)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.main()
+
+    assert exc_info.value.code == 1
+    assert context.closed
+
+
 def test_bound_action_records_action_id(monkeypatch: pytest.MonkeyPatch) -> None:
     from aws_tui import app as app_module
 

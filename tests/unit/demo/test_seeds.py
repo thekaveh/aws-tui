@@ -175,8 +175,43 @@ async def test_clone_state_machine_walks_to_success(monkeypatch: pytest.MonkeyPa
         await asyncio.sleep(0.001)
         detail = await emr.get_job_run("etl-pipeline-1", new_id)
         if detail.state is JobRunState.SUCCESS:
+            assert detail.updated_at > detail.created_at
+            assert detail.duration_ms == int(
+                (detail.updated_at - detail.created_at).total_seconds() * 1000
+            )
             return
     raise AssertionError(f"state walk did not reach SUCCESS; final state was {detail.state!r}")
+
+
+@pytest.mark.asyncio
+async def test_successive_demo_clones_are_newest_and_strictly_ordered() -> None:
+    emr = seeded_demo_emr()
+    first_id = await emr.start_job_run(
+        "etl-pipeline-1",
+        execution_role_arn="arn:aws:iam::111111111111:role/EmrJobRole",
+        entry_point="s3://demo/etl.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=None,
+        name="first-clone",
+    )
+    second_id = await emr.start_job_run(
+        "etl-pipeline-1",
+        execution_role_arn="arn:aws:iam::111111111111:role/EmrJobRole",
+        entry_point="s3://demo/etl.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=None,
+        name="second-clone",
+    )
+    try:
+        runs = await emr.list_job_runs("etl-pipeline-1")
+        first = next(run for run in runs if run.job_run_id == first_id)
+        second = next(run for run in runs if run.job_run_id == second_id)
+
+        assert runs[:2] == [second, first]
+        assert second.created_at > first.created_at
+        assert first.created_at > runs[2].created_at
+    finally:
+        await emr.aclose()
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,7 @@ The composition builds:
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -158,6 +159,33 @@ class AppContext:
             unreachable_connections if unreachable_connections is not None else set()
         )
 
+    def close_unstarted(self) -> None:
+        """Release a context that never reached Textual's mount lifecycle.
+
+        ``AwsTuiApp.on_unmount`` owns normal async shutdown. This synchronous
+        fallback is only for composition or app-constructor failures, before
+        workers and AWS clients can exist.
+        """
+        for disposable in (
+            self.s3_connections_vm,
+            self.command_palette_vm,
+            self.quick_look_vm,
+            self.confirm_vm,
+            self.transfers_vm,
+            self.table_clipboard_vm,
+            self.root_vm,
+            self.focus_coordinator,
+        ):
+            with suppress(Exception):
+                disposable.dispose()
+        if self.demo_emr is not None:
+            with suppress(Exception):
+                self.demo_emr.dispose()
+        with suppress(Exception):
+            self.log_sink.flush()
+        with suppress(Exception):
+            self.log_sink.close()
+
 
 def build_app_context(
     *,
@@ -186,6 +214,25 @@ def build_app_context(
         cache_dir = cache_home()
 
     log_sink = LogSink(base_dir=cache_dir / "log", capture_stdlib=True)
+    try:
+        return _build_app_context(
+            config_dir=config_dir,
+            cache_dir=cache_dir,
+            demo=demo,
+            log_sink=log_sink,
+        )
+    except BaseException:
+        log_sink.close()
+        raise
+
+
+def _build_app_context(
+    *,
+    config_dir: Path,
+    cache_dir: Path,
+    demo: bool,
+    log_sink: LogSink,
+) -> AppContext:
     # read_only=demo: in demo mode all write methods on ConfigStore are
     # silent no-ops so the user's real config.toml is never mutated.
     config_store = ConfigStore(path=config_dir / "config.toml", read_only=demo)
@@ -351,35 +398,40 @@ def build_app_context(
         hub=hub,
         dispatcher=dispatcher,
     )
-    focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=dispatcher)
-    focus_coordinator.construct()
-    table_clipboard_vm = TableClipboardVM(hub=hub, dispatcher=dispatcher)
-    table_clipboard_vm.construct()
-    return AppContext(
-        root_vm=root_vm,
-        registry=registry,
-        config_store=config_store,
-        log_sink=log_sink,
-        keymap_store=keymap_store,
-        keychain=keychain,
-        theme_store=theme_store,
-        connection_resolver=connection_resolver,
-        aws_session=aws_session,
-        transfers_vm=transfers_vm,
-        confirm_vm=confirm_vm,
-        quick_look_vm=quick_look_vm,
-        command_palette_vm=command_palette_vm,
-        transfer_journal=transfer_journal,
-        hub=hub,
-        dispatcher=dispatcher,
-        initial_theme=initial_theme,
-        s3_connections_vm=s3_connections_vm,
-        focus_coordinator=focus_coordinator,
-        table_clipboard_vm=table_clipboard_vm,
-        demo=demo,
-        demo_emr=demo_emr_ref,
-        unreachable_connections=set(),
-    )
+    with ExitStack() as rollback:
+        focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=dispatcher)
+        rollback.callback(focus_coordinator.dispose)
+        focus_coordinator.construct()
+        table_clipboard_vm = TableClipboardVM(hub=hub, dispatcher=dispatcher)
+        rollback.callback(table_clipboard_vm.dispose)
+        table_clipboard_vm.construct()
+        context = AppContext(
+            root_vm=root_vm,
+            registry=registry,
+            config_store=config_store,
+            log_sink=log_sink,
+            keymap_store=keymap_store,
+            keychain=keychain,
+            theme_store=theme_store,
+            connection_resolver=connection_resolver,
+            aws_session=aws_session,
+            transfers_vm=transfers_vm,
+            confirm_vm=confirm_vm,
+            quick_look_vm=quick_look_vm,
+            command_palette_vm=command_palette_vm,
+            transfer_journal=transfer_journal,
+            hub=hub,
+            dispatcher=dispatcher,
+            initial_theme=initial_theme,
+            s3_connections_vm=s3_connections_vm,
+            focus_coordinator=focus_coordinator,
+            table_clipboard_vm=table_clipboard_vm,
+            demo=demo,
+            demo_emr=demo_emr_ref,
+            unreachable_connections=set(),
+        )
+        rollback.pop_all()
+        return context
 
 
 __all__ = [

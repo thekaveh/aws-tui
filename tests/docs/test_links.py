@@ -12,6 +12,15 @@ def test_find_links_extracts_targets():
     assert [ln.target for ln in find_links(md)] == ["one.md", "https://x.test/y", "p.png"]
 
 
+def test_find_links_ignores_code_but_keeps_links_with_code_labels():
+    md = (
+        "`[inline](missing-inline.md)` and [`real`](real.md)\n"
+        "```markdown\n[fenced](missing-fenced.md)\n```\n"
+    )
+
+    assert [link.target for link in find_links(md)] == ["real.md"]
+
+
 def test_site_forbids_repo_and_wiki_links():
     assert is_forbidden(f"{REPO_URL}/blob/main/src/x.py", "site") is True
     assert is_forbidden(f"{WIKI_URL}/Home", "site") is True

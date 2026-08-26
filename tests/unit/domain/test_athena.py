@@ -838,6 +838,25 @@ async def test_terminal_observation_revokes_stop_authority() -> None:
     boto.stop_query_execution.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_foreign_terminal_history_does_not_enter_app_ownership_ledgers() -> None:
+    client, boto, _ = _athena_client()
+
+    for index in range(25):
+        execution_id = f"history-{index}"
+        response = _query_execution("SUCCEEDED")
+        execution = cast(dict[str, object], response["QueryExecution"])
+        execution["QueryExecutionId"] = execution_id
+        boto.get_query_execution.return_value = response
+
+        await client.get_query_execution(execution_id)
+
+    assert client._app_started_active_queries == set()
+    assert client._app_started_query_ids_by_token == {}
+    assert client._retired_app_started_queries == set()
+    assert client._stop_tasks == {}
+
+
 async def test_terminal_observation_wins_over_failed_stop_race() -> None:
     client, boto, _ = _athena_client(
         "start_query_execution",

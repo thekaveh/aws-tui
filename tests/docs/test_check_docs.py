@@ -179,6 +179,19 @@ def test_local_anchors_accept_punctuation_when_github_and_mkdocs_agree(tmp_path)
     assert check_local_anchors(tmp_path) == []
 
 
+def test_local_links_flag_missing_path_without_fragment(tmp_path):
+    (tmp_path / "docs").mkdir()
+    _write_mkdocs_config(tmp_path)
+    (tmp_path / "README.md").write_text("[missing](docs/does-not-exist.md)\n")
+
+    findings = check_local_anchors(tmp_path)
+
+    assert any(
+        "local link target docs/does-not-exist.md does not exist" in finding.message
+        for finding in findings
+    )
+
+
 def test_local_anchors_require_both_github_and_mkdocs_duplicate_suffixes(tmp_path):
     (tmp_path / "docs").mkdir()
     _write_mkdocs_config(tmp_path)

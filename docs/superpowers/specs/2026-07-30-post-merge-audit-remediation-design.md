@@ -167,9 +167,13 @@ The following sources must be reviewed and updated where applicable:
 - `docs/adding-a-service.md`
 - `docs/contract-ledger.md`
 - `docs/RELEASING.md`
-- `.superpowers/sdd/2026-07-30-task-7-report.md`
 - the Glue/Athena polish design and implementation records when they make a
   current-state claim rather than preserving historical instructions.
+
+Agent execution reports under `.superpowers/` are transient working state,
+not canonical documentation. Git history preserves reports that accompanied
+older implementation commits; durable conclusions belong in this design, its
+implementation plan, or another indexed document under `docs/`.
 
 The documentation must cover the exact source picker, selector commands,
 complete focus order, `ServiceTabStrip`, `TableClipboardVM`,

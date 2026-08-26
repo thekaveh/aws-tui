@@ -638,6 +638,14 @@ class AthenaClient:
             del self._stop_tasks[execution_id]
 
     def _retire_app_started_query(self, execution_id: str) -> None:
+        owned = (
+            execution_id in self._app_started_active_queries
+            or execution_id in self._stop_tasks
+            or execution_id in self._retired_app_started_queries
+            or execution_id in self._app_started_query_ids_by_token.values()
+        )
+        if not owned:
+            return
         self._app_started_active_queries.discard(execution_id)
         self._retired_app_started_queries.add(execution_id)
         retired_tokens = [

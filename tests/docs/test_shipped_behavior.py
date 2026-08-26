@@ -37,6 +37,14 @@ def test_cookbook_describes_live_keybinding_overrides() -> None:
     assert 'pane.copy = "y"' not in active_docs
 
 
+def test_connections_uses_the_literal_environment_prefix_contract() -> None:
+    text = _text("docs/connections.md")
+
+    assert "`env:PREFIX_`" in text
+    assert "`env:PREFIX_*`" not in text
+    assert 'credentials = "keychain:minio-local" # or env:PREFIX_' in text
+
+
 def test_keybindings_describes_shipped_palette_and_runtime_resolver() -> None:
     text = _text("docs/keybindings.md")
 
