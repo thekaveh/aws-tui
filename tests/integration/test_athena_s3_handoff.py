@@ -19,14 +19,14 @@ from aws_tui.domain.filesystem import (
     NotFoundError,
     PathRef,
 )
-from aws_tui.domain.query import QueryContext, QueryState
+from aws_tui.domain.query import QueryContext, QueryState, ResultColumn
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
 from aws_tui.services.s3.service import S3Service
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.glue.detail_rows import ResourceListPane
-from aws_tui.vm.athena.page_vm import AthenaPageVM
+from aws_tui.vm.athena.page_vm import AthenaPageSnapshot, AthenaPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 from aws_tui.vm.messages import OpenS3LocationRequest
@@ -855,22 +855,32 @@ async def _open_athena_results(
     ctx: AppContext,
     app: AwsTuiApp,
     pilot: object,
-) -> tuple[AthenaPageVM, tuple[str, ...]]:
+) -> tuple[AthenaPageVM, AthenaPageSnapshot, tuple[str, ...]]:
     page = await _open_athena(ctx, app, pilot)
-    await page.select_view("history")
-    await page.select_history_execution("q-dev-succeeded")
-    await page.open_history_results()
-    assert page.active_view == "results"
-    assert page.results.execution_id == "q-dev-succeeded"
     client = _athena_client(ctx, "demo-dev")
+    assert page.context is not None
+    client.add_query_result(
+        "SELECT 'S3_ROLLBACK_SQL_MARKER'",
+        page.context,
+        columns=(ResultColumn("_col0", "varchar", "NULLABLE"),),
+        rows=(("S3_ROLLBACK_RESULT",),),
+    )
+    page.query.set_sql("SELECT 'S3_ROLLBACK_SQL_MARKER'")
+    await page.select_view("query")
+    await page.query.execute()
+    await page.select_view("results")
+    assert page.active_view == "results"
+    assert page.results.rows == (("S3_ROLLBACK_RESULT",),)
+    snapshot = page.export_snapshot()
     history_before = tuple(client.history["dev-analytics"])
-    return page, history_before
+    return page, snapshot, history_before
 
 
 async def _assert_athena_results_restored(
     ctx: AppContext,
     app: AwsTuiApp,
     pilot: object,
+    snapshot: AthenaPageSnapshot,
     history_before: tuple[str, ...],
 ) -> None:
     await _wait_for_service_setup(ctx, app, pilot)
@@ -880,8 +890,7 @@ async def _assert_athena_results_restored(
     assert ctx.root_vm.active_connection.name == "demo-dev"
     page = ctx.root_vm.content_host.current
     assert isinstance(page, AthenaPageVM)
-    assert page.active_view == "results"
-    assert page.results.execution_id == "q-dev-succeeded"
+    assert page.export_snapshot() == snapshot
     client = _athena_client(ctx, "demo-dev")
     assert tuple(client.history["dev-analytics"]) == history_before
     assert len(app.query(DualPane)) == 0
@@ -911,7 +920,7 @@ async def test_result_handoff_rolls_back_every_post_mount_failure(
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test(size=(120, 40)) as pilot:
-            _, history_before = await _open_athena_results(ctx, app, pilot)
+            _, snapshot, history_before = await _open_athena_results(ctx, app, pilot)
 
             if stage == "bind":
 
@@ -953,6 +962,7 @@ async def test_result_handoff_rolls_back_every_post_mount_failure(
                 ctx,
                 app,
                 pilot,
+                snapshot,
                 history_before,
             )
             failure_stage = "navigation" if stage == "terminal" else stage
@@ -978,7 +988,7 @@ async def test_result_handoff_cancellation_restores_prior_athena_state(
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test(size=(120, 40)) as pilot:
-            _, history_before = await _open_athena_results(ctx, app, pilot)
+            _, snapshot, history_before = await _open_athena_results(ctx, app, pilot)
             navigation_started = asyncio.Event()
             release_navigation = asyncio.Event()
             original_navigate = PaneVM.navigate_to
@@ -1000,6 +1010,7 @@ async def test_result_handoff_cancellation_restores_prior_athena_state(
                 ctx,
                 app,
                 pilot,
+                snapshot,
                 history_before,
             )
     finally:

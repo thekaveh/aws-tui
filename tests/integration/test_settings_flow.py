@@ -22,6 +22,7 @@ _MINIO_LOCAL_TOML = (
     'kind = "s3-compatible"\n'
     'endpoint_url = "http://127.0.0.1:1"\n'  # unreachable on purpose
     'region = "us-east-1"\n'
+    'credentials = "static"\n'
     'access_key_id = "AKIATEST"\n'
     'secret_access_key = "SECRETTEST"\n'
     "force_path_style = true\n"

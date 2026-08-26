@@ -9,6 +9,7 @@ import pytest
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.infra.aws_session import TokenState
+from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.nav_row import NavRow
 from aws_tui.ui.widgets.pane import Pane
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
@@ -147,6 +148,8 @@ async def test_arrow_walking_back_to_s3_keeps_visual_focus_on_nav(
             await pilot.press("down")
             await pilot.pause()
             assert ctx.root_vm.services_menu.selected_id == "settings"
+            assert ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
+            assert isinstance(app.focused, NavMenu)
             await pilot.press("up")
             await pilot.pause()
 

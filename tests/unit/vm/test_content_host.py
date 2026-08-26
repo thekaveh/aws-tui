@@ -129,6 +129,38 @@ async def test_set_content_same_service_replaces_different_vm() -> None:
     host.dispose()
 
 
+async def test_set_content_identical_instance_is_a_lifecycle_noop() -> None:
+    events: list[str] = []
+
+    class _LifecycleVM:
+        def construct(self) -> None:
+            events.append("construct")
+
+        async def setup(self) -> None:
+            events.append("setup")
+
+        async def shutdown(self) -> None:
+            events.append("shutdown")
+
+        def dispose(self) -> None:
+            events.append("dispose")
+
+    host = _build()
+    child = _LifecycleVM()
+    await host.set_content(cast("ComponentVM", child), service_id="s3")
+    setup_task = host._setup_task
+    assert setup_task is not None
+    await setup_task
+
+    await host.set_content(cast("ComponentVM", child), service_id="renamed-s3")
+
+    assert host.current is child
+    assert host.current_id == "s3"
+    assert events == ["construct", "setup"]
+    host.dispose()
+    assert events == ["construct", "setup", "dispose"]
+
+
 async def test_dispose_disposes_current_content() -> None:
     host = _build()
     child = _component()

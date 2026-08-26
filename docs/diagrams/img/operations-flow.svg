@@ -21,7 +21,7 @@
         <path d="M300 165H380" stroke="#22d3ee"/>
         <path d="M620 140H675V115H730" stroke="#fbbf24"/>
         <path d="M620 190H675V225H730" stroke="#fbbf24"/>
-        <path d="M620 165H1080" stroke="#34d399"/>
+        <path d="M180 215V270H1230V215" stroke="#34d399" data-owner="DualPaneVM" data-target="TransferJournal"/>
         <path d="M250 440H300" stroke="#34d399"/><path d="M500 440H550" stroke="#34d399"/>
         <path d="M770 440H830" stroke="#34d399"/><path d="M1030 440H1080" stroke="#fbbf24"/>
         <path d="M1280 440H1330" stroke="#fbbf24"/><path d="M1430 490V525" stroke="#fbbf24"/>

@@ -13,6 +13,7 @@ from textual.worker import WorkerCancelled
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.demo import seeds
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets.dual_pane import DualPane
@@ -235,7 +236,18 @@ async def test_s3_handoff_mount_failure_is_reported_and_redacted(
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test(size=(120, 40)) as pilot:
-            await _open_demo_glue(ctx, app, pilot)
+            glue = await _open_demo_glue(ctx, app, pilot)
+            await glue.open_table(
+                TableRef(
+                    "AwsDataCatalog",
+                    "dev_analytics",
+                    "dev_events_iceberg",
+                    "demo-dev",
+                    "us-east-1",
+                )
+            )
+            assert await glue.catalog.iceberg.select_view("snapshots")
+            assert glue.catalog.iceberg.select_snapshot(4201)
             mount_results: list[tuple[str, bool]] = []
             original_mount = Container.mount
             original_mount_service_view = app._mount_service_view
@@ -271,6 +283,11 @@ async def test_s3_handoff_mount_failure_is_reported_and_redacted(
 
             assert mount_results == [("s3", False), ("glue", True)]
             _assert_visible_glue(ctx, app)
+            restored = ctx.root_vm.content_host.current
+            assert isinstance(restored, GluePageVM)
+            assert restored.catalog.selected_table_name == "dev_events_iceberg"
+            assert restored.catalog.iceberg.active_view == "snapshots"
+            assert restored.catalog.iceberg.selected_snapshot_id == 4201
             _assert_redacted_failure(ctx, toast_id="s3-handoff-mount-failed")
     finally:
         with contextlib.suppress(Exception):

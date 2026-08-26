@@ -292,3 +292,11 @@ def test_architecture_diagram_is_landscape_and_current():
     assert 'd="M455 610V635H330V672H455V680"' in svg
     assert 'd="M715 610V635H920V672H715V680"' in svg
     assert 'x="625" y="658"' in svg
+
+
+def test_operations_flow_assigns_transfer_journal_to_dual_pane() -> None:
+    master = Path("docs/diagrams/operations-flow.html").read_text(encoding="utf-8")
+
+    assert 'data-owner="DualPaneVM" data-target="TransferJournal"' in master
+    assert 'd="M180 215V270H1230V215"' in master
+    assert 'd="M620 165H1080"' not in master

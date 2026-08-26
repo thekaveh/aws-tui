@@ -1458,6 +1458,54 @@ async def test_table_handoff_rollback_restores_complete_athena_result_state(
 
 
 @pytest.mark.asyncio
+async def test_table_handoff_rollback_restores_glue_iceberg_view(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    table_ref = TableRef(
+        "AwsDataCatalog",
+        "dev_analytics",
+        "dev_events_iceberg",
+        "demo-dev",
+        "us-east-1",
+    )
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+            await glue.open_table(table_ref)
+            assert await glue.catalog.iceberg.select_view("files")
+
+            async def fail_open(
+                target: AthenaPageVM,
+                requested: TableRef,
+                snapshot_id: int | None = None,
+            ) -> None:
+                del target, requested, snapshot_id
+                raise RuntimeError("safe Athena open failure")
+
+            monkeypatch.setattr(AthenaPageVM, "open_table", fail_open)
+            ctx.hub.send(OpenAthenaTableRequest(table_ref))
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            restored = ctx.root_vm.content_host.current
+            assert isinstance(restored, GluePageVM)
+            assert restored.active_view == "catalog"
+            assert restored.catalog.selected_database_name == "dev_analytics"
+            assert restored.catalog.selected_table_name == "dev_events_iceberg"
+            assert restored.catalog.iceberg.active_view == "files"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_table_handoff_rollback_survives_repeated_cancellation_and_restores_athena(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

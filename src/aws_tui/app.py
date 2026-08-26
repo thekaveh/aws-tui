@@ -82,6 +82,7 @@ from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
     ConnectionListChangedMessage,
@@ -104,7 +105,18 @@ class _S3HandoffSnapshot:
     connection: Connection | None
     auth_state: TokenState | None
     service_id: str | None
+    athena: AthenaPageSnapshot | None = field(repr=False)
     athena_result_execution_id: str | None
+    glue: _GluePageSnapshot | None = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _GluePageSnapshot:
+    active_view: GlueView
+    database_name: str | None
+    table_ref: TableRef | None = field(repr=False)
+    iceberg_view: IcebergView | None
+    iceberg_snapshot_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,9 +125,7 @@ class _TableHandoffSnapshot:
     auth_state: TokenState | None
     service_id: str | None
     athena: AthenaPageSnapshot | None = field(repr=False)
-    glue_view: str | None
-    glue_database_name: str | None
-    glue_table_ref: TableRef | None = field(repr=False)
+    glue: _GluePageSnapshot | None = field(repr=False)
 
 
 class _S3HandoffStageError(Exception):
@@ -3518,29 +3528,48 @@ class AwsTuiApp(App[None]):
     def _capture_table_handoff_snapshot(self) -> _TableHandoffSnapshot:
         ctx = self._app_ctx
         current = ctx.root_vm.content_host.current
-        glue_table_ref: TableRef | None = None
-        if isinstance(current, GluePageVM):
-            selected_table_name = current.catalog.selected_table_name
-            selected = next(
-                (
-                    row
-                    for row in current.catalog.tables
-                    if row.ref.table_name == selected_table_name
-                ),
-                None,
-            )
-            glue_table_ref = selected.ref if selected is not None else None
         return _TableHandoffSnapshot(
             connection=ctx.root_vm.active_connection,
             auth_state=ctx.root_vm.active_auth_state,
             service_id=ctx.root_vm.content_host.current_id,
             athena=current.export_snapshot() if isinstance(current, AthenaPageVM) else None,
-            glue_view=current.active_view if isinstance(current, GluePageVM) else None,
-            glue_database_name=(
-                current.catalog.selected_database_name if isinstance(current, GluePageVM) else None
-            ),
-            glue_table_ref=glue_table_ref,
+            glue=self._capture_glue_page_snapshot(current)
+            if isinstance(current, GluePageVM)
+            else None,
         )
+
+    @staticmethod
+    def _capture_glue_page_snapshot(page: GluePageVM) -> _GluePageSnapshot:
+        selected_table_name = page.catalog.selected_table_name
+        selected = next(
+            (row for row in page.catalog.tables if row.ref.table_name == selected_table_name),
+            None,
+        )
+        iceberg = page.catalog.iceberg
+        return _GluePageSnapshot(
+            active_view=page.active_view,
+            database_name=page.catalog.selected_database_name,
+            table_ref=selected.ref if selected is not None else None,
+            iceberg_view=iceberg.active_view if iceberg.available else None,
+            iceberg_snapshot_id=iceberg.selected_snapshot_id,
+        )
+
+    @staticmethod
+    async def _restore_glue_page_snapshot(
+        page: GluePageVM,
+        snapshot: _GluePageSnapshot,
+    ) -> None:
+        if snapshot.table_ref is not None:
+            await page.open_table(snapshot.table_ref)
+        elif snapshot.database_name is not None:
+            await page.select_database(snapshot.database_name)
+        if snapshot.table_ref is not None and snapshot.iceberg_view is not None:
+            iceberg = page.catalog.iceberg
+            await iceberg.select_view(snapshot.iceberg_view)
+            if snapshot.iceberg_snapshot_id is not None:
+                iceberg.select_snapshot(snapshot.iceberg_snapshot_id)
+        if page.active_view != snapshot.active_view:
+            await page.select_view(snapshot.active_view)
 
     async def _restore_superseded_table_handoff(
         self,
@@ -3661,13 +3690,8 @@ class AwsTuiApp(App[None]):
         if isinstance(current, AthenaPageVM):
             if snapshot.athena is not None:
                 await current.restore_snapshot(snapshot.athena)
-        elif isinstance(current, GluePageVM):
-            if snapshot.glue_table_ref is not None:
-                await current.open_table(snapshot.glue_table_ref)
-            elif snapshot.glue_database_name is not None:
-                await current.select_database(snapshot.glue_database_name)
-            if snapshot.glue_view is not None:
-                await current.select_view(cast("GlueView", snapshot.glue_view))
+        elif isinstance(current, GluePageVM) and snapshot.glue is not None:
+            await self._restore_glue_page_snapshot(current, snapshot.glue)
         if not self._table_handoff_should_restore(generation):
             return False
         await self.wait_for_refresh()
@@ -3745,15 +3769,23 @@ class AwsTuiApp(App[None]):
             return
         destination, object_name = target
         current = ctx.root_vm.content_host.current
+        athena_snapshot: AthenaPageSnapshot | None = None
+        if isinstance(current, AthenaPageVM):
+            with contextlib.suppress(ValueError):
+                athena_snapshot = current.export_snapshot()
         snapshot = _S3HandoffSnapshot(
             connection=ctx.root_vm.active_connection,
             auth_state=ctx.root_vm.active_auth_state,
             service_id=ctx.root_vm.content_host.current_id,
+            athena=athena_snapshot,
             athena_result_execution_id=(
                 current.results.execution_id
                 if isinstance(current, AthenaPageVM) and current.active_view == "results"
                 else None
             ),
+            glue=self._capture_glue_page_snapshot(current)
+            if isinstance(current, GluePageVM)
+            else None,
         )
 
         try:
@@ -3885,7 +3917,9 @@ class AwsTuiApp(App[None]):
                 connection=snapshot.connection,
                 auth_state=snapshot.auth_state,
                 service_id=snapshot.service_id,
+                athena=snapshot.athena,
                 athena_result_execution_id=snapshot.athena_result_execution_id,
+                glue=snapshot.glue,
             )
         )
         while True:
@@ -3907,7 +3941,9 @@ class AwsTuiApp(App[None]):
         connection: Connection | None,
         auth_state: TokenState | None,
         service_id: str | None,
+        athena: AthenaPageSnapshot | None = None,
         athena_result_execution_id: str | None = None,
+        glue: _GluePageSnapshot | None = None,
     ) -> bool:
         """Restore the coherent service snapshot captured before a handoff."""
         if connection is None or auth_state is None or service_id is None:
@@ -3958,13 +3994,14 @@ class AwsTuiApp(App[None]):
             with contextlib.suppress(asyncio.CancelledError):
                 await setup_task
         current = self._app_ctx.root_vm.content_host.current
-        if (
-            service_id == "athena"
-            and athena_result_execution_id is not None
-            and isinstance(current, AthenaPageVM)
-        ):
-            await current.results.load(athena_result_execution_id)
-            await current.select_view("results")
+        if service_id == "athena" and isinstance(current, AthenaPageVM):
+            if athena is not None:
+                await current.restore_snapshot(athena)
+            elif athena_result_execution_id is not None:
+                await current.results.load(athena_result_execution_id)
+                await current.select_view("results")
+        elif service_id == "glue" and isinstance(current, GluePageVM) and glue is not None:
+            await self._restore_glue_page_snapshot(current, glue)
         return restored
 
     def _raise_s3_handoff_failure(

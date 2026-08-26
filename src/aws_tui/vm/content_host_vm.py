@@ -2,8 +2,9 @@
 
 ``set_content(new_vm, service_id=...)`` constructs the candidate before
 shutting down and disposing the previous content tree. Re-setting
-with the same ``service_id`` is a no-op so the menu can publish "selected
-service" updates without rebuilding the world.
+with the identical non-null VM instance is a no-op. A different VM with
+the same ``service_id`` is still a real replacement and runs the complete
+shutdown, disposal, construction, and setup lifecycle.
 
 ``setup`` (if the hosted VM exposes one) is dispatched as a BACKGROUND
 asyncio task by ``set_content`` rather than awaited inline. This is what
@@ -118,7 +119,7 @@ class ContentHostVM:
         service_id: str | None,
         before_publish: Callable[[], None] | None,
     ) -> None:
-        """Swap the hosted VM. Idempotent on equal ``service_id``.
+        """Swap the hosted VM. Idempotent only for the identical VM instance.
 
         Adoption + the ``"current"`` :class:`PropertyChangedMessage`
         fire synchronously inside the await — the View layer can mount
