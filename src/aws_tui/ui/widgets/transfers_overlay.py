@@ -15,14 +15,15 @@ re-mounts children on each batch update.
 from __future__ import annotations
 
 import os
+from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
-from textual.events import Click
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import Button, Static
 from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.ui.formatters import humanize_bytes
@@ -40,6 +41,24 @@ _LINGER_SECONDS: float = float(os.environ.get("AWS_TUI_TRANSFER_LINGER", "3.0"))
 _BAR_CELLS: int = 10
 _BAR_FILLED: str = "▰"  # ▰
 _BAR_EMPTY: str = "▱"  # ▱
+
+
+class _TransferCancelButton(Button):
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("enter", "press", show=False),
+        Binding("space", "press", show=False),
+    ]
+
+    def __init__(self, *, disabled: bool) -> None:
+        super().__init__(
+            "x",
+            id="cancel-btn",
+            classes="transfer-cancel",
+            compact=True,
+            flat=True,
+            tooltip="Cancel transfer",
+            disabled=disabled,
+        )
 
 
 def _last_segment(uri: str) -> str:
@@ -114,9 +133,13 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
     TransferRowWidget .transfer-bar { width: 1fr; }
     TransferRowWidget .transfer-cancel {
         width: 5;
+        min-width: 5;
         height: 1;
+        min-height: 1;
         text-align: center;
         margin: 0 0 0 1;
+        padding: 0;
+        border: none;
     }
     TransferRowWidget .transfer-bytes { width: 1fr; }
     TransferRowWidget .transfer-rate { width: auto; text-align: right; }
@@ -138,7 +161,7 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         yield Static(self._dest_text(), classes="transfer-dest-row", markup=False)
         with Horizontal(classes="transfer-bar-row"):
             yield Static(self._bar_text(), classes="transfer-bar", markup=False)
-            yield Static("[✕]", id="cancel-btn", classes="transfer-cancel", markup=False)
+            yield _TransferCancelButton(disabled=self._vm.is_finished)
         with Horizontal(classes="transfer-meta-row"):
             yield Static(self._bytes_text(), classes="transfer-bytes", markup=False)
             yield Static(self._rate_text(), classes="transfer-rate", markup=False)
@@ -154,18 +177,11 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()
 
-    def on_click(self, event: Click) -> None:
-        # Bubble: react when the click landed on our Cancel Static.
-        # Cancelled / completed / failed rows ignore clicks (the chip is dim).
-        if self._vm.is_finished:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "cancel-btn" or self._vm.is_finished:
             return
-        target = event.widget if hasattr(event, "widget") else None
-        node: object | None = target
-        while node is not None:
-            if isinstance(node, Static) and getattr(node, "id", None) == "cancel-btn":
-                self._vm.cancel_command.execute()
-                return
-            node = getattr(node, "parent", None)
+        event.stop()
+        self._vm.cancel_command.execute()
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name != "state":
@@ -182,6 +198,7 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
             self.query_one(".transfer-bar", Static).update(self._bar_text())
             self.query_one(".transfer-bytes", Static).update(self._bytes_text())
             self.query_one(".transfer-rate", Static).update(self._rate_text())
+            self.query_one("#cancel-btn", Button).disabled = self._vm.is_finished
         except NoMatches:
             return
 
