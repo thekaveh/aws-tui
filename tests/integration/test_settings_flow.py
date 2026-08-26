@@ -726,10 +726,12 @@ async def test_local_only_mount_returns_false_without_transfer_journal(
 
 
 @pytest.mark.asyncio
-async def test_local_only_mount_returns_false_when_content_adoption_fails(
+async def test_local_only_mount_preserves_content_when_candidate_construction_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
+
     ctx = build_app_context(
         config_dir=tmp_path / "config",
         cache_dir=tmp_path / "cache",
@@ -740,18 +742,20 @@ async def test_local_only_mount_returns_false_when_content_adoption_fails(
         async with app.run_test(size=(120, 40)) as pilot:
             await _await_boot(pilot, app)
             connection = ctx.connection_resolver.resolve("demo-dev")
+            outgoing = ctx.root_vm.content_host.current
+            assert outgoing is not None
 
-            async def fail_set_content(vm: object, *, service_id: str | None) -> None:
-                del vm, service_id
-                raise RuntimeError("content adoption failed")
+            def fail_construct(_self: DualPaneVM) -> None:
+                raise RuntimeError("candidate construction failed")
 
-            monkeypatch.setattr(ctx.root_vm.content_host, "set_content", fail_set_content)
+            monkeypatch.setattr(DualPaneVM, "construct", fail_construct)
             result = await app._mount_local_only_dual_pane(
                 initial_conn=connection,
                 reason="test",
             )
 
             assert result is False
+            assert ctx.root_vm.content_host.current is outgoing
     finally:
         _dispose(ctx)
 
@@ -1121,18 +1125,9 @@ async def test_corrupt_sso_cache_at_startup_falls_back_to_local(tmp_path: Path) 
 async def test_boot_chain_with_mixed_failures_populates_both_panes(tmp_path: Path) -> None:
     """User report: AWS profile + an s3-compatible connection BOTH
     unavailable. After boot, neither pane shows content. After
-    Settings → S3 toggle, the local source appears. The toggle path
-    works because ``content_host.current_id`` is ``"settings"`` so
-    ``set_content`` adopts the new local DualPaneVM. The boot path
-    is broken because the failed s3-compatible attempt during the
-    chain already set ``current_id = "s3"``, and the chain's
-    closing ``_mount_local_only_dual_pane`` call asks for the same
-    ``service_id="s3"`` — the idempotent ``set_content`` early-return
-    short-circuits the swap and the failed S3FS DualPane stays in
-    ``content_host.current``. The DualPane WIDGET gets re-mounted
-    over the host, but it's bound to a stale local-only VM (or no
-    VM at all if the path doesn't even mount the widget) and the
-    panes look empty.
+    Settings → S3 toggle, the local source appears. The boot path must
+    replace the failed S3 content with the local fallback even though both
+    VMs share ``service_id="s3"``.
     """
     import contextlib as _contextlib
 
