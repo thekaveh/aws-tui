@@ -14,6 +14,7 @@ re-mounts children on each batch update.
 
 from __future__ import annotations
 
+import math
 import os
 from typing import ClassVar
 
@@ -35,7 +36,18 @@ from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 # fades out. Long enough that the user notices completion; short enough
 # that the box doesn't accumulate cruft. Override with $AWS_TUI_TRANSFER_LINGER
 # (used by tests so they don't have to sleep).
-_LINGER_SECONDS: float = float(os.environ.get("AWS_TUI_TRANSFER_LINGER", "3.0"))
+_DEFAULT_LINGER_SECONDS = 3.0
+
+
+def _read_linger_seconds() -> float:
+    try:
+        value = float(os.environ.get("AWS_TUI_TRANSFER_LINGER", _DEFAULT_LINGER_SECONDS))
+    except (TypeError, ValueError):
+        return _DEFAULT_LINGER_SECONDS
+    return value if math.isfinite(value) and value >= 0 else _DEFAULT_LINGER_SECONDS
+
+
+_LINGER_SECONDS = _read_linger_seconds()
 
 #: Width of the custom progress bar in cells.
 _BAR_CELLS: int = 10

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import runpy
+import subprocess
 import sys
 from collections import deque
 from pathlib import Path
@@ -101,6 +103,44 @@ def test_cli_version_prints_without_launching_app(
     app_module.main()
 
     assert capsys.readouterr().out == f"aws-tui {__version__} (demo: disabled)\n"
+
+
+def test_cli_version_survives_malformed_transfer_linger_override() -> None:
+    env = {**os.environ, "AWS_TUI_TRANSFER_LINGER": "not-a-number"}
+
+    result = subprocess.run(
+        [sys.executable, "-m", "aws_tui", "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"aws-tui {__version__} (demo: disabled)\n"
+
+
+@pytest.mark.parametrize("value", ["not-a-number", "nan", "inf", "-1"])
+def test_invalid_transfer_linger_override_falls_back_to_default(value: str) -> None:
+    env = {**os.environ, "AWS_TUI_TRANSFER_LINGER": value}
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from aws_tui.ui.widgets.transfers_overlay import _LINGER_SECONDS; "
+            "print(_LINGER_SECONDS)",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "3.0\n"
 
 
 def test_cli_version_reports_demo_flag_without_launching_app(
