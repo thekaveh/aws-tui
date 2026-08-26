@@ -17,9 +17,9 @@ from collections.abc import AsyncIterator
 import pytest
 from vmx import MessageHub, RxDispatcher
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:

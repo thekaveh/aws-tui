@@ -319,6 +319,65 @@ async def test_add_inline_form_persists_to_toml(
 
 
 @pytest.mark.asyncio
+async def test_open_connection_form_owns_tab_traversal(
+    tmp_path: Path,
+) -> None:
+    """App-priority Tab remains inside the visible Settings form."""
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+            await pilot.press("comma")
+            await pilot.pause()
+
+            from textual.widgets import Input
+
+            from aws_tui.ui.widgets.modal_button import ModalButton
+            from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+
+            form = app.query_one(ConnectionFormInline)
+            form.open_for_add()
+            values = {
+                "form-name": "minio-test",
+                "form-endpoint_url": "http://localhost:9000",
+                "form-region": "us-east-1",
+                "form-access_key_id": "AKIATEST",
+                "form-secret_access_key": "SECRETTEST",
+                "form-session_token": "",
+            }
+            for widget_id, value in values.items():
+                app.query_one(f"#{widget_id}", Input).value = value
+            await pilot.pause()
+
+            expected_ids = (
+                "form-endpoint_url",
+                "form-region",
+                "form-access_key_id",
+                "form-secret_access_key",
+                "form-session_token",
+            )
+            for expected_id in expected_ids:
+                await pilot.press("tab")
+                assert app.focused is app.query_one(f"#{expected_id}", Input)
+
+            await pilot.press("tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-cancel-btn"
+            await pilot.press("tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-save-btn"
+            await pilot.press("tab")
+            assert app.focused is app.query_one("#form-name", Input)
+            await pilot.press("shift+tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-save-btn"
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
 async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
     """Seed a connection → open Settings → click delete chip → confirm → TOML removed."""
     config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)

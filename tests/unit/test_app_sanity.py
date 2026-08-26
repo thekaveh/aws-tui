@@ -239,6 +239,30 @@ def test_cli_returns_failure_when_textual_swallows_fatal_exception(
     assert exc_info.value.code == 1
 
 
+def test_cli_reports_redacted_startup_failure_before_app_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aws_tui import app as app_module
+
+    def fail_build_context(*, demo: bool) -> object:
+        del demo
+        raise RuntimeError("secret_access_key=SUPERSECRET")
+
+    monkeypatch.setattr(sys, "argv", ["aws-tui"])
+    monkeypatch.setattr(app_module, "build_app_context", fail_build_context)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.main()
+
+    assert exc_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert "aws-tui failed to start" in stderr
+    assert "RuntimeError" in stderr
+    assert "[REDACTED]" in stderr
+    assert "SUPERSECRET" not in stderr
+
+
 def test_bound_action_records_action_id(monkeypatch: pytest.MonkeyPatch) -> None:
     from aws_tui import app as app_module
 

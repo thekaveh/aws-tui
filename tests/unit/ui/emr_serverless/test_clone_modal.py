@@ -20,11 +20,11 @@ from textual.widgets import Input
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
 from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 _FIXED_TS = datetime(2026, 6, 27, 12, 0, 0, tzinfo=UTC)
 

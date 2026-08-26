@@ -36,11 +36,11 @@ from textual.containers import Container, Horizontal
 from textual.css.errors import StylesheetError
 from textual.css.tokenizer import TokenError
 from textual.widget import Widget
-from textual.widgets import Static, TextArea
+from textual.widgets import Input, Static, TextArea
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.data_catalog import TableRef
-from aws_tui.domain.filesystem import EntryKind
+from aws_tui.domain.filesystem import AuthRequiredError, EntryKind
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
@@ -67,6 +67,7 @@ from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_view_factory import build_service_view
+from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
@@ -309,7 +310,7 @@ def _build_swap_candidates(
 
     candidates: list[tuple[str, str | Connection]] = [("local", "local")]
     skipped: list[str] = []
-    for conn in ctx.connection_resolver.list():
+    for conn in _live_connections(ctx):
         if (conn.kind, conn.name) in ctx.unreachable_connections:
             skipped.append(conn.name)
             continue
@@ -322,9 +323,28 @@ def _service_source_candidates(ctx: AppContext, service_id: str) -> tuple[Connec
     service = ctx.registry.get(service_id)
     return tuple(
         connection
-        for connection in ctx.connection_resolver.list()
+        for connection in _live_connections(ctx)
         if connection.kind == "aws" and service.supports(connection)
     )
+
+
+def _live_connections(ctx: AppContext) -> tuple[Connection, ...]:
+    """Read the mutable connection catalog without crashing a live action."""
+    try:
+        return tuple(ctx.connection_resolver.list())
+    except Exception as exc:
+        ctx.log_sink.error(
+            "app.live_connection_discovery.failed",
+            error=redact_text(str(exc)),
+            error_type=type(exc).__name__,
+        )
+        notifications.advise(
+            ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="could not reload connections — keeping current source",
+            toast_id="connection-discovery-failed",
+        )
+        return ()
 
 
 def _service_source_contexts(
@@ -1595,6 +1615,11 @@ class AwsTuiApp(App[None]):
     def action_command_palette(self) -> None:
         """Open the fuzzy command palette (bound to ``:`` / ``Ctrl+K``)."""
         self.record_action("app.command_palette")
+        for screen in self.screen_stack:
+            if isinstance(screen, CommandPalette):
+                with contextlib.suppress(Exception):
+                    screen.query_one("#palette-input", Input).focus()
+                return
         self._populate_command_palette()
         vm = self._app_ctx.command_palette_vm
         vm.set_active_service(self._app_ctx.root_vm.content_host.current_id)
@@ -1655,6 +1680,10 @@ class AwsTuiApp(App[None]):
         self._cycle_focus(reverse=True)
 
     def _cycle_focus(self, *, reverse: bool) -> None:
+        with contextlib.suppress(Exception):
+            form = self.query_one(ConnectionFormInline)
+            if form.cycle_focus(reverse=reverse):
+                return
         # EMR page owns its own 4-slot Tab cycle.
         with contextlib.suppress(Exception):
             emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
@@ -2037,11 +2066,9 @@ class AwsTuiApp(App[None]):
             await pane.refresh()
 
     async def action_help(self) -> None:
-        """Show the help overlay (also bound to ``:``). The theme picker
-        is a separate modal — press ``t`` (or use the help modal's
-        Themes link)."""
+        """Show the help overlay with the active configurable keymap."""
         self.record_action("app.help")
-        await self.push_screen(HelpModal())
+        await self.push_screen(HelpModal(keymap=self._app_ctx.keymap_store))
 
     async def action_copy(self) -> None:
         """Copy the focused pane's marked entries (or the cursor row if
@@ -2442,7 +2469,20 @@ class AwsTuiApp(App[None]):
         else:
             assert not isinstance(payload, str)  # narrows payload to Connection
             conn = payload
-            new_provider = self._make_s3_provider_for_connection(conn)
+            try:
+                new_provider = self._make_s3_provider_for_connection(conn)
+            except AuthRequiredError:
+                ctx.log_sink.warning(
+                    "pane.swap_source.auth_required",
+                    connection=conn.name,
+                )
+                notifications.advise(
+                    ctx.root_vm.chrome.toast_stack,
+                    subject="Source",
+                    message=f"authentication required for {conn.name} — keeping current source",
+                    toast_id="swap-source-auth-required",
+                )
+                return
             new_protocol = "s3:"
 
         swap = getattr(focused, "swap_provider", None)
@@ -4719,7 +4759,16 @@ def main() -> None:
         print(f"aws-tui {__version__} (demo: {status})")
         return
 
-    app = AwsTuiApp(context=build_app_context(demo=demo))
+    try:
+        context = build_app_context(demo=demo)
+        app = AwsTuiApp(context=context)
+    except Exception as exc:
+        message = redact_text(str(exc)) or "startup failed"
+        print(
+            f"\naws-tui failed to start.\n  {type(exc).__name__}: {message}\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
     try:
         app.run()
     except BaseException as exc:

@@ -492,24 +492,28 @@ class AthenaResultsVM:
 
         async def fetch(token: str | None) -> tuple[list[ResultRow], str | None]:
             nonlocal restored_page
-            if token is None and restored_page is not None:
-                page = restored_page
-                restored_page = None
-            elif execution_id is None:
-                return [], None
-            else:
-                page = await self._client.get_results_page(
-                    execution_id,
-                    start_token=token,
-                )
-            if not self._is_current(worker):
-                return [], None
-            if token is None:
-                worker.columns = page.columns
-                self._columns = page.columns
-            elif page.columns != worker.columns:
-                raise _ResultColumnsChangedError
-            return list(page.rows), page.next_token
+            task = self._track_current_task(worker)
+            try:
+                if token is None and restored_page is not None:
+                    page = restored_page
+                    restored_page = None
+                elif execution_id is None:
+                    return [], None
+                else:
+                    page = await self._client.get_results_page(
+                        execution_id,
+                        start_token=token,
+                    )
+                if not self._is_current(worker):
+                    return [], None
+                if token is None:
+                    worker.columns = page.columns
+                    self._columns = page.columns
+                elif page.columns != worker.columns:
+                    raise _ResultColumnsChangedError
+                return list(page.rows), page.next_token
+            finally:
+                self._untrack_task(worker, task)
 
         worker.pager = SnapshotTokenPager(fetch)
         worker.load_more_command = (

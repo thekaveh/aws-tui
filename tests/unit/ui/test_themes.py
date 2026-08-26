@@ -160,6 +160,15 @@ def test_selected_state_tokens_have_readable_contrast(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
+@pytest.mark.parametrize("token", ["$accent", "$success", "$warning", "$danger"])
+def test_notification_tokens_have_readable_contrast(name: str, token: str) -> None:
+    tokens = _theme_tokens(ThemeStore().load(name))
+    ratio = _contrast_ratio(tokens[token], tokens["$bg-elev"])
+
+    assert ratio >= 4.5, f"theme {name}: {token} on $bg-elev contrast is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
 def test_selected_state_background_is_perceptible(name: str) -> None:
     content = ThemeStore().load(name)
     tokens = _theme_tokens(content)

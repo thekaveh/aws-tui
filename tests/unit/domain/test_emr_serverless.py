@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import botocore.exceptions
 import pytest
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import (
     _EMR_BOTO_CONFIG,
     EMR_BOTO_CONFIG,
@@ -33,7 +34,6 @@ from aws_tui.domain.filesystem import (
     ThrottledError,
     ValidationError,
 )
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def test_application_summary_is_frozen() -> None:

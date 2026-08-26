@@ -9,6 +9,7 @@ from pathlib import Path
 import aioboto3
 import pytest
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
 from aws_tui.domain.filesystem import (
     ConflictError,
@@ -22,7 +23,6 @@ from aws_tui.domain.filesystem import (
 )
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.s3_fs import S3FS
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 # moto_server + s3_endpoint fixtures come from tests/unit/domain/conftest.py.
 

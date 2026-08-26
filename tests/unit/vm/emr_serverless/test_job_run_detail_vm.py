@@ -6,10 +6,10 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunState
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _make() -> tuple[JobRunDetailVM, _InMemoryEmr]:

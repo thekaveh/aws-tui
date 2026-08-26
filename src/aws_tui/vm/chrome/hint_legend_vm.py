@@ -21,10 +21,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
 from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
 
-# Always-visible global chips — shown regardless of which service is
-# active and what is selected. Themes / help / quit / etc. — the "app
-# chrome" controls. User feedback after PR #80 asked for these on the
-# same Commands pane after the service-specific chips.
+# Always-visible global chips follow the service-specific commands.
 _GLOBAL_ACTIONS: tuple[str, ...] = (
     "app.command_palette",
     "app.themes",
@@ -33,10 +30,8 @@ _GLOBAL_ACTIONS: tuple[str, ...] = (
     "app.quit",
 )
 
-# Per-service chip sets — the leading Commands-pane entries depend on
-# which service is active. Refresh stays on
-# every service. PR-B/C will extend the EMR set with the cancel / clone
-# / submit / lifecycle action ids once those handlers ship.
+# Per-service chip sets lead the Commands pane and include the actions
+# available for the active service.
 _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
     "s3": (
         "pane.switch_focus",

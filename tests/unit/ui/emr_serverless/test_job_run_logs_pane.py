@@ -12,10 +12,10 @@ from textual.containers import VerticalScroll
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient
 from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _make_vm() -> tuple[JobRunLogsVM, MessageHub[Message], _InMemoryEmr]:

@@ -681,10 +681,13 @@ class AthenaQueryVM:
 
     async def _drain_execution_task(self) -> None:
         task = self._execution_task
-        if task is None or task is asyncio.current_task():
-            return
-        with suppress(asyncio.CancelledError):
-            await task
+        if task is not None and task is not asyncio.current_task():
+            with suppress(asyncio.CancelledError):
+                await task
+        # VMx 3.23 runs command delegates in an inner task. The delegate can
+        # finish before execute_async() clears command admission state.
+        while self._execute_command.is_executing:
+            await asyncio.sleep(0)
 
     async def _drain_submission_finalizers(self) -> None:
         while self._submission_finalizers:

@@ -14,7 +14,7 @@ $accent-soft:  #8be9fd;
 $accent-hot:   #ff79c6;
 $success:      #50fa7b;
 $warning:      #f1fa8c;
-$danger:       #ff5555;
+$danger:       #ff7b7b;
 $rule-dim:     #44475a;
 $rule-accent:  #bd93f9;
 

@@ -10,16 +10,22 @@ from typing import cast
 import pytest
 from textual.widgets import OptionList, Static
 
-from aws_tui.app import AwsTuiApp, _next_service_source, _service_source_candidates
+from aws_tui.app import (
+    AwsTuiApp,
+    _build_swap_candidates,
+    _next_service_source,
+    _service_source_candidates,
+)
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.infra.aws_session import TokenProbeResult, TokenState
+from aws_tui.infra.config_store import ConfigError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.services.glue import GlueClientProtocol, GlueService
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 from tests.unit.vm.glue._fake_glue import seeded_glue
 
 
@@ -112,6 +118,30 @@ def test_next_service_source_wraps_by_connection_name_and_region() -> None:
     dev, prod = _aws_connections()
     assert _next_service_source((dev, prod), dev) == prod
     assert _next_service_source((dev, prod), prod) == dev
+
+
+def test_live_connection_discovery_failure_is_nonfatal_and_reported(tmp_path: Path) -> None:
+    ctx = build_app_context(demo=True, cache_dir=tmp_path / "cache")
+
+    def fail_discovery() -> list[Connection]:
+        raise ConfigError("config.toml is not valid TOML")
+
+    ctx.connection_resolver.list = fail_discovery  # type: ignore[method-assign]
+    try:
+        assert _service_source_candidates(ctx, "glue") == ()
+        candidates, skipped = _build_swap_candidates(ctx)
+
+        assert candidates == [("local", "local")]
+        assert skipped == []
+        matching = [
+            toast
+            for toast in ctx.root_vm.chrome.toast_stack.toasts
+            if toast.model.id == "connection-discovery-failed"
+        ]
+        assert len(matching) == 1
+        assert "could not reload connections" in matching[0].model.text
+    finally:
+        ctx.root_vm.dispose()
 
 
 def _multi_profile_emr_context(

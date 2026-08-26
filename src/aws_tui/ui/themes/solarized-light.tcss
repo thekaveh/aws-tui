@@ -9,12 +9,12 @@ $bg-sel:       #e9d9aa;
 $text:         #3f555c;
 $text-muted:   #657b83;
 $text-dim:     #93a1a1;
-$accent:       #268bd2;
+$accent:       #006f9e;
 $accent-soft:  #6c71c4;
 $accent-hot:   #d33682;
-$success:      #859900;
-$warning:      #b58900;
-$danger:       #dc322f;
+$success:      #526600;
+$warning:      #805900;
+$danger:       #b01f24;
 $rule-dim:     #d9d2bd;
 $rule-accent:  #268bd2;
 

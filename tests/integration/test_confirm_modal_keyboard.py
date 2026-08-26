@@ -16,6 +16,7 @@ import pytest
 from textual.widgets import TextArea
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
@@ -23,7 +24,6 @@ from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.emr_serverless.log_filter_modal import LogFilterModal
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from tests.integration.conftest import AppContextBuilder
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:

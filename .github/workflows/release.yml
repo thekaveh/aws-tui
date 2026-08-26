@@ -252,6 +252,7 @@ jobs:
             tests/unit/infra/test_connection_resolver.py \
             tests/unit/infra/test_keychain.py \
             tests/unit/test_app_sanity.py \
+            tests/unit/domain/test_sql_policy.py \
             tests/unit/vm/test_vmx_smoke.py \
             -q
 

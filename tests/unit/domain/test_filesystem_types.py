@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import (
     ConflictError,
     EntryKind,
@@ -14,7 +15,6 @@ from aws_tui.domain.filesystem import (
     PathRef,
     TransferProgress,
 )
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 pytestmark = pytest.mark.unit
 

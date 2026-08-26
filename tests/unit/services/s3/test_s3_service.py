@@ -9,6 +9,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.transfer_journal import TransferJournal
@@ -18,7 +19,6 @@ from aws_tui.services.s3 import service as s3_service_module
 from aws_tui.services.s3.service import _aioboto3_session_for
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.services_protocol import Service
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 def _hub() -> MessageHub[Message]:

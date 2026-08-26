@@ -19,10 +19,10 @@ from textual.widgets import OptionList, Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _make_vm(fake: _InMemoryEmr | None = None) -> tuple[ApplicationsVM, MessageHub[Message]]:

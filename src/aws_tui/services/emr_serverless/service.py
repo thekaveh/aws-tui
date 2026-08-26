@@ -136,20 +136,8 @@ class EmrServerlessService:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="emr-serverless",
         label="EMR",
-        # 🔥 U+1F525 FIRE — SMP single-codepoint, renders 2-cell
-        # colour reliably and draws to the full bounding box (the
-        # 💥 COLLISION glyph that briefly shipped in PR #83 drew
-        # to a tighter box and read as smaller than the 🪣 nav
-        # peer; user feedback). Fifth icon attempt:
-        #   PR #77 ⚡  (BMP U+26A1)         → 1-cell outline, broke layout
-        #   PR #79 🔥  (SMP U+1F525)        → 2-cell colour, worked
-        #   PR #81 ⚡️ (BMP U+26A1+VS-16)   → broke layout again
-        #   PR #83 💥 (SMP U+1F4A5)        → small bounding box vs 🪣
-        #         🔥  (SMP U+1F525)        → here, back to the known good
-        # Semantically apt for Spark (the framework). Future icon
-        # contract: pick from the SMP block (U+1F***) and prefer
-        # glyphs that draw to the full bounding box; see
-        # nav_menu.py for the 2-cell layout invariant.
+        # U+1F525 FIRE is a single SMP code point that satisfies the
+        # nav rail's two-cell icon contract and remains apt for Spark.
         icon="🔥",
     )
 

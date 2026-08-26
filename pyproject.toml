@@ -41,7 +41,7 @@ dependencies = [
   # Upper bounds match the vmx posture — next-major caps insulate
   # downstream `pip install aws-tui` from a transitive breaking
   # change between releases. Bump deliberately, not by accident.
-  "vmx>=3.1.0,<4.0.0",
+  "vmx>=3.23.0,<4.0.0",
   # App crash/mount recovery and priority-preserving dynamic bindings use
   # isolated private compatibility points. Re-audit before changing this pin.
   "textual==8.2.8",
@@ -59,7 +59,8 @@ dependencies = [
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://github.com/thekaveh/aws-tui"
+Homepage = "https://thekaveh.github.io/aws-tui/"
+Documentation = "https://thekaveh.github.io/aws-tui/"
 Repository = "https://github.com/thekaveh/aws-tui"
 Issues = "https://github.com/thekaveh/aws-tui/issues"
 Changelog = "https://github.com/thekaveh/aws-tui/blob/main/CHANGELOG.md"

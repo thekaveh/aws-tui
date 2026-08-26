@@ -20,10 +20,10 @@ from typing import Any
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _build_page() -> tuple[EmrServerlessPage, EmrServerlessPageVM, _InMemoryEmr]:

@@ -16,11 +16,11 @@ from pathlib import Path
 import pytest
 from vmx import MessageHub, RxDispatcher
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.s3_fs import S3FS
 from aws_tui.vm.file_manager.pane_vm import PaneVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:
@@ -112,6 +112,44 @@ async def test_pane_source_swap_does_not_change_active_connection(tmp_path: Path
             assert active is not None
             await app.action_swap_source()
             assert ctx.root_vm.active_connection == active
+    finally:
+        ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pane_source_swap_preserves_provider_when_credentials_are_missing(
+    tmp_path: Path,
+) -> None:
+    from aws_tui.app import AwsTuiApp
+    from aws_tui.composition import build_app_context
+    from aws_tui.domain.filesystem import AuthRequiredError
+
+    ctx = build_app_context(demo=True, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            dual = app._dual_pane()
+            assert dual is not None
+            focused = dual.focused_pane
+            assert focused is not None
+            provider_before = focused.provider
+
+            def fail_provider(_connection: object) -> object:
+                raise AuthRequiredError("credentials missing")
+
+            app._make_s3_provider_for_connection = fail_provider  # type: ignore[method-assign]
+
+            await app.action_swap_source()
+
+            assert focused.provider is provider_before
+            matching = [
+                toast
+                for toast in ctx.root_vm.chrome.toast_stack.toasts
+                if toast.model.id == "swap-source-auth-required"
+            ]
+            assert len(matching) == 1
+            assert "authentication required" in matching[0].model.text
     finally:
         ctx.root_vm.dispose()
 

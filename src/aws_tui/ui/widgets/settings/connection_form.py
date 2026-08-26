@@ -203,17 +203,11 @@ class ConnectionFormInline(Widget):
             ),
             persister=_noop_persister,
             strict=False,
+            validators={
+                "name": _validate_name,
+                "endpoint_url": _validate_endpoint_url,
+            },
         )
-
-    def _install_view_validators(self) -> None:
-        """Layer the View-specific format validators (name-regex
-        and URL-format) on top of the VM's built-in field-presence
-        + cross-field validators. Uses the form VM's public
-        ``add_field_validator`` — no reach-through into the
-        inner VMx :class:`FormVM` (round-3 directive
-        §9.bis.11: composed primitives stay private)."""
-        self._form_vm.add_field_validator("name", _validate_name)
-        self._form_vm.add_field_validator("endpoint_url", _validate_endpoint_url)
 
     def compose(self) -> ComposeResult:
         with Container():
@@ -244,7 +238,6 @@ class ConnectionFormInline(Widget):
                 yield ModalButton("save", button_id="form-save-btn", classes="-primary")
 
     def on_mount(self) -> None:
-        self._install_view_validators()
         self._errors_sub = self._form_vm.on_errors_changed.subscribe(
             on_next=self._on_errors_changed
         )
@@ -310,6 +303,28 @@ class ConnectionFormInline(Widget):
         self._submitting = False
         self._ctx = None
 
+    def cycle_focus(self, *, reverse: bool = False) -> bool:
+        """Cycle within the open form when one of its controls owns focus."""
+        if not self.has_class("-open"):
+            return False
+        focused = self.app.focused
+        if focused is None or self not in focused.ancestors_with_self:
+            return False
+        controls = tuple(
+            widget
+            for widget in self.walk_children(Widget)
+            if isinstance(widget, (Input, ModalButton)) and widget.can_focus and not widget.disabled
+        )
+        if not controls:
+            return False
+        try:
+            index = controls.index(focused)
+        except ValueError:
+            index = 0 if reverse else -1
+        step = -1 if reverse else 1
+        controls[(index + step) % len(controls)].focus()
+        return True
+
     def _reset_form_vm(self, model: S3CompatForm) -> None:
         """Dispose the prior form VM and build a fresh one with
         ``model`` as both the working and snapshot values, then
@@ -322,8 +337,11 @@ class ConnectionFormInline(Widget):
             initial=model,
             persister=_noop_persister,
             strict=False,
+            validators={
+                "name": _validate_name,
+                "endpoint_url": _validate_endpoint_url,
+            },
         )
-        self._install_view_validators()
         self._errors_sub = self._form_vm.on_errors_changed.subscribe(
             on_next=self._on_errors_changed
         )
@@ -488,17 +506,15 @@ class ConnectionFormInline(Widget):
 
 
 # Keep the legacy helper exported so tests importing it still work;
-# implementation now delegates to the form VM's validators when run
-# through the widget. Tests that import the function directly get
+# implementation mirrors the validators supplied to the VMx FormVM builder.
+# Tests that import the function directly get
 # the standalone regex/URL behavior unchanged.
 def _validate_s3_form_value(field: str, value: str) -> str | None:
     """Standalone validator preserved for tests that import it.
 
-    The widget no longer uses this directly — it composes
-    :class:`S3ConnectionFormVM` and adds the same validators via
-    ``add_field_validator``. Tests that called this function
-    against arbitrary (field, value) pairs continue to work
-    unchanged.
+    The widget supplies equivalent validators while constructing
+    :class:`S3ConnectionFormVM`. Tests that call this function against
+    arbitrary (field, value) pairs continue to work unchanged.
     """
     stripped = value.strip()
     if field == "name":

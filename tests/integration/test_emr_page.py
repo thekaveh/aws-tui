@@ -14,6 +14,7 @@ import pytest
 from aws_tui import app as app_module
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
@@ -27,7 +28,6 @@ from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _prep(tmp_path: Path, toml_text: str) -> Path:

@@ -24,6 +24,7 @@ import pytest
 from vmx import MessageHub, RxDispatcher
 
 from aws_tui.composition import AppContext
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import FileSystemProvider
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.aws_session import AwsSession
@@ -40,7 +41,6 @@ from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 _MINIO_IMAGE = (
     "minio/minio:RELEASE.2025-09-07T16-13-09Z"

@@ -9,8 +9,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 # Hardcoded modified time so snapshots stay stable across runs.
 _FIXED_MTIME = datetime(2026, 6, 14, 12, 0, 0, tzinfo=UTC)

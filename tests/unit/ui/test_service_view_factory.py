@@ -8,6 +8,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets.athena.page import AthenaPage
@@ -19,7 +20,6 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.service_source_vm import ServiceSourceContext
-from tests.unit.domain._in_memory_fs import InMemoryFS
 from tests.unit.ui.athena.test_page import _build_vm as _build_athena_vm
 from tests.unit.ui.emr_serverless.test_emr_page_pollers import _build_page
 from tests.unit.ui.glue.test_page import _build_vm as _build_glue_vm

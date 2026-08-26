@@ -92,8 +92,12 @@ class CommandPalette(HubSubscriberMixin, ModalScreen[None]):
         self.dismiss(None)
 
     def action_execute(self) -> None:
-        self._vm.execute_selected_command.execute()
-        self.dismiss(None)
+        command = self._vm.execute_selected_command
+        if not command.can_execute():
+            return
+        command.execute()
+        if not self._vm.is_open:
+            self.dismiss(None)
 
     def action_move_up(self) -> None:
         self._vm.move_selection_command.execute(-1)

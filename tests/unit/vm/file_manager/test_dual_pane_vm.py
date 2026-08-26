@@ -12,6 +12,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.cross_fs import ConflictResolution
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
@@ -22,7 +23,6 @@ from aws_tui.vm.messages import (
     TransferProgressMessage,
     TransferState,
 )
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 def _hub() -> MessageHub[Message]:

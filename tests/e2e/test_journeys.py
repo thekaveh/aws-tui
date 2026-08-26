@@ -26,6 +26,8 @@ from textual.widgets import Button, Static
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.demo.in_memory_athena import InMemoryAthena
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import (
     FileSystemProvider,
@@ -42,8 +44,6 @@ from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.e2e.conftest import _AWS_CREDENTIAL_ENV_VARS
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 

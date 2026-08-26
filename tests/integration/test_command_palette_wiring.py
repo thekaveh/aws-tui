@@ -98,6 +98,39 @@ async def test_ctrl_k_opens_command_palette(app_context_factory) -> None:  # typ
 
 
 @pytest.mark.asyncio
+async def test_enter_with_zero_matches_keeps_palette_open(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+k")
+        await pilot.press(*"no command can match this value")
+        await pilot.pause()
+        assert app._app_ctx.command_palette_vm.filtered_entries == ()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, CommandPalette)
+        assert app._app_ctx.command_palette_vm.is_open
+
+
+@pytest.mark.asyncio
+async def test_repeated_ctrl_k_does_not_stack_palettes(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+k")
+        await pilot.press("ctrl+k")
+        await pilot.pause()
+
+        assert sum(isinstance(screen, CommandPalette) for screen in app.screen_stack) == 1
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, CommandPalette)
+        assert not app._app_ctx.command_palette_vm.is_open
+
+
+@pytest.mark.asyncio
 async def test_palette_entry_action_dispatches(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     # A palette entry's action routes through the ActionRegistry (same path as
     # the key binding), so selecting "Cycle theme" is identical to pressing T.

@@ -9,13 +9,13 @@ import pytest
 from textual.app import App, ComposeResult
 from vmx import Message, MessageHub, RxDispatcher
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.pane import EntryRow, Pane
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _astream(data: bytes) -> AsyncIterator[bytes]:

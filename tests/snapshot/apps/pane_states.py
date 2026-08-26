@@ -9,11 +9,11 @@ from __future__ import annotations
 from textual.app import App, ComposeResult
 from vmx import MessageHub, RxDispatcher
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.pane import Pane
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 def _load_css(theme: str) -> str:

@@ -221,8 +221,12 @@ class EmrServerlessPageVM:
         self.job_runs.select(run_id)
         if self.job_runs.selected_id != run_id:
             return
-        self.job_run_detail.set_target(self.applications.selected_id, run_id)
-        target = (self.applications.selected_id, run_id)
+        application_id = self.applications.selected_id
+        self.job_run_detail.set_target(application_id, run_id)
+        # Retarget immediately so a failed detail read cannot leave the
+        # previously selected run's logs visible beside the new selection.
+        self.job_run_logs.set_target(application_id, run_id, None)
+        target = (application_id, run_id)
         if not await self._run(self.job_run_detail.refresh):
             return
         if (self.applications.selected_id, self.job_run_detail._job_run_id) != target:
