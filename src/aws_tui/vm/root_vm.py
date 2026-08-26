@@ -16,6 +16,8 @@ caller so we can keep the test surface free of boto3.
 
 from __future__ import annotations
 
+import asyncio
+
 from reactivex.abc import DisposableBase
 from vmx import ComponentVM, Message, MessageHub, RxDispatcher
 from vmx.lifecycle.status import ConstructionStatus
@@ -202,7 +204,7 @@ class RootVM:
         await self._content_host.set_content(None, service_id=None)
         self._connection = connection
         self._auth_state = auth_state
-        # Send the message; NavMenuVM and StatusBarVM are subscribed.
+        # Send the message so connection-aware descendants react.
         self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
 
     async def switch_connection_and_service(
@@ -217,8 +219,18 @@ class RootVM:
             raise RuntimeError(
                 f"service {service_id!r} does not support connection {connection.name!r}"
             )
-        await self.switch_connection_with(connection, auth_state)
-        await self.switch_service(service_id)
+        # Build and construct the replacement while the current connection,
+        # selection, and hosted content are still authoritative. ContentHostVM
+        # constructs candidates before it tears down outgoing content, so a
+        # factory or construction failure leaves the old state intact.
+        vm = service.build_vm(connection)
+        await self._adopt_service_vm(service_id, vm)
+        self._connection = connection
+        self._auth_state = auth_state
+        self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
+        # A connection change may rebuild the menu when support differs (for
+        # example AWS -> S3-compatible), clearing the tentative selection.
+        self._services_menu.switch_service_command.execute(service_id)
 
     async def switch_service(self, service_id: str) -> None:
         """Build the named service's VM tree and host it.
@@ -247,6 +259,10 @@ class RootVM:
         # facade (or VMx VM) the service decides to host. We just need a
         # construct/destruct/dispose surface.
         vm = service.build_vm(self._connection)
+        await self._adopt_service_vm(service_id, vm)
+
+    async def _adopt_service_vm(self, service_id: str, vm: object) -> None:
+        """Adopt one prebuilt service VM with selection rollback."""
         # Reflect the selection in the menu BEFORE adoption — the user
         # clicked S3, the ribbon should jump to S3 the next render
         # tick, not after a 60-second botocore retry budget. The
@@ -262,12 +278,16 @@ class RootVM:
         self._services_menu.switch_service_command.execute(service_id)
         try:
             await self._content_host.set_content(vm, service_id=service_id)
-        except BaseException:
+        except (Exception, asyncio.CancelledError):
             # Revert — host failed to adopt, ribbon must not advance.
             if prior_selection is not None:
                 self._services_menu.switch_service_command.execute(prior_selection)
+            else:
+                self._services_menu.clear_selection()
             if self._content_host.current is not vm:
-                vm.dispose()
+                dispose = getattr(vm, "dispose", None)
+                if callable(dispose):
+                    dispose()
             raise
 
     async def switch_theme(self, name: str) -> None:

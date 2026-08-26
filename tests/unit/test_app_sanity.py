@@ -269,6 +269,8 @@ def test_bound_action_records_action_id(monkeypatch: pytest.MonkeyPatch) -> None
     app = object.__new__(app_module.AwsTuiApp)
     app._action_ring = deque(maxlen=100)  # type: ignore[attr-defined]
     app._last_action_id = None  # type: ignore[attr-defined]
+    app._current_mode = "default"  # type: ignore[attr-defined]
+    app._screen_stacks = {"default": []}  # type: ignore[attr-defined]
     monkeypatch.setattr(app, "_cycle_focus", lambda *, reverse: None)
 
     app.action_switch_focus()
@@ -330,11 +332,91 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
     assert events == [
         "content.shutdown",
         "clients.close",
-        "logs.flush",
-        "logs.close",
         "clipboard.dispose",
         "root.dispose",
+        "logs.flush",
+        "logs.close",
     ]
+
+
+@pytest.mark.asyncio
+async def test_app_shutdown_records_failures_continues_and_closes_logging_last() -> None:
+    from aws_tui import app as app_module
+
+    events: list[str] = []
+
+    class _ContentHost:
+        async def shutdown(self) -> None:
+            events.append("content.shutdown")
+
+    class _Disposable:
+        def __init__(self, name: str, *, fail: bool = False) -> None:
+            self._name = name
+            self._fail = fail
+
+        def dispose(self) -> None:
+            events.append(f"{self._name}.dispose")
+            if self._fail:
+                raise RuntimeError(f"{self._name} failed")
+
+    class _Root(_Disposable):
+        content_host = _ContentHost()
+
+    class _Log:
+        def error(self, event: str, **fields: object) -> None:
+            events.append(f"log.error:{event}:{fields['step']}")
+
+        def flush(self) -> None:
+            events.append("logs.flush")
+
+        def close(self) -> None:
+            events.append("logs.close")
+
+    async def close_clients() -> None:
+        events.append("clients.close")
+        raise RuntimeError("clients failed")
+
+    async def close_demo() -> None:
+        events.append("demo.close")
+
+    app = object.__new__(app_module.AwsTuiApp)
+    app._workers = SimpleNamespace(cancel_group=lambda *_args: None)  # type: ignore[attr-defined]
+    app._pane_state_sub = None  # type: ignore[attr-defined]
+    app._connection_list_sub = None  # type: ignore[attr-defined]
+    app._nav_selection_sub = None  # type: ignore[attr-defined]
+    app._cursor_sub = None  # type: ignore[attr-defined]
+    app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
+        transfers_vm=SimpleNamespace(
+            cancel_all_command=SimpleNamespace(execute=lambda: None),
+            dispose=lambda: events.append("transfers.dispose"),
+        ),
+        aws_session=SimpleNamespace(aclose_all_clients=close_clients),
+        log_sink=_Log(),
+        s3_connections_vm=_Disposable("connections", fail=True),
+        command_palette_vm=SimpleNamespace(
+            shutdown=_complete,
+            dispose=lambda: events.append("palette.dispose"),
+        ),
+        quick_look_vm=_Disposable("quick-look"),
+        confirm_vm=_Disposable("confirm"),
+        table_clipboard_vm=_Disposable("clipboard"),
+        root_vm=_Root("root"),
+        focus_coordinator=_Disposable("focus"),
+        demo_emr=SimpleNamespace(aclose=close_demo),
+    )
+
+    await app._aws_tui_shutdown()
+
+    assert events.index("root.dispose") < events.index("logs.flush")
+    assert events.index("focus.dispose") < events.index("logs.flush")
+    assert events.index("demo.close") < events.index("logs.flush")
+    assert "log.error:app.shutdown.cleanup_failed:aws_session.aclose_all_clients" in events
+    assert "log.error:app.shutdown.cleanup_failed:s3_connections_vm.dispose" in events
+    assert events[-1] == "logs.close"
+    assert app._shutdown_errors == (  # type: ignore[attr-defined]
+        ("aws_session.aclose_all_clients", "RuntimeError"),
+        ("s3_connections_vm.dispose", "RuntimeError"),
+    )
 
 
 @pytest.mark.asyncio

@@ -43,10 +43,7 @@ VMs to build service pages, but it cannot import Textual widgets.
   VMs rather than owned by Infrastructure. Subtrees:
   - `vm/chrome/` — persistent shell state (hint legend, toasts,
     overlays like command palette / confirm / quick look / crash, plus
-    dormant transfer-recovery scaffolding and a retained
-    `StatusBarVM` subscriber for
-    legacy status bookkeeping even though no `StatusBar` widget is
-    mounted in the production chrome). `HintLegendVM` owns service-scoped action
+    dormant transfer-recovery scaffolding). `HintLegendVM` owns service-scoped action
     membership, configured shortcut labels, complete effect/prerequisite
     tooltips, availability, and fitting priority. The `HintLegend` view performs
     terminal-width measurement and renders exactly one compact command row;

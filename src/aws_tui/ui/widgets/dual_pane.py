@@ -129,7 +129,7 @@ class DualPane(HubSubscriberMixin, Widget):
         slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
         self._apply_visual_focus(slot)
         if self._focus_coordinator is not None:
-            self._focus_coordinator.set_focused_slot(slot)
+            self._focus_coordinator.project_focused_slot(slot)
 
     def _apply_visual_focus(self, slot: FocusSlot) -> None:
         if self._left_widget is None or self._right_widget is None:

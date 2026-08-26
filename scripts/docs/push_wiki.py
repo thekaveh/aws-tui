@@ -99,6 +99,11 @@ def _commit_if_changed(repo_dir: str | Path) -> None:
     staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo_dir, env=env)
     if staged.returncode == 0:
         return  # nothing staged — no-op
+    if staged.returncode != 1:
+        raise subprocess.CalledProcessError(
+            staged.returncode,
+            ["git", "diff", "--cached", "--quiet"],
+        )
     subprocess.run(
         ["git", "commit", "-m", "docs: sync generated wiki"],
         cwd=repo_dir,

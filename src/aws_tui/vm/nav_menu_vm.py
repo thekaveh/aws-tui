@@ -219,6 +219,15 @@ class NavMenuVM:
         self._connection = connection
         self._rebuild_items()
 
+    def clear_selection(self) -> None:
+        """Clear the tentative service selection and notify observers."""
+        if self._inner.current is None:
+            return
+        self._inner.current = None
+        for item in self._items:
+            item.set_selected(False)
+        self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
+
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _initial_children(self) -> tuple[ComponentVMOf[ServiceDescriptor], ...]:

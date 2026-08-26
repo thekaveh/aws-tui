@@ -90,14 +90,14 @@ async def test_m3_full_lifecycle() -> None:
     )
     root.construct()
 
-    # Hub propagation: ConnectionChangedMessage drives the status bar.
+    # Hub propagation: the connection change is published once.
     seen_conn: list[ConnectionChangedMessage] = []
     sub_conn = root.message_hub.messages.subscribe(
         on_next=lambda m: seen_conn.append(m) if isinstance(m, ConnectionChangedMessage) else None
     )
 
     await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
-    assert root.chrome.status_bar.connection_label == "kaveh-dev (aws)"
+    assert root.active_connection == _aws_conn()
     # The connection change message was published exactly once.
     assert len(seen_conn) == 1
 

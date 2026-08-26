@@ -219,11 +219,41 @@ jobs:
       - name: pytest (documentation contracts)
         run: uv run pytest tests/docs -v
 
+  lowest-supported-dependencies:
+    name: lowest supported dependencies (py3.11)
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: install Python 3.11
+        run: uv python install 3.11
+      - name: install declared minimum dependencies
+        shell: bash
+        run: |
+          uv venv --python 3.11 lowest-supported-venv
+          PY="lowest-supported-venv/bin/python"
+          uv pip install --resolution lowest-direct --python "$PY" .
+          uv pip install --python "$PY" pytest pytest-asyncio "moto[server,s3]>=5"
+      - name: exercise minimum dependency runtime
+        run: |
+          lowest-supported-venv/bin/python -m pytest \
+            tests/minimum_runtime/test_dependency_floors.py \
+            tests/unit/infra/test_connection_resolver.py \
+            tests/unit/infra/test_keychain.py \
+            tests/unit/test_app_sanity.py \
+            tests/unit/domain/test_sql_policy.py \
+            tests/unit/vm/test_vmx_smoke.py \
+            -q
+
   gate:
     name: ci gate
     timeout-minutes: 5
     if: always()
-    needs: [unit, integration, coverage, snapshot, e2e, lint-type, security, pkg, docs]
+    needs: [unit, integration, coverage, snapshot, e2e, lint-type, security, pkg, docs, lowest-supported-dependencies]
     runs-on: ubuntu-24.04
     steps:
       - name: require every CI tier

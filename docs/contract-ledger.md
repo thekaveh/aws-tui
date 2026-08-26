@@ -129,22 +129,24 @@ OpenGlueTableRequest
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
-| Python runtime and AWS SDK graph | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==4.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.11.4`, `sqlglot==30.17.0`, `anyio==4.14.2`, and `aiofiles==25.1.0` from `uv.lock` | The application uses only each package's public facade or documented module path. VMx owns command admission/cancellation, modal focus restoration, immutable form construction, observable state, component lifecycle, filtering, and paging. Textual remains exactly pinned because the binding and mount-recovery adapters are audited against 8.2.8. AWS operations and request members are validated against the locked Botocore models. | Full unit, integration, snapshot, and E2E tiers; minimum-direct-dependency tests; import/layer checks; VMx compatibility regressions for command cancellation, retired pager generations, form validation, and modal restoration; source-derived Botocore operation and input-member tests. |
+| Python runtime and AWS SDK graph | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==4.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.11.4`, `sqlglot==30.17.0`, `anyio==4.14.2`, and `aiofiles==25.1.0` from `uv.lock` | VMx and the other runtime packages use public facades or documented module paths. The Textual compatibility adapter uses exact-version private hooks (`_bindings`, `_pre_process`, and `_handle_exception`) because Textual 8.2.8 has no equivalent public binding-replacement and lifecycle-recovery surface; the exact Textual pin prevents unreviewed drift. VMx owns command admission/cancellation, modal focus restoration, immutable form construction, observable state, component lifecycle, filtering, and paging. AWS operations and request members are validated against the locked Botocore models. | Full unit, integration, snapshot, and E2E tiers; minimum-direct-dependency tests; import/layer checks; VMx compatibility regressions for command cancellation, retired pager generations, form validation, and modal restoration; source-derived Botocore operation and input-member tests. |
 | VMx 3.23 compatibility and specialization | `vmx==3.23.0` from `uv.lock`; runtime requirement `vmx>=3.23.0,<4.0.0` | `FocusCoordinatorVM` delegates modal save/restore behavior to public `DiscriminatorVM.modal_open()` / `modal_close()`. `S3ConnectionFormVM` supplies complete field and model validation through `FormVMBuilder` at construction time. Athena drains public `AsyncRelayCommand.is_executing` admission state after cancellation and tracks the provider task behind nested command execution so shutdown waits for cancellation-resistant I/O. No VM reaches into VMx private fields. | Focus, Settings form, Athena query/results, VMx smoke, mypy, and lifecycle tests run against the locked package. The dated VMx 3.23 maintenance report records adopted and rejected candidates plus production-line metrics. |
 | Packaging and developer tooling | `hatchling==1.32.0`, `testcontainers==4.15.0`, and `textual-dev==1.8.0` from `uv.lock`; `build-system.requires` constrained to `hatchling>=1.31.0,<2` | CI, release, Pages, and bootstrap sync/export with `--locked`, so a stale lock fails instead of silently installing it. Bootstrap installs all dependency groups. The Textual development CLI used by `scripts/dev.sh` is declared explicitly. Wheel and sdist members must exclude repository metadata, tests, local caches, and traversal paths. | `uv lock --check`, script/workflow guard tests, real wheel/sdist builds, `scripts.check_dist`, Twine metadata checks, isolated install smoke, and a Textual CLI invocation. |
 | GitHub Actions and pre-commit toolchain | `astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d` (`v10.0.1`), `ruff-pre-commit@aab412d509121cb5f7533134b7e67f9fab59c682` (`v0.16.4`), and the other immutable action refs listed in §1.4 | Workflow jobs retain least-privilege permissions and bounded timeouts. The wiki deploy key is checked before it is written. The Homebrew checkout does not persist its cross-repository token. Artifact contents are checked before upload or publication. | Official tag/ref verification, YAML guard tests, pre-commit, shellcheck, and local workflow-equivalent package/docs commands. |
 
-Exact S3 boto operation ledger (14):
+Exact S3 boto operation ledger (16):
 
 ```text
 AbortMultipartUpload
 CompleteMultipartUpload
 CopyObject
+CreateBucket
 CreateMultipartUpload
 DeleteObject
 DeleteObjects
 GetObject
 GetObjectTagging
+HeadBucket
 HeadObject
 ListBuckets
 ListObjectsV2

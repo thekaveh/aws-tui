@@ -84,9 +84,11 @@ built-in composition, so use a repository checkout to compose the raw
 built-in theme, then the shared operational layer, in that file:
 
 ```bash
+THEME_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/aws-tui/themes"
+mkdir -p "$THEME_DIR"
 cat src/aws_tui/ui/themes/carbon.tcss \
     src/aws_tui/ui/themes/operational-panes.tcss \
-    > <config-dir>/themes/midnight.tcss
+    > "$THEME_DIR/midnight.tcss"
 ```
 
 `operational-panes.tcss` retains the Glue and Athena borders and focus

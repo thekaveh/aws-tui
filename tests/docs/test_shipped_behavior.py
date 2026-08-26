@@ -99,3 +99,30 @@ def test_release_checklist_covers_published_package_and_platform_status() -> Non
     assert "PyPI project status" in releasing
     assert "Clean install smoke" in releasing
     assert "Supported-platform status" in releasing
+
+
+def test_installed_help_and_current_docs_use_executable_contracts() -> None:
+    app = _text("src/aws_tui/app.py")
+    help_modal = _text("src/aws_tui/ui/widgets/help_modal.py")
+    s3 = _text("docs/services/s3.md")
+    theming = _text("docs/theming.md")
+    recording = _text("docs/recording-todo.md")
+
+    docs_url = "https://thekaveh.github.io/aws-tui/"
+    assert docs_url in app
+    assert docs_url in help_modal
+    assert "See [b]docs/connections.md[/] in the repo" not in app
+    assert '"  docs/connections.md' not in help_modal
+    assert "show or hide dotfiles with `.`" not in s3
+    assert 'THEME_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/aws-tui/themes"' in theming
+    assert '> "$THEME_DIR/midnight.tcss"' in theming
+    assert "planned crash modal" not in recording.lower()
+    assert "The crash dump writer and interactive crash modal are live" in recording
+
+
+def test_current_contract_ledger_discloses_exact_pinned_private_adapters() -> None:
+    ledger = _text("docs/contract-ledger.md")
+
+    assert "Textual compatibility adapter uses exact-version private hooks" in ledger
+    for private_name in ("`_bindings`", "`_pre_process`", "`_handle_exception`"):
+        assert private_name in ledger

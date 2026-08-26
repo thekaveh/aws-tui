@@ -33,13 +33,15 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._loaded_once = False
         self._page_sizes: list[int] = []
         self._page_tokens: list[TToken | None] = []
+        self._operation_generation = 0
+        self._refreshing = False
         self._disposed = False
         self._collection_changed: Subject[CollectionChangedEvent] = Subject()
         self._property_changed: Subject[str] = Subject()
         self._command_changed: Subject[None] = Subject()
         self._load_more_command = (
             AsyncRelayCommand.builder()
-            .predicate(lambda: self.has_more and not self._disposed)
+            .predicate(lambda: self.has_more and not self._disposed and not self._refreshing)
             .triggers(self._command_changed)
             .task(self._load_more)
             .build()
@@ -83,6 +85,8 @@ class SnapshotTokenPager(Generic[T, TToken]):
     def restore(self, items: Sequence[T], next_token: TToken | None) -> None:
         if self._disposed:
             raise RuntimeError("SnapshotTokenPager is disposed")
+        self._operation_generation += 1
+        self._refreshing = False
         restored = list(items)
         self._items = restored
         self._current_token = next_token
@@ -94,8 +98,9 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._notify_reset()
 
     async def _load_more(self) -> None:
+        generation = self._operation_generation
         page, next_token = await self._fetch_next(self._current_token)
-        if self._disposed:
+        if self._disposed or generation != self._operation_generation:
             return
         additions = list(page)
         self._items.extend(additions)
@@ -106,8 +111,17 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._notify_reset()
 
     async def _refresh(self) -> None:
-        page, next_token = await self._fetch_next(None)
-        if self._disposed:
+        self._operation_generation += 1
+        generation = self._operation_generation
+        self._refreshing = True
+        self._command_changed.on_next(None)
+        try:
+            page, next_token = await self._fetch_next(None)
+        finally:
+            if generation == self._operation_generation:
+                self._refreshing = False
+                self._command_changed.on_next(None)
+        if self._disposed or generation != self._operation_generation:
             return
         fresh = list(page)
         first_page_size = self._page_sizes[0] if self._page_sizes else None
@@ -142,6 +156,7 @@ class SnapshotTokenPager(Generic[T, TToken]):
         if self._disposed:
             return
         self._disposed = True
+        self._operation_generation += 1
         self._load_more_command.dispose()
         self._refresh_command.dispose()
         self._collection_changed.on_completed()

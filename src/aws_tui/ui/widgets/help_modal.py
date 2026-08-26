@@ -132,10 +132,10 @@ class HelpModal(ModalScreen[None]):
 
                 yield Static("Docs", classes="help-section")
                 yield Static(
-                    "  docs/connections.md       config schema + vendor quirks\n"
-                    "  docs/theming.md           palette tokens + override recipes\n"
-                    "  docs/keybindings.md       full action-id table\n"
-                    "  docs/cookbook.md          step-by-step recipes",
+                    "  https://thekaveh.github.io/aws-tui/connections/\n"
+                    "  https://thekaveh.github.io/aws-tui/theming/\n"
+                    "  https://thekaveh.github.io/aws-tui/keybindings/\n"
+                    "  https://thekaveh.github.io/aws-tui/cookbook/",
                     classes="help-dim",
                 )
             help_keys = self._action_keys("app.help")

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from importlib import resources
+from pathlib import Path
 
 import pytest
 from textual.css.parse import parse
@@ -63,10 +64,9 @@ def test_builtin_theme_styles_widgets(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
-def test_builtin_theme_retains_status_bar_compatibility_styles(name: str) -> None:
-    """The legacy StatusBar widget is not production chrome, but is retained."""
+def test_builtin_theme_does_not_retain_unmounted_status_bar_styles(name: str) -> None:
     content = ThemeStore().load(name)
-    assert "StatusBar" in content, f"theme {name} missing retained StatusBar styles"
+    assert "StatusBar" not in content, f"theme {name} retains dead StatusBar styles"
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
@@ -157,6 +157,40 @@ def test_selected_state_tokens_have_readable_contrast(name: str) -> None:
     ratio = _contrast_ratio(tokens["$text"], tokens["$bg-sel"])
 
     assert ratio >= 4.5, f"theme {name}: $text on $bg-sel contrast is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_muted_text_is_readable_on_both_content_backgrounds(name: str) -> None:
+    tokens = _theme_tokens(ThemeStore().load(name))
+
+    for background_token in ("$bg", "$bg-elev"):
+        ratio = _contrast_ratio(tokens["$text-muted"], tokens[background_token])
+        assert ratio >= 4.5, (
+            f"theme {name}: $text-muted on {background_token} contrast is {ratio:.2f}:1"
+        )
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_brand_banner_titles_use_readable_text_token(name: str) -> None:
+    bodies = _bodies_for_selector(ThemeStore().load(name), "BrandBanner")
+
+    assert any("border-title-color: $text;" in body for body in bodies)
+    assert any("border-subtitle-color: $text;" in body for body in bodies)
+
+
+def test_docs_accent_meets_light_and_dark_theme_contrast() -> None:
+    css = (Path(__file__).parents[3] / "docs/stylesheets/extra.css").read_text(encoding="utf-8")
+    root = re.search(r":root\s*\{([^}]*)\}", css, re.DOTALL)
+    slate = re.search(r'\[data-md-color-scheme="slate"\]\s*\{([^}]*)\}', css, re.DOTALL)
+    assert root is not None
+    assert slate is not None
+
+    light_accent = re.search(r"--md-accent-fg-color:\s*(#[0-9a-fA-F]{6})", root.group(1))
+    dark_accent = re.search(r"--md-accent-fg-color:\s*(#[0-9a-fA-F]{6})", slate.group(1))
+    assert light_accent is not None
+    assert dark_accent is not None
+    assert _contrast_ratio(light_accent.group(1), "#ffffff") >= 4.5
+    assert _contrast_ratio(dark_accent.group(1), "#0b0f14") >= 4.5
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
@@ -414,38 +448,3 @@ def test_glue_list_placeholders_use_semantic_theme_tokens(name: str) -> None:
     assert "color: $warning;" in warning.group(1)
     assert error is not None
     assert "color: $danger;" in error.group(1)
-
-
-@pytest.mark.parametrize("name", ALL_THEMES)
-@pytest.mark.parametrize(
-    ("selector", "minimum"),
-    [
-        ("status-conn", 4.5),
-        ("status-region", 4.5),
-        ("status-auth-ok", 4.5),
-        ("status-auth-warn", 4.5),
-        ("status-auth-err", 4.5),
-        ("status-transfers", 4.5),
-    ],
-)
-def test_status_bar_text_tokens_have_readable_contrast(
-    name: str,
-    selector: str,
-    minimum: float,
-) -> None:
-    content = ThemeStore().load(name)
-    tokens = _theme_tokens(content)
-    match = re.search(
-        rf"StatusBar\s*>\s*\.{selector}\s*\{{[^}}]*color:\s*(\$[\w-]+);",
-        content,
-        re.MULTILINE,
-    )
-    assert match is not None, f"theme {name}: missing StatusBar .{selector} color rule"
-
-    foreground = tokens[match.group(1)]
-    background = tokens["$bg-elev"]
-    ratio = _contrast_ratio(foreground, background)
-
-    assert ratio >= minimum, (
-        f"theme {name}: .{selector} contrast is {ratio:.2f}:1 for {foreground} on {background}"
-    )

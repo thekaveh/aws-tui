@@ -25,42 +25,6 @@ Screen {
     color: $text;
 }
 
-StatusBar {
-    height: 1;
-    background: $bg-elev;
-    color: $text-muted;
-    padding: 0 1;
-}
-
-StatusBar > .status-name {
-    color: $accent;
-    text-style: bold;
-}
-
-StatusBar > .status-conn {
-    color: $text;
-}
-
-StatusBar > .status-region {
-    color: $text;
-}
-
-StatusBar > .status-auth-ok {
-    color: $text;
-}
-
-StatusBar > .status-auth-warn {
-    color: $text;
-}
-
-StatusBar > .status-auth-err {
-    color: $text;
-}
-
-StatusBar > .status-transfers {
-    color: $text;
-}
-
 Pane {
     background: $bg;
     color: $text;
@@ -363,8 +327,8 @@ Toast {
 BrandBanner {
     border: round $rule-dim;
     background: $bg;
-    border-title-color: $rule-dim;
-    border-subtitle-color: $rule-dim;
+    border-title-color: $text;
+    border-subtitle-color: $text;
 }
 
 TransfersOverlay {

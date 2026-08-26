@@ -141,6 +141,29 @@ def test_ci_pytest_tiers_stay_wired() -> None:
     )
 
 
+def test_ci_gates_minimum_supported_dependencies() -> None:
+    workflow = _workflow(".github/workflows/ci.yml")
+    minimum = workflow["jobs"]["lowest-supported-dependencies"]
+    gate_needs = workflow["jobs"]["gate"]["needs"]
+
+    assert minimum["timeout-minutes"] == 20
+    assert "lowest-supported-dependencies" in gate_needs
+    install = _step(
+        workflow,
+        "lowest-supported-dependencies",
+        "install declared minimum dependencies",
+    )["run"]
+    exercise = _step(
+        workflow,
+        "lowest-supported-dependencies",
+        "exercise minimum dependency runtime",
+    )["run"]
+    assert "--resolution lowest-direct" in install
+    assert '"moto[server,s3]>=5"' in install
+    assert "tests/minimum_runtime/test_dependency_floors.py" in exercise
+    assert "tests/unit/vm/test_vmx_smoke.py" in exercise
+
+
 def test_integration_marker_is_reserved_for_minio_tier() -> None:
     marked_files = {
         path.relative_to(REPO_ROOT).as_posix()

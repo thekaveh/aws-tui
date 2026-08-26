@@ -42,6 +42,8 @@ _MODELED_OPERATIONS = {
         "GetTags",
     },
     "s3": {
+        "CreateBucket",
+        "HeadBucket",
         "ListBuckets",
         "ListObjectsV2",
         "HeadObject",

@@ -158,6 +158,12 @@ class FocusCoordinatorVM:
         # non-modal key replaces the active key.
         self._focus_discriminator.set_active_key(slot)
 
+    def project_focused_slot(self, slot: FocusSlot) -> None:
+        """Project widget focus without breaking modal precedence."""
+        if self.is_modal:
+            return
+        self.set_focused_slot(slot)
+
     def cycle_s3_focus(self, *, reverse: bool = False) -> None:
         """Rotate the S3 focus ring.
 

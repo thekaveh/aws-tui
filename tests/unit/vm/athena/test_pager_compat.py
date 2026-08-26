@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from importlib.metadata import version
 
 import pytest
@@ -247,3 +248,28 @@ def test_seed_token_pager_uses_aws_tui_owned_public_restore_boundary() -> None:
 
     with pytest.raises(TypeError, match="SnapshotTokenPager"):
         seed_token_pager(IncompatiblePager(), ["value"], None)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_refresh_retires_an_in_flight_continuation_page() -> None:
+    continuation_started = asyncio.Event()
+    release_continuation = asyncio.Event()
+
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token == "next":
+            continuation_started.set()
+            await release_continuation.wait()
+            return ["stale-page"], None
+        return ["fresh-page"], "fresh-next"
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch)
+    seed_token_pager(pager, ["seed"], "next")
+    continuation = asyncio.create_task(pager.load_more_command.execute_async())
+    await continuation_started.wait()
+
+    await pager.refresh_command.execute_async()
+    release_continuation.set()
+    await continuation
+
+    assert pager.items == ["fresh-page"]
+    assert pager.current_token == "fresh-next"

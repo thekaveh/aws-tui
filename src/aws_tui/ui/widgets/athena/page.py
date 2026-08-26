@@ -624,7 +624,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         if target is None:
             return
         if self._focus_coordinator is not None:
-            self._focus_coordinator.set_focused_slot(slot)
+            self._focus_coordinator.project_focused_slot(slot)
         self.app.set_focus(target)
 
     def _sync_focused_widget(self, focused: Widget) -> None:
@@ -633,7 +633,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         ancestors = set(focused.ancestors_with_self)
         for slot, target in self._focus_targets():
             if target in ancestors:
-                self._focus_coordinator.set_focused_slot(slot)
+                self._focus_coordinator.project_focused_slot(slot)
                 return
 
     def _focus_and_open_picker(self, slot: FocusSlot, selector: str) -> None:

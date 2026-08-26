@@ -47,8 +47,8 @@ class TransferState(StrEnum):
 class ConnectionChangedMessage:
     """Published by ``RootVM`` after a successful connection switch.
 
-    Subscribers: :class:`NavMenuVM`, :class:`StatusBarVM`, every service
-    content VM, the active :class:`ContentHostVM` swap orchestrator.
+    Subscribers: :class:`NavMenuVM`, service content VMs, and the active
+    :class:`ContentHostVM` swap orchestrator.
     """
 
     connection: Connection
@@ -97,8 +97,7 @@ class AuthExpiredMessage:
 class TransferProgressMessage:
     """Published by ``domain.CrossFsCopy`` / ``CrossFsMove`` workers.
 
-    Subscribers: :class:`TransferVM` (per-transfer detail), retained
-    :class:`StatusBarVM` (aggregate counter).
+    Subscribers: :class:`TransferVM` (per-transfer detail).
 
     ``source_label`` / ``destination_label`` are optional — included so
     that the first message for a given transfer can carry enough info

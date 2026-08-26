@@ -57,10 +57,7 @@ async def test_chrome_has_banner_no_statusbar(
         await pilot.pause()
         await pilot.pause()
         assert len(app.query(BrandBanner)) == 1
-        # No StatusBar widget should be mounted.
-        from aws_tui.ui.widgets.status_bar import StatusBar
-
-        assert len(app.query(StatusBar)) == 0
+        assert not app.query("#status-bar")
 
 
 @pytest.mark.asyncio

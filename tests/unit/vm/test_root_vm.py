@@ -40,6 +40,30 @@ class _FakeService:
         return vm
 
 
+class _FailingVM:
+    def __init__(self) -> None:
+        self.disposed = False
+
+    def construct(self) -> None:
+        raise RuntimeError("candidate construction failed")
+
+    def dispose(self) -> None:
+        self.disposed = True
+
+
+class _FailingService(_FakeService):
+    def __init__(self, id_: str, *, fail_during: str) -> None:
+        super().__init__(id_)
+        self._fail_during = fail_during
+        self.failed_vm: _FailingVM | None = None
+
+    def build_vm(self, connection: Connection) -> ComponentVM | _FailingVM:
+        if self._fail_during == "build":
+            raise RuntimeError("candidate build failed")
+        self.failed_vm = _FailingVM()
+        return self.failed_vm
+
+
 def _aws_conn(name: str = "kaveh-dev") -> Connection:
     return Connection(
         name=name,
@@ -88,12 +112,12 @@ def test_root_constructs_three_aggregates() -> None:
     root.dispose()
 
 
-async def test_switch_connection_updates_status_and_menu() -> None:
+async def test_switch_connection_updates_connection_and_menu() -> None:
     s3 = _FakeService("s3")
     ec2 = _FakeService("ec2", accepts_s3=False)
     root = _build_root(s3, ec2)
     await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
-    assert root.chrome.status_bar.connection_label == "kaveh-dev (aws)"
+    assert root.active_connection == _aws_conn()
     ids = {item.descriptor.id for item in root.services_menu.items}
     assert ids == {"s3", "ec2", "settings"}
     root.dispose()
@@ -215,6 +239,51 @@ async def test_atomic_switch_rejects_unsupported_connection_before_disposal() ->
         )
 
     assert root.content_host.current is old_vm
+    root.dispose()
+
+
+@pytest.mark.parametrize("fail_during", ["build", "construct"])
+async def test_atomic_switch_preserves_state_on_candidate_failure(fail_during: str) -> None:
+    stable = _FakeService("stable")
+    failing = _FailingService("failing", fail_during=fail_during)
+    root = _build_root(stable, failing)
+    original_connection = _aws_conn("dev")
+    original_auth = TokenState.CONNECTED
+    await root.switch_connection_with(original_connection, original_auth)
+    await root.switch_service("stable")
+    original_content = root.content_host.current
+
+    expected = (
+        "candidate build failed" if fail_during == "build" else "candidate construction failed"
+    )
+    with pytest.raises(RuntimeError, match=expected):
+        await root.switch_connection_and_service(
+            _aws_conn("prod"),
+            TokenState.EXPIRED,
+            "failing",
+        )
+
+    assert root.active_connection == original_connection
+    assert root.active_auth_state is original_auth
+    assert root.content_host.current is original_content
+    assert root.services_menu.selected_id == "stable"
+    if failing.failed_vm is not None:
+        assert failing.failed_vm.disposed
+    root.dispose()
+
+
+async def test_failed_initial_service_adoption_clears_tentative_selection() -> None:
+    failing = _FailingService("failing", fail_during="construct")
+    root = _build_root(failing)
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+
+    with pytest.raises(RuntimeError, match="candidate construction failed"):
+        await root.switch_service("failing")
+
+    assert root.content_host.current is None
+    assert root.services_menu.selected_id is None
+    assert failing.failed_vm is not None
+    assert failing.failed_vm.disposed
     root.dispose()
 
 

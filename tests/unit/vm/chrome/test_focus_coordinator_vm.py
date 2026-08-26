@@ -337,6 +337,19 @@ def test_set_non_modal_while_modal_clears_saved_slot() -> None:
     vm.dispose()
 
 
+def test_view_projection_cannot_overwrite_modal_restore_slot() -> None:
+    vm = _make()
+    vm.set_focused_slot(FocusSlot.EMR_LOGS)
+    vm.modal_open()
+
+    vm.project_focused_slot(FocusSlot.NAV_MENU)
+
+    assert vm.focused_slot is FocusSlot.MODAL
+    vm.modal_close()
+    assert vm.focused_slot is FocusSlot.EMR_LOGS
+    vm.dispose()
+
+
 def test_modal_restore_uses_public_discriminator_api() -> None:
     """VMx owns modal restore state through its public API."""
     vm = _make()

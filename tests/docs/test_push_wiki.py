@@ -164,3 +164,25 @@ def test_commit_if_changed_is_noop_when_clean(tmp_path):
         ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
     ).stdout
     assert before == after
+
+
+def test_commit_if_changed_raises_when_git_diff_fails(tmp_path, monkeypatch):
+    from scripts.docs.push_wiki import _commit_if_changed
+
+    calls = 0
+
+    def run(command, **kwargs):
+        nonlocal calls
+        del kwargs
+        calls += 1
+        if command[:3] == ["git", "diff", "--cached"]:
+            return subprocess.CompletedProcess(command, 128)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _commit_if_changed(tmp_path)
+
+    assert exc_info.value.returncode == 128
+    assert calls == 2

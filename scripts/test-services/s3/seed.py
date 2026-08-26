@@ -30,6 +30,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import aioboto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 ENDPOINT = os.environ.get("AWS_TUI_DEV_S3_ENDPOINT", "http://localhost:9000")
 ACCESS_KEY = os.environ.get("AWS_TUI_DEV_S3_KEY", "minioadmin")
@@ -184,7 +185,10 @@ async def _ensure_bucket(client: object, name: str) -> bool:
     try:
         await client.head_bucket(Bucket=name)  # type: ignore[attr-defined]
         return False
-    except Exception:
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code not in {"404", "NoSuchBucket", "NotFound"}:
+            raise
         await client.create_bucket(Bucket=name)  # type: ignore[attr-defined]
         return True
 

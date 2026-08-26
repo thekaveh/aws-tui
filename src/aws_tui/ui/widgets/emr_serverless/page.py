@@ -278,7 +278,7 @@ class EmrServerlessPage(Widget):
                 return
         if textual_focused is None or self.has_focus_within:
             if self._focus_coordinator is not None:
-                self._focus_coordinator.set_focused_slot(FocusSlot.EMR_RUNS)
+                self._focus_coordinator.project_focused_slot(FocusSlot.EMR_RUNS)
             self._left.focus()
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
@@ -613,7 +613,7 @@ class EmrServerlessPage(Widget):
                 FocusSlot.EMR_DETAIL,
                 FocusSlot.EMR_LOGS,
             )[next_idx]
-            self._focus_coordinator.set_focused_slot(slot_to_project)
+            self._focus_coordinator.project_focused_slot(slot_to_project)
 
     def _close_departed_selector(self, focused_idx: int) -> None:
         if focused_idx == 0 and self._source_header is not None:
@@ -639,7 +639,7 @@ class EmrServerlessPage(Widget):
         if target is None:
             return
         if self._focus_coordinator is not None:
-            self._focus_coordinator.set_focused_slot(slot)
+            self._focus_coordinator.project_focused_slot(slot)
         self.app.set_focus(target)
 
     def project_focus_slot(self, slot: FocusSlot) -> None:
@@ -659,7 +659,7 @@ class EmrServerlessPage(Widget):
         ancestors = set(focused.ancestors_with_self)
         for slot, target in self._focus_targets():
             if target in ancestors:
-                self._focus_coordinator.set_focused_slot(slot)
+                self._focus_coordinator.project_focused_slot(slot)
                 return
 
     def _focus_nav_menu(self) -> None:

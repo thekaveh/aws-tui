@@ -127,13 +127,14 @@ Cleanup after recording: `rm "$CACHE_DIR/transfers/5eedabc05eedabc0.jsonl"`.
 Do not imply that an interactive resume modal exists; recovery remains a
 journal and cleanup contract until a new user-facing flow is designed.
 
-## 1.6. Crash dump / planned crash modal (cookbook: diagnose after a crash)
+## 1.6. Crash dump and modal (cookbook: diagnose after a crash)
 
 Format: PNG screenshot.
 
 Recipe:
 
-There's no built-in way to trigger an unhandled exception
+The crash dump writer and interactive crash modal are live. There is no
+built-in diagnostic command that deliberately triggers an unhandled exception
 short of editing the code, so the recommended approach is to
 temporarily add a `raise TypeError("demo")` inside e.g.
 `pane.action_open()`, launch, trigger the action, and screenshot the

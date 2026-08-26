@@ -641,6 +641,7 @@ class AwsTuiApp(App[None]):
         self._content_mount_recovering: weakref.WeakSet[Widget] = weakref.WeakSet()
         self._shutdown_task: asyncio.Task[None] | None = None
         self._shutdown_complete = False
+        self._shutdown_errors: tuple[tuple[str, str], ...] = ()
         self._command_palette_populated: bool = False
         self._pane_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
@@ -696,11 +697,8 @@ class AwsTuiApp(App[None]):
         return self._app_ctx
 
     def compose(self) -> ComposeResult:
-        # StatusBar is no longer mounted — profile/region/auth indicator
-        # now live in the left pane's border (title shows the live path,
-        # subtitle shows the connection identity). Bookkeeping VMs still
-        # exist in RootVM.chrome so hub subscribers stay wired up; only
-        # the widget is dropped.
+        # Profile/region/auth identity lives in the left pane's border:
+        # the title shows the live path and the subtitle shows the connection.
         ctx = self._app_ctx
         yield BrandBanner(
             theme_name=ctx.initial_theme,
@@ -733,6 +731,7 @@ class AwsTuiApp(App[None]):
         ctx.quick_look_vm.construct()
         ctx.command_palette_vm.construct()
         ctx.s3_connections_vm.construct()
+        self.screen_change_signal.subscribe(self, self._sync_modal_focus, immediate=True)
         # NOTE: SettingsVM is intentionally NOT constructed here. It's
         # now built fresh per mount in ``_mount_settings_view`` because
         # ContentHostVM disposes its hosted VM on swap-out, and a
@@ -831,8 +830,24 @@ class AwsTuiApp(App[None]):
     async def on_unmount(self) -> None:
         await self._aws_tui_shutdown()
 
+    def _sync_modal_focus(self, _screen: object) -> None:
+        """Project Textual's screen stack into VMx modal precedence."""
+        coordinator = self._app_ctx.focus_coordinator
+        if len(self.screen_stack) > 1:
+            coordinator.modal_open()
+        else:
+            was_modal = coordinator.is_modal
+            coordinator.modal_close()
+            if was_modal:
+                self.call_after_refresh(self._restore_focus_after_modal, coordinator.focused_slot)
+
+    def _restore_focus_after_modal(self, slot: FocusSlot) -> None:
+        coordinator = self._app_ctx.focus_coordinator
+        coordinator.set_focused_slot(slot)
+        self._project_focus_slot(slot)
+
     def _dispose_table_clipboard_subscription(self) -> None:
-        subscription = self._table_clipboard_sub
+        subscription = getattr(self, "_table_clipboard_sub", None)
         if subscription is None:
             return
         subscription.dispose()
@@ -1483,7 +1498,7 @@ class AwsTuiApp(App[None]):
                 "    1. Run [b]aws configure[/]                      (interactive AWS keys setup)\n"
                 "    2. Run [b]aws configure sso[/]                  (interactive SSO setup)\n"
                 f"    3. Edit [b]{config_path}[/]     (add an AWS or S3-compatible connection)\n\n"
-                "  See [b]docs/connections.md[/] in the repo for the [b][connections.<name>][/] schema and\n"
+                "  See [b]https://thekaveh.github.io/aws-tui/connections/[/] for the [b][connections.<name>][/] schema and\n"
                 "  vendor quirks (MinIO, R2, B2, Wasabi).\n\n"
                 "  Press [b]q[/] to quit.",
                 id="content-placeholder",
@@ -1672,11 +1687,17 @@ class AwsTuiApp(App[None]):
     def action_switch_focus(self) -> None:
         """Move to the next app-wide focus slot."""
         self.record_action("pane.switch_focus")
+        if len(self.screen_stack) > 1:
+            self.screen.focus_next()
+            return
         self._cycle_focus(reverse=False)
 
     def action_switch_focus_reverse(self) -> None:
         """Move to the previous app-wide focus slot."""
         self.record_action("pane.switch_focus_back")
+        if len(self.screen_stack) > 1:
+            self.screen.focus_previous()
+            return
         self._cycle_focus(reverse=True)
 
     def _cycle_focus(self, *, reverse: bool) -> None:
@@ -1834,12 +1855,22 @@ class AwsTuiApp(App[None]):
 
     def action_move_up(self) -> None:
         self.record_action("pane.move_up")
+        if len(self.screen_stack) > 1 and isinstance(self.focused, (Input, TextArea)):
+            move = getattr(self.focused, "action_cursor_up", None)
+            if callable(move):
+                move()
+            return
         if self._forward_to_modal("action_move_up"):
             return
         self._move_cursor(-1)
 
     def action_move_down(self) -> None:
         self.record_action("pane.move_down")
+        if len(self.screen_stack) > 1 and isinstance(self.focused, (Input, TextArea)):
+            move = getattr(self.focused, "action_cursor_down", None)
+            if callable(move):
+                move()
+            return
         if self._forward_to_modal("action_move_down"):
             return
         self._move_cursor(1)
@@ -1988,6 +2019,9 @@ class AwsTuiApp(App[None]):
 
     async def action_ascend(self) -> None:
         self.record_action("pane.ascend")
+        if len(self.screen_stack) > 1 and isinstance(self.focused, (Input, TextArea)):
+            self.focused.action_delete_left()
+            return
         # Forward Backspace to the active modal as a cancel-by-key
         # gesture (esc still works too).
         if self._forward_to_modal("action_cancel", "action_close", "action_dismiss"):
@@ -4666,22 +4700,52 @@ class AwsTuiApp(App[None]):
         internal ``App._shutdown`` lifecycle hook on Textual.
         """
         ctx = self._app_ctx
-        self._close_service_navigation_intake()
-        self.workers.cancel_group(self, "content-mount")
+        errors: list[tuple[str, BaseException]] = []
+
+        def run_cleanup(step: str, cleanup: Any) -> None:
+            try:
+                cleanup()
+            except (Exception, asyncio.CancelledError) as exc:
+                errors.append((step, exc))
+
+        async def await_cleanup(step: str, cleanup: Any) -> None:
+            try:
+                await cleanup()
+            except (Exception, asyncio.CancelledError) as exc:
+                errors.append((step, exc))
+
+        def dispose_subscription(attribute: str) -> None:
+            subscription = getattr(self, attribute, None)
+            if subscription is None:
+                return
+            subscription.dispose()
+            setattr(self, attribute, None)
+
+        run_cleanup("service_navigation.close_intake", self._close_service_navigation_intake)
+        run_cleanup(
+            "workers.cancel_content_mount",
+            lambda: self.workers.cancel_group(self, "content-mount"),
+        )
+
         navigation_lock = getattr(self, "_service_navigation_lock", None)
         if navigation_lock is not None:
-            async with navigation_lock:
-                pass
-        await self._drain_table_navigation()
-        with contextlib.suppress(Exception):
-            ctx.transfers_vm.cancel_all_command.execute()
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            await self._cancel_transfer_workers_before_content_swap()
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            await ctx.command_palette_vm.shutdown()
-        # Keep the hosted VM's graceful shutdown alive through caller
-        # cancellation. Remote cleanup must complete while its AWS client is open.
-        with contextlib.suppress(Exception, asyncio.CancelledError):
+
+            async def drain_navigation_lock() -> None:
+                async with navigation_lock:
+                    pass
+
+            await await_cleanup("service_navigation.lock", drain_navigation_lock)
+        await await_cleanup("table_navigation.drain", self._drain_table_navigation)
+        run_cleanup("transfers.cancel_all", ctx.transfers_vm.cancel_all_command.execute)
+        await await_cleanup(
+            "transfer_workers.cancel",
+            self._cancel_transfer_workers_before_content_swap,
+        )
+        palette_shutdown = getattr(ctx.command_palette_vm, "shutdown", None)
+        if callable(palette_shutdown):
+            await await_cleanup("command_palette.shutdown", palette_shutdown)
+
+        async def shutdown_hosted_content() -> None:
             host_shutdown = asyncio.create_task(ctx.root_vm.content_host.shutdown())
             while not host_shutdown.done():
                 try:
@@ -4689,78 +4753,58 @@ class AwsTuiApp(App[None]):
                 except asyncio.CancelledError:
                     continue
             await host_shutdown
-        # Include asyncio.CancelledError in the suppress — without it
-        # an in-flight CancelledError (a BaseException, not an
-        # Exception) on the aclose_all_clients await would cascade
-        # past every subsequent cleanup step below this block,
-        # skipping log_sink.flush()/.close() + the four reactive
-        # subscription disposes. Shutdown must NOT be cancellable
-        # mid-stream.
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            await ctx.aws_session.aclose_all_clients()
-        with contextlib.suppress(Exception):
-            ctx.log_sink.flush()
-            ctx.log_sink.close()
-        with contextlib.suppress(Exception):
-            if self._pane_state_sub is not None:
-                self._pane_state_sub.dispose()
-                self._pane_state_sub = None
-        with contextlib.suppress(Exception):
-            if self._connection_list_sub is not None:
-                self._connection_list_sub.dispose()
-                self._connection_list_sub = None
-        with contextlib.suppress(Exception):
-            if self._nav_selection_sub is not None:
-                self._nav_selection_sub.dispose()
-                self._nav_selection_sub = None
-        with contextlib.suppress(Exception):
-            if self._cursor_sub is not None:
-                self._cursor_sub.dispose()
-                self._cursor_sub = None
-        with contextlib.suppress(Exception):
-            if self._service_navigation_sub is not None:
-                self._service_navigation_sub.dispose()
-                self._service_navigation_sub = None
-        with contextlib.suppress(Exception):
-            if self._palette_failure_sub is not None:
-                self._palette_failure_sub.dispose()
-                self._palette_failure_sub = None
-        with contextlib.suppress(Exception):
-            self._dispose_table_clipboard_subscription()
-        with contextlib.suppress(Exception):
-            # Currently-hosted SettingsVM (if any) is disposed by the
-            # ContentHostVM tree teardown via ``root_vm.shutdown()``.
-            ctx.s3_connections_vm.dispose()
-        # One suppress PER dispose — bundling them under a single
-        # suppress lets the first raise short-circuit every later
-        # call (most notably the FocusCoordinatorVM cleanup the
-        # comment below specifically defends against).
-        with contextlib.suppress(Exception):
-            ctx.command_palette_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.quick_look_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.confirm_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.transfers_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.table_clipboard_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.root_vm.dispose()
-        with contextlib.suppress(Exception):
-            # FocusCoordinatorVM lives on the AppContext top-level,
-            # not under root_vm, so root_vm.dispose() doesn't reach
-            # it. Without an explicit call the inner ComponentVM +
-            # Subject leak on every shutdown.
-            ctx.focus_coordinator.dispose()
-        with contextlib.suppress(Exception):
-            # In demo mode, cancel any in-flight clone state-machine tasks
-            # so asyncio doesn't emit "Task was destroyed but it is pending"
-            # warnings on exit.  The InMemoryEmr singleton is shared across
-            # connection switches within the same AppContext, so we dispose
-            # it here (on app shutdown) rather than in EmrServerlessPageVM.
-            if ctx.demo_emr is not None:
-                await ctx.demo_emr.aclose()
+
+        await await_cleanup("content_host.shutdown", shutdown_hosted_content)
+        await await_cleanup("aws_session.aclose_all_clients", ctx.aws_session.aclose_all_clients)
+
+        for attribute in (
+            "_pane_state_sub",
+            "_connection_list_sub",
+            "_nav_selection_sub",
+            "_cursor_sub",
+            "_service_navigation_sub",
+            "_palette_failure_sub",
+        ):
+            run_cleanup(
+                f"subscription.{attribute.removeprefix('_')}.dispose",
+                partial(dispose_subscription, attribute),
+            )
+        run_cleanup(
+            "table_clipboard.subscription.dispose",
+            self._dispose_table_clipboard_subscription,
+        )
+
+        for step, disposable in (
+            ("s3_connections_vm.dispose", ctx.s3_connections_vm),
+            ("command_palette_vm.dispose", ctx.command_palette_vm),
+            ("quick_look_vm.dispose", ctx.quick_look_vm),
+            ("confirm_vm.dispose", ctx.confirm_vm),
+            ("transfers_vm.dispose", ctx.transfers_vm),
+            ("table_clipboard_vm.dispose", ctx.table_clipboard_vm),
+            ("root_vm.dispose", ctx.root_vm),
+            ("focus_coordinator.dispose", ctx.focus_coordinator),
+        ):
+            run_cleanup(step, disposable.dispose)
+
+        if ctx.demo_emr is not None:
+            await await_cleanup("demo_emr.aclose", ctx.demo_emr.aclose)
+
+        # Keep structured logging available until every other owner has been
+        # drained. Cleanup errors are durable diagnostics, but shutdown remains
+        # best-effort and does not turn an ordinary quit into a crash.
+        for step, exc in errors:
+            try:
+                ctx.log_sink.error(
+                    "app.shutdown.cleanup_failed",
+                    step=step,
+                    error_type=type(exc).__name__,
+                    error=redact_text(str(exc)),
+                )
+            except Exception:
+                break
+        run_cleanup("log_sink.flush", ctx.log_sink.flush)
+        run_cleanup("log_sink.close", ctx.log_sink.close)
+        self._shutdown_errors = tuple((step, type(exc).__name__) for step, exc in errors)
 
 
 def main() -> None:

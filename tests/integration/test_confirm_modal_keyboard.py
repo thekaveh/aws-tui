@@ -23,6 +23,7 @@ from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.emr_serverless.log_filter_modal import LogFilterModal
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -134,6 +135,77 @@ async def test_enter_in_modal_text_area_inserts_newline(
 
         assert app.screen is modal
         assert editor.text == "\n" + before
+
+
+@pytest.mark.asyncio
+async def test_modal_text_area_keeps_arrow_navigation(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        modal = LogFilterModal(DEFAULT_LOG_FILTER)
+        await app.push_screen(modal)
+        editor = modal.query_one("#log-patterns", TextArea)
+        editor.text = "first\nsecond"
+        editor.cursor_location = (1, 0)
+        editor.focus()
+
+        await pilot.press("up")
+        await pilot.pause()
+
+        assert app.screen is modal
+        assert editor.cursor_location == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_modal_text_area_keeps_backspace_editing(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        modal = LogFilterModal(DEFAULT_LOG_FILTER)
+        await app.push_screen(modal)
+        editor = modal.query_one("#log-patterns", TextArea)
+        editor.text = "ab"
+        editor.cursor_location = (0, 2)
+        editor.focus()
+
+        await pilot.press("backspace")
+        await pilot.pause()
+
+        assert app.screen is modal
+        assert editor.text == "a"
+
+
+@pytest.mark.asyncio
+async def test_tab_stays_inside_modal_and_tracks_vmx_modal_focus(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_LEFT)
+        assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT
+        modal = LogFilterModal(DEFAULT_LOG_FILTER)
+        await app.push_screen(modal)
+        editor = modal.query_one("#log-patterns", TextArea)
+        editor.focus()
+        assert ctx.focus_coordinator.is_modal
+
+        await pilot.press("tab")
+        await pilot.pause()
+
+        assert app.screen is modal
+        assert app.focused is not None
+        assert modal in app.focused.ancestors_with_self
+        assert ctx.focus_coordinator.is_modal
+
+        modal.dismiss(None)
+        await pilot.pause()
+        assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT
 
 
 @pytest.mark.asyncio

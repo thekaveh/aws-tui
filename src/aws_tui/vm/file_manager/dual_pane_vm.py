@@ -188,7 +188,7 @@ class DualPaneVM:
         # children are ready to handle the subsequent state shuffle.
         # ``if … is None`` guard makes construct→destruct→construct
         # cycles safe: each construct must subscribe exactly once.
-        # Mirrors NavMenuVM / StatusBarVM / HintLegendVM symmetric
+        # Mirrors the other hub-subscribing VMs' symmetric
         # construct/destruct contracts.
         if self._cancel_sub is None:
             self._cancel_sub = self._hub.messages.subscribe(on_next=self._on_hub_message)

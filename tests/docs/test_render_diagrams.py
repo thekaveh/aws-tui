@@ -287,3 +287,8 @@ def test_architecture_diagram_is_landscape_and_current():
     assert "TransferJournal" in groups["domain-models"]
     assert "EMR Serverless Client" in groups["domain-models"]
     assert "S3 log adapter" in groups["domain-models"]
+    assert 'd="M455 610V680"' not in svg
+    assert 'd="M715 610V680"' not in svg
+    assert 'd="M455 610V635H330V672H455V680"' in svg
+    assert 'd="M715 610V635H920V672H715V680"' in svg
+    assert 'x="625" y="658"' in svg

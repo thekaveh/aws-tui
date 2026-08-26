@@ -14,7 +14,7 @@ host this VM as a singleton (see [[vmx-content-host-singleton-trap]])."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import aioboto3
 from vmx import Message, MessageHub
@@ -30,12 +30,9 @@ from aws_tui.domain.emr_serverless import (
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.service_source_vm import ServiceSelectionStore
 from aws_tui.vm.services_protocol import ServiceDescriptor
-
-if TYPE_CHECKING:
-    from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
-
 
 #: Test hook — when provided, replaces real ``EmrServerlessClient`` construction
 #: with whatever the factory returns (typically ``_InMemoryEmr``).
@@ -163,14 +160,8 @@ class EmrServerlessService:
         this predicate."""
         return connection.kind == "aws"
 
-    def build_vm(self, connection: Connection) -> "EmrServerlessPageVM":  # noqa: UP037
-        """Build a fresh page VM for ``connection``.
-
-        Lazy-imported because :mod:`aws_tui.vm.emr_serverless.page_vm`
-        depends on this module's :class:`ServiceDescriptor`; an eager
-        import would cycle."""
-        from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
-
+    def build_vm(self, connection: Connection) -> EmrServerlessPageVM:
+        """Build a fresh page VM for ``connection``."""
         client = self._make_client(connection)
         logs_client = self._make_logs_client(connection, client=client)
         return EmrServerlessPageVM(
