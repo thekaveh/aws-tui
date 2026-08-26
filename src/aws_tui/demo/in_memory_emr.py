@@ -119,14 +119,22 @@ class InMemoryEmr:
         await asyncio.sleep(_DEMO_LATENCY_SEC)
         _ = bucket
         _file, lines = self._log_files[log_file.key]
-        matched = tuple(line for line in lines if filter_.matches(line))
-        bytes_read = min(log_file.size or 0, max_bytes)
+        budget = max(0, max_bytes)
+        bytes_read = 0
+        scanned: list[str] = []
+        for line in lines:
+            encoded_size = len((line + "\n").encode())
+            if bytes_read + encoded_size > budget:
+                break
+            bytes_read += encoded_size
+            scanned.append(line)
+        matched = tuple(line for line in scanned if filter_.matches(line))
         yield LogChunk(
             lines=matched,
             bytes_read=bytes_read,
-            lines_scanned=len(lines),
+            lines_scanned=len(scanned),
             matched_count=len(matched),
-            truncated=(log_file.size or 0) > max_bytes,
+            truncated=len(scanned) < len(lines),
         )
 
     # ── Test seeding ────────────────────────────────────────────────────────

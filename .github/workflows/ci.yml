@@ -43,14 +43,14 @@ jobs:
       # Runs unit + the in-process integration files (full-app pilot,
       # modal forwarding, etc. — they intentionally lack the
       # `integration` marker per pyproject's addopts comment). The
-      # MinIO testcontainer tier is excluded by the default
+      # S3Mock testcontainer tier is excluded by the default
       # `-m 'not integration'` addopts and runs in the integration job
       # below.
       - name: pytest (unit + in-process integration)
         run: uv run --python ${{ matrix.python }} pytest tests/unit tests/integration -v
 
   integration:
-    name: integration (MinIO testcontainer)
+    name: integration (S3Mock testcontainer)
     timeout-minutes: 20
     runs-on: ubuntu-24.04
     steps:

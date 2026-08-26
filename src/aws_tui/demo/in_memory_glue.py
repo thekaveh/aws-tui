@@ -18,6 +18,7 @@ from aws_tui.domain.data_catalog import (
     TableRef,
     TableSummary,
 )
+from aws_tui.domain.filesystem import ValidationError
 from aws_tui.domain.glue import (
     GlueCrawlerDetail,
     GlueCrawlerMetrics,
@@ -344,7 +345,14 @@ def _page(
     start_token: str | None,
     page_size: int,
 ) -> tuple[list[T], str | None]:
-    offset = int(start_token or "0")
+    if page_size <= 0:
+        raise ValidationError("Glue page size must be positive")
+    if start_token is None:
+        offset = 0
+    elif not start_token.isascii() or not start_token.isdecimal():
+        raise ValidationError("invalid Glue page token")
+    else:
+        offset = int(start_token)
     page = list(rows[offset : offset + page_size])
     next_offset = offset + page_size
     return page, str(next_offset) if next_offset < len(rows) else None

@@ -39,7 +39,7 @@ updates:
     open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
     target-branch: develop
-  # Tracks bumps for the local-dev MinIO container declared in
+  # Tracks bumps for the local-dev S3Mock container declared in
   # scripts/test-services/s3/docker-compose.yml. Keeps the supply-
   # chain-reproducibility pin (no ``:latest``) maintained without
   # manual upgrades.

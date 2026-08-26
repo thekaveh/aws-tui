@@ -34,18 +34,11 @@ import aioboto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import (
     ClientError,
-    ConnectionClosedError,
-    ConnectTimeoutError,
     CredentialRetrievalError,
-    EndpointConnectionError,
-    EndpointResolutionError,
-    ReadTimeoutError,
-)
-from botocore.exceptions import (
-    ConnectionError as BotoConnectionError,
 )
 
 from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
+from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     ConflictError,
@@ -73,14 +66,7 @@ from aws_tui.domain.filesystem import (
 #   EndpointConnectionError`` chain missed them.
 # - ``BotoConnectionError`` — the base ``ConnectionError`` for any
 #   other transport failure shape botocore introduces in the future.
-_TRANSPORT_FAILURE_EXCEPTIONS = (
-    EndpointConnectionError,
-    EndpointResolutionError,
-    ConnectTimeoutError,
-    ReadTimeoutError,
-    BotoConnectionError,
-    ConnectionClosedError,
-)
+_TRANSPORT_FAILURE_EXCEPTIONS = AWS_TRANSPORT_EXCEPTIONS
 _AUTH_FAILURE_EXCEPTIONS = AWS_CREDENTIAL_EXCEPTIONS
 
 if TYPE_CHECKING:

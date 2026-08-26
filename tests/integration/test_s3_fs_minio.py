@@ -1,4 +1,4 @@
-"""Integration tests for S3FS against a real MinIO container."""
+"""S3FS integration tests against a real Adobe S3Mock container."""
 
 from __future__ import annotations
 
@@ -53,17 +53,17 @@ async def _create_bucket(endpoint: str, access_key: str, secret_key: str, name: 
             pass
 
 
-async def test_minio_roundtrip_small(minio_endpoint: tuple[str, str, str]) -> None:
-    endpoint, ak, sk = minio_endpoint
+async def test_s3_compat_roundtrip_small(s3_compat_endpoint: tuple[str, str, str]) -> None:
+    endpoint, ak, sk = s3_compat_endpoint
     await _create_bucket(endpoint, ak, sk, "smallbkt")
     fs = _fs(endpoint, ak, sk, "smallbkt")
-    await fs.write_stream(PathRef.from_posix("/hello"), _agen([b"hello minio"]))
+    await fs.write_stream(PathRef.from_posix("/hello"), _agen([b"hello s3 compat"]))
     out = await _drain(await fs.read_stream(PathRef.from_posix("/hello")))
-    assert out == b"hello minio"
+    assert out == b"hello s3 compat"
 
 
-async def test_minio_list_after_write(minio_endpoint: tuple[str, str, str]) -> None:
-    endpoint, ak, sk = minio_endpoint
+async def test_s3_compat_list_after_write(s3_compat_endpoint: tuple[str, str, str]) -> None:
+    endpoint, ak, sk = s3_compat_endpoint
     await _create_bucket(endpoint, ak, sk, "listbkt")
     fs = _fs(endpoint, ak, sk, "listbkt")
     await fs.write_stream(PathRef.from_posix("/x"), _agen([b"x"]))
@@ -76,8 +76,8 @@ async def test_minio_list_after_write(minio_endpoint: tuple[str, str, str]) -> N
     assert all(e.kind == EntryKind.FILE for e in entries)
 
 
-async def test_minio_delete_then_missing(minio_endpoint: tuple[str, str, str]) -> None:
-    endpoint, ak, sk = minio_endpoint
+async def test_s3_compat_delete_then_missing(s3_compat_endpoint: tuple[str, str, str]) -> None:
+    endpoint, ak, sk = s3_compat_endpoint
     await _create_bucket(endpoint, ak, sk, "delbkt")
     fs = _fs(endpoint, ak, sk, "delbkt")
     await fs.write_stream(PathRef.from_posix("/k"), _agen([b"x"]))
@@ -86,9 +86,9 @@ async def test_minio_delete_then_missing(minio_endpoint: tuple[str, str, str]) -
         await fs.stat(PathRef.from_posix("/k"))
 
 
-async def test_minio_multipart_16mb(minio_endpoint: tuple[str, str, str]) -> None:
-    """Real multipart upload via MinIO exercises the explicit part loop."""
-    endpoint, ak, sk = minio_endpoint
+async def test_s3_compat_multipart_16mb(s3_compat_endpoint: tuple[str, str, str]) -> None:
+    """Real multipart upload exercises the explicit part loop."""
+    endpoint, ak, sk = s3_compat_endpoint
     await _create_bucket(endpoint, ak, sk, "bigbkt")
     fs = _fs(endpoint, ak, sk, "bigbkt")
     payload = os.urandom(16 * 1024 * 1024)
@@ -104,10 +104,10 @@ async def test_minio_multipart_16mb(minio_endpoint: tuple[str, str, str]) -> Non
     assert out == payload
 
 
-async def test_minio_list_buckets_at_service_root(
-    minio_endpoint: tuple[str, str, str],
+async def test_s3_compat_list_buckets_at_service_root(
+    s3_compat_endpoint: tuple[str, str, str],
 ) -> None:
-    endpoint, ak, sk = minio_endpoint
+    endpoint, ak, sk = s3_compat_endpoint
     await _create_bucket(endpoint, ak, sk, "alpha-bucket")
     await _create_bucket(endpoint, ak, sk, "beta-bucket")
     fs = _fs(endpoint, ak, sk, bucket=None)

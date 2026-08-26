@@ -917,7 +917,7 @@ VM tests **never import** `aioboto3`, `boto3`, `botocore`, or `Textual`. Enforce
 |---|---|---|
 | AWS S3 | `moto` (in-process) | `S3FS` happy paths + every error class in §7 |
 | AWS S3 multipart | `moto-server` subprocess | concurrent part uploads |
-| MinIO | `testcontainers-python` with `minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | `S3FS` against real S3-compat; catches path-style + TLS quirks |
+| S3-compatible test service | `testcontainers-python` with `adobe/s3mock:5.1.0@sha256:65cf60155a2e235fe7d5bf6c633747d6fc7ed93f9f5a6727d86470026b83c2a2` | `S3FS` against an independent implementation; catches path-style and wire-protocol quirks without a vulnerable or license-gated MinIO image |
 | Local FS | `tmp_path` | `LocalFS` ops + symlinks + perm errors |
 | Cross-FS copy | combinations | LocalFS↔S3FS, S3FS↔S3FS byte-equality + ETag check |
 

@@ -1,4 +1,4 @@
-"""Integration tests for CrossFsCopy/Move using LocalFS and S3FS on MinIO."""
+"""CrossFsCopy/Move integration tests against an independent S3 implementation."""
 
 from __future__ import annotations
 
@@ -50,8 +50,8 @@ async def _drain(it: AsyncIterator[bytes]) -> bytes:
     return bytes(out)
 
 
-async def test_local_to_minio(minio_endpoint: tuple[str, str, str], tmp_path: Path) -> None:
-    endpoint, ak, sk = minio_endpoint
+async def test_local_to_s3_compat(s3_compat_endpoint: tuple[str, str, str], tmp_path: Path) -> None:
+    endpoint, ak, sk = s3_compat_endpoint
     await _make_bucket(endpoint, ak, sk, "l2sbkt")
     (tmp_path / "file.txt").write_bytes(b"local-to-s3")
     local = LocalFS(root=tmp_path)
@@ -62,8 +62,8 @@ async def test_local_to_minio(minio_endpoint: tuple[str, str, str], tmp_path: Pa
     assert out == b"local-to-s3"
 
 
-async def test_minio_to_local(minio_endpoint: tuple[str, str, str], tmp_path: Path) -> None:
-    endpoint, ak, sk = minio_endpoint
+async def test_s3_compat_to_local(s3_compat_endpoint: tuple[str, str, str], tmp_path: Path) -> None:
+    endpoint, ak, sk = s3_compat_endpoint
     await _make_bucket(endpoint, ak, sk, "s2lbkt")
     s3 = _s3fs(endpoint, ak, sk, "s2lbkt")
 
@@ -77,8 +77,10 @@ async def test_minio_to_local(minio_endpoint: tuple[str, str, str], tmp_path: Pa
     assert (tmp_path / "k").read_bytes() == b"minio-to-local"
 
 
-async def test_move_local_to_minio(minio_endpoint: tuple[str, str, str], tmp_path: Path) -> None:
-    endpoint, ak, sk = minio_endpoint
+async def test_move_local_to_s3_compat(
+    s3_compat_endpoint: tuple[str, str, str], tmp_path: Path
+) -> None:
+    endpoint, ak, sk = s3_compat_endpoint
     await _make_bucket(endpoint, ak, sk, "movbkt")
     (tmp_path / "src.txt").write_bytes(b"moveme")
     local = LocalFS(root=tmp_path)
@@ -90,10 +92,10 @@ async def test_move_local_to_minio(minio_endpoint: tuple[str, str, str], tmp_pat
     assert not (tmp_path / "src.txt").exists()
 
 
-async def test_minio_to_minio_cross_bucket(
-    minio_endpoint: tuple[str, str, str],
+async def test_s3_compat_cross_bucket(
+    s3_compat_endpoint: tuple[str, str, str],
 ) -> None:
-    endpoint, ak, sk = minio_endpoint
+    endpoint, ak, sk = s3_compat_endpoint
     await _make_bucket(endpoint, ak, sk, "from-bkt")
     await _make_bucket(endpoint, ak, sk, "to-bkt")
     src = _s3fs(endpoint, ak, sk, "from-bkt")

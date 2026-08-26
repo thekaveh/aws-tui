@@ -97,9 +97,10 @@ dev = [
   "pytest>=8",
   "pytest-asyncio>=0.24",
   "pytest-cov>=4",
+  "pytest-timeout>=2.4",
   "pytest-textual-snapshot>=1",
   "moto[server,s3]>=5",
-  "testcontainers[minio]>=4",
+  "testcontainers>=4",
   "types-aiofiles>=23",
   # Installed so CI/release can build with `uv build --no-build-isolation`
   # against the locked backend instead of resolving hatchling at build time.
@@ -125,12 +126,13 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "-ra --strict-markers --strict-config -m 'not integration'"
+timeout = 60
 markers = [
   # Tagged via ``pytestmark = pytest.mark.unit`` in 6 files under
   # tests/unit/domain/ — descriptive only; the default run already
   # includes everything except ``-m 'not integration'``.
   "unit: pure-Python tests, no external service (run by default)",
-  # Opt-in marker for tests that spin up a real testcontainer (MinIO).
+  # Opt-in marker for tests that spin up a real S3Mock testcontainer.
   # Excluded from the default ``uv run pytest`` via the ``addopts``
   # filter above; opt in with ``-m integration``. Applied via
   # ``pytestmark = pytest.mark.integration`` in

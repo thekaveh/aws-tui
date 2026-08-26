@@ -250,6 +250,8 @@ class InMemoryFS:
         parent = dst.parent()
         if not parent.is_root and parent not in self._tree:
             raise NotFoundError(f"parent missing: {parent.as_posix()}")
+        if not parent.is_root and self._tree[parent] is not None:
+            raise ConflictError(f"parent is not a directory: {parent.as_posix()}")
         # Recursive move: rewrite every key prefixed by src.
         affected = [
             p

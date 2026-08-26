@@ -314,7 +314,7 @@ class TestResolveAndMaterialize:
 
 
 class TestS3CompatibleCredentialDispatch:
-    def test_keychain_read_failure_resolves_as_missing_credentials(
+    def test_keychain_backend_failure_is_not_disguised_as_missing_credentials(
         self, tmp_path: Path, store: ConfigStore
     ) -> None:
         class _FailingKeychain(InMemoryKeychain):
@@ -337,10 +337,8 @@ class TestS3CompatibleCredentialDispatch:
             aws_credentials_path=tmp_path / "missing",
         )
 
-        connection = resolver.resolve("locked")
-
-        assert connection.access_key_id is None
-        assert connection.secret_access_key is None
+        with pytest.raises(RuntimeError, match="keychain locked"):
+            resolver.resolve("locked")
 
     def test_keychain_credentials(self, tmp_path: Path, store: ConfigStore) -> None:
         kc = InMemoryKeychain()

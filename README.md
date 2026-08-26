@@ -170,7 +170,7 @@ inspection workflows.
   by `scripts/check-layers.sh`. Mypy strict-clean.
   See [`docs/architecture.md` testing pyramid](docs/architecture.md#15-testing-pyramid)
   for the current test-tier table; the default tier runs unit / in-process integration /
-  snapshot / e2e, with a 9-test MinIO tier opt-in via
+  snapshot / e2e, with a 9-test S3-compatible S3Mock tier opt-in via
   `uv run pytest -m integration`.
 
 ## 1.2. Install
@@ -256,9 +256,9 @@ are indexed below for contributors and repository review.
    2. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
    3. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and shipped `[keybindings]` overlay behavior.
    4. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
-   5. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to MinIO, switch theme on the fly, prepare keybinding overlays, inspect transfer evidence after a crash).
+   5. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to local S3Mock, switch theme on the fly, prepare keybinding overlays, inspect transfer evidence after a crash).
    6. [Supported platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
-   7. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — MinIO Docker Compose + seed for offline development.
+   7. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — Adobe S3Mock Docker Compose + seed for offline development.
    8. [S3 and local file manager](docs/services/s3.md) — sources, dual-pane operations, transfer safety, architecture, and verification.
    9. [EMR Serverless](docs/services/emr-serverless.md) — source/application context, runs, logs, clone workflow, architecture, and verification.
    10. [AWS Glue and Iceberg metadata](docs/services/glue.md) — catalog/jobs/crawlers, bounded metadata, Athena handoffs, architecture, and verification.

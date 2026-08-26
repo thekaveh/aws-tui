@@ -83,10 +83,14 @@ def test_log_filter_with_swaps_patterns() -> None:
 class _StubBody:
     def __init__(self, payload: bytes) -> None:
         self._payload = payload
+        self.closed = False
 
     async def read(self, n: int) -> bytes:
         out, self._payload = self._payload[:n], self._payload[n:]
         return out
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _RaisingBody:
@@ -99,12 +103,15 @@ class _RaisingBody:
 
 class _StubS3:
     def __init__(self, body: bytes) -> None:
-        self.get_object = AsyncMock(return_value={"Body": _StubBody(body)})
+        self.body = _StubBody(body)
+        self.get_object = AsyncMock(return_value={"Body": self.body})
+        self.exited = False
 
     async def __aenter__(self) -> _StubS3:
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        self.exited = True
         return None
 
 
@@ -325,6 +332,28 @@ async def test_stream_log_exact_compressed_limit_is_not_truncated() -> None:
 
     assert chunks[-1].lines == ("ERROR complete",)
     assert chunks[-1].truncated is False
+
+
+@pytest.mark.asyncio
+async def test_stream_log_maps_corrupt_gzip_and_closes_resources() -> None:
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, LogFile, stream_log
+    from aws_tui.domain.filesystem import ValidationError
+
+    stub = _StubS3(b"not-a-gzip-stream")
+
+    with pytest.raises(ValidationError, match="corrupt EMR log gzip stream"):
+        async for _chunk in stream_log(
+            session=_StubSession(stub),  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=LogFile(key="corrupt.gz", kind=LogFileKind.DRIVER_STDERR),
+            bucket="b",
+            max_bytes=1024,
+            filter_=DEFAULT_LOG_FILTER,
+        ):
+            pass
+
+    assert stub.body.closed
+    assert stub.exited
 
 
 @pytest.mark.asyncio

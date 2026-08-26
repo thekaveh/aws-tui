@@ -205,15 +205,15 @@ the same observable plus dispose-on-unmount.
 | Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards that reject blank-but-valid output |
 | Integration (in-process) | Recount with `uv run pytest tests/integration --collect-only -q | tail -1` | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
 | E2E | Recount with `uv run pytest tests/e2e --collect-only -q | tail -1` | Pilot-driven user journeys |
-| Integration (MinIO) | Recount with `uv run pytest -m integration --collect-only -q | tail -1` | MinIO via testcontainers (opt-in, `-m integration`) |
+| Integration (S3-compatible) | Recount with `uv run pytest -m integration --collect-only -q | tail -1` | Adobe S3Mock via testcontainers (opt-in, `-m integration`) |
 
 The default tier total changes as coverage grows. Recount with
 `uv run pytest --collect-only -q | tail -1`; recount snapshot goldens
 with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
-Opt-in MinIO tier: `uv run pytest -m integration`.
+Opt-in S3-compatible tier: `uv run pytest -m integration`.
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)
-with `uv run pytest`. Opt into the MinIO tier with
+with `uv run pytest`. Opt into the S3-compatible tier with
 `uv run pytest -m integration` — it spins up a container, which the
 default `addopts` filter excludes (`-m 'not integration'`).
 

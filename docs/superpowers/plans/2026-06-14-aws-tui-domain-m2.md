@@ -6,7 +6,7 @@
 
 **Architecture:** One Protocol, two concrete providers (LocalFS via anyio+aiofiles, S3FS via aioboto3), one cross-fs streamer that reads from any provider and writes to any provider, one journal for resumable transfers. The dual-pane UI (M3+) will consume the same Protocol from both sides.
 
-**Tech Stack:** `anyio` (filesystem ops on threadpool), `aiofiles` (streaming reads/writes), `aioboto3` (S3), `moto` (in-process AWS mock for unit-tier integration tests), `testcontainers-python` with `minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` (real S3-compat for the strict tier).
+**Tech Stack:** `anyio` (filesystem ops on threadpool), `aiofiles` (streaming reads/writes), `aioboto3` (S3), `moto` (in-process AWS mock for unit-tier integration tests), `testcontainers-python` with `adobe/s3mock:5.1.0@sha256:65cf60155a2e235fe7d5bf6c633747d6fc7ed93f9f5a6727d86470026b83c2a2` (independent S3 compatibility for the strict tier; updated from the original MinIO plan after the community image line became vulnerable).
 
 ---
 
@@ -275,27 +275,27 @@ Each append is one JSON line. `find_unfinished` reads all jsonl files in base_di
 
 ---
 
-## 1.6. Task 6: integration tests with MinIO testcontainer
+## 1.6. Task 6: integration tests with an S3-compatible testcontainer
 
 **Files:**
 - Create: `tests/integration/__init__.py`
-- Create: `tests/integration/conftest.py` (session-scoped MinIO container fixture)
+- Create: `tests/integration/conftest.py` (session-scoped S3Mock container fixture)
 - Create: `tests/integration/test_s3_fs_minio.py`
 - Create: `tests/integration/test_cross_fs_minio.py`
 
-Add `testcontainers[minio]>=4` to dev deps in `pyproject.toml`.
+Add `testcontainers>=4` to dev deps in `pyproject.toml`.
 
 **Conftest fixture:**
 ```python
 @pytest.fixture(scope="session")
-def minio_endpoint() -> Iterator[tuple[str, str, str]]:
+def s3_compat_endpoint() -> Iterator[tuple[str, str, str]]:
     """Returns (endpoint_url, access_key, secret_key)."""
-    from testcontainers.minio import MinioContainer
-    with MinioContainer() as minio:
+    from testcontainers.core.container import DockerContainer
+    with DockerContainer("adobe/s3mock:5.1.0") as s3mock:
         yield (
-            f"http://{minio.get_container_host_ip()}:{minio.get_exposed_port(9000)}",
-            minio.access_key,
-            minio.secret_key,
+            f"http://{s3mock.get_container_host_ip()}:{s3mock.get_exposed_port(9090)}",
+            "test",
+            "test",
         )
 ```
 
@@ -304,8 +304,8 @@ Mark integration tests with `@pytest.mark.integration` and add to `[tool.pytest.
 Acceptance:
 - Tests run with `uv run pytest -m integration -v` (must be opted-in).
 - Tests skip cleanly when Docker isn't available (`pytest.skip` if the container fixture errors).
-- S3FS roundtrip works against MinIO with `force_path_style=True`.
-- Cross-FS LocalFS↔S3FS(MinIO) works.
+- S3FS roundtrip works against S3Mock with `force_path_style=True`.
+- Cross-FS LocalFS to/from S3FS(S3Mock) works.
 
 Wire integration into CI: add a new `integration` job in `.github/workflows/ci.yml` that runs on `ubuntu-22.04` (Docker available) with `uv run pytest -m integration -v`.
 

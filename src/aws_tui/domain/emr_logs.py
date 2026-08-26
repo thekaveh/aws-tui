@@ -20,16 +20,18 @@ state distinction that every other EMR pane gets for free.
 
 from __future__ import annotations
 
+import inspect
 import re
 import zlib
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from aws_tui.domain.emr_serverless import map_boto_error
-from aws_tui.domain.filesystem import ProviderError
+from aws_tui.domain.filesystem import ProviderError, ValidationError
 
 if TYPE_CHECKING:
     import aioboto3
@@ -276,6 +278,7 @@ async def stream_log(
     kwargs: dict[str, object] = {"region_name": region_name}
     if boto_config is not None:
         kwargs["config"] = boto_config
+    body: Any = None
     try:
         async with session.client("s3", **kwargs) as s3:
             resp = await s3.get_object(Bucket=bucket, Key=log_file.key)
@@ -300,7 +303,10 @@ async def stream_log(
                 if remaining_decompressed <= 0:
                     truncated = True
                     break
-                raw_output = decompressor.decompress(chunk, remaining_decompressed + 1)
+                try:
+                    raw_output = decompressor.decompress(chunk, remaining_decompressed + 1)
+                except zlib.error:
+                    raise ValidationError("corrupt EMR log gzip stream") from None
                 if len(raw_output) > remaining_decompressed:
                     raw_output = raw_output[:remaining_decompressed]
                     truncated = True
@@ -346,7 +352,7 @@ async def stream_log(
                 try:
                     tail = decompressor.flush(_MAX_DECOMPRESSED_BYTES - decompressed_bytes)
                 except zlib.error:
-                    truncated = True
+                    raise ValidationError("corrupt EMR log gzip stream") from None
                 else:
                     pending.extend(tail)
                     decompressed_bytes += len(tail)
@@ -377,6 +383,21 @@ async def stream_log(
         if mapped is None:
             raise
         raise mapped from exc
+    finally:
+        if body is not None:
+            with suppress(Exception):
+                await _close_streaming_body(body)
+
+
+async def _close_streaming_body(body: object) -> None:
+    close = getattr(body, "aclose", None)
+    if not callable(close):
+        close = getattr(body, "close", None)
+    if not callable(close):
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result
 
 
 @dataclass(frozen=True, slots=True)

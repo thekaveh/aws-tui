@@ -1,7 +1,7 @@
 # 1. Connections for AWS Profiles and S3-Compatible Storage
 
 > Mirror of spec §6.1–6.3 and §6.5. See also the
-> [cookbook](cookbook.md) for the "connect to local MinIO" walkthrough.
+> [cookbook](cookbook.md) for the "connect to local S3Mock" walkthrough.
 
 A **Connection** is the unit aws-tui authenticates as. Two kinds:
 
@@ -159,7 +159,7 @@ Why this is useful day-to-day:
 
 The `,` key opens **Settings** where you can add, edit, or delete
 `s3-compatible` connections (see the
-[`docs/cookbook.md` MinIO walkthrough](cookbook.md#11-connect-to-and-switch-between-data-sources)).
+[`docs/cookbook.md` S3Mock walkthrough](cookbook.md#11-connect-to-and-switch-between-data-sources)).
 AWS profiles are read-only from aws-tui's perspective — manage those
 through the standard `~/.aws/` tooling.
 

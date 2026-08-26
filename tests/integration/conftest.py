@@ -1,7 +1,7 @@
 """Integration-tier shared fixtures.
 
-- :func:`minio_endpoint` — session-scoped MinIO testcontainer. Used by
-  the two MinIO smoke suites (opt-in via ``-m integration``).
+- :func:`s3_compat_endpoint` — session-scoped Adobe S3Mock container.
+  Used by the two real S3-protocol suites (opt-in via ``-m integration``).
 - :func:`app_context_factory` — per-test fixture returning a builder
   callable that constructs an :class:`AppContext` for full-app pilot
   tests. Pass ``fs=`` to inject a seeded :class:`InMemoryFS` as the
@@ -42,9 +42,8 @@ from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
-_MINIO_IMAGE = (
-    "minio/minio:RELEASE.2025-09-07T16-13-09Z"
-    "@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+_S3MOCK_IMAGE = (
+    "adobe/s3mock:5.1.0@sha256:65cf60155a2e235fe7d5bf6c633747d6fc7ed93f9f5a6727d86470026b83c2a2"
 )
 
 _AWS_CREDENTIAL_ENV_VARS = (
@@ -82,49 +81,52 @@ def _isolated_aws_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         monkeypatch.setenv(variable, str(path))
 
 
-def _minio_unavailable(message: str) -> None:
+def _s3_compat_unavailable(message: str) -> None:
     """Fail required CI coverage while keeping local Docker tests optional."""
     if os.environ.get("CI"):
         pytest.fail(message)
     pytest.skip(message)
 
 
-def _start_minio_or_unavailable(container: Any) -> None:
-    """Start MinIO or tear down any partially allocated container."""
+def _start_s3mock_or_unavailable(container: Any) -> None:
+    """Start S3Mock or tear down any partially allocated container."""
     try:
         container.start()
     except Exception as exc:  # pragma: no cover - exercised through helper tests
         with contextlib.suppress(Exception):
             container.stop()
-        _minio_unavailable(f"could not start MinIO container (Docker missing?): {exc}")
+        _s3_compat_unavailable(f"could not start S3Mock container (Docker missing?): {exc}")
 
 
 @pytest.fixture(scope="session")
-def minio_endpoint() -> Iterator[tuple[str, str, str]]:
-    """Spin up a real MinIO container.
+def s3_compat_endpoint() -> Iterator[tuple[str, str, str]]:
+    """Spin up a real Adobe S3Mock container.
 
     Returns ``(endpoint_url, access_key, secret_key)``. The container is
     reused for every test in the session. Skipped if Docker / the
     container client isn't available.
     """
     try:
-        from testcontainers.community.minio import MinioContainer  # lazy import
+        from testcontainers.core.container import DockerContainer
+        from testcontainers.core.wait_strategies import HttpWaitStrategy
     except Exception as exc:  # pragma: no cover
-        _minio_unavailable(f"testcontainers MinIO unavailable: {exc}")
+        _s3_compat_unavailable(f"testcontainers S3Mock unavailable: {exc}")
 
     try:
-        container = MinioContainer(image=_MINIO_IMAGE)
+        container = (
+            DockerContainer(_S3MOCK_IMAGE)
+            .with_exposed_ports(9090)
+            .waiting_for(HttpWaitStrategy(9090, "/favicon.ico"))
+        )
     except Exception as exc:  # pragma: no cover
-        _minio_unavailable(f"could not construct MinIO container: {exc}")
-    _start_minio_or_unavailable(container)
+        _s3_compat_unavailable(f"could not construct S3Mock container: {exc}")
+    _start_s3mock_or_unavailable(container)
 
     try:
         host = container.get_container_host_ip()
-        port = container.get_exposed_port(9000)
+        port = container.get_exposed_port(9090)
         endpoint = f"http://{host}:{port}"
-        access_key = container.access_key
-        secret_key = container.secret_key
-        yield (endpoint, access_key, secret_key)
+        yield (endpoint, "test", "test")
     finally:
         with contextlib.suppress(Exception):  # pragma: no cover
             container.stop()

@@ -1,5 +1,5 @@
 # Paste this block into <config-dir>/config.toml to point aws-tui at the
-# local MinIO seeded by scripts/test-services/s3/seed.py. See docs/platforms.md
+# local Adobe S3Mock seeded by scripts/test-services/s3/seed.py. See docs/platforms.md
 # for the exact OS path. Then launch:
 #
 #   aws-tui
@@ -14,8 +14,8 @@ kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
 region = "us-east-1"
 credentials = "static"
-access_key_id = "minioadmin"
-secret_access_key = "minioadmin"
+access_key_id = "test"
+secret_access_key = "test"
 force_path_style = true
 verify_tls = false
 

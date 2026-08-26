@@ -16,6 +16,7 @@ import botocore.exceptions
 from botocore.config import Config as BotoConfig
 
 from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
+from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     NotFoundError,
@@ -156,13 +157,7 @@ _CLIENT_ERROR_CODE_MAP: dict[str, type[ProviderError]] = {
     "ResourceNotFoundException": NotFoundError,
     "ValidationException": ValidationError,
 }
-_TRANSPORT_FAILURE_EXCEPTIONS = (
-    botocore.exceptions.EndpointConnectionError,
-    botocore.exceptions.ConnectTimeoutError,
-    botocore.exceptions.ReadTimeoutError,
-    botocore.exceptions.ConnectionClosedError,
-    botocore.exceptions.ConnectionError,
-)
+_TRANSPORT_FAILURE_EXCEPTIONS = AWS_TRANSPORT_EXCEPTIONS
 
 
 def _map_boto_error(exc: BaseException) -> ProviderError | None:

@@ -1,4 +1,4 @@
-"""Seed the local MinIO instance with a realistic mix of buckets / folders /
+"""Seed the local S3Mock instance with a realistic mix of buckets / folders /
 files so aws-tui has interesting content to navigate during development.
 
 Idempotent: existing buckets are left in place; existing objects are
@@ -9,8 +9,8 @@ Run:
 
 Configuration:
     AWS_TUI_DEV_S3_ENDPOINT  default http://localhost:9000
-    AWS_TUI_DEV_S3_KEY       default minioadmin
-    AWS_TUI_DEV_S3_SECRET    default minioadmin
+    AWS_TUI_DEV_S3_KEY       default test
+    AWS_TUI_DEV_S3_SECRET    default test
 
 Buckets created:
     aws-tui-dev-photos    — nested year/month/day folders, ~30 small files
@@ -33,8 +33,8 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 ENDPOINT = os.environ.get("AWS_TUI_DEV_S3_ENDPOINT", "http://localhost:9000")
-ACCESS_KEY = os.environ.get("AWS_TUI_DEV_S3_KEY", "minioadmin")
-SECRET_KEY = os.environ.get("AWS_TUI_DEV_S3_SECRET", "minioadmin")
+ACCESS_KEY = os.environ.get("AWS_TUI_DEV_S3_KEY", "test")
+SECRET_KEY = os.environ.get("AWS_TUI_DEV_S3_SECRET", "test")
 REGION = "us-east-1"
 
 
@@ -165,8 +165,8 @@ _BUCKETS: dict[str, list[_SeedObject]] = {
 }
 
 
-async def _wait_for_minio(client: object, *, max_attempts: int = 30) -> None:
-    """Poll MinIO's readiness via a cheap list-buckets call. Useful when the
+async def _wait_for_s3_compat(client: object, *, max_attempts: int = 30) -> None:
+    """Poll S3Mock readiness via a cheap list-buckets call. Useful when the
     container has just started and isn't ready to accept S3 traffic yet."""
     last_exc: BaseException | None = None
     for _attempt in range(max_attempts):
@@ -176,7 +176,7 @@ async def _wait_for_minio(client: object, *, max_attempts: int = 30) -> None:
         except Exception as exc:
             last_exc = exc
             await asyncio.sleep(0.5)
-    raise RuntimeError(f"MinIO not ready after {max_attempts} attempts; last error: {last_exc!r}")
+    raise RuntimeError(f"S3Mock not ready after {max_attempts} attempts; last error: {last_exc!r}")
 
 
 async def _ensure_bucket(client: object, name: str) -> bool:
@@ -206,7 +206,7 @@ async def _seed_bucket(client: object, bucket: str, objects: list[_SeedObject]) 
     print(f"  {'created' if created else 'reusing'} bucket: {bucket}")
     if not objects:
         return
-    # Serialize the puts — MinIO can handle parallel but this keeps output
+    # Serialize the puts; this keeps output
     # deterministic and the throughput is plenty for the dataset size.
     for obj in objects:
         await _put_object(client, bucket, obj)
@@ -226,7 +226,7 @@ def _size_summary(objects: list[_SeedObject]) -> str:
 
 async def main() -> int:
     started = datetime.now(UTC)
-    print(f"==> seeding MinIO at {ENDPOINT}")
+    print(f"==> seeding S3Mock at {ENDPOINT}")
     session = aioboto3.Session()
     config = Config(
         retries={"total_max_attempts": 6, "mode": "adaptive"},
@@ -242,7 +242,7 @@ async def main() -> int:
         config=config,
     ) as client:
         try:
-            await _wait_for_minio(client)
+            await _wait_for_s3_compat(client)
         except RuntimeError as exc:
             print(f"==> {exc}", file=sys.stderr)
             return 1
@@ -252,7 +252,7 @@ async def main() -> int:
     total_objs = sum(len(v) for v in _BUCKETS.values())
     print(f"==> done. {len(_BUCKETS)} buckets, {total_objs} objects, {elapsed:.1f}s")
     print()
-    print("Point aws-tui at this MinIO by adding to <config-dir>/config.toml:")
+    print("Point aws-tui at this S3Mock by adding to <config-dir>/config.toml:")
     print("  (see docs/platforms.md for the exact OS path)")
     print("  (copy from scripts/test-services/s3/config-snippet.toml)")
     return 0

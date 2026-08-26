@@ -272,15 +272,12 @@ class ConnectionResolver:
             service = spec[len("keychain:") :]
             if self._keychain is None:
                 return None, None, None
-            try:
-                token = self._keychain.get(service, "session_token")
-                return (
-                    self._keychain.get(service, "access_key_id"),
-                    self._keychain.get(service, "secret_access_key"),
-                    _blank_to_none(token),
-                )
-            except Exception:
-                return None, None, None
+            token = self._keychain.get(service, "session_token")
+            return (
+                self._keychain.get(service, "access_key_id"),
+                self._keychain.get(service, "secret_access_key"),
+                _blank_to_none(token),
+            )
         if spec.startswith("env:"):
             prefix = spec[len("env:") :]
             return (

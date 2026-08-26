@@ -137,7 +137,7 @@ jobs:
       - name: pytest coverage (unit + in-process integration)
         run: uv run --python 3.12 pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml
 
-      - name: pytest (MinIO integration tier)
+      - name: pytest (S3Mock integration tier)
         run: uv run --python 3.12 pytest -m integration -v
 
       - name: pytest (snapshot tier)
