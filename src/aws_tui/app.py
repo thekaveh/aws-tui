@@ -843,6 +843,8 @@ class AwsTuiApp(App[None]):
 
     def _restore_focus_after_modal(self, slot: FocusSlot) -> None:
         coordinator = self._app_ctx.focus_coordinator
+        if len(self.screen_stack) > 1 or coordinator.is_modal:
+            return
         coordinator.set_focused_slot(slot)
         self._project_focus_slot(slot)
 

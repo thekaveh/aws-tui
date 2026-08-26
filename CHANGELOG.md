@@ -157,13 +157,16 @@ section; the current tree must not be tagged as v0.8.0.
 ### 1.1.3. Fixed
 
 - **Atomic source and service changes.** Root service adoption now builds and
-  constructs the candidate before committing connection, authentication, or
-  menu state; failed initial adoption clears the tentative selection without
+  constructs the candidate before committing source identity, and publishes
+  the new content, connection, and authentication identity as one
+  observer-consistent tuple,
+  and retires an outgoing VM if cancellation arrives after its shutdown has
+  begun. Failed initial adoption clears the tentative selection without
   disturbing a previously hosted service.
 - **Modal keyboard and focus routing.** Editable modal controls receive arrow,
   Backspace, Tab, and Shift+Tab input before app-level navigation, and closing
   a modal restores the VMx focus slot without a delayed widget projection
-  overwriting it.
+  overwriting it or a newly opened modal.
 - **Athena pagination freshness.** Refresh invalidates in-flight continuation
   loads so stale pages cannot append results after newer query state arrives.
 - **Resilient shutdown.** Teardown continues after individual cleanup errors,
@@ -171,8 +174,8 @@ section; the current tree must not be tagged as v0.8.0.
 - **Maintenance correctness.** CI now verifies the lowest supported dependency
   set, MinIO seeding creates only genuinely missing buckets, wiki publication
   distinguishes changes from command failures, installed help uses published
-  documentation URLs, and current command/contract guidance matches runtime
-  behavior.
+  documentation URLs, dead status-bar references are rejected, and current
+  command/contract guidance matches runtime behavior and VMx 3.23.
 - **Accessible chrome and docs.** Banner title tokens, Solarized muted text,
   and documentation accent colors now meet their intended contrast thresholds.
 - **Runtime lifecycle and interaction hardening.** Athena now drains the real

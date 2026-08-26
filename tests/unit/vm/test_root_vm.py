@@ -224,6 +224,30 @@ async def test_switch_connection_and_service_rebuilds_same_service() -> None:
     root.dispose()
 
 
+async def test_atomic_switch_never_publishes_new_content_with_old_connection() -> None:
+    stable = _FakeService("stable")
+    target = _FakeService("target")
+    root = _build_root(stable, target)
+    dev = _aws_conn("dev")
+    prod = _aws_conn("prod")
+    await root.switch_connection_with(dev, TokenState.CONNECTED)
+    await root.switch_service("stable")
+
+    observed: list[tuple[Connection | None, TokenState | None]] = []
+
+    def capture_state(_message: object) -> None:
+        if root.content_host.current_id == "target":
+            observed.append((root.active_connection, root.active_auth_state))
+
+    subscription = root.message_hub.messages.subscribe(on_next=capture_state)
+    await root.switch_connection_and_service(prod, TokenState.EXPIRED, "target")
+    subscription.dispose()
+
+    assert observed
+    assert observed == [(prod, TokenState.EXPIRED)] * len(observed)
+    root.dispose()
+
+
 async def test_atomic_switch_rejects_unsupported_connection_before_disposal() -> None:
     emr = _FakeService("emr-serverless", accepts_s3=False)
     root = _build_root(emr)

@@ -4,7 +4,7 @@ Holds two :class:`PaneVM` instances and orchestrates cross-pane
 operations (copy / move / delete-in-focused). Copy and move route
 through M2's :class:`CrossFsCopy` / :class:`CrossFsMove`; per-file
 progress is bridged to :class:`TransferProgressMessage` on the hub so
-:class:`TransfersVM` and the chrome status bar can react.
+:class:`TransfersVM` and the transfers overlay can react.
 
 The facade does not subclass VMx's ``AggregateVM2`` — its components are
 facades (which AggregateVMN cannot wrap). We mirror the pattern used by
@@ -374,8 +374,8 @@ class DualPaneVM:
                     # a terminal TransferProgressMessage so the
                     # in-memory TransferVM the pre-register placed
                     # in PENDING leaves the active set (otherwise
-                    # the status-bar aggregate + cancel_all predicate
-                    # stay "active" with phantom queued rows visible
+                    # the aggregate + cancel_all predicate stay
+                    # "active" with phantom queued rows visible
                     # in the transfers overlay).
                     self._journal.mark_aborted(transfer_id)
                     self._hub.send(
@@ -450,7 +450,7 @@ class DualPaneVM:
                     # See ``copy_across`` for the parity rationale —
                     # publish CANCELLED so the in-memory TransferVM
                     # doesn't stay in PENDING forever and inflate the
-                    # status-bar / transfers-overlay active count.
+                    # transfers-overlay active count.
                     self._journal.mark_aborted(transfer_id)
                     self._hub.send(
                         TransferProgressMessage(
@@ -527,8 +527,8 @@ class DualPaneVM:
             #   1. cancel_event registrations (memory only)
             #   2. journal files in PENDING state (misleading interrupted
             #      transfer records)
-            #   3. in-memory TransferVMs in PENDING (status-bar
-            #      aggregate, transfers overlay, cancel_all predicate
+            #   3. in-memory TransferVMs in PENDING (aggregate,
+            #      transfers overlay, cancel_all predicate
             #      all read off these)
             # Reap all three so a single mid-batch raise can't
             # accumulate phantom queued transfers across the session.

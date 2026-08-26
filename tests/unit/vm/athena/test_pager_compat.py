@@ -9,7 +9,7 @@ from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 
 
 @pytest.mark.asyncio
-async def test_seed_token_pager_contract_matches_vmx_3_1_0() -> None:
+async def test_seed_token_pager_contract_matches_vmx_3_23() -> None:
     assert version("vmx").partition(".")[0] == "3"
     calls: list[str | None] = []
 

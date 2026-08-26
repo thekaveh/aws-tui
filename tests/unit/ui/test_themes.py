@@ -1,8 +1,6 @@
-"""Smoke tests for the built-in themes.
+"""Structural, contrast, and parser checks for the built-in themes.
 
-We don't assert content; we just ensure each ``.tcss`` parses without errors
-through Textual's CSS parser. Snapshot tests (under ``tests/snapshot``)
-provide the rendering-level coverage.
+Snapshot tests under ``tests/snapshot`` provide rendering-level coverage.
 """
 
 from __future__ import annotations
@@ -66,7 +64,9 @@ def test_builtin_theme_styles_widgets(name: str) -> None:
 @pytest.mark.parametrize("name", ALL_THEMES)
 def test_builtin_theme_does_not_retain_unmounted_status_bar_styles(name: str) -> None:
     content = ThemeStore().load(name)
-    assert "StatusBar" not in content, f"theme {name} retains dead StatusBar styles"
+    assert re.search(r"status[\s_-]*bar", content, re.IGNORECASE) is None, (
+        f"theme {name} retains dead StatusBar styles"
+    )
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)

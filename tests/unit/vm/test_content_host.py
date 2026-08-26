@@ -665,6 +665,49 @@ async def test_set_content_drains_setup_cleanup_through_repeated_cancellation() 
     host.dispose()
 
 
+async def test_cancelled_swap_retires_outgoing_vm_after_shutdown_begins() -> None:
+    shutdown_started = asyncio.Event()
+    release_shutdown = asyncio.Event()
+
+    class _VM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def shutdown(self) -> None:
+            shutdown_started.set()
+            await release_shutdown.wait()
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    current = _VM()
+    replacement = _component()
+    await host.set_content(cast("ComponentVM", current), service_id="service")
+
+    swap = asyncio.create_task(host.set_content(replacement, service_id="replacement"))
+    await shutdown_started.wait()
+    swap.cancel()
+    await asyncio.sleep(0)
+
+    assert not swap.done()
+    release_shutdown.set()
+    with pytest.raises(asyncio.CancelledError):
+        await swap
+
+    assert current.status is ConstructionStatus.DISPOSED
+    assert replacement.status is ConstructionStatus.DISPOSED
+    assert host.current is None
+    assert host.current_id is None
+
+    fresh = _component()
+    await host.set_content(fresh, service_id="service")
+    assert host.current is fresh
+    host.dispose()
+
+
 async def test_set_content_none_clears_current() -> None:
     host = _build()
     child = _component()

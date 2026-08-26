@@ -17,6 +17,7 @@ caller so we can keep the test surface free of boto3.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
 from reactivex.abc import DisposableBase
 from vmx import ComponentVM, Message, MessageHub, RxDispatcher
@@ -224,9 +225,11 @@ class RootVM:
         # constructs candidates before it tears down outgoing content, so a
         # factory or construction failure leaves the old state intact.
         vm = service.build_vm(connection)
-        await self._adopt_service_vm(service_id, vm)
-        self._connection = connection
-        self._auth_state = auth_state
+        await self._adopt_service_vm(
+            service_id,
+            vm,
+            before_publish=lambda: self._set_connection_state(connection, auth_state),
+        )
         self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
         # A connection change may rebuild the menu when support differs (for
         # example AWS -> S3-compatible), clearing the tentative selection.
@@ -261,7 +264,13 @@ class RootVM:
         vm = service.build_vm(self._connection)
         await self._adopt_service_vm(service_id, vm)
 
-    async def _adopt_service_vm(self, service_id: str, vm: object) -> None:
+    async def _adopt_service_vm(
+        self,
+        service_id: str,
+        vm: object,
+        *,
+        before_publish: Callable[[], None] | None = None,
+    ) -> None:
         """Adopt one prebuilt service VM with selection rollback."""
         # Reflect the selection in the menu BEFORE adoption — the user
         # clicked S3, the ribbon should jump to S3 the next render
@@ -277,7 +286,11 @@ class RootVM:
         prior_selection = self._services_menu.selected_id
         self._services_menu.switch_service_command.execute(service_id)
         try:
-            await self._content_host.set_content(vm, service_id=service_id)
+            await self._content_host.set_content(
+                vm,
+                service_id=service_id,
+                before_publish=before_publish,
+            )
         except (Exception, asyncio.CancelledError):
             # Revert — host failed to adopt, ribbon must not advance.
             if prior_selection is not None:
@@ -289,6 +302,10 @@ class RootVM:
                 if callable(dispose):
                     dispose()
             raise
+
+    def _set_connection_state(self, connection: Connection, auth_state: TokenState) -> None:
+        self._connection = connection
+        self._auth_state = auth_state
 
     async def switch_theme(self, name: str) -> None:
         """Publish a theme-changed message; the view layer reloads ``.tcss``."""

@@ -209,6 +209,30 @@ async def test_tab_stays_inside_modal_and_tracks_vmx_modal_focus(
 
 
 @pytest.mark.asyncio
+async def test_deferred_focus_restore_does_not_override_new_modal(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_LEFT)
+        modal = LogFilterModal(DEFAULT_LOG_FILTER)
+        await app.push_screen(modal)
+        editor = modal.query_one("#log-patterns", TextArea)
+        editor.focus()
+        assert ctx.focus_coordinator.is_modal
+
+        app._restore_focus_after_modal(FocusSlot.S3_LEFT)
+        await pilot.pause()
+
+        assert app.screen is modal
+        assert ctx.focus_coordinator.is_modal
+        assert app.focused is not None
+        assert modal in app.focused.ancestors_with_self
+
+
+@pytest.mark.asyncio
 async def test_enter_on_crash_modal_uses_safe_default(
     app_context_factory: AppContextBuilder,
 ) -> None:

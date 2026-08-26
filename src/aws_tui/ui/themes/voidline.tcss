@@ -1,8 +1,7 @@
 /*
  * Voidline — neon cyan + magenta on near-black.
  *
- * Heavy double-line borders, powerline-style chips with bg fills,
- * sparkline in status bar (rendered programmatically — not via CSS).
+ * Heavy double-line borders and powerline-style chips with bg fills.
  *
  * Palette per spec §4.5.
  */

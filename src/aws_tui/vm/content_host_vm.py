@@ -97,11 +97,27 @@ class ContentHostVM:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    async def set_content(self, vm: Any | None, *, service_id: str | None) -> None:
+    async def set_content(
+        self,
+        vm: Any | None,
+        *,
+        service_id: str | None,
+        before_publish: Callable[[], None] | None = None,
+    ) -> None:
         async with self._swap_lock:
-            await self._set_content_locked(vm, service_id=service_id)
+            await self._set_content_locked(
+                vm,
+                service_id=service_id,
+                before_publish=before_publish,
+            )
 
-    async def _set_content_locked(self, vm: Any | None, *, service_id: str | None) -> None:
+    async def _set_content_locked(
+        self,
+        vm: Any | None,
+        *,
+        service_id: str | None,
+        before_publish: Callable[[], None] | None,
+    ) -> None:
         """Swap the hosted VM. Idempotent on equal ``service_id``.
 
         Adoption + the ``"current"`` :class:`PropertyChangedMessage`
@@ -125,9 +141,10 @@ class ContentHostVM:
         # Cancel any in-flight setup for the OUTGOING VM before we
         # dispose it (the task holds a reference to the VM; if we
         # dispose first the task may dereference disposed state).
+        shutdown_cancelled = False
         try:
             await self._cancel_and_drain_setup()
-            await self._shutdown_current()
+            shutdown_cancelled = await self._shutdown_current_for_swap()
         except BaseException:
             if vm is not None:
                 vm.dispose()
@@ -144,6 +161,12 @@ class ContentHostVM:
             self._current = None
             self._current_id = None
 
+        if shutdown_cancelled:
+            if vm is not None:
+                vm.dispose()
+            self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
+            raise asyncio.CancelledError
+
         if vm is None:
             self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
             return
@@ -156,6 +179,8 @@ class ContentHostVM:
         # leave the content host entirely blank instead.
         self._current = vm
         self._current_id = service_id
+        if before_publish is not None:
+            before_publish()
         self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
 
         setup = getattr(vm, "setup", None)
@@ -208,6 +233,36 @@ class ContentHostVM:
         result = shutdown()
         if inspect.isawaitable(result):
             await result
+
+    async def _shutdown_current_for_swap(self) -> bool:
+        """Drain outgoing shutdown before honoring caller cancellation."""
+        if self._current is None:
+            return False
+        shutdown = getattr(self._current, "shutdown", None)
+        if not callable(shutdown):
+            return False
+        result = shutdown()
+        if not inspect.isawaitable(result):
+            return False
+
+        shutdown_task = asyncio.ensure_future(result)
+        caller = asyncio.current_task()
+        caller_cancellation_count = 0 if caller is None else caller.cancelling()
+        cancellation_requested = False
+        while not shutdown_task.done():
+            try:
+                await asyncio.shield(shutdown_task)
+            except asyncio.CancelledError:
+                current_count = 0 if caller is None else caller.cancelling()
+                if current_count > caller_cancellation_count:
+                    cancellation_requested = True
+                    caller_cancellation_count = current_count
+                elif shutdown_task.done():
+                    break
+            except Exception:
+                break
+        shutdown_task.result()
+        return cancellation_requested
 
     async def _run_setup(self, setup: Any) -> None:
         """Drive ``setup``'s awaitable; swallow cancellation cleanly.

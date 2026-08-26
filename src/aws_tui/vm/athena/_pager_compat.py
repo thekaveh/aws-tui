@@ -15,7 +15,7 @@ TToken = TypeVar("TToken")
 class SnapshotTokenPager(Generic[T, TToken]):
     """Token pager with an explicit, side-effect-free snapshot boundary.
 
-    VMx 3.1 does not expose public snapshot hydration on
+    VMx 3.23 does not expose public snapshot hydration on
     ``TokenPagedComposition``. Athena therefore owns this small pager state
     while continuing to use VMx commands for execution and enablement.
     """
