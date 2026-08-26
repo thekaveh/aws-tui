@@ -100,7 +100,6 @@ def _state_class(state: TransferState) -> str:
     return {
         TransferState.PENDING: "-pending",
         TransferState.RUNNING: "-running",
-        TransferState.PAUSED: "-paused",
         TransferState.COMPLETED: "-done",
         TransferState.SKIPPED: "-cancelled",
         TransferState.FAILED: "-failed",
@@ -215,7 +214,7 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
             return
 
     def _sync_state_class(self) -> None:
-        for cls in ("-pending", "-running", "-paused", "-done", "-failed", "-cancelled"):
+        for cls in ("-pending", "-running", "-done", "-failed", "-cancelled"):
             self.remove_class(cls)
         self.add_class(_state_class(self._vm.state))
 
@@ -237,8 +236,6 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         pct = self._percentage()
         if state is TransferState.RUNNING:
             return f"↑ {pct}%" if pct is not None else "↑ ..."
-        if state is TransferState.PAUSED:
-            return f"⏸ {pct}%" if pct is not None else "⏸ ..."
         if state is TransferState.COMPLETED:
             return "✓ done"
         if state is TransferState.SKIPPED:

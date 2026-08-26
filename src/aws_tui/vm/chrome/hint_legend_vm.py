@@ -19,7 +19,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
-from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
+from aws_tui.vm.messages import FocusChangedMessage
 
 # Always-visible global chips follow the service-specific commands.
 _GLOBAL_ACTIONS: tuple[str, ...] = (
@@ -276,8 +276,7 @@ class HintLegendVM:
 
     Callers register focusable VMs and their action-id sequences via
     :meth:`register_focusable`; subsequent :class:`FocusChangedMessage` events
-    drive the visible chips. :class:`KeymapChangedMessage` triggers a rebuild
-    so re-bindings show up immediately.
+    drive the visible chips.
     """
 
     def __init__(
@@ -403,8 +402,6 @@ class HintLegendVM:
             if self._focused_vm_id == msg.focused_vm_id:
                 return
             self._focused_vm_id = msg.focused_vm_id
-            self._rebuild_actions()
-        elif isinstance(msg, KeymapChangedMessage):
             self._rebuild_actions()
 
     def _rebuild_actions(self) -> None:

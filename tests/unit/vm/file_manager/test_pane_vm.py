@@ -460,15 +460,6 @@ async def test_pane_root_notfound_renders_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pane_set_auth_required_external() -> None:
-    fs = await _seed_fs()
-    pane = await _make_pane(fs)
-    pane.set_auth_required()
-    assert pane.state == PaneState.AUTH_REQUIRED
-    pane.dispose()
-
-
-@pytest.mark.asyncio
 async def test_pane_make_directory_then_refresh() -> None:
     fs = await _seed_fs()
     pane = await _make_pane(fs)

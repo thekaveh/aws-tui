@@ -9,11 +9,9 @@ from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.messages import (
-    AuthExpiredMessage,
     ConnectionChangedMessage,
     CopyTableReferenceRequest,
     FocusChangedMessage,
-    KeymapChangedMessage,
     OpenAthenaTableRequest,
     OpenGlueTableRequest,
     OpenS3LocationRequest,
@@ -40,17 +38,12 @@ def _connection() -> Connection:
             auth_state=TokenState.CONNECTED,
         ),
         lambda: ThemeChangedMessage(name="voidline"),
-        lambda: AuthExpiredMessage(
-            connection_name="kaveh-prod",
-            reason="expired",
-        ),
         lambda: TransferProgressMessage(
             transfer_id="t1",
             bytes_transferred=10,
             bytes_total=100,
             state="running",
         ),
-        lambda: KeymapChangedMessage(action="pane.copy", new_keys=("c",)),
         lambda: FocusChangedMessage(focused_vm_id="pane.left"),
         lambda: OpenS3LocationRequest(
             connection_name="prod-west",
@@ -110,13 +103,6 @@ def test_theme_changed_round_trip() -> None:
     assert msg.sender_name == "root"
 
 
-def test_auth_expired_round_trip() -> None:
-    msg = AuthExpiredMessage(connection_name="kaveh-prod", reason="expired")
-    assert msg.connection_name == "kaveh-prod"
-    assert msg.reason == "expired"
-    assert msg.sender_name == "aws_session"
-
-
 def test_transfer_progress_round_trip() -> None:
     msg = TransferProgressMessage(
         transfer_id="t1", bytes_transferred=10, bytes_total=100, state="running"
@@ -132,12 +118,6 @@ def test_transfer_progress_allows_unknown_total() -> None:
         transfer_id="t1", bytes_transferred=10, bytes_total=None, state="running"
     )
     assert msg.bytes_total is None
-
-
-def test_keymap_changed_round_trip() -> None:
-    msg = KeymapChangedMessage(action="pane.copy", new_keys=("c",))
-    assert msg.action == "pane.copy"
-    assert msg.new_keys == ("c",)
 
 
 def test_focus_changed_round_trip() -> None:

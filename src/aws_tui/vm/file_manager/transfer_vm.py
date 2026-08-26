@@ -85,7 +85,7 @@ class TransferVM:
 
     @property
     def is_active(self) -> bool:
-        return self._inner.model.state in (TransferState.RUNNING, TransferState.PAUSED)
+        return self._inner.model.state is TransferState.RUNNING
 
     @property
     def is_finished(self) -> bool:
@@ -229,7 +229,6 @@ class TransferVM:
         return self._inner.model.state in (
             TransferState.PENDING,
             TransferState.RUNNING,
-            TransferState.PAUSED,
         )
 
     def _cancel(self) -> None:

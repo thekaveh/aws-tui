@@ -21,7 +21,7 @@ from aws_tui.vm.chrome.hint_legend_vm import (
     _canonical_shortcut,
     _tooltip_for,
 )
-from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
+from aws_tui.vm.messages import FocusChangedMessage
 
 
 def _hub() -> MessageHub[Message]:
@@ -201,21 +201,6 @@ def test_focus_unknown_vm_falls_back_to_globals() -> None:
     global_ids = {a.action_id for a in legend.global_actions}
     assert "app.help" in global_ids
     assert "app.command_palette" in global_ids
-    legend.dispose()
-
-
-def test_keymap_changed_re_derives_legend() -> None:
-    legend, hub = _build(actions={"pane.left": ("pane.copy",)})
-    hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
-    # Caller invokes register_focusable+keymap update in lockstep with the
-    # keymap store; the message is a notification so the legend recomputes.
-    hub.send(KeymapChangedMessage(action="pane.copy", new_keys=("ctrl+c",)))
-    copy_action = next(a for a in legend.actions if a.action_id == "pane.copy")
-    # The legend re-resolves through the keymap on each rebuild — but since
-    # we use a real KeymapStore we constructed earlier (with defaults), the
-    # label stays "c". We assert recomputation by checking the action list
-    # is rebuilt (a new HintAction instance with the same payload).
-    assert copy_action.key_label == "c"
     legend.dispose()
 
 

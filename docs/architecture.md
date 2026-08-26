@@ -142,6 +142,13 @@ remains the authoritative in-app clipboard. `ActionRegistry` is also rooted in
 button dispatch the same registered Glue actions before the Glue VMs publish a
 single typed Athena request path.
 
+`AwsTuiApp` remains a large composition-root adapter that coordinates navigation,
+cross-service rollback, action routing, and shutdown. Extracting those transaction
+coordinators into dedicated mediators is deferred to a focused architecture change:
+the move spans cancellation ownership and complete rollback state across all four
+services, so treating it as a mechanical maintenance refactor would carry more risk
+than the line-count reduction justifies.
+
 ## 1.3. Lifecycle
 VMx components implement `construct → destruct → dispose`. Hosted service VMs
 may additionally expose app-owned asynchronous `setup` and `shutdown` hooks;
@@ -165,8 +172,7 @@ the interaction stays inside one subtree. Custom envelopes (defined in
 `src/aws_tui/vm/messages.py`):
 
 - `ConnectionChangedMessage`, `ThemeChangedMessage`,
-  `AuthExpiredMessage`, `TransferProgressMessage`,
-  `KeymapChangedMessage`, `FocusChangedMessage`, `PaletteActionFailedMessage`,
+  `TransferProgressMessage`, `FocusChangedMessage`, `PaletteActionFailedMessage`,
   `TransferCancelRequestedMessage`, `ConnectionListChangedMessage`,
   `OpenS3LocationRequest`, `OpenAthenaTableRequest`,
   `OpenGlueTableRequest`, `CopyTableReferenceRequest`, and

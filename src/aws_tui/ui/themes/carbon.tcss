@@ -365,7 +365,6 @@ TransferRowWidget {
     background: $bg;
 }
 TransferRowWidget.-running        { border-left: thick $accent; }
-TransferRowWidget.-paused         { border-left: thick $warning; }
 TransferRowWidget.-done           { border-left: thick $success; }
 TransferRowWidget.-failed         { border-left: thick $danger; }
 TransferRowWidget.-cancelled      { border-left: thick $rule-dim; }
@@ -378,7 +377,6 @@ TransferRowWidget .transfer-name {
 }
 TransferRowWidget .transfer-state-word  { color: $text-muted; }
 TransferRowWidget.-running    .transfer-state-word  { color: $accent; }
-TransferRowWidget.-paused     .transfer-state-word  { color: $warning; }
 TransferRowWidget.-done       .transfer-state-word  { color: $success; }
 TransferRowWidget.-failed     .transfer-state-word  { color: $danger; }
 TransferRowWidget.-cancelled  .transfer-state-word  { color: $text-muted; }
@@ -391,7 +389,6 @@ TransferRowWidget .transfer-dest-row {
 
 TransferRowWidget .transfer-bar         { color: $accent;     background: $bg; }
 TransferRowWidget.-running    .transfer-bar { color: $accent; }
-TransferRowWidget.-paused     .transfer-bar { color: $warning; }
 TransferRowWidget.-done       .transfer-bar { color: $success; }
 TransferRowWidget.-failed     .transfer-bar { color: $danger; }
 TransferRowWidget.-cancelled  .transfer-bar { color: $text-muted; }

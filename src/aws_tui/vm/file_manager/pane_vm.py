@@ -63,8 +63,7 @@ class PaneState(StrEnum):
     """Render state surfaced by ``PaneViewModel`` per spec §7.7.
 
     State entry conditions (single source of truth for the state
-    machine — keep in sync with :meth:`PaneVM._reload` and
-    :meth:`PaneVM.set_auth_required`):
+    machine — keep in sync with :meth:`PaneVM._reload`):
 
     - ``IDLE`` — Entries available (success path with non-empty listing,
       or initial construction before the first reload).
@@ -74,9 +73,7 @@ class PaneState(StrEnum):
       root path (treated as an empty bucket / mount point). No
       ``_error_text`` is set on the EMPTY-via-NotFoundError path because
       the user-facing copy is just "empty", not an error.
-    - ``AUTH_REQUIRED`` — ``AuthRequiredError`` during ``list()``, or
-      injected externally by ``RootVM`` after it observes an
-      ``AuthExpiredMessage``.
+    - ``AUTH_REQUIRED`` — ``AuthRequiredError`` during ``list()``.
     - ``FORBIDDEN`` — ``PermissionDeniedError`` during ``list()``.
     - ``UNREACHABLE`` — ``ProviderUnreachableError`` during ``list()``.
     - ``ERROR`` — Generic ``ProviderError``, OR ``NotFoundError`` on a
@@ -783,12 +780,6 @@ class PaneVM:
         new_path = self._path.join(new_name)
         await self._provider.rename(old_path, new_path)
         await self._reload()
-
-    # ── External error injection ────────────────────────────────────────────
-
-    def set_auth_required(self) -> None:
-        """Called by ``RootVM`` after observing ``AuthExpiredMessage``."""
-        self._set_state(PaneState.AUTH_REQUIRED)
 
     # ── Internal: listing & state ───────────────────────────────────────────
 

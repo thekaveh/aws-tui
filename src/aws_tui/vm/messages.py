@@ -21,22 +21,12 @@ from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.redaction import redact_text
 
-#: Reason values for ``AuthExpiredMessage``.
-AuthExpiredReason = Literal["expired", "missing", "load_error"]
-
 
 class TransferState(StrEnum):
-    """State machine values per spec §7.5.
-
-    ``PAUSED`` is reachable via the network-failure recovery flow (spec §7.5):
-    ``RUNNING -> PAUSED -> RUNNING (recovered)``. The connectivity watcher that
-    transitions to PAUSED on sustained network failure is not yet wired in
-    v0.7.x; the state remains in the enum so the eventual wiring is additive.
-    """
+    """States emitted by the shipped transfer worker."""
 
     PENDING = "pending"
     RUNNING = "running"
-    PAUSED = "paused"
     COMPLETED = "completed"
     SKIPPED = "skipped"
     FAILED = "failed"
@@ -69,24 +59,6 @@ class ThemeChangedMessage:
 
     name: str
     sender_name: str = "root"
-
-    @property
-    def sender_object(self) -> object:
-        return self
-
-
-@dataclass(frozen=True, slots=True)
-class AuthExpiredMessage:
-    """Published by ``infra.AwsSession`` when a 401-equivalent or stale SSO
-    token is detected.
-
-    Subscribers: :class:`ToastStackVM` (soft toast "press a to sso-login"),
-    the failing pane (renders "auth needed" placeholder).
-    """
-
-    connection_name: str
-    reason: AuthExpiredReason
-    sender_name: str = "aws_session"
 
     @property
     def sender_object(self) -> object:
@@ -170,23 +142,6 @@ class ConnectionListChangedMessage:
     names: tuple[str, ...]
     change: Literal["added", "updated", "deleted"]
     sender_name: str = "s3_connections"
-
-    @property
-    def sender_object(self) -> object:
-        return self
-
-
-@dataclass(frozen=True, slots=True)
-class KeymapChangedMessage:
-    """Published by ``infra.KeymapStore`` after a runtime rebind.
-
-    Subscribers: :class:`HintLegendVM` (re-derives chip labels), the view
-    layer's input router.
-    """
-
-    action: str
-    new_keys: tuple[str, ...]
-    sender_name: str = "keymap_store"
 
     @property
     def sender_object(self) -> object:
@@ -345,13 +300,10 @@ def _validate_table_ref(value: object) -> None:
 
 
 __all__ = [
-    "AuthExpiredMessage",
-    "AuthExpiredReason",
     "ConnectionChangedMessage",
     "ConnectionListChangedMessage",
     "CopyTableReferenceRequest",
     "FocusChangedMessage",
-    "KeymapChangedMessage",
     "OpenAthenaTableRequest",
     "OpenGlueTableRequest",
     "OpenS3LocationRequest",
