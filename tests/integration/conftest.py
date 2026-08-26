@@ -108,7 +108,7 @@ def minio_endpoint() -> Iterator[tuple[str, str, str]]:
     container client isn't available.
     """
     try:
-        from testcontainers.minio import MinioContainer  # lazy import
+        from testcontainers.community.minio import MinioContainer  # lazy import
     except Exception as exc:  # pragma: no cover
         _minio_unavailable(f"testcontainers MinIO unavailable: {exc}")
 
