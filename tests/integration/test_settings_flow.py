@@ -52,10 +52,10 @@ async def _await_boot(pilot: object, app: object) -> None:
     longer reaches the post-mount state. We wait for the
     ``content-mount`` group of workers to drain instead.
 
-    Then we dismiss any boot-chain narration toasts the worker
-    raised — they dock right and would cover Settings-panel click
-    targets the test then exercises. The narration is real-user
-    UX; tests interact post-boot and don't need it.
+    Then we dismiss boot-chain narration and configuration-risk toasts —
+    they dock right and would cover Settings-panel click targets the test
+    then exercises. Their contents have dedicated assertions elsewhere in
+    this module; interaction tests operate after startup notices are cleared.
     """
     await app.workers.wait_for_complete(  # type: ignore[attr-defined]
         list(app.workers._workers)  # type: ignore[attr-defined]
@@ -64,7 +64,11 @@ async def _await_boot(pilot: object, app: object) -> None:
     stack = app.app_ctx.root_vm.chrome.toast_stack  # type: ignore[attr-defined]
     for toast in tuple(stack.toasts):
         tid = toast.model.id
-        if tid.startswith("boot-") or tid.startswith("initial-fallback-"):
+        if (
+            tid.startswith("boot-")
+            or tid.startswith("initial-fallback-")
+            or tid.startswith("config-")
+        ):
             stack.dismiss(tid)
     await pilot.pause()  # type: ignore[attr-defined]
 
