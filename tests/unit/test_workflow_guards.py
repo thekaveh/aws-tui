@@ -160,6 +160,7 @@ def test_ci_gates_minimum_supported_dependencies() -> None:
     )["run"]
     assert "--resolution lowest-direct" in install
     assert '"moto[server,s3]>=5"' in install
+    assert '"pytest-timeout>=2.4"' in install
     assert "tests/minimum_runtime/test_dependency_floors.py" in exercise
     assert "tests/unit/vm/test_vmx_smoke.py" in exercise
 
@@ -312,6 +313,7 @@ def test_release_checks_declared_minimum_s3_dependency_models_before_publish() -
     assert '--python "$PY" .' in install
     assert "aioboto3==" not in install
     assert "botocore==" not in install
+    assert '"pytest-timeout>=2.4"' in install
     exercise = _step(
         workflow, "lowest-supported-dependencies", "exercise minimum dependency runtime"
     )["run"]

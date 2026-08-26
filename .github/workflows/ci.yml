@@ -237,7 +237,7 @@ jobs:
           uv venv --python 3.11 lowest-supported-venv
           PY="lowest-supported-venv/bin/python"
           uv pip install --resolution lowest-direct --python "$PY" .
-          uv pip install --python "$PY" pytest pytest-asyncio "moto[server,s3]>=5"
+          uv pip install --python "$PY" pytest pytest-asyncio "pytest-timeout>=2.4" "moto[server,s3]>=5"
       - name: exercise minimum dependency runtime
         run: |
           lowest-supported-venv/bin/python -m pytest \
