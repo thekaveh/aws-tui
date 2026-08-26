@@ -44,6 +44,17 @@ Review the PR like any other change. Merge when CI is green.
 
 ### 1.1.1. Pre-tag checklist
 
+- **PyPI project status.** Confirm the public project page is reachable, note
+  the latest published version, and verify that the intended new version is
+  still available on both PyPI and TestPyPI before creating a tag.
+- **Clean install smoke.** Build the release artifacts, validate them with
+  `uv run python -m scripts.check_dist dist/` and `uv run twine check dist/*`,
+  then install the wheel into a fresh temporary environment and run
+  `aws-tui --version`, `aws-tui --help`, and `python -m aws_tui --version`.
+- **Supported-platform status.** Confirm the latest required CI run is green on
+  macOS, Linux, and Windows for Python 3.11, 3.12, and 3.13. Record any
+  platform-specific exception in the release PR instead of silently relying on
+  the Linux result.
 - **Release classification.** Glue, Athena, and Iceberg integration are
   minor-version feature work targeting v0.9.0. They must remain in
   **Unreleased** until that cut and must not be presented as a v0.8.0 headline

@@ -115,6 +115,12 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.2. Changed
 
+- **VMx 3.23 adoption.** Raised the VMx floor to 3.23.0, moved modal focus
+  restoration to public `DiscriminatorVM` APIs, rebuilt S3 validation through
+  immutable `FormVMBuilder` validators, and aligned Athena cancellation and
+  shutdown with public `AsyncRelayCommand` execution state. The dated audit
+  records substitutions, rejected candidates, production line deltas, and test
+  impact.
 - **Overlay pickers, compact commands, and unified Athena handoffs.** Inline
   service-context and EMR application dropdowns now overlay without resizing
   adjacent panes. The Commands pane is one tooltip-rich row with deterministic
@@ -146,6 +152,12 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.3. Fixed
 
+- **Runtime lifecycle and interaction hardening.** Athena now drains the real
+  provider task behind cancelled query/result commands, Settings has a complete
+  forward/reverse Tab ring, command-palette empty-result and repeated-open flows
+  remain stable, Help reflects the active keymap, EMR logs retarget immediately,
+  source swaps avoid invalid authentication fallbacks, and startup failures are
+  redacted before the CLI exits with status 1.
 - **Maintenance reliability and data-integrity pass.** Cross-filesystem moves
   retain sources that were skipped, S3 batch deletion reports partial service
   failures, gzip log reads enforce decompressed-size and line bounds, and AWS
@@ -160,9 +172,9 @@ section; the current tree must not be tagged as v0.8.0.
   stale detail state, command-palette failures reach the toast/log surfaces,
   modal keyboard activation follows the visible safe default, and release/CI
   gates now enforce documentation contracts alongside the runtime tiers.
-- **S3-compatible secrets use the configured keychain.** Settings and
-  first-run persistence store credentials by reference, remove superseded
-  entries, and roll back cleanly when config persistence fails.
+- **S3-compatible secrets use the configured keychain.** Settings persistence
+  stores credentials by reference, removes superseded entries, and rolls back
+  cleanly when config persistence fails.
 - **EMR + UI polish train.** Eight follow-up PRs (#96, #98, #99,
   #100, #102, #103, #104, #105) addressed user-reported issues
   found while exercising the EMR + nav-rail surface:
@@ -177,7 +189,6 @@ section; the current tree must not be tagged as v0.8.0.
     horizontal padding so column 0 is the ribbon, matching EntryRow;
   - filter EMR hub messages by sender (#103) — kill cross-VM
     redraws on the shared MessageHub when sibling VMs fire ``state``
-    or ``selected_id`` echoes;
   - preserve the credit pedigree in the demo banner subtitle
     (#104) — prepend the DEMO chip instead of replacing;
   - Settings NavRow keeps the ``-selected`` highlight (#105) —
@@ -196,9 +207,9 @@ section; the current tree must not be tagged as v0.8.0.
   Glue/Iceberg, and Athena view models publish redacted operation diagnostics
   through the shared VMx message hub while preserving their user-facing error
   states.
-- **First-run S3-compatible save failures no longer crash the error
-  handler.** The modal now uses supported Textual notification kwargs in
-  test harnesses and the unified toast taxonomy in production.
+- **Settings S3-compatible save failures remain recoverable.** The inline form
+  uses the unified toast taxonomy and preserves the active connection when
+  persistence fails.
 - **Non-SSO AWS profiles reach live boto credential validation.** Shared
   credentials, `credential_process`, env, and role-backed profiles no
   longer fall back to local panes as `no AWS credentials` merely because
@@ -214,8 +225,8 @@ section; the current tree must not be tagged as v0.8.0.
   exception text, S3-compatible pane titles / Settings rows / reprs drop
   endpoint userinfo, query strings, and fragments, and the Settings form
   rejects those unsafe endpoint URL shapes plus malformed ports.
-- **S3-compatible credential hardening.** Settings and first-run now share
-  normalized form-to-config mapping, blank optional session tokens resolve
+- **S3-compatible credential hardening.** Settings uses normalized
+  form-to-config mapping, blank optional session tokens resolve
   as absent across static/env/keychain/profile sources, and
   ``S3CompatForm`` / ``ConnectionEntry`` reprs mask static credentials.
 - **Crash reports now log through the configured JSON log sink.** The
@@ -231,7 +242,7 @@ section; the current tree must not be tagged as v0.8.0.
   pager instead of mutating its private token/item storage.
 - **App stdlib warnings now land in the JSON log sink.** The composed app
   opts into an `aws_tui.*` logging bridge so config/keymap fallback,
-  resume-abort, first-run, and AWS client-shutdown warnings are captured
+  resume-abort, and AWS client-shutdown warnings are captured
   with the same structured redaction as direct `LogSink` calls.
 - **Settings focus avoids private Textual imports.** SettingsView now
   locates the first public focusable child in the Connections section
@@ -242,6 +253,10 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.4. Docs
 
+- Added current S3, EMR Serverless, Glue/Iceberg, and Athena service guides; a
+  VMx 3.23 compatibility and line-count audit; refreshed consumed-contract and
+  release checklists; and regenerated the four architecture diagrams from the
+  runtime's current ownership and lifecycle boundaries.
 - Added an installation guide, corrected the documentation inventory and
   implementation-status records, and made `docs-check` reject stale or
   unexpected committed architecture-diagram assets.
@@ -269,6 +284,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.5. Build
 
+- CI, release, Pages, and bootstrap now enforce the lockfile with `--locked`;
+  the declared development graph includes `textual-dev`; workflow and
+  pre-commit actions use verified immutable refs; and wheel/sdist publication
+  rejects repository metadata, local caches, tests, and traversal members
+  before upload.
 - Removed blanket integration-test reruns so failures remain observable,
   added a stable aggregate `ci gate`, expanded installed-wheel smoke tests,
   and gated Homebrew publication until the tap is explicitly enabled.

@@ -17,7 +17,8 @@ navigation, deterministic demo mode, and built-in themes.
 
 ![aws-tui Glue and Iceberg demo](https://raw.githubusercontent.com/thekaveh/aws-tui/main/assets/screenshots/aws-tui-running.png)
 
-- [Project documentation](https://github.com/thekaveh/aws-tui/tree/main/docs)
+- [Project documentation](https://thekaveh.github.io/aws-tui/)
+- [Canonical documentation source](https://github.com/thekaveh/aws-tui/tree/main/docs)
 - [Installation and quickstart](https://github.com/thekaveh/aws-tui#13-quickstart)
 - [Connection configuration](https://github.com/thekaveh/aws-tui/blob/main/docs/connections.md)
 - [Security policy](https://github.com/thekaveh/aws-tui/blob/main/SECURITY.md)

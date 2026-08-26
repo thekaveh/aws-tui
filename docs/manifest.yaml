@@ -17,6 +17,13 @@ sections:
       - { id: keybindings, title: Keybindings, source: docs/keybindings.md }
       - { id: cookbook, title: Cookbook, source: docs/cookbook.md }
       - { id: theming, title: Theming, source: docs/theming.md }
+  - id: services
+    title: Service Guides
+    children:
+      - { id: service-s3, title: S3 and Local File Manager, source: docs/services/s3.md }
+      - { id: service-emr, title: EMR Serverless, source: docs/services/emr-serverless.md }
+      - { id: service-glue, title: AWS Glue and Iceberg Metadata, source: docs/services/glue.md }
+      - { id: service-athena, title: Amazon Athena, source: docs/services/athena.md }
   - id: development
     title: Development
     children:

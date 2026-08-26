@@ -125,7 +125,35 @@ OpenGlueTableRequest
 | Python runtime dependency ownership | `vmx==3.1.0`, `textual==8.2.8`, `reactivex==4.1.0`, and `rich==15.0.0` from `uv.lock` | Every production import is directly declared: VMx provides lifecycle/composition primitives, Textual owns the TUI runtime, Reactivex owns observable protocols/subjects, and Rich provides markup escaping. `boto3` is no longer declared directly because production creates clients through `aioboto3`; Botocore remains direct for configuration, models, and exceptions. VMx's documented deep module paths remain supported public imports; root-facade imports are preferred for newly touched code, without a mechanical 46-module churn. | Built wheel metadata inspection, import inventory over `src/aws_tui`, exact installed-source inspection, isolated wheel smoke, and full unit/integration/snapshot/E2E coverage. |
 | GitHub Actions CI/release/publish workflow | `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` (`v7.0.1`), `astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9` (`v9.0.0`), `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` (`v7.0.1`), `actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` (`v8.0.1`), `pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33` (`v1.14.2` peeled commit), `peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1` (`v8.1.1`), `actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d` (`v6.0.0`), `actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9` (`v5.0.0`), and `actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128` (`v5.0.0`) | Current major-version contracts for checkout, uv installation/cache, artifact exchange, trusted PyPI publishing, Homebrew PR creation, and Pages deployment. CI's stable `ci gate` now includes an unconditional documentation-contract job. | GitHub release API plus peeled `git ls-remote` tag verification on 2026-08-02; workflow guard tests, YAML parsing, local docs build, package build, and installed-wheel smoke. |
 
-## 1.5. Deferred contract checks
+## 1.5. 2026-08-25 maintenance pass
+
+| Integration point | Pinned version / ref | Consumed contract | Verification method |
+|---|---:|---|---|
+| Python runtime and AWS SDK graph | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==4.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.11.4`, `sqlglot==30.17.0`, `anyio==4.14.2`, and `aiofiles==25.1.0` from `uv.lock` | The application uses only each package's public facade or documented module path. VMx owns command admission/cancellation, modal focus restoration, immutable form construction, observable state, component lifecycle, filtering, and paging. Textual remains exactly pinned because the binding and mount-recovery adapters are audited against 8.2.8. AWS operations and request members are validated against the locked Botocore models. | Full unit, integration, snapshot, and E2E tiers; minimum-direct-dependency tests; import/layer checks; VMx compatibility regressions for command cancellation, retired pager generations, form validation, and modal restoration; source-derived Botocore operation and input-member tests. |
+| VMx 3.23 compatibility and specialization | `vmx==3.23.0` from `uv.lock`; runtime requirement `vmx>=3.23.0,<4.0.0` | `FocusCoordinatorVM` delegates modal save/restore behavior to public `DiscriminatorVM.modal_open()` / `modal_close()`. `S3ConnectionFormVM` supplies complete field and model validation through `FormVMBuilder` at construction time. Athena drains public `AsyncRelayCommand.is_executing` admission state after cancellation and tracks the provider task behind nested command execution so shutdown waits for cancellation-resistant I/O. No VM reaches into VMx private fields. | Focus, Settings form, Athena query/results, VMx smoke, mypy, and lifecycle tests run against the locked package. The dated VMx 3.23 maintenance report records adopted and rejected candidates plus production-line metrics. |
+| Packaging and developer tooling | `hatchling==1.32.0`, `testcontainers==4.15.0`, and `textual-dev==1.8.0` from `uv.lock`; `build-system.requires` constrained to `hatchling>=1.31.0,<2` | CI, release, Pages, and bootstrap sync/export with `--locked`, so a stale lock fails instead of silently installing it. Bootstrap installs all dependency groups. The Textual development CLI used by `scripts/dev.sh` is declared explicitly. Wheel and sdist members must exclude repository metadata, tests, local caches, and traversal paths. | `uv lock --check`, script/workflow guard tests, real wheel/sdist builds, `scripts.check_dist`, Twine metadata checks, isolated install smoke, and a Textual CLI invocation. |
+| GitHub Actions and pre-commit toolchain | `astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d` (`v10.0.1`), `ruff-pre-commit@aab412d509121cb5f7533134b7e67f9fab59c682` (`v0.16.4`), and the other immutable action refs listed in §1.4 | Workflow jobs retain least-privilege permissions and bounded timeouts. The wiki deploy key is checked before it is written. The Homebrew checkout does not persist its cross-repository token. Artifact contents are checked before upload or publication. | Official tag/ref verification, YAML guard tests, pre-commit, shellcheck, and local workflow-equivalent package/docs commands. |
+
+Exact S3 boto operation ledger (14):
+
+```text
+AbortMultipartUpload
+CompleteMultipartUpload
+CopyObject
+CreateMultipartUpload
+DeleteObject
+DeleteObjects
+GetObject
+GetObjectTagging
+HeadObject
+ListBuckets
+ListObjectsV2
+PutObject
+UploadPart
+UploadPartCopy
+```
+
+## 1.6. Deferred contract checks
 
 - External upstream documentation was not exhaustively re-queried for every
   library API. The concrete code paths above were checked against the locked

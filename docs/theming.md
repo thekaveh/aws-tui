@@ -141,7 +141,7 @@ find tests/snapshot/__snapshots__ -name '*.raw' | wc -l
 find tests/snapshot/__snapshots__ -mindepth 1 -maxdepth 1 -type d | wc -l
 ```
 
-Every new widget snapshot is paired with a content-presence guard test
-(per the PR #53 lesson). Updates:
+Every new widget snapshot is paired with a content-presence guard test so a
+visually plausible blank rendering cannot pass unnoticed. Updates:
 `uv run pytest tests/snapshot --snapshot-update`. Snapshots are
 CI-gated on Python 3.12 / Ubuntu to avoid tolerance flakes.

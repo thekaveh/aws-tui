@@ -1,9 +1,10 @@
 # 1. Supported platforms
 
-aws-tui runs on macOS, Linux, and Windows. The Python code itself is
-platform-agnostic — the only per-OS variation is **where your config and
-cache files live** and **which terminal emulator + font you should use to
-get full color and Unicode rendering.**
+aws-tui runs on macOS, Linux, and Windows through one shared application and
+service architecture. Platform adapters handle native config and cache paths,
+atomic file replacement and synchronization, local filesystem identity and
+containment, and the operating-system credential store. Terminal and font
+capabilities also differ by platform.
 
 ## 1.1. Quick reference
 
@@ -24,7 +25,7 @@ The two things to get right on Windows are the **terminal host** and the
 PowerShell 7+, and even `cmd.exe` all work; aws-tui doesn't shell out to
 the launching command processor for anything user-visible.
 
-### 1.2.1. Required terminal host
+### 1.2.1. Tested terminal host
 
 aws-tui's banner, box-drawing borders, and 24-bit theme gradients all
 need a terminal that supports:
@@ -33,9 +34,10 @@ need a terminal that supports:
 - Unicode box-drawing characters (`╔ ═ ╗ ║ ╝`, `█ ▓ ▌`, etc.)
 - The Kitty / VT mouse protocol so multi-select via Ctrl+Click works
 
-The only Windows terminal host that supports all three in one package
-is **Windows Terminal 1.18 or newer**. It ships by default on Windows 11
-and is a one-click install from the Microsoft Store on Windows 10. The
+**Windows Terminal 1.18 or newer** is the tested and recommended host. It
+ships by default on Windows 11 and is a one-click install from the Microsoft
+Store on Windows 10. Other modern truecolor terminals, including WezTerm, may
+work but are not part of the supported test matrix. The
 legacy `conhost.exe` (the console window you get if you launch
 `powershell.exe` directly without Windows Terminal) does **not** support
 24-bit color reliably and is **not supported**.

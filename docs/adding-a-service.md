@@ -183,8 +183,8 @@ protocol applies.
 ## 1.5. Reference: the shipped services
 
 ### 1.5.1. S3
-`src/aws_tui/services/s3/service.py` is the first concrete service.
-Read it end-to-end (~80 lines):
+`src/aws_tui/services/s3/service.py` is the first concrete service. Read its
+`S3Service` implementation end to end:
 
 - `descriptor` declares `id = "s3"`, label `"S3"`, icon code point `U+1FAA3 BUCKET`
   (U+1FAA3 BUCKET — true emoji codepoint, renders coloured in any

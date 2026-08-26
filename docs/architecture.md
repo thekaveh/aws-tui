@@ -42,8 +42,8 @@ VMs to build service pages, but it cannot import Textual widgets.
   `src/aws_tui/vm/service_source_vm.py`, shared by the single-context service
   VMs rather than owned by Infrastructure. Subtrees:
   - `vm/chrome/` — persistent shell state (hint legend, toasts,
-    overlays like command palette / confirm / quick look / crash /
-    first-run, plus dormant transfer-recovery scaffolding and a retained
+    overlays like command palette / confirm / quick look / crash, plus
+    dormant transfer-recovery scaffolding and a retained
     `StatusBarVM` subscriber for
     legacy status bookkeeping even though no `StatusBar` widget is
     mounted in the production chrome). `HintLegendVM` owns service-scoped action
@@ -51,19 +51,21 @@ VMs to build service pages, but it cannot import Textual widgets.
     tooltips, availability, and fitting priority. The `HintLegend` view performs
     terminal-width measurement and renders exactly one compact command row;
     lower-priority hints yield to `[:] more` and `[q] quit` rather than wrapping.
-  - `vm/file_manager/` — pane / dual-pane / entry / transfer VMs.
+  - `vm/file_manager/` — `DualPaneVM`, two `PaneVM` children, entry VMs, and
+    transfer state. `DualPaneVM` owns cross-provider copy/move orchestration;
+    each `PaneVM` owns one provider-backed projection and cursor.
   - `vm/table_clipboard_vm.py` — `TableClipboardVM`, an app-lifetime VMx
     component that retains one typed, replaceable table reference.
   - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
     `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
-    (added post-tag by PR #76 and extended by PR #84; the read-mostly EMR
-    Serverless browser with logs streaming and focused clone submission).
+    (the read-mostly EMR Serverless browser with logs streaming and focused
+    clone submission).
     Its immutable `ServiceSourceContext` carries the active connection name,
     optional distinct AWS profile, and region to the service view; the shared
     `ServiceSourceHeader` renders that identity above the EMR application picker.
     `ServiceSelectionStore` scopes remembered service selections by
     `(service_id, connection_name, region)`.
-    `JobRunCloneVM` (PR #83) backs the clone-job-run modal — a
+    `JobRunCloneVM` backs the clone-job-run modal — a
     sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
     per modal-mount with the focused run as the source.
   - `vm/glue/` — `GluePageVM` with independent Catalog, Jobs, and
@@ -125,6 +127,10 @@ VMs to build service pages, but it cannot import Textual widgets.
   application and platform state. Infrastructure prepares those boundaries;
   domain adapters perform the provider operations.
 
+`demo/` is a composition-only provider substitution outside the production
+layers. Demo mode selects in-memory service adapters at the composition root;
+production modules do not import the demo package.
+
 ## 1.2. Composition root
 The two top-level files `src/aws_tui/composition.py` and
 `src/aws_tui/app.py` are the only modules permitted to import from
@@ -140,7 +146,9 @@ button dispatch the same registered Glue actions before the Glue VMs publish a
 single typed Athena request path.
 
 ## 1.3. Lifecycle
-VMs implement `construct → run → destruct → dispose` (VMx convention).
+VMx components implement `construct → destruct → dispose`. Hosted service VMs
+may additionally expose app-owned asynchronous `setup` and `shutdown` hooks;
+those hooks are not a VMx lifecycle phase.
 The `RootVM` constructs the chrome and content-host children
 depth-first; `ContentHostVM.set_content(new)` disposes the previous
 content via the same cascade. When outgoing content exposes `shutdown`,
@@ -153,8 +161,9 @@ aioboto3 client, flush logs, then dispose subscriptions and the VM tree
 (spec §5.4).
 
 ## 1.4. Messaging
-All cross-VM communication goes through the session's single
-`MessageHub`. Custom envelopes (defined in
+Cross-service and shell-wide event communication goes through the session's
+single `MessageHub`. Parent VMs orchestrate their owned children directly when
+the interaction stays inside one subtree. Custom envelopes (defined in
 `src/aws_tui/vm/messages.py`):
 
 - `ConnectionChangedMessage`, `ThemeChangedMessage`,
@@ -196,12 +205,12 @@ the same observable plus dispose-on-unmount.
 | Tier | Count | What it proves |
 |---|---|---|
 | Unit | Recount with `uv run pytest tests/unit --collect-only -q | tail -1` | VM, domain, infra behavior; isolated local I/O only, with no external services |
-| Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards (per PR #53 lesson) |
+| Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards that reject blank-but-valid output |
 | Integration (in-process) | Recount with `uv run pytest tests/integration --collect-only -q | tail -1` | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
 | E2E | Recount with `uv run pytest tests/e2e --collect-only -q | tail -1` | Pilot-driven user journeys |
 | Integration (MinIO) | Recount with `uv run pytest -m integration --collect-only -q | tail -1` | MinIO via testcontainers (opt-in, `-m integration`) |
 
-Default tier total drifts with each post-tag PR. Recount with
+The default tier total changes as coverage grows. Recount with
 `uv run pytest --collect-only -q | tail -1`; recount snapshot goldens
 with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
 Opt-in MinIO tier: `uv run pytest -m integration`.
@@ -253,5 +262,5 @@ at `src/aws_tui/` top-level so the check never inspects them.
 8. `src/aws_tui/vm/settings/settings_vm.py` +
    `src/aws_tui/ui/widgets/settings_view.py` — the in-app Settings
    page (built per-mount, not as an `AppContext` singleton — see the
-   PR #56 post-ship amendment in the
+   lifecycle amendment in the
    [Settings-as-nav-page design spec](superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md)).

@@ -65,6 +65,26 @@ def test_completeness_flags_unreferenced_published_doc(tmp_path):
     assert any("orphan.md" in f.message for f in findings)
 
 
+def test_completeness_flags_unreferenced_nested_service_doc(tmp_path):
+    _write_docs(tmp_path)
+    services = tmp_path / "docs" / "services"
+    services.mkdir()
+    (services / "orphan.md").write_text("# 1. Orphan service\n")
+
+    findings = check_completeness(MANIFEST, tmp_path)
+
+    assert any("docs/services/orphan.md" in finding.message for finding in findings)
+
+
+def test_completeness_ignores_historical_superpowers_docs(tmp_path):
+    _write_docs(tmp_path)
+    specs = tmp_path / "docs" / "superpowers" / "specs"
+    specs.mkdir(parents=True)
+    (specs / "historical.md").write_text("# 1. Historical spec\n")
+
+    assert check_completeness(MANIFEST, tmp_path) == []
+
+
 def test_completeness_ignores_internal_docs(tmp_path):
     _write_docs(tmp_path)
     (tmp_path / "docs" / "recording-todo.md").write_text("# 1. Recording TODO\n")

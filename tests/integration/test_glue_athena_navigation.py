@@ -1137,9 +1137,11 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
 
             open_started = asyncio.Event()
             rollback_started = asyncio.Event()
+            external_navigation_started = asyncio.Event()
             rollback_active = False
             original_switch = ctx.root_vm.switch_connection_and_service
             original_mount = app._mount_service_view
+            original_external_navigation = app._mount_external_navigation
             original_restore = AthenaPageVM.restore_snapshot
 
             async def pause_open(target: GluePageVM, table_ref: TableRef) -> None:
@@ -1179,6 +1181,10 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
                     await release_rollback.wait()
                 await original_restore(target, snapshot)  # type: ignore[arg-type]
 
+            async def signal_external_navigation(selected: str, generation: int) -> None:
+                external_navigation_started.set()
+                await original_external_navigation(selected, generation)
+
             monkeypatch.setattr(GluePageVM, "open_table", pause_open)
             monkeypatch.setattr(
                 ctx.root_vm,
@@ -1186,6 +1192,11 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
                 pause_switch,
             )
             monkeypatch.setattr(app, "_mount_service_view", pause_mount)
+            monkeypatch.setattr(
+                app,
+                "_mount_external_navigation",
+                signal_external_navigation,
+            )
             monkeypatch.setattr(AthenaPageVM, "restore_snapshot", pause_restore)
 
             ctx.hub.send(
@@ -1209,7 +1220,7 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
             owner = app._service_navigation_owner
             assert owner is not None
             assert owner[0] == "external"
-            await asyncio.sleep(0.05)
+            await asyncio.wait_for(external_navigation_started.wait(), timeout=3)
             release_rollback.set()
             await asyncio.wait_for(
                 _wait_for_service_setup(ctx, app, pilot),

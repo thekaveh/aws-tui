@@ -47,6 +47,40 @@ _MINIO_IMAGE = (
     "@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
 )
 
+_AWS_CREDENTIAL_ENV_VARS = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_SECURITY_TOKEN",
+    "AWS_PROFILE",
+    "AWS_DEFAULT_PROFILE",
+    "AWS_ROLE_ARN",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_ROLE_SESSION_NAME",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+    "AWS_CREDENTIAL_FILE",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_aws_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep integration tests independent of host credential providers."""
+    for variable in _AWS_CREDENTIAL_ENV_VARS:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+    for variable, filename in (
+        ("AWS_CONFIG_FILE", "aws-config"),
+        ("AWS_SHARED_CREDENTIALS_FILE", "aws-credentials"),
+        ("BOTO_CONFIG", "boto-config"),
+    ):
+        path = tmp_path / filename
+        path.write_text("", encoding="utf-8")
+        monkeypatch.setenv(variable, str(path))
+
 
 def _minio_unavailable(message: str) -> None:
     """Fail required CI coverage while keeping local Docker tests optional."""

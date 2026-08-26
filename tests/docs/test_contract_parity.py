@@ -46,12 +46,14 @@ _MODELED_OPERATIONS = {
         "ListObjectsV2",
         "HeadObject",
         "GetObject",
+        "GetObjectTagging",
         "PutObject",
         "CopyObject",
         "DeleteObject",
         "DeleteObjects",
         "CreateMultipartUpload",
         "UploadPart",
+        "UploadPartCopy",
         "CompleteMultipartUpload",
         "AbortMultipartUpload",
     },
@@ -72,6 +74,16 @@ _CONSUMED_INPUT_MEMBERS = {
     ("glue", "GetCrawlerMetrics"): {"CrawlerNameList"},
     ("s3", "ListObjectsV2"): {"Bucket", "Prefix", "Delimiter", "ContinuationToken"},
     ("s3", "DeleteObjects"): {"Bucket", "Delete"},
+    ("s3", "GetObjectTagging"): {"Bucket", "Key"},
+    ("s3", "UploadPartCopy"): {
+        "Bucket",
+        "Key",
+        "UploadId",
+        "PartNumber",
+        "CopySource",
+        "CopySourceRange",
+        "CopySourceIfMatch",
+    },
 }
 
 
@@ -204,11 +216,29 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
     project = tomllib.loads(_text("pyproject.toml"))
     ledger = _text("docs/contract-ledger.md")
 
-    for name in ("textual", "vmx", "hatchling", "testcontainers"):
+    for name in (
+        "aioboto3",
+        "botocore",
+        "hatchling",
+        "keyring",
+        "platformdirs",
+        "sqlglot",
+        "testcontainers",
+        "textual",
+        "textual-dev",
+        "vmx",
+    ):
         assert f"`{name}=={versions[name]}`" in ledger
 
     build_requirement = project["build-system"]["requires"][0]
     assert f"`build-system.requires` constrained to `{build_requirement}`" in ledger
+
+
+def test_s3_operation_ledger_matches_locked_model_contract() -> None:
+    ledger = _text("docs/contract-ledger.md")
+    assert set(_text_ledger_block(ledger, "Exact S3 boto operation ledger")) == set(
+        _MODELED_OPERATIONS["s3"]
+    )
 
 
 def test_credential_docs_match_keychain_reference_storage() -> None:

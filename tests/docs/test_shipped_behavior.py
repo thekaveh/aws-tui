@@ -58,13 +58,24 @@ def test_unreleased_changelog_does_not_contradict_shipped_handlers_or_demo() -> 
 
 def test_current_docs_do_not_claim_deleted_first_run_or_resume_modals() -> None:
     current = " ".join(
-        _text(path) for path in ("README.md", "docs/connections.md", "docs/recording-todo.md")
+        _text(path)
+        for path in (
+            "README.md",
+            "docs/architecture.md",
+            "docs/connections.md",
+            "docs/recording-todo.md",
+        )
     )
+    unreleased = _text("CHANGELOG.md").split("## 1.2.", maxsplit=1)[0]
 
     assert "welcome modal exists" not in current.lower()
     assert "resume modal pops up" not in current.lower()
     assert "FirstRunModal" not in current
     assert "ResumeModal" not in current
+    assert "overlays like command palette / confirm / quick look / crash / first-run" not in current
+    assert "first-run persistence store credentials" not in unreleased
+    assert "First-run S3-compatible save failures" not in unreleased
+    assert "Settings and first-run now share" not in unreleased
 
 
 def test_contributing_documents_gitflow_base_branches() -> None:
@@ -72,3 +83,19 @@ def test_contributing_documents_gitflow_base_branches() -> None:
 
     assert "Branch feature, fix, and maintenance work from `develop`" in text
     assert "Reserve `main` for release-promotion PRs from `develop`" in text
+
+
+def test_current_keybinding_guide_avoids_platform_and_pr_chronology() -> None:
+    keybindings = _text("docs/keybindings.md")
+
+    assert "macOS-tailored" not in keybindings
+    assert "PR #" not in keybindings
+    assert "post-tag" not in keybindings
+
+
+def test_release_checklist_covers_published_package_and_platform_status() -> None:
+    releasing = _text("docs/RELEASING.md")
+
+    assert "PyPI project status" in releasing
+    assert "Clean install smoke" in releasing
+    assert "Supported-platform status" in releasing

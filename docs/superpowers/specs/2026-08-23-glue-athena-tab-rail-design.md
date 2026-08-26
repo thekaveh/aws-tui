@@ -1,8 +1,8 @@
 # 1. Glue and Athena tab rail and context framing design
 
-**Status:** Approved for implementation on 2026-08-23. This document is the
-source of truth for refining Glue and Athena navigation presentation after
-hands-on review of the interaction-polish release.
+**Status:** Implemented on 2026-08-23. The underline-only tab presentation in
+this document was subsequently superseded by the segmented-frame design; its
+context framing and unchanged-navigation decisions remain historical context.
 
 This design supersedes only the Glue context-pane framing and Glue/Athena tab
 strip presentation described in

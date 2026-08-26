@@ -91,7 +91,8 @@ def render_wiki(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
         (out_dir / output_name(leaf, "wiki")).write_text(md, encoding="utf-8")
     (out_dir / "_Sidebar.md").write_text(_wiki_sidebar(manifest), encoding="utf-8")
     (out_dir / "_Footer.md").write_text(
-        "aws-tui documentation — generated; do not edit here.\n", encoding="utf-8"
+        "aws-tui documentation | Apache-2.0\n",
+        encoding="utf-8",
     )
     copy_assets(repo_root, out_dir / "img")
     _copy_hero(repo_root, out_dir / "img" / "aws-tui-running.png")

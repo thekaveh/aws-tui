@@ -16,8 +16,9 @@ from scripts.docs.build_docs import build
 from scripts.docs.links import find_links, is_forbidden
 from scripts.docs.manifest import Manifest, load_manifest
 
-# Top-level docs deliberately kept in-repo only (never published/flagged).
+# Docs deliberately kept in-repo only (never published/flagged).
 INTERNAL_DOCS: frozenset[str] = frozenset({"docs/recording-todo.md"})
+INTERNAL_DOC_PREFIXES: tuple[str, ...] = ("docs/superpowers/",)
 
 _PLACEHOLDER_RE = re.compile(r"\b(TODO|TBD|FIXME|XXX)\b")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(\d+(?:\.\d+)*)\.\s+\S")
@@ -59,9 +60,9 @@ def check_completeness(manifest: Manifest, repo_root: str | Path) -> list[Findin
     repo_root = Path(repo_root)
     referenced = {leaf.source for leaf in manifest.leaves()}
     findings: list[Finding] = []
-    for md in sorted((repo_root / "docs").glob("*.md")):
-        rel = f"docs/{md.name}"
-        if rel in INTERNAL_DOCS or rel in referenced:
+    for md in sorted((repo_root / "docs").rglob("*.md")):
+        rel = md.relative_to(repo_root).as_posix()
+        if rel in INTERNAL_DOCS or rel.startswith(INTERNAL_DOC_PREFIXES) or rel in referenced:
             continue
         findings.append(Finding("error", f"{rel}: published doc not referenced by manifest"))
     return findings
