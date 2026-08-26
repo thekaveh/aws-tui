@@ -1,6 +1,6 @@
 # 1. Architecture
 
-![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue, and Athena views with ContextPicker and ServiceTabStrip; Glue and Athena VM trees; a typed CopyTableReferenceRequest to TableClipboardVM copy-and-insert route; service plugins; shared TableRef and QueryContext models; IcebergInspector; source selection and connection resolution; immutable Glue, Athena, and S3 navigation messages; and the AWS Glue, Athena, S3, and Lake Formation boundary.](diagrams/img/architecture.png)
+![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue and Iceberg, and Athena views; Glue and Athena VM trees plus S3 and EMR view models; service plugins; domain operations with shared TableRef and QueryContext models; connection, configuration, keychain, platform-path, and logging infrastructure; the AWS Glue, Athena, S3, and Lake Formation boundary; and a separate demo-mode composition boundary.](diagrams/img/architecture.png)
 
 ![aws-tui operational flows for local and S3 transfer, Glue-to-Athena query handoff, S3 result artifacts, and bounded EMR Serverless log loading.](diagrams/img/operations-flow.png)
 

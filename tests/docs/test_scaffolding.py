@@ -464,6 +464,14 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         "AWS Glue, Athena, S3, and Lake Formation boundary",
     ):
         assert phrase in alt_text
+    for nonvisual_detail in (
+        "ContextPicker",
+        "ServiceTabStrip",
+        "CopyTableReferenceRequest",
+        "TableClipboardVM",
+        "navigation messages",
+    ):
+        assert nonvisual_detail not in alt_text
     assert "hosted VM shutdown is awaited before disposal" in _squash(architecture)
     assert "Domain adapters perform the runtime AWS and filesystem I/O" in _squash(architecture)
     assert (
