@@ -654,6 +654,7 @@ async def test_demo_query_artifacts_are_profile_local_replay_safe_and_distinct(
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.asyncio
@@ -839,6 +840,8 @@ async def test_demo_athena_and_s3_caches_are_isolated_between_app_contexts(
             first.root_vm.dispose()
         with contextlib.suppress(Exception):
             second.root_vm.dispose()
+        first.log_sink.close()
+        second.log_sink.close()
 
 
 def _result_request(*, preferred_pane: str = "left") -> OpenS3LocationRequest:

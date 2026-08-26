@@ -137,6 +137,33 @@ def test_unknown_keybinding_action_logs_and_falls_back_atomically(
         ctx.root_vm.dispose()
 
 
+def test_malformed_keybinding_logs_and_falls_back_atomically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = tmp_path / "config"
+    cache = tmp_path / "cache"
+    _write_config(
+        cfg,
+        '[keybindings]\n"pane.delete" = "x,y"\n',
+    )
+    cache.mkdir()
+    warnings: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(
+        "aws_tui.composition._logger.warning",
+        lambda event, *, extra: warnings.append((event, extra)),
+    )
+
+    ctx = build_app_context(config_dir=cfg, cache_dir=cache)
+    try:
+        assert ctx.keymap_store.all() == KeymapStore().all()
+        assert warnings[-1][0] == "composition.keymap_overlay.invalid"
+        assert warnings[-1][1]["error_type"] == "InvalidKeybinding"
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
 def test_initial_theme_falls_back_to_carbon_on_broken_config(tmp_path: Path) -> None:
     cfg = tmp_path / "config"
     cache = tmp_path / "cache"

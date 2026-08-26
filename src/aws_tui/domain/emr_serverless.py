@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import botocore.exceptions
 from botocore.config import Config as BotoConfig
@@ -137,11 +137,43 @@ class JobRunDetail:
     s3_monitoring_log_uri: str | None
 
 
+class EmrServerlessClientProtocol(Protocol):
+    """Structural client boundary consumed by the EMR viewmodels."""
+
+    async def list_applications(self) -> list[ApplicationSummary]: ...
+
+    async def list_job_runs_page(
+        self,
+        application_id: str,
+        *,
+        start_token: str | None = None,
+        states: set[JobRunState] | None = None,
+    ) -> tuple[list[JobRunSummary], str | None]: ...
+
+    async def get_job_run(
+        self,
+        application_id: str,
+        job_run_id: str,
+    ) -> JobRunDetail: ...
+
+    async def start_job_run(
+        self,
+        application_id: str,
+        *,
+        execution_role_arn: str,
+        entry_point: str,
+        entry_point_arguments: tuple[str, ...],
+        spark_submit_parameters: str | None,
+        name: str | None = None,
+    ) -> str: ...
+
+
 __all__ = [
     "EMR_BOTO_CONFIG",
     "ApplicationState",
     "ApplicationSummary",
     "EmrServerlessClient",
+    "EmrServerlessClientProtocol",
     "JobRunDetail",
     "JobRunState",
     "JobRunSummary",

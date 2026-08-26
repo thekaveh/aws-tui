@@ -6,13 +6,15 @@ the page-VM's 5-s poller can refresh while the run is non-terminal."""
 
 from __future__ import annotations
 
-from typing import Any
-
 import reactivex as rx
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
+from aws_tui.domain.emr_serverless import (
+    EmrServerlessClientProtocol,
+    JobRunDetail,
+    JobRunState,
+)
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject
@@ -29,7 +31,7 @@ class JobRunDetailVM:
     def __init__(
         self,
         *,
-        client: Any,
+        client: EmrServerlessClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:

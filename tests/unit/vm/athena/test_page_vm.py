@@ -816,6 +816,50 @@ async def test_query_refresh_recovers_failed_current_workgroup_detail_context() 
 
 
 @pytest.mark.asyncio
+async def test_query_refresh_selects_a_valid_fallback_when_workgroup_disappears() -> None:
+    client = PageClient()
+    store = ServiceSelectionStore()
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    client.workgroups = [client.workgroups[1]]
+
+    await page.refresh_query_context()
+
+    assert page.context == QueryContext(
+        "analytics",
+        "us-west-2",
+        "analysts",
+        "AwsDataCatalog",
+        "events",
+    )
+    assert page.query.context == page.context
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    assert store.get(scope, "workgroup") == "analysts"
+
+
+@pytest.mark.asyncio
+async def test_query_refresh_clears_executable_context_when_no_workgroups_remain() -> None:
+    client = PageClient()
+    store = ServiceSelectionStore()
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    page.query.set_sql("SELECT 1")
+    client.workgroups = []
+
+    await page.refresh_query_context()
+    await page.query.execute()
+
+    empty = QueryContext("analytics", "us-west-2", "", "", "")
+    assert page.context == empty
+    assert page.query.context == empty
+    assert page.workgroup_detail is None
+    assert page.workgroup_detail_state is PaneState.EMPTY
+    assert client.start_calls == []
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    assert all(store.get(scope, key) is None for key in ("workgroup", "catalog", "database"))
+
+
+@pytest.mark.asyncio
 async def test_late_workgroup_detail_cannot_replace_the_current_selection() -> None:
     client = PageClient()
     page = make_page_vm(client)

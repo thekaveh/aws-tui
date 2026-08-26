@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from typing import Any
 
 import reactivex as rx
 from vmx import (
@@ -38,7 +37,11 @@ from vmx import (
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
+from aws_tui.domain.emr_serverless import (
+    EmrServerlessClientProtocol,
+    JobRunState,
+    JobRunSummary,
+)
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject
@@ -113,7 +116,7 @@ class JobRunsVM:
     def __init__(
         self,
         *,
-        client: Any,
+        client: EmrServerlessClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
@@ -450,6 +453,8 @@ class JobRunsVM:
 
     async def _fetch_page(self, token: str | None) -> tuple[tuple[JobRunItemVM, ...], str | None]:
         target_app_id = self._application_id
+        if target_app_id is None:
+            return (), None
         runs, next_token = await self._client.list_job_runs_page(
             target_app_id,
             start_token=token,

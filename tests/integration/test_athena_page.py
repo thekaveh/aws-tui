@@ -54,6 +54,7 @@ async def _mounted_athena_app(
             await ctx.root_vm.content_host.shutdown()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 def test_athena_is_registered_after_glue_and_is_hidden_from_minio(tmp_path: Path) -> None:
@@ -77,6 +78,7 @@ def test_athena_is_registered_after_glue_and_is_hidden_from_minio(tmp_path: Path
         assert not ctx.registry.get("athena").supports(minio)
     finally:
         ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.asyncio

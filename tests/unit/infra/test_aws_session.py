@@ -145,6 +145,23 @@ class TestProbeTokenAws:
         assert result.state is TokenState.CONNECTED
         assert result.expires_at is not None
 
+    def test_bom_prefixed_config_returns_connected(self, tmp_path: Path) -> None:
+        aws_cfg = tmp_path / ".aws" / "config"
+        sso_session = "company-sso"
+        _write_aws_config_with_sso(aws_cfg, profile="dev", sso_session=sso_session)
+        body = aws_cfg.read_text(encoding="utf-8")
+        aws_cfg.write_text(body, encoding="utf-8-sig")
+        cache_dir = tmp_path / "sso-cache"
+        expires = datetime.now(UTC) + timedelta(hours=1)
+        _write_cache_entry(cache_dir, cache_key=_sha1(sso_session), expires_at=expires)
+
+        result = AwsSession(
+            sso_cache_dir=cache_dir,
+            aws_config_path=aws_cfg,
+        ).probe_token(_aws_conn())
+
+        assert result.state is TokenState.CONNECTED
+
     def test_expired_token_returns_expired(self, tmp_path: Path) -> None:
         aws_cfg = tmp_path / ".aws" / "config"
         sso_session = "company-sso"

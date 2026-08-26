@@ -580,8 +580,8 @@ async def test_emr_page_c_key_pushes_clone_modal(tmp_path: Path) -> None:
     """Pressing ``c`` on the EMR page opens the clone-job-run modal
     pre-populated from the currently-selected job run.
 
-    Verifies the full wiring from PR-C-clone: the page widget's
-    ``c`` binding routes to ``action_clone_selected_run``, which
+    Verifies the full wiring from PR-C-clone: the App's configurable
+    ``emr.clone`` binding routes to ``action_clone_selected_run``, which
     builds a ``JobRunCloneVM`` from the page VM's
     ``job_run_detail.detail`` and pushes ``JobRunCloneModal``
     onto Textual's screen stack. No submit is exercised here — the

@@ -104,6 +104,10 @@ def _dispose(ctx: object) -> None:
     if root is not None and hasattr(root, "dispose"):
         with contextlib.suppress(Exception):
             root.dispose()
+    log_sink = getattr(ctx, "log_sink", None)
+    if log_sink is not None and hasattr(log_sink, "close"):
+        with contextlib.suppress(Exception):
+            log_sink.close()
 
 
 @pytest.mark.asyncio

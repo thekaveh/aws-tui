@@ -88,14 +88,18 @@ def test_service_candidates_include_only_supported_aws_connections(tmp_path: Pat
         config_dir=_three_source_config(tmp_path),
         cache_dir=tmp_path / "cache",
     )
-    _configure_auto_profiles(ctx, tmp_path)
-    candidates = _service_source_candidates(ctx, "emr-serverless")
-    assert [(connection.name, connection.region) for connection in candidates] == [
-        ("prod-west", "us-west-2"),
-        ("dev", "us-east-1"),
-        ("zulu", "eu-west-1"),
-        ("alpha", "ap-southeast-1"),
-    ]
+    try:
+        _configure_auto_profiles(ctx, tmp_path)
+        candidates = _service_source_candidates(ctx, "emr-serverless")
+        assert [(connection.name, connection.region) for connection in candidates] == [
+            ("prod-west", "us-west-2"),
+            ("dev", "us-east-1"),
+            ("zulu", "eu-west-1"),
+            ("alpha", "ap-southeast-1"),
+        ]
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.parametrize("service_id", ["emr-serverless", "glue", "athena"])
@@ -107,11 +111,15 @@ def test_s3_unreachable_mark_does_not_suppress_other_service_candidates(
         config_dir=_three_source_config(tmp_path),
         cache_dir=tmp_path / "cache",
     )
-    ctx.unreachable_connections.add(("aws", "prod-west"))
+    try:
+        ctx.unreachable_connections.add(("aws", "prod-west"))
 
-    candidates = _service_source_candidates(ctx, service_id)
+        candidates = _service_source_candidates(ctx, service_id)
 
-    assert any(connection.name == "prod-west" for connection in candidates)
+        assert any(connection.name == "prod-west" for connection in candidates)
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 def test_next_service_source_wraps_by_connection_name_and_region() -> None:
@@ -142,6 +150,7 @@ def test_live_connection_discovery_failure_is_nonfatal_and_reported(tmp_path: Pa
         assert "could not reload connections" in matching[0].model.text
     finally:
         ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 def _multi_profile_emr_context(

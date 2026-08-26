@@ -18,14 +18,16 @@ fingerprint guard added in PR #100(b) becomes redundant.
 
 from __future__ import annotations
 
-from typing import Any
-
 import reactivex as rx
 from vmx import ComponentVMOf, CompositeVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import ApplicationState, ApplicationSummary
+from aws_tui.domain.emr_serverless import (
+    ApplicationState,
+    ApplicationSummary,
+    EmrServerlessClientProtocol,
+)
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject
@@ -110,7 +112,7 @@ class ApplicationsVM:
     def __init__(
         self,
         *,
-        client: Any,  # EmrServerlessClient or _InMemoryEmr — see PR-A spec §1
+        client: EmrServerlessClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:

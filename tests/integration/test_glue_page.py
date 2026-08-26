@@ -39,6 +39,7 @@ def test_glue_and_athena_are_registered_after_emr(tmp_path: Path) -> None:
         assert ids == ["s3", "emr-serverless", "glue", "athena"]
     finally:
         ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.asyncio

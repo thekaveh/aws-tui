@@ -157,7 +157,7 @@ class AwsSession:
             return None
 
         parser = configparser.ConfigParser()
-        parser.read(self._aws_config_path, encoding="utf-8")
+        parser.read(self._aws_config_path, encoding="utf-8-sig")
 
         section: str | None = None
         if parser.has_section(f"profile {profile}"):

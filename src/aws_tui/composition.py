@@ -32,7 +32,12 @@ from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
 from aws_tui.infra.keychain import KeychainBackend, Keyring
-from aws_tui.infra.keymap_store import KeybindingCollision, KeymapStore, UnknownAction
+from aws_tui.infra.keymap_store import (
+    InvalidKeybinding,
+    KeybindingCollision,
+    KeymapStore,
+    UnknownAction,
+)
 from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
@@ -207,7 +212,7 @@ def build_app_context(
         initial_theme = "carbon"
     try:
         keymap_store = KeymapStore(overlay=keybindings_overlay)
-    except (KeybindingCollision, UnknownAction) as exc:
+    except (InvalidKeybinding, KeybindingCollision, UnknownAction) as exc:
         _logger.warning(
             "composition.keymap_overlay.invalid",
             extra={"error": str(exc), "error_type": type(exc).__name__},

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from textual.binding import Binding
 
-from aws_tui.infra.keymap_store import KeymapStore, UnknownAction, textual_key_name
+from aws_tui.infra.keymap_store import KeymapStore, textual_key_name
 from aws_tui.ui.actions import ActionRegistry
 
 #: Human-readable label per action id used in Textual binding descriptions.
@@ -58,7 +58,8 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
     "pane.new": "New",
     "pane.refresh": "Refresh",
     "auth.authenticate": "Sign in",
-    "modal.cancel": "Cancel",
+    "emr.clone": "Clone EMR run",
+    "emr.logs.filter": "Filter EMR logs",
 }
 
 
@@ -166,20 +167,6 @@ class BindingResolver:
                     )
                 )
         return bindings
-
-    def resolve_action_id(self, key: str) -> str | None:
-        """Return the action id bound to ``key``, or None when unbound."""
-        for action_id, keys in self._keymap.all().items():
-            if key in keys:
-                return action_id
-        return None
-
-    def keys_for(self, action_id: str) -> tuple[str, ...]:
-        """Return the keys bound to ``action_id`` (empty tuple if unknown)."""
-        try:
-            return self._keymap.resolve(action_id)
-        except UnknownAction:
-            return ()
 
 
 __all__ = ["BindingResolver"]

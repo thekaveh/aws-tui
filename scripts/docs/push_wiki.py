@@ -163,8 +163,9 @@ def push_wiki(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="push_wiki")
-    parser.add_argument("--check", action="store_true")
-    parser.add_argument("--push", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true")
+    mode.add_argument("--push", action="store_true")
     args = parser.parse_args(argv)
     repo_root = Path.cwd()
     remote = os.environ.get("WIKI_REMOTE", DEFAULT_REMOTE)

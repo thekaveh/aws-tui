@@ -13,7 +13,8 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
-from aws_tui.domain.emr_logs import EmrServerlessLogsClient
+from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogFile, LogFileKind
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM
 
@@ -31,17 +32,30 @@ def _make_vm() -> tuple[JobRunLogsVM, MessageHub[Message], _InMemoryEmr]:
 
 
 class _PaneApp(App[None]):
-    def __init__(self, vm: JobRunLogsVM, hub: MessageHub[Message]) -> None:
+    def __init__(
+        self,
+        vm: JobRunLogsVM,
+        hub: MessageHub[Message],
+        *,
+        keymap: KeymapStore | None = None,
+    ) -> None:
         super().__init__()
         self._vm = vm
         self._hub = hub
+        self._keymap = keymap
         self._messages: list[object] = []
 
     def compose(self) -> ComposeResult:
-        yield JobRunLogsPane(self._vm, id="pane")
+        yield JobRunLogsPane(self._vm, keymap=self._keymap, id="pane")
 
     def on_message(self, message: object) -> None:
         # Capture all posted messages for testing
+        self._messages.append(message)
+
+    def on_job_run_logs_pane_log_file_selected(
+        self,
+        message: JobRunLogsPane.LogFileSelected,
+    ) -> None:
         self._messages.append(message)
 
 
@@ -145,23 +159,42 @@ async def test_pressing_r_calls_action_reload() -> None:
         assert "reload" in calls, "Expected action_reload to be called"
 
 
-async def test_pressing_f_calls_action_open_filter() -> None:
-    """Pressing 'f' should invoke action_open_filter."""
+async def test_filter_row_uses_the_configured_filter_key() -> None:
     vm, hub, _fake = _make_vm()
-    app = _PaneApp(vm, hub)
+    app = _PaneApp(vm, hub, keymap=KeymapStore(overlay={"emr.logs.filter": "ctrl+f"}))
     async with app.run_test() as pilot:
         await pilot.pause()
         pane = pilot.app.query_one(JobRunLogsPane)
+        assert "ctrl+f edit" in str(pane.query_one("#logs-filter").render())
+
+
+async def test_left_and_right_select_exact_duplicate_kind_log_files() -> None:
+    vm, hub, _fake = _make_vm()
+    first = LogFile("logs/SPARK_EXECUTOR/1/stderr.gz", LogFileKind.EXECUTOR_STDERR)
+    second = LogFile("logs/SPARK_EXECUTOR/2/stderr.gz", LogFileKind.EXECUTOR_STDERR)
+    vm._available_files = (first, second)
+    vm._current_file = first
+    app = _PaneApp(vm, hub)
+
+    async with app.run_test() as pilot:
+        pane = pilot.app.query_one(JobRunLogsPane)
         pane.focus()
+        await pilot.press("right")
         await pilot.pause()
-        calls: list[str] = []
-        original_action = pane.action_open_filter
 
-        def spy_action() -> None:
-            calls.append("filter")
-            original_action()
+        selected = [
+            message
+            for message in app._messages
+            if isinstance(message, JobRunLogsPane.LogFileSelected)
+        ]
+        assert selected[-1].key == second.key
 
-        pane.action_open_filter = spy_action
-        await pilot.press("f")
+        vm.select_log_file_key(second.key)
+        await pilot.press("left")
         await pilot.pause()
-        assert "filter" in calls, "Expected action_open_filter to be called"
+        selected = [
+            message
+            for message in app._messages
+            if isinstance(message, JobRunLogsPane.LogFileSelected)
+        ]
+        assert selected[-1].key == first.key

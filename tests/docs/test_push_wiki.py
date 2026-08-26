@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import scripts.docs.push_wiki as push_wiki_module
 from scripts.docs.push_wiki import (
     DEFAULT_REMOTE,
     GITHUB_ED25519_KNOWN_HOST,
@@ -11,6 +12,35 @@ from scripts.docs.push_wiki import (
     authenticated_remote,
     sync_wiki,
 )
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_push"),
+    [([], False), (["--check"], False), (["--push"], True)],
+)
+def test_main_selects_exactly_one_wiki_mode(
+    argv: list[str],
+    expected_push: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        push_wiki_module,
+        "push_wiki",
+        lambda *_args, push, **_kwargs: calls.append(push),
+    )
+
+    assert push_wiki_module.main(argv) == 0
+    assert calls == [expected_push]
+
+
+def test_main_rejects_check_and_push_together() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        push_wiki_module.main(["--check", "--push"])
+
+    assert exc_info.value.code == 2
 
 
 def test_default_remote_targets_wiki_git():

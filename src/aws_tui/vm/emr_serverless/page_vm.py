@@ -15,6 +15,7 @@ from vmx import ComponentVMOf, Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient
+from aws_tui.domain.emr_serverless import EmrServerlessClientProtocol
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
@@ -32,7 +33,7 @@ class EmrServerlessPageVM:
     def __init__(
         self,
         *,
-        client: Any,
+        client: EmrServerlessClientProtocol,
         logs_client: EmrServerlessLogsClient,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
@@ -81,7 +82,7 @@ class EmrServerlessPageVM:
         return self._source
 
     @property
-    def client(self) -> Any:
+    def client(self) -> EmrServerlessClientProtocol:
         """EMR Serverless client (``EmrServerlessClient`` or test
         fake). Public so the page widget can hand it to per-action
         VMs (e.g. ``JobRunCloneVM``) without re-piping through the

@@ -563,6 +563,8 @@ class AwsTuiApp(App[None]):
         self._actions.register("pane.delete", self.action_delete)
         self._actions.register("app.swap_source", self.action_swap_source)
         self._actions.register("emr.next_application", self.action_next_emr_application)
+        self._actions.register("emr.clone", self.action_clone_emr_run)
+        self._actions.register("emr.logs.filter", self.action_filter_emr_logs)
         self._actions.register(
             "glue.catalog",
             partial(self.action_select_glue_view, "catalog"),
@@ -710,7 +712,6 @@ class AwsTuiApp(App[None]):
         # explicit recovery paths.
         self._chain_resolved_to_local: bool = False
         self._chain_initial_conn: Connection | None = None
-        self._pending_boot_nav_selection: str | None = None
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -820,7 +821,7 @@ class AwsTuiApp(App[None]):
             # telling the user how to recover.
             self._boot_in_flight = True
             self.run_worker(
-                self._initial_mount_worker(initial_conn=initial_conn, auth_state=auth_state),
+                self._initial_mount_worker(initial_conn=initial_conn),
                 exclusive=True,
                 group="content-mount",
             )
@@ -878,9 +879,7 @@ class AwsTuiApp(App[None]):
         subscription.dispose()
         self._table_clipboard_sub = None
 
-    async def _initial_mount_worker(
-        self, *, initial_conn: Connection, auth_state: TokenState
-    ) -> None:
+    async def _initial_mount_worker(self, *, initial_conn: Connection) -> None:
         """Walk the configured-connections chain, narrating each step
         via toasts, until one succeeds OR all fail (→ local-only).
 
@@ -911,13 +910,10 @@ class AwsTuiApp(App[None]):
         through ``_attempt_future`` (resolved by
         ``_on_pane_state_changed`` for the matching connection key).
 
-        ``auth_state`` is kept as a parameter for back-compat
-        (caller in ``on_mount`` already probed the initial
-        connection); we re-probe each AWS candidate in the chain
-        instead of relying on the value because the chain may
-        include connections the caller never probed.
+        The caller probes the initial connection before publishing it to
+        ``RootVM``. This worker re-probes every AWS candidate because the
+        chain can include connections that caller did not inspect.
         """
-        _ = auth_state  # caller probed `initial_conn`; chain re-probes each AWS candidate
         ctx = self._app_ctx
         try:
             chain = self._build_attempt_chain(initial_conn)
@@ -992,13 +988,6 @@ class AwsTuiApp(App[None]):
                 )
         finally:
             self._boot_in_flight = False
-            selected = self._pending_boot_nav_selection
-            self._pending_boot_nav_selection = None
-            if selected is not None and ctx.root_vm.services_menu.selected_id == selected:
-                if selected == SETTINGS_NAV_ID:
-                    await self._mount_settings_view()
-                else:
-                    await self._mount_service_view(selected)
 
     def _build_attempt_chain(self, initial: Connection) -> list[Connection]:
         """Order the resolver's connection list with ``initial`` first.
@@ -2063,6 +2052,9 @@ class AwsTuiApp(App[None]):
         # navigation is unchanged.
         if self._forward_to_modal("action_focus_prev"):
             return
+        emr_page = self._emr_page()
+        if emr_page is not None and emr_page.select_adjacent_log_file(-1):
+            return
         await self.action_ascend()
 
     def action_modal_right(self) -> None:
@@ -2071,7 +2063,11 @@ class AwsTuiApp(App[None]):
         # In a modal: Right moves arrow-key focus to the next footer
         # button. Outside any modal: no-op (panes don't currently bind
         # Right to anything).
-        self._forward_to_modal("action_focus_next")
+        if self._forward_to_modal("action_focus_next"):
+            return
+        emr_page = self._emr_page()
+        if emr_page is not None:
+            emr_page.select_adjacent_log_file(1)
 
     async def action_refresh(self) -> None:
         self.record_action("pane.refresh")
@@ -2552,6 +2548,20 @@ class AwsTuiApp(App[None]):
         page = self._emr_page()
         if page is not None:
             await page.vm.cycle_application(1)
+
+    async def action_clone_emr_run(self) -> None:
+        page = self._emr_page()
+        if page is not None:
+            self.record_action("emr.clone")
+            await page.action_clone_selected_run()
+            return
+        if self._bindings_overlap("emr.clone", "pane.copy"):
+            await self.action_copy()
+
+    def action_filter_emr_logs(self) -> None:
+        page = self._emr_page()
+        if page is not None and page.open_focused_log_filter():
+            self.record_action("emr.logs.filter")
 
     async def action_select_glue_view(self, view: str) -> None:
         self.record_action(f"glue.{view}")
@@ -4202,7 +4212,6 @@ class AwsTuiApp(App[None]):
         # screen at startup.
         if self._boot_in_flight:
             if selected != "s3":
-                self._pending_boot_nav_selection = None
                 self._boot_in_flight = False
                 self.workers.cancel_group(self, "content-mount")
                 self.run_worker(

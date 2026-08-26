@@ -14,11 +14,16 @@ behavior byte-identical to today's hard-coded `BINDINGS`** (same keys,
 same handlers, same `priority`, same footer visibility, modulo one
 documented dedup).
 
-## 1.2. Background / current state (verified in code)
+## 1.2. Background / implementation-time baseline
 
-- `src/aws_tui/ui/bindings.py` — `BindingResolver` is fully built and
-  unit-tested: `to_textual_bindings()`, `resolve_action_id()`,
-  `keys_for()`. **Constructed at `app.py:254` but never used at runtime.**
+The following bullets record the state when this design was written; they are
+not claims about the current implementation.
+
+- Historical baseline: `src/aws_tui/ui/bindings.py` had a fully built,
+  unit-tested `BindingResolver`, but it was not used at runtime. The shipped
+  implementation retains the runtime `to_textual_bindings()` bridge; the
+  lookup-only `resolve_action_id()` and `keys_for()` scaffolding was removed
+  after no production caller emerged.
 - `src/aws_tui/ui/actions.py` — `ActionRegistry` (`register`/`invoke`/
   `has`/`known_actions`). **Only `app.quit` is registered today.**
 - `src/aws_tui/infra/keymap_store.py` — `KeymapStore.DEFAULT_BINDINGS`

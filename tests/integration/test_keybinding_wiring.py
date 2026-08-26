@@ -51,6 +51,8 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("d", "dispatch('pane.delete')", True, False),
     ("S", "dispatch('app.swap_source')", True, False),
     ("A", "dispatch('emr.next_application')", True, False),
+    ("c", "dispatch('emr.clone')", False, False),
+    ("f", "dispatch('emr.logs.filter')", False, False),
     ("1", "dispatch('glue.catalog')", False, False),
     ("2", "dispatch('glue.jobs')", False, False),
     ("3", "dispatch('glue.crawlers')", False, False),
@@ -123,6 +125,28 @@ def test_dispatch_invokes_registered_handler(app_context_factory) -> None:  # ty
     app._actions.register("pane.copy", lambda: calls.append("copy"))
     app.action_dispatch("pane.copy")
     assert calls == ["copy"]
+
+
+@pytest.mark.asyncio
+async def test_app_routes_emr_log_focus_actions_to_the_page(
+    app_context_factory,
+) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    adjacent: list[int] = []
+    filters: list[str] = []
+
+    page = SimpleNamespace(
+        select_adjacent_log_file=lambda delta: adjacent.append(delta) or True,
+        open_focused_log_filter=lambda: filters.append("open") or True,
+    )
+    app._emr_page = lambda: page  # type: ignore[method-assign,return-value]
+
+    await app.action_modal_left_or_ascend()
+    app.action_modal_right()
+    app.action_filter_emr_logs()
+
+    assert adjacent == [-1, 1]
+    assert filters == ["open"]
 
 
 @pytest.mark.asyncio
@@ -231,7 +255,11 @@ def test_config_overlay_reaches_live_textual_bindings(tmp_path: Path) -> None:
     config_dir.mkdir()
     cache_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[keybindings]\n"pane.copy" = "ctrl+y"\n"pane.delete" = []\n',
+        "[keybindings]\n"
+        '"pane.copy" = "ctrl+y"\n'
+        '"pane.delete" = []\n'
+        '"emr.clone" = "ctrl+g"\n'
+        '"emr.logs.filter" = "ctrl+f"\n',
         encoding="utf-8",
     )
     ctx = build_app_context(config_dir=config_dir, cache_dir=cache_dir)
@@ -243,10 +271,17 @@ def test_config_overlay_reaches_live_textual_bindings(tmp_path: Path) -> None:
             key == "c" and action == "dispatch('pane.copy')" for key, action, _, _ in installed
         )
         assert not any(action == "dispatch('pane.delete')" for _, action, _, _ in installed)
+        assert ("ctrl+g", "dispatch('emr.clone')", False, True) in installed
+        assert ("ctrl+f", "dispatch('emr.logs.filter')", False, True) in installed
+        assert not any(
+            key == "f" and action == "dispatch('emr.logs.filter')"
+            for key, action, _, _ in installed
+        )
         assert ctx.keymap_store.resolve("pane.copy") == ("ctrl+y",)
         assert ctx.root_vm.chrome.hint_legend._keymap is ctx.keymap_store
     finally:
         ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.asyncio

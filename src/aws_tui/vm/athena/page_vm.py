@@ -1045,12 +1045,30 @@ class AthenaPageVM:
             return
         workgroup = self._context.workgroup
         await self.refresh_workgroups()
-        if (
-            not self._is_alive()
-            or self._workgroups_state not in {PaneState.IDLE, PaneState.EMPTY}
-            or self._workgroup_detail_state is PaneState.IDLE
-            or workgroup not in {row.name for row in self.workgroups}
-        ):
+        if not self._is_alive() or self._workgroups_state not in {
+            PaneState.IDLE,
+            PaneState.EMPTY,
+        }:
+            return
+        workgroup_names = tuple(row.name for row in self.workgroups)
+        if not workgroup_names:
+            await self._clear_query_context()
+            return
+        if workgroup not in workgroup_names:
+            await self._select_workgroup(
+                workgroup_names[0],
+                preferred_catalog=self._selection_store.get(
+                    self._selection_scope,
+                    "catalog",
+                ),
+                preferred_database=self._selection_store.get(
+                    self._selection_scope,
+                    "database",
+                ),
+                setup_active=True,
+            )
+            return
+        if self._workgroup_detail_state is PaneState.IDLE:
             return
         await self._select_workgroup(
             workgroup,
@@ -1064,6 +1082,21 @@ class AthenaPageVM:
             ),
             setup_active=True,
         )
+
+    async def _clear_query_context(self) -> None:
+        self._begin_context_change(
+            "",
+            "",
+            "",
+            clear_catalogs=True,
+            clear_databases=True,
+        )
+        self._workgroup_detail = None
+        self._workgroup_detail_state = PaneState.EMPTY
+        self._workgroup_detail_error_text = None
+        self._clear_context_store()
+        self._notify_workgroup_detail()
+        await self.query.set_context(self._context)
 
     async def shutdown(self) -> None:
         async with self._shutdown_lock:

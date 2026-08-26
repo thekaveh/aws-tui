@@ -118,7 +118,6 @@ _ACTION_LABELS: dict[str, str] = {
     "emr.next_application": "switch app",
     "app.quit": "quit",
     "auth.authenticate": "sign in",
-    "modal.cancel": "cancel",
     "emr.clone": "clone",
     "emr.logs.filter": "filter logs",
     "glue.catalog": "catalog",

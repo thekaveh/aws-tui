@@ -30,6 +30,7 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from aws_tui.domain.emr_logs import LogFile, LogFileKind
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
 
 
@@ -93,8 +94,9 @@ class JobRunLogsPane(Widget, can_focus=True):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "load", "Load", show=False),
         Binding("r", "reload", "Reload", show=False),
-        Binding("f", "open_filter", "Filter"),
         Binding("F", "reset_filter", "Reset filter", show=False),
+        Binding("left", "previous_file", "Previous file", show=False),
+        Binding("right", "next_file", "Next file", show=False),
         Binding("up", "scroll_up", "Up", show=False),
         Binding("k", "scroll_up", "Up", show=False),
         Binding("down", "scroll_down", "Down", show=False),
@@ -135,11 +137,13 @@ class JobRunLogsPane(Widget, can_focus=True):
         self,
         vm: JobRunLogsVM,
         *,
+        keymap: KeymapStore | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: JobRunLogsVM = vm
+        self._keymap = keymap or KeymapStore()
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
@@ -192,6 +196,12 @@ class JobRunLogsPane(Widget, can_focus=True):
         """Post ResetFilterRequested (Shift+F)."""
         self.post_message(self.ResetFilterRequested())
 
+    def action_previous_file(self) -> None:
+        self._select_adjacent_file(-1)
+
+    def action_next_file(self) -> None:
+        self._select_adjacent_file(1)
+
     def action_scroll_up(self) -> None:
         """Scroll body up."""
         try:
@@ -239,7 +249,7 @@ class JobRunLogsPane(Widget, can_focus=True):
 
     def _refresh_filter_row(self) -> None:
         """Render the always-visible filter affordance:
-        ``filter: <patterns…>  ·  f edit  ·  shift+f reset``. The
+        ``filter: <patterns…>  ·  <configured key> edit  ·  shift+f reset``. The
         patterns list is comma-joined and ellipsized by the
         text-overflow rule on ``.logs-filter-row``. In PASSTHROUGH
         mode the label flips to ``filter: off`` so the user can
@@ -255,8 +265,23 @@ class JobRunLogsPane(Widget, can_focus=True):
             patterns_text = "off"
         else:
             patterns_text = " · ".join(f.patterns)
-        hint = " · f edit · shift+f reset"
+        keys = self._keymap.resolve("emr.logs.filter")
+        edit_hint = f" · {keys[0]} edit" if keys else ""
+        hint = f"{edit_hint} · shift+f reset"
         row.update(f"filter: {patterns_text}{hint}")
+
+    def _select_adjacent_file(self, delta: int) -> None:
+        files = self._vm.available_files
+        if len(files) < 2:
+            return
+        current = self._vm.current_file
+        try:
+            index = files.index(current) if current is not None else 0
+        except ValueError:
+            index = 0
+        selected = files[(index + delta) % len(files)]
+        if selected != current:
+            self.post_message(self.LogFileSelected(selected.key))
 
     def _refresh_chips(self) -> None:
         """Render file-selector chip strip."""

@@ -214,10 +214,8 @@ class S3ConnectionsPanel(Widget):
 
     @work(exclusive=True, group="s3-connections-delete")
     async def _do_delete(self, name: str) -> None:
-        # exclusive=True + group serializes rapid double-clicks on the
-        # same (or different) delete chip — without it, two concurrent
-        # workers can both pass the confirm dialog and the second's
-        # vm.remove() crashes with a missing-entry error.
+        # The latest delete request supersedes any in-flight request in
+        # this group, so two workers cannot confirm and remove concurrently.
         confirm_vm = ConfirmationVM(hub=self._hub, dispatcher=self._vm.dispatcher)
         confirm_vm.construct()
         try:

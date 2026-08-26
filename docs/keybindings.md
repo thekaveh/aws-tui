@@ -289,7 +289,7 @@ unbound until a handler ships.
 | `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Reserved for a future auth helper; currently run `aws sso login --profile <name>` yourself |
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
 | `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |
-| `emr.logs.filter` | `f` (when EMR logs pane focused) | widget-scoped | Open the EMR logs filter modal |
+| `emr.logs.filter` | `f` (when EMR logs pane focused) | yes | Open the EMR logs filter modal |
 | `glue.catalog` | `1` | yes | Select the Glue Catalog view |
 | `glue.jobs` | `2` | yes | Select the Glue Jobs view |
 | `glue.crawlers` | `3` | yes | Select the Glue Crawlers view |
@@ -314,7 +314,6 @@ unbound until a handler ships.
 | `athena.open_in_glue` | none (command palette) | yes | Open the one unambiguous visible query table in Glue |
 | `pane.modal_left` | `left` | yes | Route left-arrow modal or pane navigation |
 | `pane.modal_right` | `right` | yes | Route right-arrow modal or pane navigation |
-| `modal.cancel` | `escape` | yes | Cancel / close current overlay (modal-owned) |
 
 Rows with a default key are registered by
 `KeymapStore.DEFAULT_BINDINGS` and may be overlaid in
@@ -325,6 +324,9 @@ registered in `ActionRegistry`, and absent from
 supported.
 Any unknown overlay id is logged and causes the app to fall back to
 the default keymap.
+
+Modal and selector cancellation remains locally owned by each overlay and uses
+`Escape`; it is intentionally not a configurable App action.
 
 All live App-level bindings are installed through `BindingResolver`,
 including `Shift+↑` / `Shift+↓` for extend-selection. Their

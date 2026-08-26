@@ -14,7 +14,7 @@ host this VM as a singleton (see [[vmx-content-host-singleton-trap]])."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
-from typing import Any, ClassVar, cast
+from typing import ClassVar, cast
 
 import aioboto3
 from vmx import Message, MessageHub
@@ -23,7 +23,10 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogChunk, LogFile, LogFilter
 from aws_tui.domain.emr_serverless import (
     EMR_BOTO_CONFIG,
+    ApplicationSummary,
     EmrServerlessClient,
+    EmrServerlessClientProtocol,
+    JobRunDetail,
     JobRunState,
     JobRunSummary,
     map_boto_error,
@@ -36,7 +39,7 @@ from aws_tui.vm.services_protocol import ServiceDescriptor
 
 #: Test hook — when provided, replaces real ``EmrServerlessClient`` construction
 #: with whatever the factory returns (typically ``_InMemoryEmr``).
-EmrClientFactory = Callable[[Connection], Any]
+EmrClientFactory = Callable[[Connection], EmrServerlessClientProtocol]
 EmrLogsClientFactory = Callable[[Connection], EmrServerlessLogsClient]
 
 
@@ -70,7 +73,7 @@ class _FailedEmrClient:
     def __init__(self, error: ProviderError) -> None:
         self._error = error
 
-    async def list_applications(self) -> list[object]:
+    async def list_applications(self) -> list[ApplicationSummary]:
         raise self._error
 
     async def list_job_runs_page(
@@ -91,7 +94,7 @@ class _FailedEmrClient:
     ) -> list[JobRunSummary]:
         raise self._error
 
-    async def get_job_run(self, application_id: str, job_run_id: str) -> object:
+    async def get_job_run(self, application_id: str, job_run_id: str) -> JobRunDetail:
         raise self._error
 
     async def start_job_run(
@@ -175,7 +178,7 @@ class EmrServerlessService:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _make_client(self, connection: Connection) -> Any:
+    def _make_client(self, connection: Connection) -> EmrServerlessClientProtocol:
         if self._client_factory is not None:
             return self._client_factory(connection)
         try:
@@ -188,7 +191,10 @@ class EmrServerlessService:
         return EmrServerlessClient(session=session, region_name=connection.region)
 
     def _make_logs_client(
-        self, connection: Connection, *, client: Any | None = None
+        self,
+        connection: Connection,
+        *,
+        client: EmrServerlessClientProtocol | None = None,
     ) -> EmrServerlessLogsClient:
         if self._logs_client_factory is not None:
             return self._logs_client_factory(connection)
