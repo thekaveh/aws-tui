@@ -136,7 +136,7 @@ markers = [
   # Excluded from the default ``uv run pytest`` via the ``addopts``
   # filter above; opt in with ``-m integration``. Applied via
   # ``pytestmark = pytest.mark.integration`` in
-  # tests/integration/{test_cross_fs_minio,test_s3_fs_minio}.py. Fast
+  # tests/integration/{test_cross_fs_s3_compat,test_s3_fs_s3_compat}.py. Fast
   # in-process tests under tests/integration/ (full-app pilot, modal
   # forwarding, etc.) intentionally don't carry this marker — they run
   # by default.

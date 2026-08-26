@@ -280,8 +280,8 @@ Each append is one JSON line. `find_unfinished` reads all jsonl files in base_di
 **Files:**
 - Create: `tests/integration/__init__.py`
 - Create: `tests/integration/conftest.py` (session-scoped S3Mock container fixture)
-- Create: `tests/integration/test_s3_fs_minio.py`
-- Create: `tests/integration/test_cross_fs_minio.py`
+- Create: `tests/integration/test_s3_fs_s3_compat.py`
+- Create: `tests/integration/test_cross_fs_s3_compat.py`
 
 Add `testcontainers>=4` to dev deps in `pyproject.toml`.
 

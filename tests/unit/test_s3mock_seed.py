@@ -11,7 +11,7 @@ from botocore.exceptions import ClientError
 
 def _load_seed_module() -> ModuleType:
     path = Path(__file__).parents[2] / "scripts/test-services/s3/seed.py"
-    spec = importlib.util.spec_from_file_location("aws_tui_minio_seed", path)
+    spec = importlib.util.spec_from_file_location("aws_tui_s3mock_seed", path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -36,7 +36,7 @@ class _BucketClient:
 
 
 @pytest.mark.asyncio
-async def test_minio_seed_creates_only_for_a_missing_bucket() -> None:
+async def test_s3mock_seed_creates_only_for_a_missing_bucket() -> None:
     seed = _load_seed_module()
     client = _BucketClient("404")
 
@@ -45,7 +45,7 @@ async def test_minio_seed_creates_only_for_a_missing_bucket() -> None:
 
 
 @pytest.mark.asyncio
-async def test_minio_seed_does_not_mask_head_bucket_authorization_failure() -> None:
+async def test_s3mock_seed_does_not_mask_head_bucket_authorization_failure() -> None:
     seed = _load_seed_module()
     client = _BucketClient("AccessDenied")
 

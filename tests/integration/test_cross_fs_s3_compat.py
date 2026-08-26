@@ -68,13 +68,13 @@ async def test_s3_compat_to_local(s3_compat_endpoint: tuple[str, str, str], tmp_
     s3 = _s3fs(endpoint, ak, sk, "s2lbkt")
 
     async def src() -> AsyncIterator[bytes]:
-        yield b"minio-to-local"
+        yield b"s3mock-to-local"
 
     await s3.write_stream(PathRef.from_posix("/k"), src())
     local = LocalFS(root=tmp_path)
     copier = CrossFsCopy(source=s3, destination=local)
     await copier.copy(PathRef.from_posix("/k"), PathRef.from_posix("/k"))
-    assert (tmp_path / "k").read_bytes() == b"minio-to-local"
+    assert (tmp_path / "k").read_bytes() == b"s3mock-to-local"
 
 
 async def test_move_local_to_s3_compat(

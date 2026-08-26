@@ -164,7 +164,7 @@ def test_ci_gates_minimum_supported_dependencies() -> None:
     assert "tests/unit/vm/test_vmx_smoke.py" in exercise
 
 
-def test_integration_marker_is_reserved_for_minio_tier() -> None:
+def test_integration_marker_is_reserved_for_s3_compat_tier() -> None:
     marked_files = {
         path.relative_to(REPO_ROOT).as_posix()
         for path in (REPO_ROOT / "tests/integration").rglob("*.py")
@@ -172,8 +172,8 @@ def test_integration_marker_is_reserved_for_minio_tier() -> None:
     }
 
     assert marked_files == {
-        "tests/integration/test_cross_fs_minio.py",
-        "tests/integration/test_s3_fs_minio.py",
+        "tests/integration/test_cross_fs_s3_compat.py",
+        "tests/integration/test_s3_fs_s3_compat.py",
     }
 
 
@@ -239,7 +239,7 @@ def test_release_pytest_tiers_stay_wired() -> None:
     _assert_step_has_command(
         workflow,
         "verify",
-        "pytest (MinIO integration tier)",
+        "pytest (S3Mock integration tier)",
         "uv run",
         "--python 3.12",
         "pytest",
