@@ -437,6 +437,8 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
     assert "Prior content stays authoritative" in lifecycle
     assert "Construct candidate tree" in lifecycle
     assert "Drain + adopt candidate" in lifecycle
+    assert "shutdown · dispose" in lifecycle
+    assert "shutdown · destruct · dispose" not in lifecycle
     assert "Dispose subscriptions + VM tree" in lifecycle
     assert "Flush + close logs" in lifecycle
     assert lifecycle.index("Dispose subscriptions + VM tree") < lifecycle.index(
