@@ -106,10 +106,9 @@ inspection workflows.
   runs or detail panes. `Tab` and `Shift+Tab` traverse the source selector,
   application selector, runs, detail, logs, and service rail.
 - **Silent SSO.** Auto-discovers every AWS profile from
-  `~/.aws/{config,credentials}`. SSO-backed profiles get a cheap
-  token-cache freshness probe on launch (one `stat`, one ~1 KB JSON
-  read, sub-millisecond); non-SSO profiles go straight to live boto
-  credential-chain validation.
+  `~/.aws/{config,credentials}`. SSO-backed profiles use local AWS config and
+  SSO cache reads only; no AWS network call. Non-SSO profiles go straight to
+  live boto credential-chain validation.
   Honors `$AWS_DEFAULT_PROFILE` and then `$AWS_PROFILE` between
   `[defaults].connection` and the first-auto fallback so SSO setups where
   `[default]` has no creds still pick the right profile.

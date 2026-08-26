@@ -101,6 +101,17 @@ def test_release_checklist_covers_published_package_and_platform_status() -> Non
     assert "Supported-platform status" in releasing
 
 
+def test_sso_startup_docs_promise_only_local_no_network_io() -> None:
+    surfaces = (_text("README.md"), _text("docs/connections.md"))
+
+    for content in surfaces:
+        assert "local AWS config and SSO cache reads only; no AWS network call" in content
+        assert "~1 KB" not in content
+        assert "Sub-millisecond" not in content
+        assert "one `stat`" not in content
+        assert "one `os.stat`" not in content
+
+
 def test_installed_help_and_current_docs_use_executable_contracts() -> None:
     app = _text("src/aws_tui/app.py")
     help_modal = _text("src/aws_tui/ui/widgets/help_modal.py")

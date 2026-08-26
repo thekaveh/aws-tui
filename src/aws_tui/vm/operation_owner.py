@@ -61,7 +61,8 @@ class OperationOwner:
     def cancel(self) -> tuple[asyncio.Task[Any], ...]:
         tasks = tuple(self.tasks)
         for task in tasks:
-            if not task.done():
+            # Re-cancelling interrupts awaits inside the task's cleanup path.
+            if not task.done() and not task.cancelling():
                 task.cancel()
         return tasks
 
@@ -80,6 +81,9 @@ class OperationOwner:
                         if current_count > cancellation_count:
                             cancelled = True
                             cancellation_count = current_count
+                    except Exception:
+                        # One failed cleanup must not strand the remaining tasks.
+                        pass
                 if not task.cancelled():
                     with contextlib.suppress(Exception):
                         task.result()
