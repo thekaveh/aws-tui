@@ -437,6 +437,11 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
     assert "Prior content stays authoritative" in lifecycle
     assert "Construct candidate tree" in lifecycle
     assert "Drain + adopt candidate" in lifecycle
+    assert "Dispose subscriptions + VM tree" in lifecycle
+    assert "Flush + close logs" in lifecycle
+    assert lifecycle.index("Dispose subscriptions + VM tree") < lifecycle.index(
+        "Flush + close logs"
+    )
     assert "Root clears content" not in lifecycle
     assert "old tree drains before rebuild" not in lifecycle
     assert "Rebuild prior service" not in lifecycle

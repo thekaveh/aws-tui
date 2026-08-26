@@ -119,6 +119,7 @@ def test_installed_help_and_current_docs_use_executable_contracts() -> None:
     assert "The crash dump writer and interactive crash modal are live" not in recording
     assert "The crash dump writer is live" in recording
     assert "is not wired into the unhandled exception path" in recording
+    assert "subagent" not in recording.casefold()
     assert "v0.9.0 development docs" in recording
     assert "S3Mock" in recording
 

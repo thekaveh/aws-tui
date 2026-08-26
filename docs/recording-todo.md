@@ -1,10 +1,9 @@
 # 1. Recording TODO
 
 > Items the maintainer (i.e. **you**) needs to record manually before
-> the v0.9.0 development docs feel complete. A subagent cannot drive a real terminal
-> to produce asciinema casts or PNG screenshots, so this file is a
-> hand-off list. Each item lists where it lands in the docs and the
-> rough recipe.
+> the v0.9.0 development docs feel complete. These artifacts require a
+> manual terminal recording session, so this file is a hand-off list. Each
+> item lists where it lands in the docs and the rough recipe.
 
 Place finished artifacts under `docs/assets/` (create if missing) and
 embed them at the section named in each item:

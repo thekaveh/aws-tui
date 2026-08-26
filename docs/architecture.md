@@ -154,7 +154,8 @@ shutdown is awaited before disposal, and every hosted service's owned
 operations drain before teardown. App shutdown is task-owned and idempotent. Explicit quit and Textual
 unmount (including fatal teardown) await the same sequence: stop navigation
 intake, drain transfers, setup, queries, and preview workers, close every
-aioboto3 client, flush logs, then dispose subscriptions and the VM tree
+aioboto3 client, dispose subscriptions and the VM tree, then flush and close
+logs last so teardown diagnostics remain available
 (spec §5.4).
 
 ## 1.4. Messaging

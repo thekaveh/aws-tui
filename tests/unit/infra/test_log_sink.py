@@ -138,3 +138,39 @@ def test_capture_stdlib_aws_tui_warnings_when_enabled(tmp_path: Path) -> None:
     assert lines[-1]["level"] == "WARNING"
     assert lines[-1]["error"] == "secret_access_key=[REDACTED]"
     assert lines[-1]["error_type"] == "RuntimeError"
+
+
+@pytest.mark.parametrize("close_first", ["first", "second"])
+def test_overlapping_stdlib_captures_restore_logger_after_final_close(
+    tmp_path: Path,
+    close_first: str,
+) -> None:
+    logger = logging.getLogger("aws_tui")
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    previous_handlers = list(logger.handlers)
+    logger.setLevel(logging.WARNING)
+    logger.propagate = True
+
+    first = LogSink(base_dir=tmp_path / "first", capture_stdlib=True)
+    second = LogSink(base_dir=tmp_path / "second", capture_stdlib=True)
+    closing, survivor, survivor_dir = (
+        (first, second, tmp_path / "second")
+        if close_first == "first"
+        else (second, first, tmp_path / "first")
+    )
+    try:
+        closing.close()
+        logging.getLogger("aws_tui.overlap").info("survivor-record")
+        survivor.flush()
+        assert _read_log_lines(survivor_dir)[-1]["event"] == "survivor-record"
+
+        survivor.close()
+        assert logger.level == logging.WARNING
+        assert logger.propagate is True
+        assert logger.handlers == previous_handlers
+    finally:
+        first.close()
+        second.close()
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
