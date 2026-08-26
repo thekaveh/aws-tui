@@ -47,6 +47,8 @@ class OperationOwner:
         except Exception:
             if caller is not None and caller.cancelling():
                 raise asyncio.CancelledError from None
+            if not self._accepting:
+                raise self._superseded_error from None
             raise
         if caller is not None and caller.cancelling():
             raise asyncio.CancelledError

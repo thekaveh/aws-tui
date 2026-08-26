@@ -88,3 +88,24 @@ async def test_drain_continues_after_owned_task_cleanup_fails(
     finally:
         release_slow_cleanup.set()
         await asyncio.gather(drain, failing, slow, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_closed_owner_translates_cancellation_cleanup_failure() -> None:
+    owner = OperationOwner()
+    operation_started = asyncio.Event()
+
+    async def operation() -> None:
+        operation_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            raise RuntimeError("cleanup failed")
+
+    caller = asyncio.create_task(owner.run(operation))
+    await operation_started.wait()
+    owner.close()
+    await owner.cancel_and_drain()
+
+    with pytest.raises(OperationSuperseded):
+        await caller
