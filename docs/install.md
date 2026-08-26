@@ -28,7 +28,7 @@ aws-tui --version
 ```bash
 git clone https://github.com/thekaveh/aws-tui.git
 cd aws-tui
-uv sync --frozen --dev
+uv sync --locked --all-groups
 uv run aws-tui
 ```
 

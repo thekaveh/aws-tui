@@ -429,9 +429,22 @@ class AthenaQueryVM:
             self._reset_execution_state()
             self._notify("context")
             self._execute_command.cancel()
-            await self._drain_execution_task()
-            await self._stop_pending_cleanup(report_error=False)
-            self._lifecycle_transition = False
+            cancelled = False
+            cleanup = asyncio.create_task(
+                self._finish_context_transition(),
+                name="athena-context-transition-cleanup",
+            )
+            try:
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                cleanup.result()
+            finally:
+                self._lifecycle_transition = False
+            if cancelled:
+                raise asyncio.CancelledError
 
     async def execute(self) -> None:
         if (
@@ -678,6 +691,10 @@ class AthenaQueryVM:
     async def _stop_pending_cleanup(self, *, report_error: bool) -> None:
         for ref in tuple(self._pending_cleanup_refs.values()):
             await self._stop_retained_ref(ref, report_error=report_error)
+
+    async def _finish_context_transition(self) -> None:
+        await self._drain_execution_task()
+        await self._stop_pending_cleanup(report_error=False)
 
     async def _drain_execution_task(self) -> None:
         task = self._execution_task

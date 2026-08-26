@@ -301,3 +301,21 @@ def test_transfers_register_vm_accepts_prebuilt_transfer_vm() -> None:
     assert tvms.register_vm(duplicate) is vm  # original wins
     assert sum(1 for t in tvms.transfers if t.id == "custom") == 1
     tvms.dispose()
+
+
+def test_transfers_register_vm_before_parent_construction_attaches_once() -> None:
+    hub = _hub()
+    tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    child = TransferVM(
+        _model(id="early", state=TransferState.RUNNING),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+
+    tvms.register_vm(child)
+    tvms.construct()
+
+    assert tvms.is_constructed
+    assert child.is_constructed
+    assert tvms.transfers == (child,)
+    tvms.dispose()

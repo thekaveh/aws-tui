@@ -2801,6 +2801,14 @@ class AwsTuiApp(App[None]):
             await ctx.root_vm.switch_connection_and_service(target, auth_state, service_id)
             if await self._mount_service_view(service_id, required_connection=target):
                 return True
+        except asyncio.CancelledError:
+            if prior_connection is not None and prior_auth_state is not None:
+                await self._restore_single_context_source_durably(
+                    service_id,
+                    prior_connection,
+                    prior_auth_state,
+                )
+            raise
         except Exception as exc:
             ctx.log_sink.error(
                 "service_source.rebuild_failed",
@@ -2810,24 +2818,15 @@ class AwsTuiApp(App[None]):
             )
 
         restored = False
+        rollback_cancelled = False
         if prior_connection is not None and prior_auth_state is not None:
-            try:
-                await ctx.root_vm.switch_connection_and_service(
-                    prior_connection,
-                    prior_auth_state,
-                    service_id,
-                )
-                restored = await self._mount_service_view(
-                    service_id,
-                    required_connection=prior_connection,
-                )
-            except Exception as exc:
-                ctx.log_sink.error(
-                    "service_source.rollback_failed",
-                    service_id=service_id,
-                    connection=prior_connection.name,
-                    error_type=type(exc).__name__,
-                )
+            restored, rollback_cancelled = await self._restore_single_context_source_durably(
+                service_id,
+                prior_connection,
+                prior_auth_state,
+            )
+        if rollback_cancelled:
+            raise asyncio.CancelledError
         notifications.error(
             ctx.root_vm.chrome.toast_stack,
             subject="Source",
@@ -2837,6 +2836,49 @@ class AwsTuiApp(App[None]):
             ),
         )
         return False
+
+    async def _restore_single_context_source_durably(
+        self,
+        service_id: str,
+        connection: Connection,
+        auth_state: TokenState,
+    ) -> tuple[bool, bool]:
+        rollback = asyncio.create_task(
+            self._restore_single_context_source(service_id, connection, auth_state),
+            name=f"{service_id}-source-rollback",
+        )
+        cancelled = False
+        while not rollback.done():
+            try:
+                await asyncio.shield(rollback)
+            except asyncio.CancelledError:
+                cancelled = True
+        return rollback.result(), cancelled
+
+    async def _restore_single_context_source(
+        self,
+        service_id: str,
+        connection: Connection,
+        auth_state: TokenState,
+    ) -> bool:
+        try:
+            await self._app_ctx.root_vm.switch_connection_and_service(
+                connection,
+                auth_state,
+                service_id,
+            )
+            return await self._mount_service_view(
+                service_id,
+                required_connection=connection,
+            )
+        except Exception as exc:
+            self._app_ctx.log_sink.error(
+                "service_source.rollback_failed",
+                service_id=service_id,
+                connection=connection.name,
+                error_type=type(exc).__name__,
+            )
+            return False
 
     def _make_s3_provider_for_connection(self, conn: Connection) -> FileSystemProvider:
         """Build the S3 pane provider through the registered S3 service.

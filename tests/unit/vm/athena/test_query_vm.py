@@ -633,6 +633,45 @@ async def test_lifecycle_transition_retains_detached_submission_until_remote_sto
 
 
 @pytest.mark.asyncio
+async def test_cancelled_context_transition_finishes_remote_stop_and_clears_busy_state() -> None:
+    fake = seeded_athena([QueryState.RUNNING])
+    fake.block_poll_for = "q-app-1"
+    fake.block_stop = True
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 1")
+    execution = asyncio.create_task(vm.execute())
+    await asyncio.wait_for(fake.poll_started.wait(), timeout=1)
+    replacement = QueryContext(
+        "prod-west",
+        "us-west-2",
+        "other-workgroup",
+        "AwsDataCatalog",
+        "other_database",
+    )
+    transition = asyncio.create_task(vm.set_context(replacement))
+    await asyncio.wait_for(fake.stop_started.wait(), timeout=1)
+
+    transition.cancel()
+    await asyncio.sleep(0)
+    assert not transition.done()
+    transition.cancel()
+    transition.cancel()
+    await asyncio.sleep(0)
+    assert not transition.done()
+    fake.release_stop.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(transition, timeout=1)
+    await asyncio.wait_for(execution, timeout=1)
+
+    assert vm.context == replacement
+    assert not vm._lifecycle_transition
+    assert vm._pending_cleanup_refs == {}
+    assert vm.export_snapshot().context == replacement
+    await vm.shutdown()
+    vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_awaits_detached_submission_error_without_publication() -> None:
     fake = DetachedStartAthena(
         executions=((_detail("q-app-1", QueryState.RUNNING),),),

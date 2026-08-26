@@ -360,6 +360,129 @@ async def test_failed_source_mount_restores_previous_source(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_cancelled_source_switch_during_teardown_restores_previous_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx, _calls = _multi_profile_emr_context(tmp_path)
+    app = AwsTuiApp(ctx)
+    release_shutdown = asyncio.Event()
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_service_mount(pilot, app)
+            prior = ctx.root_vm.active_connection
+            prior_vm = ctx.root_vm.content_host.current
+            assert prior is not None
+            assert prior_vm is not None
+            target = next(
+                connection
+                for connection in _service_source_candidates(ctx, "emr-serverless")
+                if connection != prior
+            )
+            shutdown_started = asyncio.Event()
+            original_shutdown = prior_vm.shutdown
+
+            async def blocked_shutdown() -> None:
+                shutdown_started.set()
+                await release_shutdown.wait()
+                await original_shutdown()
+
+            monkeypatch.setattr(prior_vm, "shutdown", blocked_shutdown)
+            rebuild = asyncio.create_task(
+                app._rebuild_single_context_source("emr-serverless", target)
+            )
+            await asyncio.wait_for(shutdown_started.wait(), timeout=1)
+
+            rebuild.cancel()
+            release_shutdown.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(rebuild, timeout=2)
+            await _await_service_mount(pilot, app)
+
+            assert ctx.root_vm.active_connection == prior
+            assert ctx.root_vm.content_host.current is not None
+            assert ctx.root_vm.content_host.current.source.connection_key == (
+                prior.name,
+                prior.region,
+            )
+    finally:
+        release_shutdown.set()
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_source_mount_durably_restores_previous_source(tmp_path: Path) -> None:
+    ctx, _calls = _multi_profile_emr_context(tmp_path)
+    app = AwsTuiApp(ctx)
+    release_rollback = asyncio.Event()
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_service_mount(pilot, app)
+            prior = ctx.root_vm.active_connection
+            assert prior is not None
+            target = next(
+                connection
+                for connection in _service_source_candidates(ctx, "emr-serverless")
+                if connection != prior
+            )
+            real_mount = app._mount_service_view
+            target_mount_started = asyncio.Event()
+            rollback_mount_started = asyncio.Event()
+
+            async def blocked_mount(
+                service_id: str,
+                *,
+                required_connection: Connection | None = None,
+            ) -> bool:
+                assert required_connection is not None
+                if required_connection == target:
+                    target_mount_started.set()
+                    await asyncio.Event().wait()
+                rollback_mount_started.set()
+                await release_rollback.wait()
+                return await real_mount(
+                    service_id,
+                    required_connection=required_connection,
+                )
+
+            app._mount_service_view = blocked_mount  # type: ignore[method-assign]
+            rebuild = asyncio.create_task(
+                app._rebuild_single_context_source("emr-serverless", target)
+            )
+            await asyncio.wait_for(target_mount_started.wait(), timeout=1)
+            assert ctx.root_vm.active_connection == target
+
+            rebuild.cancel()
+            await asyncio.wait_for(rollback_mount_started.wait(), timeout=1)
+            rebuild.cancel()
+            rebuild.cancel()
+            await asyncio.sleep(0)
+            assert not rebuild.done()
+            release_rollback.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(rebuild, timeout=2)
+            await _await_service_mount(pilot, app)
+
+            assert ctx.root_vm.active_connection == prior
+            assert ctx.root_vm.content_host.current is not None
+            assert ctx.root_vm.content_host.current.source.connection_key == (
+                prior.name,
+                prior.region,
+            )
+    finally:
+        release_rollback.set()
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_glue_source_picker_event_rebuilds_exact_selected_target(
     tmp_path: Path,
 ) -> None:
