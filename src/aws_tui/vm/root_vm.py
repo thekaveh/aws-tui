@@ -107,6 +107,7 @@ class RootVM:
             region=region,
             error_type=message.error_type,
             error=message.safe_error,
+            traceback=message.safe_traceback,
         )
 
     # ── Children accessors ──────────────────────────────────────────────────

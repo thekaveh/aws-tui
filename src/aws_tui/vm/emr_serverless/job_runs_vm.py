@@ -45,6 +45,7 @@ from aws_tui.domain.emr_serverless import (
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
@@ -438,7 +439,10 @@ class JobRunsVM:
 
     def _new_pager(self) -> TokenPagedComposition[JobRunItemVM, str]:
         return TokenPagedComposition(
-            self._fetch_page,
+            reject_token_cycles(
+                self._fetch_page,
+                message="EMR Serverless repeated a job-run continuation token",
+            ),
             pages_equal=self._pages_equal,
         )
 
@@ -460,8 +464,6 @@ class JobRunsVM:
             start_token=token,
             states=None,
         )
-        if token is not None and next_token == token:
-            raise ProviderError("EMR Serverless repeated a job-run continuation token")
         if self._paging_identity is not None:
             app_id, expected_token = self._paging_identity
             if token is None and self._application_id != app_id:

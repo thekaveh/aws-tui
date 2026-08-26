@@ -12,6 +12,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueJobRunSummary, GlueJobSummary
 from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
@@ -332,7 +333,12 @@ class GlueJobsVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return TokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a job continuation token",
+            )
+        )
 
     def _clear_job_selection(self) -> None:
         self._run_generation += 1
@@ -369,7 +375,12 @@ class GlueJobsVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return TokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a job-run continuation token",
+            )
+        )
 
     def _set_state(self, field: str, state: PaneState, property_name: str) -> None:
         if getattr(self, field) == state:

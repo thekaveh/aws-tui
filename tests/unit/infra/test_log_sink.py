@@ -140,6 +140,24 @@ def test_capture_stdlib_aws_tui_warnings_when_enabled(tmp_path: Path) -> None:
     assert lines[-1]["error_type"] == "RuntimeError"
 
 
+def test_capture_stdlib_exception_serializes_redacted_traceback(tmp_path: Path) -> None:
+    s = LogSink(base_dir=tmp_path, capture_stdlib=True)
+    try:
+        try:
+            raise RuntimeError("Authorization: Bearer TRACE_SECRET")
+        except RuntimeError:
+            logging.getLogger("aws_tui.background").exception("background.failed")
+        s.flush()
+    finally:
+        s.close()
+
+    raw = (tmp_path / "aws-tui.log").read_text(encoding="utf-8")
+    assert "TRACE_SECRET" not in raw
+    record = _read_log_lines(tmp_path)[-1]
+    assert record["event"] == "background.failed"
+    assert "RuntimeError: Authorization: Bearer [REDACTED]" in str(record["traceback"])
+
+
 @pytest.mark.parametrize("close_first", ["first", "second"])
 def test_overlapping_stdlib_captures_restore_logger_after_final_close(
     tmp_path: Path,

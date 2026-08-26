@@ -23,6 +23,7 @@ from aws_tui.domain.data_catalog import (
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
@@ -778,7 +779,12 @@ class GlueCatalogVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return TokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a database continuation token",
+            )
+        )
 
     def _make_table_pager(
         self,
@@ -806,7 +812,12 @@ class GlueCatalogVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return TokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a table continuation token",
+            )
+        )
 
     def _make_partition_pager(
         self,
@@ -834,7 +845,12 @@ class GlueCatalogVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return TokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a partition continuation token",
+            )
+        )
 
     def _replace_table_pager(self, database_name: str | None) -> None:
         old_pager = self._table_pager

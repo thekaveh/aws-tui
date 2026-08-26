@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -49,6 +50,7 @@ from aws_tui.infra.redaction import redact_text
 _PAGE_SIZE = 50
 _RESULT_PAGE_SIZE = 1000
 _NAMED_QUERY_BATCH_SIZE = 50
+_MAX_RETIRED_APP_STARTED_QUERIES = 1_024
 _TERMINAL_QUERY_STATES = frozenset(
     {
         QueryState.SUCCEEDED,
@@ -218,6 +220,7 @@ class AthenaClient:
         self._app_started_active_queries: set[str] = set()
         self._app_started_query_ids_by_token: dict[str, str] = {}
         self._retired_app_started_queries: set[str] = set()
+        self._retired_app_started_query_order: deque[str] = deque()
         self._stop_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def list_workgroups_page(
@@ -647,7 +650,12 @@ class AthenaClient:
         if not owned:
             return
         self._app_started_active_queries.discard(execution_id)
-        self._retired_app_started_queries.add(execution_id)
+        if execution_id not in self._retired_app_started_queries:
+            self._retired_app_started_queries.add(execution_id)
+            self._retired_app_started_query_order.append(execution_id)
+            while len(self._retired_app_started_query_order) > _MAX_RETIRED_APP_STARTED_QUERIES:
+                expired_id = self._retired_app_started_query_order.popleft()
+                self._retired_app_started_queries.discard(expired_id)
         retired_tokens = [
             token
             for token, token_execution_id in self._app_started_query_ids_by_token.items()

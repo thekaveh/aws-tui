@@ -19,6 +19,7 @@ production polishes over the original test fake:
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -36,6 +37,7 @@ from aws_tui.domain.emr_serverless import (
 # Mirrors aws_tui.demo.in_memory_fs._DEMO_LATENCY_SEC. Surfaces the
 # UI's loading… placeholders during demo runs.
 _DEMO_LATENCY_SEC: float = 0.05
+_logger = logging.getLogger(__name__)
 
 
 class InMemoryEmr:
@@ -376,11 +378,16 @@ class InMemoryEmr:
         self._state_tasks.discard(task)
         if task.cancelled():
             return
-        # Drain task.exception() to suppress asyncio's "never
-        # retrieved" warning. Demo-mode-only blast radius — there
-        # is no production toast surface to route to; the bare
-        # drain is the contract.
-        _ = task.exception()
+        error = task.exception()
+        if error is not None:
+            _logger.error(
+                "demo.emr.state_walk.failed",
+                extra={
+                    "error": str(error),
+                    "error_type": type(error).__name__,
+                },
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def _advance_state(self, application_id: str, job_run_id: str) -> None:
         """Walk a freshly-submitted job through SUBMITTED → SCHEDULED →
@@ -429,12 +436,20 @@ class InMemoryEmr:
         The brief proposed a ``__slots__``-reflection dict comprehension,
         but ``dataclasses.replace`` is cleaner and avoids the branch.
         """
-        updated_at = self._tick(advance_seconds)
         runs = self._runs.get(application_id, {})
         existing = runs.get(job_run_id)
+        detail = self._details.get((application_id, job_run_id))
+        prior_updated_at = (
+            existing.updated_at
+            if existing is not None
+            else detail.updated_at
+            if detail is not None
+            else self._clock
+        )
+        updated_at = prior_updated_at + timedelta(seconds=advance_seconds)
+        self._observe_timestamp(updated_at)
         if existing is not None:
             runs[job_run_id] = replace(existing, state=state, updated_at=updated_at)
-        detail = self._details.get((application_id, job_run_id))
         if detail is not None:
             duration_ms = detail.duration_ms
             if state in {JobRunState.SUCCESS, JobRunState.FAILED, JobRunState.CANCELLED}:

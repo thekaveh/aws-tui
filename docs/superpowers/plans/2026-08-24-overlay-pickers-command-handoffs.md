@@ -1,7 +1,8 @@
 # 1. Overlay Pickers, One-Line Commands, and Athena Handoffs Implementation Plan
 
-**Status:** Tasks 1-6 and Task 7 Steps 1-6 implemented on the feature branch on
-2026-08-25; push, PR, merge, and branch cleanup remain parent-owned.
+**Status:** Completed and merged into `develop` through PR #176 on 2026-08-25.
+This is a historical implementation record; its branch commands, checklists,
+and lifecycle instructions are not current work.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -13,7 +14,7 @@
 
 ## 1.1. Global Constraints
 
-- Work only on `codex/overlay-pickers-command-handoffs`, based on current `develop`; merge only through a PR back to `develop`.
+- Historical execution constraint: work was performed on `codex/overlay-pickers-command-handoffs`, based on `develop`, and merged back through PR #176.
 - `ContextPicker` and EMR `ApplicationPicker` are the only inline-dropdown classes in scope; resource `OptionList` panes, modal pickers, and the command palette are excluded.
 - A picker trigger keeps its three-row collapsed footprint while open; opening and closing may not change parent, sibling, tab-strip, or service-content regions.
 - Dropdown overlays use Textual's screen overlay and viewport constraint facilities; do not manually calculate absolute screen coordinates.

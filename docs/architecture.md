@@ -42,8 +42,9 @@ VMs to build service pages, but it cannot import Textual widgets.
   `src/aws_tui/vm/service_source_vm.py`, shared by the single-context service
   VMs rather than owned by Infrastructure. Subtrees:
   - `vm/chrome/` — persistent shell state (hint legend, toasts,
-    overlays like command palette / confirm / quick look / crash, plus
-    dormant transfer-recovery scaffolding). `HintLegendVM` owns service-scoped action
+    and overlays like command palette / confirm / quick look / crash).
+    Transfer journals are diagnostic-only; no startup recovery VM or UI ships.
+    `HintLegendVM` owns service-scoped action
     membership, configured shortcut labels, complete effect/prerequisite
     tooltips, availability, and fitting priority. The `HintLegend` view performs
     terminal-width measurement and renders exactly one compact command row;

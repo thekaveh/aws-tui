@@ -65,73 +65,47 @@ def test_filling_a_required_field_clears_its_error() -> None:
     f.dispose()
 
 
-# -------------------- cross-field validator --------------------
+# -------------------- addressing-style independence --------------------
 
 
-def test_endpoint_iff_force_path_style_is_enforced_both_directions() -> None:
-    """The §9.bis.5 canonical cross-field example.
-
-    The validator is symmetric: setting the endpoint without
-    ``force_path_style`` flags ``force_path_style``; requiring
-    ``force_path_style`` without an endpoint flags ``endpoint_url``
-    with the cross-field message (distinct from the bare
-    field-presence message)."""
-    # Direction A — endpoint set + force_path_style off → flag force_path_style.
-    f_a = S3ConnectionFormVM(
+def test_virtual_hosted_compatible_endpoint_is_valid() -> None:
+    """Custom endpoints may use virtual-hosted addressing, as R2 does."""
+    form = S3ConnectionFormVM(
         initial=_valid().__class__(
-            name="x",
-            endpoint_url="http://x",
-            region="r",
-            access_key_id="a",
-            secret_access_key="s",
+            name="r2-prod",
+            endpoint_url="https://account.r2.cloudflarestorage.com",
+            region="auto",
+            access_key_id="R2_ACCESS_KEY",
+            secret_access_key="R2_SECRET",
             force_path_style=False,
         ),
         persister=_ok_persister,
     )
-    assert "force_path_style" in f_a.errors
-    f_a.dispose()
-    # Direction B — force_path_style on + no endpoint → flag endpoint_url
-    # WITH the cross-field message (not the bare field-presence message).
-    f_b = S3ConnectionFormVM(
+
+    assert form.errors == {}
+    assert form.is_valid is True
+    form.dispose()
+
+
+@pytest.mark.parametrize("force_path_style", [True, False])
+def test_custom_endpoint_is_required_for_every_addressing_style(
+    force_path_style: bool,
+) -> None:
+    form = S3ConnectionFormVM(
         initial=_valid().__class__(
             name="x",
             endpoint_url="",
             region="r",
             access_key_id="a",
             secret_access_key="s",
-            force_path_style=True,
+            force_path_style=force_path_style,
         ),
         persister=_ok_persister,
     )
-    assert "endpoint_url" in f_b.errors
-    # The cross-field message must be the one that lands — proves the
-    # model validator fired (not just the field-presence validator,
-    # which would say "endpoint_url is required" instead).
-    assert "force_path_style is True" in f_b.errors["endpoint_url"]
-    f_b.dispose()
 
-
-def test_no_endpoint_no_force_path_style_satisfies_cross_field_but_field_presence_still_fails() -> (
-    None
-):
-    """Both flags off → cross-field invariant is consistent (no
-    ``force_path_style`` error), but ``endpoint_url`` is still
-    flagged because every s3-compatible connection needs a custom
-    endpoint URL — the form has no "AWS S3" mode."""
-    f = S3ConnectionFormVM(
-        initial=_valid().__class__(
-            name="prod",
-            endpoint_url="",
-            region="us-east-1",
-            access_key_id="a",
-            secret_access_key="s",
-            force_path_style=False,
-        ),
-        persister=_ok_persister,
-    )
-    assert "endpoint_url" in f.errors  # field-presence wins
-    assert "force_path_style" not in f.errors  # cross-field invariant holds
-    f.dispose()
+    assert form.errors["endpoint_url"] == "endpoint_url is required"
+    assert "force_path_style" not in form.errors
+    form.dispose()
 
 
 # -------------------- submit gating --------------------

@@ -1,12 +1,13 @@
 """S3ConnectionFormVM — custom VM composing VMx FormVM (round-3 §9.bis.5).
 
 Wraps a :class:`vmx.FormVM` over :class:`S3CompatForm` and adds
-the cross-field invariants the S3-connection edit flow needs:
+the field invariants the S3-connection edit flow needs:
 
 - All visible fields (``name`` / ``endpoint_url`` / ``region`` /
   ``access_key_id`` / ``secret_access_key``) are required.
-- ``endpoint_url`` must be present IFF ``force_path_style`` is True —
-  the §9.bis.5 canonical cross-field example.
+- ``endpoint_url`` is required for every S3-compatible connection.
+- ``force_path_style`` remains independent because services such as
+  Cloudflare R2 use custom endpoints with virtual-hosted addressing.
 
 The inner :class:`vmx.FormVM` is NOT exposed publicly. Consumers (view
 widgets, tests) bind to the ``model``, ``errors``, ``can_submit``,
@@ -27,7 +28,6 @@ from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 #: Async persister: (form) -> Awaitable[None]. Raises on failure.
 S3FormPersister = Callable[[S3CompatForm], Awaitable[None]]
 S3FieldValidator = Callable[[S3CompatForm], str | None]
-S3ModelValidator = Callable[[S3CompatForm], dict[str, str]]
 
 
 def _require_non_empty(field_label: str) -> Callable[[S3CompatForm], str | None]:
@@ -52,20 +52,6 @@ def _first_error(*validators: S3FieldValidator) -> S3FieldValidator:
         return None
 
     return _validate
-
-
-def _endpoint_iff_force_path_style(form: S3CompatForm) -> dict[str, str]:
-    has_endpoint = bool(form.endpoint_url.strip())
-    if has_endpoint == form.force_path_style:
-        return {}
-    if form.force_path_style and not has_endpoint:
-        return {
-            "endpoint_url": "endpoint URL is required when force_path_style is True",
-        }
-    # has_endpoint AND not force_path_style — the converse mismatch
-    return {
-        "force_path_style": "force_path_style must be True when an endpoint URL is set",
-    }
 
 
 class S3ConnectionFormVM:
@@ -114,7 +100,6 @@ class S3ConnectionFormVM:
             builder.initial(initial)
             .persister(persister)
             .strict(strict)
-            .model_validator(_endpoint_iff_force_path_style)
             .validator("name", field_validators["name"])
             .validator("endpoint_url", field_validators["endpoint_url"])
             .validator("region", field_validators["region"])
@@ -196,5 +181,4 @@ __all__ = [
     "S3ConnectionFormVM",
     "S3FieldValidator",
     "S3FormPersister",
-    "S3ModelValidator",
 ]

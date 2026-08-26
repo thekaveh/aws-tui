@@ -12,6 +12,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueCrawlerDetail, GlueCrawlerSummary
 from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
@@ -256,7 +257,12 @@ class GlueCrawlersVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return TokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a crawler continuation token",
+            )
+        )
 
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:

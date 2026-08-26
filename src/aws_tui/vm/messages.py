@@ -12,6 +12,7 @@ to keep the VM layer free of Textual / boto3 imports.
 
 from __future__ import annotations
 
+import traceback
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
@@ -169,6 +170,7 @@ class ServiceOperationFailedMessage:
     operation: str
     error_type: str
     safe_error: str
+    safe_traceback: str
     source: str | None = None
     region: str | None = None
     sender_name: str = "service_operation"
@@ -188,6 +190,9 @@ class ServiceOperationFailedMessage:
             operation=operation,
             error_type=type(error).__name__,
             safe_error=redact_text(str(error)),
+            safe_traceback=redact_text(
+                "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            ).strip(),
             source=source,
             region=region,
         )

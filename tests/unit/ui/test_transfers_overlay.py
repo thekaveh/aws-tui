@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Button
 from vmx import NULL_DISPATCHER, Message, MessageHub
 
-from aws_tui.ui.widgets.transfers_overlay import TransferRowWidget
+from aws_tui.ui.widgets.transfers_overlay import TransferRowWidget, TransfersOverlay
 from aws_tui.vm.file_manager.transfer_vm import TransferModel, TransferState, TransferVM
+from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 
 
 class _TransferRowApp(App[None]):
@@ -72,3 +75,30 @@ async def test_cancel_button_is_disabled_for_finished_transfer() -> None:
             assert cancel.disabled
     finally:
         vm.dispose()
+
+
+def test_expired_ids_are_pruned_with_bounded_transfer_history() -> None:
+    hub = cast("MessageHub[Message]", MessageHub())
+    vm = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    overlay = TransfersOverlay(vm, hub=hub)
+
+    for index in range(125):
+        vm.register(
+            TransferModel(
+                id=f"transfer-{index}",
+                direction="upload",
+                source_label=f"/tmp/{index}",
+                destination_label=f"s3://bucket/{index}",
+                bytes_done=1,
+                bytes_total=1,
+                state=TransferState.COMPLETED,
+            )
+        )
+        overlay._expired_ids.add(f"transfer-{index}")
+    overlay._rebuild()
+
+    retained_ids = {transfer.id for transfer in vm.transfers}
+    assert overlay._expired_ids == retained_ids
+    assert len(overlay._expired_ids) == 100
+    vm.dispose()

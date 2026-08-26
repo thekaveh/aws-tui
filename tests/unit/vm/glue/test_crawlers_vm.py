@@ -6,7 +6,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.filesystem import PermissionDeniedError
+from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.crawlers_vm import GlueCrawlersVM
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
@@ -35,6 +35,35 @@ async def test_crawlers_page_and_load_detail() -> None:
     await vm.select_crawler("ready-crawler")
     assert vm.crawler_detail is not None
     assert vm.crawler_detail.summary.name == "ready-crawler"
+
+
+@pytest.mark.asyncio
+async def test_crawler_pager_rejects_multi_token_cycle_before_mutation() -> None:
+    fake = seeded_glue()
+    lineage = {None: "A", "A": "B", "B": "A"}
+    original = fake.list_crawlers_page
+
+    async def crawlers(
+        *,
+        start_token: str | None = None,
+        state: str | None = None,
+    ) -> tuple[list, str | None]:
+        rows, _ = await original(start_token=None, state=state)
+        return rows, lineage[start_token]
+
+    fake.list_crawlers_page = crawlers  # type: ignore[method-assign]
+    vm = make_crawlers_vm(fake)
+    pager = vm._make_crawler_pager()
+    try:
+        await pager.refresh_command.execute_async()
+        await pager.load_more_command.execute_async()
+        before = pager.items
+        with pytest.raises(ProviderError, match="crawler continuation"):
+            await pager.load_more_command.execute_async()
+        assert pager.items == before
+    finally:
+        pager.dispose()
+        vm.dispose()
 
 
 @pytest.mark.asyncio

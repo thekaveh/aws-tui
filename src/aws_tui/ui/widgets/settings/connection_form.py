@@ -495,9 +495,9 @@ class ConnectionFormInline(Widget):
         self._submitting = True
         # Pull the live model from the form VM. set_field has been
         # threading every keystroke into the working model, so it's
-        # current — just hand it off. force_path_style=True and
-        # verify_tls=True from the initial construction survive
-        # untouched because no Input writes to those fields.
+        # current — just hand it off. The initial force_path_style
+        # and verify_tls values survive untouched because no Input
+        # writes to those fields.
         model = self._form_vm.model
         ctx = self._ctx
         self.post_message(

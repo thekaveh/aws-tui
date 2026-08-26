@@ -60,6 +60,8 @@ class _JsonLineFormatter(logging.Formatter):
             }
             if stdlib_extra:
                 payload.update(redact_mapping(stdlib_extra))
+        if record.exc_info is not None:
+            payload["traceback"] = redact_text(self.formatException(record.exc_info))
         return json.dumps(payload, default=str, separators=(",", ":"))
 
 

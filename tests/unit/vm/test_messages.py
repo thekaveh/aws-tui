@@ -15,6 +15,7 @@ from aws_tui.vm.messages import (
     OpenAthenaTableRequest,
     OpenGlueTableRequest,
     OpenS3LocationRequest,
+    ServiceOperationFailedMessage,
     ThemeChangedMessage,
     TransferProgressMessage,
 )
@@ -101,6 +102,22 @@ def test_theme_changed_round_trip() -> None:
     msg = ThemeChangedMessage(name="amber")
     assert msg.name == "amber"
     assert msg.sender_name == "root"
+
+
+def test_service_failure_retains_redacted_traceback_text() -> None:
+    try:
+        raise RuntimeError("Authorization: Bearer TRACE_SECRET")
+    except RuntimeError as error:
+        message = ServiceOperationFailedMessage.from_error(
+            service="athena",
+            operation="list_catalogs",
+            error=error,
+        )
+
+    assert "test_service_failure_retains_redacted_traceback_text" in message.safe_traceback
+    assert "RuntimeError" in message.safe_traceback
+    assert "TRACE_SECRET" not in message.safe_traceback
+    assert "Authorization: Bearer [REDACTED]" in message.safe_traceback
 
 
 def test_transfer_progress_round_trip() -> None:

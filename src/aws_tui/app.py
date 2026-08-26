@@ -1702,7 +1702,7 @@ class AwsTuiApp(App[None]):
             form = self.query_one(ConnectionFormInline)
             if form.cycle_focus(reverse=reverse):
                 return
-        # EMR page owns its own 4-slot Tab cycle.
+        # EMR page owns its own six-slot Tab cycle.
         with contextlib.suppress(Exception):
             emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
             if reverse:

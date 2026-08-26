@@ -363,6 +363,7 @@ def test_unexpected_service_failure_is_logged_with_active_source() -> None:
                 "region": "us-east-1",
                 "error_type": "RuntimeError",
                 "error": "Authorization: Bearer [REDACTED]",
+                "traceback": "RuntimeError: Authorization: Bearer [REDACTED]",
             },
         )
     ]

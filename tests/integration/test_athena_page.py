@@ -444,7 +444,7 @@ async def test_recovered_context_pager_clears_error_styling_tooltip_and_hint(
             start_token: str | None = None,
         ) -> tuple[list[object], str | None]:
             assert start_token == "workgroups-next"
-            return list(client.workgroups), "workgroups-next"
+            return list(client.workgroups), "workgroups-after-retry"
 
         client.list_workgroups_page = retry_page  # type: ignore[method-assign]
         await page.action_load_more()

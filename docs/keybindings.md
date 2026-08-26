@@ -95,8 +95,10 @@ connection-switch entries in the row above remain deferred.
 
 These actions are wired by `EmrServerlessPage`. The EMR page is mounted in
 place of the S3 dual-pane when the **EMR** navigation row is selected.
-Bindings are App-level `priority=True` and short-circuit through
-`_emr_active_pane()` before the dual-pane guard fires.
+Bindings resolve at App level and short-circuit through `_emr_active_pane()`
+before the dual-pane guard fires. Non-printable navigation keys use App
+priority where appropriate; printable action keys remain non-priority so a
+focused editable widget can consume text first.
 
 | Action | Default | Notes |
 |---|---|---|

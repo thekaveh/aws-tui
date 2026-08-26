@@ -318,6 +318,35 @@ async def test_load_more_rejects_repeated_continuation_token() -> None:
     assert vm.error_text == "EMR Serverless repeated a job-run continuation token"
 
 
+@pytest.mark.asyncio
+async def test_load_more_rejects_multi_token_cycle_before_mutation() -> None:
+    class _CyclicTokenClient(_InMemoryEmr):
+        async def list_job_runs_page(self, *args: object, **kwargs: object) -> object:
+            page, _token = await super().list_job_runs_page(  # type: ignore[arg-type]
+                *args,
+                **{**kwargs, "start_token": None},
+            )
+            lineage = {None: "A", "A": "B", "B": "A"}
+            return page, lineage[kwargs.get("start_token")]
+
+    fake = _CyclicTokenClient()
+    hub: MessageHub[Message] = MessageHub()
+    vm = JobRunsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    vm.set_application("a1")
+    await vm.refresh()
+    await vm.load_more()
+    before = vm.runs
+
+    await vm.load_more()
+
+    assert vm.runs == before
+    assert vm.error_text == "EMR Serverless repeated a job-run continuation token"
+    vm.dispose()
+
+
 # -------------------- Phase 2: composite-backed selection (§4.2.1) --------------------
 
 

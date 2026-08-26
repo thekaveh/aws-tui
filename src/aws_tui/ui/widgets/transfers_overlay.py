@@ -373,6 +373,8 @@ class TransfersOverlay(Widget):
         self.call_after_refresh(self._rebuild)
 
     def _rebuild(self) -> None:
+        represented_ids = {transfer.id for transfer in self._vm.transfers}
+        self._expired_ids.intersection_update(represented_ids)
         try:
             container = self.query_one("#transfers-overlay-inner", Vertical)
         except NoMatches:

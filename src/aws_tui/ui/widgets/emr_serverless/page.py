@@ -579,7 +579,7 @@ class EmrServerlessPage(Widget):
         the S3 file panes), so the slot ID is derived from
         ``has_focus`` / ``has_focus_within`` rather than from a VM
         flag. The NAV slot lives outside this page — when we're
-        about to leave one of our 3 panes for NAV, we drop our
+        about to leave one of our five page-owned targets for NAV, we drop our
         focus and ask the App to focus the NavMenu.
         """
         if (

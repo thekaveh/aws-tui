@@ -12,6 +12,7 @@ from unittest.mock import call
 import botocore.exceptions
 import pytest
 
+from aws_tui.domain import athena as athena_module
 from aws_tui.domain.athena import (
     AthenaCatalogSummary,
     AthenaClient,
@@ -855,6 +856,20 @@ async def test_foreign_terminal_history_does_not_enter_app_ownership_ledgers() -
     assert client._app_started_query_ids_by_token == {}
     assert client._retired_app_started_queries == set()
     assert client._stop_tasks == {}
+
+
+def test_retired_app_started_query_ledger_is_bounded() -> None:
+    client, _boto, _session = _athena_client()
+    limit = athena_module._MAX_RETIRED_APP_STARTED_QUERIES
+
+    for index in range(limit + 25):
+        execution_id = f"owned-{index}"
+        client._app_started_active_queries.add(execution_id)
+        client._retire_app_started_query(execution_id)
+
+    assert len(client._retired_app_started_queries) == limit
+    assert "owned-0" not in client._retired_app_started_queries
+    assert f"owned-{limit + 24}" in client._retired_app_started_queries
 
 
 async def test_terminal_observation_wins_over_failed_stop_race() -> None:
