@@ -66,12 +66,12 @@ def _make_connection(kind: str = "aws") -> Connection:
 
 
 @pytest.mark.asyncio
-async def test_hint_legend_renders_with_registered_actions() -> None:
+async def test_hint_legend_renders_service_actions() -> None:
     hub: MessageHub = MessageHub()
     dispatcher = RxDispatcher.immediate()
     keymap = KeymapStore()
     vm = HintLegendVM(hub=hub, dispatcher=dispatcher, keymap=keymap)
-    vm.register_focusable("pane.left", ("pane.copy", "pane.delete"))
+    vm.set_current_service("s3")
     vm.construct()
     try:
 
@@ -93,11 +93,7 @@ async def test_hint_legend_renders_with_registered_actions() -> None:
             assert "more" in strip
             assert "quit" in strip
             assert "cmd" not in strip
-            from aws_tui.vm.messages import FocusChangedMessage
-
-            hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
-            await pilot.pause()
-            assert "copy" in _strip_text(app.query_one(HintLegend))
+            assert any(action.action_id == "pane.copy" for action in vm.actions)
     finally:
         vm.dispose()
         hub.dispose()

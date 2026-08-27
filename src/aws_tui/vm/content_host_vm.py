@@ -105,12 +105,19 @@ class ContentHostVM:
         service_id: str | None,
         before_publish: Callable[[], None] | None = None,
     ) -> None:
-        async with self._swap_lock:
-            await self._set_content_locked(
-                vm,
-                service_id=service_id,
-                before_publish=before_publish,
-            )
+        try:
+            async with self._swap_lock:
+                await self._set_content_locked(
+                    vm,
+                    service_id=service_id,
+                    before_publish=before_publish,
+                )
+        except BaseException:
+            # Ownership transfers before lock acquisition. If adoption never
+            # happened, the host is the candidate's sole disposer.
+            if vm is not None and self._current is not vm:
+                vm.dispose()
+            raise
 
     async def _set_content_locked(
         self,
@@ -147,8 +154,6 @@ class ContentHostVM:
             await self._cancel_and_drain_setup()
             shutdown_cancelled = await self._shutdown_current_for_swap()
         except BaseException:
-            if vm is not None:
-                vm.dispose()
             raise
         # Dispose the previous content first so its subscriptions / tasks
         # tear down before the new one wires up.
@@ -156,15 +161,11 @@ class ContentHostVM:
             try:
                 self._current.dispose()
             except BaseException:
-                if vm is not None:
-                    vm.dispose()
                 raise
             self._current = None
             self._current_id = None
 
         if shutdown_cancelled:
-            if vm is not None:
-                vm.dispose()
             self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
             raise asyncio.CancelledError
 

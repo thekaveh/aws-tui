@@ -41,6 +41,7 @@ def _three_source_config(tmp_path: Path) -> Path:
         "[connections.minio]\n"
         'kind = "s3-compatible"\n'
         'endpoint_url = "http://127.0.0.1:9000"\n'
+        'credentials = "static"\n'
         'access_key_id = "x"\n'
         'secret_access_key = "y"\n'
         "\n"

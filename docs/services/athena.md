@@ -34,7 +34,8 @@ The Query VM records an app-owned execution identity and polls until a terminal
 state. `Esc` can stop only that active app-owned query. Results load at most
 1,000 rows per Athena page and retain the continuation token for `l` to load
 more. History hydrates selected execution detail, including bytes scanned and
-result reuse. Saved independently pages named queries and prepared statements;
+result reuse, with one `BatchGetQueryExecution` request per bounded 50-row
+history page. Saved independently pages named queries and prepared statements;
 opening either copies SQL into the editor without executing it.
 
 Workgroup configuration determines customer-S3 output or Athena managed

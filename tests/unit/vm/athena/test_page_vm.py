@@ -264,6 +264,15 @@ class PageClient:
             None,
         )
 
+    async def get_query_executions(
+        self,
+        execution_ids: list[str],
+    ) -> tuple[QueryExecutionDetail, ...]:
+        details: list[QueryExecutionDetail] = []
+        for execution_id in execution_ids:
+            details.append(await self.get_query_execution(execution_id))
+        return tuple(details)
+
     async def list_named_queries_page(
         self,
         workgroup: str,

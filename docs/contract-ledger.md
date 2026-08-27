@@ -25,10 +25,10 @@ durable map of the real upstream surfaces that mocks and adapters must track.
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
-| Amazon Athena client | `botocore==1.40.61` service model, Athena API `2017-05-18` | The `AthenaClient` uses exactly the 15 boto operation methods listed below, including `get_prepared_statement` for prepared-query detail. It always supplies `WorkGroup`, `QueryExecutionContext` (catalog/database), and a client request token to `start_query_execution`. `AthenaClient.start_query(...)` accepts an optional `output_location` and adds `ResultConfiguration.OutputLocation` only when its caller supplies that value. The shipped `AthenaQueryVM` query runner does not supply `output_location`; it relies on the selected workgroup's enforced customer S3 or Athena managed-results configuration. List/result continuations are opaque `NextToken` values. | Source trace through `src/aws_tui/domain/athena.py`, `src/aws_tui/vm/athena/query_vm.py`, `src/aws_tui/domain/query.py`, and `src/aws_tui/domain/sql_policy.py`; unit tests cover every operation, both start-query request shapes, response mapping, pagination, output-configuration failures, error normalization, and result-header handling. Documentation tests compare this exact ledger with the minimum IAM action set and pin the facade-versus-query-runner distinction. |
+| Amazon Athena client | `botocore==1.40.61` service model, Athena API `2017-05-18` | The `AthenaClient` uses exactly the 16 boto operation methods listed below, including batched history hydration and prepared-query detail. It always supplies `WorkGroup`, `QueryExecutionContext` (catalog/database), and a client request token to `start_query_execution`. `AthenaClient.start_query(...)` accepts an optional `output_location` and adds `ResultConfiguration.OutputLocation` only when its caller supplies that value. The shipped `AthenaQueryVM` query runner does not supply `output_location`; it relies on the selected workgroup's enforced customer S3 or Athena managed-results configuration. List/result continuations are opaque `NextToken` values. | Source-derived operation inventory is compared exactly with the locked Botocore model, with explicit high-risk input-member checks. Unit tests cover every operation, both start-query request shapes, response mapping, pagination, output-configuration failures, error normalization, and result-header handling. |
 | Athena page and result handoff | Internal `AthenaPageVM` / `OpenS3LocationRequest` contract | Query, History, Results, and Saved are connection- and region-scoped. The client accepts one read-only parsed statement, tracks only app-started active executions for stopping, and loads results a page at a time. A result handoff reloads the selected execution and requires a succeeded execution, matching active connection/region/context, and a valid `s3://` output location before handing the exact identity to S3. Full SQL, raw boto responses, and result values do not enter logs or crash dumps. | `tests/unit/domain/test_athena.py`, `tests/unit/domain/test_sql_policy.py`, Athena VM tests, `tests/integration/test_athena_page.py`, `tests/integration/test_athena_s3_handoff.py`, demo tests, and Athena snapshots. |
 
-Exact boto operation ledger (15):
+Exact boto operation ledger (16):
 
 ```text
 list_work_groups
@@ -38,6 +38,7 @@ list_databases
 list_table_metadata
 list_query_executions
 get_query_execution
+batch_get_query_execution
 get_query_runtime_statistics
 start_query_execution
 stop_query_execution

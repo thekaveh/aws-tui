@@ -113,8 +113,9 @@ VMs to build service pages, but it cannot import Textual widgets.
   `AthenaClient` issue service operations and map external responses/errors
   into domain values. `TableRef` and `QueryContext` carry immutable table and
   execution identity. `IcebergInspector` uses `AthenaQueryRunner` to read
-  bounded Iceberg metadata tables; `ReadOnlySqlPolicy` validates both user and
-  generated SQL. Raw AWS responses remain below VMs.
+  bounded Iceberg metadata tables; Athena history hydrates each bounded page
+  with one batch request. `ReadOnlySqlPolicy` validates both user and generated
+  SQL. Raw AWS responses remain below VMs.
 - **Infrastructure** — Infrastructure owns sessions, credentials,
   configuration, SDK client construction, and OS-backed stores.
   `AwsSession` and `ConnectionResolver` provide configured AWS identities and
@@ -122,8 +123,10 @@ VMs to build service pages, but it cannot import Textual widgets.
   the VM-layer `ServiceSelectionStore` scopes workgroup and resource
   selections by service, connection name, and region. `ConfigStore`, `ThemeStore`,
   `KeymapStore`, `LogSink`, `CrashDump`, and `KeychainBackend` persist
-  application and platform state. Infrastructure prepares those boundaries;
-  domain adapters perform the provider operations.
+  application and platform state. `ConfigStore` and Settings share endpoint
+  and credential-source validation for S3-compatible connections.
+  Infrastructure prepares those boundaries; domain adapters perform the
+  provider operations.
 
 `demo/` is a composition-only provider substitution outside the production
 layers. Demo mode selects in-memory service adapters at the composition root;
@@ -150,6 +153,10 @@ the move spans cancellation ownership and complete rollback state across all fou
 services, so treating it as a mechanical maintenance refactor would carry more risk
 than the line-count reduction justifies.
 
+At startup, automatic connection attempts consume one shared 90-second budget;
+untried sources remain available for explicit selection after the local fallback
+mounts.
+
 ## 1.3. Lifecycle
 VMx components implement `construct → destruct → dispose`. Hosted service VMs
 may additionally expose app-owned asynchronous `setup` and `shutdown` hooks;
@@ -158,8 +165,9 @@ The `RootVM` constructs the chrome and content-host children
 depth-first; `ContentHostVM.set_content(new)` disposes the previous
 content via the same cascade. When outgoing content exposes `shutdown`,
 `ContentHostVM.set_content(...)` awaits it before calling `dispose`; hosted VM
-shutdown is awaited before disposal, and every hosted service's owned
-operations drain before teardown. App shutdown is task-owned and idempotent. Explicit quit and Textual
+shutdown is awaited before disposal, and the host owns disposal of a candidate
+that is never adopted. Every hosted service's owned operations drain before
+teardown. App shutdown is task-owned and idempotent. Explicit quit and Textual
 unmount (including fatal teardown) await the same sequence: stop navigation
 intake, drain transfers, setup, queries, and preview workers, close every
 aioboto3 client, dispose subscriptions and the VM tree, then flush and close

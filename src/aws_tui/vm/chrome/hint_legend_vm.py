@@ -1,25 +1,19 @@
 """HintLegendVM — derives the bottom contextual command sequence.
 
-The legend lists action chips (``<key> <label>``) appropriate to the focused
-VM, followed by always-visible app-level fallbacks (theme, help, quit).
-The focused VM identifier flows through :class:`FocusChangedMessage`;
-key labels flow through :class:`KeymapStore` (re-resolved on every rebuild).
-
-The legend is purely a denormalized projection — when no focus message has
-arrived, only the fallback chips are shown.
+The legend lists action chips (``<key> <label>``) for the active service,
+followed by always-visible app-level fallbacks (theme, help, quit). Key labels
+flow through :class:`KeymapStore` and are re-resolved on every rebuild.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from reactivex.abc import DisposableBase
 from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
-from aws_tui.vm.messages import FocusChangedMessage
 
 # Always-visible global chips follow the service-specific commands.
 _GLOBAL_ACTIONS: tuple[str, ...] = (
@@ -271,12 +265,7 @@ class HintAction:
 
 
 class HintLegendVM:
-    """Reactive hint-legend viewmodel.
-
-    Callers register focusable VMs and their action-id sequences via
-    :meth:`register_focusable`; subsequent :class:`FocusChangedMessage` events
-    drive the visible chips.
-    """
+    """Reactive service-level hint-legend viewmodel."""
 
     def __init__(
         self,
@@ -288,8 +277,6 @@ class HintLegendVM:
         self._hub: MessageHub[Message] = hub
         self._keymap: KeymapStore = keymap
 
-        self._registry: dict[str, tuple[str, ...]] = {}
-        self._focused_vm_id: str | None = None
         self._current_service_id: str | None = None
         self._actions: tuple[HintAction, ...] = ()
         self._global_actions: tuple[HintAction, ...] = ()
@@ -303,7 +290,6 @@ class HintLegendVM:
         self._inner: ComponentVM = (
             ComponentVM.builder().name("hint_legend").services(hub, dispatcher).build()
         )
-        self._sub: DisposableBase | None = None
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -311,8 +297,8 @@ class HintLegendVM:
     def actions(self) -> tuple[HintAction, ...]:
         """Service-specific chips shown before the global commands.
 
-        Includes any focused-VM-registered ids and the active service's
-        chip set (S3, EMR, Glue, Athena, Settings, or fallback)."""
+        Includes the active service's chip set (S3, EMR, Glue, Athena,
+        Settings, or fallback)."""
         return self._actions
 
     @property
@@ -345,10 +331,6 @@ class HintLegendVM:
         self._rebuild_actions()
 
     @property
-    def focused_vm_id(self) -> str | None:
-        return self._focused_vm_id
-
-    @property
     def status(self) -> ConstructionStatus:
         return self._inner.status
 
@@ -360,70 +342,22 @@ class HintLegendVM:
 
     def construct(self) -> None:
         self._inner.construct()
-        if self._sub is None:
-            self._sub = self._hub.messages.subscribe(on_next=self._on_message)
         self._rebuild_actions()
 
     def destruct(self) -> None:
-        if self._sub is not None:
-            self._sub.dispose()
-            self._sub = None
         self._inner.destruct()
 
     def dispose(self) -> None:
-        if self._sub is not None:
-            self._sub.dispose()
-            self._sub = None
         self._inner.dispose()
 
-    # ── Registration API ───────────────────────────────────────────────────
-
-    def register_focusable(self, vm_id: str, action_ids: tuple[str, ...]) -> None:
-        """Associate a focusable VM with an ordered tuple of action ids.
-
-        Re-registering replaces the prior tuple. Action ids the keymap doesn't
-        know about are silently dropped at render time.
-        """
-        self._registry[vm_id] = action_ids
-        if self._focused_vm_id == vm_id:
-            self._rebuild_actions()
-
-    def unregister_focusable(self, vm_id: str) -> None:
-        self._registry.pop(vm_id, None)
-        if self._focused_vm_id == vm_id:
-            self._focused_vm_id = None
-            self._rebuild_actions()
-
     # ── Internal ────────────────────────────────────────────────────────────
-
-    def _on_message(self, msg: object) -> None:
-        if isinstance(msg, FocusChangedMessage):
-            if self._focused_vm_id == msg.focused_vm_id:
-                return
-            self._focused_vm_id = msg.focused_vm_id
-            self._rebuild_actions()
 
     def _rebuild_actions(self) -> None:
         # ── Service-specific (LEFT column) ──────────────────────────
         #
-        # ``seen`` dedups across the focused-pane block, the service
-        # block, and (downstream) the globals — without it a chip
-        # registered both as focused-pane and as a service action
-        # would render twice. The focused-pane registration is
-        # exercised only by tests today (BindingResolver wiring is
-        # deferred per the [[deferred-from-m6]] memo) but kept so
-        # the contract is honest.
+        # ``seen`` deduplicates service actions and globals.
         seen: set[str] = set()
         chips: list[HintAction] = []
-        focused = self._focused_vm_id
-        if focused is not None:
-            for action_id in self._registry.get(focused, ()):
-                if action_id in seen:
-                    continue
-                chip = self._resolve(action_id)
-                if chip is not None:
-                    chips.append(chip)
-                    seen.add(action_id)
         service_set = _SERVICE_ACTIONS.get(
             self._current_service_id or "", _FALLBACK_SERVICE_ACTIONS
         )

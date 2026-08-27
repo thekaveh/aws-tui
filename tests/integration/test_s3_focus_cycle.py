@@ -27,7 +27,8 @@ def _make_fast_focus_app(tmp_path: Path) -> tuple[AppContext, AwsTuiApp]:
     ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
     app = AwsTuiApp(ctx)
 
-    async def _fast_try_connection(conn: object) -> str:
+    async def _fast_try_connection(conn: object, *, timeout: float = 90.0) -> str:
+        del timeout
         await ctx.root_vm.switch_connection_with(conn, TokenState.CONNECTED)  # type: ignore[arg-type]
         ctx.root_vm.services_menu.switch_service_command.execute("s3")
         await app._mount_local_only_dual_pane(  # type: ignore[arg-type]

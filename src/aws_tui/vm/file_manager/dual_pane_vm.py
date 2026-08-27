@@ -24,7 +24,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
-from aws_tui.domain.filesystem import TransferProgress
+from aws_tui.domain.filesystem import ProviderError, TransferProgress
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
@@ -36,6 +36,9 @@ from aws_tui.vm.messages import (
 
 if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
+
+
+_MAX_TRANSFER_BATCH_ENTRIES = 1_000
 
 
 class FocusedPane(StrEnum):
@@ -487,6 +490,11 @@ class DualPaneVM:
         records all-of-them as unfinished (not just the one being
         copied).
         """
+        if len(targets) > _MAX_TRANSFER_BATCH_ENTRIES:
+            raise ProviderError(
+                "copy and move batches support at most "
+                f"{_MAX_TRANSFER_BATCH_ENTRIES} selected entries"
+            )
         transfer_ids: list[tuple[EntryVM, str]] = []
         try:
             for entry in targets:

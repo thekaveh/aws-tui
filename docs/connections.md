@@ -44,8 +44,10 @@ must be TOML strings when present. `force_path_style` and `verify_tls`
 must be TOML booleans (`true` / `false`), not quoted strings.
 `endpoint_url` must be an HTTP(S) endpoint. URL paths are preserved, but
 do not include URL username/password, query strings, or fragments. The UI
-rejects those in Settings and redacts them from display if a hand-edited
-config already contains them.
+and config loader apply the same validation, so an invalid hand-edited entry
+fails with a configuration error before a client is created. Every
+S3-compatible entry requires one of the credential specifications below;
+`static` also requires nonblank `access_key_id` and `secret_access_key`.
 
 ## 1.2. Credential sources for S3-compatible connections
 The `credentials` field is dispatched at runtime:
@@ -150,6 +152,10 @@ Why this is useful day-to-day:
   the cycle automatically on next launch (or immediately if added
   through Settings — the rail's `ConnectionListChangedMessage`
   refreshes the candidate ring without a relaunch).
+- **Bounded launch fallback** — automatic startup attempts share one 90-second
+  budget across the ordered connection list. Connections that do not fit in
+  that launch budget remain available for explicit selection after the local
+  fallback mounts.
 - **Cross-account / cross-vendor transfers** — put one account on the
   left pane, a different account on the right pane (each pane cycles
   independently), then `c` (copy) streams between them via
@@ -228,18 +234,14 @@ service-scoped: it remains visible in that service page and does not mark the
 connection unreachable or remove it from the source cycle. A connection is
 only marked unreachable by connection-level S3 pane failures.
 
-## 1.5. Vendor Quirks
-- **Cloudflare R2** — no bucket versioning, no replication;
-  `region = "auto"`; uses HTTPS at
-  `https://<account>.r2.cloudflarestorage.com`.
-- **Backblaze B2** — smaller multipart limits than AWS (5 MiB min
-  part vs. 5 GiB max); long-lived buckets need keys with `b2-` prefix.
-- **MinIO** — uses path-style URLs (`force_path_style = true`);
-  self-signed TLS dev setups need `verify_tls = false` (will emit a
-  warning toast at launch).
-- **Wasabi** — mostly behaves like AWS; region matters (us-east-1 vs.
-  us-east-2 buckets).
-- **Ceph RGW / SeaweedFS** — typically path-style + custom region.
+## 1.5. Provider Configuration Patterns
+aws-tui enforces only the connection fields it passes to botocore: an HTTP(S)
+endpoint, region, addressing style, TLS verification choice, and credential
+source. Use the storage provider's current documentation to choose the exact
+endpoint and region and to determine whether path-style addressing is
+required. Set `verify_tls = false` only for a controlled development endpoint
+whose certificate cannot be verified; aws-tui shows a warning when that
+setting is active.
 
 ## 1.6. Recommended 1-Day MPU Abort Lifecycle Rule
 Set a 1-day lifecycle rule to abort incomplete multipart uploads on

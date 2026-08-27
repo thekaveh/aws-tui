@@ -7,6 +7,7 @@ from scripts.docs.build_docs import (
     _assert_dirs_equal,
     build,
     render_mkdocs_yml,
+    render_package_readme,
     render_site,
     render_wiki,
 )
@@ -44,7 +45,7 @@ def _fixture(tmp_path: Path):
               - id: dev
                 title: Development
                 children:
-                  - { id: architecture, title: Architecture, source: docs/architecture.md }
+                  - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture] }
                   - { id: keybindings, title: Keybindings, source: docs/keybindings.md }
             diagrams:
               - { id: architecture, master: docs/diagrams/architecture.html }
@@ -139,7 +140,7 @@ def _manifest_yaml() -> str:
           - id: dev
             title: Development
             children:
-              - { id: architecture, title: Architecture, source: docs/architecture.md }
+              - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture] }
               - { id: keybindings, title: Keybindings, source: docs/keybindings.md }
         diagrams:
           - { id: architecture, master: docs/diagrams/architecture.html }
@@ -156,3 +157,35 @@ def test_assert_dirs_equal_detects_difference(tmp_path):
     (b / "f.txt").write_text("two")
     with pytest.raises(AssertionError):
         _assert_dirs_equal(a, b)
+
+
+def test_package_surface_is_generated_and_checked(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "index.md").write_text("# 1. Overview\n", encoding="utf-8")
+    (docs / "package.md").write_text("# 1. Package\n\nCanonical.\n", encoding="utf-8")
+    manifest_path = docs / "manifest.yaml"
+    manifest_path.write_text(
+        textwrap.dedent(
+            """
+            surfaces: [repo, package]
+            numbering: per-doc
+            package: { source: docs/package.md, output: PYPI.md }
+            sections:
+              - { id: overview, title: Overview, source: docs/index.md }
+            diagrams: []
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    build(manifest_path, tmp_path, package=True)
+    manifest = parse_manifest(manifest_path.read_text(encoding="utf-8"))
+
+    assert (tmp_path / "PYPI.md").read_text(encoding="utf-8") == render_package_readme(
+        manifest, tmp_path
+    )
+    build(manifest_path, tmp_path, check=True)
+    (tmp_path / "PYPI.md").write_text("stale\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="package README is stale"):
+        build(manifest_path, tmp_path, check=True)

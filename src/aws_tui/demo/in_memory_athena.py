@@ -565,6 +565,15 @@ class InMemoryAthena:
             self._started_state_indexes.pop(execution_id, None)
         return updated
 
+    async def get_query_executions(
+        self,
+        execution_ids: list[str],
+    ) -> tuple[QueryExecutionDetail, ...]:
+        self._record("get_query_executions", tuple(execution_ids))
+        return tuple(
+            [await self.get_query_execution(execution_id) for execution_id in execution_ids]
+        )
+
     async def get_query_runtime_statistics(
         self,
         execution_id: str,

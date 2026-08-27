@@ -252,7 +252,7 @@ are indexed below for contributors and repository review.
 
 1. **User-facing**
    1. [Installation](docs/install.md) — isolated Git installation, development setup, demo mode, and release-channel status.
-   2. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
+   2. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections, understand credential resolution, and set provider-specific endpoint options.
    3. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and shipped `[keybindings]` overlay behavior.
    4. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
    5. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to local S3Mock, switch theme on the fly, prepare keybinding overlays, inspect transfer evidence after a crash).

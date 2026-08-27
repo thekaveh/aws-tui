@@ -663,7 +663,13 @@ class CrossFsCopy:
             except NotFoundError:
                 published = await _durably_run(self._atomic_publish(publisher, staged, destination))
                 if published.error is None:
-                    _finish_durable(None, context="overwrite publish", outcomes=[published])
+                    container_cleanup = await self._cleanup_published_container(staged)
+                    _finish_durable(
+                        None,
+                        context="overwrite publish",
+                        outcomes=[published, container_cleanup],
+                        ignore_not_found=True,
+                    )
                     return
                 if (
                     isinstance(published.error, ConflictError)

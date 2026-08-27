@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
-from urllib.parse import urlparse
 
 from textual import on
 from textual.app import ComposeResult
@@ -28,6 +27,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Static
 from vmx import Message, MessageHub
 
+from aws_tui.infra.connection_validation import validate_endpoint_url
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 from aws_tui.vm.settings.s3_connection_form_vm import S3ConnectionFormVM
@@ -62,26 +62,10 @@ def _validate_endpoint_url(form: S3CompatForm) -> str | None:
     Field-presence is enforced by :class:`S3ConnectionFormVM`'s
     built-in non-empty validators; this validator runs only when the
     field is non-empty (regression: format wins over presence)."""
-    stripped = form.endpoint_url.strip()
-    if not stripped:
+    if not form.endpoint_url.strip():
         return None  # field-presence validator already flagged it
-    try:
-        parsed = urlparse(stripped)
-    except ValueError:
-        return "not a valid URL"
-    if parsed.scheme not in ("http", "https"):
-        return "must start with http:// or https://"
-    if not parsed.netloc:
-        return "missing host"
-    try:
-        _ = parsed.port
-    except ValueError:
-        return "invalid port"
-    if parsed.username or parsed.password:
-        return "must not include username or password"
-    if parsed.query or parsed.fragment:
-        return "must not include query or fragment"
-    return None
+    error = validate_endpoint_url(form.endpoint_url)
+    return None if error is None else error.removeprefix("is ")
 
 
 async def _noop_persister(_m: S3CompatForm) -> None:
@@ -522,23 +506,8 @@ def _validate_s3_form_value(field: str, value: str) -> str | None:
     if field == "endpoint_url":
         if not stripped:
             return "required"
-        try:
-            parsed = urlparse(stripped)
-        except ValueError:
-            return "not a valid URL"
-        if parsed.scheme not in ("http", "https"):
-            return "must start with http:// or https://"
-        if not parsed.netloc:
-            return "missing host"
-        try:
-            _ = parsed.port
-        except ValueError:
-            return "invalid port"
-        if parsed.username or parsed.password:
-            return "must not include username or password"
-        if parsed.query or parsed.fragment:
-            return "must not include query or fragment"
-        return None
+        error = validate_endpoint_url(value)
+        return None if error is None else error.removeprefix("is ")
     if field == "session_token":
         return None
     if not stripped:

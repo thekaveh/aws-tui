@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -461,64 +460,8 @@ class AthenaHistoryVM:
         worker: _HistoryWorker,
         refs: list[QueryExecutionRef],
     ) -> list[QueryExecutionDetail]:
-        tasks = [
-            asyncio.create_task(self._client.get_query_execution(ref.execution_id)) for ref in refs
-        ]
-        if not tasks:
-            return []
-        worker.tasks.update(tasks)
-        try:
-            done, _ = await asyncio.wait(
-                tasks,
-                return_when=asyncio.FIRST_EXCEPTION,
-            )
-            failed = next(
-                (task for task in done if not task.cancelled() and task.exception() is not None),
-                None,
-            )
-            if failed is not None:
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-            await self._drain_detail_tasks(tasks, cancel=False)
-            if failed is not None:
-                error = failed.exception()
-                assert error is not None
-                raise error
-            return [task.result() for task in tasks]
-        except BaseException:
-            await self._drain_detail_tasks(tasks, cancel=True)
-            raise
-        finally:
-            worker.tasks.difference_update(tasks)
-
-    async def _drain_detail_tasks(
-        self,
-        tasks: list[asyncio.Task[QueryExecutionDetail]],
-        *,
-        cancel: bool,
-    ) -> None:
-        current = asyncio.current_task()
-        cancellation_count = current.cancelling() if current is not None else 0
-        cancelled = False
-        if cancel:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-        for task in tasks:
-            while not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    current_count = current.cancelling() if current is not None else 0
-                    if current_count > cancellation_count:
-                        cancelled = True
-                        cancellation_count = current_count
-            if not task.cancelled():
-                with contextlib.suppress(Exception):
-                    task.result()
-        if cancelled:
-            raise asyncio.CancelledError
+        del worker
+        return list(await self._client.get_query_executions([ref.execution_id for ref in refs]))
 
     def _replace_worker(self, workgroup: str, generation: int) -> _HistoryWorker:
         old_worker = self._worker

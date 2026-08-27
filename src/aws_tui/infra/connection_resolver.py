@@ -152,8 +152,12 @@ class ConnectionResolver:
     def materialize(self, name: str) -> ConnectionEntry:
         """Promote an auto-discovered connection to an explicit config entry.
 
-        Idempotent on already-explicit entries (writes the same body back).
+        Idempotent on already-explicit entries without rewriting their
+        credential-source metadata.
         """
+        explicit = self._config_store.load().connections.get(name)
+        if explicit is not None:
+            return explicit
         conn = self.resolve(name)
         entry = ConnectionEntry(
             name=conn.name,

@@ -12,6 +12,7 @@ class FakeAwsClient:
     """Async AWS client with explicit mocks for domain-client surfaces."""
 
     def __init__(self) -> None:
+        self.batch_get_query_execution = AsyncMock()
         self.batch_get_named_query = AsyncMock()
         self.get_prepared_statement = AsyncMock()
         self.get_query_execution = AsyncMock()

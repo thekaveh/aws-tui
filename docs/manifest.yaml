@@ -1,8 +1,12 @@
-# Single source of truth for the three-surface docs: hierarchy + nav order +
-# published page set. Humans edit ONLY the canonical docs/*.md + this file;
-# generated/site + generated/wiki + mkdocs.yml are regenerated and gitignored.
-surfaces: [repo, site, wiki]
+# Single source of truth for the repository, site, wiki, and package docs:
+# hierarchy + nav order + published page set. Humans edit ONLY the canonical
+# docs/*.md + this file; generated/site + generated/wiki + mkdocs.yml and
+# PYPI.md are generated outputs.
+surfaces: [repo, site, wiki, package]
 numbering: per-doc
+package:
+  source: docs/package-readme.md
+  output: PYPI.md
 sections:
   - { id: overview, title: Overview, source: docs/index.md }
   - id: getting-started

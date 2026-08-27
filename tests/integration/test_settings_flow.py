@@ -576,7 +576,8 @@ async def test_settings_selection_during_boot_replays_after_boot_mount(
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def _slow_try_connection(conn: object) -> str:
+    async def _slow_try_connection(conn: object, *, timeout: float = 90.0) -> str:
+        del timeout
         started.set()
         await release.wait()
         await app._mount_local_only_dual_pane(  # type: ignore[arg-type]
@@ -635,7 +636,8 @@ async def test_settings_selection_during_boot_mounts_without_waiting_for_boot_ch
     release = asyncio.Event()
     cancelled = asyncio.Event()
 
-    async def _slow_try_connection(conn: object) -> str:
+    async def _slow_try_connection(conn: object, *, timeout: float = 90.0) -> str:
+        del timeout
         started.set()
         try:
             await release.wait()
@@ -702,7 +704,8 @@ async def test_s3_selection_after_local_fallback_retries_initial_connection(
     async def _forbidden_local_mount(*args: object, **kwargs: object) -> None:
         raise AssertionError("successful S3 retry should not preserve local-only fallback")
 
-    async def _fake_try_connection(retry_conn: object) -> str:
+    async def _fake_try_connection(retry_conn: object, *, timeout: float = 90.0) -> str:
+        del timeout
         attempts.append(retry_conn.name)
         return "ok"
 
@@ -736,7 +739,8 @@ async def test_s3_selection_propagates_failed_local_fallback_mount(
     async def _noop_cancel_transfers() -> None:
         return None
 
-    async def _failed_try_connection(retry_conn: object) -> str:
+    async def _failed_try_connection(retry_conn: object, *, timeout: float = 90.0) -> str:
+        del timeout
         assert retry_conn is conn
         return "unreachable"
 

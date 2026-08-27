@@ -20,6 +20,7 @@ ATHENA_BOTO_OPERATIONS = (
     "list_table_metadata",
     "list_query_executions",
     "get_query_execution",
+    "batch_get_query_execution",
     "get_query_runtime_statistics",
     "start_query_execution",
     "stop_query_execution",
@@ -165,7 +166,7 @@ def test_athena_operation_ledger_and_minimum_iam_are_exact() -> None:
 
     operation_block = _fenced_block_after(
         ledger,
-        "Exact boto operation ledger (15)",
+        "Exact boto operation ledger (16)",
         "text",
     )
     assert tuple(operation_block.splitlines()) == ATHENA_BOTO_OPERATIONS

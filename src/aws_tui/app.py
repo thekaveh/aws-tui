@@ -98,6 +98,7 @@ from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _ACTION_RING_SIZE = 100
 _QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
+_BOOT_CHAIN_BUDGET_SECONDS = 90.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -922,7 +923,17 @@ class AwsTuiApp(App[None]):
                 length=len(chain),
                 initial=initial_conn.name,
             )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + _BOOT_CHAIN_BUDGET_SECONDS
             for index, conn in enumerate(chain, start=1):
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    ctx.log_sink.info(
+                        "app.boot_chain.budget_exhausted",
+                        attempted=index - 1,
+                        total=len(chain),
+                    )
+                    break
                 # Defer the "▸ Trying X…" toast so a fast happy boot
                 # (e.g. silent SSO succeeds in <500ms) stays silent.
                 # The deferred task self-cancels if the attempt
@@ -936,7 +947,7 @@ class AwsTuiApp(App[None]):
                     self._raise_attempt_toast_after_grace(conn, index=index, total=len(chain))
                 )
                 try:
-                    outcome = await self._try_connection(conn)
+                    outcome = await self._try_connection(conn, timeout=remaining)
                 finally:
                     pre_attempt_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -1021,7 +1032,12 @@ class AwsTuiApp(App[None]):
             seen.add(key)
         return chain
 
-    async def _try_connection(self, conn: Connection) -> str:
+    async def _try_connection(
+        self,
+        conn: Connection,
+        *,
+        timeout: float = _BOOT_CHAIN_BUDGET_SECONDS,
+    ) -> str:
         """Attempt to mount ``conn`` as the LEFT pane's source.
 
         Returns one of: ``"ok"``, ``"aws-sso-expired"``,
@@ -1066,7 +1082,7 @@ class AwsTuiApp(App[None]):
             if not await self._mount_initial_service_view():
                 return "error"
             try:
-                return await asyncio.wait_for(self._attempt_future, timeout=90.0)
+                return await asyncio.wait_for(self._attempt_future, timeout=timeout)
             except TimeoutError:
                 return "timeout"
         finally:

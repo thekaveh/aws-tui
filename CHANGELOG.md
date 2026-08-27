@@ -160,6 +160,14 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.3. Fixed
 
+- **Bounded startup, transfers, and service hydration.** Automatic connection
+  fallback now shares one 90-second launch budget, copy and move reject batches
+  above 1,000 selected entries before creating journals, and Athena history
+  hydrates each 50-row page with one `BatchGetQueryExecution` request. Persisted
+  S3-compatible connections use the same endpoint and credential validation as
+  Settings, explicit credential references survive materialization unchanged,
+  cross-filesystem overwrite races clean their staging container, and content
+  candidates have one disposal owner across failed service swaps.
 - **Atomic source and service changes.** Root service adoption now builds and
   constructs the candidate before committing source identity, and publishes
   the new content, connection, and authentication identity as one

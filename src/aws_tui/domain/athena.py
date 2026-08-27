@@ -480,6 +480,50 @@ class AthenaClient:
                 sensitive_values=(execution_id,),
             )
 
+    async def get_query_executions(
+        self,
+        execution_ids: Sequence[str],
+    ) -> tuple[QueryExecutionDetail, ...]:
+        """Hydrate one history page with Athena's batch operation."""
+        if not execution_ids:
+            return ()
+        if len(execution_ids) > _PAGE_SIZE:
+            raise ValidationError(f"Athena history batches support at most {_PAGE_SIZE} ids")
+        if len(set(execution_ids)) != len(execution_ids):
+            raise ValidationError("Athena history batch ids must be unique")
+        try:
+            requested = list(execution_ids)
+            async with await self._aws_session.client(
+                self._connection,
+                "athena",
+            ) as client:
+                response = await client.batch_get_query_execution(
+                    QueryExecutionIds=requested,
+                )
+            unprocessed_error = _unprocessed_query_execution_error(
+                response,
+                sensitive_values=requested,
+            )
+            if unprocessed_error is not None:
+                raise unprocessed_error
+            details = [
+                self._map_query_execution(item)
+                for item in _response_items(response, "QueryExecutions")
+            ]
+            by_id = {detail.summary.ref.execution_id: detail for detail in details}
+            if len(by_id) != len(details) or set(by_id) != set(requested):
+                raise ValueError("query execution batch identity mismatch")
+            ordered = tuple(by_id[execution_id] for execution_id in requested)
+            for detail in ordered:
+                if detail.summary.state in _TERMINAL_QUERY_STATES:
+                    self._retire_app_started_query(detail.summary.ref.execution_id)
+            return ordered
+        except Exception as exc:
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=tuple(execution_ids),
+            )
+
     async def get_query_runtime_statistics(
         self,
         execution_id: str,
@@ -991,6 +1035,24 @@ def _unprocessed_named_query_error(
     message = _sanitize_message(
         _optional_string(first, "ErrorMessage")
         or "Athena could not process one or more named queries",
+        sensitive_values,
+    )
+    return _provider_error_for_code(code, message)
+
+
+def _unprocessed_query_execution_error(
+    response: object,
+    *,
+    sensitive_values: Sequence[str],
+) -> ProviderError | None:
+    unprocessed = _response_items(response, "UnprocessedQueryExecutionIds")
+    if not unprocessed:
+        return None
+    first = unprocessed[0]
+    code = _optional_string(first, "ErrorCode") or ""
+    message = _sanitize_message(
+        _optional_string(first, "ErrorMessage")
+        or "Athena could not process one or more query executions",
         sensitive_values,
     )
     return _provider_error_for_code(code, message)

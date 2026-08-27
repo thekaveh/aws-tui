@@ -303,6 +303,31 @@ class TestResolveAndMaterialize:
         cfg_obj = store.load()
         assert "auto-dev" in cfg_obj.connections
 
+    def test_materialize_preserves_an_explicit_connection_verbatim(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        explicit = ConnectionEntry(
+            name="minio-local",
+            kind="s3-compatible",
+            endpoint_url="http://localhost:9000/storage",
+            region="us-east-1",
+            credentials="keychain:minio-local",
+            force_path_style=True,
+            verify_tls=False,
+        )
+        store.add_connection(explicit)
+        resolver = ConnectionResolver(
+            config_store=store,
+            keychain=InMemoryKeychain(),
+            aws_config_path=tmp_path / "missing",
+            aws_credentials_path=tmp_path / "missing",
+        )
+
+        materialized = resolver.materialize("minio-local")
+
+        assert materialized == explicit
+        assert store.load().connections["minio-local"] == explicit
+
     def test_materialize_missing_raises(self, tmp_path: Path, store: ConfigStore) -> None:
         resolver = ConnectionResolver(
             config_store=store,

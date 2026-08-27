@@ -161,6 +161,48 @@ async def test_cancelled_switch_disposes_unadopted_vm() -> None:
     root.dispose()
 
 
+async def test_shutdown_failure_disposes_candidate_exactly_once() -> None:
+    class _LifecycleVM:
+        def __init__(self, *, shutdown_error: bool = False) -> None:
+            self.shutdown_error = shutdown_error
+            self.dispose_calls = 0
+
+        def construct(self) -> None:
+            pass
+
+        async def shutdown(self) -> None:
+            if self.shutdown_error:
+                raise RuntimeError("outgoing shutdown failed")
+
+        def dispose(self) -> None:
+            self.dispose_calls += 1
+
+    class _LifecycleService(_FakeService):
+        def __init__(self, id_: str, vm: _LifecycleVM) -> None:
+            super().__init__(id_)
+            self.vm = vm
+
+        def build_vm(self, connection: Connection) -> _LifecycleVM:
+            del connection
+            return self.vm
+
+    outgoing = _LifecycleVM(shutdown_error=True)
+    candidate = _LifecycleVM()
+    old_service = _LifecycleService("old", outgoing)
+    new_service = _LifecycleService("new", candidate)
+    root = _build_root(old_service, new_service)
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+    await root.switch_service("old")
+
+    with pytest.raises(RuntimeError, match="outgoing shutdown failed"):
+        await root.switch_service("new")
+
+    assert root.content_host.current is outgoing
+    assert root.services_menu.selected_id == "old"
+    assert candidate.dispose_calls == 1
+    root.dispose()
+
+
 async def test_switch_service_same_id_is_noop() -> None:
     s3 = _FakeService("s3")
     root = _build_root(s3)

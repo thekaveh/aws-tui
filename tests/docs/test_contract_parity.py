@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 
 import botocore.session
+from botocore import xform_name
 
 ROOT = Path(__file__).parents[2]
 
@@ -18,6 +19,7 @@ _MODELED_OPERATIONS = {
         "ListTableMetadata",
         "ListQueryExecutions",
         "GetQueryExecution",
+        "BatchGetQueryExecution",
         "GetQueryRuntimeStatistics",
         "StartQueryExecution",
         "StopQueryExecution",
@@ -62,6 +64,14 @@ _MODELED_OPERATIONS = {
     "sts": {"GetCallerIdentity"},
 }
 
+_OPERATION_SOURCES = {
+    "athena": ("src/aws_tui/domain/athena.py", "src/aws_tui/domain/athena_runner.py"),
+    "emr-serverless": ("src/aws_tui/domain/emr_serverless.py",),
+    "glue": ("src/aws_tui/domain/glue.py",),
+    "s3": ("src/aws_tui/domain/s3_fs.py", "scripts/test-services/s3/seed.py"),
+    "sts": ("src/aws_tui/infra/aws_session.py", "src/aws_tui/domain/glue.py"),
+}
+
 _CONSUMED_INPUT_MEMBERS = {
     ("athena", "StartQueryExecution"): {
         "QueryString",
@@ -102,6 +112,17 @@ def _numbered_section(text: str, heading: str) -> str:
 
 def _module(path: str) -> ast.Module:
     return ast.parse(_text(path), filename=path)
+
+
+def _source_aws_operations(service_name: str) -> set[str]:
+    model = botocore.session.get_session().get_service_model(service_name)
+    by_method = {xform_name(operation): operation for operation in model.operation_names}
+    called_methods: set[str] = set()
+    for path in _OPERATION_SOURCES[service_name]:
+        for node in ast.walk(_module(path)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                called_methods.add(node.func.attr)
+    return {by_method[method] for method in called_methods & set(by_method)}
 
 
 def _default_binding_actions() -> tuple[str, ...]:
@@ -301,6 +322,7 @@ def test_consumed_aws_operations_and_inputs_exist_in_locked_botocore_models() ->
     for service_name, operations in _MODELED_OPERATIONS.items():
         model = session.get_service_model(service_name)
         assert operations <= set(model.operation_names)
+        assert operations == _source_aws_operations(service_name)
 
     for (service_name, operation_name), members in _CONSUMED_INPUT_MEMBERS.items():
         operation = session.get_service_model(service_name).operation_model(operation_name)

@@ -28,6 +28,7 @@ def _seed_entry(name: str, region: str = "us-east-1") -> ConnectionEntry:
         kind="s3-compatible",
         region=region,
         endpoint_url=f"http://{name}.local:9000",
+        credentials="static",
         access_key_id="AKIATEST",
         secret_access_key="SECRETTEST",
         force_path_style=True,

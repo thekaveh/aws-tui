@@ -68,6 +68,8 @@ def check_self_containment(generated_root: str | Path, repo_root: str | Path) ->
 def check_completeness(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
     repo_root = Path(repo_root)
     referenced = {leaf.source for leaf in manifest.leaves()}
+    if manifest.package is not None:
+        referenced.add(manifest.package.source)
     findings: list[Finding] = []
     for md in sorted((repo_root / "docs").rglob("*.md")):
         rel = md.relative_to(repo_root).as_posix()
@@ -97,7 +99,8 @@ def check_placeholders(
 
 
 def check_numbering(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
-    del manifest
+    if manifest.numbering != "per-doc":
+        return [Finding("error", f"unsupported numbering mode: {manifest.numbering}")]
     repo_root = Path(repo_root)
     findings: list[Finding] = []
     markdown = sorted(repo_root.glob("*.md")) + sorted((repo_root / "docs").rglob("*.md"))

@@ -454,6 +454,51 @@ async def test_overwrite_retries_backup_setup_across_disappear_appear_races() ->
     assert {entry.name for entry in await dst.list(PathRef(()))} == {"a"}
 
 
+async def test_overwrite_cleans_private_stage_when_target_disappears() -> None:
+    class _DisappearingTargetFS(InMemoryFS):
+        atomic_write_replaces = False
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.disappeared = False
+
+        async def atomic_publish_no_replace(
+            self,
+            staged: PathRef,
+            destination: PathRef,
+            *,
+            expected_source_revision: str,
+        ) -> str:
+            if staged.name == "a" and ".aws-tui-backup-" in destination.name:
+                self.disappeared = True
+                await InMemoryFS.delete(
+                    self,
+                    staged,
+                    expected_etag=expected_source_revision,
+                )
+                raise NotFoundError(staged.as_posix())
+            return await super().atomic_publish_no_replace(
+                staged,
+                destination,
+                expected_source_revision=expected_source_revision,
+            )
+
+    src = InMemoryFS()
+    dst = _DisappearingTargetFS()
+    await _put_file(src, PathRef.from_posix("/source"), b"replacement")
+    await _put_file(dst, PathRef.from_posix("/a"), b"original")
+
+    assert await CrossFsCopy(source=src, destination=dst).copy(
+        PathRef.from_posix("/source"),
+        PathRef.from_posix("/a"),
+        on_conflict=ConflictResolution.OVERWRITE,
+    )
+
+    assert dst.disappeared
+    assert await _read_file(dst, PathRef.from_posix("/a")) == b"replacement"
+    assert {entry.name for entry in await dst.list(PathRef(()))} == {"a"}
+
+
 async def test_atomic_overwrite_failure_never_deletes_existing_destination() -> None:
     src = InMemoryFS()
     dst = InMemoryFS()

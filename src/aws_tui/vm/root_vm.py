@@ -33,7 +33,6 @@ from aws_tui.vm.chrome.chrome_vm import ChromeVM
 from aws_tui.vm.content_host_vm import ContentHostVM
 from aws_tui.vm.messages import (
     ConnectionChangedMessage,
-    FocusChangedMessage,
     ServiceOperationFailedMessage,
     ThemeChangedMessage,
 )
@@ -66,7 +65,6 @@ class RootVM:
 
         self._connection: Connection | None = None
         self._auth_state: TokenState | None = None
-        self._focused_vm_id: str | None = None
         self._theme_name: str = "carbon"
 
         self._services_menu: NavMenuVM = NavMenuVM(
@@ -133,10 +131,6 @@ class RootVM:
     @property
     def message_hub(self) -> MessageHub[Message]:
         return self._hub
-
-    @property
-    def focused_vm_id(self) -> str | None:
-        return self._focused_vm_id
 
     @property
     def active_connection(self) -> Connection | None:
@@ -298,10 +292,6 @@ class RootVM:
                 self._services_menu.switch_service_command.execute(prior_selection)
             else:
                 self._services_menu.clear_selection()
-            if self._content_host.current is not vm:
-                dispose = getattr(vm, "dispose", None)
-                if callable(dispose):
-                    dispose()
             raise
 
     def _set_connection_state(self, connection: Connection, auth_state: TokenState) -> None:
@@ -318,13 +308,6 @@ class RootVM:
             return
         self._theme_name = name
         self._hub.send(ThemeChangedMessage(name=name))
-
-    def focus(self, vm_id: str) -> None:
-        """Notify subscribers (HintLegendVM, services menu) of focus changes."""
-        if self._focused_vm_id == vm_id:
-            return
-        self._focused_vm_id = vm_id
-        self._hub.send(FocusChangedMessage(focused_vm_id=vm_id))
 
     def shutdown(self) -> None:
         """Graceful shutdown: dispose the entire tree.

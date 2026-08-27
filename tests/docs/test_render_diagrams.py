@@ -95,7 +95,7 @@ def test_render_all_writes_svg_and_png(tmp_path):
             """
             surfaces: [site]
             numbering: per-doc
-            sections: [{id: overview, title: O, source: docs/diagrams/d.html}]
+            sections: [{id: overview, title: O, source: docs/diagrams/d.html, diagrams: [system]}]
             diagrams: [{id: system, master: docs/diagrams/d.html}]
             """
         )
@@ -131,7 +131,7 @@ def test_check_committed_assets_detects_stale_and_unexpected_assets(tmp_path):
             """
             surfaces: [site]
             numbering: per-doc
-            sections: [{id: overview, title: O, source: docs/diagrams/d.html}]
+            sections: [{id: overview, title: O, source: docs/diagrams/d.html, diagrams: [system]}]
             diagrams: [{id: system, master: docs/diagrams/d.html}]
             """
         )

@@ -63,6 +63,7 @@ class HistoryClient:
         ] = {}
         self.details: dict[str, QueryExecutionDetail] = {}
         self.list_calls: list[tuple[str, str | None]] = []
+        self.batch_calls: list[tuple[str, ...]] = []
         self.detail_calls: list[str] = []
         self.stop_calls: list[str] = []
         self.block_request: tuple[str, str | None] | None = None
@@ -113,6 +114,15 @@ class HistoryClient:
             return self.details[execution_id]
         finally:
             self.active_detail_ids.discard(execution_id)
+
+    async def get_query_executions(
+        self,
+        execution_ids: list[str],
+    ) -> tuple[QueryExecutionDetail, ...]:
+        self.batch_calls.append(tuple(execution_ids))
+        async with asyncio.TaskGroup() as tasks:
+            pending = [tasks.create_task(self.get_query_execution(item)) for item in execution_ids]
+        return tuple(task.result() for task in pending)
 
     async def stop_query(self, execution_id: str) -> None:
         self.stop_calls.append(execution_id)
@@ -169,6 +179,7 @@ async def test_history_hydrates_only_the_current_token_page() -> None:
     assert vm.has_more
     assert client.list_calls == [("analysts", None)]
     assert client.detail_calls == ["q-2"]
+    assert client.batch_calls == [("q-2",)]
 
     await vm.load_more()
 
@@ -176,6 +187,7 @@ async def test_history_hydrates_only_the_current_token_page() -> None:
     assert not vm.has_more
     assert client.list_calls == [("analysts", None), ("analysts", "next")]
     assert client.detail_calls == ["q-2", "q-1"]
+    assert client.batch_calls == [("q-2",), ("q-1",)]
 
 
 @pytest.mark.asyncio
@@ -409,7 +421,7 @@ async def test_history_shutdown_cancels_and_drains_all_detail_siblings() -> None
 
 
 @pytest.mark.asyncio
-async def test_repeated_setup_cancellation_keeps_detail_tasks_tracked_for_shutdown() -> None:
+async def test_repeated_setup_cancellation_cannot_publish_after_shutdown() -> None:
     client = _seeded_client()
     client.block_detail_ids = set(client.details)
     client.pages[("analysts", None)] = (
@@ -436,17 +448,18 @@ async def test_repeated_setup_cancellation_keeps_detail_tasks_tracked_for_shutdo
     try:
         await asyncio.sleep(0)
 
-        assert not shutdown.done()
+        assert shutdown.done()
         assert client.active_detail_ids == client.block_detail_ids
-        assert any(
-            not task.done()
-            for worker in vm._workers  # type: ignore[attr-defined]
-            for task in worker.tasks
-        )
+        assert vm.items == ()
     finally:
         client.release_details.set()
         await asyncio.gather(setup, return_exceptions=True)
         await shutdown
+
+    for _ in range(10):
+        if not client.active_detail_ids:
+            break
+        await asyncio.sleep(0)
 
     assert client.active_detail_ids == set()
     assert vm.items == ()

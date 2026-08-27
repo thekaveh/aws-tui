@@ -571,6 +571,7 @@ the action supports resource-level permissions:
       "athena:ListTableMetadata",
       "athena:ListQueryExecutions",
       "athena:GetQueryExecution",
+      "athena:BatchGetQueryExecution",
       "athena:GetQueryRuntimeStatistics",
       "athena:StartQueryExecution",
       "athena:StopQueryExecution",

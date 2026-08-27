@@ -203,22 +203,6 @@ class ServiceOperationFailedMessage:
 
 
 @dataclass(frozen=True, slots=True)
-class FocusChangedMessage:
-    """Published by the view layer (via ``RootVM``) whenever focus moves to a
-    different VM.
-
-    Subscribers: :class:`HintLegendVM` (swaps the action chips).
-    """
-
-    focused_vm_id: str
-    sender_name: str = "root"
-
-    @property
-    def sender_object(self) -> object:
-        return self
-
-
-@dataclass(frozen=True, slots=True)
 class OpenS3LocationRequest:
     """Request composition-root navigation to one S3 location.
 
@@ -308,7 +292,6 @@ __all__ = [
     "ConnectionChangedMessage",
     "ConnectionListChangedMessage",
     "CopyTableReferenceRequest",
-    "FocusChangedMessage",
     "OpenAthenaTableRequest",
     "OpenGlueTableRequest",
     "OpenS3LocationRequest",

@@ -15,7 +15,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.cross_fs import ConflictResolution
-from aws_tui.domain.filesystem import NotFoundError, PathRef
+from aws_tui.domain.filesystem import NotFoundError, PathRef, ProviderError
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneVM
@@ -245,6 +245,26 @@ async def test_dual_copy_across_pre_registers_all_pending_before_running(
         "all PENDING messages should fire before any RUNNING — got "
         f"pending at {pending_indexes}, running at {running_indexes}"
     )
+    dp.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dual_copy_rejects_oversized_batch_before_journaling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.vm.file_manager import dual_pane_vm
+
+    dp, _ = await _make_dual(tmp_path)
+    monkeypatch.setattr(dual_pane_vm, "_MAX_TRANSFER_BATCH_ENTRIES", 1)
+    dp.left.enter_multiselect_command.execute()
+    dp.left.select_all_command.execute()
+
+    with pytest.raises(ProviderError, match="at most 1"):
+        await dp.copy_across()
+
+    assert dp._journal.find_unfinished() == []  # type: ignore[attr-defined]
+    assert dp._cancel_events == {}  # type: ignore[attr-defined]
     dp.dispose()
 
 

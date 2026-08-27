@@ -11,7 +11,6 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.messages import (
     ConnectionChangedMessage,
     CopyTableReferenceRequest,
-    FocusChangedMessage,
     OpenAthenaTableRequest,
     OpenGlueTableRequest,
     OpenS3LocationRequest,
@@ -45,7 +44,6 @@ def _connection() -> Connection:
             bytes_total=100,
             state="running",
         ),
-        lambda: FocusChangedMessage(focused_vm_id="pane.left"),
         lambda: OpenS3LocationRequest(
             connection_name="prod-west",
             region="us-west-2",
@@ -138,11 +136,6 @@ def test_transfer_progress_allows_unknown_total() -> None:
         transfer_id="t1", bytes_transferred=10, bytes_total=None, state="running"
     )
     assert msg.bytes_total is None
-
-
-def test_focus_changed_round_trip() -> None:
-    msg = FocusChangedMessage(focused_vm_id="pane.left")
-    assert msg.focused_vm_id == "pane.left"
 
 
 def test_open_s3_request_carries_source_identity() -> None:
@@ -312,7 +305,7 @@ def test_messages_are_immutable() -> None:
 
 def test_messages_use_slots() -> None:
     # Slots dataclasses reject arbitrary attribute assignment.
-    msg = FocusChangedMessage(focused_vm_id="x")
+    msg = ThemeChangedMessage(name="carbon")
     with pytest.raises((AttributeError, TypeError)):
         msg.random_attr = "y"  # type: ignore[attr-defined]
 

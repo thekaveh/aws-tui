@@ -519,6 +519,68 @@ async def test_get_query_execution_defaults_optional_statistics() -> None:
     assert detail.error is None
 
 
+async def test_get_query_executions_batches_once_and_preserves_requested_order() -> None:
+    first = cast(dict[str, object], _query_execution("SUCCEEDED")["QueryExecution"])
+    first["QueryExecutionId"] = "q-1"
+    second = cast(dict[str, object], _query_execution("RUNNING")["QueryExecution"])
+    second["QueryExecutionId"] = "q-2"
+    client, boto, _ = _athena_client(
+        "batch_get_query_execution",
+        {
+            "QueryExecutions": [second, first],
+            "UnprocessedQueryExecutionIds": [],
+        },
+    )
+
+    details = await client.get_query_executions(["q-1", "q-2"])
+
+    assert tuple(detail.summary.ref.execution_id for detail in details) == ("q-1", "q-2")
+    boto.batch_get_query_execution.assert_awaited_once_with(QueryExecutionIds=["q-1", "q-2"])
+    boto.get_query_execution.assert_not_awaited()
+
+
+async def test_get_query_executions_rejects_unprocessed_ids() -> None:
+    client, _, _ = _athena_client(
+        "batch_get_query_execution",
+        {
+            "QueryExecutions": [],
+            "UnprocessedQueryExecutionIds": [
+                {
+                    "QueryExecutionId": "q-sensitive",
+                    "ErrorCode": "INTERNAL_ERROR",
+                    "ErrorMessage": "could not process q-sensitive",
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await client.get_query_executions(["q-sensitive"])
+
+    assert "q-sensitive" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "response_ids",
+    [("q-1",), ("q-1", "q-1")],
+)
+async def test_get_query_executions_rejects_incomplete_or_duplicate_results(
+    response_ids: tuple[str, ...],
+) -> None:
+    rows: list[dict[str, object]] = []
+    for execution_id in response_ids:
+        row = cast(dict[str, object], _query_execution()["QueryExecution"])
+        row["QueryExecutionId"] = execution_id
+        rows.append(row)
+    client, _, _ = _athena_client(
+        "batch_get_query_execution",
+        {"QueryExecutions": rows, "UnprocessedQueryExecutionIds": []},
+    )
+
+    with pytest.raises(ValidationError, match="malformed Athena response"):
+        await client.get_query_executions(["q-1", "q-2"])
+
+
 async def test_get_query_runtime_statistics_maps_timeline_and_input_bytes() -> None:
     client, boto, _ = _athena_client(
         "get_query_runtime_statistics",
@@ -1390,6 +1452,8 @@ async def _invoke_sensitive_operation(
         await client.list_query_executions_page(sensitive, start_token=sensitive)
     elif method == "get_query_execution":
         await client.get_query_execution(sensitive)
+    elif method == "batch_get_query_execution":
+        await client.get_query_executions([sensitive])
     elif method == "get_query_runtime_statistics":
         await client.get_query_runtime_statistics(sensitive)
     elif method == "stop_query_execution":
@@ -1418,6 +1482,7 @@ async def _invoke_sensitive_operation(
         "list_table_metadata",
         "list_query_executions",
         "get_query_execution",
+        "batch_get_query_execution",
         "get_query_runtime_statistics",
         "stop_query_execution",
         "get_query_results",
@@ -1470,6 +1535,8 @@ async def _invoke_malformed_case(client: AthenaClient, method: str) -> None:
         await client.list_query_executions_page("analysts")
     elif method == "get_query_execution":
         await client.get_query_execution("q-123")
+    elif method == "batch_get_query_execution":
+        await client.get_query_executions(["q-123"])
     elif method == "get_query_runtime_statistics":
         await client.get_query_runtime_statistics("q-123")
     elif method == "get_query_results":
@@ -1494,6 +1561,10 @@ async def _invoke_malformed_case(client: AthenaClient, method: str) -> None:
         ("list_table_metadata", {"TableMetadataList": [{"TableType": "VIEW"}]}),
         ("list_query_executions", {"QueryExecutionIds": [7]}),
         ("get_query_execution", {"QueryExecution": {"QueryExecutionId": "q-123"}}),
+        (
+            "batch_get_query_execution",
+            {"QueryExecutions": [{"QueryExecutionId": "q-123"}]},
+        ),
         (
             "get_query_runtime_statistics",
             {"QueryRuntimeStatistics": {"Timeline": []}},

@@ -10,7 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from scripts.docs.manifest import Manifest, Section, load_manifest
+from scripts.docs.manifest import Manifest, ManifestError, Section, load_manifest
 from scripts.docs.render_diagrams import copy_assets, render_svg, write_svg
 from scripts.docs.transforms import (
     build_source_map,
@@ -190,6 +190,12 @@ def render_mkdocs_yml(manifest: Manifest) -> str:
     return _MKDOCS_TEMPLATE.format(nav=_mkdocs_nav(manifest))
 
 
+def render_package_readme(manifest: Manifest, repo_root: str | Path) -> str:
+    if manifest.package is None:
+        raise ManifestError("package surface is not configured")
+    return (Path(repo_root) / manifest.package.source).read_text(encoding="utf-8")
+
+
 def _hash_tree(root: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for p in sorted(root.rglob("*")):
@@ -209,29 +215,51 @@ def build(
     *,
     site: bool = False,
     wiki: bool = False,
+    package: bool = False,
     check: bool = False,
 ) -> None:
     repo_root = Path(repo_root)
     manifest = load_manifest(path, repo_root)
+    requested = {
+        name for name, enabled in (("site", site), ("wiki", wiki), ("package", package)) if enabled
+    }
+    unsupported = requested - set(manifest.surfaces)
+    if unsupported:
+        raise ManifestError(f"requested undeclared surfaces: {sorted(unsupported)}")
     generated = repo_root / "generated"
-    if site or check:
+    build_site = site or (check and "site" in manifest.surfaces)
+    build_wiki = wiki or (check and "wiki" in manifest.surfaces)
+    build_package = package or (check and "package" in manifest.surfaces)
+    if build_site:
         render_site(manifest, repo_root, generated / "site")
         (repo_root / "mkdocs.yml").write_text(render_mkdocs_yml(manifest), encoding="utf-8")
-    if wiki or check:
+    if build_wiki:
         render_wiki(manifest, repo_root, generated / "wiki")
+    if build_package:
+        assert manifest.package is not None
+        expected = render_package_readme(manifest, repo_root)
+        output = repo_root / manifest.package.output
+        if check:
+            actual = output.read_text(encoding="utf-8") if output.is_file() else ""
+            assert actual == expected, f"package README is stale: {manifest.package.output}"
+        else:
+            output.write_text(expected, encoding="utf-8")
     if check:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            render_site(manifest, repo_root, tmp_path / "site")
-            render_wiki(manifest, repo_root, tmp_path / "wiki")
-            _assert_dirs_equal(tmp_path / "site", generated / "site")
-            _assert_dirs_equal(tmp_path / "wiki", generated / "wiki")
+            if build_site:
+                render_site(manifest, repo_root, tmp_path / "site")
+                _assert_dirs_equal(tmp_path / "site", generated / "site")
+            if build_wiki:
+                render_wiki(manifest, repo_root, tmp_path / "wiki")
+                _assert_dirs_equal(tmp_path / "wiki", generated / "wiki")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="build_docs")
     parser.add_argument("--site", action="store_true")
     parser.add_argument("--wiki", action="store_true")
+    parser.add_argument("--package", action="store_true")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
     repo_root = Path.cwd()
@@ -240,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root,
         site=args.site,
         wiki=args.wiki,
+        package=args.package,
         check=args.check,
     )
     return 0

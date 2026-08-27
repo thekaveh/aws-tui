@@ -90,6 +90,7 @@ _S3COMPAT_TOML = (
     'kind = "s3-compatible"\n'
     'endpoint_url = "http://127.0.0.1:1"\n'
     'region = "us-east-1"\n'
+    'credentials = "static"\n'
     'access_key_id = "x"\n'
     'secret_access_key = "y"\n'
     "[defaults]\n"
