@@ -1,5 +1,10 @@
 # 1. Post-Merge Audit Remediation Implementation Plan
 
+**Status:** Completed and merged into `develop` through PR #152. This is a
+historical implementation record; branch commands and unchecked steps below
+are not current work. The transient `.superpowers/sdd/` execution reports
+referenced by the original plan were intentionally removed after merge.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Restore the shipped keymap contract, make command discovery context-correct, remove new theme duplication, and bring all canonical and three-surface documentation into exact semantic parity with the current Glue/Athena implementation.
@@ -10,8 +15,8 @@
 
 ## 1.1. Global Constraints
 
-- Work only on `codex/post-merge-audit-remediation`, based on `develop` commit `a14bc98fce5847f31199d9d44cc2ff255448e09f`.
-- Target a later merge into `develop`; do not merge or push changes to `main`.
+- Historical execution constraint: work was performed on `codex/post-merge-audit-remediation`, based on `develop` commit `a14bc98fce5847f31199d9d44cc2ff255448e09f`.
+- The completed branch targeted `develop` through PR #152 and did not merge directly into `main`.
 - Preserve Glue and Athena read-only behavior and explicit Athena execution.
 - Preserve exact connection-name and region guards for copy, insert, navigation, and S3 handoff.
 - Use only `vmx>=3.1.0,<4.0.0` public APIs.
@@ -66,7 +71,7 @@
   `docs/RELEASING.md`: current behavior.
 - `docs/diagrams/architecture.html` and `docs/diagrams/img/architecture.{svg,png}`:
   clipboard/message architecture and generated artifacts.
-- `.superpowers/sdd/2026-07-30-task-7-report.md`: missing commit traceability.
+- `.superpowers/sdd/2026-07-30-task-7-report.md`: historical transient report, intentionally removed after merge.
 - `.github/workflows/ci.yml`: remove the stale hardcoded E2E journey count.
 
 ---

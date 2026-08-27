@@ -1,6 +1,8 @@
 # 1. Glue and Athena segmented tabs and layout fixes design
 
-**Status:** Approved for implementation on 2026-08-23 after hands-on review.
+**Status:** Implemented on 2026-08-23. The shared segmented-frame and layout
+regression decisions remain authoritative; the later overlay-picker design
+refines selector and command-hint behavior without changing tab order.
 
 This design supersedes only the underline tab-rail presentation in
 `2026-08-23-glue-athena-tab-rail-design.md`. It also corrects two regressions

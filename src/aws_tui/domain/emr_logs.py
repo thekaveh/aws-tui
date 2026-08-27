@@ -20,16 +20,18 @@ state distinction that every other EMR pane gets for free.
 
 from __future__ import annotations
 
+import inspect
 import re
 import zlib
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from aws_tui.domain.emr_serverless import map_boto_error
-from aws_tui.domain.filesystem import ProviderError
+from aws_tui.domain.filesystem import ProviderError, ValidationError
 
 if TYPE_CHECKING:
     import aioboto3
@@ -96,6 +98,9 @@ DEFAULT_LOG_FILTER: LogFilter = LogFilter(
     mode=FilterMode.MATCH,
     case_insensitive=True,
 )
+
+_MAX_LOG_DISCOVERY_FILES = 200
+_MAX_LOG_DISCOVERY_PAGES = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,7 +221,7 @@ async def list_log_files(
     run_prefix: str,
     boto_config: BotoConfig | None = None,
 ) -> list[LogFile]:
-    """List all log files under the run's S3 prefix. Returns
+    """List a bounded set of log files under the run's S3 prefix. Returns
     ``LogFile``s with ``kind`` parsed from the key path and ``size``
     from each object's ``Size`` field. Driver-first sort so the
     default selection (``DRIVER_STDERR``) is at a stable index."""
@@ -228,16 +233,24 @@ async def list_log_files(
         async with session.client("s3", **kwargs) as s3:
             next_token: str | None = None
             seen_tokens: set[str] = set()
+            page_count = 0
             while True:
+                if page_count >= _MAX_LOG_DISCOVERY_PAGES:
+                    raise ProviderError("EMR log discovery exceeded the pagination safety limit")
+                page_count += 1
                 list_kwargs: dict[str, object] = {"Bucket": bucket, "Prefix": run_prefix}
                 if next_token is not None:
                     list_kwargs["ContinuationToken"] = next_token
                 resp = await s3.list_objects_v2(**list_kwargs)
                 for obj in resp.get("Contents", []):
                     key = obj["Key"]
-                    kind, sort_idx = _classify_key(key)
+                    prefix = f"{run_prefix.rstrip('/')}/"
+                    relative_key = key[len(prefix) :] if key.startswith(prefix) else key
+                    kind, sort_idx = _classify_key(relative_key)
                     if kind is None:
                         continue
+                    if len(files) >= _MAX_LOG_DISCOVERY_FILES:
+                        raise ProviderError("EMR log discovery exceeded the file safety limit")
                     files.append((sort_idx, LogFile(key=key, kind=kind, size=obj.get("Size"))))
                 next_token = resp.get("NextContinuationToken")
                 if not resp.get("IsTruncated"):
@@ -276,6 +289,7 @@ async def stream_log(
     kwargs: dict[str, object] = {"region_name": region_name}
     if boto_config is not None:
         kwargs["config"] = boto_config
+    body: Any = None
     try:
         async with session.client("s3", **kwargs) as s3:
             resp = await s3.get_object(Bucket=bucket, Key=log_file.key)
@@ -300,7 +314,10 @@ async def stream_log(
                 if remaining_decompressed <= 0:
                     truncated = True
                     break
-                raw_output = decompressor.decompress(chunk, remaining_decompressed + 1)
+                try:
+                    raw_output = decompressor.decompress(chunk, remaining_decompressed + 1)
+                except zlib.error:
+                    raise ValidationError("corrupt EMR log gzip stream") from None
                 if len(raw_output) > remaining_decompressed:
                     raw_output = raw_output[:remaining_decompressed]
                     truncated = True
@@ -346,7 +363,7 @@ async def stream_log(
                 try:
                     tail = decompressor.flush(_MAX_DECOMPRESSED_BYTES - decompressed_bytes)
                 except zlib.error:
-                    truncated = True
+                    raise ValidationError("corrupt EMR log gzip stream") from None
                 else:
                     pending.extend(tail)
                     decompressed_bytes += len(tail)
@@ -377,6 +394,21 @@ async def stream_log(
         if mapped is None:
             raise
         raise mapped from exc
+    finally:
+        if body is not None:
+            with suppress(Exception):
+                await _close_streaming_body(body)
+
+
+async def _close_streaming_body(body: object) -> None:
+    close = getattr(body, "aclose", None)
+    if not callable(close):
+        close = getattr(body, "close", None)
+    if not callable(close):
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result
 
 
 @dataclass(frozen=True, slots=True)

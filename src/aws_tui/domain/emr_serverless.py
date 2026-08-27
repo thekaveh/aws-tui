@@ -10,12 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import botocore.exceptions
 from botocore.config import Config as BotoConfig
 
 from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
+from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     NotFoundError,
@@ -91,7 +92,7 @@ class ApplicationSummary:
     id: str
     name: str
     state: ApplicationState
-    type: str  # "SPARK" or "HIVE" — v1 only renders SPARK applications
+    type: str  # Service-reported application type, currently SPARK or HIVE.
     created_at: datetime
 
 
@@ -136,11 +137,43 @@ class JobRunDetail:
     s3_monitoring_log_uri: str | None
 
 
+class EmrServerlessClientProtocol(Protocol):
+    """Structural client boundary consumed by the EMR viewmodels."""
+
+    async def list_applications(self) -> list[ApplicationSummary]: ...
+
+    async def list_job_runs_page(
+        self,
+        application_id: str,
+        *,
+        start_token: str | None = None,
+        states: set[JobRunState] | None = None,
+    ) -> tuple[list[JobRunSummary], str | None]: ...
+
+    async def get_job_run(
+        self,
+        application_id: str,
+        job_run_id: str,
+    ) -> JobRunDetail: ...
+
+    async def start_job_run(
+        self,
+        application_id: str,
+        *,
+        execution_role_arn: str,
+        entry_point: str,
+        entry_point_arguments: tuple[str, ...],
+        spark_submit_parameters: str | None,
+        name: str | None = None,
+    ) -> str: ...
+
+
 __all__ = [
     "EMR_BOTO_CONFIG",
     "ApplicationState",
     "ApplicationSummary",
     "EmrServerlessClient",
+    "EmrServerlessClientProtocol",
     "JobRunDetail",
     "JobRunState",
     "JobRunSummary",
@@ -156,13 +189,10 @@ _CLIENT_ERROR_CODE_MAP: dict[str, type[ProviderError]] = {
     "ResourceNotFoundException": NotFoundError,
     "ValidationException": ValidationError,
 }
-_TRANSPORT_FAILURE_EXCEPTIONS = (
-    botocore.exceptions.EndpointConnectionError,
-    botocore.exceptions.ConnectTimeoutError,
-    botocore.exceptions.ReadTimeoutError,
-    botocore.exceptions.ConnectionClosedError,
-    botocore.exceptions.ConnectionError,
-)
+_TRANSPORT_FAILURE_EXCEPTIONS = AWS_TRANSPORT_EXCEPTIONS
+_MAX_EMR_LISTING_PAGES = 100
+_MAX_EMR_APPLICATIONS = 1000
+_EMR_PAGE_SIZE = 50
 
 
 def _map_boto_error(exc: BaseException) -> ProviderError | None:
@@ -231,12 +261,22 @@ class EmrServerlessClient:
                 items: list[dict[str, Any]] = []
                 next_token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
                 while True:
-                    kwargs: dict[str, Any] = {}
+                    if page_count >= _MAX_EMR_LISTING_PAGES:
+                        raise ProviderError(
+                            "EMR Serverless application pagination safety limit exceeded"
+                        )
+                    page_count += 1
+                    kwargs: dict[str, Any] = {"maxResults": _EMR_PAGE_SIZE}
                     if next_token is not None:
                         kwargs["nextToken"] = next_token
                     resp = await c.list_applications(**kwargs)
                     items.extend(resp.get("applications", []))
+                    if len(items) > _MAX_EMR_APPLICATIONS:
+                        raise ProviderError(
+                            "EMR Serverless application collection safety limit exceeded"
+                        )
                     next_token = resp.get("nextToken")
                     if next_token is None:
                         break
@@ -288,7 +328,10 @@ class EmrServerlessClient:
             async with self._session.client(
                 "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
             ) as c:
-                kwargs: dict[str, Any] = {"applicationId": application_id}
+                kwargs: dict[str, Any] = {
+                    "applicationId": application_id,
+                    "maxResults": _EMR_PAGE_SIZE,
+                }
                 if start_token is not None:
                     kwargs["nextToken"] = start_token
                 if states and states != set(JobRunState):
@@ -333,8 +376,17 @@ class EmrServerlessClient:
                 items: list[dict[str, object]] = []
                 next_token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
                 while len(items) < max_results:
-                    kwargs: dict[str, Any] = {"applicationId": application_id}
+                    if page_count >= _MAX_EMR_LISTING_PAGES:
+                        raise ProviderError(
+                            "EMR Serverless job-run pagination safety limit exceeded"
+                        )
+                    page_count += 1
+                    kwargs: dict[str, Any] = {
+                        "applicationId": application_id,
+                        "maxResults": min(_EMR_PAGE_SIZE, max_results - len(items)),
+                    }
                     if next_token is not None:
                         kwargs["nextToken"] = next_token
                     if states and states != set(JobRunState):

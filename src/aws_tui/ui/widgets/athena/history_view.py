@@ -163,6 +163,7 @@ class AthenaHistoryView(Widget):
                 state=self._vm.state,
                 error_text=self._vm.error_text,
                 has_more=self._vm.has_more,
+                limit_reached=self._vm.limit_reached,
             )
             detail.replace(
                 self._detail_values(),
@@ -179,6 +180,7 @@ class AthenaHistoryView(Widget):
                 busy=self._vm.is_loading_more,
                 state=self._vm.state,
                 error_text=self._vm.error_text,
+                limit_reached=self._vm.limit_reached,
             )
         except NoMatches:
             return

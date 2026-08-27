@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime
+
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.emr_serverless import ApplicationState
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
+from aws_tui.domain.emr_serverless import ApplicationState, ApplicationSummary
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _make() -> tuple[ApplicationsVM, _InMemoryEmr]:
@@ -365,3 +368,55 @@ async def test_refresh_failure_surfaces_unreachable_state() -> None:
     vm.construct()
     await vm.refresh()
     assert vm.state is PaneState.UNREACHABLE
+
+
+@pytest.mark.asyncio
+async def test_concurrent_refreshes_commit_in_request_order() -> None:
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+    first = ApplicationSummary(
+        id="old",
+        name="old",
+        state=ApplicationState.STARTED,
+        type="SPARK",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    second = ApplicationSummary(
+        id="new",
+        name="new",
+        state=ApplicationState.STARTED,
+        type="SPARK",
+        created_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    class _SequencedClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def list_applications(self) -> list[ApplicationSummary]:
+            self.calls += 1
+            if self.calls == 1:
+                first_started.set()
+                await release_first.wait()
+                return [first]
+            second_started.set()
+            return [second]
+
+    client = _SequencedClient()
+    hub: MessageHub[Message] = MessageHub()
+    vm = ApplicationsVM(client=client, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    first_refresh = asyncio.create_task(vm.refresh())
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    second_refresh = asyncio.create_task(vm.refresh())
+    await asyncio.sleep(0)
+
+    assert not second_started.is_set()
+
+    release_first.set()
+    await asyncio.gather(first_refresh, second_refresh)
+
+    assert second_started.is_set()
+    assert vm.applications == (second,)
+    vm.dispose()

@@ -233,6 +233,80 @@ async def test_catalog_uses_token_pagers_and_loads_more_at_each_level() -> None:
 
 
 @pytest.mark.asyncio
+async def test_database_pager_stops_at_explicit_item_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.vm.glue import catalog_vm
+
+    monkeypatch.setattr(catalog_vm, "_MAX_DATABASE_ITEMS", 1, raising=False)
+    fake = seeded_glue()
+    fake.database_page_size = 1
+    fake.add_database("warehouse")
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+
+    await vm.load_more_databases()
+
+    assert len(vm.databases) == 1
+    assert not vm.has_more_databases
+    assert vm.database_limit_reached
+    assert vm.databases_state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_catalog_pagers_reject_multi_token_cycles_before_mutation() -> None:
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.add_partition(ref, "day=2026-08-26")
+    lineage = {None: "A", "A": "B", "B": "A"}
+    original_databases = fake.list_databases_page
+    original_tables = fake.list_tables_page
+    original_partitions = fake.list_partitions_page
+
+    async def databases(*, start_token: str | None = None) -> tuple[list, str | None]:
+        rows, _ = await original_databases(start_token=None)
+        return rows, lineage[start_token]
+
+    async def tables(
+        database: str,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list, str | None]:
+        rows, _ = await original_tables(database, start_token=None)
+        return rows, lineage[start_token]
+
+    async def partitions(
+        table_ref: TableRef,
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list, str | None]:
+        rows, _ = await original_partitions(table_ref, start_token=None)
+        return rows, lineage[start_token]
+
+    fake.list_databases_page = databases  # type: ignore[method-assign]
+    fake.list_tables_page = tables  # type: ignore[method-assign]
+    fake.list_partitions_page = partitions  # type: ignore[method-assign]
+    vm = make_catalog_vm(fake)
+    pagers = (
+        (vm._make_database_pager(), "database"),
+        (vm._make_table_pager("analytics"), "table"),
+        (vm._make_partition_pager(ref), "partition"),
+    )
+    try:
+        for pager, family in pagers:
+            await pager.refresh_command.execute_async()
+            await pager.load_more_command.execute_async()
+            before = pager.items
+            with pytest.raises(ProviderError, match=family):
+                await pager.load_more_command.execute_async()
+            assert pager.items == before
+    finally:
+        for pager, _family in pagers:
+            pager.dispose()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_refresh_notifies_database_pager_replacement_and_result() -> None:
     fake = seeded_glue()
     fake.add_database("warehouse")

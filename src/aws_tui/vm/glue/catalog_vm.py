@@ -7,7 +7,6 @@ from typing import Any, Literal, cast
 
 import reactivex as rx
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
-from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -23,6 +22,7 @@ from aws_tui.domain.data_catalog import (
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
@@ -36,10 +36,14 @@ from aws_tui.vm.messages import (
     OpenAthenaTableRequest,
     OpenS3LocationRequest,
 )
+from aws_tui.vm.paging import BoundedTokenPagedComposition
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _DISCOVERY_PAGE_LIMIT = 64
 _DISCOVERY_EMPTY_PAGE_LIMIT = 3
+_MAX_DATABASE_ITEMS = 1_000
+_MAX_TABLE_ITEMS = 1_000
+_MAX_PARTITION_ITEMS = 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,15 +159,27 @@ class GlueCatalogVM:
 
     @property
     def has_more_databases(self) -> bool:
-        return self._database_pager.current_token is not None
+        return self._database_pager.has_more
 
     @property
     def has_more_tables(self) -> bool:
-        return self._table_pager.current_token is not None
+        return self._table_pager.has_more
 
     @property
     def has_more_partitions(self) -> bool:
-        return self._partition_pager.current_token is not None
+        return self._partition_pager.has_more
+
+    @property
+    def database_limit_reached(self) -> bool:
+        return self._database_pager.limit_reached
+
+    @property
+    def table_limit_reached(self) -> bool:
+        return self._table_pager.limit_reached
+
+    @property
+    def partition_limit_reached(self) -> bool:
+        return self._partition_pager.limit_reached
 
     @property
     def state(self) -> PaneState:
@@ -761,7 +777,9 @@ class GlueCatalogVM:
             "statistics_state",
         )
 
-    def _make_database_pager(self) -> TokenPagedComposition[DatabaseSummary, str]:
+    def _make_database_pager(
+        self,
+    ) -> BoundedTokenPagedComposition[DatabaseSummary, str]:
         generation = self._database_generation
 
         async def fetch(token: str | None) -> tuple[list[DatabaseSummary], str | None]:
@@ -778,12 +796,18 @@ class GlueCatalogVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return BoundedTokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a database continuation token",
+            ),
+            max_items=_MAX_DATABASE_ITEMS,
+        )
 
     def _make_table_pager(
         self,
         database_name: str | None,
-    ) -> TokenPagedComposition[TableSummary, str]:
+    ) -> BoundedTokenPagedComposition[TableSummary, str]:
         generation = self._table_generation
 
         async def fetch(token: str | None) -> tuple[list[TableSummary], str | None]:
@@ -806,12 +830,18 @@ class GlueCatalogVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return BoundedTokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a table continuation token",
+            ),
+            max_items=_MAX_TABLE_ITEMS,
+        )
 
     def _make_partition_pager(
         self,
         ref: TableRef | None,
-    ) -> TokenPagedComposition[PartitionSummary, str]:
+    ) -> BoundedTokenPagedComposition[PartitionSummary, str]:
         generation = self._partition_generation
 
         async def fetch(token: str | None) -> tuple[list[PartitionSummary], str | None]:
@@ -834,7 +864,13 @@ class GlueCatalogVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return BoundedTokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a partition continuation token",
+            ),
+            max_items=_MAX_PARTITION_ITEMS,
+        )
 
     def _replace_table_pager(self, database_name: str | None) -> None:
         old_pager = self._table_pager

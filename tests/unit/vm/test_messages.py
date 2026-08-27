@@ -9,14 +9,12 @@ from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.messages import (
-    AuthExpiredMessage,
     ConnectionChangedMessage,
     CopyTableReferenceRequest,
-    FocusChangedMessage,
-    KeymapChangedMessage,
     OpenAthenaTableRequest,
     OpenGlueTableRequest,
     OpenS3LocationRequest,
+    ServiceOperationFailedMessage,
     ThemeChangedMessage,
     TransferProgressMessage,
 )
@@ -40,18 +38,12 @@ def _connection() -> Connection:
             auth_state=TokenState.CONNECTED,
         ),
         lambda: ThemeChangedMessage(name="voidline"),
-        lambda: AuthExpiredMessage(
-            connection_name="kaveh-prod",
-            reason="expired",
-        ),
         lambda: TransferProgressMessage(
             transfer_id="t1",
             bytes_transferred=10,
             bytes_total=100,
             state="running",
         ),
-        lambda: KeymapChangedMessage(action="pane.copy", new_keys=("c",)),
-        lambda: FocusChangedMessage(focused_vm_id="pane.left"),
         lambda: OpenS3LocationRequest(
             connection_name="prod-west",
             region="us-west-2",
@@ -110,11 +102,23 @@ def test_theme_changed_round_trip() -> None:
     assert msg.sender_name == "root"
 
 
-def test_auth_expired_round_trip() -> None:
-    msg = AuthExpiredMessage(connection_name="kaveh-prod", reason="expired")
-    assert msg.connection_name == "kaveh-prod"
-    assert msg.reason == "expired"
-    assert msg.sender_name == "aws_session"
+def test_service_failure_retains_redacted_traceback_text() -> None:
+    try:
+        raise RuntimeError(
+            "Authorization: Bearer TRACE_SECRET {'secret_access_key': 'REPR_TRACE_SECRET'}"
+        )
+    except RuntimeError as error:
+        message = ServiceOperationFailedMessage.from_error(
+            service="athena",
+            operation="list_catalogs",
+            error=error,
+        )
+
+    assert "test_service_failure_retains_redacted_traceback_text" in message.safe_traceback
+    assert "RuntimeError" in message.safe_traceback
+    assert "TRACE_SECRET" not in message.safe_traceback
+    assert "REPR_TRACE_SECRET" not in message.safe_traceback
+    assert "Authorization: Bearer [REDACTED]" in message.safe_traceback
 
 
 def test_transfer_progress_round_trip() -> None:
@@ -132,17 +136,6 @@ def test_transfer_progress_allows_unknown_total() -> None:
         transfer_id="t1", bytes_transferred=10, bytes_total=None, state="running"
     )
     assert msg.bytes_total is None
-
-
-def test_keymap_changed_round_trip() -> None:
-    msg = KeymapChangedMessage(action="pane.copy", new_keys=("c",))
-    assert msg.action == "pane.copy"
-    assert msg.new_keys == ("c",)
-
-
-def test_focus_changed_round_trip() -> None:
-    msg = FocusChangedMessage(focused_vm_id="pane.left")
-    assert msg.focused_vm_id == "pane.left"
 
 
 def test_open_s3_request_carries_source_identity() -> None:
@@ -312,7 +305,7 @@ def test_messages_are_immutable() -> None:
 
 def test_messages_use_slots() -> None:
     # Slots dataclasses reject arbitrary attribute assignment.
-    msg = FocusChangedMessage(focused_vm_id="x")
+    msg = ThemeChangedMessage(name="carbon")
     with pytest.raises((AttributeError, TypeError)):
         msg.random_attr = "y"  # type: ignore[attr-defined]
 

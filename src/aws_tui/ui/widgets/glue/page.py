@@ -391,7 +391,7 @@ class GluePage(HubSubscriberMixin, Widget):
         ancestors = set(focused.ancestors_with_self)
         for slot, target in self._focus_targets():
             if target in ancestors:
-                self._focus_coordinator.set_focused_slot(slot)
+                self._focus_coordinator.project_focused_slot(slot)
                 return
 
     def _project_focus_slot(
@@ -406,7 +406,7 @@ class GluePage(HubSubscriberMixin, Widget):
         if target is None:
             return
         if self._focus_coordinator is not None:
-            self._focus_coordinator.set_focused_slot(slot)
+            self._focus_coordinator.project_focused_slot(slot)
         self.app.set_focus(target)
 
     def move_focused(self, delta: int) -> None:

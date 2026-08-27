@@ -54,6 +54,7 @@ async def _mounted_athena_app(
             await ctx.root_vm.content_host.shutdown()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 def test_athena_is_registered_after_glue_and_is_hidden_from_minio(tmp_path: Path) -> None:
@@ -77,6 +78,7 @@ def test_athena_is_registered_after_glue_and_is_hidden_from_minio(tmp_path: Path
         assert not ctx.registry.get("athena").supports(minio)
     finally:
         ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.asyncio
@@ -337,9 +339,17 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         await pilot.pause()
         assert hint_enabled("athena.load_more")
 
-        vm._set_loading_more("workgroups", True)  # type: ignore[attr-defined]
+        workgroup_worker = vm._workgroup_worker  # type: ignore[attr-defined]
+        vm._begin_loading_more(  # type: ignore[attr-defined]
+            "workgroups",
+            workgroup_worker,
+        )
         await pilot.pause()
         assert not hint_enabled("athena.load_more")
+        vm._finish_loading_more(  # type: ignore[attr-defined]
+            "workgroups",
+            workgroup_worker,
+        )
 
 
 @pytest.mark.asyncio
@@ -442,7 +452,7 @@ async def test_recovered_context_pager_clears_error_styling_tooltip_and_hint(
             start_token: str | None = None,
         ) -> tuple[list[object], str | None]:
             assert start_token == "workgroups-next"
-            return list(client.workgroups), "workgroups-next"
+            return list(client.workgroups), "workgroups-after-retry"
 
         client.list_workgroups_page = retry_page  # type: ignore[method-assign]
         await page.action_load_more()

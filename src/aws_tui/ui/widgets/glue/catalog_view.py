@@ -125,6 +125,7 @@ class GlueCatalogView(Widget):
                 state=self._vm.databases_state,
                 error_text=self._vm.databases_error_text,
                 has_more=self._vm.has_more_databases,
+                limit_reached=self._vm.database_limit_reached,
             )
             tables.replace(
                 tuple(
@@ -138,6 +139,7 @@ class GlueCatalogView(Widget):
                 state=self._vm.tables_state,
                 error_text=self._vm.tables_error_text,
                 has_more=self._vm.has_more_tables,
+                limit_reached=self._vm.table_limit_reached,
             )
             detail.replace(
                 self._detail_values(),
@@ -166,7 +168,12 @@ class GlueCatalogView(Widget):
         for column in detail.columns:
             marker = "partition" if column.partition_key else "column"
             rows.append(DetailValue(marker, f"{column.name}: {column.type_name}"))
-        rows.append(DetailValue("Partitions", str(len(self._vm.partitions))))
+        partition_count = str(len(self._vm.partitions))
+        if self._vm.partition_limit_reached:
+            partition_count += " (safety limit)"
+        elif self._vm.has_more_partitions:
+            partition_count += " (more available)"
+        rows.append(DetailValue("Partitions", partition_count))
         for partition in self._vm.partitions:
             rows.append(DetailValue("partition", " / ".join(partition.values)))
         rows.append(DetailValue("Statistics", str(len(self._vm.column_statistics))))

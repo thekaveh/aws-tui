@@ -136,6 +136,8 @@ class GlueIcebergView(Widget):
         self._vm = vm
         self._sub: DisposableBase | None = None
         self._suppress_highlight = False
+        self._refresh_pending = False
+        self._table_snapshot: object | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="glue-iceberg-tabs"):
@@ -256,7 +258,14 @@ class GlueIcebergView(Widget):
         return self.run_worker(deferred, exclusive=True, group=group)
 
     def _on_vm_changed(self, _property_name: str) -> None:
-        self.call_after_refresh(self._refresh)
+        if self._refresh_pending:
+            return
+        self._refresh_pending = True
+        self.call_after_refresh(self._flush_refresh)
+
+    def _flush_refresh(self) -> None:
+        self._refresh_pending = False
+        self._refresh()
 
     def _refresh(self) -> None:
         try:
@@ -279,20 +288,23 @@ class GlueIcebergView(Widget):
         selected_snapshot_id = self._vm.selected_snapshot_id
         self._suppress_highlight = True
         try:
-            table.clear(columns=True)
-            columns = _columns(self._vm.active_view)
-            for index, column in enumerate(columns):
-                table.add_column(column, key=f"glue-iceberg-column-{index}")
-            for index, row in enumerate(self._vm.items):
-                row_key = (
-                    f"iceberg-snapshot-{cast(IcebergSnapshot, row).snapshot_id}"
-                    if self._vm.active_view == "snapshots"
-                    else f"iceberg-row-{index}"
-                )
-                table.add_row(
-                    *(Text(cell, no_wrap=True) for cell in _cells(self._vm.active_view, row)),
-                    key=row_key,
-                )
+            table_snapshot = (self._vm.active_view, self._vm.items)
+            if table_snapshot != self._table_snapshot:
+                self._table_snapshot = table_snapshot
+                table.clear(columns=True)
+                columns = _columns(self._vm.active_view)
+                for index, column in enumerate(columns):
+                    table.add_column(column, key=f"glue-iceberg-column-{index}")
+                for index, row in enumerate(self._vm.items):
+                    row_key = (
+                        f"iceberg-snapshot-{cast(IcebergSnapshot, row).snapshot_id}"
+                        if self._vm.active_view == "snapshots"
+                        else f"iceberg-row-{index}"
+                    )
+                    table.add_row(
+                        *(Text(cell, no_wrap=True) for cell in _cells(self._vm.active_view, row)),
+                        key=row_key,
+                    )
             if self._vm.active_view == "snapshots" and self._vm.snapshots:
                 selected_index = next(
                     (

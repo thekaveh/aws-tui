@@ -1,6 +1,6 @@
 # 1. Architecture
 
-![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue, and Athena views with ContextPicker and ServiceTabStrip; Glue and Athena VM trees; a typed CopyTableReferenceRequest to TableClipboardVM copy-and-insert route; service plugins; shared TableRef and QueryContext models; IcebergInspector; source selection and connection resolution; immutable Glue, Athena, and S3 navigation messages; and the AWS Glue, Athena, S3, and Lake Formation boundary.](diagrams/img/architecture.png)
+![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue and Iceberg, and Athena views; Glue and Athena VM trees plus S3 and EMR view models; service plugins; domain operations with shared TableRef and QueryContext models; connection, configuration, keychain, platform-path, and logging infrastructure; the AWS Glue, Athena, S3, and Lake Formation boundary; and a separate demo-mode composition boundary.](diagrams/img/architecture.png)
 
 ![aws-tui operational flows for local and S3 transfer, Glue-to-Athena query handoff, S3 result artifacts, and bounded EMR Serverless log loading.](diagrams/img/operations-flow.png)
 
@@ -42,28 +42,28 @@ VMs to build service pages, but it cannot import Textual widgets.
   `src/aws_tui/vm/service_source_vm.py`, shared by the single-context service
   VMs rather than owned by Infrastructure. Subtrees:
   - `vm/chrome/` — persistent shell state (hint legend, toasts,
-    overlays like command palette / confirm / quick look / crash /
-    first-run, plus dormant transfer-recovery scaffolding and a retained
-    `StatusBarVM` subscriber for
-    legacy status bookkeeping even though no `StatusBar` widget is
-    mounted in the production chrome). `HintLegendVM` owns service-scoped action
+    and overlays like command palette / confirm / quick look / crash).
+    Transfer journals are diagnostic-only; no startup recovery VM or UI ships.
+    `HintLegendVM` owns service-scoped action
     membership, configured shortcut labels, complete effect/prerequisite
     tooltips, availability, and fitting priority. The `HintLegend` view performs
     terminal-width measurement and renders exactly one compact command row;
     lower-priority hints yield to `[:] more` and `[q] quit` rather than wrapping.
-  - `vm/file_manager/` — pane / dual-pane / entry / transfer VMs.
+  - `vm/file_manager/` — `DualPaneVM`, two `PaneVM` children, entry VMs, and
+    transfer state. `DualPaneVM` owns cross-provider copy/move orchestration;
+    each `PaneVM` owns one provider-backed projection and cursor.
   - `vm/table_clipboard_vm.py` — `TableClipboardVM`, an app-lifetime VMx
     component that retains one typed, replaceable table reference.
   - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
     `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
-    (added post-tag by PR #76 and extended by PR #84; the read-mostly EMR
-    Serverless browser with logs streaming and focused clone submission).
+    (the read-mostly EMR Serverless browser with logs streaming and focused
+    clone submission).
     Its immutable `ServiceSourceContext` carries the active connection name,
     optional distinct AWS profile, and region to the service view; the shared
     `ServiceSourceHeader` renders that identity above the EMR application picker.
     `ServiceSelectionStore` scopes remembered service selections by
     `(service_id, connection_name, region)`.
-    `JobRunCloneVM` (PR #83) backs the clone-job-run modal — a
+    `JobRunCloneVM` backs the clone-job-run modal — a
     sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
     per modal-mount with the focused run as the source.
   - `vm/glue/` — `GluePageVM` with independent Catalog, Jobs, and
@@ -112,9 +112,15 @@ VMs to build service pages, but it cannot import Textual widgets.
   storage, while `S3FS`, `EmrServerlessClient`, `GlueClient`, and
   `AthenaClient` issue service operations and map external responses/errors
   into domain values. `TableRef` and `QueryContext` carry immutable table and
-  execution identity. `IcebergInspector` uses `AthenaQueryRunner` to read
-  bounded Iceberg metadata tables; `ReadOnlySqlPolicy` validates both user and
-  generated SQL. Raw AWS responses remain below VMs.
+  execution identity. User-driven Glue and EMR lists use VMx token paging
+  through the app's bounded composition specialization. Athena uses an
+  app-owned bounded snapshot pager because VMx does not expose public snapshot
+  hydration, while retaining VMx commands for execution and enablement. Both
+  stop at explicit cumulative collection ceilings, and the UI distinguishes a
+  safety-limit stop from an ordinary continuation. `IcebergInspector` uses
+  `AthenaQueryRunner` to read bounded Iceberg metadata tables; Athena history
+  hydrates each bounded page with one batch request. `ReadOnlySqlPolicy`
+  validates both user and generated SQL. Raw AWS responses remain below VMs.
 - **Infrastructure** — Infrastructure owns sessions, credentials,
   configuration, SDK client construction, and OS-backed stores.
   `AwsSession` and `ConnectionResolver` provide configured AWS identities and
@@ -122,8 +128,14 @@ VMs to build service pages, but it cannot import Textual widgets.
   the VM-layer `ServiceSelectionStore` scopes workgroup and resource
   selections by service, connection name, and region. `ConfigStore`, `ThemeStore`,
   `KeymapStore`, `LogSink`, `CrashDump`, and `KeychainBackend` persist
-  application and platform state. Infrastructure prepares those boundaries;
-  domain adapters perform the provider operations.
+  application and platform state. `ConfigStore` and Settings share endpoint
+  and credential-source validation for S3-compatible connections.
+  Infrastructure prepares those boundaries; domain adapters perform the
+  provider operations.
+
+`demo/` is a composition-only provider substitution outside the production
+layers. Demo mode selects in-memory service adapters at the composition root;
+production modules do not import the demo package.
 
 ## 1.2. Composition root
 The two top-level files `src/aws_tui/composition.py` and
@@ -139,27 +151,42 @@ remains the authoritative in-app clipboard. `ActionRegistry` is also rooted in
 button dispatch the same registered Glue actions before the Glue VMs publish a
 single typed Athena request path.
 
+`AwsTuiApp` remains a large composition-root adapter that coordinates navigation,
+cross-service rollback, action routing, and shutdown. Extracting those transaction
+coordinators into dedicated mediators is deferred to a focused architecture change:
+the move spans cancellation ownership and complete rollback state across all four
+services, so treating it as a mechanical maintenance refactor would carry more risk
+than the line-count reduction justifies.
+
+At startup, automatic connection attempts consume one shared 90-second budget;
+untried sources remain available for explicit selection after the local fallback
+mounts.
+
 ## 1.3. Lifecycle
-VMs implement `construct → run → destruct → dispose` (VMx convention).
+VMx components implement `construct → destruct → dispose`. Hosted service VMs
+may additionally expose app-owned asynchronous `setup` and `shutdown` hooks;
+those hooks are not a VMx lifecycle phase.
 The `RootVM` constructs the chrome and content-host children
 depth-first; `ContentHostVM.set_content(new)` disposes the previous
 content via the same cascade. When outgoing content exposes `shutdown`,
 `ContentHostVM.set_content(...)` awaits it before calling `dispose`; hosted VM
-shutdown is awaited before disposal, and every hosted service's owned
-operations drain before teardown. App shutdown is task-owned and idempotent. Explicit quit and Textual
+shutdown is awaited before disposal, and the host owns disposal of a candidate
+that is never adopted. Every hosted service's owned operations drain before
+teardown. App shutdown is task-owned and idempotent. Explicit quit and Textual
 unmount (including fatal teardown) await the same sequence: stop navigation
 intake, drain transfers, setup, queries, and preview workers, close every
-aioboto3 client, flush logs, then dispose subscriptions and the VM tree
+aioboto3 client, dispose subscriptions and the VM tree, then flush and close
+logs last so teardown diagnostics remain available
 (spec §5.4).
 
 ## 1.4. Messaging
-All cross-VM communication goes through the session's single
-`MessageHub`. Custom envelopes (defined in
+Cross-service and shell-wide event communication goes through the session's
+single `MessageHub`. Parent VMs orchestrate their owned children directly when
+the interaction stays inside one subtree. Custom envelopes (defined in
 `src/aws_tui/vm/messages.py`):
 
 - `ConnectionChangedMessage`, `ThemeChangedMessage`,
-  `AuthExpiredMessage`, `TransferProgressMessage`,
-  `KeymapChangedMessage`, `FocusChangedMessage`, `PaletteActionFailedMessage`,
+  `TransferProgressMessage`, `FocusChangedMessage`, `PaletteActionFailedMessage`,
   `TransferCancelRequestedMessage`, `ConnectionListChangedMessage`,
   `OpenS3LocationRequest`, `OpenAthenaTableRequest`,
   `OpenGlueTableRequest`, `CopyTableReferenceRequest`, and
@@ -186,28 +213,29 @@ root, which updates `TableClipboardVM` and attempts the OS clipboard copy.
 Palette eligibility is VM-owned state: the palette projects global commands
 and only commands whose declared service IDs include the active service.
 
-VMs subscribe via `hub.messages.subscribe(on_next=callback)` (an
-`reactivex.Observable` under the hood); filtering happens inside the
-callback (typically `isinstance(msg, FooMessage)`). The view layer
-subscribes via `HubSubscriberMixin` on a per-widget basis, which wraps
-the same observable plus dispose-on-unmount.
+Cross-service and shared-chrome messages use the `MessageHub`: VMs subscribe
+directly where they own the reaction, while widgets use `HubSubscriberMixin`
+when a view must consume hub traffic. Local VM-to-view updates use each VM's
+`on_property_changed` observable instead of the global hub. Widget-owned
+subscriptions are disposed on unmount, and VM-owned subscriptions are disposed
+with the VM lifecycle.
 
 ## 1.5. Testing pyramid
 | Tier | Count | What it proves |
 |---|---|---|
 | Unit | Recount with `uv run pytest tests/unit --collect-only -q | tail -1` | VM, domain, infra behavior; isolated local I/O only, with no external services |
-| Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards (per PR #53 lesson) |
+| Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards that reject blank-but-valid output |
 | Integration (in-process) | Recount with `uv run pytest tests/integration --collect-only -q | tail -1` | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
 | E2E | Recount with `uv run pytest tests/e2e --collect-only -q | tail -1` | Pilot-driven user journeys |
-| Integration (MinIO) | Recount with `uv run pytest -m integration --collect-only -q | tail -1` | MinIO via testcontainers (opt-in, `-m integration`) |
+| Integration (S3-compatible) | Recount with `uv run pytest -m integration --collect-only -q | tail -1` | Adobe S3Mock via testcontainers (opt-in, `-m integration`) |
 
-Default tier total drifts with each post-tag PR. Recount with
+The default tier total changes as coverage grows. Recount with
 `uv run pytest --collect-only -q | tail -1`; recount snapshot goldens
 with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
-Opt-in MinIO tier: `uv run pytest -m integration`.
+Opt-in S3-compatible tier: `uv run pytest -m integration`.
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)
-with `uv run pytest`. Opt into the MinIO tier with
+with `uv run pytest`. Opt into the S3-compatible tier with
 `uv run pytest -m integration` — it spins up a container, which the
 default `addopts` filter excludes (`-m 'not integration'`).
 
@@ -253,5 +281,5 @@ at `src/aws_tui/` top-level so the check never inspects them.
 8. `src/aws_tui/vm/settings/settings_vm.py` +
    `src/aws_tui/ui/widgets/settings_view.py` — the in-app Settings
    page (built per-mount, not as an `AppContext` singleton — see the
-   PR #56 post-ship amendment in the
+   lifecycle amendment in the
    [Settings-as-nav-page design spec](superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md)).

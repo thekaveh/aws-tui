@@ -111,6 +111,7 @@ class GlueCrawlersView(Widget):
             state=self._vm.state,
             error_text=self._vm.error_text,
             has_more=self._vm.has_more_crawlers,
+            limit_reached=self._vm.limit_reached,
         )
         detail.replace(
             self._detail_values(),

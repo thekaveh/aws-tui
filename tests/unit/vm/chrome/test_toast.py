@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import cast
 
 import pytest
@@ -158,6 +159,23 @@ async def test_non_sticky_toast_auto_dismisses() -> None:
     await asyncio.sleep(0.05)
     assert stack.count == 0
     stack.dispose()
+
+
+async def test_auto_dismiss_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    stack = _stack()
+
+    async def fail() -> None:
+        raise RuntimeError("dismiss failed")
+
+    task = asyncio.create_task(fail(), name="toast-auto-dismiss-broken")
+    stack._timers["broken"] = task
+    await asyncio.sleep(0)
+    with caplog.at_level(logging.ERROR, logger="aws_tui.vm.chrome.toast_stack_vm"):
+        stack._on_auto_dismiss_done(task)
+
+    record = next(record for record in caplog.records if record.message == "toast.dismiss.failed")
+    assert record.error_type == "RuntimeError"
+    assert record.toast_id == "broken"
 
 
 async def test_sticky_toast_does_not_auto_dismiss() -> None:

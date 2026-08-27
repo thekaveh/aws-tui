@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 from scripts.docs.manifest import parse_manifest
 from scripts.docs.render_diagrams import (
+    _same_committed_png,
     check_committed_assets,
     copy_assets,
     extract_svg,
@@ -15,6 +16,14 @@ from scripts.docs.render_diagrams import (
     render_svg,
     svg_to_png,
 )
+
+
+def _png_bytes(image: Image.Image) -> bytes:
+    from io import BytesIO
+
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
 
 
 def _write_test_font(repo_root: Path) -> None:
@@ -83,6 +92,23 @@ def test_svg_to_png_writes_png_magic(tmp_path):
     assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_committed_png_comparison_allows_bounded_cross_platform_raster_drift():
+    baseline = Image.new("RGBA", (100, 100), "black")
+    platform_render = baseline.copy()
+    for x in range(20):
+        for y in range(20):
+            platform_render.putpixel((x, y), (102, 102, 102, 255))
+
+    assert _same_committed_png(_png_bytes(baseline), _png_bytes(platform_render))
+
+    visually_stale = baseline.copy()
+    for x in range(25):
+        for y in range(25):
+            visually_stale.putpixel((x, y), (102, 102, 102, 255))
+
+    assert not _same_committed_png(_png_bytes(baseline), _png_bytes(visually_stale))
+
+
 def test_render_all_writes_svg_and_png(tmp_path):
     _require_cairosvg()
     _write_test_font(tmp_path)
@@ -95,7 +121,7 @@ def test_render_all_writes_svg_and_png(tmp_path):
             """
             surfaces: [site]
             numbering: per-doc
-            sections: [{id: overview, title: O, source: docs/diagrams/d.html}]
+            sections: [{id: overview, title: O, source: docs/diagrams/d.html, diagrams: [system]}]
             diagrams: [{id: system, master: docs/diagrams/d.html}]
             """
         )
@@ -131,7 +157,7 @@ def test_check_committed_assets_detects_stale_and_unexpected_assets(tmp_path):
             """
             surfaces: [site]
             numbering: per-doc
-            sections: [{id: overview, title: O, source: docs/diagrams/d.html}]
+            sections: [{id: overview, title: O, source: docs/diagrams/d.html, diagrams: [system]}]
             diagrams: [{id: system, master: docs/diagrams/d.html}]
             """
         )
@@ -287,3 +313,16 @@ def test_architecture_diagram_is_landscape_and_current():
     assert "TransferJournal" in groups["domain-models"]
     assert "EMR Serverless Client" in groups["domain-models"]
     assert "S3 log adapter" in groups["domain-models"]
+    assert 'd="M455 610V680"' not in svg
+    assert 'd="M715 610V680"' not in svg
+    assert 'd="M455 610V635H330V672H455V680"' in svg
+    assert 'd="M715 610V635H920V672H715V680"' in svg
+    assert 'x="625" y="658"' in svg
+
+
+def test_operations_flow_assigns_transfer_journal_to_dual_pane() -> None:
+    master = Path("docs/diagrams/operations-flow.html").read_text(encoding="utf-8")
+
+    assert 'data-owner="DualPaneVM" data-target="TransferJournal"' in master
+    assert 'd="M180 215V270H1230V215"' in master
+    assert 'd="M620 165H1080"' not in master

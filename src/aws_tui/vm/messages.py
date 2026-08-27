@@ -12,6 +12,7 @@ to keep the VM layer free of Textual / boto3 imports.
 
 from __future__ import annotations
 
+import traceback
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
@@ -21,22 +22,12 @@ from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.redaction import redact_text
 
-#: Reason values for ``AuthExpiredMessage``.
-AuthExpiredReason = Literal["expired", "missing", "load_error"]
-
 
 class TransferState(StrEnum):
-    """State machine values per spec §7.5.
-
-    ``PAUSED`` is reachable via the network-failure recovery flow (spec §7.5):
-    ``RUNNING -> PAUSED -> RUNNING (recovered)``. The connectivity watcher that
-    transitions to PAUSED on sustained network failure is not yet wired in
-    v0.7.x; the state remains in the enum so the eventual wiring is additive.
-    """
+    """States emitted by the shipped transfer worker."""
 
     PENDING = "pending"
     RUNNING = "running"
-    PAUSED = "paused"
     COMPLETED = "completed"
     SKIPPED = "skipped"
     FAILED = "failed"
@@ -47,8 +38,8 @@ class TransferState(StrEnum):
 class ConnectionChangedMessage:
     """Published by ``RootVM`` after a successful connection switch.
 
-    Subscribers: :class:`NavMenuVM`, :class:`StatusBarVM`, every service
-    content VM, the active :class:`ContentHostVM` swap orchestrator.
+    Subscribers: :class:`NavMenuVM`, service content VMs, and the active
+    :class:`ContentHostVM` swap orchestrator.
     """
 
     connection: Connection
@@ -76,29 +67,10 @@ class ThemeChangedMessage:
 
 
 @dataclass(frozen=True, slots=True)
-class AuthExpiredMessage:
-    """Published by ``infra.AwsSession`` when a 401-equivalent or stale SSO
-    token is detected.
-
-    Subscribers: :class:`ToastStackVM` (soft toast "press a to sso-login"),
-    the failing pane (renders "auth needed" placeholder).
-    """
-
-    connection_name: str
-    reason: AuthExpiredReason
-    sender_name: str = "aws_session"
-
-    @property
-    def sender_object(self) -> object:
-        return self
-
-
-@dataclass(frozen=True, slots=True)
 class TransferProgressMessage:
     """Published by ``domain.CrossFsCopy`` / ``CrossFsMove`` workers.
 
-    Subscribers: :class:`TransferVM` (per-transfer detail), retained
-    :class:`StatusBarVM` (aggregate counter).
+    Subscribers: :class:`TransferVM` (per-transfer detail).
 
     ``source_label`` / ``destination_label`` are optional — included so
     that the first message for a given transfer can carry enough info
@@ -178,23 +150,6 @@ class ConnectionListChangedMessage:
 
 
 @dataclass(frozen=True, slots=True)
-class KeymapChangedMessage:
-    """Published by ``infra.KeymapStore`` after a runtime rebind.
-
-    Subscribers: :class:`HintLegendVM` (re-derives chip labels), the view
-    layer's input router.
-    """
-
-    action: str
-    new_keys: tuple[str, ...]
-    sender_name: str = "keymap_store"
-
-    @property
-    def sender_object(self) -> object:
-        return self
-
-
-@dataclass(frozen=True, slots=True)
 class PaletteActionFailedMessage:
     """A command-palette action failed before or during execution."""
 
@@ -215,6 +170,7 @@ class ServiceOperationFailedMessage:
     operation: str
     error_type: str
     safe_error: str
+    safe_traceback: str
     source: str | None = None
     region: str | None = None
     sender_name: str = "service_operation"
@@ -234,25 +190,12 @@ class ServiceOperationFailedMessage:
             operation=operation,
             error_type=type(error).__name__,
             safe_error=redact_text(str(error)),
+            safe_traceback=redact_text(
+                "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            ).strip(),
             source=source,
             region=region,
         )
-
-    @property
-    def sender_object(self) -> object:
-        return self
-
-
-@dataclass(frozen=True, slots=True)
-class FocusChangedMessage:
-    """Published by the view layer (via ``RootVM``) whenever focus moves to a
-    different VM.
-
-    Subscribers: :class:`HintLegendVM` (swaps the action chips).
-    """
-
-    focused_vm_id: str
-    sender_name: str = "root"
 
     @property
     def sender_object(self) -> object:
@@ -346,13 +289,9 @@ def _validate_table_ref(value: object) -> None:
 
 
 __all__ = [
-    "AuthExpiredMessage",
-    "AuthExpiredReason",
     "ConnectionChangedMessage",
     "ConnectionListChangedMessage",
     "CopyTableReferenceRequest",
-    "FocusChangedMessage",
-    "KeymapChangedMessage",
     "OpenAthenaTableRequest",
     "OpenGlueTableRequest",
     "OpenS3LocationRequest",

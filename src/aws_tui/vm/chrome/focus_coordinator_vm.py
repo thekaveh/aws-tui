@@ -104,10 +104,10 @@ class FocusCoordinatorVM:
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._focus_discriminator: DiscriminatorVM[FocusSlot] = DiscriminatorVM(initial)
-        self._modal_restore_stack: list[FocusSlot] = []
         self._focus_sub: DisposableBase = self._focus_discriminator.active_changed.subscribe(
             on_next=self._emit_changed
         )
+        self._underlying_slot_override: FocusSlot | None = None
         self._disposed = False
         self._inner: ComponentVM = (
             ComponentVM.builder().name("focus_coordinator").services(hub, dispatcher).build()
@@ -153,14 +153,27 @@ class FocusCoordinatorVM:
         if slot is FocusSlot.MODAL:
             self.modal_open()
             return
-        if self.focused_slot is FocusSlot.MODAL:
-            # Implicit close — the caller is overriding the saved slot.
-            # The facade owns restore semantics so VMx internals remain
-            # replaceable across compatible VMx releases.
-            self._modal_restore_stack.clear()
         if self.focused_slot is slot:
             return
+        # VMx 3.23+ intentionally clears saved modal history when an explicit
+        # non-modal key replaces the active key.
         self._focus_discriminator.set_active_key(slot)
+
+    def project_focused_slot(self, slot: FocusSlot) -> None:
+        """Project widget focus without breaking modal precedence."""
+        if self.is_modal:
+            return
+        self.set_focused_slot(slot)
+
+    def set_underlying_slot(self, slot: FocusSlot) -> None:
+        """Change the slot restored after a modal without dismissing it."""
+        if slot is FocusSlot.MODAL:
+            self.modal_open()
+            return
+        if self.is_modal:
+            self._underlying_slot_override = slot
+            return
+        self.set_focused_slot(slot)
 
     def cycle_s3_focus(self, *, reverse: bool = False) -> None:
         """Rotate the S3 focus ring.
@@ -256,18 +269,20 @@ class FocusCoordinatorVM:
         slot so :meth:`modal_close` can restore it."""
         if self.focused_slot is FocusSlot.MODAL:
             return
-        self._modal_restore_stack.append(self.focused_slot)
-        self._focus_discriminator.set_active_key(FocusSlot.MODAL)
+        self._underlying_slot_override = None
+        self._focus_discriminator.modal_open(FocusSlot.MODAL)
 
     def modal_close(self) -> None:
         """Pop the MODAL precedence slot. Restores the prior
         non-modal slot. No-op when no modal is open."""
         if self.focused_slot is not FocusSlot.MODAL:
             return
-        restore = (
-            self._modal_restore_stack.pop() if self._modal_restore_stack else FocusSlot.NAV_MENU
-        )
-        self._focus_discriminator.set_active_key(restore)
+        if self._underlying_slot_override is not None:
+            target = self._underlying_slot_override
+            self._underlying_slot_override = None
+            self._focus_discriminator.set_active_key(target)
+            return
+        self._focus_discriminator.modal_close()
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -281,8 +296,8 @@ class FocusCoordinatorVM:
         if self._disposed:
             return
         self._disposed = True
+        self._underlying_slot_override = None
         self._focus_sub.dispose()
-        self._modal_restore_stack.clear()
         self._focus_discriminator.dispose()
         self._inner.dispose()
 

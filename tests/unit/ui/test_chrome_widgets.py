@@ -20,15 +20,12 @@ from textual.widget import Widget
 from textual.widgets import Static
 from vmx import MessageHub, RxDispatcher
 
-from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets.hint_legend import HintLegend, _action_width, _fit_actions
 from aws_tui.ui.widgets.nav_menu import NavMenu
-from aws_tui.ui.widgets.status_bar import StatusBar
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.vm.chrome.hint_legend_vm import HintAction, HintLegendVM
-from aws_tui.vm.chrome.status_bar_vm import StatusBarVM
 from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
@@ -65,43 +62,16 @@ def _make_connection(kind: str = "aws") -> Connection:
     )
 
 
-# ── StatusBar ───────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_status_bar_mounts_and_reacts_to_connection_update() -> None:
-    hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
-    vm = StatusBarVM(hub=hub, dispatcher=dispatcher)
-    vm.construct()
-    try:
-
-        class _App(App[None]):
-            def compose(self) -> ComposeResult:
-                yield StatusBar(vm, hub=hub)
-
-        app = _App()
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            assert app.query_one(StatusBar) is not None
-            vm.update_connection(_make_connection(), TokenState.CONNECTED)
-            await pilot.pause()
-            assert "kaveh-dev" in vm.connection_label
-    finally:
-        vm.dispose()
-        hub.dispose()
-
-
 # ── HintLegend ──────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_hint_legend_renders_with_registered_actions() -> None:
+async def test_hint_legend_renders_service_actions() -> None:
     hub: MessageHub = MessageHub()
     dispatcher = RxDispatcher.immediate()
     keymap = KeymapStore()
     vm = HintLegendVM(hub=hub, dispatcher=dispatcher, keymap=keymap)
-    vm.register_focusable("pane.left", ("pane.copy", "pane.delete"))
+    vm.set_current_service("s3")
     vm.construct()
     try:
 
@@ -123,11 +93,7 @@ async def test_hint_legend_renders_with_registered_actions() -> None:
             assert "more" in strip
             assert "quit" in strip
             assert "cmd" not in strip
-            from aws_tui.vm.messages import FocusChangedMessage
-
-            hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
-            await pilot.pause()
-            assert "copy" in _strip_text(app.query_one(HintLegend))
+            assert any(action.action_id == "pane.copy" for action in vm.actions)
     finally:
         vm.dispose()
         hub.dispose()

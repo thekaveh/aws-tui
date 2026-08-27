@@ -31,12 +31,17 @@ from aws_tui.vm.athena._domain_validation import (
     valid_result_column,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena._pager_compat import (
+    PagerCollectionLimitError,
+    SnapshotTokenPager,
+    seed_token_pager,
+)
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _RESULTS_ERROR = "Athena results request failed"
+_RESULTS_LIMIT_ERROR = "Athena result row safety limit reached"
 _COLUMN_ERROR = "Athena returned inconsistent result columns"
 _SNAPSHOT_ERROR = "Athena results snapshot is invalid"
 _SNAPSHOT_ERROR_STATES = frozenset(
@@ -47,6 +52,7 @@ _SNAPSHOT_ERROR_STATES = frozenset(
         PaneState.ERROR,
     }
 )
+_MAX_RESULT_ROWS = 10_000
 
 ResultRow = tuple[str | None, ...]
 
@@ -60,6 +66,7 @@ class AthenaResultsSnapshot:
     state: PaneState = field(repr=False)
     error_text: str | None = field(repr=False)
     is_loading_more: bool = field(repr=False)
+    limit_reached: bool = field(default=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +122,7 @@ class AthenaResultsVM:
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
         self._is_loading_more = False
+        self._loading_more_worker: _PagerGeneration | None = None
         self._workers: set[_PagerGeneration] = set()
         self._worker = self._make_worker(None, self._generation)
         self._pager = self._worker.pager
@@ -147,6 +155,10 @@ class AthenaResultsVM:
     @property
     def has_more(self) -> bool:
         return self._execution_id is not None and self._pager.current_token is not None
+
+    @property
+    def limit_reached(self) -> bool:
+        return self._pager.limit_reached
 
     @property
     def state(self) -> PaneState:
@@ -196,6 +208,13 @@ class AthenaResultsVM:
             self._set_state(PaneState.ERROR)
             self._notify("error_text")
             return
+        except PagerCollectionLimitError:
+            if not self._is_current(worker):
+                return
+            self._error_text = _RESULTS_LIMIT_ERROR
+            self._set_state(PaneState.ERROR)
+            self._notify("error_text")
+            return
         except ProviderError as exc:
             if not self._is_current(worker):
                 return
@@ -240,6 +259,7 @@ class AthenaResultsVM:
             state=self._state,
             error_text=self._error_text,
             is_loading_more=self._is_loading_more,
+            limit_reached=self._pager.limit_reached,
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError(_SNAPSHOT_ERROR)
@@ -265,7 +285,12 @@ class AthenaResultsVM:
             generation,
         )
         worker.columns = snapshot.columns
-        seed_token_pager(worker.pager, snapshot.rows, snapshot.next_token)
+        seed_token_pager(
+            worker.pager,
+            snapshot.rows,
+            snapshot.next_token,
+            limit_reached=snapshot.limit_reached,
+        )
         self._state = snapshot.state
         self._error_text = snapshot.error_text
         self._is_loading_more = snapshot.is_loading_more
@@ -285,12 +310,15 @@ class AthenaResultsVM:
             or type(snapshot.rows) is not tuple
             or type(snapshot.is_loading_more) is not bool
             or snapshot.is_loading_more
+            or type(snapshot.limit_reached) is not bool
+            or (snapshot.limit_reached and snapshot.next_token is not None)
             or type(snapshot.state) is not PaneState
             or snapshot.state is PaneState.LOADING
             or not optional_exact_string(snapshot.execution_id)
             or not optional_non_empty_exact_string(snapshot.next_token)
             or not optional_exact_string(snapshot.error_text)
             or not all(valid_result_column(column) for column in snapshot.columns)
+            or len(snapshot.rows) > _MAX_RESULT_ROWS
             or not all(
                 type(row) is tuple
                 and len(row) == len(snapshot.columns)
@@ -425,8 +453,7 @@ class AthenaResultsVM:
     async def _load_more(self, worker: _PagerGeneration) -> None:
         if not self._can_load_more(worker):
             return
-        self._is_loading_more = True
-        self._notify("is_loading_more")
+        self._begin_loading_more(worker)
         task = self._track_current_task(worker)
         try:
             await worker.pager.load_more_command.execute_async()
@@ -434,6 +461,13 @@ class AthenaResultsVM:
             if not self._is_current(worker):
                 return
             self._error_text = _COLUMN_ERROR
+            self._set_state(PaneState.ERROR)
+            self._notify("error_text")
+            return
+        except PagerCollectionLimitError:
+            if not self._is_current(worker):
+                return
+            self._error_text = _RESULTS_LIMIT_ERROR
             self._set_state(PaneState.ERROR)
             self._notify("error_text")
             return
@@ -461,8 +495,7 @@ class AthenaResultsVM:
             return
         finally:
             self._untrack_task(worker, task)
-            self._is_loading_more = False
-            self._notify("is_loading_more")
+            self._finish_loading_more(worker)
         if not self._is_current(worker):
             return
         self._error_text = None
@@ -481,6 +514,20 @@ class AthenaResultsVM:
             and worker.pager.current_token is not None
         )
 
+    def _begin_loading_more(self, worker: _PagerGeneration) -> None:
+        self._loading_more_worker = worker
+        if not self._is_loading_more:
+            self._is_loading_more = True
+            self._notify("is_loading_more")
+
+    def _finish_loading_more(self, worker: _PagerGeneration) -> None:
+        if self._loading_more_worker is not worker:
+            return
+        self._loading_more_worker = None
+        if self._is_loading_more:
+            self._is_loading_more = False
+            self._notify("is_loading_more")
+
     def _make_worker(
         self,
         execution_id: str | None,
@@ -492,26 +539,30 @@ class AthenaResultsVM:
 
         async def fetch(token: str | None) -> tuple[list[ResultRow], str | None]:
             nonlocal restored_page
-            if token is None and restored_page is not None:
-                page = restored_page
-                restored_page = None
-            elif execution_id is None:
-                return [], None
-            else:
-                page = await self._client.get_results_page(
-                    execution_id,
-                    start_token=token,
-                )
-            if not self._is_current(worker):
-                return [], None
-            if token is None:
-                worker.columns = page.columns
-                self._columns = page.columns
-            elif page.columns != worker.columns:
-                raise _ResultColumnsChangedError
-            return list(page.rows), page.next_token
+            task = self._track_current_task(worker)
+            try:
+                if token is None and restored_page is not None:
+                    page = restored_page
+                    restored_page = None
+                elif execution_id is None:
+                    return [], None
+                else:
+                    page = await self._client.get_results_page(
+                        execution_id,
+                        start_token=token,
+                    )
+                if not self._is_current(worker):
+                    return [], None
+                if token is None:
+                    worker.columns = page.columns
+                    self._columns = page.columns
+                elif page.columns != worker.columns:
+                    raise _ResultColumnsChangedError
+                return list(page.rows), page.next_token
+            finally:
+                self._untrack_task(worker, task)
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_RESULT_ROWS)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more(worker))
@@ -530,6 +581,7 @@ class AthenaResultsVM:
         restored_page: ResultPage | None = None,
     ) -> _PagerGeneration:
         old_worker = self._worker
+        self._finish_loading_more(old_worker)
         worker = self._make_worker(
             execution_id,
             generation,

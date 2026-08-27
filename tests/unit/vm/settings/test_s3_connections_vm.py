@@ -69,6 +69,7 @@ def _entry(name: str = "minio-local", region: str = "us-east-1") -> ConnectionEn
         kind="s3-compatible",
         region=region,
         endpoint_url="http://localhost:9000",
+        credentials="static",
         access_key_id="AKIATEST",
         secret_access_key="SECRETTEST",
         force_path_style=True,

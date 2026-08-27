@@ -9,7 +9,7 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 from textual.worker import WorkerCancelled
 
 from aws_tui.domain.data_catalog import TableRef
@@ -51,20 +51,14 @@ async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
         the InMemoryFS listing has finished before we force-refresh
         the chrome.
 
-    Layer 3 — direct chrome refresh
+    Layer 3 — public rendered-state settling
         After setup completes, ``_notify("viewmodel")`` has fired but
         the downstream call_after_refresh → InvokeLater → screen
         callback chain is non-deterministic across the 10 sequential
         test runs (different asyncio scheduling pressure per theme).
-        Rather than polling the async queue, we call ``_refresh_chrome``
-        directly on every mounted ``Pane`` widget.  This is safe because:
-        (a) setup has completed, so ``pane._vm.viewmodel.summary`` already
-            holds the settled value ("2 obj · 0 B", "21 obj · 94 B", etc.),
-        (b) ``_refresh_chrome`` is a pure synchronous read-and-update —
-            it does not re-trigger the same reactive chain — and
-        (c) it is exactly what the reactive chain would have called
-            once settled; forcing it here just removes the timing
-            uncertainty from the snapshot.
+        Poll the mounted footer until it matches the public VM projection.
+        This keeps the snapshot dependent on the same subscription and
+        deferred-render path as production.
 
     Two ``pilot.pause()`` calls after the force-refresh drain CSS
     transitions and focus-ring animations before the snapshot is taken.
@@ -89,13 +83,29 @@ async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
         if setup_task is not None and not setup_task.done():
             await setup_task
 
-    # Layer 3: force-sync every Pane's chrome (header + footer) from
-    # the live VM state.  After setup_task is done, the VM is settled;
-    # calling _refresh_chrome directly bypasses the non-deterministic
-    # call_after_refresh → InvokeLater → screen-callback chain.
-    for pane in pilot.app.query(Pane):
-        with contextlib.suppress(Exception):
-            pane._refresh_chrome()  # type: ignore[attr-defined]
+    # Layer 3: wait for the production VM subscription to update every
+    # mounted Pane footer. Do not call a private render method here: doing
+    # so would let snapshots pass when the live reactive path is broken.
+    for _ in range(100):
+        panes = list(pilot.app.query(Pane))
+        mismatches = [
+            pane
+            for pane in panes
+            if str(pane.query_one(".pane-footer", Static).render()) != pane.vm.viewmodel.summary
+        ]
+        if not mismatches:
+            break
+        await pilot.pause(0.01)
+    else:
+        details = "; ".join(
+            f"id={pane.id!r}, mounted={pane.is_mounted}, "
+            f"footer={str(pane.query_one('.pane-footer', Static).render())!r}, "
+            f"summary={pane.vm.viewmodel.summary!r}"
+            for pane in mismatches
+        )
+        raise AssertionError(
+            f"Pane chrome did not reactively reach the settled VM projection: {details}"
+        )
 
     # Two final ticks drain any pending animations / CSS transitions
     # (focus rings, toast entrance) before the screenshot is taken.

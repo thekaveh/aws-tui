@@ -17,20 +17,20 @@
 
 Walks through three setups people hit on day one:
 
-- **§1.1–§1.5** — connect to a local MinIO from scratch (the
+- **§1.1–§1.5** — connect to local Adobe S3Mock from scratch (the
   canonical "first s3-compatible endpoint" walkthrough).
 - **§1.6** — jump between AWS profiles with one keystroke
   (multi-account flows).
 - **§1.7** — run several `s3-compatible` endpoints side-by-side.
 
-You have a MinIO running on `http://localhost:9000` with the dev
-credentials `minioadmin / minioadmin`. The shipped harness creates the
-canonical `dev-s3` connection; the manual examples below use `minio-local`
+You have S3Mock running on `http://localhost:9000` with arbitrary test
+credentials `test / test`. The shipped harness creates the canonical
+`dev-s3` connection; the manual examples below use `s3mock-local`
 to show that connection names are user-defined.
 
-### 1.1.1. Start MinIO (skip if already running)
+### 1.1.1. Start S3Mock (skip if already running)
 
-**Quickest path — dev seeded MinIO** (recommended for first-time
+**Quickest path — dev seeded S3Mock** (recommended for first-time
 exploration; ships ~5 buckets and ~90 objects so you have content to
 navigate):
 
@@ -45,14 +45,12 @@ This wraps `docker compose` + `seed.py` and prints the path to
 volume). See `scripts/test-services/README.md` for the seeded
 dataset and how to extend it.
 
-**Plain MinIO** (no seed):
+**Plain S3Mock** (no seed):
 
 ```bash
-docker run --rm -d --name minio \
-    -p 127.0.0.1:9000:9000 -p 127.0.0.1:9001:9001 \
-    -e MINIO_ROOT_USER=minioadmin \
-    -e MINIO_ROOT_PASSWORD=minioadmin \
-    minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data --console-address ":9001"
+docker run --rm -d --name s3mock \
+    -p 127.0.0.1:9000:9090 \
+    adobe/s3mock:5.1.0@sha256:65cf60155a2e235fe7d5bf6c633747d6fc7ed93f9f5a6727d86470026b83c2a2
 ```
 
 ### 1.1.2. Store the credentials in the macOS Keychain (recommended)
@@ -61,21 +59,21 @@ The resolver expects two required keychain entries under ONE service name
 (matching the `credentials = "keychain:<service>"` value in
 `config.toml`): one account named `access_key_id` and one named
 `secret_access_key`. Temporary credentials may also provide an
-optional `session_token` account. So for a `keychain:minio-local`
+optional `session_token` account. So for a `keychain:s3mock-local`
 config entry:
 
 ```bash
-# service="minio-local", account="access_key_id"
+# service="s3mock-local", account="access_key_id"
 security add-generic-password \
-    -s minio-local -a access_key_id -w minioadmin
+    -s s3mock-local -a access_key_id -w test
 
-# service="minio-local", account="secret_access_key"
+# service="s3mock-local", account="secret_access_key"
 security add-generic-password \
-    -s minio-local -a secret_access_key -w minioadmin
+    -s s3mock-local -a secret_access_key -w test
 
 # optional, only for temporary credentials
 security add-generic-password \
-    -s minio-local -a session_token -w '<session-token>'
+    -s s3mock-local -a session_token -w '<session-token>'
 ```
 
 (The Python `keyring` library aws-tui uses delegates to the macOS
@@ -87,11 +85,11 @@ form:
 
 | Field | Value |
 |---|---|
-| Name | `minio-local` |
+| Name | `s3mock-local` |
 | Endpoint URL | `http://localhost:9000` |
 | Region | `us-east-1` |
-| Access key ID | `minioadmin` |
-| Secret access key | `minioadmin` |
+| Access key ID | `test` |
+| Secret access key | `test` |
 | Session token | Optional; only for temporary credentials |
 
 The form stores the secret fields in the OS keychain through `keyring` and
@@ -101,32 +99,32 @@ alternate between the `aws-tui:connection-revisions/<url-escaped-name>/0` and
 `/1` services. The resulting entry is equivalent to the following shape:
 
 ```toml
-[connections.minio-local]
+[connections.s3mock-local]
 kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
-credentials = "keychain:aws-tui:connections/minio-local"
+credentials = "keychain:aws-tui:connections/s3mock-local"
 force_path_style = true
-verify_tls = false              # http:// MinIO -> no cert to verify
+verify_tls = false              # http:// S3Mock -> no cert to verify
 ```
 
 ### 1.1.4. Add by editing the file directly
 If you already have other connections, just append:
 
 ```toml
-[connections.minio-local]
+[connections.s3mock-local]
 kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
 credentials = "static"          # tells the resolver to use inline keys below
-access_key_id = "minioadmin"
-secret_access_key = "minioadmin"
+access_key_id = "test"
+secret_access_key = "test"
 force_path_style = true
-verify_tls = false              # http:// MinIO → no cert to verify
+verify_tls = false              # http:// S3Mock -> no cert to verify
 ```
 
 For **multiple** S3-compatible services, just add more
-`[connections.<name>]` blocks — the `<name>` (e.g. `minio-local`,
+`[connections.<name>]` blocks — the `<name>` (e.g. `s3mock-local`,
 `r2-prod`, `b2-archive`) becomes the source identifier shown in
-the pane's bottom border (`s3-compatible · minio-local · localhost:9000`).
+the pane's bottom border (`s3-compatible · s3mock-local · localhost:9000`).
 **Region is optional and intentionally not displayed** for
 `s3-compatible` connections — MinIO/R2/B2/etc. don't have a
 meaningful region, so the pane title shows `name · endpoint`
@@ -144,7 +142,7 @@ from `~/.aws/credentials` show up as
 `aws s3 · {profile} · {region}`; TOML `s3-compatible` entries
 show up as `s3-compatible · {name} · {endpoint}`. Tap
 `Shift+S` until the pane title reads
-`s3-compatible · minio-local · {endpoint}` — the bucket list
+`s3-compatible · s3mock-local · {endpoint}` — the bucket list
 should populate immediately.
 
 > `:` opens the command palette. Its `Switch source` command invokes
@@ -418,6 +416,10 @@ exception: TypeError: unsupported operand type(s) for +: ...
 ... (last 1000 lines of aws-tui.log)
 ```
 
+The writer reads backward across the active log and numbered rotations. It
+retains up to 1,000 lines while reading at most 1 MiB in total, so producing a
+crash report does not load every retained log into memory.
+
 The crash dump writer is live in v0.8.x. The interactive crash modal
 below exists as UI scaffolding but is not wired into the unhandled
 exception path yet:
@@ -573,6 +575,7 @@ the action supports resource-level permissions:
       "athena:ListTableMetadata",
       "athena:ListQueryExecutions",
       "athena:GetQueryExecution",
+      "athena:BatchGetQueryExecution",
       "athena:GetQueryRuntimeStatistics",
       "athena:StartQueryExecution",
       "athena:StopQueryExecution",

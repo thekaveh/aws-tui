@@ -11,6 +11,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     FileEntry,
@@ -20,9 +21,9 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderError,
     ProviderUnreachableError,
+    ThrottledError,
 )
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 def _hub() -> MessageHub[Message]:
@@ -319,6 +320,39 @@ async def test_pane_delete_marked_partial_failure_aggregates_and_reloads() -> No
 
 
 @pytest.mark.asyncio
+async def test_delete_marked_cancellation_drains_final_reload() -> None:
+    class _BlockingReloadFS(InMemoryFS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.list_calls = 0
+            self.reload_started = asyncio.Event()
+            self.release_reload = asyncio.Event()
+
+        async def list(self, path: PathRef) -> list[FileEntry]:
+            self.list_calls += 1
+            if self.list_calls == 2:
+                self.reload_started.set()
+                await self.release_reload.wait()
+            return await super().list(path)
+
+    fs = _BlockingReloadFS()
+    await fs.write_stream(PathRef(("delete-me.txt",)), _astream(b"payload"))
+    pane = await _make_pane(fs)
+    pane.toggle_select_command.execute()
+    deletion = asyncio.create_task(pane.delete_marked())
+    await asyncio.wait_for(fs.reload_started.wait(), timeout=1)
+
+    deletion.cancel()
+    fs.release_reload.set()
+    with pytest.raises(asyncio.CancelledError):
+        await deletion
+
+    assert pane.state is PaneState.EMPTY
+    assert pane.entries == ()
+    pane.dispose()
+
+
+@pytest.mark.asyncio
 async def test_pane_navigate_to_changes_breadcrumb() -> None:
     fs = await _seed_fs()
     pane = await _make_pane(fs)
@@ -407,6 +441,11 @@ class _ErrorFS(_UnreachableFS):
         raise ProviderError("boom")
 
 
+class _ThrottledFS(_UnreachableFS):
+    async def list(self, _path: PathRef) -> list[FileEntry]:
+        raise ThrottledError("slow down")
+
+
 class _EmptyBucketFS(_UnreachableFS):
     async def list(self, _path: PathRef) -> list[FileEntry]:
         raise NotFoundError("bucket-empty")
@@ -418,6 +457,15 @@ async def test_pane_unreachable_state() -> None:
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.UNREACHABLE
+    pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pane_throttling_uses_generic_error_state() -> None:
+    pane = PaneVM(provider=_ThrottledFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane.construct()
+    await pane.setup()
+    assert pane.state == PaneState.ERROR
     pane.dispose()
 
 
@@ -456,15 +504,6 @@ async def test_pane_root_notfound_renders_empty() -> None:
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.EMPTY
-    pane.dispose()
-
-
-@pytest.mark.asyncio
-async def test_pane_set_auth_required_external() -> None:
-    fs = await _seed_fs()
-    pane = await _make_pane(fs)
-    pane.set_auth_required()
-    assert pane.state == PaneState.AUTH_REQUIRED
     pane.dispose()
 
 

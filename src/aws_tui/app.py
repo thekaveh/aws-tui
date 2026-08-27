@@ -36,11 +36,11 @@ from textual.containers import Container, Horizontal
 from textual.css.errors import StylesheetError
 from textual.css.tokenizer import TokenError
 from textual.widget import Widget
-from textual.widgets import Static, TextArea
+from textual.widgets import Input, Static, TextArea
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.data_catalog import TableRef
-from aws_tui.domain.filesystem import EntryKind
+from aws_tui.domain.filesystem import AuthRequiredError, EntryKind
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
@@ -67,6 +67,7 @@ from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_view_factory import build_service_view
+from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
@@ -81,6 +82,7 @@ from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
     ConnectionListChangedMessage,
@@ -96,6 +98,7 @@ from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _ACTION_RING_SIZE = 100
 _QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
+_BOOT_CHAIN_BUDGET_SECONDS = 90.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +106,18 @@ class _S3HandoffSnapshot:
     connection: Connection | None
     auth_state: TokenState | None
     service_id: str | None
+    athena: AthenaPageSnapshot | None = field(repr=False)
     athena_result_execution_id: str | None
+    glue: _GluePageSnapshot | None = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _GluePageSnapshot:
+    active_view: GlueView
+    database_name: str | None
+    table_ref: TableRef | None = field(repr=False)
+    iceberg_view: IcebergView | None
+    iceberg_snapshot_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,9 +126,7 @@ class _TableHandoffSnapshot:
     auth_state: TokenState | None
     service_id: str | None
     athena: AthenaPageSnapshot | None = field(repr=False)
-    glue_view: str | None
-    glue_database_name: str | None
-    glue_table_ref: TableRef | None = field(repr=False)
+    glue: _GluePageSnapshot | None = field(repr=False)
 
 
 class _S3HandoffStageError(Exception):
@@ -134,6 +146,19 @@ _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
 _GLUE_SERVICE_IDS = frozenset({"glue"})
 _ATHENA_SERVICE_IDS = frozenset({"athena"})
 _EMR_SERVICE_IDS = frozenset({"emr-serverless"})
+
+_MODAL_ROUTED_ACTIONS = frozenset(
+    {
+        "pane.switch_focus",
+        "pane.switch_focus_back",
+        "pane.move_up",
+        "pane.move_down",
+        "pane.descend",
+        "pane.ascend",
+        "pane.modal_left",
+        "pane.modal_right",
+    }
+)
 
 _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
     PaletteEntry("app.themes", "Theme picker", "app"),
@@ -309,7 +334,7 @@ def _build_swap_candidates(
 
     candidates: list[tuple[str, str | Connection]] = [("local", "local")]
     skipped: list[str] = []
-    for conn in ctx.connection_resolver.list():
+    for conn in _live_connections(ctx):
         if (conn.kind, conn.name) in ctx.unreachable_connections:
             skipped.append(conn.name)
             continue
@@ -322,9 +347,28 @@ def _service_source_candidates(ctx: AppContext, service_id: str) -> tuple[Connec
     service = ctx.registry.get(service_id)
     return tuple(
         connection
-        for connection in ctx.connection_resolver.list()
+        for connection in _live_connections(ctx)
         if connection.kind == "aws" and service.supports(connection)
     )
+
+
+def _live_connections(ctx: AppContext) -> tuple[Connection, ...]:
+    """Read the mutable connection catalog without crashing a live action."""
+    try:
+        return tuple(ctx.connection_resolver.list())
+    except Exception as exc:
+        ctx.log_sink.error(
+            "app.live_connection_discovery.failed",
+            error=redact_text(str(exc)),
+            error_type=type(exc).__name__,
+        )
+        notifications.advise(
+            ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="could not reload connections — keeping current source",
+            toast_id="connection-discovery-failed",
+        )
+        return ()
 
 
 def _service_source_contexts(
@@ -520,6 +564,8 @@ class AwsTuiApp(App[None]):
         self._actions.register("pane.delete", self.action_delete)
         self._actions.register("app.swap_source", self.action_swap_source)
         self._actions.register("emr.next_application", self.action_next_emr_application)
+        self._actions.register("emr.clone", self.action_clone_emr_run)
+        self._actions.register("emr.logs.filter", self.action_filter_emr_logs)
         self._actions.register(
             "glue.catalog",
             partial(self.action_select_glue_view, "catalog"),
@@ -621,6 +667,7 @@ class AwsTuiApp(App[None]):
         self._content_mount_recovering: weakref.WeakSet[Widget] = weakref.WeakSet()
         self._shutdown_task: asyncio.Task[None] | None = None
         self._shutdown_complete = False
+        self._shutdown_errors: tuple[tuple[str, str], ...] = ()
         self._command_palette_populated: bool = False
         self._pane_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
@@ -666,7 +713,6 @@ class AwsTuiApp(App[None]):
         # explicit recovery paths.
         self._chain_resolved_to_local: bool = False
         self._chain_initial_conn: Connection | None = None
-        self._pending_boot_nav_selection: str | None = None
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
@@ -676,11 +722,8 @@ class AwsTuiApp(App[None]):
         return self._app_ctx
 
     def compose(self) -> ComposeResult:
-        # StatusBar is no longer mounted — profile/region/auth indicator
-        # now live in the left pane's border (title shows the live path,
-        # subtitle shows the connection identity). Bookkeeping VMs still
-        # exist in RootVM.chrome so hub subscribers stay wired up; only
-        # the widget is dropped.
+        # Profile/region/auth identity lives in the left pane's border:
+        # the title shows the live path and the subtitle shows the connection.
         ctx = self._app_ctx
         yield BrandBanner(
             theme_name=ctx.initial_theme,
@@ -713,6 +756,7 @@ class AwsTuiApp(App[None]):
         ctx.quick_look_vm.construct()
         ctx.command_palette_vm.construct()
         ctx.s3_connections_vm.construct()
+        self.screen_change_signal.subscribe(self, self._sync_modal_focus, immediate=True)
         # NOTE: SettingsVM is intentionally NOT constructed here. It's
         # now built fresh per mount in ``_mount_settings_view`` because
         # ContentHostVM disposes its hosted VM on swap-out, and a
@@ -778,7 +822,7 @@ class AwsTuiApp(App[None]):
             # telling the user how to recover.
             self._boot_in_flight = True
             self.run_worker(
-                self._initial_mount_worker(initial_conn=initial_conn, auth_state=auth_state),
+                self._initial_mount_worker(initial_conn=initial_conn),
                 exclusive=True,
                 group="content-mount",
             )
@@ -811,16 +855,32 @@ class AwsTuiApp(App[None]):
     async def on_unmount(self) -> None:
         await self._aws_tui_shutdown()
 
+    def _sync_modal_focus(self, _screen: object) -> None:
+        """Project Textual's screen stack into VMx modal precedence."""
+        coordinator = self._app_ctx.focus_coordinator
+        if len(self.screen_stack) > 1:
+            coordinator.modal_open()
+        else:
+            was_modal = coordinator.is_modal
+            coordinator.modal_close()
+            if was_modal:
+                self.call_after_refresh(self._restore_focus_after_modal, coordinator.focused_slot)
+
+    def _restore_focus_after_modal(self, slot: FocusSlot) -> None:
+        coordinator = self._app_ctx.focus_coordinator
+        if len(self.screen_stack) > 1 or coordinator.is_modal:
+            return
+        coordinator.set_focused_slot(slot)
+        self._project_focus_slot(slot)
+
     def _dispose_table_clipboard_subscription(self) -> None:
-        subscription = self._table_clipboard_sub
+        subscription = getattr(self, "_table_clipboard_sub", None)
         if subscription is None:
             return
         subscription.dispose()
         self._table_clipboard_sub = None
 
-    async def _initial_mount_worker(
-        self, *, initial_conn: Connection, auth_state: TokenState
-    ) -> None:
+    async def _initial_mount_worker(self, *, initial_conn: Connection) -> None:
         """Walk the configured-connections chain, narrating each step
         via toasts, until one succeeds OR all fail (→ local-only).
 
@@ -851,13 +911,10 @@ class AwsTuiApp(App[None]):
         through ``_attempt_future`` (resolved by
         ``_on_pane_state_changed`` for the matching connection key).
 
-        ``auth_state`` is kept as a parameter for back-compat
-        (caller in ``on_mount`` already probed the initial
-        connection); we re-probe each AWS candidate in the chain
-        instead of relying on the value because the chain may
-        include connections the caller never probed.
+        The caller probes the initial connection before publishing it to
+        ``RootVM``. This worker re-probes every AWS candidate because the
+        chain can include connections that caller did not inspect.
         """
-        _ = auth_state  # caller probed `initial_conn`; chain re-probes each AWS candidate
         ctx = self._app_ctx
         try:
             chain = self._build_attempt_chain(initial_conn)
@@ -866,7 +923,17 @@ class AwsTuiApp(App[None]):
                 length=len(chain),
                 initial=initial_conn.name,
             )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + _BOOT_CHAIN_BUDGET_SECONDS
             for index, conn in enumerate(chain, start=1):
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    ctx.log_sink.info(
+                        "app.boot_chain.budget_exhausted",
+                        attempted=index - 1,
+                        total=len(chain),
+                    )
+                    break
                 # Defer the "▸ Trying X…" toast so a fast happy boot
                 # (e.g. silent SSO succeeds in <500ms) stays silent.
                 # The deferred task self-cancels if the attempt
@@ -880,7 +947,7 @@ class AwsTuiApp(App[None]):
                     self._raise_attempt_toast_after_grace(conn, index=index, total=len(chain))
                 )
                 try:
-                    outcome = await self._try_connection(conn)
+                    outcome = await self._try_connection(conn, timeout=remaining)
                 finally:
                     pre_attempt_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -911,6 +978,13 @@ class AwsTuiApp(App[None]):
                     attempt=index,
                     outcome=outcome,
                 )
+                if outcome == "timeout":
+                    ctx.log_sink.info(
+                        "app.boot_chain.budget_exhausted",
+                        attempted=index,
+                        total=len(chain),
+                    )
+                    break
             # Chain exhausted — mount local on both panes and
             # remember the decision so a subsequent Settings → S3
             # toggle reproduces the local-on-both state instead of
@@ -932,13 +1006,6 @@ class AwsTuiApp(App[None]):
                 )
         finally:
             self._boot_in_flight = False
-            selected = self._pending_boot_nav_selection
-            self._pending_boot_nav_selection = None
-            if selected is not None and ctx.root_vm.services_menu.selected_id == selected:
-                if selected == SETTINGS_NAV_ID:
-                    await self._mount_settings_view()
-                else:
-                    await self._mount_service_view(selected)
 
     def _build_attempt_chain(self, initial: Connection) -> list[Connection]:
         """Order the resolver's connection list with ``initial`` first.
@@ -972,7 +1039,12 @@ class AwsTuiApp(App[None]):
             seen.add(key)
         return chain
 
-    async def _try_connection(self, conn: Connection) -> str:
+    async def _try_connection(
+        self,
+        conn: Connection,
+        *,
+        timeout: float = _BOOT_CHAIN_BUDGET_SECONDS,
+    ) -> str:
         """Attempt to mount ``conn`` as the LEFT pane's source.
 
         Returns one of: ``"ok"``, ``"aws-sso-expired"``,
@@ -1017,7 +1089,7 @@ class AwsTuiApp(App[None]):
             if not await self._mount_initial_service_view():
                 return "error"
             try:
-                return await asyncio.wait_for(self._attempt_future, timeout=90.0)
+                return await asyncio.wait_for(self._attempt_future, timeout=timeout)
             except TimeoutError:
                 return "timeout"
         finally:
@@ -1191,22 +1263,8 @@ class AwsTuiApp(App[None]):
             transfer_journal=journal,
         )
         try:
-            # ContentHostVM.set_content is idempotent on a matching
-            # ``service_id`` — it returns early if ``current_id`` is
-            # already the same. When the boot chain falls back to
-            # local-on-both AFTER an s3-compatible attempt failed,
-            # ``current_id`` is already "s3" (the failed attempt's
-            # service id) and the idempotent check would silently skip
-            # adopting the new local DualPaneVM, leaving the host
-            # bound to the failed S3FS panes. User-visible symptom:
-            # "upon launching the app, neither pane shows any content
-            # when neither aws s3 nor s3-compatible are available.
-            # Only when I browse the settings and come back to S3, it
-            # shows the local source." (The toggle path worked because
-            # ``current_id`` flipped to ``"settings"`` in between,
-            # invalidating the idempotent skip.) Force the swap by
-            # clearing first.
-            await ctx.root_vm.content_host.set_content(None, service_id=None)
+            # ContentHostVM constructs the candidate before retiring the
+            # outgoing VM, so a malformed fallback cannot empty the host.
             await ctx.root_vm.content_host.set_content(dual, service_id="s3")
         except Exception as exc:
             ctx.log_sink.error(
@@ -1463,7 +1521,7 @@ class AwsTuiApp(App[None]):
                 "    1. Run [b]aws configure[/]                      (interactive AWS keys setup)\n"
                 "    2. Run [b]aws configure sso[/]                  (interactive SSO setup)\n"
                 f"    3. Edit [b]{config_path}[/]     (add an AWS or S3-compatible connection)\n\n"
-                "  See [b]docs/connections.md[/] in the repo for the [b][connections.<name>][/] schema and\n"
+                "  See [b]https://thekaveh.github.io/aws-tui/connections/[/] for the [b][connections.<name>][/] schema and\n"
                 "  vendor quirks (MinIO, R2, B2, Wasabi).\n\n"
                 "  Press [b]q[/] to quit.",
                 id="content-placeholder",
@@ -1478,8 +1536,15 @@ class AwsTuiApp(App[None]):
 
         workers = self.workers.cancel_group(self, "transfer-ops")
         if workers:
-            with contextlib.suppress(WorkerCancelled):
-                await self.workers.wait_for_complete(workers)
+            results = await asyncio.gather(
+                *(worker.wait() for worker in workers),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, WorkerCancelled):
+                    continue
+                if isinstance(result, BaseException):
+                    raise result
 
     # ── Action handlers ────────────────────────────────────────────────────
 
@@ -1495,18 +1560,11 @@ class AwsTuiApp(App[None]):
         :meth:`App.action_quit` (just ``self.exit()``), bypassing
         :meth:`_aws_tui_shutdown` entirely — aioboto3 client closures,
         in-flight transfer cancellation, log-sink flush, and VM
-        disposal all leaked at exit. The async coroutine
-        :meth:`action_app_quit` was wired but never invoked because no
-        binding routed to it.
+        disposal all leaked at exit.
         """
         self.record_action("app.quit")
         await self._aws_tui_shutdown()
         self.exit()
-
-    # BindingResolver maps user-defined ``[keybindings].app.quit`` entries
-    # through this alias so every route reaches the same shutdown path.
-    async def action_app_quit(self) -> None:
-        await self.action_quit()
 
     def _handle_quit(self) -> None:
         # Synchronous fallback for the BindingResolver bridge that
@@ -1522,6 +1580,10 @@ class AwsTuiApp(App[None]):
         holds the real handler. Returning the handler's awaitable (if any)
         lets Textual await async actions.
         """
+        if (
+            len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal
+        ) and action_id not in _MODAL_ROUTED_ACTIONS:
+            return None
         return self._actions.invoke(action_id)
 
     def _on_palette_action_message(self, message: object) -> None:
@@ -1595,6 +1657,11 @@ class AwsTuiApp(App[None]):
     def action_command_palette(self) -> None:
         """Open the fuzzy command palette (bound to ``:`` / ``Ctrl+K``)."""
         self.record_action("app.command_palette")
+        for screen in self.screen_stack:
+            if isinstance(screen, CommandPalette):
+                with contextlib.suppress(Exception):
+                    screen.query_one("#palette-input", Input).focus()
+                return
         self._populate_command_palette()
         vm = self._app_ctx.command_palette_vm
         vm.set_active_service(self._app_ctx.root_vm.content_host.current_id)
@@ -1647,15 +1714,25 @@ class AwsTuiApp(App[None]):
     def action_switch_focus(self) -> None:
         """Move to the next app-wide focus slot."""
         self.record_action("pane.switch_focus")
+        if len(self.screen_stack) > 1:
+            self.screen.focus_next()
+            return
         self._cycle_focus(reverse=False)
 
     def action_switch_focus_reverse(self) -> None:
         """Move to the previous app-wide focus slot."""
         self.record_action("pane.switch_focus_back")
+        if len(self.screen_stack) > 1:
+            self.screen.focus_previous()
+            return
         self._cycle_focus(reverse=True)
 
     def _cycle_focus(self, *, reverse: bool) -> None:
-        # EMR page owns its own 4-slot Tab cycle.
+        with contextlib.suppress(Exception):
+            form = self.query_one(ConnectionFormInline)
+            if form.cycle_focus(reverse=reverse):
+                return
+        # EMR page owns its own six-slot Tab cycle.
         with contextlib.suppress(Exception):
             emr_page = self.query_one("#content-emr-page", EmrServerlessPage)
             if reverse:
@@ -1674,10 +1751,18 @@ class AwsTuiApp(App[None]):
             return
 
         coordinator = self._app_ctx.focus_coordinator
-        if self._dual_pane() is None:
+        with contextlib.suppress(Exception):
+            settings = self.query_one(SettingsView)
+            if settings.cycle_focus(reverse=reverse):
+                coordinator.set_focused_slot(FocusSlot.SETTINGS)
+                return
             coordinator.cycle_settings_focus(reverse=reverse)
-        else:
-            coordinator.cycle_s3_focus(reverse=reverse)
+            if coordinator.focused_slot is FocusSlot.SETTINGS:
+                settings.focus_boundary(reverse=reverse)
+            else:
+                self._project_focus_slot(coordinator.focused_slot)
+            return
+        coordinator.cycle_s3_focus(reverse=reverse)
         self._project_focus_slot(coordinator.focused_slot)
 
     def _project_focus_slot(self, slot: FocusSlot) -> None:
@@ -1805,12 +1890,22 @@ class AwsTuiApp(App[None]):
 
     def action_move_up(self) -> None:
         self.record_action("pane.move_up")
+        if len(self.screen_stack) > 1 and isinstance(self.focused, (Input, TextArea)):
+            move = getattr(self.focused, "action_cursor_up", None)
+            if callable(move):
+                move()
+            return
         if self._forward_to_modal("action_move_up"):
             return
         self._move_cursor(-1)
 
     def action_move_down(self) -> None:
         self.record_action("pane.move_down")
+        if len(self.screen_stack) > 1 and isinstance(self.focused, (Input, TextArea)):
+            move = getattr(self.focused, "action_cursor_down", None)
+            if callable(move):
+                move()
+            return
         if self._forward_to_modal("action_move_down"):
             return
         self._move_cursor(1)
@@ -1929,6 +2024,10 @@ class AwsTuiApp(App[None]):
                 return
             nav.action_commit()
             return
+        with contextlib.suppress(Exception):
+            settings = self.query_one(SettingsView)
+            if settings.activate_focused():
+                return
         glue_page = self._glue_page()
         if glue_page is not None and glue_page.activate_focused(space=False):
             return
@@ -1959,6 +2058,9 @@ class AwsTuiApp(App[None]):
 
     async def action_ascend(self) -> None:
         self.record_action("pane.ascend")
+        if isinstance(self.focused, (Input, TextArea)):
+            self.focused.action_delete_left()
+            return
         # Forward Backspace to the active modal as a cancel-by-key
         # gesture (esc still works too).
         if self._forward_to_modal("action_cancel", "action_close", "action_dismiss"):
@@ -1992,6 +2094,9 @@ class AwsTuiApp(App[None]):
         # navigation is unchanged.
         if self._forward_to_modal("action_focus_prev"):
             return
+        emr_page = self._emr_page()
+        if emr_page is not None and emr_page.select_adjacent_log_file(-1):
+            return
         await self.action_ascend()
 
     def action_modal_right(self) -> None:
@@ -2000,7 +2105,11 @@ class AwsTuiApp(App[None]):
         # In a modal: Right moves arrow-key focus to the next footer
         # button. Outside any modal: no-op (panes don't currently bind
         # Right to anything).
-        self._forward_to_modal("action_focus_next")
+        if self._forward_to_modal("action_focus_next"):
+            return
+        emr_page = self._emr_page()
+        if emr_page is not None:
+            emr_page.select_adjacent_log_file(1)
 
     async def action_refresh(self) -> None:
         self.record_action("pane.refresh")
@@ -2037,11 +2146,9 @@ class AwsTuiApp(App[None]):
             await pane.refresh()
 
     async def action_help(self) -> None:
-        """Show the help overlay (also bound to ``:``). The theme picker
-        is a separate modal — press ``t`` (or use the help modal's
-        Themes link)."""
+        """Show the help overlay with the active configurable keymap."""
         self.record_action("app.help")
-        await self.push_screen(HelpModal())
+        await self.push_screen(HelpModal(keymap=self._app_ctx.keymap_store))
 
     async def action_copy(self) -> None:
         """Copy the focused pane's marked entries (or the cursor row if
@@ -2442,7 +2549,20 @@ class AwsTuiApp(App[None]):
         else:
             assert not isinstance(payload, str)  # narrows payload to Connection
             conn = payload
-            new_provider = self._make_s3_provider_for_connection(conn)
+            try:
+                new_provider = self._make_s3_provider_for_connection(conn)
+            except AuthRequiredError:
+                ctx.log_sink.warning(
+                    "pane.swap_source.auth_required",
+                    connection=conn.name,
+                )
+                notifications.advise(
+                    ctx.root_vm.chrome.toast_stack,
+                    subject="Source",
+                    message=f"authentication required for {conn.name} — keeping current source",
+                    toast_id="swap-source-auth-required",
+                )
+                return
             new_protocol = "s3:"
 
         swap = getattr(focused, "swap_provider", None)
@@ -2470,6 +2590,20 @@ class AwsTuiApp(App[None]):
         page = self._emr_page()
         if page is not None:
             await page.vm.cycle_application(1)
+
+    async def action_clone_emr_run(self) -> None:
+        page = self._emr_page()
+        if page is not None:
+            self.record_action("emr.clone")
+            await page.action_clone_selected_run()
+            return
+        if self._bindings_overlap("emr.clone", "pane.copy"):
+            await self.action_copy()
+
+    def action_filter_emr_logs(self) -> None:
+        page = self._emr_page()
+        if page is not None and page.open_focused_log_filter():
+            self.record_action("emr.logs.filter")
 
     async def action_select_glue_view(self, view: str) -> None:
         self.record_action(f"glue.{view}")
@@ -2761,6 +2895,14 @@ class AwsTuiApp(App[None]):
             await ctx.root_vm.switch_connection_and_service(target, auth_state, service_id)
             if await self._mount_service_view(service_id, required_connection=target):
                 return True
+        except asyncio.CancelledError:
+            if prior_connection is not None and prior_auth_state is not None:
+                await self._restore_single_context_source_durably(
+                    service_id,
+                    prior_connection,
+                    prior_auth_state,
+                )
+            raise
         except Exception as exc:
             ctx.log_sink.error(
                 "service_source.rebuild_failed",
@@ -2770,24 +2912,15 @@ class AwsTuiApp(App[None]):
             )
 
         restored = False
+        rollback_cancelled = False
         if prior_connection is not None and prior_auth_state is not None:
-            try:
-                await ctx.root_vm.switch_connection_and_service(
-                    prior_connection,
-                    prior_auth_state,
-                    service_id,
-                )
-                restored = await self._mount_service_view(
-                    service_id,
-                    required_connection=prior_connection,
-                )
-            except Exception as exc:
-                ctx.log_sink.error(
-                    "service_source.rollback_failed",
-                    service_id=service_id,
-                    connection=prior_connection.name,
-                    error_type=type(exc).__name__,
-                )
+            restored, rollback_cancelled = await self._restore_single_context_source_durably(
+                service_id,
+                prior_connection,
+                prior_auth_state,
+            )
+        if rollback_cancelled:
+            raise asyncio.CancelledError
         notifications.error(
             ctx.root_vm.chrome.toast_stack,
             subject="Source",
@@ -2797,6 +2930,49 @@ class AwsTuiApp(App[None]):
             ),
         )
         return False
+
+    async def _restore_single_context_source_durably(
+        self,
+        service_id: str,
+        connection: Connection,
+        auth_state: TokenState,
+    ) -> tuple[bool, bool]:
+        rollback = asyncio.create_task(
+            self._restore_single_context_source(service_id, connection, auth_state),
+            name=f"{service_id}-source-rollback",
+        )
+        cancelled = False
+        while not rollback.done():
+            try:
+                await asyncio.shield(rollback)
+            except asyncio.CancelledError:
+                cancelled = True
+        return rollback.result(), cancelled
+
+    async def _restore_single_context_source(
+        self,
+        service_id: str,
+        connection: Connection,
+        auth_state: TokenState,
+    ) -> bool:
+        try:
+            await self._app_ctx.root_vm.switch_connection_and_service(
+                connection,
+                auth_state,
+                service_id,
+            )
+            return await self._mount_service_view(
+                service_id,
+                required_connection=connection,
+            )
+        except Exception as exc:
+            self._app_ctx.log_sink.error(
+                "service_source.rollback_failed",
+                service_id=service_id,
+                connection=connection.name,
+                error_type=type(exc).__name__,
+            )
+            return False
 
     def _make_s3_provider_for_connection(self, conn: Connection) -> FileSystemProvider:
         """Build the S3 pane provider through the registered S3 service.
@@ -3390,29 +3566,48 @@ class AwsTuiApp(App[None]):
     def _capture_table_handoff_snapshot(self) -> _TableHandoffSnapshot:
         ctx = self._app_ctx
         current = ctx.root_vm.content_host.current
-        glue_table_ref: TableRef | None = None
-        if isinstance(current, GluePageVM):
-            selected_table_name = current.catalog.selected_table_name
-            selected = next(
-                (
-                    row
-                    for row in current.catalog.tables
-                    if row.ref.table_name == selected_table_name
-                ),
-                None,
-            )
-            glue_table_ref = selected.ref if selected is not None else None
         return _TableHandoffSnapshot(
             connection=ctx.root_vm.active_connection,
             auth_state=ctx.root_vm.active_auth_state,
             service_id=ctx.root_vm.content_host.current_id,
             athena=current.export_snapshot() if isinstance(current, AthenaPageVM) else None,
-            glue_view=current.active_view if isinstance(current, GluePageVM) else None,
-            glue_database_name=(
-                current.catalog.selected_database_name if isinstance(current, GluePageVM) else None
-            ),
-            glue_table_ref=glue_table_ref,
+            glue=self._capture_glue_page_snapshot(current)
+            if isinstance(current, GluePageVM)
+            else None,
         )
+
+    @staticmethod
+    def _capture_glue_page_snapshot(page: GluePageVM) -> _GluePageSnapshot:
+        selected_table_name = page.catalog.selected_table_name
+        selected = next(
+            (row for row in page.catalog.tables if row.ref.table_name == selected_table_name),
+            None,
+        )
+        iceberg = page.catalog.iceberg
+        return _GluePageSnapshot(
+            active_view=page.active_view,
+            database_name=page.catalog.selected_database_name,
+            table_ref=selected.ref if selected is not None else None,
+            iceberg_view=iceberg.active_view if iceberg.available else None,
+            iceberg_snapshot_id=iceberg.selected_snapshot_id,
+        )
+
+    @staticmethod
+    async def _restore_glue_page_snapshot(
+        page: GluePageVM,
+        snapshot: _GluePageSnapshot,
+    ) -> None:
+        if snapshot.table_ref is not None:
+            await page.open_table(snapshot.table_ref)
+        elif snapshot.database_name is not None:
+            await page.select_database(snapshot.database_name)
+        if snapshot.table_ref is not None and snapshot.iceberg_view is not None:
+            iceberg = page.catalog.iceberg
+            await iceberg.select_view(snapshot.iceberg_view)
+            if snapshot.iceberg_snapshot_id is not None:
+                iceberg.select_snapshot(snapshot.iceberg_snapshot_id)
+        if page.active_view != snapshot.active_view:
+            await page.select_view(snapshot.active_view)
 
     async def _restore_superseded_table_handoff(
         self,
@@ -3533,13 +3728,8 @@ class AwsTuiApp(App[None]):
         if isinstance(current, AthenaPageVM):
             if snapshot.athena is not None:
                 await current.restore_snapshot(snapshot.athena)
-        elif isinstance(current, GluePageVM):
-            if snapshot.glue_table_ref is not None:
-                await current.open_table(snapshot.glue_table_ref)
-            elif snapshot.glue_database_name is not None:
-                await current.select_database(snapshot.glue_database_name)
-            if snapshot.glue_view is not None:
-                await current.select_view(cast("GlueView", snapshot.glue_view))
+        elif isinstance(current, GluePageVM) and snapshot.glue is not None:
+            await self._restore_glue_page_snapshot(current, snapshot.glue)
         if not self._table_handoff_should_restore(generation):
             return False
         await self.wait_for_refresh()
@@ -3617,15 +3807,23 @@ class AwsTuiApp(App[None]):
             return
         destination, object_name = target
         current = ctx.root_vm.content_host.current
+        athena_snapshot: AthenaPageSnapshot | None = None
+        if isinstance(current, AthenaPageVM):
+            with contextlib.suppress(ValueError):
+                athena_snapshot = current.export_snapshot()
         snapshot = _S3HandoffSnapshot(
             connection=ctx.root_vm.active_connection,
             auth_state=ctx.root_vm.active_auth_state,
             service_id=ctx.root_vm.content_host.current_id,
+            athena=athena_snapshot,
             athena_result_execution_id=(
                 current.results.execution_id
                 if isinstance(current, AthenaPageVM) and current.active_view == "results"
                 else None
             ),
+            glue=self._capture_glue_page_snapshot(current)
+            if isinstance(current, GluePageVM)
+            else None,
         )
 
         try:
@@ -3695,8 +3893,9 @@ class AwsTuiApp(App[None]):
             focused = FocusedPane.LEFT if request.preferred_pane == "left" else FocusedPane.RIGHT
             slot = FocusSlot.S3_LEFT if focused is FocusedPane.LEFT else FocusSlot.S3_RIGHT
             dual.set_focused(focused)
-            ctx.focus_coordinator.set_focused_slot(slot)
-            self._project_focus_slot(slot)
+            ctx.focus_coordinator.set_underlying_slot(slot)
+            if not ctx.focus_coordinator.is_modal:
+                self._project_focus_slot(slot)
         except asyncio.CancelledError:
             if not self._s3_handoff_was_superseded(snapshot):
                 await self._restore_s3_handoff_snapshot(snapshot)
@@ -3756,7 +3955,9 @@ class AwsTuiApp(App[None]):
                 connection=snapshot.connection,
                 auth_state=snapshot.auth_state,
                 service_id=snapshot.service_id,
+                athena=snapshot.athena,
                 athena_result_execution_id=snapshot.athena_result_execution_id,
+                glue=snapshot.glue,
             )
         )
         while True:
@@ -3778,7 +3979,9 @@ class AwsTuiApp(App[None]):
         connection: Connection | None,
         auth_state: TokenState | None,
         service_id: str | None,
+        athena: AthenaPageSnapshot | None = None,
         athena_result_execution_id: str | None = None,
+        glue: _GluePageSnapshot | None = None,
     ) -> bool:
         """Restore the coherent service snapshot captured before a handoff."""
         if connection is None or auth_state is None or service_id is None:
@@ -3829,13 +4032,14 @@ class AwsTuiApp(App[None]):
             with contextlib.suppress(asyncio.CancelledError):
                 await setup_task
         current = self._app_ctx.root_vm.content_host.current
-        if (
-            service_id == "athena"
-            and athena_result_execution_id is not None
-            and isinstance(current, AthenaPageVM)
-        ):
-            await current.results.load(athena_result_execution_id)
-            await current.select_view("results")
+        if service_id == "athena" and isinstance(current, AthenaPageVM):
+            if athena is not None:
+                await current.restore_snapshot(athena)
+            elif athena_result_execution_id is not None:
+                await current.results.load(athena_result_execution_id)
+                await current.select_view("results")
+        elif service_id == "glue" and isinstance(current, GluePageVM) and glue is not None:
+            await self._restore_glue_page_snapshot(current, glue)
         return restored
 
     def _raise_s3_handoff_failure(
@@ -4050,7 +4254,6 @@ class AwsTuiApp(App[None]):
         # screen at startup.
         if self._boot_in_flight:
             if selected != "s3":
-                self._pending_boot_nav_selection = None
                 self._boot_in_flight = False
                 self.workers.cancel_group(self, "content-mount")
                 self.run_worker(
@@ -4150,6 +4353,7 @@ class AwsTuiApp(App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            self._restore_navigation_after_failed_adoption("Settings")
             return
         try:
             # ``await`` both the remove and the mount so a cancelled
@@ -4246,6 +4450,7 @@ class AwsTuiApp(App[None]):
                 service_id=service_id,
                 error_type=type(exc).__name__,
             )
+            self._restore_navigation_after_failed_adoption(service_id)
             return False
         try:
             current_vm = ctx.root_vm.content_host.current
@@ -4280,6 +4485,36 @@ class AwsTuiApp(App[None]):
             )
             return False
         return True
+
+    def _restore_navigation_after_failed_adoption(self, requested_id: str) -> None:
+        """Realign tentative navigation chrome with the still-hosted content."""
+        ctx = self._app_ctx
+        current_id = ctx.root_vm.content_host.current_id
+        menu = ctx.root_vm.services_menu
+        if menu.selected_id != current_id:
+            current_task = asyncio.current_task()
+            suppression = (
+                (current_task, current_id)
+                if current_task is not None and current_id is not None
+                else None
+            )
+            self._service_navigation_suppressed_selection = suppression
+            try:
+                if current_id is None:
+                    menu.clear_selection()
+                else:
+                    menu.switch_service_command.execute(current_id)
+            finally:
+                if self._service_navigation_suppressed_selection is suppression:
+                    self._service_navigation_suppressed_selection = None
+        ctx.root_vm.chrome.hint_legend.set_current_service(current_id)
+        with contextlib.suppress(Exception):
+            notifications.error(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Mount",
+                message=f"Could not open {requested_id}; restored {current_id or 'current view'}",
+                toast_id="navigation-adoption-failed",
+            )
 
     async def _replace_content_widget(self, host: Container, replacement: Widget) -> None:
         """Mount a content replacement or leave a coherent error surface."""
@@ -4584,22 +4819,52 @@ class AwsTuiApp(App[None]):
         internal ``App._shutdown`` lifecycle hook on Textual.
         """
         ctx = self._app_ctx
-        self._close_service_navigation_intake()
-        self.workers.cancel_group(self, "content-mount")
+        errors: list[tuple[str, BaseException]] = []
+
+        def run_cleanup(step: str, cleanup: Any) -> None:
+            try:
+                cleanup()
+            except (Exception, asyncio.CancelledError) as exc:
+                errors.append((step, exc))
+
+        async def await_cleanup(step: str, cleanup: Any) -> None:
+            try:
+                await cleanup()
+            except (Exception, asyncio.CancelledError) as exc:
+                errors.append((step, exc))
+
+        def dispose_subscription(attribute: str) -> None:
+            subscription = getattr(self, attribute, None)
+            if subscription is None:
+                return
+            subscription.dispose()
+            setattr(self, attribute, None)
+
+        run_cleanup("service_navigation.close_intake", self._close_service_navigation_intake)
+        run_cleanup(
+            "workers.cancel_content_mount",
+            lambda: self.workers.cancel_group(self, "content-mount"),
+        )
+
         navigation_lock = getattr(self, "_service_navigation_lock", None)
         if navigation_lock is not None:
-            async with navigation_lock:
-                pass
-        await self._drain_table_navigation()
-        with contextlib.suppress(Exception):
-            ctx.transfers_vm.cancel_all_command.execute()
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            await self._cancel_transfer_workers_before_content_swap()
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            await ctx.command_palette_vm.shutdown()
-        # Keep the hosted VM's graceful shutdown alive through caller
-        # cancellation. Remote cleanup must complete while its AWS client is open.
-        with contextlib.suppress(Exception, asyncio.CancelledError):
+
+            async def drain_navigation_lock() -> None:
+                async with navigation_lock:
+                    pass
+
+            await await_cleanup("service_navigation.lock", drain_navigation_lock)
+        await await_cleanup("table_navigation.drain", self._drain_table_navigation)
+        run_cleanup("transfers.cancel_all", ctx.transfers_vm.cancel_all_command.execute)
+        await await_cleanup(
+            "transfer_workers.cancel",
+            self._cancel_transfer_workers_before_content_swap,
+        )
+        palette_shutdown = getattr(ctx.command_palette_vm, "shutdown", None)
+        if callable(palette_shutdown):
+            await await_cleanup("command_palette.shutdown", palette_shutdown)
+
+        async def shutdown_hosted_content() -> None:
             host_shutdown = asyncio.create_task(ctx.root_vm.content_host.shutdown())
             while not host_shutdown.done():
                 try:
@@ -4607,78 +4872,58 @@ class AwsTuiApp(App[None]):
                 except asyncio.CancelledError:
                     continue
             await host_shutdown
-        # Include asyncio.CancelledError in the suppress — without it
-        # an in-flight CancelledError (a BaseException, not an
-        # Exception) on the aclose_all_clients await would cascade
-        # past every subsequent cleanup step below this block,
-        # skipping log_sink.flush()/.close() + the four reactive
-        # subscription disposes. Shutdown must NOT be cancellable
-        # mid-stream.
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            await ctx.aws_session.aclose_all_clients()
-        with contextlib.suppress(Exception):
-            ctx.log_sink.flush()
-            ctx.log_sink.close()
-        with contextlib.suppress(Exception):
-            if self._pane_state_sub is not None:
-                self._pane_state_sub.dispose()
-                self._pane_state_sub = None
-        with contextlib.suppress(Exception):
-            if self._connection_list_sub is not None:
-                self._connection_list_sub.dispose()
-                self._connection_list_sub = None
-        with contextlib.suppress(Exception):
-            if self._nav_selection_sub is not None:
-                self._nav_selection_sub.dispose()
-                self._nav_selection_sub = None
-        with contextlib.suppress(Exception):
-            if self._cursor_sub is not None:
-                self._cursor_sub.dispose()
-                self._cursor_sub = None
-        with contextlib.suppress(Exception):
-            if self._service_navigation_sub is not None:
-                self._service_navigation_sub.dispose()
-                self._service_navigation_sub = None
-        with contextlib.suppress(Exception):
-            if self._palette_failure_sub is not None:
-                self._palette_failure_sub.dispose()
-                self._palette_failure_sub = None
-        with contextlib.suppress(Exception):
-            self._dispose_table_clipboard_subscription()
-        with contextlib.suppress(Exception):
-            # Currently-hosted SettingsVM (if any) is disposed by the
-            # ContentHostVM tree teardown via ``root_vm.shutdown()``.
-            ctx.s3_connections_vm.dispose()
-        # One suppress PER dispose — bundling them under a single
-        # suppress lets the first raise short-circuit every later
-        # call (most notably the FocusCoordinatorVM cleanup the
-        # comment below specifically defends against).
-        with contextlib.suppress(Exception):
-            ctx.command_palette_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.quick_look_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.confirm_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.transfers_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.table_clipboard_vm.dispose()
-        with contextlib.suppress(Exception):
-            ctx.root_vm.dispose()
-        with contextlib.suppress(Exception):
-            # FocusCoordinatorVM lives on the AppContext top-level,
-            # not under root_vm, so root_vm.dispose() doesn't reach
-            # it. Without an explicit call the inner ComponentVM +
-            # Subject leak on every shutdown.
-            ctx.focus_coordinator.dispose()
-        with contextlib.suppress(Exception):
-            # In demo mode, cancel any in-flight clone state-machine tasks
-            # so asyncio doesn't emit "Task was destroyed but it is pending"
-            # warnings on exit.  The InMemoryEmr singleton is shared across
-            # connection switches within the same AppContext, so we dispose
-            # it here (on app shutdown) rather than in EmrServerlessPageVM.
-            if ctx.demo_emr is not None:
-                await ctx.demo_emr.aclose()
+
+        await await_cleanup("content_host.shutdown", shutdown_hosted_content)
+        await await_cleanup("aws_session.aclose_all_clients", ctx.aws_session.aclose_all_clients)
+
+        for attribute in (
+            "_pane_state_sub",
+            "_connection_list_sub",
+            "_nav_selection_sub",
+            "_cursor_sub",
+            "_service_navigation_sub",
+            "_palette_failure_sub",
+        ):
+            run_cleanup(
+                f"subscription.{attribute.removeprefix('_')}.dispose",
+                partial(dispose_subscription, attribute),
+            )
+        run_cleanup(
+            "table_clipboard.subscription.dispose",
+            self._dispose_table_clipboard_subscription,
+        )
+
+        for step, disposable in (
+            ("s3_connections_vm.dispose", ctx.s3_connections_vm),
+            ("command_palette_vm.dispose", ctx.command_palette_vm),
+            ("quick_look_vm.dispose", ctx.quick_look_vm),
+            ("confirm_vm.dispose", ctx.confirm_vm),
+            ("transfers_vm.dispose", ctx.transfers_vm),
+            ("table_clipboard_vm.dispose", ctx.table_clipboard_vm),
+            ("root_vm.dispose", ctx.root_vm),
+            ("focus_coordinator.dispose", ctx.focus_coordinator),
+        ):
+            run_cleanup(step, disposable.dispose)
+
+        for connection_name, demo_emr in ctx.demo_emrs.items():
+            await await_cleanup(f"demo_emrs.{connection_name}.aclose", demo_emr.aclose)
+
+        # Keep structured logging available until every other owner has been
+        # drained. Cleanup errors are durable diagnostics, but shutdown remains
+        # best-effort and does not turn an ordinary quit into a crash.
+        for step, exc in errors:
+            try:
+                ctx.log_sink.error(
+                    "app.shutdown.cleanup_failed",
+                    step=step,
+                    error_type=type(exc).__name__,
+                    error=redact_text(str(exc)),
+                )
+            except Exception:
+                break
+        run_cleanup("log_sink.flush", ctx.log_sink.flush)
+        run_cleanup("log_sink.close", ctx.log_sink.close)
+        self._shutdown_errors = tuple((step, type(exc).__name__) for step, exc in errors)
 
 
 def main() -> None:
@@ -4719,7 +4964,19 @@ def main() -> None:
         print(f"aws-tui {__version__} (demo: {status})")
         return
 
-    app = AwsTuiApp(context=build_app_context(demo=demo))
+    context: AppContext | None = None
+    try:
+        context = build_app_context(demo=demo)
+        app = AwsTuiApp(context=context)
+    except Exception as exc:
+        if context is not None:
+            context.close_unstarted()
+        message = redact_text(str(exc)) or "startup failed"
+        print(
+            f"\naws-tui failed to start.\n  {type(exc).__name__}: {message}\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
     try:
         app.run()
     except BaseException as exc:

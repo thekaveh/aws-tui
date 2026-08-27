@@ -1,5 +1,103 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>aws-tui Deployment and Trust Boundaries</title><style>@font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Regular.ttf") format("truetype"); font-style: normal; font-weight: 400; }@font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Bold.ttf") format("truetype"); font-style: normal; font-weight: 600 700; }*{box-sizing:border-box}body{margin:0;padding:32px;background:#020617;color:#f8fafc;font-family:"Fira Code Embedded",monospace}.wrap{max-width:1600px;margin:auto}h1{font-size:24px;letter-spacing:0}.sub{color:#94a3b8}.frame{margin-top:20px;padding:16px;border:1px solid #1e293b;border-radius:8px;background:#07101f}svg{display:block;width:100%;min-width:1100px;height:auto}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}.card{padding:14px;border:1px solid #1e293b;border-radius:8px;background:#0f172a}.card h2{font-size:13px;letter-spacing:0}.card p{font-size:11px;line-height:1.5;color:#94a3b8}@media(max-width:760px){body{padding:16px}.cards{grid-template-columns:1fr}}</style></head><body><main class="wrap"><h1>aws-tui Deployment and Trust Boundaries</h1><p class="sub">One local process, multiple profile-scoped AWS contexts, and optional S3-compatible endpoints</p><section class="frame"><svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="t d"><title id="t">aws-tui deployment</title><desc id="d">The local aws-tui process reads platform configuration and keychain credentials, resolves multiple AWS profiles, and calls services within exact account and region boundaries or configured S3-compatible endpoints.</desc><defs><pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0L0 0 0 40" fill="none" stroke="#1e293b" stroke-width=".5"/></pattern><marker id="a" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker></defs><rect width="1600" height="900" fill="#020617"/><rect width="1600" height="900" fill="url(#g)"/>
-<g fill="none" stroke-width="2" marker-end="url(#a)"><path d="M300 230H420" stroke="#22d3ee"/><path d="M300 390H420" stroke="#fb7185" stroke-dasharray="6,4"/><path d="M300 550H420" stroke="#22d3ee"/><path d="M720 390H850V210H980" stroke="#fbbf24"/><path d="M720 390H850V450H980" stroke="#fbbf24"/><path d="M720 390H850V690H980" stroke="#a78bfa"/></g>
-<g font-family="Fira Code Embedded" text-anchor="middle"><rect x="40" y="80" width="720" height="720" rx="12" fill="#050d19" stroke="#22d3ee" stroke-width="2" stroke-dasharray="8,4"/><text x="65" y="112" fill="#22d3ee" font-size="14" font-weight="700" text-anchor="start">USER WORKSTATION</text><rect x="90" y="175" width="210" height="110" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="2"/><text x="195" y="218" fill="#f8fafc" font-size="13" font-weight="600">Terminal user</text><text x="195" y="243" fill="#94a3b8" font-size="10">keyboard + OS clipboard</text><rect x="90" y="335" width="210" height="110" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="2"/><text x="195" y="374" fill="#f8fafc" font-size="13" font-weight="600">Config + keychain</text><text x="195" y="399" fill="#94a3b8" font-size="10">namespaced keychain saves</text><text x="195" y="418" fill="#94a3b8" font-size="10">static mode remains supported</text><rect x="90" y="495" width="210" height="110" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="2"/><text x="195" y="538" fill="#f8fafc" font-size="13" font-weight="600">Local filesystem</text><text x="195" y="563" fill="#94a3b8" font-size="10">pane source / destination</text><rect x="420" y="270" width="300" height="240" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="2"/><text x="570" y="320" fill="#f8fafc" font-size="15" font-weight="700">aws-tui process</text><text x="570" y="352" fill="#a7f3d0" font-size="11">Textual + VMx 3.1.0</text><text x="570" y="390" fill="#94a3b8" font-size="10">ConnectionResolver</text><text x="570" y="418" fill="#94a3b8" font-size="10">AwsSession client contexts</text><text x="570" y="446" fill="#94a3b8" font-size="10">S3 · EMR · Glue · Athena</text>
-<rect x="930" y="80" width="620" height="500" rx="12" fill="#171307" stroke="#fbbf24" stroke-width="2" stroke-dasharray="8,4"/><text x="955" y="112" fill="#fbbf24" font-size="14" font-weight="700" text-anchor="start">AWS ACCOUNTS / REGIONS</text><rect x="980" y="150" width="520" height="120" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="2"/><text x="1240" y="190" fill="#f8fafc" font-size="13" font-weight="600">Profile A · account / region A</text><text x="1240" y="220" fill="#fde68a" font-size="10">S3 · EMR Serverless · Glue · Athena</text><text x="1240" y="244" fill="#94a3b8" font-size="9">resources remain isolated by exact identity</text><rect x="980" y="390" width="520" height="120" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="2"/><text x="1240" y="430" fill="#f8fafc" font-size="13" font-weight="600">Profile B · account / region B</text><text x="1240" y="460" fill="#fde68a" font-size="10">independent catalogs, databases, runs, buckets</text><text x="1240" y="484" fill="#94a3b8" font-size="9">Shift+S rebuilds under this source</text><text x="955" y="620" fill="#a78bfa" font-size="14" font-weight="700" text-anchor="start">EXTERNAL S3-COMPATIBLE</text><rect x="980" y="630" width="520" height="120" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="2"/><text x="1240" y="670" fill="#f8fafc" font-size="13" font-weight="600">S3-compatible endpoint</text><text x="1240" y="700" fill="#c4b5fd" font-size="10">MinIO · R2 · B2 · custom TLS/path style</text><text x="1240" y="724" fill="#94a3b8" font-size="9">configured endpoint and credential reference</text></g></svg></section><section class="cards"><article class="card"><h2>Process boundary</h2><p>No server component: state and credentials remain on the user workstation.</p></article><article class="card"><h2>Request identity</h2><p>AWS requests use an explicit connection, profile, and region; S3-compatible requests use their configured endpoint and credential reference.</p></article><article class="card"><h2>Endpoint choice</h2><p>S3 panes may independently target AWS or configured compatible providers.</p></article></section></main></body></html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aws-tui Deployment and Trust Boundaries</title>
+  <style>
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Regular.ttf") format("truetype"); font-style: normal; font-weight: 400; }
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Bold.ttf") format("truetype"); font-style: normal; font-weight: 600 700; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px; background: #020617; color: #f8fafc; font-family: "Fira Code Embedded", monospace; }
+    main { width: min(1600px, 100%); margin: auto; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+    p { margin: 8px 0 0; color: #94a3b8; font-size: 14px; }
+    .frame { margin-top: 20px; padding: 16px; overflow-x: auto; border: 1px solid #1e293b; border-radius: 8px; background: #07101f; }
+    svg { display: block; width: 100%; min-width: 1120px; height: auto; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>aws-tui Deployment and Trust Boundaries</h1>
+  <p>Local state, credential resolution, exact AWS contexts, and optional S3-compatible endpoints</p>
+  <section class="frame">
+    <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+      <title id="title">aws-tui deployment and trust boundaries</title>
+      <desc id="desc">The local process reads application configuration, AWS profile metadata and credential sources, local files, and user input. It calls exact profile-scoped AWS contexts. S3-compatible requests use their configured endpoint and credential reference.</desc>
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
+        <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
+      </defs>
+      <rect width="1600" height="900" fill="#020617"/><rect width="1600" height="900" fill="url(#grid)"/>
+
+      <g fill="#07101f" stroke-width="2" stroke-dasharray="8 5">
+        <rect x="35" y="55" width="800" height="790" rx="10" stroke="#22d3ee"/>
+        <rect x="920" y="55" width="645" height="535" rx="10" stroke="#fbbf24" fill="#141107"/>
+        <rect x="920" y="625" width="645" height="220" rx="10" stroke="#a78bfa" fill="#100b1a"/>
+      </g>
+      <g font-family="Fira Code Embedded" font-size="12" font-weight="700" text-anchor="start">
+        <text x="58" y="84" fill="#22d3ee">USER WORKSTATION</text>
+        <text x="944" y="84" fill="#fbbf24">AWS ACCOUNT / REGION BOUNDARIES</text>
+        <text x="944" y="654" fill="#a78bfa">CONFIGURED S3-COMPATIBLE BOUNDARY</text>
+      </g>
+
+      <g fill="none" stroke-width="2" marker-end="url(#arrow)">
+        <path d="M320 180H370V320H430" stroke="#22d3ee"/>
+        <path d="M320 345H430" stroke="#fb7185"/>
+        <path d="M320 520H370V455H430" stroke="#fbbf24"/>
+        <path d="M320 705H380V570H430" stroke="#22d3ee"/>
+        <path d="M790 330H880V205H990" stroke="#fbbf24"/>
+        <path d="M790 445H990" stroke="#fbbf24"/>
+        <path d="M790 560H875V735H990" stroke="#a78bfa"/>
+      </g>
+
+      <g font-family="Fira Code Embedded" text-anchor="middle">
+        <g fill="#0f172a" stroke="#22d3ee" stroke-width="2">
+          <rect x="75" y="125" width="245" height="110" rx="5"/>
+          <rect x="75" y="650" width="245" height="110" rx="5"/>
+        </g>
+        <g fill="#0f172a" stroke="#fb7185" stroke-width="2"><rect x="75" y="290" width="245" height="110" rx="5"/></g>
+        <g fill="#0f172a" stroke="#fbbf24" stroke-width="2"><rect x="75" y="455" width="245" height="130" rx="5"/></g>
+        <g fill="#0f172a" stroke="#34d399" stroke-width="2"><rect x="430" y="245" width="360" height="390" rx="6"/></g>
+
+        <g fill="#f8fafc" font-size="12" font-weight="700">
+          <text x="197" y="165">Terminal user</text><text x="197" y="330">Application config</text>
+          <text x="197" y="495">AWS credential sources</text><text x="197" y="690">Local filesystem</text>
+          <text x="610" y="290" font-size="15">aws-tui process</text>
+        </g>
+        <g fill="#94a3b8" font-size="9.5">
+          <text x="197" y="191">keyboard · pointer · clipboard</text><text x="197" y="356">connection names · regions</text>
+          <text x="197" y="377">keychain references; legacy static readable</text>
+          <text x="197" y="521">AWS config / shared credentials</text><text x="197" y="542">environment · SSO cache · roles</text>
+          <text x="197" y="563">secrets stay in provider-owned stores</text><text x="197" y="716">pane source / destination</text>
+          <text x="610" y="325" fill="#a7f3d0" font-size="11">Textual 8.2.8 + VMx 3.23.0</text>
+          <text x="610" y="370">ConfigStore + KeychainBackend</text><text x="610" y="406">ConnectionResolver</text>
+          <text x="610" y="442">AwsSession client contexts</text><text x="610" y="478">service-owned S3 / EMR sessions</text>
+          <text x="610" y="514">S3 · EMR · Glue · Athena</text><text x="610" y="550">exact connection + region identity</text>
+          <text x="610" y="586">no server-side aws-tui component</text>
+        </g>
+
+        <g fill="#0f172a" stroke="#fbbf24" stroke-width="2">
+          <rect x="990" y="135" width="500" height="140" rx="5"/>
+          <rect x="990" y="375" width="500" height="140" rx="5"/>
+        </g>
+        <g fill="#f8fafc" font-size="13" font-weight="700">
+          <text x="1240" y="178">Profile A · account / region A</text><text x="1240" y="418">Profile B · account / region B</text>
+        </g>
+        <g fill="#fde68a" font-size="10">
+          <text x="1240" y="210">S3 · EMR Serverless · Glue · Athena</text><text x="1240" y="450">independent catalogs · runs · buckets</text>
+        </g>
+        <g fill="#94a3b8" font-size="9.5">
+          <text x="1240" y="237">SDK credential chain remains profile-scoped</text><text x="1240" y="477">Shift+S rebuilds under the selected identity</text>
+        </g>
+
+        <rect x="990" y="690" width="500" height="120" rx="5" fill="#0f172a" stroke="#a78bfa" stroke-width="2"/>
+        <text x="1240" y="730" fill="#f8fafc" font-size="13" font-weight="700">S3-compatible endpoint</text>
+        <text x="1240" y="758" fill="#c4b5fd" font-size="10">MinIO · R2 · B2 · custom TLS / path style</text>
+        <text x="1240" y="784" fill="#94a3b8" font-size="9.5">configured endpoint + credential reference</text>
+      </g>
+    </svg>
+  </section>
+</main>
+</body>
+</html>

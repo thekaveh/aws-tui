@@ -6,7 +6,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.filesystem import ProviderUnreachableError
+from aws_tui.domain.filesystem import ProviderError, ProviderUnreachableError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.jobs_vm import GlueJobsVM
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
@@ -41,6 +41,47 @@ async def test_jobs_pages_jobs_and_runs_for_selected_job() -> None:
     await vm.load_more_runs()
     assert len(vm.runs) == 2
     assert fake.run_requests[-1] == ("nightly", "1", ())
+
+
+@pytest.mark.asyncio
+async def test_job_pagers_reject_multi_token_cycles_before_mutation() -> None:
+    fake = seeded_glue()
+    lineage = {None: "A", "A": "B", "B": "A"}
+    original_jobs = fake.list_jobs_page
+    original_runs = fake.list_job_runs_page
+
+    async def jobs(*, start_token: str | None = None) -> tuple[list, str | None]:
+        rows, _ = await original_jobs(start_token=None)
+        return rows, lineage[start_token]
+
+    async def runs(
+        job_name: str,
+        *,
+        start_token: str | None = None,
+        states: tuple[str, ...] = (),
+    ) -> tuple[list, str | None]:
+        rows, _ = await original_runs(job_name, start_token=None, states=states)
+        return rows, lineage[start_token]
+
+    fake.list_jobs_page = jobs  # type: ignore[method-assign]
+    fake.list_job_runs_page = runs  # type: ignore[method-assign]
+    vm = make_jobs_vm(fake)
+    pagers = (
+        (vm._make_job_pager(), "job continuation"),
+        (vm._make_run_pager("nightly"), "job-run continuation"),
+    )
+    try:
+        for pager, message in pagers:
+            await pager.refresh_command.execute_async()
+            await pager.load_more_command.execute_async()
+            before = pager.items
+            with pytest.raises(ProviderError, match=message):
+                await pager.load_more_command.execute_async()
+            assert pager.items == before
+    finally:
+        for pager, _message in pagers:
+            pager.dispose()
+        vm.dispose()
 
 
 @pytest.mark.asyncio

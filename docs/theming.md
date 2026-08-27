@@ -84,9 +84,11 @@ built-in composition, so use a repository checkout to compose the raw
 built-in theme, then the shared operational layer, in that file:
 
 ```bash
+THEME_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/aws-tui/themes"
+mkdir -p "$THEME_DIR"
 cat src/aws_tui/ui/themes/carbon.tcss \
     src/aws_tui/ui/themes/operational-panes.tcss \
-    > <config-dir>/themes/midnight.tcss
+    > "$THEME_DIR/midnight.tcss"
 ```
 
 `operational-panes.tcss` retains the Glue and Athena borders and focus
@@ -141,7 +143,8 @@ find tests/snapshot/__snapshots__ -name '*.raw' | wc -l
 find tests/snapshot/__snapshots__ -mindepth 1 -maxdepth 1 -type d | wc -l
 ```
 
-Every new widget snapshot is paired with a content-presence guard test
-(per the PR #53 lesson). Updates:
+Every new widget snapshot is paired with a content-presence guard test so a
+visually plausible blank rendering cannot pass unnoticed. Updates:
 `uv run pytest tests/snapshot --snapshot-update`. Snapshots are
-CI-gated on Python 3.12 / Ubuntu to avoid tolerance flakes.
+CI-gated on Python 3.12 on Ubuntu and macOS to catch platform-specific
+rendering drift.

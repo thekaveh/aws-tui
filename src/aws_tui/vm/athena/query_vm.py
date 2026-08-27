@@ -429,9 +429,22 @@ class AthenaQueryVM:
             self._reset_execution_state()
             self._notify("context")
             self._execute_command.cancel()
-            await self._drain_execution_task()
-            await self._stop_pending_cleanup(report_error=False)
-            self._lifecycle_transition = False
+            cancelled = False
+            cleanup = asyncio.create_task(
+                self._finish_context_transition(),
+                name="athena-context-transition-cleanup",
+            )
+            try:
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                cleanup.result()
+            finally:
+                self._lifecycle_transition = False
+            if cancelled:
+                raise asyncio.CancelledError
 
     async def execute(self) -> None:
         if (
@@ -679,12 +692,19 @@ class AthenaQueryVM:
         for ref in tuple(self._pending_cleanup_refs.values()):
             await self._stop_retained_ref(ref, report_error=report_error)
 
+    async def _finish_context_transition(self) -> None:
+        await self._drain_execution_task()
+        await self._stop_pending_cleanup(report_error=False)
+
     async def _drain_execution_task(self) -> None:
         task = self._execution_task
-        if task is None or task is asyncio.current_task():
-            return
-        with suppress(asyncio.CancelledError):
-            await task
+        if task is not None and task is not asyncio.current_task():
+            with suppress(asyncio.CancelledError):
+                await task
+        # VMx 3.23 runs command delegates in an inner task. The delegate can
+        # finish before execute_async() clears command admission state.
+        while self._execute_command.is_executing:
+            await asyncio.sleep(0)
 
     async def _drain_submission_finalizers(self) -> None:
         while self._submission_finalizers:

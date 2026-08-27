@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from importlib.metadata import version
 
 import pytest
 
+from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 
 
 @pytest.mark.asyncio
-async def test_seed_token_pager_contract_matches_vmx_3_1_0() -> None:
+async def test_seed_token_pager_contract_matches_vmx_3_23() -> None:
     assert version("vmx").partition(".")[0] == "3"
     calls: list[str | None] = []
 
@@ -33,6 +35,20 @@ async def test_seed_token_pager_contract_matches_vmx_3_1_0() -> None:
     assert pager.items == ["first", "fetched"]
     assert pager.current_token is None
     assert not pager.has_more
+
+
+def test_seed_token_pager_restores_explicit_limit_state() -> None:
+    async def fetch(_token: str | None) -> tuple[list[str], str | None]:
+        return [], None
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch, max_items=2)
+
+    seed_token_pager(pager, ["first"], None, limit_reached=True)
+
+    assert pager.items == ["first"]
+    assert pager.current_token is None
+    assert not pager.has_more
+    assert pager.limit_reached
 
 
 @pytest.mark.asyncio
@@ -99,6 +115,28 @@ async def test_snapshot_token_pager_refresh_preserves_loaded_later_pages_for_unc
         "current_token",
         "has_more",
     ]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_token_pager_refresh_preserves_exact_cap_for_unchanged_prefix() -> None:
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token is None:
+            return ["first"], "next"
+        return ["second"], "more"
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch, max_items=2)
+    await pager.load_more_command.execute_async()
+    await pager.load_more_command.execute_async()
+
+    assert pager.items == ["first", "second"]
+    assert pager.limit_reached
+
+    await pager.refresh_command.execute_async()
+
+    assert pager.items == ["first", "second"]
+    assert pager.current_token is None
+    assert not pager.has_more
+    assert pager.limit_reached
 
 
 @pytest.mark.asyncio
@@ -240,6 +278,72 @@ async def test_snapshot_token_pager_restore_treats_snapshot_as_one_conservative_
     assert len(resets) == 1
 
 
+@pytest.mark.asyncio
+async def test_snapshot_token_pager_rejects_immediate_token_repeat_without_appending() -> None:
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token is None:
+            return ["first"], "repeat"
+        return ["duplicate"], "repeat"
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch)
+    await pager.load_more_command.execute_async()
+
+    with pytest.raises(ProviderError, match=r"repeated.*continuation token"):
+        await pager.load_more_command.execute_async()
+
+    assert pager.items == ["first"]
+    assert pager.current_token is None
+    assert not pager.has_more
+
+
+@pytest.mark.asyncio
+async def test_snapshot_token_pager_rejects_multi_page_token_cycle_without_appending() -> None:
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token is None:
+            return ["first"], "page-a"
+        if token == "page-a":
+            return ["second"], "page-b"
+        if token == "page-b":
+            return ["duplicate"], "page-a"
+        raise AssertionError(f"unexpected token: {token}")
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch)
+    await pager.load_more_command.execute_async()
+    await pager.load_more_command.execute_async()
+
+    with pytest.raises(ProviderError, match=r"repeated.*continuation token"):
+        await pager.load_more_command.execute_async()
+
+    assert pager.items == ["first", "second"]
+    assert pager.current_token is None
+    assert not pager.has_more
+
+
+@pytest.mark.asyncio
+async def test_snapshot_token_pager_rejects_cumulative_items_beyond_limit() -> None:
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token is None:
+            return ["first"], "next"
+        return ["second", "third"], "more"
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch, max_items=2)
+    await pager.load_more_command.execute_async()
+
+    with pytest.raises(ProviderError, match="collection safety limit"):
+        await pager.load_more_command.execute_async()
+
+    assert pager.items == ["first"]
+    assert pager.current_token is None
+    assert not pager.has_more
+
+    await pager.refresh_command.execute_async()
+
+    assert pager.items == ["first"]
+    assert pager.current_token is None
+    assert not pager.has_more
+    assert pager.limit_reached
+
+
 def test_seed_token_pager_uses_aws_tui_owned_public_restore_boundary() -> None:
     class IncompatiblePager:
         def restore(self, items: object, next_token: object) -> None:
@@ -247,3 +351,28 @@ def test_seed_token_pager_uses_aws_tui_owned_public_restore_boundary() -> None:
 
     with pytest.raises(TypeError, match="SnapshotTokenPager"):
         seed_token_pager(IncompatiblePager(), ["value"], None)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_refresh_retires_an_in_flight_continuation_page() -> None:
+    continuation_started = asyncio.Event()
+    release_continuation = asyncio.Event()
+
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token == "next":
+            continuation_started.set()
+            await release_continuation.wait()
+            return ["stale-page"], None
+        return ["fresh-page"], "fresh-next"
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch)
+    seed_token_pager(pager, ["seed"], "next")
+    continuation = asyncio.create_task(pager.load_more_command.execute_async())
+    await continuation_started.wait()
+
+    await pager.refresh_command.execute_async()
+    release_continuation.set()
+    await continuation
+
+    assert pager.items == ["fresh-page"]
+    assert pager.current_token == "fresh-next"

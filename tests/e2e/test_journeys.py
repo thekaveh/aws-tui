@@ -2,7 +2,7 @@
 
 Canonical user journeys spanning full ``App.run_test()`` Pilot flows and
 lower-level orchestration checks. Real provider contracts live in the
-separate MinIO integration tier so this suite remains deterministic and
+separate S3Mock integration tier so this suite remains deterministic and
 Docker-free.
 
 The journeys are intentionally pragmatic — they assert the journey hits
@@ -26,6 +26,8 @@ from textual.widgets import Button, Static
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.demo.in_memory_athena import InMemoryAthena
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import (
     FileSystemProvider,
@@ -42,8 +44,6 @@ from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.e2e.conftest import _AWS_CREDENTIAL_ENV_VARS
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -186,7 +186,7 @@ async def test_journey_2_copy_object_to_local(app_context: AppContext, tmp_path:
     dual.dispose()
 
 
-# ── Journey 3: switch AWS -> MinIO mid-session (requires Docker) ────────────
+# ── Journey 3: switch AWS -> S3-compatible source mid-session ──────────────
 
 
 @pytest.mark.e2e
@@ -194,8 +194,8 @@ async def test_journey_2_copy_object_to_local(app_context: AppContext, tmp_path:
 async def test_journey_3_switch_connection(app_context: AppContext) -> None:
     """Connection switch fires the right hub message + tears down old content.
 
-    A full AWS->MinIO swap with active transfers needs Docker; we cover the
-    in-process orchestration only here so the suite stays Docker-free.
+    A full provider swap with active transfers belongs to the S3Mock tier; this
+    test covers in-process connection orchestration and stays Docker-free.
     """
     aws = _aws_connection()
     minio = Connection(
@@ -213,17 +213,19 @@ async def test_journey_3_switch_connection(app_context: AppContext) -> None:
     # First, settle on AWS.
     await app_context.root_vm.switch_connection_with(aws, TokenState.CONNECTED)
 
-    # Then switch to MinIO. The ContentHostVM should go through dispose-then-construct.
+    # Then switch to a configured S3-compatible source.
     await app_context.root_vm.switch_connection_with(minio, TokenState.MISSING)
     assert app_context.root_vm.content_host.current_id is None
 
 
-# ── Journey 4: resume from journal ──────────────────────────────────────────
+# ── Journey 4: detect an interrupted journal ────────────────────────────────
 
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
-async def test_journey_4_resume_from_journal(app_context: AppContext, tmp_path: Path) -> None:
+async def test_journey_4_detect_interrupted_journal(
+    app_context: AppContext, tmp_path: Path
+) -> None:
     """Write a half-finished journal entry, scan, assert it's detected."""
     journal = app_context.transfer_journal
     # Start a new transfer

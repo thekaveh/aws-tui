@@ -83,10 +83,14 @@ def test_log_filter_with_swaps_patterns() -> None:
 class _StubBody:
     def __init__(self, payload: bytes) -> None:
         self._payload = payload
+        self.closed = False
 
     async def read(self, n: int) -> bytes:
         out, self._payload = self._payload[:n], self._payload[n:]
         return out
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _RaisingBody:
@@ -99,12 +103,15 @@ class _RaisingBody:
 
 class _StubS3:
     def __init__(self, body: bytes) -> None:
-        self.get_object = AsyncMock(return_value={"Body": _StubBody(body)})
+        self.body = _StubBody(body)
+        self.get_object = AsyncMock(return_value={"Body": self.body})
+        self.exited = False
 
     async def __aenter__(self) -> _StubS3:
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        self.exited = True
         return None
 
 
@@ -231,6 +238,89 @@ async def test_list_log_files_supports_retries_rotation_and_hive_workers() -> No
 
 
 @pytest.mark.asyncio
+async def test_list_log_files_classifies_only_the_run_relative_suffix() -> None:
+    from aws_tui.domain.emr_logs import list_log_files
+
+    run_prefix = "SPARK_DRIVER/SPARK_EXECUTOR/team/applications/a/jobs/r"
+    fake_keys = [
+        (f"{run_prefix}/SPARK_EXECUTOR/7/stdout.gz", 10),
+        (f"{run_prefix}/TEZ_TASK/4/stderr.gz", 20),
+    ]
+
+    files = await list_log_files(  # type: ignore[arg-type]
+        session=_StubSessionListObjectsV2(_StubS3ListObjectsV2(fake_keys)),
+        region_name="us-east-1",
+        bucket="b",
+        run_prefix=run_prefix,
+    )
+
+    assert [(file.kind, file.key) for file in files] == [
+        (LogFileKind.EXECUTOR_STDOUT, fake_keys[0][0]),
+        (LogFileKind.TEZ_TASK_STDERR, fake_keys[1][0]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_rejects_pagination_beyond_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_logs
+    from aws_tui.domain.filesystem import ProviderError
+
+    class _PagedS3(_StubS3ListObjectsV2):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.calls = 0
+
+        async def list_objects_v2(self, **kwargs: object) -> dict[str, object]:
+            self.calls += 1
+            if self.calls > 1:
+                return {"Contents": [], "IsTruncated": False}
+            return {
+                "Contents": [],
+                "IsTruncated": True,
+                "NextContinuationToken": f"page-{self.calls + 1}",
+            }
+
+    stub = _PagedS3()
+    monkeypatch.setattr(emr_logs, "_MAX_LOG_DISCOVERY_PAGES", 1, raising=False)
+
+    with pytest.raises(ProviderError, match="pagination safety limit"):
+        await emr_logs.list_log_files(  # type: ignore[arg-type]
+            session=_StubSessionListObjectsV2(stub),
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+    assert stub.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_rejects_more_files_than_ui_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_logs
+    from aws_tui.domain.filesystem import ProviderError
+
+    monkeypatch.setattr(emr_logs, "_MAX_LOG_DISCOVERY_FILES", 1, raising=False)
+    stub = _StubS3ListObjectsV2(
+        [
+            ("logs/applications/a/jobs/r/SPARK_DRIVER/stdout.gz", 10),
+            ("logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz", 20),
+        ]
+    )
+
+    with pytest.raises(ProviderError, match="file safety limit"):
+        await emr_logs.list_log_files(  # type: ignore[arg-type]
+            session=_StubSessionListObjectsV2(stub),
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+
+@pytest.mark.asyncio
 async def test_stream_log_yields_matched_lines() -> None:
     from aws_tui.domain.emr_logs import (
         DEFAULT_LOG_FILTER,
@@ -325,6 +415,28 @@ async def test_stream_log_exact_compressed_limit_is_not_truncated() -> None:
 
     assert chunks[-1].lines == ("ERROR complete",)
     assert chunks[-1].truncated is False
+
+
+@pytest.mark.asyncio
+async def test_stream_log_maps_corrupt_gzip_and_closes_resources() -> None:
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, LogFile, stream_log
+    from aws_tui.domain.filesystem import ValidationError
+
+    stub = _StubS3(b"not-a-gzip-stream")
+
+    with pytest.raises(ValidationError, match="corrupt EMR log gzip stream"):
+        async for _chunk in stream_log(
+            session=_StubSession(stub),  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=LogFile(key="corrupt.gz", kind=LogFileKind.DRIVER_STDERR),
+            bucket="b",
+            max_bytes=1024,
+            filter_=DEFAULT_LOG_FILTER,
+        ):
+            pass
+
+    assert stub.body.closed
+    assert stub.exited
 
 
 @pytest.mark.asyncio

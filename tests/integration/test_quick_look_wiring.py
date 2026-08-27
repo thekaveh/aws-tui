@@ -8,11 +8,11 @@ from collections.abc import AsyncIterator
 import pytest
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.ui.widgets.pane import EntryRow
 from aws_tui.ui.widgets.quick_look import QuickLook
 from tests.integration.conftest import AppContextBuilder
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:

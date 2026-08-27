@@ -1,5 +1,21 @@
 $error: $danger;
 
+/* Shared help overlay surface */
+HelpModal > #help-frame {
+    color: $text;
+    background: $bg-elev;
+    border: round $accent;
+}
+HelpModal #help-title,
+HelpModal .help-section {
+    color: $accent;
+}
+HelpModal #help-subtitle,
+HelpModal .help-dim,
+HelpModal #help-footer {
+    color: $text-muted;
+}
+
 /* Shared service context picker borders */
 ContextPicker {
     border: solid $rule-dim;

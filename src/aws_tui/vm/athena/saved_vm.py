@@ -33,12 +33,17 @@ from aws_tui.vm.athena._domain_validation import (
     valid_prepared_statement_summary,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena._pager_compat import (
+    PagerCollectionLimitError,
+    SnapshotTokenPager,
+    seed_token_pager,
+)
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _SAVED_ERROR = "Athena saved query request failed"
 _PREPARED_ERROR = "Athena prepared statement request failed"
+_MAX_SAVED_ITEMS = 1_000
 
 T = TypeVar("T")
 
@@ -66,6 +71,8 @@ class AthenaSavedSnapshot:
     named_error_text: str | None = field(repr=False)
     prepared_error_text: str | None = field(repr=False)
     detail_error_text: str | None = field(repr=False)
+    named_limit_reached: bool = field(default=False, repr=False)
+    prepared_limit_reached: bool = field(default=False, repr=False)
 
 
 @dataclass(eq=False)
@@ -113,6 +120,8 @@ class AthenaSavedVM:
         self._detail_error_text: str | None = None
         self._is_loading_more_named_queries = False
         self._is_loading_more_prepared_statements = False
+        self._loading_more_named_worker: _SavedWorker[NamedQuerySummary] | None = None
+        self._loading_more_prepared_worker: _SavedWorker[PreparedStatementSummary] | None = None
         self._detail_tasks: set[asyncio.Task[Any]] = set()
         self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
@@ -143,11 +152,19 @@ class AthenaSavedVM:
 
     @property
     def has_more_named_queries(self) -> bool:
-        return bool(self._workgroup) and self._named_pager.current_token is not None
+        return bool(self._workgroup) and self._named_pager.has_more
 
     @property
     def has_more_prepared_statements(self) -> bool:
-        return bool(self._workgroup) and self._prepared_pager.current_token is not None
+        return bool(self._workgroup) and self._prepared_pager.has_more
+
+    @property
+    def named_limit_reached(self) -> bool:
+        return self._named_pager.limit_reached
+
+    @property
+    def prepared_limit_reached(self) -> bool:
+        return self._prepared_pager.limit_reached
 
     @property
     def selected_kind(self) -> SavedQueryKind | None:
@@ -253,20 +270,20 @@ class AthenaSavedVM:
     async def load_more_named_queries(self) -> None:
         worker = self._named_worker
         if self._can_load_more_named(worker):
-            self._set_loading_more_named(True)
+            self._begin_loading_more_named(worker)
             try:
                 await self._run_named_pager(worker, refresh=False)
             finally:
-                self._set_loading_more_named(False)
+                self._finish_loading_more_named(worker)
 
     async def load_more_prepared_statements(self) -> None:
         worker = self._prepared_worker
         if self._can_load_more_prepared(worker):
-            self._set_loading_more_prepared(True)
+            self._begin_loading_more_prepared(worker)
             try:
                 await self._run_prepared_pager(worker, refresh=False)
             finally:
-                self._set_loading_more_prepared(False)
+                self._finish_loading_more_prepared(worker)
 
     async def select_named_query(self, query_id: str) -> None:
         if self._disposed or self._shutdown_started:
@@ -398,6 +415,8 @@ class AthenaSavedVM:
             named_error_text=self._named_error_text,
             prepared_error_text=self._prepared_error_text,
             detail_error_text=self._detail_error_text,
+            named_limit_reached=self._named_pager.limit_reached,
+            prepared_limit_reached=self._prepared_pager.limit_reached,
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena saved query snapshot is invalid")
@@ -422,11 +441,17 @@ class AthenaSavedVM:
         named.named_query_details.update(
             {detail.query_id: detail for detail in snapshot.named_query_details}
         )
-        seed_token_pager(named.pager, snapshot.named_queries, snapshot.named_next_token)
+        seed_token_pager(
+            named.pager,
+            snapshot.named_queries,
+            snapshot.named_next_token,
+            limit_reached=snapshot.named_limit_reached,
+        )
         seed_token_pager(
             prepared.pager,
             snapshot.prepared_statements,
             snapshot.prepared_next_token,
+            limit_reached=snapshot.prepared_limit_reached,
         )
         self._selected_kind = snapshot.selected_kind
         self._selected_query_id = snapshot.selected_query_id
@@ -452,8 +477,14 @@ class AthenaSavedVM:
             or type(snapshot.named_queries) is not tuple
             or type(snapshot.named_query_details) is not tuple
             or type(snapshot.prepared_statements) is not tuple
+            or len(snapshot.named_queries) > _MAX_SAVED_ITEMS
+            or len(snapshot.prepared_statements) > _MAX_SAVED_ITEMS
             or not optional_non_empty_exact_string(snapshot.named_next_token)
             or not optional_non_empty_exact_string(snapshot.prepared_next_token)
+            or type(snapshot.named_limit_reached) is not bool
+            or type(snapshot.prepared_limit_reached) is not bool
+            or (snapshot.named_limit_reached and snapshot.named_next_token is not None)
+            or (snapshot.prepared_limit_reached and snapshot.prepared_next_token is not None)
             or (
                 snapshot.selected_kind is not None
                 and type(snapshot.selected_kind) is not SavedQueryKind
@@ -650,6 +681,20 @@ class AthenaSavedVM:
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
+        except PagerCollectionLimitError:
+            if self._is_current_named(worker):
+                accepted_ids = {row.query_id for row in worker.pager.items}
+                worker.named_query_details = {
+                    query_id: detail
+                    for query_id, detail in worker.named_query_details.items()
+                    if query_id in accepted_ids
+                }
+                self._named_error_text = None
+                self._notify("named_queries")
+                self._notify("has_more_named_queries")
+                self._notify("named_error_text")
+                self._set_named_state(PaneState.IDLE if self.named_queries else PaneState.EMPTY)
+            return
         except ProviderError as exc:
             if self._is_current_named(worker):
                 self._named_state, self._named_error_text = map_provider_error(
@@ -689,6 +734,16 @@ class AthenaSavedVM:
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
+        except PagerCollectionLimitError:
+            if self._is_current_prepared(worker):
+                self._prepared_error_text = None
+                self._notify("prepared_statements")
+                self._notify("has_more_prepared_statements")
+                self._notify("prepared_error_text")
+                self._set_prepared_state(
+                    PaneState.IDLE if self.prepared_statements else PaneState.EMPTY
+                )
+            return
         except ProviderError as exc:
             if self._is_current_prepared(worker):
                 self._prepared_state, self._prepared_error_text = map_provider_error(
@@ -751,7 +806,7 @@ class AthenaSavedVM:
             worker.named_query_details.update(by_id)
             return [_named_query_summary(by_id[query_id]) for query_id in ids], next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_SAVED_ITEMS)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more_named(worker))
@@ -784,7 +839,7 @@ class AthenaSavedVM:
                 return [], None
             return rows, next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_SAVED_ITEMS)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more_prepared(worker))
@@ -797,6 +852,7 @@ class AthenaSavedVM:
 
     def _replace_named_worker(self) -> _SavedWorker[NamedQuerySummary]:
         old_worker = self._named_worker
+        self._finish_loading_more_named(old_worker)
         worker = self._make_named_worker()
         self._named_worker = worker
         self._named_pager = worker.pager
@@ -805,6 +861,7 @@ class AthenaSavedVM:
 
     def _replace_prepared_worker(self) -> _SavedWorker[PreparedStatementSummary]:
         old_worker = self._prepared_worker
+        self._finish_loading_more_prepared(old_worker)
         worker = self._make_prepared_worker()
         self._prepared_worker = worker
         self._prepared_pager = worker.pager
@@ -866,20 +923,14 @@ class AthenaSavedVM:
                 task.cancel()
 
     def _can_load_more_named(self, worker: _SavedWorker[NamedQuerySummary]) -> bool:
-        return (
-            self._is_current_named(worker)
-            and bool(worker.workgroup)
-            and worker.pager.current_token is not None
-        )
+        return self._is_current_named(worker) and bool(worker.workgroup) and worker.pager.has_more
 
     def _can_load_more_prepared(
         self,
         worker: _SavedWorker[PreparedStatementSummary],
     ) -> bool:
         return (
-            self._is_current_prepared(worker)
-            and bool(worker.workgroup)
-            and worker.pager.current_token is not None
+            self._is_current_prepared(worker) and bool(worker.workgroup) and worker.pager.has_more
         )
 
     def _is_current_named(
@@ -975,17 +1026,45 @@ class AthenaSavedVM:
         self._prepared_state = state
         self._notify("prepared_state")
 
-    def _set_loading_more_named(self, value: bool) -> None:
-        if self._is_loading_more_named_queries == value:
-            return
-        self._is_loading_more_named_queries = value
-        self._notify("is_loading_more_named_queries")
+    def _begin_loading_more_named(
+        self,
+        worker: _SavedWorker[NamedQuerySummary],
+    ) -> None:
+        self._loading_more_named_worker = worker
+        if not self._is_loading_more_named_queries:
+            self._is_loading_more_named_queries = True
+            self._notify("is_loading_more_named_queries")
 
-    def _set_loading_more_prepared(self, value: bool) -> None:
-        if self._is_loading_more_prepared_statements == value:
+    def _finish_loading_more_named(
+        self,
+        worker: _SavedWorker[NamedQuerySummary],
+    ) -> None:
+        if self._loading_more_named_worker is not worker:
             return
-        self._is_loading_more_prepared_statements = value
-        self._notify("is_loading_more_prepared_statements")
+        self._loading_more_named_worker = None
+        if self._is_loading_more_named_queries:
+            self._is_loading_more_named_queries = False
+            self._notify("is_loading_more_named_queries")
+
+    def _begin_loading_more_prepared(
+        self,
+        worker: _SavedWorker[PreparedStatementSummary],
+    ) -> None:
+        self._loading_more_prepared_worker = worker
+        if not self._is_loading_more_prepared_statements:
+            self._is_loading_more_prepared_statements = True
+            self._notify("is_loading_more_prepared_statements")
+
+    def _finish_loading_more_prepared(
+        self,
+        worker: _SavedWorker[PreparedStatementSummary],
+    ) -> None:
+        if self._loading_more_prepared_worker is not worker:
+            return
+        self._loading_more_prepared_worker = None
+        if self._is_loading_more_prepared_statements:
+            self._is_loading_more_prepared_statements = False
+            self._notify("is_loading_more_prepared_statements")
 
     def _notify(self, property_name: str) -> None:
         if self._disposed:

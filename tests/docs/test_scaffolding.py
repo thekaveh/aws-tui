@@ -20,6 +20,7 @@ ATHENA_BOTO_OPERATIONS = (
     "list_table_metadata",
     "list_query_executions",
     "get_query_execution",
+    "batch_get_query_execution",
     "get_query_runtime_statistics",
     "start_query_execution",
     "stop_query_execution",
@@ -165,7 +166,7 @@ def test_athena_operation_ledger_and_minimum_iam_are_exact() -> None:
 
     operation_block = _fenced_block_after(
         ledger,
-        "Exact boto operation ledger (15)",
+        "Exact boto operation ledger (16)",
         "text",
     )
     assert tuple(operation_block.splitlines()) == ATHENA_BOTO_OPERATIONS
@@ -407,6 +408,7 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
     architecture = _read("docs/architecture.md")
     diagram = _read("docs/diagrams/architecture.html")
     deployment = _read("docs/diagrams/deployment.html")
+    lifecycle = _read("docs/diagrams/lifecycle.html")
     public_docs = "\n".join(
         _read(path)
         for path in (
@@ -433,6 +435,19 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
     assert "await hosted VM shutdown" in diagram
     assert "then dispose outgoing VM" in diagram
     assert "exact connection + region" in diagram
+    assert "Prior content stays authoritative" in lifecycle
+    assert "Construct candidate tree" in lifecycle
+    assert "Drain + adopt candidate" in lifecycle
+    assert "shutdown · dispose" in lifecycle
+    assert "shutdown · destruct · dispose" not in lifecycle
+    assert "Dispose subscriptions + VM tree" in lifecycle
+    assert "Flush + close logs" in lifecycle
+    assert lifecycle.index("Dispose subscriptions + VM tree") < lifecycle.index(
+        "Flush + close logs"
+    )
+    assert "Root clears content" not in lifecycle
+    assert "old tree drains before rebuild" not in lifecycle
+    assert "Rebuild prior service" not in lifecycle
     assert "DualPane" in diagram
     assert "service_view_factory.py" in diagram
     assert "S3Page" not in diagram
@@ -452,6 +467,14 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         "AWS Glue, Athena, S3, and Lake Formation boundary",
     ):
         assert phrase in alt_text
+    for nonvisual_detail in (
+        "ContextPicker",
+        "ServiceTabStrip",
+        "CopyTableReferenceRequest",
+        "TableClipboardVM",
+        "navigation messages",
+    ):
+        assert nonvisual_detail not in alt_text
     assert "hosted VM shutdown is awaited before disposal" in _squash(architecture)
     assert "Domain adapters perform the runtime AWS and filesystem I/O" in _squash(architecture)
     assert (
@@ -484,6 +507,24 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         "same-source insert",
     ):
         assert diagram_claim in diagram
+
+
+def test_service_guide_uses_current_test_layout_and_avoids_pr_chronology() -> None:
+    services = _read("docs/adding-a-service.md")
+
+    assert "tests/integration/services/<name>/" not in services
+    assert "tests/integration/test_<name>_*.py" in services
+    assert "full icon saga" not in services
+    assert "PR #76" not in services
+
+
+def test_readme_indexes_every_internal_superpowers_note() -> None:
+    readme = _read("README.md")
+    notes = sorted((REPO_ROOT / "docs/superpowers/notes").glob("*.md"))
+
+    assert notes
+    for note in notes:
+        assert note.relative_to(REPO_ROOT).as_posix() in readme
 
 
 def test_glue_and_athena_palette_only_actions_are_not_default_bindings() -> None:

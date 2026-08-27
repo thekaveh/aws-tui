@@ -5,17 +5,20 @@ from typing import Any
 
 import reactivex as rx
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
-from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueCrawlerDetail, GlueCrawlerSummary
 from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
+from aws_tui.vm.paging import BoundedTokenPagedComposition
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
+
+_MAX_CRAWLER_ITEMS = 1_000
 
 
 class GlueCrawlersVM:
@@ -73,7 +76,11 @@ class GlueCrawlersVM:
 
     @property
     def has_more_crawlers(self) -> bool:
-        return self._crawler_pager.current_token is not None
+        return self._crawler_pager.has_more
+
+    @property
+    def limit_reached(self) -> bool:
+        return self._crawler_pager.limit_reached
 
     @property
     def state(self) -> PaneState:
@@ -241,7 +248,9 @@ class GlueCrawlersVM:
         self._notify("has_more_crawlers")
         self._set_state(PaneState.IDLE if self.crawlers else PaneState.EMPTY)
 
-    def _make_crawler_pager(self) -> TokenPagedComposition[GlueCrawlerSummary, str]:
+    def _make_crawler_pager(
+        self,
+    ) -> BoundedTokenPagedComposition[GlueCrawlerSummary, str]:
         generation = self._crawler_generation
         state_filter = self._state_filter
 
@@ -256,7 +265,13 @@ class GlueCrawlersVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return BoundedTokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a crawler continuation token",
+            ),
+            max_items=_MAX_CRAWLER_ITEMS,
+        )
 
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:

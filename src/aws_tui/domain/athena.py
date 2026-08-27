@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,6 +12,7 @@ from typing import Any, NoReturn
 import botocore.exceptions
 
 from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
+from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
 from aws_tui.domain.data_catalog import (
     DatabaseRef,
     DatabaseSummary,
@@ -48,6 +50,7 @@ from aws_tui.infra.redaction import redact_text
 _PAGE_SIZE = 50
 _RESULT_PAGE_SIZE = 1000
 _NAMED_QUERY_BATCH_SIZE = 50
+_MAX_RETIRED_APP_STARTED_QUERIES = 1_024
 _TERMINAL_QUERY_STATES = frozenset(
     {
         QueryState.SUCCEEDED,
@@ -109,13 +112,7 @@ _VALIDATION_CODES = frozenset(
         "ValidationException",
     }
 )
-_TRANSPORT_EXCEPTIONS = (
-    botocore.exceptions.EndpointConnectionError,
-    botocore.exceptions.ConnectTimeoutError,
-    botocore.exceptions.ReadTimeoutError,
-    botocore.exceptions.ConnectionClosedError,
-    botocore.exceptions.ConnectionError,
-)
+_TRANSPORT_EXCEPTIONS = AWS_TRANSPORT_EXCEPTIONS
 
 
 def map_athena_error(exc: BaseException) -> ProviderError | None:
@@ -223,6 +220,7 @@ class AthenaClient:
         self._app_started_active_queries: set[str] = set()
         self._app_started_query_ids_by_token: dict[str, str] = {}
         self._retired_app_started_queries: set[str] = set()
+        self._retired_app_started_query_order: deque[str] = deque()
         self._stop_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def list_workgroups_page(
@@ -482,6 +480,50 @@ class AthenaClient:
                 sensitive_values=(execution_id,),
             )
 
+    async def get_query_executions(
+        self,
+        execution_ids: Sequence[str],
+    ) -> tuple[QueryExecutionDetail, ...]:
+        """Hydrate one history page with Athena's batch operation."""
+        if not execution_ids:
+            return ()
+        if len(execution_ids) > _PAGE_SIZE:
+            raise ValidationError(f"Athena history batches support at most {_PAGE_SIZE} ids")
+        if len(set(execution_ids)) != len(execution_ids):
+            raise ValidationError("Athena history batch ids must be unique")
+        try:
+            requested = list(execution_ids)
+            async with await self._aws_session.client(
+                self._connection,
+                "athena",
+            ) as client:
+                response = await client.batch_get_query_execution(
+                    QueryExecutionIds=requested,
+                )
+            unprocessed_error = _unprocessed_query_execution_error(
+                response,
+                sensitive_values=requested,
+            )
+            if unprocessed_error is not None:
+                raise unprocessed_error
+            details = [
+                self._map_query_execution(item)
+                for item in _response_items(response, "QueryExecutions")
+            ]
+            by_id = {detail.summary.ref.execution_id: detail for detail in details}
+            if len(by_id) != len(details) or set(by_id) != set(requested):
+                raise ValueError("query execution batch identity mismatch")
+            ordered = tuple(by_id[execution_id] for execution_id in requested)
+            for detail in ordered:
+                if detail.summary.state in _TERMINAL_QUERY_STATES:
+                    self._retire_app_started_query(detail.summary.ref.execution_id)
+            return ordered
+        except Exception as exc:
+            _raise_mapped_athena_error(
+                exc,
+                sensitive_values=tuple(execution_ids),
+            )
+
     async def get_query_runtime_statistics(
         self,
         execution_id: str,
@@ -643,8 +685,21 @@ class AthenaClient:
             del self._stop_tasks[execution_id]
 
     def _retire_app_started_query(self, execution_id: str) -> None:
+        owned = (
+            execution_id in self._app_started_active_queries
+            or execution_id in self._stop_tasks
+            or execution_id in self._retired_app_started_queries
+            or execution_id in self._app_started_query_ids_by_token.values()
+        )
+        if not owned:
+            return
         self._app_started_active_queries.discard(execution_id)
-        self._retired_app_started_queries.add(execution_id)
+        if execution_id not in self._retired_app_started_queries:
+            self._retired_app_started_queries.add(execution_id)
+            self._retired_app_started_query_order.append(execution_id)
+            while len(self._retired_app_started_query_order) > _MAX_RETIRED_APP_STARTED_QUERIES:
+                expired_id = self._retired_app_started_query_order.popleft()
+                self._retired_app_started_queries.discard(expired_id)
         retired_tokens = [
             token
             for token, token_execution_id in self._app_started_query_ids_by_token.items()
@@ -980,6 +1035,24 @@ def _unprocessed_named_query_error(
     message = _sanitize_message(
         _optional_string(first, "ErrorMessage")
         or "Athena could not process one or more named queries",
+        sensitive_values,
+    )
+    return _provider_error_for_code(code, message)
+
+
+def _unprocessed_query_execution_error(
+    response: object,
+    *,
+    sensitive_values: Sequence[str],
+) -> ProviderError | None:
+    unprocessed = _response_items(response, "UnprocessedQueryExecutionIds")
+    if not unprocessed:
+        return None
+    first = unprocessed[0]
+    code = _optional_string(first, "ErrorCode") or ""
+    message = _sanitize_message(
+        _optional_string(first, "ErrorMessage")
+        or "Athena could not process one or more query executions",
         sensitive_values,
     )
     return _provider_error_for_code(code, message)

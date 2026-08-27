@@ -17,6 +17,7 @@ the async ``provider.list()`` call. Subscribers observe via
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -63,8 +64,7 @@ class PaneState(StrEnum):
     """Render state surfaced by ``PaneViewModel`` per spec §7.7.
 
     State entry conditions (single source of truth for the state
-    machine — keep in sync with :meth:`PaneVM._reload` and
-    :meth:`PaneVM.set_auth_required`):
+    machine — keep in sync with :meth:`PaneVM._reload`):
 
     - ``IDLE`` — Entries available (success path with non-empty listing,
       or initial construction before the first reload).
@@ -74,9 +74,7 @@ class PaneState(StrEnum):
       root path (treated as an empty bucket / mount point). No
       ``_error_text`` is set on the EMPTY-via-NotFoundError path because
       the user-facing copy is just "empty", not an error.
-    - ``AUTH_REQUIRED`` — ``AuthRequiredError`` during ``list()``, or
-      injected externally by ``RootVM`` after it observes an
-      ``AuthExpiredMessage``.
+    - ``AUTH_REQUIRED`` — ``AuthRequiredError`` during ``list()``.
     - ``FORBIDDEN`` — ``PermissionDeniedError`` during ``list()``.
     - ``UNREACHABLE`` — ``ProviderUnreachableError`` during ``list()``.
     - ``ERROR`` — Generic ``ProviderError``, OR ``NotFoundError`` on a
@@ -737,15 +735,9 @@ class PaneVM:
         with zero diagnostic. The ``finally`` reload is guaranteed
         so the user always sees the post-deletion truth.
 
-        NOTE on outer-worker cancellation: if the caller's worker is
-        cancelled, the inline await below raises CancelledError at
-        the first internal await (after ``_reload`` synchronously
-        flipped state to LOADING), and the pane is briefly stranded
-        on LOADING. This is the documented trade-off for the
-        synchronous post-condition; tests + UI callers depend on
-        ``await delete_marked()`` returning AFTER the reload has
-        repopulated entries. ``r`` re-runs the reload manually on
-        the rare cancel-mid-finally path."""
+        Cancellation is retained while the final reload is shielded
+        and drained. Callers still receive ``CancelledError``, but the
+        pane never remains stranded in ``LOADING``."""
         targets = [e.entry.name for e in self.marked_entries]
         if not targets:
             return
@@ -757,7 +749,26 @@ class PaneVM:
                 except (OSError, ProviderError) as exc:
                     failures.append((name, exc))
         finally:
-            await self._reload()
+            reload_task = asyncio.create_task(self._reload())
+            cancellation: asyncio.CancelledError | None = None
+            while not reload_task.done():
+                try:
+                    await asyncio.shield(reload_task)
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                except BaseException:
+                    break
+            try:
+                reload_task.result()
+            except BaseException as exc:
+                if cancellation is not None:
+                    cancellation.add_note(
+                        f"pane reload failed during cancellation: {type(exc).__name__}: {exc}"
+                    )
+                    raise cancellation from exc
+                raise
+            if cancellation is not None:
+                raise cancellation
         if failures:
             first_name, first_exc = failures[0]
             if len(failures) == 1:
@@ -783,12 +794,6 @@ class PaneVM:
         new_path = self._path.join(new_name)
         await self._provider.rename(old_path, new_path)
         await self._reload()
-
-    # ── External error injection ────────────────────────────────────────────
-
-    def set_auth_required(self) -> None:
-        """Called by ``RootVM`` after observing ``AuthExpiredMessage``."""
-        self._set_state(PaneState.AUTH_REQUIRED)
 
     # ── Internal: listing & state ───────────────────────────────────────────
 

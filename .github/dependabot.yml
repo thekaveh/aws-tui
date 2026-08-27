@@ -39,7 +39,7 @@ updates:
     open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
     target-branch: develop
-  # Tracks bumps for the local-dev MinIO container declared in
+  # Tracks bumps for the local-dev S3Mock container declared in
   # scripts/test-services/s3/docker-compose.yml. Keeps the supply-
   # chain-reproducibility pin (no ``:latest``) maintained without
   # manual upgrades.
@@ -54,10 +54,7 @@ updates:
   # Tracks the pinned hook versions in ``.pre-commit-config.yaml``
   # (pre-commit-hooks, astral-sh/ruff-pre-commit, ComPWA/taplo-pre-commit).
   # Without this entry the pinned ``rev:`` values drift behind upstream
-  # silently — the previous loops fixed two such drifts by hand
-  # (ruff v0.15.0 → v0.15.17 in the first loop, and the rationale note
-  # the dev-deps cap comment now carries). Letting Dependabot raise
-  # the PRs catches the drift on a weekly cadence.
+  # silently. Dependabot surfaces that drift on a weekly cadence.
   - package-ecosystem: pre-commit
     directory: "/"
     schedule:

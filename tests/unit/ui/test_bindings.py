@@ -104,22 +104,9 @@ def test_overlay_keymap_reflects_in_bindings() -> None:
     assert quit_bindings[0].action == "dispatch('app.quit')"
 
 
-def test_resolve_action_id_roundtrip() -> None:
-    resolver = BindingResolver(keymap=KeymapStore(), actions=ActionRegistry())
-    assert resolver.resolve_action_id("q") == "app.quit"
-    assert resolver.resolve_action_id(":") == "app.command_palette"
-    assert resolver.resolve_action_id("nope-no-such-key") is None
-
-
 def test_duplicate_overlay_key_is_rejected_before_binding_materialization() -> None:
     with pytest.raises(
         ValueError,
         match=r"'y'.*'glue\.copy_table_ref'.*'pane\.copy'",
     ):
         KeymapStore(overlay={"pane.copy": "y"})
-
-
-def test_keys_for_returns_tuple() -> None:
-    resolver = BindingResolver(keymap=KeymapStore(), actions=ActionRegistry())
-    assert resolver.keys_for("app.quit") == ("q", "ctrl+c")
-    assert resolver.keys_for("does.not.exist") == ()

@@ -179,6 +179,7 @@ class AthenaSavedView(Widget):
             state=self._vm.named_state,
             error_text=self._vm.named_error_text,
             has_more=self._vm.has_more_named_queries,
+            limit_reached=self._vm.named_limit_reached,
         )
         prepared.replace(
             tuple(
@@ -196,6 +197,7 @@ class AthenaSavedView(Widget):
             state=self._vm.prepared_state,
             error_text=self._vm.prepared_error_text,
             has_more=self._vm.has_more_prepared_statements,
+            limit_reached=self._vm.prepared_limit_reached,
         )
         detail.replace(
             self._detail_values(),
@@ -209,12 +211,14 @@ class AthenaSavedView(Widget):
             busy=self._vm.is_loading_more_named_queries,
             state=self._vm.named_state,
             error_text=self._vm.named_error_text,
+            limit_reached=self._vm.named_limit_reached,
         )
         load_more_prepared.sync(
             has_more=self._vm.has_more_prepared_statements,
             busy=self._vm.is_loading_more_prepared_statements,
             state=self._vm.prepared_state,
             error_text=self._vm.prepared_error_text,
+            limit_reached=self._vm.prepared_limit_reached,
         )
 
     def _detail_values(self) -> tuple[DetailValue, ...]:

@@ -25,6 +25,7 @@ from textual.widget import Widget
 from textual.widgets import OptionList
 from vmx import Message, MessageHub
 
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui import notifications
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
@@ -120,13 +121,6 @@ class EmrServerlessPage(Widget):
         Binding("a", "open_application_picker", "Apps"),
         Binding("tab", "cycle_panes_forward", "Tab"),
         Binding("shift+tab", "cycle_panes_back", "←Tab"),
-        # ``emr.clone`` action id — re-runs the currently selected
-        # job with all fields pre-populated. The ``c`` keystroke
-        # overlaps with the file-manager's ``pane.copy`` but the two
-        # never share a focus context (the EMR page is not a
-        # DualPaneVM host), so the binding is unambiguous at the
-        # widget scope.
-        Binding("c", "clone_selected_run", "Clone"),
     ]
 
     def __init__(
@@ -134,6 +128,7 @@ class EmrServerlessPage(Widget):
         vm: EmrServerlessPageVM,
         *,
         hub: MessageHub[Message],
+        keymap: KeymapStore | None = None,
         source_candidates: tuple[ServiceSourceContext, ...] = (),
         focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
@@ -142,6 +137,7 @@ class EmrServerlessPage(Widget):
         super().__init__(id=id, classes=classes)
         self._vm: EmrServerlessPageVM = vm
         self._hub: MessageHub[Message] = hub
+        self._keymap = keymap or KeymapStore()
         self._source_candidates = source_candidates
         self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
         self._source_header: ServiceSourceHeader | None = None
@@ -160,7 +156,11 @@ class EmrServerlessPage(Widget):
         )
         self._left = JobRunsPane(self._vm.job_runs, id="emr-runs-pane")
         self._right_detail = JobRunDetailPane(self._vm.job_run_detail, id="emr-detail-pane")
-        self._right_logs = JobRunLogsPane(self._vm.job_run_logs, id="emr-logs-pane")
+        self._right_logs = JobRunLogsPane(
+            self._vm.job_run_logs,
+            keymap=self._keymap,
+            id="emr-logs-pane",
+        )
         self._source_header = ServiceSourceHeader(
             self._vm.source,
             candidates=self._source_candidates,
@@ -193,13 +193,9 @@ class EmrServerlessPage(Widget):
             box.border_title = "source / application"
         except Exception:
             pass
-        # NOTE: ``ContentHostVM.set_content`` already dispatches
-        # ``EmrServerlessPageVM.setup()`` as a background asyncio
-        # task when the page VM is adopted (see PR #67 — and the
-        # follow-up of the maintenance loop confirming the double
-        # dispatch). We do NOT re-launch a second setup worker here:
-        # that would race the host's task and double the boot-time
-        # ``list_applications`` API call on every EMR mount.
+        # ``ContentHostVM.set_content`` already dispatches page setup when the
+        # VM is adopted. Launching another setup worker here would race the
+        # host and duplicate the boot-time ``list_applications`` request.
         # Set up the three pollers per spec §6.
         # Poller cadence — user feedback (post-PR-#93, restated):
         # "the EMR page still refreshes quite a lot so many times
@@ -278,7 +274,7 @@ class EmrServerlessPage(Widget):
                 return
         if textual_focused is None or self.has_focus_within:
             if self._focus_coordinator is not None:
-                self._focus_coordinator.set_focused_slot(FocusSlot.EMR_RUNS)
+                self._focus_coordinator.project_focused_slot(FocusSlot.EMR_RUNS)
             self._left.focus()
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
@@ -312,10 +308,8 @@ class EmrServerlessPage(Widget):
     # ── Pollers ─────────────────────────────────────────────────────────────
 
     def _tick_applications(self) -> None:
-        # ``exclusive=True`` so a slow ``list_applications`` doesn't
-        # have a second tick land while the first is mid-flight —
-        # Textual silently skips overlapping ticks rather than
-        # queueing them, which is the right semantic for a poller.
+        # The latest tick supersedes any in-flight refresh in this group;
+        # cancellation guards keep the older result from mutating the VM.
         self.run_worker(
             self._vm.refresh_focused("applications"), exclusive=True, group="emr-poll-apps"
         )
@@ -522,6 +516,31 @@ class EmrServerlessPage(Widget):
         finally:
             clone_vm.dispose()
 
+    def open_focused_log_filter(self) -> bool:
+        focused = self.app.focused
+        if (
+            focused is None
+            or self._right_logs is None
+            or not self._is_within(focused, self._right_logs)
+        ):
+            return False
+        self._right_logs.action_open_filter()
+        return True
+
+    def select_adjacent_log_file(self, delta: int) -> bool:
+        focused = self.app.focused
+        if (
+            focused is None
+            or self._right_logs is None
+            or not self._is_within(focused, self._right_logs)
+        ):
+            return False
+        if delta < 0:
+            self._right_logs.action_previous_file()
+        else:
+            self._right_logs.action_next_file()
+        return True
+
     def _post_clone_success_toast(self, new_id: str) -> None:
         """Reach the canonical ``ToastStackVM`` through the running
         app and post the success toast. The :class:`AwsTuiApp` exposes
@@ -556,7 +575,7 @@ class EmrServerlessPage(Widget):
         the S3 file panes), so the slot ID is derived from
         ``has_focus`` / ``has_focus_within`` rather than from a VM
         flag. The NAV slot lives outside this page — when we're
-        about to leave one of our 3 panes for NAV, we drop our
+        about to leave one of our five page-owned targets for NAV, we drop our
         focus and ask the App to focus the NavMenu.
         """
         if (
@@ -613,7 +632,7 @@ class EmrServerlessPage(Widget):
                 FocusSlot.EMR_DETAIL,
                 FocusSlot.EMR_LOGS,
             )[next_idx]
-            self._focus_coordinator.set_focused_slot(slot_to_project)
+            self._focus_coordinator.project_focused_slot(slot_to_project)
 
     def _close_departed_selector(self, focused_idx: int) -> None:
         if focused_idx == 0 and self._source_header is not None:
@@ -639,7 +658,7 @@ class EmrServerlessPage(Widget):
         if target is None:
             return
         if self._focus_coordinator is not None:
-            self._focus_coordinator.set_focused_slot(slot)
+            self._focus_coordinator.project_focused_slot(slot)
         self.app.set_focus(target)
 
     def project_focus_slot(self, slot: FocusSlot) -> None:
@@ -659,7 +678,7 @@ class EmrServerlessPage(Widget):
         ancestors = set(focused.ancestors_with_self)
         for slot, target in self._focus_targets():
             if target in ancestors:
-                self._focus_coordinator.set_focused_slot(slot)
+                self._focus_coordinator.project_focused_slot(slot)
                 return
 
     def _focus_nav_menu(self) -> None:
@@ -692,9 +711,9 @@ class EmrServerlessPage(Widget):
     def on_job_runs_pane_refresh_requested(self, _event: JobRunsPane.RefreshRequested) -> None:
         # Use the same ``emr-poll-runs`` group as ``_tick_runs`` and the
         # clone-success refresh in ``action_clone_selected_run`` so a
-        # manual ``r`` press while the periodic poller is mid-flight is
-        # silently dropped by Textual rather than allowed to race the
-        # poller's worker. Both end up calling ``job_runs.refresh()``,
+        # manual ``r`` press while the periodic poller is mid-flight
+        # supersedes the older worker rather than racing it. Both end up
+        # calling ``job_runs.refresh()``,
         # which mutates the same VM state and fires the same ``runs``
         # PropertyChangedMessage — two concurrent calls produced a
         # double UI redraw and an extra ``list_job_runs`` round-trip
@@ -709,10 +728,8 @@ class EmrServerlessPage(Widget):
 
     def on_job_runs_pane_load_more_requested(self, _event: JobRunsPane.LoadMoreRequested) -> None:
         """User asked for the next page of runs (PgDn or click on
-        the bottom sentinel). Run as ``exclusive=True`` so a slow
-        page response can't be double-fired by an impatient
-        keypress — the second call is dropped by Textual rather
-        than queued behind the first."""
+        the bottom sentinel). The latest request supersedes an in-flight
+        request in the same worker group."""
         self.run_worker(
             self._vm.load_more_job_runs(),
             exclusive=True,
@@ -727,7 +744,11 @@ class EmrServerlessPage(Widget):
         self, _event: JobRunLogsPane.RefreshRequested
     ) -> None:
         """User pressed r to refresh/reload logs."""
-        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+        self.run_worker(
+            self._vm.job_run_logs.load(use_cache=False),
+            exclusive=True,
+            group="emr-logs",
+        )
 
     def on_job_run_logs_pane_log_file_selected(self, event: JobRunLogsPane.LogFileSelected) -> None:
         """User selected a different log file from the chip strip."""

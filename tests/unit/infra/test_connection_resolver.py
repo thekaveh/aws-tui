@@ -303,6 +303,31 @@ class TestResolveAndMaterialize:
         cfg_obj = store.load()
         assert "auto-dev" in cfg_obj.connections
 
+    def test_materialize_preserves_an_explicit_connection_verbatim(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        explicit = ConnectionEntry(
+            name="minio-local",
+            kind="s3-compatible",
+            endpoint_url="http://localhost:9000/storage",
+            region="us-east-1",
+            credentials="keychain:minio-local",
+            force_path_style=True,
+            verify_tls=False,
+        )
+        store.add_connection(explicit)
+        resolver = ConnectionResolver(
+            config_store=store,
+            keychain=InMemoryKeychain(),
+            aws_config_path=tmp_path / "missing",
+            aws_credentials_path=tmp_path / "missing",
+        )
+
+        materialized = resolver.materialize("minio-local")
+
+        assert materialized == explicit
+        assert store.load().connections["minio-local"] == explicit
+
     def test_materialize_missing_raises(self, tmp_path: Path, store: ConfigStore) -> None:
         resolver = ConnectionResolver(
             config_store=store,
@@ -314,7 +339,7 @@ class TestResolveAndMaterialize:
 
 
 class TestS3CompatibleCredentialDispatch:
-    def test_keychain_read_failure_resolves_as_missing_credentials(
+    def test_keychain_backend_failure_is_not_disguised_as_missing_credentials(
         self, tmp_path: Path, store: ConfigStore
     ) -> None:
         class _FailingKeychain(InMemoryKeychain):
@@ -337,10 +362,8 @@ class TestS3CompatibleCredentialDispatch:
             aws_credentials_path=tmp_path / "missing",
         )
 
-        connection = resolver.resolve("locked")
-
-        assert connection.access_key_id is None
-        assert connection.secret_access_key is None
+        with pytest.raises(RuntimeError, match="keychain locked"):
+            resolver.resolve("locked")
 
     def test_keychain_credentials(self, tmp_path: Path, store: ConfigStore) -> None:
         kc = InMemoryKeychain()

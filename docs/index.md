@@ -45,5 +45,7 @@ Athena editor for review and never executes automatically.
 - New here? Start with **Installation**, then **Platforms** and
   **Connections**.
 - Daily use: **Keybindings**, the **Cookbook**, and **Theming**.
+- Service behavior: **S3 and Local File Manager**, **EMR Serverless**,
+  **AWS Glue and Iceberg Metadata**, and **Amazon Athena**.
 - Contributing or extending: **Architecture**, **Adding a Service**, and
   the **Contract Ledger**.

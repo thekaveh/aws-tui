@@ -28,13 +28,18 @@ class PickerFocusIntent:
 
 @dataclass(slots=True)
 class PickerOpenIntent:
-    """Page-owned newest-open intent for deferred picker reconciliation."""
+    """Page-owned exclusive-open intent with deferred reconciliation epochs."""
 
     epoch: int = 0
     desired: Widget | None = None
 
     def observe(self, picker: Widget, is_open: bool) -> int:
         if is_open:
+            previous = self.desired
+            if previous is not None and previous is not picker:
+                close = getattr(previous, "close", None)
+                if callable(close):
+                    close(refocus=False)
             self.desired = picker
         elif self.desired is picker:
             self.desired = None

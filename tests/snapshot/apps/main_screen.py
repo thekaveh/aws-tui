@@ -126,16 +126,6 @@ class MainScreenApp(App[None]):
             dispatcher=self._dispatcher,
             initial=FocusSlot.S3_LEFT,
         )
-        self._hint_vm.register_focusable(
-            "pane.left",
-            (
-                "pane.descend",
-                "pane.copy",
-                "pane.delete",
-                "pane.refresh",
-            ),
-        )
-
         registry = ServiceRegistry()
         registry.register(_S3Stub())
         registry.register(_EC2Stub())
@@ -211,12 +201,9 @@ class MainScreenApp(App[None]):
             )
         )
 
-        # Drive connection + focus so chrome surfaces real text.
+        # Drive connection and service selection so chrome surfaces real text.
         self._menu_vm.update_connection(_connection())
         self._menu_vm.switch_service_command.execute("s3")
-        from aws_tui.vm.messages import FocusChangedMessage
-
-        self._hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
 
     def on_ready(self) -> None:
         # Mirror the real app's startup focus: no Textual-focused descendant

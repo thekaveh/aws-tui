@@ -53,6 +53,8 @@ class AthenaClientProtocol(Protocol):
 
     async def get_query_execution(self, execution_id: str) -> Any: ...
 
+    async def get_query_executions(self, execution_ids: list[str]) -> tuple[Any, ...]: ...
+
     async def start_query(
         self,
         sql: str,

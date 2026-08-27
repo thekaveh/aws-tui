@@ -16,11 +16,11 @@ from textual.widgets import Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunState
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _make_vm() -> tuple[JobRunsVM, MessageHub[Message], _InMemoryEmr]:
@@ -227,3 +227,26 @@ async def test_loading_state_renders_loading_placeholder() -> None:
         await pilot.pause()
         text = _placeholder_text(pane)
         assert "loading" in text
+
+
+async def test_item_budget_is_visible_after_paging_stops(monkeypatch) -> None:
+    from aws_tui.vm.emr_serverless import job_runs_vm
+
+    monkeypatch.setattr(job_runs_vm, "_MAX_JOB_RUN_ITEMS", 2)
+    vm, hub, fake = _make_vm()
+    fake.add_application(app_id="a1", name="etl")
+    fake.page_size = 1
+    for index in range(3):
+        fake.add_job_run(
+            application_id="a1",
+            job_run_id=f"r{index}",
+            state=JobRunState.SUCCESS,
+        )
+    vm.set_application("a1")
+    await vm.refresh()
+    await vm.load_more()
+
+    async with _PaneApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        body = pilot.app.query_one("#runs-body", VerticalScroll)
+        assert any("safety limit" in str(row.render()) for row in body.query(Static))

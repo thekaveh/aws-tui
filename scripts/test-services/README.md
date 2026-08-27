@@ -7,9 +7,9 @@ and leave the rest alone.
 
 ## 1.1. What's here today
 
-### 1.1.1. `s3/` — MinIO-backed S3
+### 1.1.1. `s3/` — Adobe S3Mock-backed S3
 
-S3-compliant local backend via the official MinIO container. Realistic
+S3-compatible local backend via the official Adobe S3Mock container. Realistic
 seeded dataset (5 buckets, ~90 objects: nested folder trees, unicode +
 long filenames, small files + an 8MB+ object that exercises the
 multipart upload path).
@@ -51,7 +51,7 @@ scripts/test-services/<service>/
 
 **For services without a dedicated mock (EC2, IAM, Lambda, …), use
 [LocalStack](https://docs.localstack.cloud/) as the backend.** Single
-container that mocks 60+ AWS services; heavier than MinIO so we keep it
+container that mocks 60+ AWS services; heavier than S3Mock so we keep it
 optional. The directory pattern still applies — `scripts/test-services/ec2/docker-compose.yml`
 would pin the localstack image and seed.py would talk to
 `http://localhost:4566`.
@@ -61,7 +61,7 @@ would pin the localstack image and seed.py would talk to
 - Keeps dev tooling out of the way of users who don't need it.
 - Lets each service evolve independently (different containers, different
   seed shapes, different healthchecks).
-- The repo's existing `tests/integration/` MinIO tier uses
-  `testcontainers/minio` programmatically; this harness is for **manual
+- The repo's existing `tests/integration/` S3-compatible tier uses
+  `testcontainers` with the same digest-pinned S3Mock image; this harness is for **manual
   exploratory dev**, not the CI test suite. The two paths intentionally
   don't share runtime so a flaky harness can't break CI.

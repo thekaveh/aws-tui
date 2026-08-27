@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from typing import Any
 
 import reactivex as rx
 from vmx import (
@@ -33,20 +32,26 @@ from vmx import (
     Message,
     MessageHub,
     PropertyChangedMessage,
-    TokenPagedComposition,
 )
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
+from aws_tui.domain.emr_serverless import (
+    EmrServerlessClientProtocol,
+    JobRunState,
+    JobRunSummary,
+)
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.paging import BoundedTokenPagedComposition
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _ALL_STATES: frozenset[JobRunState] = frozenset(JobRunState)
+_MAX_JOB_RUN_ITEMS = 1_000
 
 # Pre-terminal states the poller uses to keep the active (60-s)
 # cadence. See ``has_active_runs`` for the rationale; ``CANCELLING``
@@ -113,7 +118,7 @@ class JobRunsVM:
     def __init__(
         self,
         *,
-        client: Any,
+        client: EmrServerlessClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
@@ -123,7 +128,7 @@ class JobRunsVM:
         self._application_id: str | None = None
         self._pager_refresh_existing_count: int = 0
         self._paging_identity: tuple[str | None, str | None] | None = None
-        self._pager: TokenPagedComposition[JobRunItemVM, str] = self._new_pager()
+        self._pager: BoundedTokenPagedComposition[JobRunItemVM, str] = self._new_pager()
         self._has_more_suppressed: bool = False
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
@@ -188,7 +193,11 @@ class JobRunsVM:
         """``True`` when at least one more page of runs is available
         for the current application. The pane shows a "load more"
         sentinel row in that case; ``PgDn`` triggers ``load_more``."""
-        return self._pager.current_token is not None and not self._has_more_suppressed
+        return self._pager.has_more and not self._has_more_suppressed
+
+    @property
+    def limit_reached(self) -> bool:
+        return self._pager.limit_reached
 
     @property
     def status(self) -> ConstructionStatus:
@@ -433,9 +442,13 @@ class JobRunsVM:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _new_pager(self) -> TokenPagedComposition[JobRunItemVM, str]:
-        return TokenPagedComposition(
-            self._fetch_page,
+    def _new_pager(self) -> BoundedTokenPagedComposition[JobRunItemVM, str]:
+        return BoundedTokenPagedComposition(
+            reject_token_cycles(
+                self._fetch_page,
+                message="EMR Serverless repeated a job-run continuation token",
+            ),
+            max_items=_MAX_JOB_RUN_ITEMS,
             pages_equal=self._pages_equal,
         )
 
@@ -450,13 +463,13 @@ class JobRunsVM:
 
     async def _fetch_page(self, token: str | None) -> tuple[tuple[JobRunItemVM, ...], str | None]:
         target_app_id = self._application_id
+        if target_app_id is None:
+            return (), None
         runs, next_token = await self._client.list_job_runs_page(
             target_app_id,
             start_token=token,
             states=None,
         )
-        if token is not None and next_token == token:
-            raise ProviderError("EMR Serverless repeated a job-run continuation token")
         if self._paging_identity is not None:
             app_id, expected_token = self._paging_identity
             if token is None and self._application_id != app_id:

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
 T = TypeVar("T")
+_logger = logging.getLogger(__name__)
 
 
 class OperationSuperseded(Exception):
@@ -44,9 +46,15 @@ class OperationOwner:
             if not self._accepting:
                 raise self._superseded_error from None
             raise
-        except Exception:
+        except Exception as exc:
             if caller is not None and caller.cancelling():
                 raise asyncio.CancelledError from None
+            if not self._accepting:
+                _logger.error(
+                    "operation_owner.cleanup_failed",
+                    extra={"error": str(exc), "error_type": type(exc).__name__},
+                )
+                raise self._superseded_error from None
             raise
         if caller is not None and caller.cancelling():
             raise asyncio.CancelledError
@@ -61,7 +69,8 @@ class OperationOwner:
     def cancel(self) -> tuple[asyncio.Task[Any], ...]:
         tasks = tuple(self.tasks)
         for task in tasks:
-            if not task.done():
+            # Re-cancelling interrupts awaits inside the task's cleanup path.
+            if not task.done() and not task.cancelling():
                 task.cancel()
         return tasks
 
@@ -80,6 +89,9 @@ class OperationOwner:
                         if current_count > cancellation_count:
                             cancelled = True
                             cancellation_count = current_count
+                    except Exception:
+                        # One failed cleanup must not strand the remaining tasks.
+                        pass
                 if not task.cancelled():
                     with contextlib.suppress(Exception):
                         task.result()

@@ -21,7 +21,6 @@ from aws_tui.vm.chrome.hint_legend_vm import (
     _canonical_shortcut,
     _tooltip_for,
 )
-from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
 
 
 def _hub() -> MessageHub[Message]:
@@ -29,8 +28,6 @@ def _hub() -> MessageHub[Message]:
 
 
 def _build(
-    actions: dict[str, tuple[str, ...]] | None = None,
-    *,
     keymap: KeymapStore | None = None,
 ) -> tuple[HintLegendVM, MessageHub[Message]]:
     hub = _hub()
@@ -39,9 +36,6 @@ def _build(
         dispatcher=NULL_DISPATCHER,
         keymap=keymap or KeymapStore(),
     )
-    if actions:
-        for vm_id, action_ids in actions.items():
-            legend.register_focusable(vm_id, action_ids)
     legend.construct()
     return legend, hub
 
@@ -156,80 +150,6 @@ def test_initial_globals_include_help_and_theme_controls() -> None:
     legend.dispose()
 
 
-def test_focus_on_pane_swaps_service_actions() -> None:
-    legend, hub = _build(
-        actions={
-            "pane.left": (
-                "pane.descend",
-                "pane.copy",
-                "pane.delete",
-            )
-        }
-    )
-    hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
-    action_ids = [a.action_id for a in legend.actions]
-    # The pane's own (focused) actions are listed first, then the
-    # active service's chip set — both live on ``.actions`` (LEFT).
-    assert action_ids[:3] == [
-        "pane.descend",
-        "pane.copy",
-        "pane.delete",
-    ]
-    # App-level globals (themes/help/quit) live on ``.global_actions``
-    # post-PR-81 — NOT on ``.actions``.
-    global_ids = [a.action_id for a in legend.global_actions]
-    assert global_ids[-2:] == ["app.help", "app.quit"]
-    assert "app.command_palette" in global_ids
-    legend.dispose()
-
-
-def test_focus_actions_resolve_key_labels() -> None:
-    legend, hub = _build(actions={"pane.left": ("pane.copy",)})
-    hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
-    copy_action = next(a for a in legend.actions if a.action_id == "pane.copy")
-    assert copy_action.key_label == "c"
-    assert copy_action.action_label == "copy"
-    legend.dispose()
-
-
-def test_focus_unknown_vm_falls_back_to_globals() -> None:
-    legend, hub = _build()
-    hub.send(FocusChangedMessage(focused_vm_id="unregistered"))
-    # No focused-VM registration → ``.actions`` carries only the
-    # default fallback-service chip set, and the always-visible
-    # globals (themes/help/quit) live on ``.global_actions``.
-    global_ids = {a.action_id for a in legend.global_actions}
-    assert "app.help" in global_ids
-    assert "app.command_palette" in global_ids
-    legend.dispose()
-
-
-def test_keymap_changed_re_derives_legend() -> None:
-    legend, hub = _build(actions={"pane.left": ("pane.copy",)})
-    hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
-    # Caller invokes register_focusable+keymap update in lockstep with the
-    # keymap store; the message is a notification so the legend recomputes.
-    hub.send(KeymapChangedMessage(action="pane.copy", new_keys=("ctrl+c",)))
-    copy_action = next(a for a in legend.actions if a.action_id == "pane.copy")
-    # The legend re-resolves through the keymap on each rebuild — but since
-    # we use a real KeymapStore we constructed earlier (with defaults), the
-    # label stays "c". We assert recomputation by checking the action list
-    # is rebuilt (a new HintAction instance with the same payload).
-    assert copy_action.key_label == "c"
-    legend.dispose()
-
-
-def test_register_focusable_with_no_focus_does_not_disturb_state() -> None:
-    legend, _hub = _build(actions={"pane.left": ("pane.new",)})
-    actions = legend.actions
-    action_ids = {a.action_id for a in actions}
-    # Without a focus message the registration is dormant; only fallbacks
-    # are surfaced. `pane.new` is not in the app-level fallback set, so
-    # registering it for a not-yet-focused VM must keep it hidden.
-    assert "pane.new" not in action_ids
-    legend.dispose()
-
-
 def test_hint_action_is_frozen() -> None:
     a = HintAction(
         action_id="pane.copy",
@@ -239,30 +159,6 @@ def test_hint_action_is_frozen() -> None:
     )
     with pytest.raises(AttributeError):
         a.key_label = "x"  # type: ignore[misc]
-
-
-def test_unknown_action_is_silently_skipped() -> None:
-    """Pane registers actions but the keymap doesn't know one of them — skip it."""
-    legend, hub = _build(
-        actions={"pane.left": ("pane.copy", "pane.frobnicate")},
-    )
-    hub.send(FocusChangedMessage(focused_vm_id="pane.left"))
-    action_ids = {a.action_id for a in legend.actions}
-    # pane.copy resolves; pane.frobnicate doesn't and is dropped.
-    assert "pane.copy" in action_ids
-    assert "pane.frobnicate" not in action_ids
-    legend.dispose()
-
-
-def test_dispose_unsubscribes() -> None:
-    legend, hub = _build()
-    pre = legend.focused_vm_id  # None on a freshly-built legend
-    legend.dispose()
-    # Sending after dispose must NOT update the VM's state — a
-    # subscription that survived dispose would advance focused_vm_id
-    # to "x", which the assertion below catches.
-    hub.send(FocusChangedMessage(focused_vm_id="x"))
-    assert legend.focused_vm_id == pre
 
 
 def test_set_current_service_shows_dedicated_emr_application_action() -> None:

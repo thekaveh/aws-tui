@@ -28,6 +28,7 @@ def _assert_hashed_audit_pair(workflow_path: str, job: str) -> None:
     assert "--no-emit-project" in export_run
     assert "--no-hashes" not in export_run
     assert "--python" in export_run
+    assert "--all-groups" in export_run
     assert "--require-hashes" in audit_run
     assert "--disable-pip" in audit_run
     assert "--python" in audit_run
@@ -141,7 +142,31 @@ def test_ci_pytest_tiers_stay_wired() -> None:
     )
 
 
-def test_integration_marker_is_reserved_for_minio_tier() -> None:
+def test_ci_gates_minimum_supported_dependencies() -> None:
+    workflow = _workflow(".github/workflows/ci.yml")
+    minimum = workflow["jobs"]["lowest-supported-dependencies"]
+    gate_needs = workflow["jobs"]["gate"]["needs"]
+
+    assert minimum["timeout-minutes"] == 20
+    assert "lowest-supported-dependencies" in gate_needs
+    install = _step(
+        workflow,
+        "lowest-supported-dependencies",
+        "install declared minimum dependencies",
+    )["run"]
+    exercise = _step(
+        workflow,
+        "lowest-supported-dependencies",
+        "exercise minimum dependency runtime",
+    )["run"]
+    assert "--resolution lowest-direct" in install
+    assert '"moto[server,s3]>=5"' in install
+    assert '"pytest-timeout>=2.4"' in install
+    assert "tests/minimum_runtime/test_dependency_floors.py" in exercise
+    assert "tests/unit/vm/test_vmx_smoke.py" in exercise
+
+
+def test_integration_marker_is_reserved_for_s3_compat_tier() -> None:
     marked_files = {
         path.relative_to(REPO_ROOT).as_posix()
         for path in (REPO_ROOT / "tests/integration").rglob("*.py")
@@ -149,8 +174,8 @@ def test_integration_marker_is_reserved_for_minio_tier() -> None:
     }
 
     assert marked_files == {
-        "tests/integration/test_cross_fs_minio.py",
-        "tests/integration/test_s3_fs_minio.py",
+        "tests/integration/test_cross_fs_s3_compat.py",
+        "tests/integration/test_s3_fs_s3_compat.py",
     }
 
 
@@ -189,10 +214,10 @@ def test_release_pytest_tiers_stay_wired() -> None:
         "verify",
         "pytest supported Python edge versions",
         "uv sync",
-        'uv sync --frozen --python "$py" --group docs',
+        'uv sync --locked --python "$py" --group docs',
     )
     matrix_run = _step(workflow, "verify", "pytest supported Python edge versions")["run"]
-    assert "uv sync --frozen --python 3.12 --group docs" in matrix_run
+    assert "uv sync --locked --python 3.12 --group docs" in matrix_run
     assert 'uv run --python "3.12" pytest' not in matrix_run
     _assert_step_has_command(
         workflow,
@@ -216,7 +241,7 @@ def test_release_pytest_tiers_stay_wired() -> None:
     _assert_step_has_command(
         workflow,
         "verify",
-        "pytest (MinIO integration tier)",
+        "pytest (S3Mock integration tier)",
         "uv run",
         "--python 3.12",
         "pytest",
@@ -289,6 +314,7 @@ def test_release_checks_declared_minimum_s3_dependency_models_before_publish() -
     assert '--python "$PY" .' in install
     assert "aioboto3==" not in install
     assert "botocore==" not in install
+    assert '"pytest-timeout>=2.4"' in install
     exercise = _step(
         workflow, "lowest-supported-dependencies", "exercise minimum dependency runtime"
     )["run"]
@@ -356,12 +382,13 @@ def test_ci_and_release_require_documentation_contracts() -> None:
     )
 
 
-def test_pages_manual_dispatch_publishes_main_only() -> None:
+def test_pages_publication_is_main_only_including_manual_dispatch() -> None:
     workflow = _workflow(".github/workflows/pages.yml")
 
     assert workflow[True]["workflow_dispatch"] is None
-    assert workflow["jobs"]["build"]["if"] == "github.ref == 'refs/heads/main'"
-    assert workflow["jobs"]["wiki"]["if"] == "github.ref == 'refs/heads/main'"
+    main_only = "github.ref == 'refs/heads/main'"
+    assert workflow["jobs"]["build"]["if"] == main_only
+    assert workflow["jobs"]["wiki"]["if"] == main_only
     assert workflow["env"]["UV_VERSION"] == "0.11.19"
     for job_name in ("build", "wiki"):
         setup_uv = next(
@@ -383,6 +410,64 @@ def test_pages_manual_dispatch_publishes_main_only() -> None:
     _assert_step_has_command(
         workflow, "build", "documentation contract tests", "uv run", "pytest", "tests/docs"
     )
+
+
+def test_workflows_reject_stale_lockfiles() -> None:
+    for workflow_path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/pages.yml",
+        ".github/workflows/release.yml",
+    ):
+        text = (REPO_ROOT / workflow_path).read_text(encoding="utf-8")
+        assert "--frozen" not in text, workflow_path
+        for line in text.splitlines():
+            if "uv sync " in line or "uv export " in line:
+                assert "--locked" in line, f"{workflow_path}: {line.strip()}"
+
+
+def test_package_workflows_reject_denied_artifact_members() -> None:
+    for workflow_path, job in (
+        (".github/workflows/ci.yml", "pkg"),
+        (".github/workflows/release.yml", "verify"),
+    ):
+        workflow = _workflow(workflow_path)
+        _assert_step_has_command(
+            workflow,
+            job,
+            "validate artifact contents",
+            "uv run",
+            "python",
+            "-m scripts.check_dist",
+            "dist/",
+        )
+
+
+def test_release_smoke_installs_the_source_distribution() -> None:
+    workflow = _workflow(".github/workflows/release.yml")
+    step = _step(workflow, "smoke-install", "install built sdist and run console entry point")
+
+    assert step["if"] == "matrix.os == 'ubuntu-24.04' && matrix.python == '3.12'"
+    assert "dist/*.tar.gz" in step["run"]
+    assert "-m aws_tui --version" in step["run"]
+
+
+def test_wiki_deploy_key_is_validated_before_write() -> None:
+    workflow = _workflow(".github/workflows/pages.yml")
+    run = _step(workflow, "wiki", "write wiki deploy key")["run"]
+
+    assert 'if [[ -z "${WIKI_DEPLOY_KEY:-}" ]]' in run
+    assert "::error::WIKI_DEPLOY_KEY is not configured" in run
+
+
+def test_homebrew_checkout_does_not_persist_cross_repo_token() -> None:
+    workflow = _workflow(".github/workflows/release.yml")
+    checkout = next(
+        step
+        for step in workflow["jobs"]["bump-homebrew"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    )
+
+    assert checkout["with"]["persist-credentials"] is False
 
 
 def test_ci_gate_rejects_every_non_success_result() -> None:

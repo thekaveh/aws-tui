@@ -96,3 +96,39 @@ def test_load_manifest_ok_when_files_exist(tmp_path):
     )
     m = load_manifest(tmp_path / "docs" / "manifest.yaml", tmp_path)
     assert m.leaves()[0].source == "docs/index.md"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("surfaces", "[repo, unknown]", "unsupported surfaces"),
+        ("numbering", "global", "unsupported numbering"),
+    ],
+)
+def test_manifest_rejects_unsupported_contract_values(field, value, message):
+    text = (
+        "surfaces: [repo]\nnumbering: per-doc\n"
+        "sections:\n  - {id: o, title: O, source: docs/index.md}\n"
+        "diagrams: []\n"
+    )
+    if field == "surfaces":
+        text = text.replace("surfaces: [repo]", f"surfaces: {value}")
+    else:
+        text = text.replace("numbering: per-doc", f"numbering: {value}")
+    with pytest.raises(ManifestError, match=message):
+        parse_manifest(text)
+
+
+def test_manifest_rejects_unknown_and_unreferenced_diagrams():
+    unknown = MINIMAL.replace("diagrams: [architecture]", "diagrams: [missing]")
+    with pytest.raises(ManifestError, match="unknown diagrams"):
+        parse_manifest(unknown)
+
+    unreferenced = MINIMAL.replace(", diagrams: [architecture]", "")
+    with pytest.raises(ManifestError, match="not assigned"):
+        parse_manifest(unreferenced)
+
+
+def test_package_surface_requires_generation_mapping():
+    with pytest.raises(ManifestError, match="declared together"):
+        parse_manifest(MINIMAL.replace("repo, site, wiki", "repo, site, wiki, package"))

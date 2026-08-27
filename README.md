@@ -27,7 +27,7 @@ inspection workflows.
   across panes with `c` and `d` (confirm modal first); multi-select via
   `Shift+↑/↓` cursor extension, modifier+click, or persistent marks.
   The left-rail nav menu is always visible — Tab cycles in/out of it
-  as a regular pane (post-PR-#94). Move, rename, and the dedicated
+  as a regular pane. Move, rename, and the dedicated
   `v` multi-select-mode entry point are spec'd but deferred to v0.9 —
   see [`docs/keybindings.md` file operations](docs/keybindings.md#113-file-operations)
   and [action IDs](docs/keybindings.md#13-action-ids), plus the
@@ -99,18 +99,16 @@ inspection workflows.
   visible). Press `c`
   on a finished job run to open a clone-and-edit modal that
   pre-fills every field from the source run and fires
-  ``start_job_run`` on save (PR #83 — landed ahead of the rest
-  of PR-C). Job-run logs are streamable on demand; cancel and the
+  ``start_job_run`` on save. Job-run logs are streamable on demand; cancel and the
   vanilla submit form remain deferred. AWS-only (does not surface
   for s3-compatible connections). The source and application dropdowns overlay
   the current layout, so opening or closing either picker does not resize the
   runs or detail panes. `Tab` and `Shift+Tab` traverse the source selector,
   application selector, runs, detail, logs, and service rail.
 - **Silent SSO.** Auto-discovers every AWS profile from
-  `~/.aws/{config,credentials}`. SSO-backed profiles get a cheap
-  token-cache freshness probe on launch (one `stat`, one ~1 KB JSON
-  read, sub-millisecond); non-SSO profiles go straight to live boto
-  credential-chain validation.
+  `~/.aws/{config,credentials}`. SSO-backed profiles use local AWS config and
+  SSO cache reads only; no AWS network call. Non-SSO profiles go straight to
+  live boto credential-chain validation.
   Honors `$AWS_DEFAULT_PROFILE` and then `$AWS_PROFILE` between
   `[defaults].connection` and the first-auto fallback so SSO setups where
   `[default]` has no creds still pick the right profile.
@@ -171,7 +169,7 @@ inspection workflows.
   by `scripts/check-layers.sh`. Mypy strict-clean.
   See [`docs/architecture.md` testing pyramid](docs/architecture.md#15-testing-pyramid)
   for the current test-tier table; the default tier runs unit / in-process integration /
-  snapshot / e2e, with a 9-test MinIO tier opt-in via
+  snapshot / e2e, with a 9-test S3-compatible S3Mock tier opt-in via
   `uv run pytest -m integration`.
 
 ## 1.2. Install
@@ -189,7 +187,7 @@ For development:
 ```bash
 git clone https://github.com/thekaveh/aws-tui.git
 cd aws-tui
-uv sync --frozen --dev
+uv sync --locked --all-groups
 uv run aws-tui
 ```
 
@@ -208,7 +206,7 @@ AWS_TUI_DEMO=1 aws-tui
 aws-tui --demo
 ```
 
-You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications, job runs, and streamable success/failure logs, profile-isolated Glue catalogs, jobs, runs, crawlers, and Iceberg metadata, plus Athena workgroups, query histories, results, saved queries, and prepared statements. `demo-shared` demonstrates scoped Glue and Athena access-denied states. The same-profile Glue-to-Athena table/snapshot flow and Glue/Athena-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
+You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, profile-isolated EMR Serverless applications, job runs, and streamable success/failure logs, profile-isolated Glue catalogs, jobs, runs, crawlers, and Iceberg metadata, plus Athena workgroups, query histories, results, saved queries, and prepared statements. `demo-shared` demonstrates scoped Glue and Athena access-denied states. The same-profile Glue-to-Athena table/snapshot flow and Glue/Athena-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
 
 To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 
@@ -249,20 +247,26 @@ add an S3-compatible connection. No first-run modal is currently shipped.
 
 ## 1.4. Documentation
 
-Numbered hierarchically for navigation.
+Start with the [documentation overview](docs/index.md). Canonical source files
+are indexed below for contributors and repository review.
 
 1. **User-facing**
    1. [Installation](docs/install.md) — isolated Git installation, development setup, demo mode, and release-channel status.
-   2. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections; how the credential chain resolves; vendor quirks for MinIO / R2 / B2 / Wasabi.
+   2. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections, understand credential resolution, and set provider-specific endpoint options.
    3. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and shipped `[keybindings]` overlay behavior.
    4. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
-   5. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to MinIO, switch theme on the fly, prepare keybinding overlays, inspect transfer evidence after a crash).
+   5. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to local S3Mock, switch theme on the fly, prepare keybinding overlays, inspect transfer evidence after a crash).
    6. [Supported platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
-   7. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — MinIO Docker Compose + seed for offline development.
+   7. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — Adobe S3Mock Docker Compose + seed for offline development.
+   8. [S3 and local file manager](docs/services/s3.md) — sources, dual-pane operations, transfer safety, architecture, and verification.
+   9. [EMR Serverless](docs/services/emr-serverless.md) — source/application context, runs, logs, clone workflow, architecture, and verification.
+   10. [AWS Glue and Iceberg metadata](docs/services/glue.md) — catalog/jobs/crawlers, bounded metadata, Athena handoffs, architecture, and verification.
+   11. [Amazon Athena](docs/services/athena.md) — context, read-only SQL policy, lifecycle, results, handoffs, architecture, and verification.
 2. **Contributor-facing**
    1. [Architecture](docs/architecture.md) — five-layer model + composition root + lifecycle + messaging primer.
    2. [Adding a new service](docs/adding-a-service.md) — the `Service` protocol + per-layer wiring.
    3. [VMx Python cheatsheet](docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md) — facade pattern, message-protocol shape, lifecycle gotchas.
+   4. [Three-surface publish runbook](docs/superpowers/notes/2026-07-10-three-surface-docs-phase2-runbook.md) — gated Pages and wiki enablement, first publish, and verification steps.
 3. **Spec + plans**
 
    Historical superpowers specs, plans, and notes are indexed here for
@@ -277,7 +281,7 @@ Numbered hierarchically for navigation.
    8. [Demo mode](docs/superpowers/specs/2026-06-28-demo-mode-design.md) — `AWS_TUI_DEMO=1` (or `--demo`) boots the full UI against seeded in-memory fakes; ships in PRs #97 / #104.
    9. [VMx toolkit adoption](docs/superpowers/specs/2026-06-28-vmx-toolkit-adoption-design.md) — historical case-by-case retrofit of the VM layer to use VMx 2.6.1-era `CompositeVM` / `FormVM` / `IDialogService` primitives; records the analytical mistakes the design review went through (§1.3) so future VMx migration work does not repeat them.
    10. [VMx vNext upstream asks](docs/superpowers/specs/2026-06-28-vmx-upstream-vnext-asks.md) — feedback report for VMx maintainers, derived from the aws-tui toolkit-adoption review and focused on primitives that would reduce custom wrapper code.
-   11. [VMx 3.1.0 adoption audit](docs/superpowers/specs/2026-07-02-vmx-3-1-adoption-audit.md) — current VMx 3.1.0 bump report mapping new upstream primitives (`TokenPagedComposition`, `FilteredCompositeVM`, `ScoredFilteredCompositeVM`, `FormVM` validators, `ModalVM`, `DiscriminatorVM`) to aws-tui VM/view refactor candidates.
+   11. [VMx 3.1.0 adoption audit](docs/superpowers/specs/2026-07-02-vmx-3-1-adoption-audit.md) — historical bump report mapping the VMx 3.1.0 primitives adopted by aws-tui; retained as the baseline for later VMx audits.
    12. [Implementation plan index](docs/superpowers/plans/README.md) — per-milestone and post-tag implementation plans with one-line descriptions; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
    13. [Three-surface documentation](docs/superpowers/specs/2026-07-10-three-surface-docs-design.md) — implemented canonical-source projection for repository, site, and wiki documentation.
    14. [Binding resolver](docs/superpowers/specs/2026-07-21-binding-resolver-keystone-design.md) — implemented runtime keymap materialization design.
@@ -286,6 +290,10 @@ Numbered hierarchically for navigation.
    17. [Glue and Athena services](docs/superpowers/specs/2026-07-22-glue-athena-services-design.md) — implemented read-only service architecture and Iceberg integration foundation.
    18. [Glue/Athena interaction polish](docs/superpowers/specs/2026-07-30-glue-athena-interaction-polish-design.md) — implemented source selectors, focus rings, borders, and typed clipboard flows.
    19. [Post-merge audit remediation](docs/superpowers/specs/2026-07-30-post-merge-audit-remediation-design.md) — implemented runtime, documentation, and verification follow-up.
+   20. [Glue/Athena tab rail](docs/superpowers/specs/2026-08-23-glue-athena-tab-rail-design.md) — implemented context-framing design whose underline-only rail was later superseded by the segmented frame.
+   21. [Glue/Athena segmented tabs](docs/superpowers/specs/2026-08-23-glue-athena-segmented-tabs-layout-fixes-design.md) — implemented shared segmented-frame and command-legend layout correction.
+   22. [Overlay pickers and command handoffs](docs/superpowers/specs/2026-08-24-overlay-pickers-command-handoffs-design.md) — implemented overlay selector, compact command hint, and Glue/Athena handoff design.
+   23. [VMx 3.23 maintenance audit](docs/superpowers/specs/2026-08-25-vmx-3-23-maintenance-audit.md) — current compatibility, substitution, line-count, and test-impact record for the VMx 3.23 upgrade.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
    2. [Release procedure](docs/RELEASING.md) — cut-a-release checklist: version bump, CHANGELOG, tag, publish, Homebrew bump.

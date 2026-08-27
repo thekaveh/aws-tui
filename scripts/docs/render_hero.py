@@ -19,7 +19,7 @@ FONT_DIR = Path("assets/fonts/fira-code")
 
 _SVG_NS = "http://www.w3.org/2000/svg"
 _FONT_SIZE = 20.0
-_GLYPH_FALLBACKS = {"⚙": "◆", "⚠": "▲", "️": ""}
+_GLYPH_FALLBACKS = {"\n": "", "⚙": "◆", "⚠": "▲", "▾": "▼", "️": ""}
 
 
 def render(repo_root: Path) -> bytes:
@@ -77,7 +77,10 @@ def _glyph_paths(text: ET.Element, *, content: str, font: TTFont) -> list[ET.Ele
     glyph_set = font.getGlyphSet()
     cmap = font.getBestCmap()
     hmtx = font["hmtx"].metrics
-    glyph_names = [cmap.get(ord(character), ".notdef") for character in content]
+    unsupported = next((character for character in content if ord(character) not in cmap), None)
+    if unsupported is not None:
+        raise ValueError(f"hero font does not support glyph U+{ord(unsupported):04X}")
+    glyph_names = [cmap[ord(character)] for character in content]
     advances = [hmtx[name][0] for name in glyph_names]
     total_advance = sum(advances)
     target_width = float(text.attrib.get("textLength", total_advance))

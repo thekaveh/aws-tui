@@ -68,6 +68,35 @@ def test_terminal_unicode_is_converted_to_font_outlines() -> None:
     assert outlined.count("<path") > 1_000
 
 
+def test_source_selector_indicator_uses_supported_font_fallback() -> None:
+    root = Path.cwd()
+    template = '<svg xmlns="http://www.w3.org/2000/svg"><text x="0" y="20">{}</text></svg>'
+    outlined_indicator = _outline_terminal_text(
+        template.format("▾").encode(),
+        regular=root / FONT_DIR / "FiraCode-Regular.ttf",
+        bold=root / FONT_DIR / "FiraCode-Bold.ttf",
+    )
+    outlined_fallback = _outline_terminal_text(
+        template.format("▼").encode(),
+        regular=root / FONT_DIR / "FiraCode-Regular.ttf",
+        bold=root / FONT_DIR / "FiraCode-Bold.ttf",
+    )
+
+    assert outlined_indicator == outlined_fallback
+
+
+def test_hero_renderer_rejects_unsupported_glyphs() -> None:
+    root = Path.cwd()
+    source = '<svg xmlns="http://www.w3.org/2000/svg"><text x="0" y="20">💥</text></svg>'
+
+    with pytest.raises(ValueError, match="U\\+1F4A5"):
+        _outline_terminal_text(
+            source.encode(),
+            regular=root / FONT_DIR / "FiraCode-Regular.ttf",
+            bold=root / FONT_DIR / "FiraCode-Bold.ttf",
+        )
+
+
 def test_render_hero_check_reports_stale_target(tmp_path: Path, monkeypatch) -> None:
     root = Path.cwd()
     source = tmp_path / SOURCE

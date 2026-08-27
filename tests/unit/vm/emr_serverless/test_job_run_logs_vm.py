@@ -387,6 +387,31 @@ async def test_load_cache_hit_skips_stream_on_second_call(
     vm.dispose()
 
 
+async def test_explicit_refresh_bypasses_same_size_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream_call_count = 0
+
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    async def _stream_log(**kwargs: object):  # type: ignore[return]
+        nonlocal stream_call_count
+        stream_call_count += 1
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream_log, raising=False)
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+
+    await vm.load()
+    await vm.load(use_cache=False)
+
+    assert stream_call_count == 2
+    vm.dispose()
+
+
 async def test_reload_replaces_selected_file_missing_from_fresh_listing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

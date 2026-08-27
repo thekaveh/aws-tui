@@ -1137,9 +1137,11 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
 
             open_started = asyncio.Event()
             rollback_started = asyncio.Event()
+            external_navigation_started = asyncio.Event()
             rollback_active = False
             original_switch = ctx.root_vm.switch_connection_and_service
             original_mount = app._mount_service_view
+            original_external_navigation = app._mount_external_navigation
             original_restore = AthenaPageVM.restore_snapshot
 
             async def pause_open(target: GluePageVM, table_ref: TableRef) -> None:
@@ -1179,6 +1181,10 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
                     await release_rollback.wait()
                 await original_restore(target, snapshot)  # type: ignore[arg-type]
 
+            async def signal_external_navigation(selected: str, generation: int) -> None:
+                external_navigation_started.set()
+                await original_external_navigation(selected, generation)
+
             monkeypatch.setattr(GluePageVM, "open_table", pause_open)
             monkeypatch.setattr(
                 ctx.root_vm,
@@ -1186,6 +1192,11 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
                 pause_switch,
             )
             monkeypatch.setattr(app, "_mount_service_view", pause_mount)
+            monkeypatch.setattr(
+                app,
+                "_mount_external_navigation",
+                signal_external_navigation,
+            )
             monkeypatch.setattr(AthenaPageVM, "restore_snapshot", pause_restore)
 
             ctx.hub.send(
@@ -1209,7 +1220,7 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
             owner = app._service_navigation_owner
             assert owner is not None
             assert owner[0] == "external"
-            await asyncio.sleep(0.05)
+            await asyncio.wait_for(external_navigation_started.wait(), timeout=3)
             release_rollback.set()
             await asyncio.wait_for(
                 _wait_for_service_setup(ctx, app, pilot),
@@ -1442,6 +1453,54 @@ async def test_table_handoff_rollback_restores_complete_athena_result_state(
             assert sum(call.method == "start_query" for call in client.calls) == start_count
     finally:
         release_open.set()
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_table_handoff_rollback_restores_glue_iceberg_view(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    table_ref = TableRef(
+        "AwsDataCatalog",
+        "dev_analytics",
+        "dev_events_iceberg",
+        "demo-dev",
+        "us-east-1",
+    )
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+            await glue.open_table(table_ref)
+            assert await glue.catalog.iceberg.select_view("files")
+
+            async def fail_open(
+                target: AthenaPageVM,
+                requested: TableRef,
+                snapshot_id: int | None = None,
+            ) -> None:
+                del target, requested, snapshot_id
+                raise RuntimeError("safe Athena open failure")
+
+            monkeypatch.setattr(AthenaPageVM, "open_table", fail_open)
+            ctx.hub.send(OpenAthenaTableRequest(table_ref))
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            restored = ctx.root_vm.content_host.current
+            assert isinstance(restored, GluePageVM)
+            assert restored.active_view == "catalog"
+            assert restored.catalog.selected_database_name == "dev_analytics"
+            assert restored.catalog.selected_table_name == "dev_events_iceberg"
+            assert restored.catalog.iceberg.active_view == "files"
+    finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
 

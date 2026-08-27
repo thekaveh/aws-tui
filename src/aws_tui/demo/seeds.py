@@ -9,8 +9,9 @@ for the curated content rationale.
 from __future__ import annotations
 
 import zlib
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
+from aws_tui.demo.clock import DEMO_NOW
 from aws_tui.demo.in_memory_athena import (
     InMemoryAthena,
     serialize_result_pages_csv,
@@ -43,10 +44,9 @@ from aws_tui.domain.query import (
     ResultPage,
 )
 
-# Fixed "now" for deterministic timestamps. Anchored at the spec's
-# write date so the seed reads as "recently active" forever — bumping
-# the anchor is a one-line change.
-_NOW: datetime = datetime(2026, 6, 28, 12, 0, 0, tzinfo=UTC)
+# Alias the shared deterministic clock so every service timeline advances
+# together when the showcase data is refreshed.
+_NOW: datetime = DEMO_NOW
 _DEV_SUCCESS_ROWS: tuple[tuple[str | None, ...], ...] = (
     ("Ada", "42"),
     ("Lin", ""),
@@ -196,6 +196,7 @@ _RESULT_ARTIFACTS: dict[str, dict[str, bytes]] = {
 
 def seed_s3_data(fs: InMemoryFS, *, profile: str) -> None:
     """Populate ``fs`` with the per-profile showcase objects."""
+    fs._mtime[PathRef(())] = _NOW
     objects = _PROFILE_OBJECTS.get(profile, _DEFAULT_OBJECTS)
     result_artifacts = _RESULT_ARTIFACTS.get(profile, {})
     for key, size in objects:
@@ -226,80 +227,87 @@ def seeded_demo_fs(profile: str) -> InMemoryFS:
 # ── EMR seed data ───────────────────────────────────────────────────────────
 
 
-def seed_emr_data(emr: InMemoryEmr) -> None:
-    """Populate ``emr`` with 2 apps + 10 runs spanning 4 states."""
+def seed_emr_data(emr: InMemoryEmr, *, profile: str = "demo-dev") -> None:
+    """Populate one profile-scoped EMR catalog with representative runs."""
+    profile_slug = profile.removeprefix("demo-") or "default"
+    is_default = profile == "demo-dev"
+    etl_app_id = "etl-pipeline-1" if is_default else f"{profile_slug}-etl-pipeline"
+    adhoc_app_id = "ad-hoc-queries" if is_default else f"{profile_slug}-ad-hoc-queries"
+    run_scope = "" if is_default else f"{profile_slug}-"
+    data_bucket = "demo-prod" if is_default else profile
+    log_bucket = "demo-emr-logs" if is_default else f"{profile}-emr-logs"
     emr.add_application(
-        app_id="etl-pipeline-1",
-        name="etl-pipeline-1",
+        app_id=etl_app_id,
+        name=etl_app_id,
         state=ApplicationState.STARTED,
     )
     emr.add_application(
-        app_id="ad-hoc-queries",
-        name="ad-hoc-queries",
+        app_id=adhoc_app_id,
+        name=adhoc_app_id,
         state=ApplicationState.STOPPED,
     )
-    # 4 SUCCESS runs on etl-pipeline-1.
+    # Four successful ETL runs.
     for i, days_ago in enumerate([6, 5, 4, 1]):
-        run_id = f"r-etl-success-{i:03d}"
+        run_id = f"r-{run_scope}etl-success-{i:03d}"
         emr.add_job_run(
-            application_id="etl-pipeline-1",
+            application_id=etl_app_id,
             job_run_id=run_id,
             name=f"nightly-2026-06-{22 + i:02d}",
             state=JobRunState.SUCCESS,
             created_at=_NOW - timedelta(days=days_ago),
         )
         emr.add_job_run_detail(
-            application_id="etl-pipeline-1",
+            application_id=etl_app_id,
             job_run_id=run_id,
-            entry_point="s3://demo-prod/etl/scripts/nightly.py",
-            s3_monitoring_log_uri="s3://demo-emr-logs/logs",
+            entry_point=f"s3://{data_bucket}/etl/scripts/nightly.py",
+            s3_monitoring_log_uri=f"s3://{log_bucket}/logs",
         )
         emr.add_log_file(
-            application_id="etl-pipeline-1",
+            application_id=etl_app_id,
             job_run_id=run_id,
             kind=LogFileKind.DRIVER_STDERR,
             lines=("INFO nightly job started", "INFO nightly job completed"),
         )
-    # 2 SUCCESS runs on ad-hoc-queries.
+    # Two successful ad-hoc runs.
     for i, days_ago in enumerate([3, 2]):
-        run_id = f"r-adhoc-success-{i:03d}"
+        run_id = f"r-{run_scope}adhoc-success-{i:03d}"
         emr.add_job_run(
-            application_id="ad-hoc-queries",
+            application_id=adhoc_app_id,
             job_run_id=run_id,
             name=f"ad-hoc-{i:02d}",
             state=JobRunState.SUCCESS,
             created_at=_NOW - timedelta(days=days_ago),
         )
         emr.add_job_run_detail(
-            application_id="ad-hoc-queries",
+            application_id=adhoc_app_id,
             job_run_id=run_id,
-            entry_point="s3://demo-prod/etl/scripts/ad-hoc.py",
-            s3_monitoring_log_uri="s3://demo-emr-logs/logs",
+            entry_point=f"s3://{data_bucket}/etl/scripts/ad-hoc.py",
+            s3_monitoring_log_uri=f"s3://{log_bucket}/logs",
         )
         emr.add_log_file(
-            application_id="ad-hoc-queries",
+            application_id=adhoc_app_id,
             job_run_id=run_id,
             kind=LogFileKind.DRIVER_STDOUT,
             lines=("INFO query accepted", "INFO query completed"),
         )
-    # 2 FAILED runs on etl-pipeline-1 with useful filtered log output.
+    # Two failed ETL runs with useful filtered log output.
     for i, days_ago in enumerate([3, 1]):
-        run_id = f"r-etl-failed-{i:03d}"
+        run_id = f"r-{run_scope}etl-failed-{i:03d}"
         emr.add_job_run(
-            application_id="etl-pipeline-1",
+            application_id=etl_app_id,
             job_run_id=run_id,
             name=f"nightly-2026-06-{25 + i:02d}",
             state=JobRunState.FAILED,
             created_at=_NOW - timedelta(days=days_ago),
         )
         emr.add_job_run_detail(
-            application_id="etl-pipeline-1",
+            application_id=etl_app_id,
             job_run_id=run_id,
-            entry_point="s3://demo-prod/etl/scripts/nightly.py",
-            s3_monitoring_log_uri="s3://demo-emr-logs/logs",
+            entry_point=f"s3://{data_bucket}/etl/scripts/nightly.py",
+            s3_monitoring_log_uri=f"s3://{log_bucket}/logs",
         )
         emr.add_log_file(
-            application_id="etl-pipeline-1",
+            application_id=etl_app_id,
             job_run_id=run_id,
             kind=LogFileKind.DRIVER_STDERR,
             lines=(
@@ -307,38 +315,40 @@ def seed_emr_data(emr: InMemoryEmr) -> None:
                 "Caused by: demo input schema mismatch",
             ),
         )
-    # 1 RUNNING run on etl-pipeline-1.
+    # One running ETL run.
+    running_id = f"r-{run_scope}etl-running-000"
     emr.add_job_run(
-        application_id="etl-pipeline-1",
-        job_run_id="r-etl-running-000",
+        application_id=etl_app_id,
+        job_run_id=running_id,
         name="adhoc-now",
         state=JobRunState.RUNNING,
         created_at=_NOW - timedelta(minutes=5),
     )
     emr.add_job_run_detail(
-        application_id="etl-pipeline-1",
-        job_run_id="r-etl-running-000",
-        entry_point="s3://demo-prod/etl/scripts/adhoc.py",
+        application_id=etl_app_id,
+        job_run_id=running_id,
+        entry_point=f"s3://{data_bucket}/etl/scripts/adhoc.py",
     )
-    # 1 PENDING run on ad-hoc-queries.
+    # One pending ad-hoc run.
+    pending_id = f"r-{run_scope}adhoc-pending-000"
     emr.add_job_run(
-        application_id="ad-hoc-queries",
-        job_run_id="r-adhoc-pending-000",
+        application_id=adhoc_app_id,
+        job_run_id=pending_id,
         name="queued-now",
         state=JobRunState.PENDING,
         created_at=_NOW - timedelta(seconds=30),
     )
     emr.add_job_run_detail(
-        application_id="ad-hoc-queries",
-        job_run_id="r-adhoc-pending-000",
-        entry_point="s3://demo-prod/etl/scripts/adhoc.py",
+        application_id=adhoc_app_id,
+        job_run_id=pending_id,
+        entry_point=f"s3://{data_bucket}/etl/scripts/adhoc.py",
     )
 
 
-def seeded_demo_emr() -> InMemoryEmr:
-    """Fresh ``InMemoryEmr`` pre-seeded with showcase data."""
+def seeded_demo_emr(profile: str = "demo-dev") -> InMemoryEmr:
+    """Fresh profile-scoped ``InMemoryEmr`` with showcase data."""
     emr = InMemoryEmr()
-    seed_emr_data(emr)
+    seed_emr_data(emr, profile=profile)
     return emr
 
 

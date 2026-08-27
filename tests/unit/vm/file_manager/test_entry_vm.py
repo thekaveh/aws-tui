@@ -11,7 +11,6 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import EntryKind, FileEntry
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
-from aws_tui.vm.messages import AuthExpiredMessage  # noqa: F401 — sanity import
 
 
 def _hub() -> MessageHub[Message]:

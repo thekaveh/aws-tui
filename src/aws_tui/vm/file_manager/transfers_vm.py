@@ -8,7 +8,6 @@ overlay.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from vmx import (
@@ -56,7 +55,7 @@ class TransfersVM:
             .builder()
             .name("transfers")
             .services(hub, dispatcher)
-            .children(self._initial_children)
+            .children(lambda: ())
             .auto_construct_on_add(True)
             .build()
         )
@@ -158,8 +157,6 @@ class TransfersVM:
         if existing is not None:
             return existing
         self._transfers.append(vm)
-        if self._inner.is_constructed:
-            vm.construct()
         self._inner.append(vm.inner)
         self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
         self._trim_finished()
@@ -252,9 +249,6 @@ class TransfersVM:
             if transfer.inner in self._inner:
                 self._inner.remove(transfer.inner)
             transfer.dispose()
-
-    def _initial_children(self) -> Iterable[ComponentVMOf[TransferModel]]:
-        return tuple(t.inner for t in self._transfers)
 
 
 def _infer_direction(source_label: str, destination_label: str) -> TransferDirection:

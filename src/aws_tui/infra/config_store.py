@@ -28,6 +28,7 @@ from typing import Any, BinaryIO, Final
 
 import tomli_w
 
+from aws_tui.infra.connection_validation import validate_endpoint_url
 from aws_tui.infra.paths import config_home
 from aws_tui.infra.redaction import safe_endpoint_display
 
@@ -301,7 +302,7 @@ class ConfigStore:
                     f"[connections.{name}] has invalid kind {kind!r}; "
                     f"expected one of {sorted(VALID_KINDS)}"
                 )
-            connections[name] = ConnectionEntry(
+            entry = ConnectionEntry(
                 name=name,
                 kind=kind,
                 profile=_optional_str_field(body, field="profile", table=f"connections.{name}"),
@@ -334,6 +335,8 @@ class ConfigStore:
                     table=f"connections.{name}",
                 ),
             )
+            _validate_connection_entry(entry)
+            connections[name] = entry
 
         raw_defaults = raw.get("defaults", {})
         if not isinstance(raw_defaults, dict):
@@ -421,8 +424,7 @@ class ConfigStore:
     def _save_unlocked(self, config: Config) -> None:
         """Write ``config`` while the caller owns the transaction lock."""
         for entry in config.connections.values():
-            if entry.kind not in VALID_KINDS:
-                raise ConfigError(f"connection {entry.name!r} has invalid kind {entry.kind!r}")
+            _validate_connection_entry(entry)
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # Defense-in-depth: the config.toml file itself is created with
@@ -632,6 +634,33 @@ def _optional_str_field(body: dict[str, Any], *, field: str, table: str) -> str 
     if value is None or isinstance(value, str):
         return value
     raise ConfigError(f"[{table}].{field} must be a string")
+
+
+def _validate_connection_entry(entry: ConnectionEntry) -> None:
+    if entry.kind not in VALID_KINDS:
+        raise ConfigError(f"connection {entry.name!r} has invalid kind {entry.kind!r}")
+    if entry.kind != "s3-compatible":
+        return
+
+    endpoint_error = validate_endpoint_url(entry.endpoint_url or "")
+    if endpoint_error is not None:
+        raise ConfigError(f"connection {entry.name!r} endpoint_url {endpoint_error}")
+
+    spec = entry.credentials or ""
+    if spec == "static":
+        if not (entry.access_key_id or "").strip() or not (entry.secret_access_key or "").strip():
+            raise ConfigError(
+                f"connection {entry.name!r} static credentials require nonblank "
+                "access_key_id and secret_access_key"
+            )
+        return
+    for prefix in ("keychain:", "env:", "aws-profile:"):
+        if spec.startswith(prefix) and spec[len(prefix) :].strip():
+            return
+    raise ConfigError(
+        f"connection {entry.name!r} credentials must be static or a nonblank "
+        "keychain:, env:, or aws-profile: reference"
+    )
 
 
 __all__ = [

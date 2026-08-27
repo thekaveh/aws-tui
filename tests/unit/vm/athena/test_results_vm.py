@@ -125,6 +125,37 @@ async def test_results_use_token_paging_without_eager_materialization() -> None:
 
 
 @pytest.mark.asyncio
+async def test_results_stop_paging_at_cumulative_row_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.vm.athena import results_vm
+
+    monkeypatch.setattr(results_vm, "_MAX_RESULT_ROWS", 1, raising=False)
+    client = ResultClient(
+        {
+            ("q-1", None): ResultPage((_ID,), (("one",),), "next"),
+            ("q-1", "next"): ResultPage((_ID,), (("two",),), "more"),
+        }
+    )
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+
+    await vm.load_more()
+
+    assert vm.rows == (("one",),)
+    assert vm.state is PaneState.IDLE
+    assert vm.error_text is None
+    assert vm.limit_reached
+    assert not vm.has_more
+
+    destination = make_results_vm(ResultClient({}))
+    await destination.restore_snapshot(vm.export_snapshot())
+
+    assert destination.rows == vm.rows
+    assert destination.limit_reached
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "expected_diagnostics"),
     [
@@ -608,6 +639,22 @@ async def test_replacement_load_more_uses_new_generation_while_old_page_is_block
         ("q-new", None),
         ("q-new", "new-next"),
     ]
+
+
+def test_retired_result_worker_cannot_clear_current_busy_state() -> None:
+    vm = make_results_vm(ResultClient({}))
+    old_worker = vm._worker  # type: ignore[attr-defined]
+    vm._begin_loading_more(old_worker)  # type: ignore[attr-defined]
+
+    vm.clear()
+    current_worker = vm._worker  # type: ignore[attr-defined]
+    vm._begin_loading_more(current_worker)  # type: ignore[attr-defined]
+    vm._finish_loading_more(old_worker)  # type: ignore[attr-defined]
+
+    assert vm.is_loading_more
+    vm._finish_loading_more(current_worker)  # type: ignore[attr-defined]
+    assert not vm.is_loading_more
+    vm.dispose()
 
 
 @pytest.mark.asyncio

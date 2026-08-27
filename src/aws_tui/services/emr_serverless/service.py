@@ -14,7 +14,7 @@ host this VM as a singleton (see [[vmx-content-host-singleton-trap]])."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import ClassVar, cast
 
 import aioboto3
 from vmx import Message, MessageHub
@@ -23,23 +23,23 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogChunk, LogFile, LogFilter
 from aws_tui.domain.emr_serverless import (
     EMR_BOTO_CONFIG,
+    ApplicationSummary,
     EmrServerlessClient,
+    EmrServerlessClientProtocol,
+    JobRunDetail,
     JobRunState,
     JobRunSummary,
     map_boto_error,
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.service_source_vm import ServiceSelectionStore
 from aws_tui.vm.services_protocol import ServiceDescriptor
 
-if TYPE_CHECKING:
-    from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
-
-
 #: Test hook — when provided, replaces real ``EmrServerlessClient`` construction
 #: with whatever the factory returns (typically ``_InMemoryEmr``).
-EmrClientFactory = Callable[[Connection], Any]
+EmrClientFactory = Callable[[Connection], EmrServerlessClientProtocol]
 EmrLogsClientFactory = Callable[[Connection], EmrServerlessLogsClient]
 
 
@@ -52,10 +52,14 @@ def _map_session_construction_error(exc: BaseException) -> ProviderError:
 
 class _FailedEmrLogsClient:
     def __init__(self, error: ProviderError) -> None:
-        self._error = error
+        self._error_type = type(error)
+        self._error_args = error.args
+
+    def _fresh_error(self) -> ProviderError:
+        return self._error_type(*self._error_args)
 
     async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]:
-        raise self._error
+        raise self._fresh_error()
 
     async def stream(
         self,
@@ -65,16 +69,20 @@ class _FailedEmrLogsClient:
         max_bytes: int,
         filter_: LogFilter,
     ) -> AsyncIterator[LogChunk]:
-        raise self._error
+        raise self._fresh_error()
         yield  # pragma: no cover
 
 
 class _FailedEmrClient:
     def __init__(self, error: ProviderError) -> None:
-        self._error = error
+        self._error_type = type(error)
+        self._error_args = error.args
 
-    async def list_applications(self) -> list[object]:
-        raise self._error
+    def _fresh_error(self) -> ProviderError:
+        return self._error_type(*self._error_args)
+
+    async def list_applications(self) -> list[ApplicationSummary]:
+        raise self._fresh_error()
 
     async def list_job_runs_page(
         self,
@@ -83,7 +91,7 @@ class _FailedEmrClient:
         start_token: str | None = None,
         states: set[JobRunState] | None = None,
     ) -> tuple[list[JobRunSummary], str | None]:
-        raise self._error
+        raise self._fresh_error()
 
     async def list_job_runs(
         self,
@@ -92,10 +100,10 @@ class _FailedEmrClient:
         states: set[JobRunState] | None = None,
         max_results: int = 100,
     ) -> list[JobRunSummary]:
-        raise self._error
+        raise self._fresh_error()
 
-    async def get_job_run(self, application_id: str, job_run_id: str) -> object:
-        raise self._error
+    async def get_job_run(self, application_id: str, job_run_id: str) -> JobRunDetail:
+        raise self._fresh_error()
 
     async def start_job_run(
         self,
@@ -107,10 +115,10 @@ class _FailedEmrClient:
         spark_submit_parameters: str | None,
         name: str | None = None,
     ) -> str:
-        raise self._error
+        raise self._fresh_error()
 
     def make_logs_client(self) -> _FailedEmrLogsClient:
-        return _FailedEmrLogsClient(self._error)
+        return _FailedEmrLogsClient(self._fresh_error())
 
 
 class EmrServerlessService:
@@ -136,20 +144,7 @@ class EmrServerlessService:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="emr-serverless",
         label="EMR",
-        # 🔥 U+1F525 FIRE — SMP single-codepoint, renders 2-cell
-        # colour reliably and draws to the full bounding box (the
-        # 💥 COLLISION glyph that briefly shipped in PR #83 drew
-        # to a tighter box and read as smaller than the 🪣 nav
-        # peer; user feedback). Fifth icon attempt:
-        #   PR #77 ⚡  (BMP U+26A1)         → 1-cell outline, broke layout
-        #   PR #79 🔥  (SMP U+1F525)        → 2-cell colour, worked
-        #   PR #81 ⚡️ (BMP U+26A1+VS-16)   → broke layout again
-        #   PR #83 💥 (SMP U+1F4A5)        → small bounding box vs 🪣
-        #         🔥  (SMP U+1F525)        → here, back to the known good
-        # Semantically apt for Spark (the framework). Future icon
-        # contract: pick from the SMP block (U+1F***) and prefer
-        # glyphs that draw to the full bounding box; see
-        # nav_menu.py for the 2-cell layout invariant.
+        # Retained descriptor metadata; service rows render the EMR label.
         icon="🔥",
     )
 
@@ -175,14 +170,8 @@ class EmrServerlessService:
         this predicate."""
         return connection.kind == "aws"
 
-    def build_vm(self, connection: Connection) -> "EmrServerlessPageVM":  # noqa: UP037
-        """Build a fresh page VM for ``connection``.
-
-        Lazy-imported because :mod:`aws_tui.vm.emr_serverless.page_vm`
-        depends on this module's :class:`ServiceDescriptor`; an eager
-        import would cycle."""
-        from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
-
+    def build_vm(self, connection: Connection) -> EmrServerlessPageVM:
+        """Build a fresh page VM for ``connection``."""
         client = self._make_client(connection)
         logs_client = self._make_logs_client(connection, client=client)
         return EmrServerlessPageVM(
@@ -196,7 +185,7 @@ class EmrServerlessService:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _make_client(self, connection: Connection) -> Any:
+    def _make_client(self, connection: Connection) -> EmrServerlessClientProtocol:
         if self._client_factory is not None:
             return self._client_factory(connection)
         try:
@@ -209,7 +198,10 @@ class EmrServerlessService:
         return EmrServerlessClient(session=session, region_name=connection.region)
 
     def _make_logs_client(
-        self, connection: Connection, *, client: Any | None = None
+        self,
+        connection: Connection,
+        *,
+        client: EmrServerlessClientProtocol | None = None,
     ) -> EmrServerlessLogsClient:
         if self._logs_client_factory is not None:
             return self._logs_client_factory(connection)

@@ -165,6 +165,7 @@ async def test_hub_subscription_marks_unreachable_via_pane_state(
     ctx.quick_look_vm.dispose()
     ctx.command_palette_vm.dispose()
     ctx.root_vm.dispose()
+    ctx.log_sink.close()
 
 
 @pytest.mark.asyncio
@@ -199,6 +200,7 @@ async def test_hub_subscription_ignores_local_pane(tmp_path: Path) -> None:
     ctx.quick_look_vm.dispose()
     ctx.command_palette_vm.dispose()
     ctx.root_vm.dispose()
+    ctx.log_sink.close()
 
 
 @pytest.mark.asyncio

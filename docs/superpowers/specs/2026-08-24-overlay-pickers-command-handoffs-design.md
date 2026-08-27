@@ -1,7 +1,6 @@
 # 1. Overlay pickers, one-line commands, and Glue-to-Athena handoffs design
 
-**Status:** Implemented on the feature branch on 2026-08-25; integration into
-`develop` remains pending independent review.
+**Status:** Implemented and integrated into `develop` on 2026-08-25.
 
 This document is the source of truth for the interaction and presentation work
 requested after hands-on review of Glue and Athena on `develop`. It builds on the
@@ -22,7 +21,8 @@ Second, the custom selector widgets intentionally expand in normal document
 flow. `ContextPicker.-open` changes the picker to `height: auto`, while EMR's
 `ApplicationPicker` reveals an in-flow `OptionList` and lets its parent grow.
 Opening either selector can move or resize surrounding panes. Closing it requires
-another layout pass and can leave visually stale geometry. Textual 0.89.1 already
+another layout pass and can leave visually stale geometry. At the time of this
+design, Textual 0.89.1 already
 uses a screen overlay for its native `SelectOverlay`, proving that the desired
 non-reflow behavior is supported by the installed UI framework.
 

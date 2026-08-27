@@ -176,7 +176,7 @@ class NavMenu(Widget, can_focus=True):
         the legacy direct mutation when no coordinator is wired
         (e.g. test harnesses that haven't migrated yet)."""
         if self._focus_coordinator is not None:
-            self._focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
+            self._focus_coordinator.project_focused_slot(FocusSlot.NAV_MENU)
             return
         with contextlib.suppress(Exception):
             self.screen.add_class("-rail-active")
@@ -300,7 +300,7 @@ class NavMenu(Widget, can_focus=True):
         if self._focus_coordinator is not None:
             slot = _SERVICE_DEFAULT_SLOT.get(target_id)
             if slot is not None:
-                self._focus_coordinator.set_focused_slot(slot)
+                self._focus_coordinator.project_focused_slot(slot)
         focus_active = getattr(app, "focus_active_service_pane", None)
         if callable(focus_active):
             focus_active()

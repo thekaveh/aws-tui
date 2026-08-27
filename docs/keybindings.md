@@ -5,9 +5,9 @@
 > installed at runtime through `BindingResolver`. Only action IDs with
 > registered handlers receive live Textual bindings.
 
-The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
-(terminals intercept it). Letter-driven, with the command palette
-(`:` or `Ctrl+K`) as the universal escape hatch.
+The cross-platform defaults avoid F-keys and terminal-specific command
+modifiers. They are letter-driven, with the command palette (`:` or `Ctrl+K`)
+as the universal escape hatch.
 
 > **Wiring status:** rows below tagged `(deferred)` are
 > declared in `KeymapStore.DEFAULT_BINDINGS` but the matching
@@ -25,8 +25,6 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Descend into directory / bucket | `Enter` | |
 | Ascend one level | `Backspace` or `left` | |
 | Switch pane focus | `Tab` / `Shift+Tab` | |
-| Top / bottom | `g` / `G` | |
-| Toggle hidden files (LocalFS) | `.` | |
 
 ### 1.1.2. Selection
 
@@ -37,14 +35,14 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 | Extend selection one row | `Shift+↑` / `Shift+↓` | Marks the row the cursor is leaving + moves cursor |
 | Modifier+click on row | `Shift+Click`, `Cmd+Click`, `Ctrl+Click` | Toggles mark on the clicked row; on macOS terminals reserve `Shift+Click`, so `Cmd+Click` is the reliable path there |
 | Select all | `pane.select_all` action — *(deferred)* | Spec'd on `a` (in multi-select); not wired |
-| Clear selection | `Esc` (in multi-select) | Modal-style cancel; clears mark set |
+| Clear selection | no shipped command — *(deferred)* | Persistent marks can be toggled individually; a keyboard clear-all action is not registered. |
 
 ### 1.1.3. File operations
 
 | Action | Default | Notes |
 |---|---|---|
 | Copy across panes | `c` | Streams through `CrossFsCopy`, shows confirm modal |
-| Move across panes | `pane.move` action — *(deferred)* | The move handler is not yet wired in `AwsTuiApp` — `m` is no longer reserved for the nav-menu toggle (the rail is always visible post-PR-#94 — see §1.5) so `m` is available for the move action when the deferred wiring lands |
+| Move across panes | `pane.move` action — *(deferred)* | The move handler is not yet wired in `AwsTuiApp`; the always-visible navigation rail does not claim `m`, so the key remains available when move wiring lands. |
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
 | New folder | `pane.new` action — *(deferred)* | No handler wired in v0.8.x |
 | Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
@@ -66,13 +64,13 @@ The defaults are macOS-tailored — no F-keys, no `⌘`-modifier
 
 | Action | Default | Notes |
 |---|---|---|
-| Open Settings | `,` (comma) | Opens the in-app Settings nav page directly. Equivalent to arrow-keying down to the ⚙ Settings row in the rail and pressing `Enter`. |
+| Open Settings | `,` (comma) | Opens the in-app Settings nav page directly. Equivalent to arrow-keying down to the Settings row in the rail and pressing `Enter`. |
 | Switch source | `Shift+S` (`S`) | On S3, cycles the focused pane through `local` and resolver-ordered configured sources. On single-context AWS services such as EMR, Glue, and Athena, rebuilds the current service under the next supported AWS profile. |
 
 > **Nav-menu visibility:** the left rail is always visible at a single
-> fixed width and shows TEXT labels (Settings docked at the bottom as
-> the ⚙ glyph). The pre-PR-#94 `m`-key collapse/expand toggle was
-> dropped because there is no longer a collapsed mode to toggle into;
+> fixed width and shows text labels (Settings is docked at the bottom with its
+> settings icon). The former `m`-key collapse/expand toggle was dropped because
+> there is no longer a collapsed mode to toggle into;
 > `BindingResolver` does not emit `m` because the deferred `pane.move`
 > action has no registered handler (§1.3).
 
@@ -95,12 +93,12 @@ connection-switch entries in the row above remain deferred.
 
 ### 1.1.8. EMR Serverless
 
-These are wired by `EmrServerlessPage` (added post-tag, PR #76; arrow-
-key routing added by PR #78; layout overhaul by PR #80; clone-job-run
-modal added by PR #83). The EMR page is mounted in place of the S3
-dual-pane when the **EMR** nav row is selected. Bindings are
-App-level `priority=True` and short-circuit through
-`_emr_active_pane()` before the dual-pane guard fires.
+These actions are wired by `EmrServerlessPage`. The EMR page is mounted in
+place of the S3 dual-pane when the **EMR** navigation row is selected.
+Bindings resolve at App level and short-circuit through `_emr_active_pane()`
+before the dual-pane guard fires. Non-printable navigation keys use App
+priority where appropriate; printable action keys remain non-priority so a
+focused editable widget can consume text first.
 
 | Action | Default | Notes |
 |---|---|---|
@@ -111,7 +109,7 @@ App-level `priority=True` and short-circuit through
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the LEFT-pane row cursor; master-detail follows the cursor (the RIGHT pane re-loads on every cursor move, not only on `Enter`). |
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
 | Refresh | `r` | Forces an immediate poll on the active pane (apps if LEFT focused on the picker, runs if LEFT focused on the runs list, detail if RIGHT focused). |
-| Clone selected job run | `c` | Opens the `JobRunCloneModal` pre-filled from the focused run (name, entry point, IAM, args, spark params). Save fires `EmrServerlessClient.start_job_run`; success / error route through the unified `notifications.success` / `notifications.error` helpers (`Subject = "Job"`). `AwsTuiApp.action_copy` priority binding hijacks `c` to the EMR clone path when EMR is mounted — parallel to the dual-pane priority short-circuits for Tab / arrows. Added in PR #83. |
+| Clone selected job run | `c` | Opens the `JobRunCloneModal` pre-filled from the focused run (name, entry point, IAM, args, spark params). Save fires `EmrServerlessClient.start_job_run`; success / error route through the unified `notifications.success` / `notifications.error` helpers (`Subject = "Job"`). `AwsTuiApp.action_copy` routes `c` to the EMR clone path when EMR is mounted, parallel to the dual-pane priority short-circuits for Tab and arrows. |
 | Cycle pane focus | `Tab` / `Shift+Tab` | 6-slot cycle: nav rail → source selector → application selector → runs pane → detail pane → logs pane → nav rail. |
 | Backspace | `Backspace` | No-op on EMR (symmetric to `Descend` having an EMR branch). |
 | Load logs (on-demand) | `Enter` | Loads logs from S3 into the RIGHT-logs pane (first press in the logs slot after Tab-focusing). File chips preserve exact retry attempt and Spark executor or Hive/Tez worker identity, including rotated stdout/stderr objects. |
@@ -286,14 +284,14 @@ unbound until a handler ships.
 | `pane.toggle_select` | `space` (multi-select) | *(deferred)* | Add / remove from selection |
 | `pane.select_all` | `a` | *(deferred)* | Select all in pane |
 | `pane.copy` | `c` | yes | Copy marked entries to other pane |
-| `pane.move` | `m` | *(deferred)* | Move marked entries (or rename one) — `m` is no longer reserved for the nav-menu toggle (dropped in PR #94), so the default is available when the wiring lands |
+| `pane.move` | `m` | *(deferred)* | Move marked entries (or rename one); the always-visible navigation rail leaves `m` available when the wiring lands. |
 | `pane.delete` | `d` | yes | Delete marked entries (confirms) |
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
 | `pane.refresh` | `r` | yes | Re-run `provider.list()` |
 | `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Reserved for a future auth helper; currently run `aws sso login --profile <name>` yourself |
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
-| `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run (PR #83) |
-| `emr.logs.filter` | `f` (when EMR logs pane focused) | widget-scoped | Open the EMR logs filter modal |
+| `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |
+| `emr.logs.filter` | `f` (when EMR logs pane focused) | yes | Open the EMR logs filter modal |
 | `glue.catalog` | `1` | yes | Select the Glue Catalog view |
 | `glue.jobs` | `2` | yes | Select the Glue Jobs view |
 | `glue.crawlers` | `3` | yes | Select the Glue Crawlers view |
@@ -318,7 +316,6 @@ unbound until a handler ships.
 | `athena.open_in_glue` | none (command palette) | yes | Open the one unambiguous visible query table in Glue |
 | `pane.modal_left` | `left` | yes | Route left-arrow modal or pane navigation |
 | `pane.modal_right` | `right` | yes | Route right-arrow modal or pane navigation |
-| `modal.cancel` | `escape` | yes | Cancel / close current overlay (modal-owned) |
 
 Rows with a default key are registered by
 `KeymapStore.DEFAULT_BINDINGS` and may be overlaid in
@@ -329,6 +326,9 @@ registered in `ActionRegistry`, and absent from
 supported.
 Any unknown overlay id is logged and causes the app to fall back to
 the default keymap.
+
+Modal and selector cancellation remains locally owned by each overlay and uses
+`Escape`; it is intentionally not a configurable App action.
 
 All live App-level bindings are installed through `BindingResolver`,
 including `Shift+↑` / `Shift+↓` for extend-selection. Their

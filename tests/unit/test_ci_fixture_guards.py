@@ -4,28 +4,28 @@ import threading
 
 import pytest
 
-from tests.integration.conftest import _minio_unavailable, _start_minio_or_unavailable
+from tests.integration.conftest import _s3_compat_unavailable, _start_s3mock_or_unavailable
 from tests.unit.domain.conftest import _start_moto_server
 
 
-def test_minio_unavailability_fails_the_ci_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_s3mock_unavailability_fails_the_ci_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CI", "true")
 
-    with pytest.raises(pytest.fail.Exception, match="MinIO unavailable"):
-        _minio_unavailable("MinIO unavailable")
+    with pytest.raises(pytest.fail.Exception, match="S3Mock unavailable"):
+        _s3_compat_unavailable("S3Mock unavailable")
 
 
-def test_minio_unavailability_skips_an_optional_local_run(
+def test_s3mock_unavailability_skips_an_optional_local_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("CI", raising=False)
 
-    with pytest.raises(pytest.skip.Exception, match="MinIO unavailable"):
-        _minio_unavailable("MinIO unavailable")
+    with pytest.raises(pytest.skip.Exception, match="S3Mock unavailable"):
+        _s3_compat_unavailable("S3Mock unavailable")
 
 
 @pytest.mark.parametrize("ci", [False, True])
-def test_failed_minio_startup_stops_partial_container(
+def test_failed_s3mock_startup_stops_partial_container(
     monkeypatch: pytest.MonkeyPatch, ci: bool
 ) -> None:
     class _PartialContainer:
@@ -47,7 +47,7 @@ def test_failed_minio_startup_stops_partial_container(
     container = _PartialContainer()
 
     with pytest.raises(expected, match="readiness failed"):
-        _start_minio_or_unavailable(container)
+        _start_s3mock_or_unavailable(container)
 
     assert container.stopped is True
 

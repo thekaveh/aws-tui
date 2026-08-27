@@ -6,11 +6,11 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunState
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm.emr_serverless.job_runs_vm import _ACTIVE_STATES, JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _seed_runs(fake: _InMemoryEmr, app: str) -> None:
@@ -211,6 +211,33 @@ async def test_load_more_appends_next_page_then_clears_has_more() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_more_stops_at_explicit_item_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.vm.emr_serverless import job_runs_vm
+
+    monkeypatch.setattr(job_runs_vm, "_MAX_JOB_RUN_ITEMS", 2, raising=False)
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.page_size = 1
+    for index in range(3):
+        fake.add_job_run(
+            application_id="a1",
+            job_run_id=f"r{index}",
+            state=JobRunState.SUCCESS,
+        )
+    vm.set_application("a1")
+    await vm.refresh()
+
+    await vm.load_more()
+
+    assert len(vm.runs) == 2
+    assert not vm.has_more
+    assert vm.limit_reached
+    assert vm.state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_load_more_is_noop_when_no_more_pages() -> None:
     """Defensive: the pane keeps the PgDn binding even on
     fully-drained lists; calling load_more then must NOT re-fetch
@@ -316,6 +343,35 @@ async def test_load_more_rejects_repeated_continuation_token() -> None:
 
     assert vm.has_more is False
     assert vm.error_text == "EMR Serverless repeated a job-run continuation token"
+
+
+@pytest.mark.asyncio
+async def test_load_more_rejects_multi_token_cycle_before_mutation() -> None:
+    class _CyclicTokenClient(_InMemoryEmr):
+        async def list_job_runs_page(self, *args: object, **kwargs: object) -> object:
+            page, _token = await super().list_job_runs_page(  # type: ignore[arg-type]
+                *args,
+                **{**kwargs, "start_token": None},
+            )
+            lineage = {None: "A", "A": "B", "B": "A"}
+            return page, lineage[kwargs.get("start_token")]
+
+    fake = _CyclicTokenClient()
+    hub: MessageHub[Message] = MessageHub()
+    vm = JobRunsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    vm.set_application("a1")
+    await vm.refresh()
+    await vm.load_more()
+    before = vm.runs
+
+    await vm.load_more()
+
+    assert vm.runs == before
+    assert vm.error_text == "EMR Serverless repeated a job-run continuation token"
+    vm.dispose()
 
 
 # -------------------- Phase 2: composite-backed selection (§4.2.1) --------------------

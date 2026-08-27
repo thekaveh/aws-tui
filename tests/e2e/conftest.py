@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.s3.service import S3Service
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 _AWS_CREDENTIAL_ENV_VARS = (
     "AWS_ACCESS_KEY_ID",
@@ -49,8 +50,13 @@ def _isolated_aws_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.fixture
-def app_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[AppContext]:
+def app_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[AppContext]:
     """Build a fresh ``AppContext`` rooted at tmp dirs (no home pollution)."""
+    stdlib_logger = logging.getLogger("aws_tui")
+    logger_baseline = (stdlib_logger.level, stdlib_logger.propagate)
     cfg = tmp_path / "config"
     cache = tmp_path / "cache"
     cfg.mkdir(parents=True, exist_ok=True)
@@ -73,3 +79,9 @@ def app_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[App
         # Best-effort dispose.
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+        ctx.log_sink.close()
+        assert (stdlib_logger.level, stdlib_logger.propagate) == logger_baseline
+        assert all(
+            getattr(handler, "baseFilename", None) != str(ctx.log_sink.path)
+            for handler in stdlib_logger.handlers
+        )

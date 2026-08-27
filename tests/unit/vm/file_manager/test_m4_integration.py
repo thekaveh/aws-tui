@@ -19,6 +19,7 @@ import pytest
 from vmx import NULL_DISPATCHER, ComponentVM
 from vmx.lifecycle.status import ConstructionStatus
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.aws_session import TokenState
@@ -30,7 +31,6 @@ from aws_tui.services.s3 import S3Service
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _astream(payload: bytes) -> AsyncIterator[bytes]:

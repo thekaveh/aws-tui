@@ -9,6 +9,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import (
     EMR_BOTO_CONFIG,
     ApplicationState,
@@ -22,7 +23,6 @@ from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _make(
@@ -538,6 +538,41 @@ async def test_select_job_run_cascades_to_logs_vm_without_log_uri() -> None:
     )
     await page.setup()
     await page.select_job_run("r1")
+    assert page.job_run_logs.state is LogsState.NO_LOG_CONFIG
+
+
+@pytest.mark.asyncio
+async def test_failed_detail_refresh_retargets_logs_away_from_previous_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="app")
+    for run_id in ("r1", "r2"):
+        fake.add_job_run(application_id="a1", job_run_id=run_id)
+        fake.add_job_run_detail(
+            application_id="a1",
+            job_run_id=run_id,
+            s3_monitoring_log_uri=f"s3://logs/{run_id}",
+        )
+    await page.setup()
+    await page.select_job_run("r1")
+    assert page.job_run_logs.job_run_id == "r1"
+
+    original_get_job_run = fake.get_job_run
+
+    async def fail_second_detail(application_id: str, job_run_id: str):  # type: ignore[no-untyped-def]
+        if job_run_id == "r2":
+            raise ProviderUnreachableError("network blip")
+        return await original_get_job_run(application_id, job_run_id)
+
+    monkeypatch.setattr(fake, "get_job_run", fail_second_detail)
+
+    await page.select_job_run("r2")
+
+    assert page.job_run_detail.state is PaneState.UNREACHABLE
+    assert page.job_run_detail.detail is None
+    assert page.job_run_logs.application_id == "a1"
+    assert page.job_run_logs.job_run_id == "r2"
     assert page.job_run_logs.state is LogsState.NO_LOG_CONFIG
 
 

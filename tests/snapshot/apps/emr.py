@@ -12,6 +12,7 @@ from textual.pilot import Pilot
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import ApplicationState, JobRunState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.theme_store import ThemeStore
@@ -23,7 +24,6 @@ from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.service_source_vm import ServiceSourceContext
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 _FIXED_TS = datetime(2026, 6, 25, 12, 0, 0, tzinfo=UTC)
 

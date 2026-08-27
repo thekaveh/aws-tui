@@ -32,37 +32,37 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python ${{ matrix.python }}
         run: uv python install ${{ matrix.python }}
       - name: sync
-        run: uv sync --frozen --python ${{ matrix.python }}
+        run: uv sync --locked --python ${{ matrix.python }}
       # Runs unit + the in-process integration files (full-app pilot,
       # modal forwarding, etc. — they intentionally lack the
       # `integration` marker per pyproject's addopts comment). The
-      # MinIO testcontainer tier is excluded by the default
+      # S3Mock testcontainer tier is excluded by the default
       # `-m 'not integration'` addopts and runs in the integration job
       # below.
       - name: pytest (unit + in-process integration)
         run: uv run --python ${{ matrix.python }} pytest tests/unit tests/integration -v
 
   integration:
-    name: integration (MinIO testcontainer)
+    name: integration (S3Mock testcontainer)
     timeout-minutes: 20
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --frozen --python 3.12
+        run: uv sync --locked --python 3.12
       - name: pytest (integration tier)
         run: uv run pytest tests/integration -m integration -v
 
@@ -72,14 +72,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --frozen --python 3.12
+        run: uv sync --locked --python 3.12
       - name: pytest coverage (unit + in-process integration)
         run: uv run --python 3.12 pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml
 
@@ -93,14 +93,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --frozen --python 3.12
+        run: uv sync --locked --python 3.12
       - name: pytest (snapshot tier)
         run: uv run pytest tests/snapshot -v
 
@@ -110,14 +110,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --frozen --python 3.12
+        run: uv sync --locked --python 3.12
       - name: pytest (e2e tier)
         run: uv run pytest tests/e2e -v
 
@@ -127,7 +127,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -136,7 +136,7 @@ jobs:
       - name: install Python 3.11 for pre-commit hooks
         run: uv python install 3.11
       - name: sync
-        run: uv sync --frozen --python 3.12
+        run: uv sync --locked --python 3.12
       - name: layer rules
         run: ./scripts/check-layers.sh
       # Surfaces every hook defined in .pre-commit-config.yaml:
@@ -160,14 +160,14 @@ jobs:
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python ${{ matrix.python }}
         run: uv python install ${{ matrix.python }}
       - name: export locked requirements
-        run: uv export --frozen --python ${{ matrix.python }} --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit.txt"
+        run: uv export --locked --all-groups --python ${{ matrix.python }} --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit.txt"
       - name: pip-audit (locked dependencies)
         run: uv run --python ${{ matrix.python }} pip-audit -r "$RUNNER_TEMP/requirements-audit.txt" --require-hashes --disable-pip
 
@@ -177,16 +177,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync
-        run: uv sync --frozen --python 3.12
+        run: uv sync --locked --python 3.12
       - name: build wheel + sdist
         run: uv build --no-build-isolation
+      - name: validate artifact contents
+        run: uv run python -m scripts.check_dist dist/
       - name: twine check
         run: uv run twine check dist/*
       - name: upload build artifacts
@@ -204,24 +206,54 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install libcairo2
         run: sudo apt-get update && sudo apt-get install -y libcairo2
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install Python 3.12
         run: uv python install 3.12
       - name: sync (docs group)
-        run: uv sync --frozen --python 3.12 --group docs
+        run: uv sync --locked --python 3.12 --group docs
       - name: documentation drift and strict build
         run: make docs-check
       - name: pytest (documentation contracts)
         run: uv run pytest tests/docs -v
 
+  lowest-supported-dependencies:
+    name: lowest supported dependencies (py3.11)
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: install Python 3.11
+        run: uv python install 3.11
+      - name: install declared minimum dependencies
+        shell: bash
+        run: |
+          uv venv --python 3.11 lowest-supported-venv
+          PY="lowest-supported-venv/bin/python"
+          uv pip install --resolution lowest-direct --python "$PY" .
+          uv pip install --python "$PY" pytest pytest-asyncio "pytest-timeout>=2.4" "moto[server,s3]>=5"
+      - name: exercise minimum dependency runtime
+        run: |
+          lowest-supported-venv/bin/python -m pytest \
+            tests/minimum_runtime/test_dependency_floors.py \
+            tests/unit/infra/test_connection_resolver.py \
+            tests/unit/infra/test_keychain.py \
+            tests/unit/test_app_sanity.py \
+            tests/unit/domain/test_sql_policy.py \
+            tests/unit/vm/test_vmx_smoke.py \
+            -q
+
   gate:
     name: ci gate
     timeout-minutes: 5
     if: always()
-    needs: [unit, integration, coverage, snapshot, e2e, lint-type, security, pkg, docs]
+    needs: [unit, integration, coverage, snapshot, e2e, lint-type, security, pkg, docs, lowest-supported-dependencies]
     runs-on: ubuntu-24.04
     steps:
       - name: require every CI tier

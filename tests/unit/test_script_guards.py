@@ -102,10 +102,10 @@ def test_bootstrap_rejects_stale_uv_before_sync(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "aws-tui requires uv >= 0.11.19; found 0.5.7" in result.stderr
-    assert "uv sync --frozen" not in result.stdout
+    assert "uv sync --locked --all-groups" not in result.stdout
 
 
-def test_bootstrap_installs_pre_commit_python_before_sync(tmp_path: Path) -> None:
+def test_bootstrap_installs_all_groups_before_pre_commit(tmp_path: Path) -> None:
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
@@ -120,9 +120,18 @@ exit 0
     assert result.returncode == 0
     assert calls.read_text(encoding="utf-8").splitlines() == [
         "python install 3.11",
-        "sync --frozen",
+        "sync --locked --all-groups",
         "run pre-commit install",
     ]
+
+
+def test_dev_tooling_declares_textual_cli_dependency() -> None:
+    import tomllib
+
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dev_dependencies = project["dependency-groups"]["dev"]
+
+    assert any(requirement.startswith("textual-dev>=") for requirement in dev_dependencies)
 
 
 def test_dev_script_routes_through_stale_uv_guard(tmp_path: Path) -> None:
@@ -177,3 +186,33 @@ exit 2
 
     assert result.returncode == 0
     assert result.stdout.strip() == "layer rules clean"
+
+
+def test_check_layers_resolves_relative_imports_from_package_init(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    package = repo / "src" / "aws_tui" / "vm"
+    scripts.mkdir(parents=True)
+    package.mkdir(parents=True)
+    (scripts / "check-layers.sh").write_bytes(
+        (REPO_ROOT / "scripts" / "check-layers.sh").read_bytes()
+    )
+    (package / "__init__.py").write_text("from ..ui import Widget\n", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "python3",
+        f'#!/bin/sh\nexec "{sys.executable}" "$@"\n',
+    )
+
+    result = subprocess.run(
+        ["/bin/bash", str(scripts / "check-layers.sh")],
+        cwd=repo,
+        env={**os.environ, "PATH": f"{bin_dir}:{BASE_PATH}"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "resolved aws_tui.ui" in result.stdout

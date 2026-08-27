@@ -12,6 +12,7 @@ from unittest.mock import call
 import botocore.exceptions
 import pytest
 
+from aws_tui.domain import athena as athena_module
 from aws_tui.domain.athena import (
     AthenaCatalogSummary,
     AthenaClient,
@@ -518,6 +519,68 @@ async def test_get_query_execution_defaults_optional_statistics() -> None:
     assert detail.error is None
 
 
+async def test_get_query_executions_batches_once_and_preserves_requested_order() -> None:
+    first = cast(dict[str, object], _query_execution("SUCCEEDED")["QueryExecution"])
+    first["QueryExecutionId"] = "q-1"
+    second = cast(dict[str, object], _query_execution("RUNNING")["QueryExecution"])
+    second["QueryExecutionId"] = "q-2"
+    client, boto, _ = _athena_client(
+        "batch_get_query_execution",
+        {
+            "QueryExecutions": [second, first],
+            "UnprocessedQueryExecutionIds": [],
+        },
+    )
+
+    details = await client.get_query_executions(["q-1", "q-2"])
+
+    assert tuple(detail.summary.ref.execution_id for detail in details) == ("q-1", "q-2")
+    boto.batch_get_query_execution.assert_awaited_once_with(QueryExecutionIds=["q-1", "q-2"])
+    boto.get_query_execution.assert_not_awaited()
+
+
+async def test_get_query_executions_rejects_unprocessed_ids() -> None:
+    client, _, _ = _athena_client(
+        "batch_get_query_execution",
+        {
+            "QueryExecutions": [],
+            "UnprocessedQueryExecutionIds": [
+                {
+                    "QueryExecutionId": "q-sensitive",
+                    "ErrorCode": "INTERNAL_ERROR",
+                    "ErrorMessage": "could not process q-sensitive",
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await client.get_query_executions(["q-sensitive"])
+
+    assert "q-sensitive" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "response_ids",
+    [("q-1",), ("q-1", "q-1")],
+)
+async def test_get_query_executions_rejects_incomplete_or_duplicate_results(
+    response_ids: tuple[str, ...],
+) -> None:
+    rows: list[dict[str, object]] = []
+    for execution_id in response_ids:
+        row = cast(dict[str, object], _query_execution()["QueryExecution"])
+        row["QueryExecutionId"] = execution_id
+        rows.append(row)
+    client, _, _ = _athena_client(
+        "batch_get_query_execution",
+        {"QueryExecutions": rows, "UnprocessedQueryExecutionIds": []},
+    )
+
+    with pytest.raises(ValidationError, match="malformed Athena response"):
+        await client.get_query_executions(["q-1", "q-2"])
+
+
 async def test_get_query_runtime_statistics_maps_timeline_and_input_bytes() -> None:
     client, boto, _ = _athena_client(
         "get_query_runtime_statistics",
@@ -836,6 +899,39 @@ async def test_terminal_observation_revokes_stop_authority() -> None:
         await client.stop_query("q-started")
 
     boto.stop_query_execution.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_foreign_terminal_history_does_not_enter_app_ownership_ledgers() -> None:
+    client, boto, _ = _athena_client()
+
+    for index in range(25):
+        execution_id = f"history-{index}"
+        response = _query_execution("SUCCEEDED")
+        execution = cast(dict[str, object], response["QueryExecution"])
+        execution["QueryExecutionId"] = execution_id
+        boto.get_query_execution.return_value = response
+
+        await client.get_query_execution(execution_id)
+
+    assert client._app_started_active_queries == set()
+    assert client._app_started_query_ids_by_token == {}
+    assert client._retired_app_started_queries == set()
+    assert client._stop_tasks == {}
+
+
+def test_retired_app_started_query_ledger_is_bounded() -> None:
+    client, _boto, _session = _athena_client()
+    limit = athena_module._MAX_RETIRED_APP_STARTED_QUERIES
+
+    for index in range(limit + 25):
+        execution_id = f"owned-{index}"
+        client._app_started_active_queries.add(execution_id)
+        client._retire_app_started_query(execution_id)
+
+    assert len(client._retired_app_started_queries) == limit
+    assert "owned-0" not in client._retired_app_started_queries
+    assert f"owned-{limit + 24}" in client._retired_app_started_queries
 
 
 async def test_terminal_observation_wins_over_failed_stop_race() -> None:
@@ -1356,6 +1452,8 @@ async def _invoke_sensitive_operation(
         await client.list_query_executions_page(sensitive, start_token=sensitive)
     elif method == "get_query_execution":
         await client.get_query_execution(sensitive)
+    elif method == "batch_get_query_execution":
+        await client.get_query_executions([sensitive])
     elif method == "get_query_runtime_statistics":
         await client.get_query_runtime_statistics(sensitive)
     elif method == "stop_query_execution":
@@ -1384,6 +1482,7 @@ async def _invoke_sensitive_operation(
         "list_table_metadata",
         "list_query_executions",
         "get_query_execution",
+        "batch_get_query_execution",
         "get_query_runtime_statistics",
         "stop_query_execution",
         "get_query_results",
@@ -1436,6 +1535,8 @@ async def _invoke_malformed_case(client: AthenaClient, method: str) -> None:
         await client.list_query_executions_page("analysts")
     elif method == "get_query_execution":
         await client.get_query_execution("q-123")
+    elif method == "batch_get_query_execution":
+        await client.get_query_executions(["q-123"])
     elif method == "get_query_runtime_statistics":
         await client.get_query_runtime_statistics("q-123")
     elif method == "get_query_results":
@@ -1460,6 +1561,10 @@ async def _invoke_malformed_case(client: AthenaClient, method: str) -> None:
         ("list_table_metadata", {"TableMetadataList": [{"TableType": "VIEW"}]}),
         ("list_query_executions", {"QueryExecutionIds": [7]}),
         ("get_query_execution", {"QueryExecution": {"QueryExecutionId": "q-123"}}),
+        (
+            "batch_get_query_execution",
+            {"QueryExecutions": [{"QueryExecutionId": "q-123"}]},
+        ),
         (
             "get_query_runtime_statistics",
             {"QueryRuntimeStatistics": {"Timeline": []}},

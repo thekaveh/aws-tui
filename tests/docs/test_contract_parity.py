@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 
 import botocore.session
+from botocore import xform_name
 
 ROOT = Path(__file__).parents[2]
 
@@ -18,6 +19,7 @@ _MODELED_OPERATIONS = {
         "ListTableMetadata",
         "ListQueryExecutions",
         "GetQueryExecution",
+        "BatchGetQueryExecution",
         "GetQueryRuntimeStatistics",
         "StartQueryExecution",
         "StopQueryExecution",
@@ -42,20 +44,32 @@ _MODELED_OPERATIONS = {
         "GetTags",
     },
     "s3": {
+        "CreateBucket",
+        "HeadBucket",
         "ListBuckets",
         "ListObjectsV2",
         "HeadObject",
         "GetObject",
+        "GetObjectTagging",
         "PutObject",
         "CopyObject",
         "DeleteObject",
         "DeleteObjects",
         "CreateMultipartUpload",
         "UploadPart",
+        "UploadPartCopy",
         "CompleteMultipartUpload",
         "AbortMultipartUpload",
     },
     "sts": {"GetCallerIdentity"},
+}
+
+_OPERATION_SOURCES = {
+    "athena": ("src/aws_tui/domain/athena.py", "src/aws_tui/domain/athena_runner.py"),
+    "emr-serverless": ("src/aws_tui/domain/emr_serverless.py",),
+    "glue": ("src/aws_tui/domain/glue.py",),
+    "s3": ("src/aws_tui/domain/s3_fs.py", "scripts/test-services/s3/seed.py"),
+    "sts": ("src/aws_tui/infra/aws_session.py", "src/aws_tui/domain/glue.py"),
 }
 
 _CONSUMED_INPUT_MEMBERS = {
@@ -66,12 +80,28 @@ _CONSUMED_INPUT_MEMBERS = {
         "WorkGroup",
         "ResultConfiguration",
     },
-    ("emr-serverless", "ListJobRuns"): {"applicationId", "nextToken", "states"},
+    ("emr-serverless", "ListApplications"): {"maxResults", "nextToken"},
+    ("emr-serverless", "ListJobRuns"): {
+        "applicationId",
+        "maxResults",
+        "nextToken",
+        "states",
+    },
     ("emr-serverless", "GetJobRun"): {"applicationId", "jobRunId"},
     ("glue", "GetTables"): {"CatalogId", "DatabaseName", "NextToken"},
     ("glue", "GetCrawlerMetrics"): {"CrawlerNameList"},
     ("s3", "ListObjectsV2"): {"Bucket", "Prefix", "Delimiter", "ContinuationToken"},
     ("s3", "DeleteObjects"): {"Bucket", "Delete"},
+    ("s3", "GetObjectTagging"): {"Bucket", "Key"},
+    ("s3", "UploadPartCopy"): {
+        "Bucket",
+        "Key",
+        "UploadId",
+        "PartNumber",
+        "CopySource",
+        "CopySourceRange",
+        "CopySourceIfMatch",
+    },
 }
 
 
@@ -79,8 +109,26 @@ def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def _numbered_section(text: str, heading: str) -> str:
+    marker = f"## {heading}"
+    _, separator, remainder = text.partition(marker)
+    assert separator, f"missing section: {heading}"
+    return remainder.partition("\n## ")[0]
+
+
 def _module(path: str) -> ast.Module:
     return ast.parse(_text(path), filename=path)
+
+
+def _source_aws_operations(service_name: str) -> set[str]:
+    model = botocore.session.get_session().get_service_model(service_name)
+    by_method = {xform_name(operation): operation for operation in model.operation_names}
+    called_methods: set[str] = set()
+    for path in _OPERATION_SOURCES[service_name]:
+        for node in ast.walk(_module(path)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                called_methods.add(node.func.attr)
+    return {by_method[method] for method in called_methods & set(by_method)}
 
 
 def _default_binding_actions() -> tuple[str, ...]:
@@ -202,13 +250,47 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
         package["name"]: package["version"] for package in lock["package"] if "version" in package
     }
     project = tomllib.loads(_text("pyproject.toml"))
-    ledger = _text("docs/contract-ledger.md")
+    ledger = _numbered_section(
+        _text("docs/contract-ledger.md"),
+        "1.5. 2026-08-25 maintenance pass",
+    )
 
-    for name in ("textual", "vmx", "hatchling", "testcontainers"):
+    for name in (
+        "aioboto3",
+        "botocore",
+        "hatchling",
+        "keyring",
+        "platformdirs",
+        "sqlglot",
+        "testcontainers",
+        "textual",
+        "textual-dev",
+        "vmx",
+    ):
         assert f"`{name}=={versions[name]}`" in ledger
 
     build_requirement = project["build-system"]["requires"][0]
     assert f"`build-system.requires` constrained to `{build_requirement}`" in ledger
+    assert (
+        "`adobe/s3mock:5.1.0@sha256:"
+        "65cf60155a2e235fe7d5bf6c633747d6fc7ed93f9f5a6727d86470026b83c2a2`"
+    ) in ledger
+
+
+def test_numbered_section_excludes_historical_dependency_decoys() -> None:
+    ledger = "## 1.4. Old\n`package==1`\n\n## 1.5. Current\n`package==2`\n\n## 1.6. Next\n"
+
+    current = _numbered_section(ledger, "1.5. Current")
+
+    assert "`package==2`" in current
+    assert "`package==1`" not in current
+
+
+def test_s3_operation_ledger_matches_locked_model_contract() -> None:
+    ledger = _text("docs/contract-ledger.md")
+    assert set(_text_ledger_block(ledger, "Exact S3 boto operation ledger")) == set(
+        _MODELED_OPERATIONS["s3"]
+    )
 
 
 def test_credential_docs_match_keychain_reference_storage() -> None:
@@ -225,7 +307,7 @@ def test_credential_docs_match_keychain_reference_storage() -> None:
     assert "keychain:aws-tui:connections/<url-escaped-name>" in connections
     assert "keychain:aws-tui:connection-revisions/<url-escaped-name>/0" in connections
     assert "keychain:aws-tui:connection-revisions/<url-escaped-name>/1" in connections
-    assert 'credentials = "keychain:aws-tui:connections/minio-local"' in cookbook
+    assert 'credentials = "keychain:aws-tui:connections/s3mock-local"' in cookbook
     assert "under the namespaced service `aws-tui:<connection>`" not in connections
     assert "Production Settings saves store only" in ledger
     assert "two bounded revision slots" in ledger
@@ -246,6 +328,7 @@ def test_consumed_aws_operations_and_inputs_exist_in_locked_botocore_models() ->
     for service_name, operations in _MODELED_OPERATIONS.items():
         model = session.get_service_model(service_name)
         assert operations <= set(model.operation_names)
+        assert operations == _source_aws_operations(service_name)
 
     for (service_name, operation_name), members in _CONSUMED_INPUT_MEMBERS.items():
         operation = session.get_service_model(service_name).operation_model(operation_name)

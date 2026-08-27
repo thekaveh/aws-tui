@@ -10,15 +10,15 @@ The composition builds:
 
 - ``ConfigStore``, ``LogSink``, ``KeymapStore``, ``ThemeStore`` (infra)
 - ``ConnectionResolver``, ``AwsSession`` (infra; aware of boto3)
-- ``ServiceRegistry`` with ``S3Service`` registered (services)
-- ``RootVM`` with the four chrome VMs and the file-manager VMs ready
-  to be filled by ``RootVM.switch_service`` (vm)
+- ``ServiceRegistry`` with every built-in service registered (services)
+- ``RootVM`` with shared chrome and an active-service content host (vm)
 - ``AppContext`` — the bag the Textual ``AwsTuiApp`` consumes
 """
 
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -33,7 +33,12 @@ from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
 from aws_tui.infra.keychain import KeychainBackend, Keyring
-from aws_tui.infra.keymap_store import KeybindingCollision, KeymapStore, UnknownAction
+from aws_tui.infra.keymap_store import (
+    InvalidKeybinding,
+    KeybindingCollision,
+    KeymapStore,
+    UnknownAction,
+)
 from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.paths import cache_home, config_home
 from aws_tui.infra.theme_store import ThemeStore
@@ -65,7 +70,7 @@ class AppContext:
         "confirm_vm",
         "connection_resolver",
         "demo",
-        "demo_emr",
+        "demo_emrs",
         "dispatcher",
         "focus_coordinator",
         "hub",
@@ -108,7 +113,7 @@ class AppContext:
         focus_coordinator: FocusCoordinatorVM | None = None,
         table_clipboard_vm: TableClipboardVM | None = None,
         demo: bool = False,
-        demo_emr: InMemoryEmr | None = None,
+        demo_emrs: dict[str, InMemoryEmr] | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
     ) -> None:
         self.root_vm = root_vm
@@ -147,12 +152,39 @@ class AppContext:
         if table_clipboard_vm is None:
             self.table_clipboard_vm.construct()
         self.demo = demo
-        # Non-None only in demo mode; disposed by AwsTuiApp on shutdown so
-        # in-flight clone state-machine tasks are cancelled cleanly.
-        self.demo_emr: InMemoryEmr | None = demo_emr
+        # Populated lazily in demo mode; each AWS source owns a separate
+        # provider so profile switches cannot share clone mutations or data.
+        self.demo_emrs: dict[str, InMemoryEmr] = demo_emrs if demo_emrs is not None else {}
         self.unreachable_connections: set[tuple[str, str]] = (
             unreachable_connections if unreachable_connections is not None else set()
         )
+
+    def close_unstarted(self) -> None:
+        """Release a context that never reached Textual's mount lifecycle.
+
+        ``AwsTuiApp.on_unmount`` owns normal async shutdown. This synchronous
+        fallback is only for composition or app-constructor failures, before
+        workers and AWS clients can exist.
+        """
+        for disposable in (
+            self.s3_connections_vm,
+            self.command_palette_vm,
+            self.quick_look_vm,
+            self.confirm_vm,
+            self.transfers_vm,
+            self.table_clipboard_vm,
+            self.root_vm,
+            self.focus_coordinator,
+        ):
+            with suppress(Exception):
+                disposable.dispose()
+        for demo_emr in self.demo_emrs.values():
+            with suppress(Exception):
+                demo_emr.dispose()
+        with suppress(Exception):
+            self.log_sink.flush()
+        with suppress(Exception):
+            self.log_sink.close()
 
 
 def build_app_context(
@@ -182,6 +214,25 @@ def build_app_context(
         cache_dir = cache_home()
 
     log_sink = LogSink(base_dir=cache_dir / "log", capture_stdlib=True)
+    try:
+        return _build_app_context(
+            config_dir=config_dir,
+            cache_dir=cache_dir,
+            demo=demo,
+            log_sink=log_sink,
+        )
+    except BaseException:
+        log_sink.close()
+        raise
+
+
+def _build_app_context(
+    *,
+    config_dir: Path,
+    cache_dir: Path,
+    demo: bool,
+    log_sink: LogSink,
+) -> AppContext:
     # read_only=demo: in demo mode all write methods on ConfigStore are
     # silent no-ops so the user's real config.toml is never mutated.
     config_store = ConfigStore(path=config_dir / "config.toml", read_only=demo)
@@ -208,7 +259,7 @@ def build_app_context(
         initial_theme = "carbon"
     try:
         keymap_store = KeymapStore(overlay=keybindings_overlay)
-    except (KeybindingCollision, UnknownAction) as exc:
+    except (InvalidKeybinding, KeybindingCollision, UnknownAction) as exc:
         _logger.warning(
             "composition.keymap_overlay.invalid",
             extra={"error": str(exc), "error_type": type(exc).__name__},
@@ -232,10 +283,10 @@ def build_app_context(
         # DemoConnectionResolver is a structural subtype — typed as the
         # production class so all downstream call sites remain compatible.
         connection_resolver: ConnectionResolver = DemoConnectionResolver()  # type: ignore[assignment]
-        _demo_emr: InMemoryEmr = seeded_demo_emr()
         demo_glue_clients = seeded_demo_glue()
         demo_s3_filesystems: dict[str, InMemoryFS] = {}
         demo_athena_clients: dict[str, InMemoryAthena] = {}
+        demo_emr_clients: dict[str, InMemoryEmr] = {}
 
         def demo_s3_fs(connection: Connection) -> InMemoryFS:
             filesystem = demo_s3_filesystems.get(connection.name)
@@ -256,14 +307,16 @@ def build_app_context(
                 demo_athena_clients[connection.name] = client
             return client
 
-        demo_emr_ref: InMemoryEmr | None = _demo_emr
+        def demo_emr(connection: Connection) -> InMemoryEmr:
+            client = demo_emr_clients.get(connection.name)
+            if client is None:
+                client = seeded_demo_emr(connection.profile or connection.name)
+                demo_emr_clients[connection.name] = client
+            return client
+
+        demo_emrs_ref = demo_emr_clients
         s3_fs_factory = demo_s3_fs
-        # Captured by the lambda so every emr_client_factory(connection)
-        # call within this AppContext returns the SAME InMemoryEmr —
-        # switching demo profiles in the picker preserves in-flight clone
-        # state.  A second build_app_context() call (rare; mostly in tests)
-        # gets its own _demo_emr; we don't share at module scope.
-        emr_client_factory = lambda c: _demo_emr  # noqa: E731
+        emr_client_factory = demo_emr
         glue_client_factory = lambda c: demo_glue_clients[c.name]  # noqa: E731
         athena_client_factory = demo_athena
     else:
@@ -272,7 +325,7 @@ def build_app_context(
             config_store=config_store,
             keychain=keychain,
         )
-        demo_emr_ref = None
+        demo_emrs_ref = {}
         s3_fs_factory = None
         emr_client_factory = None
         glue_client_factory = None
@@ -347,35 +400,40 @@ def build_app_context(
         hub=hub,
         dispatcher=dispatcher,
     )
-    focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=dispatcher)
-    focus_coordinator.construct()
-    table_clipboard_vm = TableClipboardVM(hub=hub, dispatcher=dispatcher)
-    table_clipboard_vm.construct()
-    return AppContext(
-        root_vm=root_vm,
-        registry=registry,
-        config_store=config_store,
-        log_sink=log_sink,
-        keymap_store=keymap_store,
-        keychain=keychain,
-        theme_store=theme_store,
-        connection_resolver=connection_resolver,
-        aws_session=aws_session,
-        transfers_vm=transfers_vm,
-        confirm_vm=confirm_vm,
-        quick_look_vm=quick_look_vm,
-        command_palette_vm=command_palette_vm,
-        transfer_journal=transfer_journal,
-        hub=hub,
-        dispatcher=dispatcher,
-        initial_theme=initial_theme,
-        s3_connections_vm=s3_connections_vm,
-        focus_coordinator=focus_coordinator,
-        table_clipboard_vm=table_clipboard_vm,
-        demo=demo,
-        demo_emr=demo_emr_ref,
-        unreachable_connections=set(),
-    )
+    with ExitStack() as rollback:
+        focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=dispatcher)
+        rollback.callback(focus_coordinator.dispose)
+        focus_coordinator.construct()
+        table_clipboard_vm = TableClipboardVM(hub=hub, dispatcher=dispatcher)
+        rollback.callback(table_clipboard_vm.dispose)
+        table_clipboard_vm.construct()
+        context = AppContext(
+            root_vm=root_vm,
+            registry=registry,
+            config_store=config_store,
+            log_sink=log_sink,
+            keymap_store=keymap_store,
+            keychain=keychain,
+            theme_store=theme_store,
+            connection_resolver=connection_resolver,
+            aws_session=aws_session,
+            transfers_vm=transfers_vm,
+            confirm_vm=confirm_vm,
+            quick_look_vm=quick_look_vm,
+            command_palette_vm=command_palette_vm,
+            transfer_journal=transfer_journal,
+            hub=hub,
+            dispatcher=dispatcher,
+            initial_theme=initial_theme,
+            s3_connections_vm=s3_connections_vm,
+            focus_coordinator=focus_coordinator,
+            table_clipboard_vm=table_clipboard_vm,
+            demo=demo,
+            demo_emrs=demo_emrs_ref,
+            unreachable_connections=set(),
+        )
+        rollback.pop_all()
+        return context
 
 
 __all__ = [

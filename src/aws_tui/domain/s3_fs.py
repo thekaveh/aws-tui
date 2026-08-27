@@ -34,18 +34,11 @@ import aioboto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import (
     ClientError,
-    ConnectionClosedError,
-    ConnectTimeoutError,
     CredentialRetrievalError,
-    EndpointConnectionError,
-    EndpointResolutionError,
-    ReadTimeoutError,
-)
-from botocore.exceptions import (
-    ConnectionError as BotoConnectionError,
 )
 
 from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
+from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     ConflictError,
@@ -57,6 +50,7 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderError,
     ProviderUnreachableError,
+    ThrottledError,
     TransferProgress,
 )
 
@@ -73,14 +67,7 @@ from aws_tui.domain.filesystem import (
 #   EndpointConnectionError`` chain missed them.
 # - ``BotoConnectionError`` — the base ``ConnectionError`` for any
 #   other transport failure shape botocore introduces in the future.
-_TRANSPORT_FAILURE_EXCEPTIONS = (
-    EndpointConnectionError,
-    EndpointResolutionError,
-    ConnectTimeoutError,
-    ReadTimeoutError,
-    BotoConnectionError,
-    ConnectionClosedError,
-)
+_TRANSPORT_FAILURE_EXCEPTIONS = AWS_TRANSPORT_EXCEPTIONS
 _AUTH_FAILURE_EXCEPTIONS = AWS_CREDENTIAL_EXCEPTIONS
 
 if TYPE_CHECKING:
@@ -96,6 +83,11 @@ _MAX_COPY_OBJECT_SIZE: int = 5 * 1024 * 1024 * 1024
 # S3 batch-delete limit.
 _DELETE_BATCH_SIZE: int = 1000
 _S3_REVISION_PREFIX = "s3:v1:"
+# The file-manager protocol returns a complete directory as one value. Keep
+# remote traversal bounded until that protocol grows an explicit continuation
+# contract; fail instead of presenting a partial listing as complete.
+_MAX_LISTING_ENTRIES: int = 10_000
+_MAX_LISTING_PAGES: int = 100
 
 # Alias for the builtin ``list`` so internal method annotations don't
 # accidentally resolve to ``S3FS.list`` (which the class defines).
@@ -235,7 +227,13 @@ class S3FS:
             async with self._client() as s3:
                 token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
                 while True:
+                    if page_count >= _MAX_LISTING_PAGES:
+                        raise ProviderError(
+                            "S3 bucket listing exceeded the pagination safety limit"
+                        )
+                    page_count += 1
                     kwargs: dict[str, Any] = {"MaxBuckets": 1000}
                     if token is not None:
                         kwargs["ContinuationToken"] = token
@@ -249,6 +247,8 @@ class S3FS:
                                 modified=_to_aware(bucket.get("CreationDate")),
                             )
                         )
+                    if len(entries) > _MAX_LISTING_ENTRIES:
+                        raise ProviderError("S3 bucket listing exceeded the listing safety limit")
                     next_token = resp.get("ContinuationToken")
                     if not next_token:
                         break
@@ -285,7 +285,13 @@ class S3FS:
             async with self._client() as s3:
                 token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
                 while True:
+                    if page_count >= _MAX_LISTING_PAGES:
+                        raise ProviderError(
+                            "S3 object listing exceeded the pagination safety limit"
+                        )
+                    page_count += 1
                     kwargs: dict[str, Any] = {
                         "Bucket": target_bucket,
                         "Prefix": prefix,
@@ -322,6 +328,8 @@ class S3FS:
                                 etag=_s3_revision_token(obj),
                             )
                         )
+                    if len(entries) > _MAX_LISTING_ENTRIES:
+                        raise ProviderError("S3 object listing exceeded the listing safety limit")
                     if not resp.get("IsTruncated"):
                         break
                     token = resp.get("NextContinuationToken")
@@ -458,7 +466,15 @@ class S3FS:
                 deleted_any = False
                 token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
+                deleted_count = 0
                 while True:
+                    if page_count >= _MAX_LISTING_PAGES:
+                        raise ProviderError(
+                            "S3 delete pagination safety limit exceeded after deleting "
+                            f"{deleted_count} object(s)"
+                        )
+                    page_count += 1
                     list_kwargs: dict[str, Any] = {
                         "Bucket": bucket,
                         "Prefix": prefix,
@@ -473,6 +489,11 @@ class S3FS:
                         )
                     objects = resp.get("Contents") or []
                     if objects:
+                        if deleted_count + len(objects) > _MAX_LISTING_ENTRIES:
+                            raise ProviderError(
+                                "S3 delete collection safety limit exceeded after deleting "
+                                f"{deleted_count} object(s)"
+                            )
                         deleted_any = True
                         for batch in _chunks(objects, _DELETE_BATCH_SIZE):
                             delete_response = await s3.delete_objects(
@@ -491,6 +512,7 @@ class S3FS:
                                     f"failed to delete {len(errors)} object(s) "
                                     f"from S3 (codes: {', '.join(codes)})"
                                 )
+                            deleted_count += len(batch)
                     if not resp.get("IsTruncated"):
                         break
                     token = next_token
@@ -1317,19 +1339,16 @@ def _map_client_error(exc: ClientError, target: str) -> ProviderError:
         return _auth_error(exc)
     if code in {"AccessDenied", "403", "Forbidden"}:
         return PermissionDeniedError(target)
-    # S3 service-side transient failures map to ``ProviderUnreachableError``
-    # so the UI surfaces them with the "endpoint unreachable" placeholder
-    # rather than the generic error one. Botocore's adaptive retry policy
-    # (total_max_attempts=6) usually absorbs these, but a sustained
-    # ``ServiceUnavailable`` / ``SlowDown`` storm can still exhaust the
-    # retry budget. From the user's perspective the bucket is unreachable
-    # — same recovery action as a DNS / timeout failure (press ``r`` to
-    # retry, or wait + try again).
+    if code in {"SlowDown", "RequestLimitExceeded"}:
+        return ThrottledError(f"{code}: {target}")
+    # Service-side availability failures map to ``ProviderUnreachableError``
+    # so the UI surfaces them with the endpoint placeholder instead of the
+    # generic error one. Rate-limit responses are handled above as throttling;
+    # they must not poison connection-health fallback decisions.
     if code in {
         "ServiceUnavailable",
         "RequestTimeout",
         "RequestTimeoutException",
-        "SlowDown",
         "InternalError",
         "503",
         "504",

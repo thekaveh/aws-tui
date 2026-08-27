@@ -41,7 +41,7 @@ dependencies = [
   # Upper bounds match the vmx posture — next-major caps insulate
   # downstream `pip install aws-tui` from a transitive breaking
   # change between releases. Bump deliberately, not by accident.
-  "vmx>=3.1.0,<4.0.0",
+  "vmx>=3.23.0,<4.0.0",
   # App crash/mount recovery and priority-preserving dynamic bindings use
   # isolated private compatibility points. Re-audit before changing this pin.
   "textual==8.2.8",
@@ -59,7 +59,8 @@ dependencies = [
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://github.com/thekaveh/aws-tui"
+Homepage = "https://thekaveh.github.io/aws-tui/"
+Documentation = "https://thekaveh.github.io/aws-tui/"
 Repository = "https://github.com/thekaveh/aws-tui"
 Issues = "https://github.com/thekaveh/aws-tui/issues"
 Changelog = "https://github.com/thekaveh/aws-tui/blob/main/CHANGELOG.md"
@@ -79,6 +80,7 @@ exclude = [
   "/.github",
   "/.overnight-maint",
   "/.superpowers",
+  "/.uv-cache",
   "/docs/superpowers",
   "/scripts/test-services",
   "/tests",
@@ -95,10 +97,10 @@ dev = [
   "pytest>=8",
   "pytest-asyncio>=0.24",
   "pytest-cov>=4",
-  "pytest-xdist>=3",
+  "pytest-timeout>=2.4",
   "pytest-textual-snapshot>=1",
   "moto[server,s3]>=5",
-  "testcontainers[minio]>=4",
+  "testcontainers>=4",
   "types-aiofiles>=23",
   # Installed so CI/release can build with `uv build --no-build-isolation`
   # against the locked backend instead of resolving hatchling at build time.
@@ -109,6 +111,7 @@ dev = [
   "twine>=5",
   "pip-audit>=2.10.1",
   "shellcheck-py>=0.11.0.1",
+  "textual-dev>=1.8.0,<2",
 ]
 docs = [
   "mkdocs-material>=9.7.7,<10.0",
@@ -123,16 +126,17 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "-ra --strict-markers --strict-config -m 'not integration'"
+timeout = 60
 markers = [
   # Tagged via ``pytestmark = pytest.mark.unit`` in 6 files under
   # tests/unit/domain/ — descriptive only; the default run already
   # includes everything except ``-m 'not integration'``.
   "unit: pure-Python tests, no external service (run by default)",
-  # Opt-in marker for tests that spin up a real testcontainer (MinIO).
+  # Opt-in marker for tests that spin up a real S3Mock testcontainer.
   # Excluded from the default ``uv run pytest`` via the ``addopts``
   # filter above; opt in with ``-m integration``. Applied via
   # ``pytestmark = pytest.mark.integration`` in
-  # tests/integration/{test_cross_fs_minio,test_s3_fs_minio}.py. Fast
+  # tests/integration/{test_cross_fs_s3_compat,test_s3_fs_s3_compat}.py. Fast
   # in-process tests under tests/integration/ (full-app pilot, modal
   # forwarding, etc.) intentionally don't carry this marker — they run
   # by default.

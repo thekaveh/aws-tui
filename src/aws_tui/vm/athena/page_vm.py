@@ -35,7 +35,11 @@ from aws_tui.vm.athena._domain_validation import (
     valid_table_ref,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena._pager_compat import (
+    PagerCollectionLimitError,
+    SnapshotTokenPager,
+    seed_token_pager,
+)
 from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
 from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
@@ -58,6 +62,7 @@ _CONTEXT_ERROR = "Athena context request failed"
 _WORKGROUP_DETAIL_ERROR = "Athena workgroup request failed"
 _DISCOVERY_PAGE_LIMIT = 64
 _DISCOVERY_EMPTY_PAGE_LIMIT = 3
+_MAX_CONTEXT_ITEMS = 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,13 +89,9 @@ class _SnapshotContextStage:
     catalogs_token: str | None = field(repr=False)
     databases: tuple[DatabaseSummary, ...] = field(repr=False)
     databases_token: str | None = field(repr=False)
-
-
-@dataclass(frozen=True, slots=True)
-class _SnapshotRestoreStage:
-    context: _SnapshotContextStage = field(repr=False)
-    history: AthenaHistorySnapshot = field(repr=False)
-    saved: AthenaSavedSnapshot = field(repr=False)
+    workgroups_limit_reached: bool = field(default=False, repr=False)
+    catalogs_limit_reached: bool = field(default=False, repr=False)
+    databases_limit_reached: bool = field(default=False, repr=False)
 
 
 @dataclass(eq=False)
@@ -156,6 +157,10 @@ class AthenaPageVM:
         self._is_loading_more_workgroups = False
         self._is_loading_more_catalogs = False
         self._is_loading_more_databases = False
+        self._loading_more_workers: dict[
+            Literal["workgroups", "catalogs", "databases"],
+            _PageWorker[Any] | None,
+        ] = {"workgroups": None, "catalogs": None, "databases": None}
         self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -252,6 +257,18 @@ class AthenaPageVM:
     @property
     def has_more_databases(self) -> bool:
         return self._database_pager.current_token is not None
+
+    @property
+    def workgroup_limit_reached(self) -> bool:
+        return self._workgroup_pager.limit_reached
+
+    @property
+    def catalog_limit_reached(self) -> bool:
+        return self._catalog_pager.limit_reached
+
+    @property
+    def database_limit_reached(self) -> bool:
+        return self._database_pager.limit_reached
 
     @property
     def is_loading_more_workgroups(self) -> bool:
@@ -385,6 +402,9 @@ class AthenaPageVM:
                 catalogs_token=self._catalog_pager.current_token,
                 databases=self.databases,
                 databases_token=self._database_pager.current_token,
+                workgroups_limit_reached=self._workgroup_pager.limit_reached,
+                catalogs_limit_reached=self._catalog_pager.limit_reached,
+                databases_limit_reached=self._database_pager.limit_reached,
             ),
             active_view=self._active_view,
             query=self.query.export_snapshot(),
@@ -420,8 +440,7 @@ class AthenaPageVM:
             raise ValueError("Athena snapshot restore is unavailable") from None
         page_before = self._snapshot_restore_token()
         query_generation = self.query.snapshot_generation
-        stage = await self._preflight_snapshot(prepared)
-        if stage is None:
+        if not await self._preflight_snapshot(prepared):
             raise ValueError("Athena snapshot context is unavailable")
 
         async with self.query.snapshot_restore_guard(query_generation):
@@ -437,7 +456,7 @@ class AthenaPageVM:
                 unchanged = False
             if not unchanged:
                 raise ValueError("Athena snapshot restore is unavailable")
-            self._install_snapshot(prepared, stage)
+            self._install_snapshot(prepared)
 
     @staticmethod
     def snapshot_is_valid(snapshot: object) -> bool:
@@ -493,57 +512,47 @@ class AthenaPageVM:
     async def _preflight_snapshot(
         self,
         snapshot: AthenaPageSnapshot,
-    ) -> _SnapshotRestoreStage | None:
-        context_stage = await self._preflight_snapshot_context(snapshot)
-        if context_stage is None:
-            return None
+    ) -> bool:
+        if not await self._preflight_snapshot_context(snapshot):
+            return False
         if snapshot.context == self._context:
-            return _SnapshotRestoreStage(
-                context=context_stage,
-                history=snapshot.history,
-                saved=snapshot.saved,
-            )
-        children = await self._preflight_snapshot_children(snapshot)
-        if children is None:
-            return None
-        return _SnapshotRestoreStage(
-            context=context_stage,
-            history=children[0],
-            saved=children[1],
-        )
+            return True
+        return await self._preflight_snapshot_children(snapshot)
 
     async def _preflight_snapshot_context(
         self,
         snapshot: AthenaPageSnapshot,
-    ) -> _SnapshotContextStage | None:
+    ) -> bool:
         context = snapshot.context
         if context == self._context:
-            return snapshot.context_state
+            return True
         try:
-            workgroup_page = await self._collect_snapshot_pages(
+            workgroup_available = await self._snapshot_identity_is_available(
                 lambda token: self._client.list_workgroups_page(start_token=token),
                 valid=valid_athena_workgroup_summary,
                 matches=lambda row: row.name == context.workgroup,
+                identity=lambda row: row.name,
             )
-            if workgroup_page is None:
-                return None
+            if not workgroup_available:
+                return False
             detail = await self._client.get_workgroup(context.workgroup)
             if (
                 not valid_athena_workgroup_detail(detail)
                 or detail.summary.name != context.workgroup
             ):
-                return None
-            catalog_page = await self._collect_snapshot_pages(
+                return False
+            catalog_available = await self._snapshot_identity_is_available(
                 lambda token: self._client.list_catalogs_page(
                     workgroup=context.workgroup,
                     start_token=token,
                 ),
                 valid=valid_athena_catalog_summary,
                 matches=lambda row: row.name == context.catalog,
+                identity=lambda row: row.name,
             )
-            if catalog_page is None:
-                return None
-            database_page = await self._collect_snapshot_pages(
+            if not catalog_available:
+                return False
+            database_available = await self._snapshot_identity_is_available(
                 lambda token: self._client.list_databases_page(
                     context.catalog,
                     workgroup=context.workgroup,
@@ -556,11 +565,12 @@ class AthenaPageVM:
                     and row.ref.catalog_name == context.catalog
                 ),
                 matches=lambda row: row.ref.database_name == context.database,
+                identity=lambda row: row.ref,
             )
-            if database_page is None:
-                return None
+            if not database_available:
+                return False
         except ProviderError:
-            return None
+            return False
         except Exception as exc:
             report_unexpected_service_error(
                 self._hub,
@@ -570,22 +580,13 @@ class AthenaPageVM:
                 source=context.connection_name,
                 region=context.region,
             )
-            return None
-        return _SnapshotContextStage(
-            context=context,
-            workgroups=workgroup_page[0],
-            workgroups_token=workgroup_page[1],
-            workgroup_detail=detail,
-            catalogs=catalog_page[0],
-            catalogs_token=catalog_page[1],
-            databases=database_page[0],
-            databases_token=database_page[1],
-        )
+            return False
+        return True
 
     async def _preflight_snapshot_children(
         self,
         snapshot: AthenaPageSnapshot,
-    ) -> tuple[AthenaHistorySnapshot, AthenaSavedSnapshot] | None:
+    ) -> bool:
         staging_hub: MessageHub[Message] = MessageHub()
         diagnostic_sub = staging_hub.messages.subscribe(
             lambda message: (
@@ -618,18 +619,18 @@ class AthenaPageVM:
             if "history" in snapshot.loaded_views:
                 await history.setup()
                 if history.state not in {PaneState.IDLE, PaneState.EMPTY}:
-                    return None
+                    return False
                 if snapshot.history_execution_id is not None:
                     await history.select_execution(snapshot.history_execution_id)
                     if history.selected_execution_id != snapshot.history_execution_id:
-                        return None
+                        return False
             if "saved" in snapshot.loaded_views:
                 await saved.setup()
                 if saved.named_state not in {
                     PaneState.IDLE,
                     PaneState.EMPTY,
                 } or saved.prepared_state not in {PaneState.IDLE, PaneState.EMPTY}:
-                    return None
+                    return False
                 if (
                     snapshot.saved_kind is SavedQueryKind.NAMED
                     and snapshot.saved_query_id is not None
@@ -648,10 +649,12 @@ class AthenaPageVM:
                         and saved.detail_state is not PaneState.IDLE
                     )
                 ):
-                    return None
-            return history.export_snapshot(), saved.export_snapshot()
+                    return False
+            history.export_snapshot()
+            saved.export_snapshot()
+            return True
         except ProviderError:
-            return None
+            return False
         except Exception as exc:
             report_unexpected_service_error(
                 self._hub,
@@ -661,51 +664,57 @@ class AthenaPageVM:
                 source=snapshot.context.connection_name,
                 region=snapshot.context.region,
             )
-            return None
+            return False
         finally:
             history.dispose()
             saved.dispose()
             diagnostic_sub.dispose()
             staging_hub.dispose()
 
-    async def _collect_snapshot_pages(
+    async def _snapshot_identity_is_available(
         self,
         fetch: Callable[[str | None], Awaitable[tuple[list[T], str | None]]],
         *,
         valid: Callable[[T], bool],
         matches: Callable[[T], bool],
-    ) -> tuple[tuple[T, ...], str | None] | None:
-        rows: list[T] = []
+        identity: Callable[[T], object],
+    ) -> bool:
         token: str | None = None
         seen_tokens: set[str] = set()
+        seen_rows: set[object] = set()
         empty_pages = 0
         for _ in range(_DISCOVERY_PAGE_LIMIT):
             page_rows, next_token = await fetch(token)
             if type(page_rows) is not list or not all(valid(row) for row in page_rows):
-                return None
+                return False
             if next_token is not None and (type(next_token) is not str or not next_token):
-                return None
-            rows.extend(page_rows)
-            if any(matches(row) for row in rows):
-                return tuple(rows), next_token
+                return False
+            for row in page_rows:
+                key = identity(row)
+                if key in seen_rows:
+                    return False
+                seen_rows.add(key)
+            if len(seen_rows) > _MAX_CONTEXT_ITEMS:
+                return False
+            if any(matches(row) for row in page_rows):
+                return True
             if not page_rows:
                 empty_pages += 1
                 if empty_pages > _DISCOVERY_EMPTY_PAGE_LIMIT:
-                    return None
+                    return False
             else:
                 empty_pages = 0
             if next_token is None or next_token in seen_tokens:
-                return None
+                return False
             seen_tokens.add(next_token)
             token = next_token
-        return None
+        return False
 
     def _install_snapshot(
         self,
         snapshot: AthenaPageSnapshot,
-        stage: _SnapshotRestoreStage,
     ) -> None:
-        context = stage.context
+        context = snapshot.context_state
         self._context_generation += 1
         self._workgroup_generation += 1
         self._catalog_generation += 1
@@ -728,20 +737,23 @@ class AthenaPageVM:
             workgroup_worker.pager,
             context.workgroups,
             context.workgroups_token,
+            limit_reached=context.workgroups_limit_reached,
         )
         seed_token_pager(
             catalog_worker.pager,
             context.catalogs,
             context.catalogs_token,
+            limit_reached=context.catalogs_limit_reached,
         )
         seed_token_pager(
             database_worker.pager,
             context.databases,
             context.databases_token,
+            limit_reached=context.databases_limit_reached,
         )
         self.query._install_snapshot(snapshot.query)
-        self.history._install_snapshot(stage.history)
-        self.saved._install_snapshot(stage.saved)
+        self.history._install_snapshot(snapshot.history)
+        self.saved._install_snapshot(snapshot.saved)
         self._workgroups_state = PaneState.IDLE if context.workgroups else PaneState.EMPTY
         self._catalogs_state = PaneState.IDLE if context.catalogs else PaneState.EMPTY
         self._databases_state = PaneState.IDLE if context.databases else PaneState.EMPTY
@@ -908,7 +920,7 @@ class AthenaPageVM:
             return
         worker = self._workgroup_worker
         if self.has_more_workgroups and self._is_current_workgroup(worker):
-            self._set_loading_more("workgroups", True)
+            self._begin_loading_more("workgroups", worker)
             try:
                 await self._run_page_command(
                     worker.pager.load_more_command.execute_async,
@@ -916,14 +928,14 @@ class AthenaPageVM:
                     "workgroups",
                 )
             finally:
-                self._set_loading_more("workgroups", False)
+                self._finish_loading_more("workgroups", worker)
 
     async def load_more_catalogs(self) -> None:
         if not self._is_alive():
             return
         worker = self._catalog_worker
         if self.has_more_catalogs and self._is_current_catalog(worker):
-            self._set_loading_more("catalogs", True)
+            self._begin_loading_more("catalogs", worker)
             try:
                 await self._run_page_command(
                     worker.pager.load_more_command.execute_async,
@@ -931,14 +943,14 @@ class AthenaPageVM:
                     "catalogs",
                 )
             finally:
-                self._set_loading_more("catalogs", False)
+                self._finish_loading_more("catalogs", worker)
 
     async def load_more_databases(self) -> None:
         if not self._is_alive():
             return
         worker = self._database_worker
         if self.has_more_databases and self._is_current_database(worker):
-            self._set_loading_more("databases", True)
+            self._begin_loading_more("databases", worker)
             try:
                 await self._run_page_command(
                     worker.pager.load_more_command.execute_async,
@@ -946,7 +958,7 @@ class AthenaPageVM:
                     "databases",
                 )
             finally:
-                self._set_loading_more("databases", False)
+                self._finish_loading_more("databases", worker)
 
     async def select_history_execution(self, execution_id: str) -> None:
         if not self._is_alive():
@@ -1045,12 +1057,30 @@ class AthenaPageVM:
             return
         workgroup = self._context.workgroup
         await self.refresh_workgroups()
-        if (
-            not self._is_alive()
-            or self._workgroups_state not in {PaneState.IDLE, PaneState.EMPTY}
-            or self._workgroup_detail_state is PaneState.IDLE
-            or workgroup not in {row.name for row in self.workgroups}
-        ):
+        if not self._is_alive() or self._workgroups_state not in {
+            PaneState.IDLE,
+            PaneState.EMPTY,
+        }:
+            return
+        workgroup_names = tuple(row.name for row in self.workgroups)
+        if not workgroup_names:
+            await self._clear_query_context()
+            return
+        if workgroup not in workgroup_names:
+            await self._select_workgroup(
+                workgroup_names[0],
+                preferred_catalog=self._selection_store.get(
+                    self._selection_scope,
+                    "catalog",
+                ),
+                preferred_database=self._selection_store.get(
+                    self._selection_scope,
+                    "database",
+                ),
+                setup_active=True,
+            )
+            return
+        if self._workgroup_detail_state is PaneState.IDLE:
             return
         await self._select_workgroup(
             workgroup,
@@ -1064,6 +1094,21 @@ class AthenaPageVM:
             ),
             setup_active=True,
         )
+
+    async def _clear_query_context(self) -> None:
+        self._begin_context_change(
+            "",
+            "",
+            "",
+            clear_catalogs=True,
+            clear_databases=True,
+        )
+        self._workgroup_detail = None
+        self._workgroup_detail_state = PaneState.EMPTY
+        self._workgroup_detail_error_text = None
+        self._clear_context_store()
+        self._notify_workgroup_detail()
+        await self.query.set_context(self._context)
 
     async def shutdown(self) -> None:
         async with self._shutdown_lock:
@@ -1214,6 +1259,7 @@ class AthenaPageVM:
             current_token=lambda: self._catalog_pager.current_token,
             item_count=lambda: len(self.catalogs),
             load_more=self.load_more_catalogs,
+            failed=lambda: self._catalogs_error_text is not None,
         )
         if discovery is None:
             raise ProviderError("Athena catalog discovery did not complete")
@@ -1235,6 +1281,7 @@ class AthenaPageVM:
             current_token=lambda: self._database_pager.current_token,
             item_count=lambda: len(self.databases),
             load_more=self.load_more_databases,
+            failed=lambda: self._databases_error_text is not None,
         )
         if discovery is None:
             raise ProviderError("Athena catalog discovery did not complete")
@@ -1248,6 +1295,7 @@ class AthenaPageVM:
         current_token: Callable[[], str | None],
         item_count: Callable[[], int],
         load_more: Callable[[], Awaitable[None]],
+        failed: Callable[[], bool],
     ) -> bool | None:
         seen_tokens: set[str] = set()
         empty_pages = 0
@@ -1260,6 +1308,8 @@ class AthenaPageVM:
             count_before = item_count()
             await load_more()
             request_count += 1
+            if failed():
+                return None
             if available():
                 return True
             count_after = item_count()
@@ -1471,6 +1521,17 @@ class AthenaPageVM:
             self._page_tasks.add(task)
         try:
             await command()
+        except PagerCollectionLimitError:
+            if self._is_current_worker(worker, kind):
+                setattr(self, f"_{kind}_error_text", None)
+                items = {
+                    "workgroups": self.workgroups,
+                    "catalogs": self.catalogs,
+                    "databases": self.databases,
+                }[kind]
+                self._set_list_state(kind, PaneState.IDLE if items else PaneState.EMPTY)
+                self._notify_context_lists()
+            return
         except ProviderError as exc:
             if self._is_current_worker(worker, kind):
                 state, error_text = map_provider_error(
@@ -1531,7 +1592,7 @@ class AthenaPageVM:
                 return [], None
             return rows, next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_CONTEXT_ITEMS)
         return worker
 
     def _make_catalog_worker(
@@ -1562,7 +1623,7 @@ class AthenaPageVM:
                 return [], None
             return rows, next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_CONTEXT_ITEMS)
         return worker
 
     def _make_database_worker(
@@ -1602,7 +1663,7 @@ class AthenaPageVM:
                     raise ValueError("Athena database response identity mismatch")
             return rows, next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_CONTEXT_ITEMS)
         return worker
 
     def _replace_workgroup_worker(
@@ -1611,6 +1672,7 @@ class AthenaPageVM:
         restored_page: tuple[tuple[AthenaWorkgroupSummary, ...], str | None] | None = None,
     ) -> _PageWorker[AthenaWorkgroupSummary]:
         old_worker = self._workgroup_worker
+        self._finish_loading_more("workgroups", old_worker)
         worker = self._make_workgroup_worker(restored_page=restored_page)
         self._workgroup_worker = worker
         self._workgroup_pager = worker.pager
@@ -1624,6 +1686,7 @@ class AthenaPageVM:
         restored_page: tuple[tuple[AthenaCatalogSummary, ...], str | None] | None = None,
     ) -> _PageWorker[AthenaCatalogSummary]:
         old_worker = self._catalog_worker
+        self._finish_loading_more("catalogs", old_worker)
         worker = self._make_catalog_worker(workgroup, restored_page=restored_page)
         self._catalog_worker = worker
         self._catalog_pager = worker.pager
@@ -1638,6 +1701,7 @@ class AthenaPageVM:
         restored_page: tuple[tuple[DatabaseSummary, ...], str | None] | None = None,
     ) -> _PageWorker[DatabaseSummary]:
         old_worker = self._database_worker
+        self._finish_loading_more("databases", old_worker)
         worker = self._make_database_worker(
             workgroup,
             catalog,
@@ -1756,16 +1820,29 @@ class AthenaPageVM:
             if state in {PaneState.IDLE, PaneState.EMPTY}:
                 self._databases_error_text = None
 
-    def _set_loading_more(
+    def _begin_loading_more(
         self,
         kind: Literal["workgroups", "catalogs", "databases"],
-        value: bool,
+        worker: _PageWorker[Any],
     ) -> None:
+        self._loading_more_workers[kind] = worker
         attribute = f"_is_loading_more_{kind}"
-        if getattr(self, attribute) == value:
+        if not getattr(self, attribute):
+            setattr(self, attribute, True)
+            self._notify(f"is_loading_more_{kind}")
+
+    def _finish_loading_more(
+        self,
+        kind: Literal["workgroups", "catalogs", "databases"],
+        worker: _PageWorker[Any],
+    ) -> None:
+        if self._loading_more_workers[kind] is not worker:
             return
-        setattr(self, attribute, value)
-        self._notify(f"is_loading_more_{kind}")
+        self._loading_more_workers[kind] = None
+        attribute = f"_is_loading_more_{kind}"
+        if getattr(self, attribute):
+            setattr(self, attribute, False)
+            self._notify(f"is_loading_more_{kind}")
 
     def _notify_context_lists(self) -> None:
         for property_name in (
@@ -1839,9 +1916,18 @@ def _snapshot_context_stage_is_valid(
         or type(value.workgroups) is not tuple
         or type(value.catalogs) is not tuple
         or type(value.databases) is not tuple
+        or len(value.workgroups) > _MAX_CONTEXT_ITEMS
+        or len(value.catalogs) > _MAX_CONTEXT_ITEMS
+        or len(value.databases) > _MAX_CONTEXT_ITEMS
         or not optional_non_empty_exact_string(value.workgroups_token)
         or not optional_non_empty_exact_string(value.catalogs_token)
         or not optional_non_empty_exact_string(value.databases_token)
+        or type(value.workgroups_limit_reached) is not bool
+        or type(value.catalogs_limit_reached) is not bool
+        or type(value.databases_limit_reached) is not bool
+        or (value.workgroups_limit_reached and value.workgroups_token is not None)
+        or (value.catalogs_limit_reached and value.catalogs_token is not None)
+        or (value.databases_limit_reached and value.databases_token is not None)
         or type(value.workgroup_detail) is not AthenaWorkgroupDetail
         or not valid_athena_workgroup_detail(value.workgroup_detail)
         or not all(valid_athena_workgroup_summary(row) for row in value.workgroups)

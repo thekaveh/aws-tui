@@ -14,6 +14,7 @@ import pytest
 from aws_tui import app as app_module
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
@@ -27,7 +28,6 @@ from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _prep(tmp_path: Path, toml_text: str) -> Path:
@@ -90,6 +90,7 @@ _S3COMPAT_TOML = (
     'kind = "s3-compatible"\n'
     'endpoint_url = "http://127.0.0.1:1"\n'
     'region = "us-east-1"\n'
+    'credentials = "static"\n'
     'access_key_id = "x"\n'
     'secret_access_key = "y"\n'
     "[defaults]\n"
@@ -580,8 +581,8 @@ async def test_emr_page_c_key_pushes_clone_modal(tmp_path: Path) -> None:
     """Pressing ``c`` on the EMR page opens the clone-job-run modal
     pre-populated from the currently-selected job run.
 
-    Verifies the full wiring from PR-C-clone: the page widget's
-    ``c`` binding routes to ``action_clone_selected_run``, which
+    Verifies the full wiring from PR-C-clone: the App's configurable
+    ``emr.clone`` binding routes to ``action_clone_selected_run``, which
     builds a ``JobRunCloneVM`` from the page VM's
     ``job_run_detail.detail`` and pushes ``JobRunCloneModal``
     onto Textual's screen stack. No submit is exercised here — the

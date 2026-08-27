@@ -264,6 +264,15 @@ class PageClient:
             None,
         )
 
+    async def get_query_executions(
+        self,
+        execution_ids: list[str],
+    ) -> tuple[QueryExecutionDetail, ...]:
+        details: list[QueryExecutionDetail] = []
+        for execution_id in execution_ids:
+            details.append(await self.get_query_execution(execution_id))
+        return tuple(details)
+
     async def list_named_queries_page(
         self,
         workgroup: str,
@@ -418,12 +427,14 @@ def _page_restore_state(
         page.results.state,
         page.results.error_text,
         page.results.has_more,
+        page.results.limit_reached,
         page.history.selected_execution_id,
         page.history.items,
         page.history.detail,
         page.history.state,
         page.history.error_text,
         page.history.has_more,
+        page.history.limit_reached,
         page.saved.selected_kind,
         page.saved.selected_query_id,
         page.saved.named_queries,
@@ -436,6 +447,8 @@ def _page_restore_state(
         page.saved.named_error_text,
         page.saved.prepared_error_text,
         page.saved.detail_error_text,
+        page.saved.named_limit_reached,
+        page.saved.prepared_limit_reached,
         tuple(page.workgroups),
         tuple(page.catalogs),
         tuple(page.databases),
@@ -447,6 +460,9 @@ def _page_restore_state(
         page.workgroups_error_text,
         page.catalogs_error_text,
         page.databases_error_text,
+        page.workgroup_limit_reached,
+        page.catalog_limit_reached,
+        page.database_limit_reached,
         frozenset(page._loaded_views),  # type: ignore[attr-defined]
         dict(store._values),  # type: ignore[attr-defined]
         tuple(
@@ -816,6 +832,50 @@ async def test_query_refresh_recovers_failed_current_workgroup_detail_context() 
 
 
 @pytest.mark.asyncio
+async def test_query_refresh_selects_a_valid_fallback_when_workgroup_disappears() -> None:
+    client = PageClient()
+    store = ServiceSelectionStore()
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    client.workgroups = [client.workgroups[1]]
+
+    await page.refresh_query_context()
+
+    assert page.context == QueryContext(
+        "analytics",
+        "us-west-2",
+        "analysts",
+        "AwsDataCatalog",
+        "events",
+    )
+    assert page.query.context == page.context
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    assert store.get(scope, "workgroup") == "analysts"
+
+
+@pytest.mark.asyncio
+async def test_query_refresh_clears_executable_context_when_no_workgroups_remain() -> None:
+    client = PageClient()
+    store = ServiceSelectionStore()
+    page = make_page_vm(client, selection_store=store)
+    await page.setup()
+    page.query.set_sql("SELECT 1")
+    client.workgroups = []
+
+    await page.refresh_query_context()
+    await page.query.execute()
+
+    empty = QueryContext("analytics", "us-west-2", "", "", "")
+    assert page.context == empty
+    assert page.query.context == empty
+    assert page.workgroup_detail is None
+    assert page.workgroup_detail_state is PaneState.EMPTY
+    assert client.start_calls == []
+    scope = SelectionScope("athena", "analytics", "us-west-2")
+    assert all(store.get(scope, key) is None for key in ("workgroup", "catalog", "database"))
+
+
+@pytest.mark.asyncio
 async def test_late_workgroup_detail_cannot_replace_the_current_selection() -> None:
     client = PageClient()
     page = make_page_vm(client)
@@ -943,6 +1003,38 @@ async def test_page_snapshot_round_trip_restores_query_results_and_selections_wi
     assert "PAGE_SNAPSHOT_SQL_SECRET" not in crash
     assert execution_id not in trace
     assert execution_id not in crash
+
+
+@pytest.mark.asyncio
+async def test_page_snapshot_restores_all_context_collection_limit_states() -> None:
+    source = make_page_vm(PageClient())
+    await source.setup()
+    seed_token_pager(
+        source._workgroup_pager,  # type: ignore[attr-defined]
+        source.workgroups,
+        None,
+        limit_reached=True,
+    )
+    seed_token_pager(
+        source._catalog_pager,  # type: ignore[attr-defined]
+        source.catalogs,
+        None,
+        limit_reached=True,
+    )
+    seed_token_pager(
+        source._database_pager,  # type: ignore[attr-defined]
+        source.databases,
+        None,
+        limit_reached=True,
+    )
+
+    destination = make_page_vm(PageClient())
+    await destination.setup()
+    await destination.restore_snapshot(source.export_snapshot())
+
+    assert destination.workgroup_limit_reached
+    assert destination.catalog_limit_reached
+    assert destination.database_limit_reached
 
 
 @pytest.mark.asyncio
@@ -1240,6 +1332,49 @@ async def test_page_snapshot_restore_preflights_context_without_any_mutation(
     else:
         client.databases[("analysts", "AwsDataCatalog")] = []
     before = _page_restore_state(destination, store)
+
+    with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+        await destination.restore_snapshot(snapshot)
+
+    assert _page_restore_state(destination, store) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["oversized", "duplicate"])
+async def test_cross_context_preflight_rejects_unsafe_discovery_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from aws_tui.vm.athena import page_vm
+
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    snapshot = source.export_snapshot()
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    before = _page_restore_state(destination, store)
+    other = AthenaWorkgroupSummary("other", "ENABLED", None, None)
+
+    async def unsafe_workgroups(
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
+        client.workgroup_calls.append(start_token)
+        if start_token is None:
+            if failure == "oversized":
+                return [client.workgroups[0], other], "next"
+            return [client.workgroups[0]], "next"
+        if failure == "duplicate":
+            return [client.workgroups[0], client.workgroups[1]], None
+        return [client.workgroups[1]], None
+
+    client.list_workgroups_page = unsafe_workgroups  # type: ignore[method-assign]
+    if failure == "oversized":
+        monkeypatch.setattr(page_vm, "_MAX_CONTEXT_ITEMS", 2, raising=False)
 
     with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
         await destination.restore_snapshot(snapshot)
@@ -1743,6 +1878,17 @@ async def test_page_snapshot_restores_context_from_later_discovery_pages() -> No
     await source.select_catalog("AwsDataCatalog")
     await source.load_more_databases()
     await source.select_database("events")
+    await source.select_view("history")
+    await source.select_view("saved")
+    for pager, items in (
+        (source._workgroup_pager, source.workgroups),  # type: ignore[attr-defined]
+        (source._catalog_pager, source.catalogs),  # type: ignore[attr-defined]
+        (source._database_pager, source.databases),  # type: ignore[attr-defined]
+        (source.history._pager, source.history.items),  # type: ignore[attr-defined]
+        (source.saved._named_pager, source.saved.named_queries),  # type: ignore[attr-defined]
+        (source.saved._prepared_pager, source.saved.prepared_statements),  # type: ignore[attr-defined]
+    ):
+        seed_token_pager(pager, items, None, limit_reached=True)
     snapshot = source.export_snapshot()
     assert source.context == QueryContext(
         "analytics",
@@ -1760,6 +1906,7 @@ async def test_page_snapshot_restores_context_from_later_discovery_pages() -> No
 
     assert destination.context == source.context
     assert destination.query.context == source.context
+    assert destination.export_snapshot() == snapshot
 
 
 @pytest.mark.asyncio
@@ -1808,11 +1955,11 @@ async def test_selection_restore_is_validated_and_scoped_by_connection_region() 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("level", "state_attribute"),
+    ("level", "state_attribute", "has_more_attribute"),
     [
-        ("workgroup", "workgroups_state"),
-        ("catalog", "catalogs_state"),
-        ("database", "databases_state"),
+        ("workgroup", "workgroups_state", "has_more_workgroups"),
+        ("catalog", "catalogs_state", "has_more_catalogs"),
+        ("database", "databases_state", "has_more_databases"),
     ],
 )
 @pytest.mark.parametrize(
@@ -1827,6 +1974,7 @@ async def test_selection_restore_is_validated_and_scoped_by_connection_region() 
 async def test_transient_context_errors_preserve_all_persisted_selections(
     level: str,
     state_attribute: str,
+    has_more_attribute: str,
     error: ProviderError,
     expected_state: PaneState,
 ) -> None:
@@ -1846,6 +1994,7 @@ async def test_transient_context_errors_preserve_all_persisted_selections(
     await page.setup()
 
     assert getattr(page, state_attribute) is expected_state
+    assert not getattr(page, has_more_attribute)
     assert {key: store.get(scope, key) for key in expected} == expected
 
 
@@ -1932,6 +2081,23 @@ async def test_context_load_more_exposes_busy_state_without_reloading_page_one()
     await loading
 
     assert not page.is_loading_more_catalogs
+
+
+def test_retired_context_worker_cannot_clear_current_busy_state() -> None:
+    page = make_page_vm(PageClient())
+    old_worker = page._catalog_worker  # type: ignore[attr-defined]
+    page._begin_loading_more("catalogs", old_worker)  # type: ignore[attr-defined]
+
+    page._catalog_generation += 1  # type: ignore[attr-defined]
+    page._replace_catalog_worker("primary")  # type: ignore[attr-defined]
+    current_worker = page._catalog_worker  # type: ignore[attr-defined]
+    page._begin_loading_more("catalogs", current_worker)  # type: ignore[attr-defined]
+    page._finish_loading_more("catalogs", old_worker)  # type: ignore[attr-defined]
+
+    assert page.is_loading_more_catalogs
+    page._finish_loading_more("catalogs", current_worker)  # type: ignore[attr-defined]
+    assert not page.is_loading_more_catalogs
+    page.dispose()
 
 
 @pytest.mark.asyncio

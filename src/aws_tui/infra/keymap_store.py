@@ -32,6 +32,10 @@ class KeybindingCollision(ValueError):
     """Raised when an overlay introduces a same-key action collision."""
 
 
+class InvalidKeybinding(ValueError):
+    """Raised when an overlay contains a malformed key token."""
+
+
 _TEXTUAL_FRIENDLY_KEY_NAMES: dict[str, str] = {
     "solidus": "slash",
     "reverse_solidus": "backslash",
@@ -69,6 +73,15 @@ def _collision_pairs(
     }
 
 
+def _validate_overlay_keys(action: str, keys: tuple[str, ...]) -> None:
+    for key in keys:
+        if not key or any(character.isspace() for character in key) or "," in key:
+            raise InvalidKeybinding(
+                f"invalid keybinding {key!r} for {action!r}; "
+                "use one non-empty Textual key token per list item"
+            )
+
+
 class KeymapStore:
     """Resolve action names to keystrokes, with optional overlay merging."""
 
@@ -77,7 +90,6 @@ class KeymapStore:
             ("pane.quick_look", "pane.toggle_select"),
             ("auth.authenticate", "pane.select_all"),
             ("emr.clone", "pane.copy"),
-            ("athena.cancel", "modal.cancel"),
             ("athena.query", "glue.catalog"),
             ("athena.history", "glue.jobs"),
             ("athena.results", "glue.crawlers"),
@@ -115,11 +127,8 @@ class KeymapStore:
         "app.swap_source": ("S",),
         "emr.next_application": ("A",),
         "auth.authenticate": ("a",),
-        "modal.cancel": ("escape",),
-        # EMR-page-only — bound on ``EmrServerlessPage`` widget scope
-        # (does NOT collide with ``pane.copy`` which is only invoked
-        # when a file-manager pane is focused; the two never share a
-        # focus context).
+        # EMR-page-only. The App routes this deliberate alias to clone on
+        # EMR and to ``pane.copy`` on the file manager.
         "emr.clone": ("c",),
         "emr.logs.filter": ("f",),
         "glue.catalog": ("1",),
@@ -152,10 +161,9 @@ class KeymapStore:
                         f"overlay refers to unknown action {action!r}; "
                         f"valid actions are {sorted(self.DEFAULT_BINDINGS)}"
                     )
-                if isinstance(keys, str):
-                    merged[action] = (keys,)
-                else:
-                    merged[action] = tuple(keys)
+                normalized: tuple[str, ...] = (keys,) if isinstance(keys, str) else tuple(keys)
+                _validate_overlay_keys(action, normalized)
+                merged[action] = normalized
             unapproved = {
                 (key, left, right)
                 for key, left, right in _collision_pairs(merged)
@@ -184,4 +192,10 @@ class KeymapStore:
         return dict(self._bindings)
 
 
-__all__ = ["KeybindingCollision", "KeymapStore", "UnknownAction", "textual_key_name"]
+__all__ = [
+    "InvalidKeybinding",
+    "KeybindingCollision",
+    "KeymapStore",
+    "UnknownAction",
+    "textual_key_name",
+]

@@ -115,6 +115,20 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.2. Changed
 
+- **Live chrome cleanup.** Removed the unmounted legacy `StatusBar` widget,
+  its subscribed viewmodel, obsolete theme selectors, and the unused
+  `pytest-xdist` development dependency. Connection identity remains in the
+  service pane chrome where it is actually rendered.
+- **Independent S3-compatible test harness.** Replaced the vulnerable MinIO
+  community test image with the digest-pinned Adobe S3Mock 5.1.0 release while
+  preserving the same nine strict provider tests, Compose workflow, seeded
+  development data, and product support for user-configured MinIO endpoints.
+- **VMx 3.23 adoption.** Raised the VMx floor to 3.23.0, moved modal focus
+  restoration to public `DiscriminatorVM` APIs, rebuilt S3 validation through
+  immutable `FormVMBuilder` validators, and aligned Athena cancellation and
+  shutdown with public `AsyncRelayCommand` execution state. The dated audit
+  records substitutions, rejected candidates, production line deltas, and test
+  impact.
 - **Overlay pickers, compact commands, and unified Athena handoffs.** Inline
   service-context and EMR application dropdowns now overlay without resizing
   adjacent panes. The Commands pane is one tooltip-rich row with deterministic
@@ -146,6 +160,58 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.3. Fixed
 
+- **Terminal maintenance safety and fidelity.** S3 rate limits now remain
+  throttling signals instead of marking a connection unreachable. EMR bounds
+  application and bulk-run pagination, classifies log paths relative to the
+  configured run prefix, preserves the last retry/worker marker in labels, and
+  renders streamed lines through one reusable widget. Crash dumps read at most
+  1 MiB while retaining up to 1,000 tail lines. Pane mount now reconciles VM
+  state that changes between composition and subscription, so snapshots use the
+  production reactive path. CI audits every locked dependency group, validates
+  complete wheel and sdist payloads, and smoke-installs both artifact types.
+- **Late maintenance contract guards.** Service swaps now await every cancelled
+  transfer worker before disposing its panes, EMR log discovery rejects more
+  than 100 listing pages or 200 classified files, and package validation checks
+  that wheels contain the complete Python, typing-marker, and theme payload.
+  Documentation publication, including manual dispatch, is restricted to
+  `main`; the generated hero replaces unsupported selector glyphs explicitly
+  and rejects any future missing font glyph instead of rendering `.notdef`.
+- **Bounded startup, transfers, and service hydration.** Automatic connection
+  fallback now shares one 90-second launch budget, copy and move reject batches
+  above 1,000 selected entries before creating journals, and Athena history
+  hydrates each 50-row page with one `BatchGetQueryExecution` request. Persisted
+  S3-compatible connections use the same endpoint and credential validation as
+  Settings, explicit credential references survive materialization unchanged,
+  cross-filesystem overwrite races clean their staging container, and content
+  candidates have one disposal owner across failed service swaps.
+- **Atomic source and service changes.** Root service adoption now builds and
+  constructs the candidate before committing source identity, and publishes
+  the new content, connection, and authentication identity as one
+  observer-consistent tuple,
+  and retires an outgoing VM if cancellation arrives after its shutdown has
+  begun. Failed initial adoption clears the tentative selection without
+  disturbing a previously hosted service.
+- **Modal keyboard and focus routing.** Editable modal controls receive arrow,
+  Backspace, Tab, and Shift+Tab input before app-level navigation, and closing
+  a modal restores the VMx focus slot without a delayed widget projection
+  overwriting it or a newly opened modal.
+- **Athena pagination freshness.** Refresh invalidates in-flight continuation
+  loads so stale pages cannot append results after newer query state arrives.
+- **Resilient shutdown.** Teardown continues after individual cleanup errors,
+  reports every failed step, and flushes/closes structured logging last.
+- **Maintenance correctness.** CI now verifies the lowest supported dependency
+  set, S3Mock seeding creates only genuinely missing buckets, wiki publication
+  distinguishes changes from command failures, installed help uses published
+  documentation URLs, dead status-bar references are rejected, and current
+  command/contract guidance matches runtime behavior and VMx 3.23.
+- **Accessible chrome and docs.** Banner title tokens, Solarized muted text,
+  and documentation accent colors now meet their intended contrast thresholds.
+- **Runtime lifecycle and interaction hardening.** Athena now drains the real
+  provider task behind cancelled query/result commands, Settings has a complete
+  forward/reverse Tab ring, command-palette empty-result and repeated-open flows
+  remain stable, Help reflects the active keymap, EMR logs retarget immediately,
+  source swaps avoid invalid authentication fallbacks, and startup failures are
+  redacted before the CLI exits with status 1.
 - **Maintenance reliability and data-integrity pass.** Cross-filesystem moves
   retain sources that were skipped, S3 batch deletion reports partial service
   failures, gzip log reads enforce decompressed-size and line bounds, and AWS
@@ -160,9 +226,9 @@ section; the current tree must not be tagged as v0.8.0.
   stale detail state, command-palette failures reach the toast/log surfaces,
   modal keyboard activation follows the visible safe default, and release/CI
   gates now enforce documentation contracts alongside the runtime tiers.
-- **S3-compatible secrets use the configured keychain.** Settings and
-  first-run persistence store credentials by reference, remove superseded
-  entries, and roll back cleanly when config persistence fails.
+- **S3-compatible secrets use the configured keychain.** Settings persistence
+  stores credentials by reference, removes superseded entries, and rolls back
+  cleanly when config persistence fails.
 - **EMR + UI polish train.** Eight follow-up PRs (#96, #98, #99,
   #100, #102, #103, #104, #105) addressed user-reported issues
   found while exercising the EMR + nav-rail surface:
@@ -177,7 +243,6 @@ section; the current tree must not be tagged as v0.8.0.
     horizontal padding so column 0 is the ribbon, matching EntryRow;
   - filter EMR hub messages by sender (#103) — kill cross-VM
     redraws on the shared MessageHub when sibling VMs fire ``state``
-    or ``selected_id`` echoes;
   - preserve the credit pedigree in the demo banner subtitle
     (#104) — prepend the DEMO chip instead of replacing;
   - Settings NavRow keeps the ``-selected`` highlight (#105) —
@@ -196,9 +261,9 @@ section; the current tree must not be tagged as v0.8.0.
   Glue/Iceberg, and Athena view models publish redacted operation diagnostics
   through the shared VMx message hub while preserving their user-facing error
   states.
-- **First-run S3-compatible save failures no longer crash the error
-  handler.** The modal now uses supported Textual notification kwargs in
-  test harnesses and the unified toast taxonomy in production.
+- **Settings S3-compatible save failures remain recoverable.** The inline form
+  uses the unified toast taxonomy and preserves the active connection when
+  persistence fails.
 - **Non-SSO AWS profiles reach live boto credential validation.** Shared
   credentials, `credential_process`, env, and role-backed profiles no
   longer fall back to local panes as `no AWS credentials` merely because
@@ -214,8 +279,8 @@ section; the current tree must not be tagged as v0.8.0.
   exception text, S3-compatible pane titles / Settings rows / reprs drop
   endpoint userinfo, query strings, and fragments, and the Settings form
   rejects those unsafe endpoint URL shapes plus malformed ports.
-- **S3-compatible credential hardening.** Settings and first-run now share
-  normalized form-to-config mapping, blank optional session tokens resolve
+- **S3-compatible credential hardening.** Settings uses normalized
+  form-to-config mapping, blank optional session tokens resolve
   as absent across static/env/keychain/profile sources, and
   ``S3CompatForm`` / ``ConnectionEntry`` reprs mask static credentials.
 - **Crash reports now log through the configured JSON log sink.** The
@@ -231,7 +296,7 @@ section; the current tree must not be tagged as v0.8.0.
   pager instead of mutating its private token/item storage.
 - **App stdlib warnings now land in the JSON log sink.** The composed app
   opts into an `aws_tui.*` logging bridge so config/keymap fallback,
-  resume-abort, first-run, and AWS client-shutdown warnings are captured
+  resume-abort, and AWS client-shutdown warnings are captured
   with the same structured redaction as direct `LogSink` calls.
 - **Settings focus avoids private Textual imports.** SettingsView now
   locates the first public focusable child in the Connections section
@@ -242,6 +307,10 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.4. Docs
 
+- Added current S3, EMR Serverless, Glue/Iceberg, and Athena service guides; a
+  VMx 3.23 compatibility and line-count audit; refreshed consumed-contract and
+  release checklists; and regenerated the four architecture diagrams from the
+  runtime's current ownership and lifecycle boundaries.
 - Added an installation guide, corrected the documentation inventory and
   implementation-status records, and made `docs-check` reject stale or
   unexpected committed architecture-diagram assets.
@@ -250,8 +319,8 @@ section; the current tree must not be tagged as v0.8.0.
 - ``SECURITY.md`` — supported-version table now distinguishes the
   pending 0.8.x line from the latest tagged 0.7.x release;
   ``docs/homebrew-bootstrap.md`` adopts the §3.9 numbered heading
-  mandate; ``docs/recording-todo.md`` retargets to "v0.8.0 docs feel
-  done".
+  mandate; ``docs/recording-todo.md`` tracks the v0.9.0 development
+  documentation captures.
 - README §4 — indexed three previously-orphaned post-tag specs
   (public-release-pipeline, cross-platform-readiness, demo-mode)
   and the maintainer-facing ``docs/RELEASING.md`` +
@@ -269,6 +338,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.5. Build
 
+- CI, release, Pages, and bootstrap now enforce the lockfile with `--locked`;
+  the declared development graph includes `textual-dev`; workflow and
+  pre-commit actions use verified immutable refs; and wheel/sdist publication
+  rejects repository metadata, local caches, tests, and traversal members
+  before upload.
 - Removed blanket integration-test reruns so failures remain observable,
   added a stable aggregate `ci gate`, expanded installed-wheel smoke tests,
   and gated Homebrew publication until the tap is explicitly enabled.
@@ -349,9 +423,9 @@ section; the current tree must not be tagged as v0.8.0.
   no-target paths now use ``notifications.error(...)`` /
   ``notifications.advise(...)`` instead of Textual's bare
   ``self.notify`` — the latter paints over the Commands strip
-  and disappears with the wrong glyph / wrong colour / wrong
-  countdown. Errors get the ✖ glyph + ``$danger`` colour + 30 s
-  countdown; advisories get the ⚠ glyph + ``$warning`` colour +
+  and disappears with the wrong icon, colour, and countdown.
+  Errors use the error icon + ``$danger`` colour + 30 s
+  countdown; advisories use the warning icon + ``$warning`` colour +
   8 s countdown. Same routing as every other toast in the app.
 - **HintLegend chips now reflect selection-state disable rules**
   (PR #83, item #5). ``HintAction`` gains an ``enabled: bool``
@@ -635,7 +709,7 @@ section; the current tree must not be tagged as v0.8.0.
   handle closes. The module docstring already promised "fsync
   semantics" but the code only relied on a natural close, which
   flushes stdio buffers without forcing the FS journal/metadata
-  to disk. On power loss between a ``mark_completed`` write and
+  to disk. On power loss between a ``mark_finished`` write and
   the OS's background flush (~30s), the journal would lose the
   terminal marker and diagnostic replay would classify the transfer as
   unfinished. fsync closes that window for one syscall

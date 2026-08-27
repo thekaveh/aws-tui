@@ -10,16 +10,22 @@ from typing import cast
 import pytest
 from textual.widgets import OptionList, Static
 
-from aws_tui.app import AwsTuiApp, _next_service_source, _service_source_candidates
+from aws_tui.app import (
+    AwsTuiApp,
+    _build_swap_candidates,
+    _next_service_source,
+    _service_source_candidates,
+)
 from aws_tui.composition import AppContext, build_app_context
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.infra.aws_session import TokenProbeResult, TokenState
+from aws_tui.infra.config_store import ConfigError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.services.glue import GlueClientProtocol, GlueService
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 from tests.unit.vm.glue._fake_glue import seeded_glue
 
 
@@ -35,6 +41,7 @@ def _three_source_config(tmp_path: Path) -> Path:
         "[connections.minio]\n"
         'kind = "s3-compatible"\n'
         'endpoint_url = "http://127.0.0.1:9000"\n'
+        'credentials = "static"\n'
         'access_key_id = "x"\n'
         'secret_access_key = "y"\n'
         "\n"
@@ -82,14 +89,18 @@ def test_service_candidates_include_only_supported_aws_connections(tmp_path: Pat
         config_dir=_three_source_config(tmp_path),
         cache_dir=tmp_path / "cache",
     )
-    _configure_auto_profiles(ctx, tmp_path)
-    candidates = _service_source_candidates(ctx, "emr-serverless")
-    assert [(connection.name, connection.region) for connection in candidates] == [
-        ("prod-west", "us-west-2"),
-        ("dev", "us-east-1"),
-        ("zulu", "eu-west-1"),
-        ("alpha", "ap-southeast-1"),
-    ]
+    try:
+        _configure_auto_profiles(ctx, tmp_path)
+        candidates = _service_source_candidates(ctx, "emr-serverless")
+        assert [(connection.name, connection.region) for connection in candidates] == [
+            ("prod-west", "us-west-2"),
+            ("dev", "us-east-1"),
+            ("zulu", "eu-west-1"),
+            ("alpha", "ap-southeast-1"),
+        ]
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.parametrize("service_id", ["emr-serverless", "glue", "athena"])
@@ -101,17 +112,46 @@ def test_s3_unreachable_mark_does_not_suppress_other_service_candidates(
         config_dir=_three_source_config(tmp_path),
         cache_dir=tmp_path / "cache",
     )
-    ctx.unreachable_connections.add(("aws", "prod-west"))
+    try:
+        ctx.unreachable_connections.add(("aws", "prod-west"))
 
-    candidates = _service_source_candidates(ctx, service_id)
+        candidates = _service_source_candidates(ctx, service_id)
 
-    assert any(connection.name == "prod-west" for connection in candidates)
+        assert any(connection.name == "prod-west" for connection in candidates)
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 def test_next_service_source_wraps_by_connection_name_and_region() -> None:
     dev, prod = _aws_connections()
     assert _next_service_source((dev, prod), dev) == prod
     assert _next_service_source((dev, prod), prod) == dev
+
+
+def test_live_connection_discovery_failure_is_nonfatal_and_reported(tmp_path: Path) -> None:
+    ctx = build_app_context(demo=True, cache_dir=tmp_path / "cache")
+
+    def fail_discovery() -> list[Connection]:
+        raise ConfigError("config.toml is not valid TOML")
+
+    ctx.connection_resolver.list = fail_discovery  # type: ignore[method-assign]
+    try:
+        assert _service_source_candidates(ctx, "glue") == ()
+        candidates, skipped = _build_swap_candidates(ctx)
+
+        assert candidates == [("local", "local")]
+        assert skipped == []
+        matching = [
+            toast
+            for toast in ctx.root_vm.chrome.toast_stack.toasts
+            if toast.model.id == "connection-discovery-failed"
+        ]
+        assert len(matching) == 1
+        assert "could not reload connections" in matching[0].model.text
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 def _multi_profile_emr_context(
@@ -325,6 +365,129 @@ async def test_failed_source_mount_restores_previous_source(tmp_path: Path) -> N
             )
             assert mount_targets == [target.name, prior.name]
     finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_source_switch_during_teardown_restores_previous_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx, _calls = _multi_profile_emr_context(tmp_path)
+    app = AwsTuiApp(ctx)
+    release_shutdown = asyncio.Event()
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_service_mount(pilot, app)
+            prior = ctx.root_vm.active_connection
+            prior_vm = ctx.root_vm.content_host.current
+            assert prior is not None
+            assert prior_vm is not None
+            target = next(
+                connection
+                for connection in _service_source_candidates(ctx, "emr-serverless")
+                if connection != prior
+            )
+            shutdown_started = asyncio.Event()
+            original_shutdown = prior_vm.shutdown
+
+            async def blocked_shutdown() -> None:
+                shutdown_started.set()
+                await release_shutdown.wait()
+                await original_shutdown()
+
+            monkeypatch.setattr(prior_vm, "shutdown", blocked_shutdown)
+            rebuild = asyncio.create_task(
+                app._rebuild_single_context_source("emr-serverless", target)
+            )
+            await asyncio.wait_for(shutdown_started.wait(), timeout=1)
+
+            rebuild.cancel()
+            release_shutdown.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(rebuild, timeout=2)
+            await _await_service_mount(pilot, app)
+
+            assert ctx.root_vm.active_connection == prior
+            assert ctx.root_vm.content_host.current is not None
+            assert ctx.root_vm.content_host.current.source.connection_key == (
+                prior.name,
+                prior.region,
+            )
+    finally:
+        release_shutdown.set()
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_source_mount_durably_restores_previous_source(tmp_path: Path) -> None:
+    ctx, _calls = _multi_profile_emr_context(tmp_path)
+    app = AwsTuiApp(ctx)
+    release_rollback = asyncio.Event()
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_service_mount(pilot, app)
+            prior = ctx.root_vm.active_connection
+            assert prior is not None
+            target = next(
+                connection
+                for connection in _service_source_candidates(ctx, "emr-serverless")
+                if connection != prior
+            )
+            real_mount = app._mount_service_view
+            target_mount_started = asyncio.Event()
+            rollback_mount_started = asyncio.Event()
+
+            async def blocked_mount(
+                service_id: str,
+                *,
+                required_connection: Connection | None = None,
+            ) -> bool:
+                assert required_connection is not None
+                if required_connection == target:
+                    target_mount_started.set()
+                    await asyncio.Event().wait()
+                rollback_mount_started.set()
+                await release_rollback.wait()
+                return await real_mount(
+                    service_id,
+                    required_connection=required_connection,
+                )
+
+            app._mount_service_view = blocked_mount  # type: ignore[method-assign]
+            rebuild = asyncio.create_task(
+                app._rebuild_single_context_source("emr-serverless", target)
+            )
+            await asyncio.wait_for(target_mount_started.wait(), timeout=1)
+            assert ctx.root_vm.active_connection == target
+
+            rebuild.cancel()
+            await asyncio.wait_for(rollback_mount_started.wait(), timeout=1)
+            rebuild.cancel()
+            rebuild.cancel()
+            await asyncio.sleep(0)
+            assert not rebuild.done()
+            release_rollback.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(rebuild, timeout=2)
+            await _await_service_mount(pilot, app)
+
+            assert ctx.root_vm.active_connection == prior
+            assert ctx.root_vm.content_host.current is not None
+            assert ctx.root_vm.content_host.current.source.connection_key == (
+                prior.name,
+                prior.region,
+            )
+    finally:
+        release_rollback.set()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
 

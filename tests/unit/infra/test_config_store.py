@@ -145,6 +145,81 @@ def test_invalid_kind_raises(config_path: Path) -> None:
         store.load()
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "",
+        "ftp://minio.local",
+        "https://",
+        "https://user:secret@minio.local",
+        "https://minio.local?token=secret",
+        "https://minio.local#fragment",
+        "https://minio.local:invalid",
+    ],
+)
+def test_load_rejects_invalid_s3_endpoint_urls(config_path: Path, endpoint: str) -> None:
+    config_path.write_text(
+        "[connections.minio]\n"
+        'kind = "s3-compatible"\n'
+        f'endpoint_url = "{endpoint}"\n'
+        'credentials = "static"\n'
+        'access_key_id = "AKIA"\n'
+        'secret_access_key = "SECRET"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="endpoint_url"):
+        ConfigStore(path=config_path).load()
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    [None, "", "unknown", "keychain:", "env:   ", "aws-profile:"],
+)
+def test_load_rejects_invalid_s3_credential_specs(
+    config_path: Path,
+    credentials: str | None,
+) -> None:
+    credential_line = "" if credentials is None else f'credentials = "{credentials}"\n'
+    config_path.write_text(
+        "[connections.minio]\n"
+        'kind = "s3-compatible"\n'
+        'endpoint_url = "https://minio.local"\n'
+        f"{credential_line}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="credentials"):
+        ConfigStore(path=config_path).load()
+
+
+@pytest.mark.parametrize(
+    ("access_key_id", "secret_access_key"),
+    [(None, "SECRET"), ("AKIA", None), (" ", "SECRET"), ("AKIA", " ")],
+)
+def test_static_credentials_require_nonblank_key_pair(
+    config_path: Path,
+    access_key_id: str | None,
+    secret_access_key: str | None,
+) -> None:
+    entry = ConnectionEntry(
+        name="minio",
+        kind="s3-compatible",
+        endpoint_url="https://minio.local",
+        credentials="static",
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+    )
+    config = Config(
+        connections={entry.name: entry},
+        defaults=Defaults(),
+        keybindings=Keybindings(),
+    )
+
+    with pytest.raises(ConfigError, match="static credentials"):
+        ConfigStore(path=config_path).save(config)
+
+
 @pytest.mark.parametrize("field", ["force_path_style", "verify_tls"])
 def test_connection_boolean_fields_reject_string_values(config_path: Path, field: str) -> None:
     config_path.write_text(
@@ -332,6 +407,7 @@ def _seed_entry(name: str = "minio-local") -> ConnectionEntry:
         kind="s3-compatible",
         region="us-east-1",
         endpoint_url="http://localhost:9000",
+        credentials="static",
         access_key_id="AKIATEST",
         secret_access_key="SECRETTEST",
         force_path_style=True,
@@ -347,6 +423,7 @@ def test_update_connection_round_trip(tmp_path: Path) -> None:
         kind="s3-compatible",
         region="us-west-2",
         endpoint_url="https://minio.internal:443",
+        credentials="static",
         access_key_id="AKIANEW",
         secret_access_key="SECRETNEW",
         force_path_style=False,
@@ -417,6 +494,7 @@ def test_save_chmods_parent_dir_to_0o700(tmp_path: Path) -> None:
             kind="s3-compatible",
             region="us-east-1",
             endpoint_url="http://localhost:9000",
+            credentials="static",
             access_key_id="K",
             secret_access_key="S",
             force_path_style=True,

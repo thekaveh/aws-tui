@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Collapsible, Static
+from textual.widgets import Button, Collapsible, Static
 from vmx import Message, MessageHub
 
+from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.ui.widgets.settings.s3_connections_panel import S3ConnectionsPanel
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.settings.settings_vm import SettingsVM
@@ -160,6 +162,60 @@ class SettingsView(Widget):
         if title is None:
             return
         title.focus()
+
+    def _focus_controls(self) -> tuple[Widget, ...]:
+        title = self._section_focus_target()
+        candidates: tuple[Widget, ...] = (
+            *((title,) if title is not None else ()),
+            *tuple(self.query(Button)),
+        )
+        controls: list[Widget] = []
+        for widget in candidates:
+            if not widget.can_focus or widget.disabled:
+                continue
+            if not all(node.display for node in widget.ancestors_with_self):
+                continue
+            controls.append(widget)
+        return tuple(controls)
+
+    def focus_boundary(self, *, reverse: bool) -> None:
+        """Focus the first or last visible Settings control."""
+        controls = self._focus_controls()
+        if controls:
+            if self._focus_coordinator is not None:
+                self._focus_coordinator.project_focused_slot(FocusSlot.SETTINGS)
+            controls[-1 if reverse else 0].focus()
+
+    def cycle_focus(self, *, reverse: bool) -> bool:
+        """Move within Settings, returning false at the nav-rail boundary."""
+        controls = self._focus_controls()
+        focused = self.app.focused
+        if focused not in controls:
+            return False
+        index = controls.index(focused)
+        next_index = index + (-1 if reverse else 1)
+        if next_index < 0 or next_index >= len(controls):
+            return False
+        controls[next_index].focus()
+        return True
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        if self._focus_coordinator is not None:
+            self._focus_coordinator.project_focused_slot(FocusSlot.SETTINGS)
+
+    def activate_focused(self) -> bool:
+        """Activate the focused Settings control despite App priority keys."""
+        focused = self.app.focused
+        if focused is None or self not in focused.ancestors_with_self:
+            return False
+        if isinstance(focused, (Button, ModalButton)):
+            focused.press()
+            return True
+        toggle = getattr(focused, "action_toggle_collapsible", None)
+        if callable(toggle):
+            toggle()
+            return True
+        return False
 
 
 __all__ = ["SettingsView"]

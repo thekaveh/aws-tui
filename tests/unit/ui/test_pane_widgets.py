@@ -7,15 +7,16 @@ from pathlib import Path
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.widgets import Static
 from vmx import Message, MessageHub, RxDispatcher
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.pane import EntryRow, Pane
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _astream(data: bytes) -> AsyncIterator[bytes]:
@@ -58,6 +59,82 @@ async def test_pane_mounts_and_populates_rows() -> None:
             await pilot.pause()
             rows = app.query(EntryRow)
             assert len(rows) == 5  # data dir + 4 files
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pane_footer_reacts_to_post_mount_viewmodel_change() -> None:
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(
+        provider=await _seed(),
+        hub=hub,
+        dispatcher=dispatcher,
+        id_prefix="pane.test",
+    )
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+        app = _App()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            pane = app.query_one(Pane)
+            footer = pane.query_one(".pane-footer", Static)
+
+            vm.toggle_mark_at(0)
+            for _ in range(100):
+                if str(footer.render()) == vm.viewmodel.summary:
+                    break
+                await pilot.pause(0.01)
+
+            assert "marked" in str(footer.render())
+            assert str(footer.render()) == vm.viewmodel.summary
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pane_reconciles_viewmodel_change_between_compose_and_mount() -> None:
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(
+        provider=await _seed(),
+        hub=hub,
+        dispatcher=dispatcher,
+        id_prefix="pane.test",
+    )
+    vm.construct()
+    await vm.setup()
+
+    class _RacingPane(Pane):
+        def compose(self) -> ComposeResult:
+            children = list(super().compose())
+            vm.toggle_mark_at(0)
+            yield from children
+
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield _RacingPane(vm, hub=hub, id="pane")
+
+        app = _App()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            footer = app.query_one(".pane-footer", Static)
+
+            assert "marked" in vm.viewmodel.summary
+            assert str(footer.render()) == vm.viewmodel.summary
     finally:
         vm.dispose()
         hub.dispose()

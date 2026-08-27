@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
-from urllib.parse import urlparse
 
 from textual import on
 from textual.app import ComposeResult
@@ -28,6 +27,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Static
 from vmx import Message, MessageHub
 
+from aws_tui.infra.connection_validation import validate_endpoint_url
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 from aws_tui.vm.settings.s3_connection_form_vm import S3ConnectionFormVM
@@ -62,26 +62,10 @@ def _validate_endpoint_url(form: S3CompatForm) -> str | None:
     Field-presence is enforced by :class:`S3ConnectionFormVM`'s
     built-in non-empty validators; this validator runs only when the
     field is non-empty (regression: format wins over presence)."""
-    stripped = form.endpoint_url.strip()
-    if not stripped:
+    if not form.endpoint_url.strip():
         return None  # field-presence validator already flagged it
-    try:
-        parsed = urlparse(stripped)
-    except ValueError:
-        return "not a valid URL"
-    if parsed.scheme not in ("http", "https"):
-        return "must start with http:// or https://"
-    if not parsed.netloc:
-        return "missing host"
-    try:
-        _ = parsed.port
-    except ValueError:
-        return "invalid port"
-    if parsed.username or parsed.password:
-        return "must not include username or password"
-    if parsed.query or parsed.fragment:
-        return "must not include query or fragment"
-    return None
+    error = validate_endpoint_url(form.endpoint_url)
+    return None if error is None else error.removeprefix("is ")
 
 
 async def _noop_persister(_m: S3CompatForm) -> None:
@@ -203,17 +187,11 @@ class ConnectionFormInline(Widget):
             ),
             persister=_noop_persister,
             strict=False,
+            validators={
+                "name": _validate_name,
+                "endpoint_url": _validate_endpoint_url,
+            },
         )
-
-    def _install_view_validators(self) -> None:
-        """Layer the View-specific format validators (name-regex
-        and URL-format) on top of the VM's built-in field-presence
-        + cross-field validators. Uses the form VM's public
-        ``add_field_validator`` — no reach-through into the
-        inner VMx :class:`FormVM` (round-3 directive
-        §9.bis.11: composed primitives stay private)."""
-        self._form_vm.add_field_validator("name", _validate_name)
-        self._form_vm.add_field_validator("endpoint_url", _validate_endpoint_url)
 
     def compose(self) -> ComposeResult:
         with Container():
@@ -244,7 +222,6 @@ class ConnectionFormInline(Widget):
                 yield ModalButton("save", button_id="form-save-btn", classes="-primary")
 
     def on_mount(self) -> None:
-        self._install_view_validators()
         self._errors_sub = self._form_vm.on_errors_changed.subscribe(
             on_next=self._on_errors_changed
         )
@@ -310,6 +287,28 @@ class ConnectionFormInline(Widget):
         self._submitting = False
         self._ctx = None
 
+    def cycle_focus(self, *, reverse: bool = False) -> bool:
+        """Cycle within the open form when one of its controls owns focus."""
+        if not self.has_class("-open"):
+            return False
+        focused = self.app.focused
+        if focused is None or self not in focused.ancestors_with_self:
+            return False
+        controls = tuple(
+            widget
+            for widget in self.walk_children(Widget)
+            if isinstance(widget, (Input, ModalButton)) and widget.can_focus and not widget.disabled
+        )
+        if not controls:
+            return False
+        try:
+            index = controls.index(focused)
+        except ValueError:
+            index = 0 if reverse else -1
+        step = -1 if reverse else 1
+        controls[(index + step) % len(controls)].focus()
+        return True
+
     def _reset_form_vm(self, model: S3CompatForm) -> None:
         """Dispose the prior form VM and build a fresh one with
         ``model`` as both the working and snapshot values, then
@@ -322,8 +321,11 @@ class ConnectionFormInline(Widget):
             initial=model,
             persister=_noop_persister,
             strict=False,
+            validators={
+                "name": _validate_name,
+                "endpoint_url": _validate_endpoint_url,
+            },
         )
-        self._install_view_validators()
         self._errors_sub = self._form_vm.on_errors_changed.subscribe(
             on_next=self._on_errors_changed
         )
@@ -477,9 +479,9 @@ class ConnectionFormInline(Widget):
         self._submitting = True
         # Pull the live model from the form VM. set_field has been
         # threading every keystroke into the working model, so it's
-        # current — just hand it off. force_path_style=True and
-        # verify_tls=True from the initial construction survive
-        # untouched because no Input writes to those fields.
+        # current — just hand it off. The initial force_path_style
+        # and verify_tls values survive untouched because no Input
+        # writes to those fields.
         model = self._form_vm.model
         ctx = self._ctx
         self.post_message(
@@ -488,17 +490,15 @@ class ConnectionFormInline(Widget):
 
 
 # Keep the legacy helper exported so tests importing it still work;
-# implementation now delegates to the form VM's validators when run
-# through the widget. Tests that import the function directly get
+# implementation mirrors the validators supplied to the VMx FormVM builder.
+# Tests that import the function directly get
 # the standalone regex/URL behavior unchanged.
 def _validate_s3_form_value(field: str, value: str) -> str | None:
     """Standalone validator preserved for tests that import it.
 
-    The widget no longer uses this directly — it composes
-    :class:`S3ConnectionFormVM` and adds the same validators via
-    ``add_field_validator``. Tests that called this function
-    against arbitrary (field, value) pairs continue to work
-    unchanged.
+    The widget supplies equivalent validators while constructing
+    :class:`S3ConnectionFormVM`. Tests that call this function against
+    arbitrary (field, value) pairs continue to work unchanged.
     """
     stripped = value.strip()
     if field == "name":
@@ -506,23 +506,8 @@ def _validate_s3_form_value(field: str, value: str) -> str | None:
     if field == "endpoint_url":
         if not stripped:
             return "required"
-        try:
-            parsed = urlparse(stripped)
-        except ValueError:
-            return "not a valid URL"
-        if parsed.scheme not in ("http", "https"):
-            return "must start with http:// or https://"
-        if not parsed.netloc:
-            return "missing host"
-        try:
-            _ = parsed.port
-        except ValueError:
-            return "invalid port"
-        if parsed.username or parsed.password:
-            return "must not include username or password"
-        if parsed.query or parsed.fragment:
-            return "must not include query or fragment"
-        return None
+        error = validate_endpoint_url(value)
+        return None if error is None else error.removeprefix("is ")
     if field == "session_token":
         return None
     if not stripped:

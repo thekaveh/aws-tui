@@ -14,7 +14,6 @@ _APPROVED_ALIAS_PAIRS = (
     ("pane.quick_look", "pane.toggle_select"),
     ("auth.authenticate", "pane.select_all"),
     ("emr.clone", "pane.copy"),
-    ("athena.cancel", "modal.cancel"),
     ("athena.query", "glue.catalog"),
     ("athena.history", "glue.jobs"),
     ("athena.results", "glue.crawlers"),
@@ -82,7 +81,7 @@ class TestDefaults:
         # Spot-check a handful of known actions from spec §4.2.
         assert "app.quit" in all_bindings
         assert "pane.copy" in all_bindings
-        assert "modal.cancel" in all_bindings
+        assert "modal.cancel" not in all_bindings
         # And the full set should match DEFAULT_BINDINGS exactly when
         # there's no overlay.
         assert set(all_bindings) == set(KeymapStore.DEFAULT_BINDINGS)
@@ -96,6 +95,17 @@ class TestOverlay:
     def test_overlay_list_keys_replaces_defaults(self) -> None:
         store = KeymapStore(overlay={"pane.copy": ["c", "ctrl+y"]})
         assert store.resolve("pane.copy") == ("c", "ctrl+y")
+
+    @pytest.mark.parametrize(
+        "keys",
+        ["", "   ", " q", "q ", "q,y", ["q", ""], ["ctrl+y", " q"]],
+    )
+    def test_overlay_rejects_malformed_key_tokens(self, keys: str | list[str]) -> None:
+        with pytest.raises(ValueError, match="invalid keybinding"):
+            KeymapStore(overlay={"pane.copy": keys})
+
+    def test_empty_key_list_remains_an_intentional_disable(self) -> None:
+        assert KeymapStore(overlay={"pane.copy": []}).resolve("pane.copy") == ()
 
     def test_approved_alias_allowlist_matches_all_default_collision_pairs(self) -> None:
         actions_by_key: dict[str, set[str]] = {}

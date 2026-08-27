@@ -13,6 +13,7 @@ from typing import Any, NoReturn, TypeVar, cast
 import botocore.exceptions
 
 from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
+from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
 from aws_tui.domain.data_catalog import (
     Column,
     ColumnStatistics,
@@ -150,13 +151,7 @@ _UNREACHABLE_CODES = frozenset(
 _VALIDATION_CODES = frozenset(
     {"InvalidInputException", "InvalidParameterValueException", "ValidationException"}
 )
-_TRANSPORT_EXCEPTIONS = (
-    botocore.exceptions.EndpointConnectionError,
-    botocore.exceptions.ConnectTimeoutError,
-    botocore.exceptions.ReadTimeoutError,
-    botocore.exceptions.ConnectionClosedError,
-    botocore.exceptions.ConnectionError,
-)
+_TRANSPORT_EXCEPTIONS = AWS_TRANSPORT_EXCEPTIONS
 
 
 def map_glue_error(exc: BaseException) -> ProviderError | None:

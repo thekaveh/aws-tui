@@ -53,6 +53,8 @@ class AthenaResultsView(Widget):
         super().__init__(id=id, classes="athena-service-view")
         self._vm = vm.results
         self._sub: DisposableBase | None = None
+        self._refresh_pending = False
+        self._table_snapshot: object | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="athena-results-summary", markup=False)
@@ -89,7 +91,14 @@ class AthenaResultsView(Widget):
             )
 
     def _on_vm_changed(self, _property_name: str) -> None:
-        self.call_after_refresh(self._refresh)
+        if self._refresh_pending:
+            return
+        self._refresh_pending = True
+        self.call_after_refresh(self._flush_refresh)
+
+    def _flush_refresh(self) -> None:
+        self._refresh_pending = False
+        self._refresh()
 
     def _refresh(self) -> None:
         try:
@@ -102,23 +111,26 @@ class AthenaResultsView(Widget):
             )
         except Exception:
             return
-        table.clear(columns=True)
-        for index, column in enumerate(self._vm.columns):
-            table.add_column(
-                Text(f"{column.name}\n{column.type_name}", no_wrap=True),
-                key=f"athena-result-column-{index}",
-            )
-        for row in self._vm.rendered_rows:
-            table.add_row(
-                *(
-                    Text(
-                        "NULL" if cell.is_null else ('""' if cell.text == "" else cell.text),
-                        style="dim italic" if cell.is_null else "",
-                        no_wrap=True,
-                    )
-                    for cell in row
+        table_snapshot = (self._vm.columns, self._vm.rows)
+        if table_snapshot != self._table_snapshot:
+            self._table_snapshot = table_snapshot
+            table.clear(columns=True)
+            for index, column in enumerate(self._vm.columns):
+                table.add_column(
+                    Text(f"{column.name}\n{column.type_name}", no_wrap=True),
+                    key=f"athena-result-column-{index}",
                 )
-            )
+            for row in self._vm.rendered_rows:
+                table.add_row(
+                    *(
+                        Text(
+                            "NULL" if cell.is_null else ('""' if cell.text == "" else cell.text),
+                            style="dim italic" if cell.is_null else "",
+                            no_wrap=True,
+                        )
+                        for cell in row
+                    )
+                )
         placeholder = state_placeholder(
             self._vm.state,
             error_text=self._vm.error_text,
@@ -131,13 +143,20 @@ class AthenaResultsView(Widget):
             status.update(placeholder[0])
         status.set_class(self._vm.state is PaneState.FORBIDDEN, "-warning")
         status.set_class(self._vm.state is PaneState.ERROR, "-error")
-        suffix = " · more available" if self._vm.has_more else ""
+        suffix = (
+            " · safety limit"
+            if self._vm.limit_reached
+            else " · more available"
+            if self._vm.has_more
+            else ""
+        )
         footer.update(f"{len(self._vm.rows)} rows{suffix}")
         load_more.sync(
             has_more=self._vm.has_more,
             busy=self._vm.is_loading_more,
             state=self._vm.state,
             error_text=self._vm.error_text,
+            limit_reached=self._vm.limit_reached,
         )
 
 

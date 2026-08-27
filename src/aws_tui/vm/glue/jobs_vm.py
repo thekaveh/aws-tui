@@ -5,17 +5,21 @@ from typing import Any
 
 import reactivex as rx
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
-from vmx.collections.token_paged_composition import TokenPagedComposition
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueJobRunSummary, GlueJobSummary
 from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
+from aws_tui.vm.paging import BoundedTokenPagedComposition
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
+
+_MAX_JOB_ITEMS = 1_000
+_MAX_JOB_RUN_ITEMS = 1_000
 
 
 class GlueJobsVM:
@@ -86,11 +90,19 @@ class GlueJobsVM:
 
     @property
     def has_more_jobs(self) -> bool:
-        return self._job_pager.current_token is not None
+        return self._job_pager.has_more
 
     @property
     def has_more_runs(self) -> bool:
-        return self._run_pager.current_token is not None
+        return self._run_pager.has_more
+
+    @property
+    def job_limit_reached(self) -> bool:
+        return self._job_pager.limit_reached
+
+    @property
+    def run_limit_reached(self) -> bool:
+        return self._run_pager.limit_reached
 
     @property
     def state(self) -> PaneState:
@@ -321,7 +333,7 @@ class GlueJobsVM:
             "runs_state",
         )
 
-    def _make_job_pager(self) -> TokenPagedComposition[GlueJobSummary, str]:
+    def _make_job_pager(self) -> BoundedTokenPagedComposition[GlueJobSummary, str]:
         generation = self._job_generation
 
         async def fetch(token: str | None) -> tuple[list[GlueJobSummary], str | None]:
@@ -332,7 +344,13 @@ class GlueJobsVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return BoundedTokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a job continuation token",
+            ),
+            max_items=_MAX_JOB_ITEMS,
+        )
 
     def _clear_job_selection(self) -> None:
         self._run_generation += 1
@@ -351,7 +369,7 @@ class GlueJobsVM:
     def _make_run_pager(
         self,
         job_name: str | None,
-    ) -> TokenPagedComposition[GlueJobRunSummary, str]:
+    ) -> BoundedTokenPagedComposition[GlueJobRunSummary, str]:
         generation = self._run_generation
         states = tuple(sorted(self._run_state_filter))
 
@@ -369,7 +387,13 @@ class GlueJobsVM:
                 return [], None
             return rows, next_token
 
-        return TokenPagedComposition(fetch)
+        return BoundedTokenPagedComposition(
+            reject_token_cycles(
+                fetch,
+                message="Glue repeated a job-run continuation token",
+            ),
+            max_items=_MAX_JOB_RUN_ITEMS,
+        )
 
     def _set_state(self, field: str, state: PaneState, property_name: str) -> None:
         if getattr(self, field) == state:

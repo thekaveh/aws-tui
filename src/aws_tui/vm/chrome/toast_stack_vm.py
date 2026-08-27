@@ -9,6 +9,7 @@ child toast.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterable
 
 import reactivex as rx
@@ -17,6 +18,8 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.vm.chrome.toast_vm import ToastModel, ToastVM
+
+_logger = logging.getLogger(__name__)
 
 
 class ToastStackVM:
@@ -227,7 +230,17 @@ class ToastStackVM:
             self._timers.pop(toast_id, None)
         if task.cancelled():
             return
-        _ = task.exception()
+        error = task.exception()
+        if error is not None:
+            _logger.error(
+                "toast.dismiss.failed",
+                extra={
+                    "toast_id": toast_id,
+                    "error": str(error),
+                    "error_type": type(error).__name__,
+                },
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     def _cancel_all_timers(self) -> None:
         for task in list(self._timers.values()):

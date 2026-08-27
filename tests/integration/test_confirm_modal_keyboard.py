@@ -16,14 +16,15 @@ import pytest
 from textual.widgets import TextArea
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.emr_serverless.log_filter_modal import LogFilterModal
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from tests.integration.conftest import AppContextBuilder
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:
@@ -137,6 +138,101 @@ async def test_enter_in_modal_text_area_inserts_newline(
 
 
 @pytest.mark.asyncio
+async def test_modal_text_area_keeps_arrow_navigation(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        modal = LogFilterModal(DEFAULT_LOG_FILTER)
+        await app.push_screen(modal)
+        editor = modal.query_one("#log-patterns", TextArea)
+        editor.text = "first\nsecond"
+        editor.cursor_location = (1, 0)
+        editor.focus()
+
+        await pilot.press("up")
+        await pilot.pause()
+
+        assert app.screen is modal
+        assert editor.cursor_location == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_modal_text_area_keeps_backspace_editing(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        modal = LogFilterModal(DEFAULT_LOG_FILTER)
+        await app.push_screen(modal)
+        editor = modal.query_one("#log-patterns", TextArea)
+        editor.text = "ab"
+        editor.cursor_location = (0, 2)
+        editor.focus()
+
+        await pilot.press("backspace")
+        await pilot.pause()
+
+        assert app.screen is modal
+        assert editor.text == "a"
+
+
+@pytest.mark.asyncio
+async def test_tab_stays_inside_modal_and_tracks_vmx_modal_focus(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_LEFT)
+        assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT
+        modal = LogFilterModal(DEFAULT_LOG_FILTER)
+        await app.push_screen(modal)
+        editor = modal.query_one("#log-patterns", TextArea)
+        editor.focus()
+        assert ctx.focus_coordinator.is_modal
+
+        await pilot.press("tab")
+        await pilot.pause()
+
+        assert app.screen is modal
+        assert app.focused is not None
+        assert modal in app.focused.ancestors_with_self
+        assert ctx.focus_coordinator.is_modal
+
+        modal.dismiss(None)
+        await pilot.pause()
+        assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT
+
+
+@pytest.mark.asyncio
+async def test_deferred_focus_restore_does_not_override_new_modal(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_LEFT)
+        modal = LogFilterModal(DEFAULT_LOG_FILTER)
+        await app.push_screen(modal)
+        editor = modal.query_one("#log-patterns", TextArea)
+        editor.focus()
+        assert ctx.focus_coordinator.is_modal
+
+        app._restore_focus_after_modal(FocusSlot.S3_LEFT)
+        await pilot.pause()
+
+        assert app.screen is modal
+        assert ctx.focus_coordinator.is_modal
+        assert app.focused is not None
+        assert modal in app.focused.ancestors_with_self
+
+
+@pytest.mark.asyncio
 async def test_enter_on_crash_modal_uses_safe_default(
     app_context_factory: AppContextBuilder,
 ) -> None:
@@ -183,10 +279,47 @@ async def test_failed_service_switch_keeps_existing_view_mounted(
             raise RuntimeError("service build failed")
 
         monkeypatch.setattr(ctx.root_vm, "switch_service", fail_switch)
-        result = await app._mount_service_view("emr-serverless")
+        current = asyncio.current_task()
+        assert current is not None
+        app._service_navigation_suppressed_selection = (current, "settings")
+        ctx.root_vm.services_menu.switch_service_command.execute("settings")
+        assert ctx.root_vm.services_menu.selected_id == "settings"
+        result = await app._mount_service_view("s3")
 
         assert result is False
         assert tuple(host.children) == prior_children
+        assert ctx.root_vm.services_menu.selected_id == "s3"
+        assert "pane.copy" in {
+            action.action_id for action in ctx.root_vm.chrome.hint_legend.actions
+        }
+
+
+@pytest.mark.asyncio
+async def test_failed_settings_adoption_restores_current_service_chrome(
+    app_context_factory: AppContextBuilder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        current = asyncio.current_task()
+        assert current is not None
+        app._service_navigation_suppressed_selection = (current, "settings")
+        ctx.root_vm.services_menu.switch_service_command.execute("settings")
+        assert ctx.root_vm.services_menu.selected_id == "settings"
+
+        async def fail_set_content(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            raise RuntimeError("settings build failed")
+
+        monkeypatch.setattr(ctx.root_vm.content_host, "set_content", fail_set_content)
+        await app._mount_settings_view()
+
+        assert ctx.root_vm.services_menu.selected_id == "s3"
+        assert "pane.copy" in {
+            action.action_id for action in ctx.root_vm.chrome.hint_legend.actions
+        }
 
 
 @pytest.mark.asyncio

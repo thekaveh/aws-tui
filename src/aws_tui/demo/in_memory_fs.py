@@ -36,6 +36,9 @@ _Node = bytes | None
 # responds instantaneously and the demo reads as broken in a
 # different way (no spinner, then sudden full render).
 _DEMO_LATENCY_SEC: float = 0.05
+_MAX_LISTING_ENTRIES: int = 10_000
+_MAX_OBJECT_BYTES: int = 100 * 1024 * 1024
+_MAX_STORAGE_BYTES: int = 256 * 1024 * 1024
 
 
 class InMemoryFS:
@@ -84,6 +87,8 @@ class InMemoryFS:
             if candidate.segments[:depth] != path.segments:
                 continue
             entries.append(self._entry_for(candidate, node))
+            if len(entries) > _MAX_LISTING_ENTRIES:
+                raise ProviderError("in-memory listing safety limit exceeded")
         entries.sort(key=lambda e: (e.kind != EntryKind.DIRECTORY, e.name))
         return entries
 
@@ -250,6 +255,8 @@ class InMemoryFS:
         parent = dst.parent()
         if not parent.is_root and parent not in self._tree:
             raise NotFoundError(f"parent missing: {parent.as_posix()}")
+        if not parent.is_root and self._tree[parent] is not None:
+            raise ConflictError(f"parent is not a directory: {parent.as_posix()}")
         # Recursive move: rewrite every key prefixed by src.
         affected = [
             p
@@ -322,15 +329,32 @@ class InMemoryFS:
         if not overwrite and path in self._tree:
             raise ConflictError(path.as_posix())
 
+        existing = self._tree.get(path)
+        existing_size = len(existing) if isinstance(existing, bytes) else 0
+        retained_size = sum(len(node) for node in self._tree.values() if isinstance(node, bytes))
+        retained_size -= existing_size
+        if total_size is not None:
+            if total_size < 0:
+                raise ProviderError("in-memory object size cannot be negative")
+            self._check_write_budget(total_size, retained_size=retained_size)
+
         buf = bytearray()
         bytes_written = 0
         async for chunk in source:
-            buf.extend(chunk)
             bytes_written += len(chunk)
+            self._check_write_budget(bytes_written, retained_size=retained_size)
+            buf.extend(chunk)
             if progress is not None:
                 progress(TransferProgress(bytes_transferred=bytes_written, bytes_total=total_size))
         self._tree[path] = bytes(buf)
         self._touch(path)
+
+    @staticmethod
+    def _check_write_budget(object_size: int, *, retained_size: int) -> None:
+        if object_size > _MAX_OBJECT_BYTES:
+            raise ProviderError("in-memory object safety limit exceeded")
+        if retained_size + object_size > _MAX_STORAGE_BYTES:
+            raise ProviderError("in-memory storage safety limit exceeded")
 
 
 __all__ = ["InMemoryFS"]

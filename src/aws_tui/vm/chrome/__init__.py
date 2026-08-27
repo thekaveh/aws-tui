@@ -1,1 +1,1 @@
-"""Cross-service chrome viewmodels (palette, hint legend, status bar, toasts, modals)."""
+"""Cross-service chrome viewmodels (palette, hint legend, toasts, and modals)."""

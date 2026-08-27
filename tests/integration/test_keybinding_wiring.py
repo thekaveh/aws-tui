@@ -18,6 +18,7 @@ from vmx.messages.protocols import Message
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
 from aws_tui.domain.data_catalog import TableFormat
+from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM
 from aws_tui.vm.messages import OpenAthenaTableRequest
 from tests.unit.vm.glue.test_iceberg_vm import ICEBERG_REF, RecordingInspector
@@ -50,6 +51,8 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("d", "dispatch('pane.delete')", True, False),
     ("S", "dispatch('app.swap_source')", True, False),
     ("A", "dispatch('emr.next_application')", True, False),
+    ("c", "dispatch('emr.clone')", False, False),
+    ("f", "dispatch('emr.logs.filter')", False, False),
     ("1", "dispatch('glue.catalog')", False, False),
     ("2", "dispatch('glue.jobs')", False, False),
     ("3", "dispatch('glue.crawlers')", False, False),
@@ -125,6 +128,62 @@ def test_dispatch_invokes_registered_handler(app_context_factory) -> None:  # ty
 
 
 @pytest.mark.asyncio
+async def test_app_routes_emr_log_focus_actions_to_the_page(
+    app_context_factory,
+) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    adjacent: list[int] = []
+    filters: list[str] = []
+
+    page = SimpleNamespace(
+        select_adjacent_log_file=lambda delta: adjacent.append(delta) or True,
+        open_focused_log_filter=lambda: filters.append("open") or True,
+    )
+    app._emr_page = lambda: page  # type: ignore[method-assign,return-value]
+
+    await app.action_modal_left_or_ascend()
+    app.action_modal_right()
+    app.action_filter_emr_logs()
+
+    assert adjacent == [-1, 1]
+    assert filters == ["open"]
+
+
+@pytest.mark.asyncio
+async def test_priority_binding_does_not_dispatch_behind_modal(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    calls: list[str] = []
+    app._actions.register("athena.execute", lambda: calls.append("execute"))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpModal)
+
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+
+        assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["q", "ctrl+c"])
+async def test_quit_keys_dispatch_through_action_registry(
+    app_context_factory,  # type: ignore[no-untyped-def]
+    key: str,
+) -> None:
+    app = AwsTuiApp(app_context_factory())
+    calls: list[str] = []
+    app._actions.register("app.quit", lambda: calls.append("quit"))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert calls == ["quit"]
+
+
+@pytest.mark.asyncio
 async def test_global_v_dispatch_uses_active_snapshot_action_guard(
     app_context_factory,  # type: ignore[no-untyped-def]
     monkeypatch: pytest.MonkeyPatch,
@@ -196,7 +255,11 @@ def test_config_overlay_reaches_live_textual_bindings(tmp_path: Path) -> None:
     config_dir.mkdir()
     cache_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[keybindings]\n"pane.copy" = "ctrl+y"\n"pane.delete" = []\n',
+        "[keybindings]\n"
+        '"pane.copy" = "ctrl+y"\n'
+        '"pane.delete" = []\n'
+        '"emr.clone" = "ctrl+g"\n'
+        '"emr.logs.filter" = "ctrl+f"\n',
         encoding="utf-8",
     )
     ctx = build_app_context(config_dir=config_dir, cache_dir=cache_dir)
@@ -208,10 +271,17 @@ def test_config_overlay_reaches_live_textual_bindings(tmp_path: Path) -> None:
             key == "c" and action == "dispatch('pane.copy')" for key, action, _, _ in installed
         )
         assert not any(action == "dispatch('pane.delete')" for _, action, _, _ in installed)
+        assert ("ctrl+g", "dispatch('emr.clone')", False, True) in installed
+        assert ("ctrl+f", "dispatch('emr.logs.filter')", False, True) in installed
+        assert not any(
+            key == "f" and action == "dispatch('emr.logs.filter')"
+            for key, action, _, _ in installed
+        )
         assert ctx.keymap_store.resolve("pane.copy") == ("ctrl+y",)
         assert ctx.root_vm.chrome.hint_legend._keymap is ctx.keymap_store
     finally:
         ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,10 @@
 """ContentHostVM — holds the active service's VM tree.
 
-``set_content(new_vm, service_id=...)`` disposes the previous content tree
-(synchronously, depth-first via VMx) and constructs the new one. Re-setting
-with the same ``service_id`` is a no-op so the menu can publish "selected
-service" updates without rebuilding the world.
+``set_content(new_vm, service_id=...)`` constructs the candidate before
+shutting down and disposing the previous content tree. Re-setting
+with the identical non-null VM instance is a no-op. A different VM with
+the same ``service_id`` is still a real replacement and runs the complete
+shutdown, disposal, construction, and setup lifecycle.
 
 ``setup`` (if the hosted VM exposes one) is dispatched as a BACKGROUND
 asyncio task by ``set_content`` rather than awaited inline. This is what
@@ -97,12 +98,35 @@ class ContentHostVM:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    async def set_content(self, vm: Any | None, *, service_id: str | None) -> None:
-        async with self._swap_lock:
-            await self._set_content_locked(vm, service_id=service_id)
+    async def set_content(
+        self,
+        vm: Any | None,
+        *,
+        service_id: str | None,
+        before_publish: Callable[[], None] | None = None,
+    ) -> None:
+        try:
+            async with self._swap_lock:
+                await self._set_content_locked(
+                    vm,
+                    service_id=service_id,
+                    before_publish=before_publish,
+                )
+        except BaseException:
+            # Ownership transfers before lock acquisition. If adoption never
+            # happened, the host is the candidate's sole disposer.
+            if vm is not None and self._current is not vm:
+                vm.dispose()
+            raise
 
-    async def _set_content_locked(self, vm: Any | None, *, service_id: str | None) -> None:
-        """Swap the hosted VM. Idempotent on equal ``service_id``.
+    async def _set_content_locked(
+        self,
+        vm: Any | None,
+        *,
+        service_id: str | None,
+        before_publish: Callable[[], None] | None,
+    ) -> None:
+        """Swap the hosted VM. Idempotent only for the identical VM instance.
 
         Adoption + the ``"current"`` :class:`PropertyChangedMessage`
         fire synchronously inside the await — the View layer can mount
@@ -125,12 +149,11 @@ class ContentHostVM:
         # Cancel any in-flight setup for the OUTGOING VM before we
         # dispose it (the task holds a reference to the VM; if we
         # dispose first the task may dereference disposed state).
+        shutdown_cancelled = False
         try:
             await self._cancel_and_drain_setup()
-            await self._shutdown_current()
+            shutdown_cancelled = await self._shutdown_current_for_swap()
         except BaseException:
-            if vm is not None:
-                vm.dispose()
             raise
         # Dispose the previous content first so its subscriptions / tasks
         # tear down before the new one wires up.
@@ -138,17 +161,19 @@ class ContentHostVM:
             try:
                 self._current.dispose()
             except BaseException:
-                if vm is not None:
-                    vm.dispose()
                 raise
             self._current = None
             self._current_id = None
+
+        if shutdown_cancelled:
+            self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
+            raise asyncio.CancelledError
 
         if vm is None:
             self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
             return
 
-        # Construct the new one and adopt it before driving setup. Adopting
+        # Adopt the already-constructed candidate before driving setup. Adopting
         # first means a setup failure (e.g. ``S3FS.list`` raising
         # ``NoCredentialsError``) still leaves the View layer with something
         # to mount — every pane renders its own error placeholder per spec
@@ -156,6 +181,8 @@ class ContentHostVM:
         # leave the content host entirely blank instead.
         self._current = vm
         self._current_id = service_id
+        if before_publish is not None:
+            before_publish()
         self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
 
         setup = getattr(vm, "setup", None)
@@ -208,6 +235,36 @@ class ContentHostVM:
         result = shutdown()
         if inspect.isawaitable(result):
             await result
+
+    async def _shutdown_current_for_swap(self) -> bool:
+        """Drain outgoing shutdown before honoring caller cancellation."""
+        if self._current is None:
+            return False
+        shutdown = getattr(self._current, "shutdown", None)
+        if not callable(shutdown):
+            return False
+        result = shutdown()
+        if not inspect.isawaitable(result):
+            return False
+
+        shutdown_task = asyncio.ensure_future(result)
+        caller = asyncio.current_task()
+        caller_cancellation_count = 0 if caller is None else caller.cancelling()
+        cancellation_requested = False
+        while not shutdown_task.done():
+            try:
+                await asyncio.shield(shutdown_task)
+            except asyncio.CancelledError:
+                current_count = 0 if caller is None else caller.cancelling()
+                if current_count > caller_cancellation_count:
+                    cancellation_requested = True
+                    caller_cancellation_count = current_count
+                elif shutdown_task.done():
+                    break
+            except Exception:
+                break
+        shutdown_task.result()
+        return cancellation_requested
 
     async def _run_setup(self, setup: Any) -> None:
         """Drive ``setup``'s awaitable; swallow cancellation cleanly.

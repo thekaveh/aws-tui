@@ -36,11 +36,16 @@ class AthenaLoadMoreButton(Button):
         busy: bool,
         state: PaneState,
         error_text: str | None,
+        limit_reached: bool,
     ) -> None:
-        self.display = has_more or busy
+        self.display = has_more or busy or limit_reached
         self.disabled = not has_more or busy
-        self.label = "…" if busy else "↓"
-        self.tooltip = error_text or self._default_tooltip
+        self.label = "…" if busy else "!" if limit_reached else "↓"
+        self.tooltip = (
+            error_text
+            or ("The safety limit for this list has been reached" if limit_reached else None)
+            or self._default_tooltip
+        )
         self.set_class(state is PaneState.FORBIDDEN, "-warning")
         self.set_class(state is PaneState.ERROR, "-error")
 

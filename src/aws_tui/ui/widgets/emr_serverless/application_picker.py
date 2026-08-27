@@ -246,13 +246,13 @@ class ApplicationPicker(Widget, can_focus=True):
         if opts.highlighted is None:
             return
         opt = opts.get_option_at_index(opts.highlighted)
+        self.close()
         if opt.id is not None:
             self._vm.select(opt.id)
             # Post up so the page widget can cascade through
             # ``page_vm.select_application(id)`` — see the
             # ``ApplicationCommitted`` docstring.
             self.post_message(self.ApplicationCommitted(opt.id))
-        self.close()
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -290,10 +290,10 @@ class ApplicationPicker(Widget, can_focus=True):
         # braces guard — Textual's OptionList already suppresses
         # selection on disabled rows, but a key-driven Enter while
         # the row is the only option could slip through.
+        self.close()
         if event.option.id is not None and event.option.id != "__placeholder__":
             self._vm.select(event.option.id)
             self.post_message(self.ApplicationCommitted(event.option.id))
-        self.close()
 
     def _on_vm_property_changed(self, prop: str) -> None:
         """Round-3 directive: per-VM Observable subscription. The

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
-from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.infra.crash_dump import CrashDump, _tail_text
 
 
 def _make_exc() -> Exception:
@@ -51,6 +51,7 @@ def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
         "Authorization: Bearer SECRETBEARER "
         "api_key=SECRETAPI private_key=SECRETPRIVATE "
         "secret_access_key=SECRET "
+        "payload={'secret_access_key': 'REPRSECRET'} "
         '{"access_token": "JSONTOKEN", "password": "JSONPASS"} '
         'credentials = "TOMLCREDS"\n',
         encoding="utf-8",
@@ -70,6 +71,7 @@ def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
         "user:pass",
         "abc123",
         "SECRET",
+        "REPRSECRET",
         "SECRETBEARER",
         "SECRETAPI",
         "SECRETPRIVATE",
@@ -133,6 +135,56 @@ def test_write_appends_tail_across_rotated_logs(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
 
     assert text.index("oldest") < text.index("before-rollover") < text.index("current")
+
+
+def test_log_tail_reads_a_bounded_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = tmp_path / "aws-tui.log"
+    log.write_text("".join(f"line-{index:06d}-" + "x" * 80 + "\n" for index in range(80_000)))
+    original_open = Path.open
+    bytes_read = 0
+
+    class _TrackingFile:
+        def __init__(self, handle: object) -> None:
+            self._handle = handle
+
+        def __enter__(self) -> _TrackingFile:
+            self._handle.__enter__()  # type: ignore[attr-defined]
+            return self
+
+        def __exit__(self, *args: object) -> object:
+            return self._handle.__exit__(*args)  # type: ignore[attr-defined]
+
+        def read(self, size: int = -1) -> object:
+            nonlocal bytes_read
+            data = self._handle.read(size)  # type: ignore[attr-defined]
+            bytes_read += len(data if isinstance(data, bytes) else data.encode())
+            return data
+
+        def readlines(self) -> object:
+            nonlocal bytes_read
+            lines = self._handle.readlines()  # type: ignore[attr-defined]
+            bytes_read += sum(
+                len(line if isinstance(line, bytes) else line.encode()) for line in lines
+            )
+            return lines
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._handle, name)
+
+    def tracked_open(path: Path, *args: object, **kwargs: object) -> object:
+        handle = original_open(path, *args, **kwargs)
+        return _TrackingFile(handle) if path == log else handle
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+
+    tail = _tail_text(log, 1000)
+
+    assert "line-079999" in tail
+    assert "line-000000" not in tail
+    assert bytes_read <= 1024 * 1024
 
 
 def test_write_appends_action_tail(tmp_path: Path) -> None:

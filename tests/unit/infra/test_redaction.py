@@ -56,6 +56,21 @@ def test_redact_text_covers_common_secret_carriers() -> None:
     assert "private_key=[REDACTED]" in text
 
 
+def test_redact_text_covers_single_quoted_mapping_representations() -> None:
+    text = redact_text(
+        "{'secret_access_key': 'SECRET', "
+        "'Authorization': 'Bearer BEARER_SECRET', "
+        '"api_token": "DOUBLE_QUOTED_SECRET", '
+        "'safe': 'visible'}"
+    )
+
+    assert "SECRET" not in text
+    assert "BEARER_SECRET" not in text
+    assert "DOUBLE_QUOTED_SECRET" not in text
+    assert "'safe': 'visible'" in text
+    assert text.count("[REDACTED]") == 3
+
+
 def test_redact_text_redacts_url_fragments() -> None:
     text = redact_text("failed https://user:pass@example.com/bucket?sig=x#opaqueBearerToken123")
 

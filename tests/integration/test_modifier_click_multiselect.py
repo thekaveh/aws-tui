@@ -14,10 +14,10 @@ from collections.abc import AsyncIterator, Callable
 import pytest
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.ui.widgets.pane import Pane
 from tests.integration.conftest import AppContextBuilder
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:

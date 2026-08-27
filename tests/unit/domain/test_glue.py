@@ -1710,7 +1710,7 @@ async def test_crawler_sts_and_metrics_sanitize_malformed_client_error_shapes(
         ("get_crawler", "metrics"),
     ],
 )
-async def test_residual_botocore_errors_are_sanitized_at_public_and_crawler_boundaries(
+async def test_streaming_transport_errors_are_unreachable_at_public_and_crawler_boundaries(
     client_method: str,
     supplement: str | None,
     tmp_path: Path,
@@ -1735,8 +1735,8 @@ async def test_residual_botocore_errors_are_sanitized_at_public_and_crawler_boun
 
     raised = await _capture_glue_provider_error(client, client_method)
 
-    assert type(raised) is ProviderError
-    assert str(raised) == "Glue request failed"
+    assert type(raised) is ProviderUnreachableError
+    assert str(raised) == "Glue endpoint unavailable"
     _assert_mapped_error_has_no_raw_provider_references(
         raised,
         crash_dir=tmp_path / f"residual-botocore-{supplement or 'public'}",

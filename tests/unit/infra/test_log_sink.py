@@ -58,6 +58,7 @@ def test_secret_fields_and_url_credentials_are_redacted(sink: LogSink, tmp_path:
         "s3.failed secret_access_key=EVENTSECRET "
         "Authorization: Bearer SECRETBEARER "
         "api_key=SECRETAPI private_key=SECRETPRIVATE "
+        "payload={'secret_access_key': 'REPRSECRET'} "
         "https://user:eventpass@example.com/bucket?X-Amz-Signature=eventsig",
         endpoint_url="https://user:pass@example.com/bucket?X-Amz-Signature=abc123",
         secret_access_key="SECRET",
@@ -79,6 +80,7 @@ def test_secret_fields_and_url_credentials_are_redacted(sink: LogSink, tmp_path:
     assert "SECRETBEARER" not in raw
     assert "SECRETAPI" not in raw
     assert "SECRETPRIVATE" not in raw
+    assert "REPRSECRET" not in raw
     assert "user:eventpass" not in raw
     assert "eventsig" not in raw
     assert "abc123" not in raw
@@ -138,3 +140,57 @@ def test_capture_stdlib_aws_tui_warnings_when_enabled(tmp_path: Path) -> None:
     assert lines[-1]["level"] == "WARNING"
     assert lines[-1]["error"] == "secret_access_key=[REDACTED]"
     assert lines[-1]["error_type"] == "RuntimeError"
+
+
+def test_capture_stdlib_exception_serializes_redacted_traceback(tmp_path: Path) -> None:
+    s = LogSink(base_dir=tmp_path, capture_stdlib=True)
+    try:
+        try:
+            raise RuntimeError("Authorization: Bearer TRACE_SECRET")
+        except RuntimeError:
+            logging.getLogger("aws_tui.background").exception("background.failed")
+        s.flush()
+    finally:
+        s.close()
+
+    raw = (tmp_path / "aws-tui.log").read_text(encoding="utf-8")
+    assert "TRACE_SECRET" not in raw
+    record = _read_log_lines(tmp_path)[-1]
+    assert record["event"] == "background.failed"
+    assert "RuntimeError: Authorization: Bearer [REDACTED]" in str(record["traceback"])
+
+
+@pytest.mark.parametrize("close_first", ["first", "second"])
+def test_overlapping_stdlib_captures_restore_logger_after_final_close(
+    tmp_path: Path,
+    close_first: str,
+) -> None:
+    logger = logging.getLogger("aws_tui")
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    previous_handlers = list(logger.handlers)
+    logger.setLevel(logging.WARNING)
+    logger.propagate = True
+
+    first = LogSink(base_dir=tmp_path / "first", capture_stdlib=True)
+    second = LogSink(base_dir=tmp_path / "second", capture_stdlib=True)
+    closing, survivor, survivor_dir = (
+        (first, second, tmp_path / "second")
+        if close_first == "first"
+        else (second, first, tmp_path / "first")
+    )
+    try:
+        closing.close()
+        logging.getLogger("aws_tui.overlap").info("survivor-record")
+        survivor.flush()
+        assert _read_log_lines(survivor_dir)[-1]["event"] == "survivor-record"
+
+        survivor.close()
+        assert logger.level == logging.WARNING
+        assert logger.propagate is True
+        assert logger.handlers == previous_handlers
+    finally:
+        first.close()
+        second.close()
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate

@@ -8,7 +8,7 @@
 *.swo
 *~
 
-# Claude Code / superpowers session state (transient; specs and plans under docs/ stay tracked)
+# Agent session state and execution reports are transient; durable specs and plans live under docs/.
 .superpowers/
 .claude/
 .overnight-maint/
@@ -57,6 +57,7 @@ snapshot_report.html
 # mypy / ruff / type checkers
 .mypy_cache/
 .ruff_cache/
+.uv-cache/
 .pytype/
 .pyre/
 

@@ -83,9 +83,9 @@ Pure-data fixtures, no logic:
 
 ```python
 def seed_s3_data(fs: InMemoryFS, *, profile: str) -> None: ...
-def seed_emr_data(emr: InMemoryEmr) -> None: ...
+def seed_emr_data(emr: InMemoryEmr, *, profile: str) -> None: ...
 def seeded_demo_fs(profile: str) -> InMemoryFS: ...
-def seeded_demo_emr() -> InMemoryEmr: ...
+def seeded_demo_emr(profile: str = "demo-dev") -> InMemoryEmr: ...
 ```
 
 **S3 seed per profile** (3 profiles → 3 distinct showcases):
@@ -96,8 +96,7 @@ def seeded_demo_emr() -> InMemoryEmr: ...
 | `demo-prod` | `data-lake/`, `etl-output/` | 10 objects: `silver/customers/year=2026/month=06/part-0000.parquet`, `gold/marts/sales/snapshot.parquet`, mixed sizes 2 KB–510 MB |
 | `demo-shared` | `assets/`, `archive/` | 6 objects: `logo.png`, `report-2026Q2.pdf`, `backup-{01..03}.tar.gz` |
 
-**EMR seed** (one fixture, shared across all aws-kind demo
-connections — see component 5 for the singleton rationale):
+**EMR seed** (one profile-distinct fixture per AWS-kind demo connection):
 
 - 2 applications: `etl-pipeline-1` (STARTED),
   `ad-hoc-queries` (STOPPED)
@@ -150,7 +149,7 @@ def build_app_context(*, demo: bool = False) -> AppContext:
     if demo:
         connection_resolver = DemoConnectionResolver()
         s3_fs_factory      = lambda c: seeded_demo_fs(c.profile or "demo-default")
-        emr_client_factory = lambda c: _demo_emr  # per-AppContext singleton
+        emr_client_factory = demo_emr  # lazy per-connection registry
     else:
         connection_resolver = ConnectionResolver(...)  # existing
         s3_fs_factory      = None
@@ -158,11 +157,10 @@ def build_app_context(*, demo: bool = False) -> AppContext:
     # rest of build_app_context unchanged
 ```
 
-`build_app_context(demo=True)` captures one `_demo_emr` per app
-context so the EMR fake stays stable across connection switches.
-Without the captured instance, switching from `demo-dev` to
-`demo-prod` would re-seed EMR data and jarringly reset the user's
-in-flight clone progressions.
+`build_app_context(demo=True)` captures a registry of `InMemoryEmr` instances,
+keyed by connection name. Each profile receives distinct application, run, and
+log identities, while returning to a connection reuses its instance so in-flight
+clone progress remains stable.
 
 **Poller cadence in demo mode.** EMR page's
 application/run/detail pollers use 30/30/5 seconds (production uses
@@ -234,7 +232,7 @@ so local file operations are real host filesystem operations.
 - **Unit (new) 6–8 tests** in `tests/unit/demo/` covering
   `is_demo_mode_enabled()` (env var truthy/falsy combos,
   `--demo` flag, both at once), `demo_connections()`, the
-  per-AppContext demo EMR stability across connection switches,
+  per-connection demo EMR isolation and stability across connection switches,
   and `seeded_demo_emr()`'s clone state machine with a mocked
   async clock.
 - **Integration (new) 1 test** at

@@ -112,6 +112,7 @@ class GlueJobsView(Widget):
             state=self._vm.jobs_state,
             error_text=self._vm.jobs_error_text,
             has_more=self._vm.has_more_jobs,
+            limit_reached=self._vm.job_limit_reached,
         )
         runs.replace(
             tuple(
@@ -125,6 +126,7 @@ class GlueJobsView(Widget):
             state=self._vm.runs_state,
             error_text=self._vm.runs_error_text,
             has_more=self._vm.has_more_runs,
+            limit_reached=self._vm.run_limit_reached,
         )
         detail.replace(
             self._detail_values(),

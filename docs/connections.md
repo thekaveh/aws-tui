@@ -1,7 +1,7 @@
 # 1. Connections for AWS Profiles and S3-Compatible Storage
 
 > Mirror of spec §6.1–6.3 and §6.5. See also the
-> [cookbook](cookbook.md) for the "connect to local MinIO" walkthrough.
+> [cookbook](cookbook.md) for the "connect to local S3Mock" walkthrough.
 
 A **Connection** is the unit aws-tui authenticates as. Two kinds:
 
@@ -22,7 +22,7 @@ region = "us-east-1"
 kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
 region = "us-east-1"
-credentials = "keychain:minio-local"      # or env:PREFIX_*, aws-profile:name, static
+credentials = "keychain:minio-local"      # or env:PREFIX_, aws-profile:name, static
 force_path_style = true
 verify_tls = false                        # http:// MinIO -> no cert to verify
 
@@ -44,8 +44,10 @@ must be TOML strings when present. `force_path_style` and `verify_tls`
 must be TOML booleans (`true` / `false`), not quoted strings.
 `endpoint_url` must be an HTTP(S) endpoint. URL paths are preserved, but
 do not include URL username/password, query strings, or fragments. The UI
-rejects those in Settings and redacts them from display if a hand-edited
-config already contains them.
+and config loader apply the same validation, so an invalid hand-edited entry
+fails with a configuration error before a client is created. Every
+S3-compatible entry requires one of the credential specifications below;
+`static` also requires nonblank `access_key_id` and `secret_access_key`.
 
 ## 1.2. Credential sources for S3-compatible connections
 The `credentials` field is dispatched at runtime:
@@ -53,7 +55,7 @@ The `credentials` field is dispatched at runtime:
 | Spec | Source |
 |---|---|
 | `keychain:<service>` | OS keychain via the Python `keyring` library; backend depends on platform. Accounts: `access_key_id`, `secret_access_key`, and optional `session_token` |
-| `env:PREFIX_*` | `${PREFIX}_ACCESS_KEY_ID` + `${PREFIX}_SECRET_ACCESS_KEY` + optional `${PREFIX}_SESSION_TOKEN` |
+| `env:PREFIX_` | `${PREFIX}_ACCESS_KEY_ID` + `${PREFIX}_SECRET_ACCESS_KEY` + optional `${PREFIX}_SESSION_TOKEN`; the trailing underscore is part of the configured prefix |
 | `aws-profile:<name>` | An existing entry in `~/.aws/credentials`, including optional `aws_session_token` for temporary credentials |
 | `static` | Inline `access_key_id` / `secret_access_key` / optional `session_token` in `config.toml` — startup warning toast |
 
@@ -113,8 +115,8 @@ For non-SSO AWS profiles with no `sso_session` / `sso_start_url`, the offline
 probe returns `connected`; live boto calls then validate shared credentials,
 `credential_process`, env, or role-backed credentials.
 
-Total cost for SSO-backed profiles: one `os.stat` + one ~1 KB JSON read.
-Sub-millisecond; non-SSO profiles return `connected` from the offline probe and
+SSO-backed profiles use local AWS config and SSO cache reads only; no AWS
+network call. Non-SSO profiles return `connected` from the offline probe and
 are validated by the live boto path.
 
 ## 1.4. Switching between connections at runtime
@@ -150,6 +152,10 @@ Why this is useful day-to-day:
   the cycle automatically on next launch (or immediately if added
   through Settings — the rail's `ConnectionListChangedMessage`
   refreshes the candidate ring without a relaunch).
+- **Bounded launch fallback** — automatic startup attempts share one 90-second
+  budget across the ordered connection list. Connections that do not fit in
+  that launch budget remain available for explicit selection after the local
+  fallback mounts.
 - **Cross-account / cross-vendor transfers** — put one account on the
   left pane, a different account on the right pane (each pane cycles
   independently), then `c` (copy) streams between them via
@@ -159,7 +165,7 @@ Why this is useful day-to-day:
 
 The `,` key opens **Settings** where you can add, edit, or delete
 `s3-compatible` connections (see the
-[`docs/cookbook.md` MinIO walkthrough](cookbook.md#11-connect-to-and-switch-between-data-sources)).
+[`docs/cookbook.md` S3Mock walkthrough](cookbook.md#11-connect-to-and-switch-between-data-sources).
 AWS profiles are read-only from aws-tui's perspective — manage those
 through the standard `~/.aws/` tooling.
 
@@ -228,18 +234,14 @@ service-scoped: it remains visible in that service page and does not mark the
 connection unreachable or remove it from the source cycle. A connection is
 only marked unreachable by connection-level S3 pane failures.
 
-## 1.5. Vendor Quirks
-- **Cloudflare R2** — no bucket versioning, no replication;
-  `region = "auto"`; uses HTTPS at
-  `https://<account>.r2.cloudflarestorage.com`.
-- **Backblaze B2** — smaller multipart limits than AWS (5 MiB min
-  part vs. 5 GiB max); long-lived buckets need keys with `b2-` prefix.
-- **MinIO** — uses path-style URLs (`force_path_style = true`);
-  self-signed TLS dev setups need `verify_tls = false` (will emit a
-  warning toast at launch).
-- **Wasabi** — mostly behaves like AWS; region matters (us-east-1 vs.
-  us-east-2 buckets).
-- **Ceph RGW / SeaweedFS** — typically path-style + custom region.
+## 1.5. Provider Configuration Patterns
+aws-tui enforces only the connection fields it passes to botocore: an HTTP(S)
+endpoint, region, addressing style, TLS verification choice, and credential
+source. Use the storage provider's current documentation to choose the exact
+endpoint and region and to determine whether path-style addressing is
+required. Set `verify_tls = false` only for a controlled development endpoint
+whose certificate cannot be verified; aws-tui shows a warning when that
+setting is active.
 
 ## 1.6. Recommended 1-Day MPU Abort Lifecycle Rule
 Set a 1-day lifecycle rule to abort incomplete multipart uploads on

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -34,12 +33,17 @@ from aws_tui.vm.athena._domain_validation import (
     valid_query_execution_summary,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena._pager_compat import (
+    PagerCollectionLimitError,
+    SnapshotTokenPager,
+    seed_token_pager,
+)
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _HISTORY_ERROR = "Athena history request failed"
+_MAX_HISTORY_ITEMS = 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,7 @@ class AthenaHistorySnapshot:
     selected_execution_id: str | None = field(repr=False)
     state: PaneState = field(repr=False)
     error_text: str | None = field(repr=False)
+    limit_reached: bool = field(default=False, repr=False)
 
 
 @dataclass(eq=False)
@@ -89,6 +94,7 @@ class AthenaHistoryVM:
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
         self._is_loading_more = False
+        self._loading_more_worker: _HistoryWorker | None = None
         self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -112,7 +118,11 @@ class AthenaHistoryVM:
 
     @property
     def has_more(self) -> bool:
-        return bool(self._workgroup) and self._pager.current_token is not None
+        return bool(self._workgroup) and self._pager.has_more
+
+    @property
+    def limit_reached(self) -> bool:
+        return self._pager.limit_reached
 
     @property
     def selected_execution_id(self) -> str | None:
@@ -169,11 +179,11 @@ class AthenaHistoryVM:
         worker = self._worker
         if not self._can_load_more(worker):
             return
-        self._set_loading_more(True)
+        self._begin_loading_more(worker)
         try:
             await self._run_pager(worker, refresh=False)
         finally:
-            self._set_loading_more(False)
+            self._finish_loading_more(worker)
 
     async def select_execution(self, execution_id: str) -> None:
         if self._disposed or self._shutdown_started:
@@ -216,6 +226,7 @@ class AthenaHistoryVM:
             selected_execution_id=self._selected_execution_id,
             state=self._state,
             error_text=self._error_text,
+            limit_reached=self._pager.limit_reached,
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena history snapshot is invalid")
@@ -237,7 +248,12 @@ class AthenaHistoryVM:
         worker.details.update(
             {detail.summary.ref.execution_id: detail for detail in snapshot.details}
         )
-        seed_token_pager(worker.pager, snapshot.items, snapshot.next_token)
+        seed_token_pager(
+            worker.pager,
+            snapshot.items,
+            snapshot.next_token,
+            limit_reached=snapshot.limit_reached,
+        )
         self._selected_execution_id = snapshot.selected_execution_id
         self._detail = (
             None
@@ -259,11 +275,14 @@ class AthenaHistoryVM:
             or not valid_query_context(snapshot.context)
             or type(snapshot.items) is not tuple
             or type(snapshot.details) is not tuple
+            or len(snapshot.items) > _MAX_HISTORY_ITEMS
             or not optional_non_empty_exact_string(snapshot.next_token)
             or not optional_exact_string(snapshot.selected_execution_id)
             or type(snapshot.state) is not PaneState
             or snapshot.state is PaneState.LOADING
             or not optional_exact_string(snapshot.error_text)
+            or type(snapshot.limit_reached) is not bool
+            or (snapshot.limit_reached and snapshot.next_token is not None)
             or not all(valid_query_execution_summary(item) for item in snapshot.items)
             or not all(valid_query_execution_detail(detail) for detail in snapshot.details)
         ):
@@ -388,6 +407,20 @@ class AthenaHistoryVM:
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
+        except PagerCollectionLimitError:
+            if self._is_current(worker):
+                accepted_ids = {row.ref.execution_id for row in worker.pager.items}
+                worker.details = {
+                    execution_id: detail
+                    for execution_id, detail in worker.details.items()
+                    if execution_id in accepted_ids
+                }
+                self._error_text = None
+                self._notify("items")
+                self._notify("has_more")
+                self._notify("error_text")
+                self._set_state(PaneState.IDLE if self.items else PaneState.EMPTY)
+            return
         except ProviderError as exc:
             if self._is_current(worker):
                 self._state, self._error_text = map_provider_error(
@@ -444,7 +477,7 @@ class AthenaHistoryVM:
                 worker.details[ref.execution_id] = detail
             return [detail.summary for detail in details], next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_HISTORY_ITEMS)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more(worker))
@@ -460,67 +493,12 @@ class AthenaHistoryVM:
         worker: _HistoryWorker,
         refs: list[QueryExecutionRef],
     ) -> list[QueryExecutionDetail]:
-        tasks = [
-            asyncio.create_task(self._client.get_query_execution(ref.execution_id)) for ref in refs
-        ]
-        if not tasks:
-            return []
-        worker.tasks.update(tasks)
-        try:
-            done, _ = await asyncio.wait(
-                tasks,
-                return_when=asyncio.FIRST_EXCEPTION,
-            )
-            failed = next(
-                (task for task in done if not task.cancelled() and task.exception() is not None),
-                None,
-            )
-            if failed is not None:
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-            await self._drain_detail_tasks(tasks, cancel=False)
-            if failed is not None:
-                error = failed.exception()
-                assert error is not None
-                raise error
-            return [task.result() for task in tasks]
-        except BaseException:
-            await self._drain_detail_tasks(tasks, cancel=True)
-            raise
-        finally:
-            worker.tasks.difference_update(tasks)
-
-    async def _drain_detail_tasks(
-        self,
-        tasks: list[asyncio.Task[QueryExecutionDetail]],
-        *,
-        cancel: bool,
-    ) -> None:
-        current = asyncio.current_task()
-        cancellation_count = current.cancelling() if current is not None else 0
-        cancelled = False
-        if cancel:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-        for task in tasks:
-            while not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    current_count = current.cancelling() if current is not None else 0
-                    if current_count > cancellation_count:
-                        cancelled = True
-                        cancellation_count = current_count
-            if not task.cancelled():
-                with contextlib.suppress(Exception):
-                    task.result()
-        if cancelled:
-            raise asyncio.CancelledError
+        del worker
+        return list(await self._client.get_query_executions([ref.execution_id for ref in refs]))
 
     def _replace_worker(self, workgroup: str, generation: int) -> _HistoryWorker:
         old_worker = self._worker
+        self._finish_loading_more(old_worker)
         worker = self._make_worker(workgroup, generation)
         self._worker = worker
         self._pager = worker.pager
@@ -566,11 +544,7 @@ class AthenaHistoryVM:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _can_load_more(self, worker: _HistoryWorker) -> bool:
-        return (
-            self._is_current(worker)
-            and bool(worker.workgroup)
-            and worker.pager.current_token is not None
-        )
+        return self._is_current(worker) and bool(worker.workgroup) and worker.pager.has_more
 
     def _is_current(self, worker: _HistoryWorker) -> bool:
         return (
@@ -603,11 +577,19 @@ class AthenaHistoryVM:
         self._state = state
         self._notify("state")
 
-    def _set_loading_more(self, value: bool) -> None:
-        if self._is_loading_more == value:
+    def _begin_loading_more(self, worker: _HistoryWorker) -> None:
+        self._loading_more_worker = worker
+        if not self._is_loading_more:
+            self._is_loading_more = True
+            self._notify("is_loading_more")
+
+    def _finish_loading_more(self, worker: _HistoryWorker) -> None:
+        if self._loading_more_worker is not worker:
             return
-        self._is_loading_more = value
-        self._notify("is_loading_more")
+        self._loading_more_worker = None
+        if self._is_loading_more:
+            self._is_loading_more = False
+            self._notify("is_loading_more")
 
     def _notify(self, property_name: str) -> None:
         if self._disposed:

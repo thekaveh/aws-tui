@@ -1,5 +1,121 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>aws-tui Lifecycle and Cancellation</title><style>@font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Regular.ttf") format("truetype"); font-style: normal; font-weight: 400; }@font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Bold.ttf") format("truetype"); font-style: normal; font-weight: 600 700; }*{box-sizing:border-box}body{margin:0;padding:32px;background:#020617;color:#f8fafc;font-family:"Fira Code Embedded",monospace}.wrap{max-width:1600px;margin:auto}h1{font-size:24px;letter-spacing:0}.sub{color:#94a3b8}.frame{margin-top:20px;padding:16px;border:1px solid #1e293b;border-radius:8px;background:#07101f}svg{display:block;width:100%;min-width:1100px;height:auto}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}.card{padding:14px;border:1px solid #1e293b;border-radius:8px;background:#0f172a}.card h2{font-size:13px;letter-spacing:0}.card p{font-size:11px;line-height:1.5;color:#94a3b8}@media(max-width:760px){body{padding:16px}.cards{grid-template-columns:1fr}}</style></head><body><main class="wrap"><h1>aws-tui Lifecycle and Cancellation</h1><p class="sub">Content replacement, source rollback, worker ownership, and ordered shutdown</p><section class="frame"><svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="t d"><title id="t">aws-tui lifecycle</title><desc id="d">Orthogonal state paths show mount, background setup, service replacement with cancellation and rollback, and ordered application shutdown.</desc><defs><pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0L0 0 0 40" fill="none" stroke="#1e293b" stroke-width=".5"/></pattern><marker id="a" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker></defs><rect width="1600" height="900" fill="#020617"/><rect width="1600" height="900" fill="url(#g)"/>
-<g fill="none" stroke-width="2" marker-end="url(#a)"><path d="M310 180H420" stroke="#34d399"/><path d="M680 180H790" stroke="#34d399"/><path d="M1050 180H1160" stroke="#22d3ee"/><path d="M920 240V370" stroke="#fb923c"/><path d="M790 430H680" stroke="#fb7185" stroke-dasharray="6,4"/><path d="M420 430H310" stroke="#fb7185" stroke-dasharray="6,4"/><path d="M310 690H420" stroke="#fb7185"/><path d="M680 690H790" stroke="#fb7185"/><path d="M1050 690H1160" stroke="#fb7185"/></g>
-<g font-family="Fira Code Embedded" text-anchor="middle"><text x="60" y="70" fill="#34d399" font-size="14" font-weight="700" text-anchor="start">CONTENT MOUNT / SOURCE SWITCH</text><rect x="60" y="120" width="250" height="120" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="2"/><text x="185" y="165" fill="#f8fafc" font-size="13" font-weight="600">Current widget tree</text><text x="185" y="190" fill="#94a3b8" font-size="10">retained through adoption</text><rect x="420" y="120" width="260" height="120" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="2"/><text x="550" y="160" fill="#f8fafc" font-size="13" font-weight="600">Cancel + drain</text><text x="550" y="185" fill="#94a3b8" font-size="10">cancel widget workers</text><text x="550" y="207" fill="#94a3b8" font-size="10">drain content setup</text><rect x="790" y="120" width="260" height="120" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="2"/><text x="920" y="160" fill="#f8fafc" font-size="13" font-weight="600">Build + adopt target VM</text><text x="920" y="185" fill="#94a3b8" font-size="10">construct + background setup</text><text x="920" y="207" fill="#94a3b8" font-size="10">prior DOM remains visible</text><rect x="1160" y="120" width="360" height="120" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="2"/><text x="1340" y="160" fill="#f8fafc" font-size="13" font-weight="600">Replace DOM with target view</text><text x="1340" y="185" fill="#94a3b8" font-size="10">mount failure installs error host</text><text x="1340" y="207" fill="#67e8f9" font-size="9">success commits source identity</text><rect x="790" y="370" width="260" height="120" rx="6" fill="#0f172a" stroke="#fb923c" stroke-width="2"/><text x="920" y="410" fill="#f8fafc" font-size="13" font-weight="600">Target setup failed</text><text x="920" y="435" fill="#94a3b8" font-size="10">prior DOM remains mounted</text><text x="920" y="457" fill="#fdba74" font-size="9">restore prior connection</text><rect x="420" y="370" width="260" height="120" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="2"/><text x="550" y="410" fill="#f8fafc" font-size="13" font-weight="600">Rollback VM</text><text x="550" y="435" fill="#94a3b8" font-size="10">rebuild prior service</text><text x="550" y="457" fill="#fda4af" font-size="9">toast restore outcome</text><rect x="60" y="370" width="250" height="120" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="2"/><text x="185" y="410" fill="#f8fafc" font-size="13" font-weight="600">Prior view restored</text><text x="185" y="435" fill="#94a3b8" font-size="10">identity and focus retained</text>
-<text x="60" y="590" fill="#fb7185" font-size="14" font-weight="700" text-anchor="start">COMMON QUIT + FATAL UNMOUNT SHUTDOWN</text><rect x="60" y="630" width="250" height="120" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="2"/><text x="185" y="675" fill="#f8fafc" font-size="13" font-weight="600">Close intake</text><text x="185" y="700" fill="#94a3b8" font-size="10">one idempotent shutdown task</text><rect x="420" y="630" width="260" height="120" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="2"/><text x="550" y="670" fill="#f8fafc" font-size="13" font-weight="600">Cancel + drain</text><text x="550" y="695" fill="#94a3b8" font-size="10">transfers · setup · queries</text><text x="550" y="717" fill="#94a3b8" font-size="10">preview + widget workers</text><rect x="790" y="630" width="260" height="120" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="2"/><text x="920" y="675" fill="#f8fafc" font-size="13" font-weight="600">Close AWS clients</text><text x="920" y="700" fill="#94a3b8" font-size="10">await async context exits</text><rect x="1160" y="630" width="360" height="120" rx="6" fill="#0f172a" stroke="#fb7185" stroke-width="2"/><text x="1340" y="670" fill="#f8fafc" font-size="13" font-weight="600">Flush + dispose</text><text x="1340" y="695" fill="#94a3b8" font-size="10">logs then subscriptions</text><text x="1340" y="717" fill="#94a3b8" font-size="10">VM tree last</text></g></svg></section><section class="cards"><article class="card"><h2>Ownership</h2><p>Widget workers stop before their backing VMs are disposed.</p></article><article class="card"><h2>Rollback</h2><p>A failed source rebuild restores the prior identity and service tree.</p></article><article class="card"><h2>Shutdown order</h2><p>Explicit quit and fatal unmount await the same cleanup task.</p></article></section></main></body></html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aws-tui Lifecycle and Cancellation</title>
+  <style>
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Regular.ttf") format("truetype"); font-style: normal; font-weight: 400; }
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Bold.ttf") format("truetype"); font-style: normal; font-weight: 600 700; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px; background: #020617; color: #f8fafc; font-family: "Fira Code Embedded", monospace; }
+    main { width: min(1600px, 100%); margin: auto; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+    p { margin: 8px 0 0; color: #94a3b8; font-size: 14px; }
+    .frame { margin-top: 20px; padding: 16px; overflow-x: auto; border: 1px solid #1e293b; border-radius: 8px; background: #07101f; }
+    svg { display: block; width: 100%; min-width: 1120px; height: auto; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>aws-tui Lifecycle and Cancellation</h1>
+  <p>Hosted-service replacement, candidate rollback, and one ordered shutdown path</p>
+  <section class="frame">
+    <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+      <title id="title">aws-tui lifecycle and cancellation</title>
+      <desc id="desc">The source switch resolves and builds a candidate while prior content stays authoritative. The content host constructs the candidate, drains and disposes outgoing content, commits identity during adoption, and starts setup in the background. Candidate construction failures keep the prior service. Explicit quit and unmount share one ordered shutdown task.</desc>
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
+        <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
+      </defs>
+      <rect width="1600" height="900" fill="#020617"/><rect width="1600" height="900" fill="url(#grid)"/>
+      <g fill="#07101f" stroke="#1e293b" stroke-width="1.5">
+        <rect x="30" y="35" width="1540" height="260" rx="8"/>
+        <rect x="30" y="315" width="1540" height="290" rx="8"/>
+        <rect x="30" y="625" width="1540" height="240" rx="8"/>
+      </g>
+      <g font-family="Fira Code Embedded" font-size="12" font-weight="700" text-anchor="start">
+        <text x="52" y="63" fill="#34d399">CONTENTHOSTVM SERVICE REPLACEMENT</text>
+        <text x="52" y="343" fill="#fbbf24">SOURCE REBUILD TRANSACTION</text>
+        <text x="52" y="653" fill="#fb7185">COMMON QUIT + FATAL UNMOUNT SHUTDOWN</text>
+      </g>
+
+      <g fill="none" stroke-width="2" marker-end="url(#arrow)">
+        <path d="M280 155H340" stroke="#34d399"/><path d="M580 155H650" stroke="#34d399"/>
+        <path d="M890 155H960" stroke="#34d399"/><path d="M1200 155H1270" stroke="#22d3ee"/>
+        <path d="M1390 205V230" stroke="#fb923c"/>
+        <path d="M280 425H340" stroke="#fbbf24"/><path d="M580 425H650" stroke="#fbbf24"/>
+        <path d="M890 425H960" stroke="#34d399"/>
+        <path d="M1200 425H1270" stroke="#22d3ee"/>
+        <path d="M770 475V515" stroke="#fb7185"/><path d="M890 555H960" stroke="#fb7185"/>
+        <path d="M260 755H305" stroke="#fb7185"/><path d="M525 755H570" stroke="#fb7185"/>
+        <path d="M790 755H835" stroke="#fb7185"/><path d="M1065 755H1110" stroke="#fb7185"/>
+        <path d="M1350 755H1395" stroke="#fb7185"/>
+      </g>
+
+      <g font-family="Fira Code Embedded" text-anchor="middle">
+        <g fill="#0f172a" stroke-width="2">
+          <rect x="50" y="105" width="230" height="100" rx="5" stroke="#34d399"/>
+          <rect x="340" y="105" width="240" height="100" rx="5" stroke="#34d399"/>
+          <rect x="650" y="105" width="240" height="100" rx="5" stroke="#34d399"/>
+          <rect x="960" y="105" width="240" height="100" rx="5" stroke="#34d399"/>
+          <rect x="1270" y="105" width="240" height="100" rx="5" stroke="#22d3ee"/>
+          <rect x="1270" y="230" width="240" height="45" rx="5" stroke="#fb923c"/>
+        </g>
+        <g fill="#f8fafc" font-size="10.5" font-weight="700">
+          <text x="165" y="140">Replacement requested</text><text x="460" y="140">Construct candidate</text>
+          <text x="770" y="140">Drain outgoing</text><text x="1080" y="140">Adopt candidate</text>
+          <text x="1390" y="140">Start setup task</text><text x="1390" y="258">Report setup error</text>
+        </g>
+        <g fill="#94a3b8" font-size="9">
+          <text x="165" y="168">serialized content mutation</text><text x="460" y="168">structural failure stops here</text>
+          <text x="770" y="168">shutdown · dispose</text><text x="1080" y="168">new content is authoritative</text>
+          <text x="1390" y="168">background operation</text>
+        </g>
+
+        <g fill="#0f172a" stroke-width="2">
+          <rect x="50" y="375" width="230" height="100" rx="5" stroke="#fbbf24"/>
+          <rect x="340" y="375" width="240" height="100" rx="5" stroke="#fbbf24"/>
+          <rect x="650" y="375" width="240" height="100" rx="5" stroke="#fbbf24"/>
+          <rect x="960" y="375" width="240" height="100" rx="5" stroke="#34d399"/>
+          <rect x="650" y="515" width="240" height="80" rx="5" stroke="#fb7185"/>
+          <rect x="960" y="515" width="240" height="80" rx="5" stroke="#fb7185"/>
+          <rect x="1270" y="375" width="240" height="100" rx="5" stroke="#22d3ee"/>
+        </g>
+        <g fill="#f8fafc" font-size="10.5" font-weight="700">
+          <text x="165" y="410">Resolve target source</text><text x="460" y="410">Build candidate VM</text>
+          <text x="770" y="410">Construct candidate tree</text><text x="1080" y="410">Drain + adopt candidate</text>
+          <text x="770" y="548">Construction failure</text><text x="1080" y="548">Keep prior service</text>
+          <text x="1390" y="410">Background setup</text>
+        </g>
+        <g fill="#94a3b8" font-size="9">
+          <text x="165" y="438">exact connection + region</text><text x="460" y="438">Prior content stays authoritative</text>
+          <text x="770" y="438">construction precedes teardown</text><text x="1080" y="438">drain · dispose · commit · publish</text>
+          <text x="770" y="575">dispose rejected candidate</text><text x="1080" y="575">selection + identity unchanged</text>
+          <text x="1390" y="438">error is visible; no rollback</text>
+        </g>
+
+        <g fill="#0f172a" stroke="#fb7185" stroke-width="2">
+          <rect x="50" y="705" width="210" height="100" rx="5"/>
+          <rect x="305" y="705" width="220" height="100" rx="5"/>
+          <rect x="570" y="705" width="220" height="100" rx="5"/>
+          <rect x="835" y="705" width="230" height="100" rx="5"/>
+          <rect x="1110" y="705" width="240" height="100" rx="5"/>
+          <rect x="1395" y="705" width="150" height="100" rx="5"/>
+        </g>
+        <g fill="#f8fafc" font-size="10.5" font-weight="700">
+          <text x="155" y="742">Close intake</text><text x="415" y="742">Cancel + drain</text>
+          <text x="680" y="742">Close AWS clients</text><text x="950" y="742">Dispose subscriptions + VM tree</text>
+          <text x="1230" y="742">Flush + close logs</text><text x="1470" y="750">Done</text>
+        </g>
+        <g fill="#94a3b8" font-size="9">
+          <text x="155" y="770">one idempotent task</text><text x="415" y="770">transfers · setup · queries · preview</text>
+          <text x="680" y="770">await async context exits</text><text x="950" y="770">diagnostics remain live</text>
+          <text x="1230" y="770">flush handlers last</text>
+        </g>
+      </g>
+    </svg>
+  </section>
+</main>
+</body>
+</html>

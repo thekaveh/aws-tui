@@ -129,6 +129,38 @@ async def test_set_content_same_service_replaces_different_vm() -> None:
     host.dispose()
 
 
+async def test_set_content_identical_instance_is_a_lifecycle_noop() -> None:
+    events: list[str] = []
+
+    class _LifecycleVM:
+        def construct(self) -> None:
+            events.append("construct")
+
+        async def setup(self) -> None:
+            events.append("setup")
+
+        async def shutdown(self) -> None:
+            events.append("shutdown")
+
+        def dispose(self) -> None:
+            events.append("dispose")
+
+    host = _build()
+    child = _LifecycleVM()
+    await host.set_content(cast("ComponentVM", child), service_id="s3")
+    setup_task = host._setup_task
+    assert setup_task is not None
+    await setup_task
+
+    await host.set_content(cast("ComponentVM", child), service_id="renamed-s3")
+
+    assert host.current is child
+    assert host.current_id == "s3"
+    assert events == ["construct", "setup"]
+    host.dispose()
+    assert events == ["construct", "setup", "dispose"]
+
+
 async def test_dispose_disposes_current_content() -> None:
     host = _build()
     child = _component()
@@ -662,6 +694,49 @@ async def test_set_content_drains_setup_cleanup_through_repeated_cancellation() 
     assert cleanup_finished.is_set()
     assert host.current is current
     assert replacement.status == ConstructionStatus.DISPOSED
+    host.dispose()
+
+
+async def test_cancelled_swap_retires_outgoing_vm_after_shutdown_begins() -> None:
+    shutdown_started = asyncio.Event()
+    release_shutdown = asyncio.Event()
+
+    class _VM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def shutdown(self) -> None:
+            shutdown_started.set()
+            await release_shutdown.wait()
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    current = _VM()
+    replacement = _component()
+    await host.set_content(cast("ComponentVM", current), service_id="service")
+
+    swap = asyncio.create_task(host.set_content(replacement, service_id="replacement"))
+    await shutdown_started.wait()
+    swap.cancel()
+    await asyncio.sleep(0)
+
+    assert not swap.done()
+    release_shutdown.set()
+    with pytest.raises(asyncio.CancelledError):
+        await swap
+
+    assert current.status is ConstructionStatus.DISPOSED
+    assert replacement.status is ConstructionStatus.DISPOSED
+    assert host.current is None
+    assert host.current_id is None
+
+    fresh = _component()
+    await host.set_content(fresh, service_id="service")
+    assert host.current is fresh
     host.dispose()
 
 

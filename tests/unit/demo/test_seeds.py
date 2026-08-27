@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from datetime import timedelta
 
 import pytest
 
 from aws_tui.demo.seeds import (
+    seeded_demo_athena,
     seeded_demo_emr,
     seeded_demo_fs,
 )
@@ -116,6 +119,47 @@ async def test_seeded_demo_emr_has_runs_across_states() -> None:
     assert JobRunState.PENDING in all_states
 
 
+def test_demo_services_share_one_recent_bounded_clock() -> None:
+    from aws_tui.demo.clock import DEMO_NOW
+
+    fs = seeded_demo_fs("demo-dev")
+    emr = seeded_demo_emr()
+    athena = seeded_demo_athena("demo-dev")
+    timestamps = [
+        *fs._mtime.values(),
+        *(
+            run.created_at
+            for application_runs in emr._runs.values()
+            for run in application_runs.values()
+        ),
+        *(
+            timestamp
+            for detail in athena.query_executions.values()
+            for timestamp in (detail.summary.submitted_at, detail.summary.completed_at)
+            if timestamp is not None
+        ),
+    ]
+
+    assert timestamps
+    assert max(timestamps) <= DEMO_NOW
+    assert min(timestamps) >= DEMO_NOW - timedelta(days=7)
+
+
+def test_demo_call_recorders_keep_only_the_recent_bounded_window() -> None:
+    from aws_tui.demo._bounded_log import MAX_RECORDED_CALLS, BoundedCallLog
+
+    emr = seeded_demo_emr()
+    athena = seeded_demo_athena("demo-dev")
+
+    assert isinstance(emr.calls, BoundedCallLog)
+    assert isinstance(athena.calls, BoundedCallLog)
+    for index in range(MAX_RECORDED_CALLS + 5):
+        emr.calls.append(("probe", (index,)))
+
+    assert len(emr.calls) == MAX_RECORDED_CALLS
+    assert emr.calls[0] == ("probe", (5,))
+
+
 @pytest.mark.asyncio
 async def test_seeded_demo_failed_runs_have_streamable_logs() -> None:
     from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, build_run_prefix, parse_log_uri
@@ -175,8 +219,117 @@ async def test_clone_state_machine_walks_to_success(monkeypatch: pytest.MonkeyPa
         await asyncio.sleep(0.001)
         detail = await emr.get_job_run("etl-pipeline-1", new_id)
         if detail.state is JobRunState.SUCCESS:
+            assert detail.updated_at > detail.created_at
+            assert detail.duration_ms == int(
+                (detail.updated_at - detail.created_at).total_seconds() * 1000
+            )
             return
     raise AssertionError(f"state walk did not reach SUCCESS; final state was {detail.state!r}")
+
+
+@pytest.mark.asyncio
+async def test_successive_demo_clones_are_newest_and_strictly_ordered() -> None:
+    emr = seeded_demo_emr()
+    first_id = await emr.start_job_run(
+        "etl-pipeline-1",
+        execution_role_arn="arn:aws:iam::111111111111:role/EmrJobRole",
+        entry_point="s3://demo/etl.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=None,
+        name="first-clone",
+    )
+    second_id = await emr.start_job_run(
+        "etl-pipeline-1",
+        execution_role_arn="arn:aws:iam::111111111111:role/EmrJobRole",
+        entry_point="s3://demo/etl.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=None,
+        name="second-clone",
+    )
+    try:
+        runs = await emr.list_job_runs("etl-pipeline-1")
+        first = next(run for run in runs if run.job_run_id == first_id)
+        second = next(run for run in runs if run.job_run_id == second_id)
+
+        assert runs[:2] == [second, first]
+        assert second.created_at > first.created_at
+        assert first.created_at > runs[2].created_at
+    finally:
+        await emr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_demo_clones_each_report_five_second_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emr = seeded_demo_emr()
+    real_sleep = asyncio.sleep
+
+    async def _fast_sleep(_seconds: float) -> None:
+        await real_sleep(0)
+
+    monkeypatch.setattr("aws_tui.demo.in_memory_emr.asyncio.sleep", _fast_sleep)
+    first_id, second_id = await asyncio.gather(
+        emr.start_job_run(
+            "etl-pipeline-1",
+            execution_role_arn="arn:aws:iam::111111111111:role/EmrJobRole",
+            entry_point="s3://demo/etl.py",
+            entry_point_arguments=(),
+            spark_submit_parameters=None,
+            name="first-concurrent-clone",
+        ),
+        emr.start_job_run(
+            "etl-pipeline-1",
+            execution_role_arn="arn:aws:iam::111111111111:role/EmrJobRole",
+            entry_point="s3://demo/etl.py",
+            entry_point_arguments=(),
+            spark_submit_parameters=None,
+            name="second-concurrent-clone",
+        ),
+    )
+
+    for _ in range(20):
+        await real_sleep(0)
+        first = await emr.get_job_run("etl-pipeline-1", first_id)
+        second = await emr.get_job_run("etl-pipeline-1", second_id)
+        if first.state is JobRunState.SUCCESS and second.state is JobRunState.SUCCESS:
+            break
+
+    assert first.duration_ms == 5_000
+    assert second.duration_ms == 5_000
+    await emr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_demo_state_walk_failure_is_logged(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emr = seeded_demo_emr()
+
+    async def fail_state_walk(_application_id: str, _job_run_id: str) -> None:
+        raise RuntimeError("state walk failed")
+
+    monkeypatch.setattr(emr, "_advance_state", fail_state_walk)
+    with caplog.at_level(logging.ERROR, logger="aws_tui.demo.in_memory_emr"):
+        await emr.start_job_run(
+            "etl-pipeline-1",
+            execution_role_arn="arn:aws:iam::111111111111:role/EmrJobRole",
+            entry_point="s3://demo/etl.py",
+            entry_point_arguments=(),
+            spark_submit_parameters=None,
+            name="broken-clone",
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+            if not emr._state_tasks:
+                break
+
+    record = next(
+        record for record in caplog.records if record.message == "demo.emr.state_walk.failed"
+    )
+    assert record.error_type == "RuntimeError"
+    await emr.aclose()
 
 
 @pytest.mark.asyncio

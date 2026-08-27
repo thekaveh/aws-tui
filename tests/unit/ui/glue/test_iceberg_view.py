@@ -114,6 +114,26 @@ async def test_iceberg_metadata_region_is_hidden_for_non_iceberg_table() -> None
         assert not pilot.app.query_one(GlueIcebergView).display
 
 
+def test_iceberg_view_coalesces_property_bursts_into_one_refresh() -> None:
+    vm, _inspector = _build_vm()
+    view = GlueIcebergView(vm.catalog.iceberg)
+    scheduled: list[Callable[[], None]] = []
+    refreshes: list[None] = []
+    view.call_after_refresh = scheduled.append  # type: ignore[method-assign]
+    view._refresh = lambda: refreshes.append(None)  # type: ignore[method-assign]
+
+    view._on_vm_changed("items")
+    view._on_vm_changed("state")
+    view._on_vm_changed("has_more")
+
+    assert len(scheduled) == 1
+    scheduled[0]()
+    assert refreshes == [None]
+
+    view._on_vm_changed("selected_snapshot_id")
+    assert len(scheduled) == 2
+
+
 @pytest.mark.asyncio
 async def test_iceberg_view_composes_compact_tabs_table_and_time_travel_control() -> None:
     vm, inspector = _build_vm()

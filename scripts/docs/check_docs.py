@@ -16,8 +16,9 @@ from scripts.docs.build_docs import build
 from scripts.docs.links import find_links, is_forbidden
 from scripts.docs.manifest import Manifest, load_manifest
 
-# Top-level docs deliberately kept in-repo only (never published/flagged).
+# Docs deliberately kept in-repo only (never published/flagged).
 INTERNAL_DOCS: frozenset[str] = frozenset({"docs/recording-todo.md"})
+INTERNAL_DOC_PREFIXES: tuple[str, ...] = ("docs/superpowers/",)
 
 _PLACEHOLDER_RE = re.compile(r"\b(TODO|TBD|FIXME|XXX)\b")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(\d+(?:\.\d+)*)\.\s+\S")
@@ -47,21 +48,32 @@ def check_self_containment(generated_root: str | Path, repo_root: str | Path) ->
             if is_forbidden(link.target, surface):
                 rel = md_path.relative_to(generated_root)
                 findings.append(Finding("error", f"{rel}: forbidden link {link.target}"))
-    readme = repo_root / "README.md"
-    if readme.is_file():
-        for link in find_links(readme.read_text(encoding="utf-8")):
+    repository_docs = [repo_root / "README.md"]
+    manifest_path = repo_root / "docs" / "manifest.yaml"
+    if manifest_path.is_file():
+        manifest = load_manifest(manifest_path, repo_root)
+        repository_docs.extend(
+            repo_root / leaf.source for leaf in manifest.leaves() if leaf.source is not None
+        )
+    for repository_doc in repository_docs:
+        if not repository_doc.is_file():
+            continue
+        for link in find_links(repository_doc.read_text(encoding="utf-8")):
             if is_forbidden(link.target, "repo"):
-                findings.append(Finding("error", f"README.md: forbidden link {link.target}"))
+                rel = repository_doc.relative_to(repo_root)
+                findings.append(Finding("error", f"{rel}: forbidden link {link.target}"))
     return findings
 
 
 def check_completeness(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
     repo_root = Path(repo_root)
     referenced = {leaf.source for leaf in manifest.leaves()}
+    if manifest.package is not None:
+        referenced.add(manifest.package.source)
     findings: list[Finding] = []
-    for md in sorted((repo_root / "docs").glob("*.md")):
-        rel = f"docs/{md.name}"
-        if rel in INTERNAL_DOCS or rel in referenced:
+    for md in sorted((repo_root / "docs").rglob("*.md")):
+        rel = md.relative_to(repo_root).as_posix()
+        if rel in INTERNAL_DOCS or rel.startswith(INTERNAL_DOC_PREFIXES) or rel in referenced:
             continue
         findings.append(Finding("error", f"{rel}: published doc not referenced by manifest"))
     return findings
@@ -87,7 +99,8 @@ def check_placeholders(
 
 
 def check_numbering(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
-    del manifest
+    if manifest.numbering != "per-doc":
+        return [Finding("error", f"unsupported numbering mode: {manifest.numbering}")]
     repo_root = Path(repo_root)
     findings: list[Finding] = []
     markdown = sorted(repo_root.glob("*.md")) + sorted((repo_root / "docs").rglob("*.md"))
@@ -226,50 +239,60 @@ def check_local_anchors(repo_root: str | Path) -> list[Finding]:
     for source_path in _local_markdown_paths(repo_root):
         source_path = source_path.resolve()
         source_rel = source_path.relative_to(repo_root)
-        for line_number, line in _unfenced_lines(source_path.read_text(encoding="utf-8")):
-            for link in find_links(line):
-                target = urlsplit(link.target)
-                if target.scheme or target.netloc or not target.fragment:
-                    continue
-                target_path = source_path
-                if target.path:
-                    target_path = (source_path.parent / unquote(target.path)).resolve()
-                try:
-                    target_path.relative_to(repo_root)
-                except ValueError:
-                    continue
-                if not target_path.is_file():
-                    findings.append(
-                        Finding(
-                            "error",
-                            f"{source_rel}:{line_number}: local anchor target {target.path} does not exist",
-                        )
+        markdown = source_path.read_text(encoding="utf-8")
+        for link in find_links(markdown):
+            target = urlsplit(link.target)
+            if target.scheme or target.netloc:
+                continue
+            target_path = source_path
+            if target.path:
+                target_path = (source_path.parent / unquote(target.path)).resolve()
+            try:
+                target_path.relative_to(repo_root)
+            except ValueError:
+                continue
+            if target.path and not target_path.exists():
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{source_rel}: local link target {target.path} does not exist",
                     )
-                    continue
-                if target_path not in anchors_by_path:
-                    target_markdown = target_path.read_text(encoding="utf-8")
-                    anchors_by_path[target_path] = (
-                        _github_anchors(target_markdown),
-                        _mkdocs_anchors(target_markdown, extensions, extension_configs),
+                )
+                continue
+            if not target.fragment:
+                continue
+            if not target_path.is_file():
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{source_rel}: local anchor target {target.path} is not a file",
                     )
-                github_anchors, mkdocs_anchors = anchors_by_path[target_path]
-                anchor = unquote(target.fragment)
-                if anchor not in github_anchors:
-                    findings.append(
-                        Finding(
-                            "error",
-                            f"{source_rel}:{line_number}: unknown GitHub local anchor #{anchor} in "
-                            f"{target_path.relative_to(repo_root)}",
-                        )
+                )
+                continue
+            if target_path not in anchors_by_path:
+                target_markdown = target_path.read_text(encoding="utf-8")
+                anchors_by_path[target_path] = (
+                    _github_anchors(target_markdown),
+                    _mkdocs_anchors(target_markdown, extensions, extension_configs),
+                )
+            github_anchors, mkdocs_anchors = anchors_by_path[target_path]
+            anchor = unquote(target.fragment)
+            if anchor not in github_anchors:
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{source_rel}: unknown GitHub local anchor #{anchor} in "
+                        f"{target_path.relative_to(repo_root)}",
                     )
-                if anchor not in mkdocs_anchors:
-                    findings.append(
-                        Finding(
-                            "error",
-                            f"{source_rel}:{line_number}: unknown MkDocs local anchor #{anchor} in "
-                            f"{target_path.relative_to(repo_root)}",
-                        )
+                )
+            if anchor not in mkdocs_anchors:
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{source_rel}: unknown MkDocs local anchor #{anchor} in "
+                        f"{target_path.relative_to(repo_root)}",
                     )
+                )
     return findings
 
 
