@@ -104,6 +104,44 @@ async def test_inmem_directory_copy_recursive() -> None:
     assert await _read_file(dst, PathRef.from_posix("/d/sub/b")) == b"B"
 
 
+async def test_recursive_copy_rejects_tree_beyond_entry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import cross_fs
+
+    monkeypatch.setattr(cross_fs, "_MAX_RECURSIVE_ENTRIES", 2, raising=False)
+    src = InMemoryFS()
+    dst = InMemoryFS()
+    await src.mkdir(PathRef(("tree",)))
+    await _put_file(src, PathRef(("tree", "one")), b"1")
+    await _put_file(src, PathRef(("tree", "two")), b"2")
+
+    with pytest.raises(ProviderError, match="recursive entry safety limit"):
+        await CrossFsCopy(source=src, destination=dst).copy(PathRef(("tree",)), PathRef(("tree",)))
+
+    with pytest.raises(NotFoundError):
+        await dst.stat(PathRef(("tree",)))
+
+
+async def test_recursive_move_rejects_tree_beyond_depth_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import cross_fs
+
+    monkeypatch.setattr(cross_fs, "_MAX_RECURSION_DEPTH", 1, raising=False)
+    src = InMemoryFS()
+    dst = InMemoryFS()
+    await src.mkdir(PathRef(("tree", "nested")))
+    await _put_file(src, PathRef(("tree", "nested", "value")), b"value")
+
+    with pytest.raises(ProviderError, match="recursive depth safety limit"):
+        await CrossFsMove(source=src, destination=dst).move(PathRef(("tree",)), PathRef(("tree",)))
+
+    assert (await src.stat(PathRef(("tree",)))).kind is EntryKind.DIRECTORY
+    with pytest.raises(NotFoundError):
+        await dst.stat(PathRef(("tree",)))
+
+
 # ---------------------------------------------------------------------------
 # LocalFS ↔ LocalFS
 # ---------------------------------------------------------------------------

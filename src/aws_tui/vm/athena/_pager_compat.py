@@ -14,6 +14,10 @@ T = TypeVar("T")
 TToken = TypeVar("TToken")
 
 
+class PagerCollectionLimitError(ProviderError):
+    """The cumulative pager snapshot exceeded its configured ceiling."""
+
+
 class SnapshotTokenPager(Generic[T, TToken]):
     """Token pager with an explicit, side-effect-free snapshot boundary.
 
@@ -28,8 +32,13 @@ class SnapshotTokenPager(Generic[T, TToken]):
             [TToken | None],
             Awaitable[tuple[Sequence[T], TToken | None]],
         ],
+        *,
+        max_items: int | None = None,
     ) -> None:
+        if max_items is not None and max_items < 1:
+            raise ValueError("max_items must be positive")
         self._fetch_next = fetch_next
+        self._max_items = max_items
         self._items: list[T] = []
         self._current_token: TToken | None = None
         self._loaded_once = False
@@ -91,6 +100,7 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._operation_generation += 1
         self._refreshing = False
         restored = list(items)
+        self._check_item_budget(len(restored), snapshot=True)
         self._items = restored
         self._current_token = next_token
         self._loaded_once = True
@@ -116,6 +126,11 @@ class SnapshotTokenPager(Generic[T, TToken]):
             self._notify_properties()
             raise ProviderError("Athena returned a repeated continuation token")
         additions = list(page)
+        if self._max_items is not None and len(self._items) + len(additions) > self._max_items:
+            self._current_token = None
+            self._loaded_once = True
+            self._notify_properties()
+            raise PagerCollectionLimitError("Athena collection safety limit exceeded")
         self._items.extend(additions)
         self._current_token = next_token
         self._consumed_tokens = consumed
@@ -138,6 +153,7 @@ class SnapshotTokenPager(Generic[T, TToken]):
         if self._disposed or generation != self._operation_generation:
             return
         fresh = list(page)
+        self._check_item_budget(len(fresh), snapshot=False)
         first_page_size = self._page_sizes[0] if self._page_sizes else None
         if (
             first_page_size is not None
@@ -157,6 +173,13 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._page_tokens = [next_token]
         self._consumed_tokens = set()
         self._notify_reset()
+
+    def _check_item_budget(self, count: int, *, snapshot: bool) -> None:
+        if self._max_items is None or count <= self._max_items:
+            return
+        if snapshot:
+            raise ValueError("Athena snapshot collection safety limit exceeded")
+        raise PagerCollectionLimitError("Athena collection safety limit exceeded")
 
     def _notify_reset(self) -> None:
         self._collection_changed.on_next(CollectionChangedEvent(action="reset"))
@@ -193,4 +216,4 @@ def seed_token_pager(
     pager.restore(items, next_token)
 
 
-__all__ = ["SnapshotTokenPager", "seed_token_pager"]
+__all__ = ["PagerCollectionLimitError", "SnapshotTokenPager", "seed_token_pager"]

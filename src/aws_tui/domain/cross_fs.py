@@ -50,6 +50,20 @@ from aws_tui.domain.filesystem import (
 #: before giving up. 1000 is plenty for any plausible user-driven copy
 #: workflow and bounds the loop in pathological mass-collision cases.
 _MAX_RENAME_ATTEMPTS: Final[int] = 1000
+_MAX_RECURSIVE_ENTRIES: int = 10_000
+_MAX_RECURSION_DEPTH: int = 128
+
+
+@dataclass(slots=True)
+class _TraversalBudget:
+    entries: int = 0
+
+    def enter(self, path: PathRef, *, depth: int) -> None:
+        if depth > _MAX_RECURSION_DEPTH:
+            raise ProviderError(f"recursive depth safety limit exceeded at {path.as_posix()}")
+        self.entries += 1
+        if self.entries > _MAX_RECURSIVE_ENTRIES:
+            raise ProviderError(f"recursive entry safety limit exceeded at {path.as_posix()}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,10 +214,37 @@ class CrossFsCopy:
         - ``on_conflict`` is consulted *before* opening the source stream
           so we don't waste bandwidth.
         """
+        return await self._copy_entry(
+            src,
+            dst,
+            progress=progress,
+            on_conflict=on_conflict,
+            budget=_TraversalBudget(),
+            depth=0,
+        )
+
+    async def _copy_entry(
+        self,
+        src: PathRef,
+        dst: PathRef,
+        *,
+        progress: ProgressCallback | None,
+        on_conflict: ConflictResolution,
+        budget: _TraversalBudget,
+        depth: int,
+    ) -> bool:
+        budget.enter(src, depth=depth)
         src_entry = await self._source.stat(src)
         self._validate_same_storage_destination(src, dst, src_entry.kind)
         if src_entry.kind == EntryKind.DIRECTORY:
-            return await self._copy_directory(src, dst, progress=progress, on_conflict=on_conflict)
+            return await self._copy_directory(
+                src,
+                dst,
+                progress=progress,
+                on_conflict=on_conflict,
+                budget=budget,
+                depth=depth,
+            )
 
         if bool(getattr(self._destination, "atomic_write_replaces", False)):
             return await self._copy_file_atomically(
@@ -849,6 +890,8 @@ class CrossFsCopy:
         *,
         progress: ProgressCallback | None,
         on_conflict: ConflictResolution,
+        budget: _TraversalBudget,
+        depth: int,
     ) -> bool:
         try:
             destination_entry = await self._destination.stat(dst)
@@ -860,14 +903,22 @@ class CrossFsCopy:
             and destination_entry.kind == EntryKind.DIRECTORY
             and on_conflict != ConflictResolution.OVERWRITE
         ):
-            await self._preflight_directory_merge(src, dst, on_conflict)
+            await self._preflight_directory_merge(
+                src,
+                dst,
+                on_conflict,
+                budget=_TraversalBudget(),
+                depth=0,
+            )
             copied_all = True
             for child in await self._source.list(src):
-                copied = await self.copy(
+                copied = await self._copy_entry(
                     src.join(child.name),
                     dst.join(child.name),
                     progress=progress,
                     on_conflict=on_conflict,
+                    budget=budget,
+                    depth=depth + 1,
                 )
                 copied_all = copied_all and copied
             return copied_all
@@ -941,6 +992,8 @@ class CrossFsCopy:
                     payload,
                     manifest,
                     progress=progress,
+                    budget=_TraversalBudget(),
+                    depth=0,
                 )
                 container_revision = await publisher.capture_stage_revision(container)
             except BaseException as exc:
@@ -986,7 +1039,11 @@ class CrossFsCopy:
         src: PathRef,
         dst: PathRef,
         on_conflict: ConflictResolution,
+        *,
+        budget: _TraversalBudget,
+        depth: int,
     ) -> None:
+        budget.enter(src, depth=depth)
         for child in await self._source.list(src):
             source_path = src.join(child.name)
             destination_path = dst.join(child.name)
@@ -997,6 +1054,7 @@ class CrossFsCopy:
                 destination_entry = None
 
             if source_entry.kind != EntryKind.DIRECTORY:
+                budget.enter(source_path, depth=depth + 1)
                 if not bool(getattr(self._destination, "atomic_write_replaces", False)):
                     self._require_publisher(EntryKind.FILE, destination_path)
                 if destination_entry is not None and on_conflict == ConflictResolution.ERROR:
@@ -1012,6 +1070,8 @@ class CrossFsCopy:
                     source_path,
                     destination_path,
                     on_conflict,
+                    budget=budget,
+                    depth=depth + 1,
                 )
                 continue
             if destination_entry is not None and on_conflict == ConflictResolution.ERROR:
@@ -1019,17 +1079,39 @@ class CrossFsCopy:
             if destination_entry is not None and on_conflict == ConflictResolution.SKIP:
                 continue
             self._require_directory_transaction(destination_path)
-            await self._preflight_absent_tree(source_path, destination_path)
+            await self._preflight_absent_tree(
+                source_path,
+                destination_path,
+                budget=budget,
+                depth=depth + 1,
+            )
 
-    async def _preflight_absent_tree(self, src: PathRef, dst: PathRef) -> None:
+    async def _preflight_absent_tree(
+        self,
+        src: PathRef,
+        dst: PathRef,
+        *,
+        budget: _TraversalBudget,
+        depth: int,
+    ) -> None:
+        budget.enter(src, depth=depth)
         self._require_directory_transaction(dst)
         for child in await self._source.list(src):
             source_path = src.join(child.name)
             destination_path = dst.join(child.name)
             source_entry = await self._source.stat(source_path)
             if source_entry.kind == EntryKind.DIRECTORY:
-                await self._preflight_absent_tree(source_path, destination_path)
-            elif not bool(getattr(self._destination, "atomic_write_replaces", False)):
+                await self._preflight_absent_tree(
+                    source_path,
+                    destination_path,
+                    budget=budget,
+                    depth=depth + 1,
+                )
+            else:
+                budget.enter(source_path, depth=depth + 1)
+            if source_entry.kind != EntryKind.DIRECTORY and not bool(
+                getattr(self._destination, "atomic_write_replaces", False)
+            ):
                 self._require_publisher(EntryKind.FILE, destination_path)
 
     async def _stage_directory_tree(
@@ -1042,7 +1124,10 @@ class CrossFsCopy:
         manifest: list[StageManifestEntry],
         *,
         progress: ProgressCallback | None,
+        budget: _TraversalBudget,
+        depth: int,
     ) -> None:
+        budget.enter(src, depth=depth)
         revision = await claimer.claim_directory(dst)
         await self._verify_stage_claim(publisher, dst, revision)
         relative = PathRef(dst.segments[len(root.segments) :])
@@ -1060,8 +1145,11 @@ class CrossFsCopy:
                     root,
                     manifest,
                     progress=progress,
+                    budget=budget,
+                    depth=depth + 1,
                 )
                 continue
+            budget.enter(source_path, depth=depth + 1)
             failure: BaseException | None = None
             try:
                 await self._copy_file(
@@ -1095,8 +1183,13 @@ class CrossFsCopy:
         self,
         root: PathRef,
         path: PathRef | None = None,
+        *,
+        _budget: _TraversalBudget | None = None,
+        _depth: int = 0,
     ) -> tuple[StageManifestEntry, ...]:
+        budget = _budget or _TraversalBudget()
         current = root if path is None else path
+        budget.enter(current, depth=_depth)
         entry = await self._destination.stat(current)
         if entry.etag is None:
             raise ProviderError(f"stage entry has no revision: {current.as_posix()}")
@@ -1104,7 +1197,14 @@ class CrossFsCopy:
         manifest = [StageManifestEntry(relative, entry.kind, entry.etag)]
         if entry.kind == EntryKind.DIRECTORY:
             for child in await self._destination.list(current):
-                manifest.extend(await self._capture_tree_manifest(root, current.join(child.name)))
+                manifest.extend(
+                    await self._capture_tree_manifest(
+                        root,
+                        current.join(child.name),
+                        _budget=budget,
+                        _depth=_depth + 1,
+                    )
+                )
         return tuple(manifest)
 
     @staticmethod
@@ -1219,12 +1319,19 @@ class CrossFsMove(CrossFsCopy):
             raise ConflictError(f"source and destination are the same path: {src.as_posix()}")
         src_entry = await self._source.stat(src)
         self._validate_same_storage_destination(src, dst, src_entry.kind)
-        await self._preflight_move_tree(src, src_entry)
+        await self._preflight_move_tree(
+            src,
+            src_entry,
+            budget=_TraversalBudget(),
+            depth=0,
+        )
         return await self._move_entry(
             src,
             dst,
             progress=progress,
             on_conflict=on_conflict,
+            budget=_TraversalBudget(),
+            depth=0,
         )
 
     async def _move_entry(
@@ -1234,7 +1341,10 @@ class CrossFsMove(CrossFsCopy):
         *,
         progress: ProgressCallback | None,
         on_conflict: ConflictResolution,
+        budget: _TraversalBudget,
+        depth: int,
     ) -> bool:
+        budget.enter(src, depth=depth)
         src_entry = await self._source.stat(src)
         if src_entry.kind != EntryKind.DIRECTORY:
             await self._preflight_move_revision(src, src_entry.etag)
@@ -1257,7 +1367,13 @@ class CrossFsMove(CrossFsCopy):
             and destination_entry.kind == EntryKind.DIRECTORY
             and on_conflict != ConflictResolution.OVERWRITE
         ):
-            await self._preflight_directory_merge(src, dst, on_conflict)
+            await self._preflight_directory_merge(
+                src,
+                dst,
+                on_conflict,
+                budget=_TraversalBudget(),
+                depth=0,
+            )
             moved_all = True
             for child in await self._source.list(src):
                 moved = await self._move_entry(
@@ -1265,41 +1381,75 @@ class CrossFsMove(CrossFsCopy):
                     dst.join(child.name),
                     progress=progress,
                     on_conflict=on_conflict,
+                    budget=budget,
+                    depth=depth + 1,
                 )
                 moved_all = moved_all and moved
             if moved_all:
                 await self._source.delete_empty_directory(src)
             return moved_all
 
-        observed_tree = await self._observe_tree(src, src_entry)
+        observed_tree = await self._observe_tree(
+            src,
+            src_entry,
+            budget=_TraversalBudget(),
+            depth=0,
+        )
         copied = await self.copy(src, dst, progress=progress, on_conflict=on_conflict)
         if copied:
             await self._delete_observed_tree(observed_tree)
         return copied
 
-    async def _preflight_move_tree(self, path: PathRef, entry: FileEntry) -> None:
+    async def _preflight_move_tree(
+        self,
+        path: PathRef,
+        entry: FileEntry,
+        *,
+        budget: _TraversalBudget,
+        depth: int,
+    ) -> None:
+        budget.enter(path, depth=depth)
         if entry.kind != EntryKind.DIRECTORY:
             await self._preflight_move_revision(path, entry.etag)
             return
         for child in await self._source.list(path):
             child_path = path.join(child.name)
             child_entry = await self._source.stat(child_path)
-            await self._preflight_move_tree(child_path, child_entry)
+            await self._preflight_move_tree(
+                child_path,
+                child_entry,
+                budget=budget,
+                depth=depth + 1,
+            )
 
     async def _preflight_move_revision(self, path: PathRef, revision: str | None) -> None:
         if isinstance(self._source, MoveRevisionPreflight):
             await self._source.preflight_move_revision(path, revision)
 
     async def _observe_tree(
-        self, path: PathRef, entry: FileEntry
+        self,
+        path: PathRef,
+        entry: FileEntry,
+        *,
+        budget: _TraversalBudget,
+        depth: int,
     ) -> list[tuple[PathRef, FileEntry]]:
+        budget.enter(path, depth=depth)
         observed: list[tuple[PathRef, FileEntry]] = []
         for child in await self._source.list(path):
             child_path = path.join(child.name)
             observed_child = await self._source.stat(child_path)
             if observed_child.kind == EntryKind.DIRECTORY:
-                observed.extend(await self._observe_tree(child_path, observed_child))
+                observed.extend(
+                    await self._observe_tree(
+                        child_path,
+                        observed_child,
+                        budget=budget,
+                        depth=depth + 1,
+                    )
+                )
             else:
+                budget.enter(child_path, depth=depth + 1)
                 observed.append((child_path, observed_child))
         observed.append((path, entry))
         return observed

@@ -744,7 +744,11 @@ class EmrServerlessPage(Widget):
         self, _event: JobRunLogsPane.RefreshRequested
     ) -> None:
         """User pressed r to refresh/reload logs."""
-        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+        self.run_worker(
+            self._vm.job_run_logs.load(use_cache=False),
+            exclusive=True,
+            group="emr-logs",
+        )
 
     def on_job_run_logs_pane_log_file_selected(self, event: JobRunLogsPane.LogFileSelected) -> None:
         """User selected a different log file from the chip strip."""

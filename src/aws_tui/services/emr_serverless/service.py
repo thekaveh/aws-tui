@@ -144,8 +144,7 @@ class EmrServerlessService:
     descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
         id="emr-serverless",
         label="EMR",
-        # U+1F525 FIRE is a single SMP code point that satisfies the
-        # nav rail's two-cell icon contract and remains apt for Spark.
+        # Retained descriptor metadata; service rows render the EMR label.
         icon="🔥",
     )
 

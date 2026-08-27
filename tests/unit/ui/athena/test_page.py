@@ -371,6 +371,26 @@ def _build_vm(client: PageClient | None = None) -> tuple[AthenaPageVM, PageClien
     return make_page_vm(fake), fake
 
 
+def test_results_view_coalesces_property_bursts_into_one_refresh() -> None:
+    vm, _client = _build_vm()
+    view = AthenaResultsView(vm)
+    scheduled: list[Callable[[], None]] = []
+    refreshes: list[None] = []
+    view.call_after_refresh = scheduled.append  # type: ignore[method-assign]
+    view._refresh = lambda: refreshes.append(None)  # type: ignore[method-assign]
+
+    view._on_vm_changed("rows")
+    view._on_vm_changed("rendered_rows")
+    view._on_vm_changed("has_more")
+
+    assert len(scheduled) == 1
+    scheduled[0]()
+    assert refreshes == [None]
+
+    view._on_vm_changed("state")
+    assert len(scheduled) == 2
+
+
 @pytest.mark.asyncio
 async def test_athena_retains_its_grouped_context_header() -> None:
     vm, _client = _build_vm()

@@ -92,7 +92,7 @@ class ApplicationSummary:
     id: str
     name: str
     state: ApplicationState
-    type: str  # "SPARK" or "HIVE" — v1 only renders SPARK applications
+    type: str  # Service-reported application type, currently SPARK or HIVE.
     created_at: datetime
 
 
@@ -328,7 +328,10 @@ class EmrServerlessClient:
             async with self._session.client(
                 "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
             ) as c:
-                kwargs: dict[str, Any] = {"applicationId": application_id}
+                kwargs: dict[str, Any] = {
+                    "applicationId": application_id,
+                    "maxResults": _EMR_PAGE_SIZE,
+                }
                 if start_token is not None:
                     kwargs["nextToken"] = start_token
                 if states and states != set(JobRunState):

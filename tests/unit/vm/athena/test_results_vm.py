@@ -125,6 +125,31 @@ async def test_results_use_token_paging_without_eager_materialization() -> None:
 
 
 @pytest.mark.asyncio
+async def test_results_stop_paging_at_cumulative_row_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.vm.athena import results_vm
+
+    monkeypatch.setattr(results_vm, "_MAX_RESULT_ROWS", 1, raising=False)
+    client = ResultClient(
+        {
+            ("q-1", None): ResultPage((_ID,), (("one",),), "next"),
+            ("q-1", "next"): ResultPage((_ID,), (("two",),), "more"),
+        }
+    )
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+
+    await vm.load_more()
+
+    assert vm.rows == (("one",),)
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text is not None
+    assert "safety limit" in vm.error_text
+    assert not vm.has_more
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "expected_diagnostics"),
     [

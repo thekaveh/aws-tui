@@ -438,6 +438,7 @@ async def test_list_job_runs_passes_multi_state_filter_to_service() -> None:
     runs = await client.list_job_runs("00abc", states={JobRunState.SUCCESS, JobRunState.RUNNING})
     assert [r.job_run_id for r in runs] == ["jr1", "jr3"]
     assert set(stub.list_job_runs.call_args.kwargs["states"]) == {"SUCCESS", "RUNNING"}
+    assert stub.list_job_runs.call_args.kwargs["maxResults"] == 50
 
 
 @pytest.mark.asyncio

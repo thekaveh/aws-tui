@@ -466,7 +466,15 @@ class S3FS:
                 deleted_any = False
                 token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
+                deleted_count = 0
                 while True:
+                    if page_count >= _MAX_LISTING_PAGES:
+                        raise ProviderError(
+                            "S3 delete pagination safety limit exceeded after deleting "
+                            f"{deleted_count} object(s)"
+                        )
+                    page_count += 1
                     list_kwargs: dict[str, Any] = {
                         "Bucket": bucket,
                         "Prefix": prefix,
@@ -481,6 +489,11 @@ class S3FS:
                         )
                     objects = resp.get("Contents") or []
                     if objects:
+                        if deleted_count + len(objects) > _MAX_LISTING_ENTRIES:
+                            raise ProviderError(
+                                "S3 delete collection safety limit exceeded after deleting "
+                                f"{deleted_count} object(s)"
+                            )
                         deleted_any = True
                         for batch in _chunks(objects, _DELETE_BATCH_SIZE):
                             delete_response = await s3.delete_objects(
@@ -499,6 +512,7 @@ class S3FS:
                                     f"failed to delete {len(errors)} object(s) "
                                     f"from S3 (codes: {', '.join(codes)})"
                                 )
+                            deleted_count += len(batch)
                     if not resp.get("IsTruncated"):
                         break
                     token = next_token

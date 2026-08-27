@@ -208,11 +208,12 @@ root, which updates `TableClipboardVM` and attempts the OS clipboard copy.
 Palette eligibility is VM-owned state: the palette projects global commands
 and only commands whose declared service IDs include the active service.
 
-VMs subscribe via `hub.messages.subscribe(on_next=callback)` (an
-`reactivex.Observable` under the hood); filtering happens inside the
-callback (typically `isinstance(msg, FooMessage)`). The view layer
-subscribes via `HubSubscriberMixin` on a per-widget basis, which wraps
-the same observable plus dispose-on-unmount.
+Cross-service and shared-chrome messages use the `MessageHub`: VMs subscribe
+directly where they own the reaction, while widgets use `HubSubscriberMixin`
+when a view must consume hub traffic. Local VM-to-view updates use each VM's
+`on_property_changed` observable instead of the global hub. Widget-owned
+subscriptions are disposed on unmount, and VM-owned subscriptions are disposed
+with the VM lifecycle.
 
 ## 1.5. Testing pyramid
 | Tier | Count | What it proves |

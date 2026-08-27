@@ -206,7 +206,7 @@ AWS_TUI_DEMO=1 aws-tui
 aws-tui --demo
 ```
 
-You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, EMR Serverless applications, job runs, and streamable success/failure logs, profile-isolated Glue catalogs, jobs, runs, crawlers, and Iceberg metadata, plus Athena workgroups, query histories, results, saved queries, and prepared statements. `demo-shared` demonstrates scoped Glue and Athena access-denied states. The same-profile Glue-to-Athena table/snapshot flow and Glue/Athena-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
+You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`), populated S3 buckets, profile-isolated EMR Serverless applications, job runs, and streamable success/failure logs, profile-isolated Glue catalogs, jobs, runs, crawlers, and Iceberg metadata, plus Athena workgroups, query histories, results, saved queries, and prepared statements. `demo-shared` demonstrates scoped Glue and Athena access-denied states. The same-profile Glue-to-Athena table/snapshot flow and Glue/Athena-to-S3 handoffs work without network access, as do clone / copy / delete operations. AWS/S3/EMR/Glue/Athena demo state resets every launch; the local pane is your real filesystem. A persistent **DEMO MODE** chip in the banner subtitle keeps the no-real-AWS contract obvious.
 
 To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 

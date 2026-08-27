@@ -424,7 +424,7 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
         table_clipboard_vm=SimpleNamespace(dispose=lambda: events.append("clipboard.dispose")),
         root_vm=_RootVM(),
         focus_coordinator=_Disposable(),
-        demo_emr=None,
+        demo_emrs={},
     )
 
     await app._aws_tui_shutdown()
@@ -502,7 +502,7 @@ async def test_app_shutdown_records_failures_continues_and_closes_logging_last()
         table_clipboard_vm=_Disposable("clipboard"),
         root_vm=_Root("root"),
         focus_coordinator=_Disposable("focus"),
-        demo_emr=SimpleNamespace(aclose=close_demo),
+        demo_emrs={"demo": SimpleNamespace(aclose=close_demo)},
     )
 
     await app._aws_tui_shutdown()
@@ -563,7 +563,7 @@ async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
         table_clipboard_vm=_Disposable(),
         root_vm=_RootVM(),
         focus_coordinator=_Disposable(),
-        demo_emr=None,
+        demo_emrs={},
     )
 
     shutdown_task = asyncio.create_task(app._aws_tui_shutdown())

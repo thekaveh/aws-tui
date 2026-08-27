@@ -320,6 +320,39 @@ async def test_pane_delete_marked_partial_failure_aggregates_and_reloads() -> No
 
 
 @pytest.mark.asyncio
+async def test_delete_marked_cancellation_drains_final_reload() -> None:
+    class _BlockingReloadFS(InMemoryFS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.list_calls = 0
+            self.reload_started = asyncio.Event()
+            self.release_reload = asyncio.Event()
+
+        async def list(self, path: PathRef) -> list[FileEntry]:
+            self.list_calls += 1
+            if self.list_calls == 2:
+                self.reload_started.set()
+                await self.release_reload.wait()
+            return await super().list(path)
+
+    fs = _BlockingReloadFS()
+    await fs.write_stream(PathRef(("delete-me.txt",)), _astream(b"payload"))
+    pane = await _make_pane(fs)
+    pane.toggle_select_command.execute()
+    deletion = asyncio.create_task(pane.delete_marked())
+    await asyncio.wait_for(fs.reload_started.wait(), timeout=1)
+
+    deletion.cancel()
+    fs.release_reload.set()
+    with pytest.raises(asyncio.CancelledError):
+        await deletion
+
+    assert pane.state is PaneState.EMPTY
+    assert pane.entries == ()
+    pane.dispose()
+
+
+@pytest.mark.asyncio
 async def test_pane_navigate_to_changes_breadcrumb() -> None:
     fs = await _seed_fs()
     pane = await _make_pane(fs)

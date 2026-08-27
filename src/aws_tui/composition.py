@@ -70,7 +70,7 @@ class AppContext:
         "confirm_vm",
         "connection_resolver",
         "demo",
-        "demo_emr",
+        "demo_emrs",
         "dispatcher",
         "focus_coordinator",
         "hub",
@@ -113,7 +113,7 @@ class AppContext:
         focus_coordinator: FocusCoordinatorVM | None = None,
         table_clipboard_vm: TableClipboardVM | None = None,
         demo: bool = False,
-        demo_emr: InMemoryEmr | None = None,
+        demo_emrs: dict[str, InMemoryEmr] | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
     ) -> None:
         self.root_vm = root_vm
@@ -152,9 +152,9 @@ class AppContext:
         if table_clipboard_vm is None:
             self.table_clipboard_vm.construct()
         self.demo = demo
-        # Non-None only in demo mode; disposed by AwsTuiApp on shutdown so
-        # in-flight clone state-machine tasks are cancelled cleanly.
-        self.demo_emr: InMemoryEmr | None = demo_emr
+        # Populated lazily in demo mode; each AWS source owns a separate
+        # provider so profile switches cannot share clone mutations or data.
+        self.demo_emrs: dict[str, InMemoryEmr] = demo_emrs if demo_emrs is not None else {}
         self.unreachable_connections: set[tuple[str, str]] = (
             unreachable_connections if unreachable_connections is not None else set()
         )
@@ -178,9 +178,9 @@ class AppContext:
         ):
             with suppress(Exception):
                 disposable.dispose()
-        if self.demo_emr is not None:
+        for demo_emr in self.demo_emrs.values():
             with suppress(Exception):
-                self.demo_emr.dispose()
+                demo_emr.dispose()
         with suppress(Exception):
             self.log_sink.flush()
         with suppress(Exception):
@@ -283,10 +283,10 @@ def _build_app_context(
         # DemoConnectionResolver is a structural subtype — typed as the
         # production class so all downstream call sites remain compatible.
         connection_resolver: ConnectionResolver = DemoConnectionResolver()  # type: ignore[assignment]
-        _demo_emr: InMemoryEmr = seeded_demo_emr()
         demo_glue_clients = seeded_demo_glue()
         demo_s3_filesystems: dict[str, InMemoryFS] = {}
         demo_athena_clients: dict[str, InMemoryAthena] = {}
+        demo_emr_clients: dict[str, InMemoryEmr] = {}
 
         def demo_s3_fs(connection: Connection) -> InMemoryFS:
             filesystem = demo_s3_filesystems.get(connection.name)
@@ -307,14 +307,16 @@ def _build_app_context(
                 demo_athena_clients[connection.name] = client
             return client
 
-        demo_emr_ref: InMemoryEmr | None = _demo_emr
+        def demo_emr(connection: Connection) -> InMemoryEmr:
+            client = demo_emr_clients.get(connection.name)
+            if client is None:
+                client = seeded_demo_emr(connection.profile or connection.name)
+                demo_emr_clients[connection.name] = client
+            return client
+
+        demo_emrs_ref = demo_emr_clients
         s3_fs_factory = demo_s3_fs
-        # Captured by the lambda so every emr_client_factory(connection)
-        # call within this AppContext returns the SAME InMemoryEmr —
-        # switching demo profiles in the picker preserves in-flight clone
-        # state.  A second build_app_context() call (rare; mostly in tests)
-        # gets its own _demo_emr; we don't share at module scope.
-        emr_client_factory = lambda c: _demo_emr  # noqa: E731
+        emr_client_factory = demo_emr
         glue_client_factory = lambda c: demo_glue_clients[c.name]  # noqa: E731
         athena_client_factory = demo_athena
     else:
@@ -323,7 +325,7 @@ def _build_app_context(
             config_store=config_store,
             keychain=keychain,
         )
-        demo_emr_ref = None
+        demo_emrs_ref = {}
         s3_fs_factory = None
         emr_client_factory = None
         glue_client_factory = None
@@ -427,7 +429,7 @@ def _build_app_context(
             focus_coordinator=focus_coordinator,
             table_clipboard_vm=table_clipboard_vm,
             demo=demo,
-            demo_emr=demo_emr_ref,
+            demo_emrs=demo_emrs_ref,
             unreachable_connections=set(),
         )
         rollback.pop_all()

@@ -31,12 +31,17 @@ from aws_tui.vm.athena._domain_validation import (
     valid_result_column,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena._pager_compat import (
+    PagerCollectionLimitError,
+    SnapshotTokenPager,
+    seed_token_pager,
+)
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _RESULTS_ERROR = "Athena results request failed"
+_RESULTS_LIMIT_ERROR = "Athena result row safety limit reached"
 _COLUMN_ERROR = "Athena returned inconsistent result columns"
 _SNAPSHOT_ERROR = "Athena results snapshot is invalid"
 _SNAPSHOT_ERROR_STATES = frozenset(
@@ -47,6 +52,7 @@ _SNAPSHOT_ERROR_STATES = frozenset(
         PaneState.ERROR,
     }
 )
+_MAX_RESULT_ROWS = 10_000
 
 ResultRow = tuple[str | None, ...]
 
@@ -197,6 +203,13 @@ class AthenaResultsVM:
             self._set_state(PaneState.ERROR)
             self._notify("error_text")
             return
+        except PagerCollectionLimitError:
+            if not self._is_current(worker):
+                return
+            self._error_text = _RESULTS_LIMIT_ERROR
+            self._set_state(PaneState.ERROR)
+            self._notify("error_text")
+            return
         except ProviderError as exc:
             if not self._is_current(worker):
                 return
@@ -292,6 +305,7 @@ class AthenaResultsVM:
             or not optional_non_empty_exact_string(snapshot.next_token)
             or not optional_exact_string(snapshot.error_text)
             or not all(valid_result_column(column) for column in snapshot.columns)
+            or len(snapshot.rows) > _MAX_RESULT_ROWS
             or not all(
                 type(row) is tuple
                 and len(row) == len(snapshot.columns)
@@ -437,6 +451,13 @@ class AthenaResultsVM:
             self._set_state(PaneState.ERROR)
             self._notify("error_text")
             return
+        except PagerCollectionLimitError:
+            if not self._is_current(worker):
+                return
+            self._error_text = _RESULTS_LIMIT_ERROR
+            self._set_state(PaneState.ERROR)
+            self._notify("error_text")
+            return
         except ProviderError as exc:
             if not self._is_current(worker):
                 return
@@ -528,7 +549,7 @@ class AthenaResultsVM:
             finally:
                 self._untrack_task(worker, task)
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_RESULT_ROWS)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more(worker))

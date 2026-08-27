@@ -283,6 +283,24 @@ async def test_snapshot_token_pager_rejects_multi_page_token_cycle_without_appen
     assert not pager.has_more
 
 
+@pytest.mark.asyncio
+async def test_snapshot_token_pager_rejects_cumulative_items_beyond_limit() -> None:
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token is None:
+            return ["first"], "next"
+        return ["second", "third"], "more"
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch, max_items=2)
+    await pager.load_more_command.execute_async()
+
+    with pytest.raises(ProviderError, match="collection safety limit"):
+        await pager.load_more_command.execute_async()
+
+    assert pager.items == ["first"]
+    assert pager.current_token is None
+    assert not pager.has_more
+
+
 def test_seed_token_pager_uses_aws_tui_owned_public_restore_boundary() -> None:
     class IncompatiblePager:
         def restore(self, items: object, next_token: object) -> None:

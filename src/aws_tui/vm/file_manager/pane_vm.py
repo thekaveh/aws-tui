@@ -17,6 +17,7 @@ the async ``provider.list()`` call. Subscribers observe via
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -734,15 +735,9 @@ class PaneVM:
         with zero diagnostic. The ``finally`` reload is guaranteed
         so the user always sees the post-deletion truth.
 
-        NOTE on outer-worker cancellation: if the caller's worker is
-        cancelled, the inline await below raises CancelledError at
-        the first internal await (after ``_reload`` synchronously
-        flipped state to LOADING), and the pane is briefly stranded
-        on LOADING. This is the documented trade-off for the
-        synchronous post-condition; tests + UI callers depend on
-        ``await delete_marked()`` returning AFTER the reload has
-        repopulated entries. ``r`` re-runs the reload manually on
-        the rare cancel-mid-finally path."""
+        Cancellation is retained while the final reload is shielded
+        and drained. Callers still receive ``CancelledError``, but the
+        pane never remains stranded in ``LOADING``."""
         targets = [e.entry.name for e in self.marked_entries]
         if not targets:
             return
@@ -754,7 +749,26 @@ class PaneVM:
                 except (OSError, ProviderError) as exc:
                     failures.append((name, exc))
         finally:
-            await self._reload()
+            reload_task = asyncio.create_task(self._reload())
+            cancellation: asyncio.CancelledError | None = None
+            while not reload_task.done():
+                try:
+                    await asyncio.shield(reload_task)
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                except BaseException:
+                    break
+            try:
+                reload_task.result()
+            except BaseException as exc:
+                if cancellation is not None:
+                    cancellation.add_note(
+                        f"pane reload failed during cancellation: {type(exc).__name__}: {exc}"
+                    )
+                    raise cancellation from exc
+                raise
+            if cancellation is not None:
+                raise cancellation
         if failures:
             first_name, first_exc = failures[0]
             if len(failures) == 1:

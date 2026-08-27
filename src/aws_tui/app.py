@@ -4898,8 +4898,8 @@ class AwsTuiApp(App[None]):
         ):
             run_cleanup(step, disposable.dispose)
 
-        if ctx.demo_emr is not None:
-            await await_cleanup("demo_emr.aclose", ctx.demo_emr.aclose)
+        for connection_name, demo_emr in ctx.demo_emrs.items():
+            await await_cleanup(f"demo_emrs.{connection_name}.aclose", demo_emr.aclose)
 
         # Keep structured logging available until every other owner has been
         # drained. Cleanup errors are durable diagnostics, but shutdown remains

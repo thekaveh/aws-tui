@@ -235,13 +235,13 @@ class JobRunLogsVM:
 
     # ── Network actions ───────────────────────────────────────────────────
 
-    async def load(self) -> None:
+    async def load(self, *, use_cache: bool = True) -> None:
         try:
-            await self._operations.run(self._load)
+            await self._operations.run(lambda: self._load(use_cache=use_cache))
         except OperationSuperseded:
             return
 
-    async def _load(self) -> None:
+    async def _load(self, *, use_cache: bool) -> None:
         """Fetch + stream the selected log file.
 
         View-side ``exclusive=True, group="emr-logs"`` cancels any
@@ -324,7 +324,7 @@ class JobRunLogsVM:
                 self._filter.mode,
                 self._filter.case_insensitive,
             )
-            if cache_key in self._cache:
+            if use_cache and cache_key in self._cache:
                 # LRU bump: move the freshly-accessed entry to the
                 # "newest" end so eviction targets the least-recently
                 # used entry when the cache fills up.

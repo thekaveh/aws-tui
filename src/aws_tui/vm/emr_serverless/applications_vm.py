@@ -18,6 +18,8 @@ fingerprint guard added in PR #100(b) becomes redundant.
 
 from __future__ import annotations
 
+import asyncio
+
 import reactivex as rx
 from vmx import ComponentVMOf, CompositeVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
@@ -123,6 +125,7 @@ class ApplicationsVM:
         self._state: PaneState = PaneState.LOADING
         self._error_text: str | None = None
         self._disposed: bool = False
+        self._refresh_lock = asyncio.Lock()
         # Per-VM Observable (round-3 / PR #103 retirement path): fires
         # the name of the property that just changed, scoped to THIS
         # VM instance. Views can subscribe here instead of filtering
@@ -208,6 +211,11 @@ class ApplicationsVM:
         self._notify("selected_id")
 
     async def refresh(self) -> None:
+        """Re-fetch applications without allowing stale responses to win."""
+        async with self._refresh_lock:
+            await self._refresh_serialized()
+
+    async def _refresh_serialized(self) -> None:
         """Re-fetch the application list. Updates ``state``,
         ``applications``, and (if the prior selection went missing)
         ``selected_id``.

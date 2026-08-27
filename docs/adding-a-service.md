@@ -65,7 +65,7 @@ needs a `construct → destruct → dispose` surface.
         descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
             id="ec2",
             label="EC2",
-            icon="•",
+            icon="EC2",
         )
 
         def __init__(self, *, aws_session: AwsSession, ...) -> None:
@@ -77,6 +77,12 @@ needs a `construct → destruct → dispose` surface.
         def build_vm(self, connection: Connection) -> ComponentVM:
             return InstancesPaneVM(self._aws_session, connection)
     ```
+
+    The service rail renders `descriptor.label` for service rows. The `icon`
+    field remains reserved descriptor metadata; Settings is the current
+    exception and renders its gear icon to keep the rail narrow. Do not choose
+    an emoji or assume terminal cell width as part of a service's navigation
+    contract.
 
 3. **Register** in `src/aws_tui/composition.py` (near the existing
    `s3_service = S3Service(...)` block):
@@ -187,13 +193,8 @@ protocol applies.
 `src/aws_tui/services/s3/service.py` is the first concrete service. Read its
 `S3Service` implementation end to end:
 
-- `descriptor` declares `id = "s3"`, label `"S3"`, icon code point `U+1FAA3 BUCKET`
-  (U+1FAA3 BUCKET — true emoji codepoint, renders coloured in any
-  terminal with a modern emoji font). The icon literal in the
-  template at §2 (``"•"``) is a placeholder — the convention is to
-  pick an emoji glyph; see the docstring on
-  ``services/s3/service.py::S3Service.descriptor`` for the icon
-  rationale.
+- `descriptor` declares `id = "s3"`, label `"S3"`, and retained icon
+  metadata. The service rail renders the label, not the icon.
 - `supports()` accepts both `aws` and `s3-compatible` connections.
 - `build_vm(connection)` composes
   `DualPaneVM(left=PaneVM(S3FS), right=PaneVM(LocalFS))` each call.
@@ -206,13 +207,9 @@ protocol applies.
 `src/aws_tui/services/emr_serverless/service.py` is the second
 shipped service and demonstrates the richer per-service pattern:
 
-- `descriptor` declares `id = "emr-serverless"`, label `"EMR"`, icon
-  `U+1F525 FIRE` (an SMP single code point that reliably occupies two
-  cells across the supported terminal/font combinations). The documented
-  "icon contract" future services should follow up front:
-  **SMP single-codepoint, no VS-16 dance** — the glyph must reliably
-  occupy 2 cells in monospace terminals
-  without a variation-selector trick.
+- `descriptor` declares `id = "emr-serverless"`, label `"EMR"`, and retained
+  fire-icon metadata. The service rail renders `"EMR"`; the icon does not
+  define service-row width or alignment.
 - `supports()` is AWS-only (`connection.kind == "aws"`).
 - Domain client lives at `domain/emr_serverless.py` (async
   `EmrServerlessClient` facade over `aioboto3`, with read-only
