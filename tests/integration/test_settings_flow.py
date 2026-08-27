@@ -403,8 +403,13 @@ async def test_settings_add_and_inline_form_are_keyboard_accessible(tmp_path: Pa
             from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
             from aws_tui.ui.widgets.settings_view import SettingsView
 
-            settings_controls = app.query_one(SettingsView)._focus_controls()
+            settings = app.query_one(SettingsView)
+            settings_controls = settings._focus_controls()
             assert {"add-empty", "add-populated"} & {control.id for control in settings_controls}
+
+            initial_focus = settings._section_focus_target()
+            assert initial_focus is not None
+            await _wait_until(lambda: app.focused is initial_focus)
 
             await pilot.press("tab")
             assert app._last_action_id == "pane.switch_focus"

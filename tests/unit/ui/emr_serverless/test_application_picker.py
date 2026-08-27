@@ -315,15 +315,15 @@ async def test_application_picker_refresh_is_safe_after_child_teardown() -> None
 # ── action_commit (highlighted option → vm.select) ────────────────────────────
 
 
-async def test_action_commit_with_highlighted_option_closes_dropdown() -> None:
+async def test_action_commit_with_highlighted_option_closes_dropdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """When a row is highlighted, ``action_commit`` closes the
     dropdown — the user-visible "commit closes" contract.
 
-    Post-batch-4: the dropdown is back inline (OptionList is a
-    direct child of the picker, rendered inside the apps-box
-    which grows via ``height: auto`` to accommodate it). The
-    prior screen-mount approach broke positioning + message
-    bubbling — see the picker module docstring for the history.
+    The option list remains the picker's direct child for message
+    bubbling, while CSS overlays it on the screen so opening it does
+    not reflow the page.
     """
     fake = _InMemoryEmr()
     fake.add_application(app_id="a1", name="etl")
@@ -340,6 +340,14 @@ async def test_action_commit_with_highlighted_option_closes_dropdown() -> None:
         opts = picker.query_one("#app-options", OptionList)
         opts.highlighted = 0
         await pilot.pause()
+
+        original_select = vm.select
+
+        def select_after_close(app_id: str) -> None:
+            assert not picker.is_open
+            original_select(app_id)
+
+        monkeypatch.setattr(vm, "select", select_after_close)
         picker.action_commit()
         await pilot.pause()
         # Commit closes the dropdown AND lands a selection on the VM.

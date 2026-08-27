@@ -556,6 +556,11 @@ async def test_same_turn_context_opens_keep_only_newest_picker_focused(
 
         first.open()
         newest.open()
+
+        # Shared picker intent is an immediate exclusivity contract.  The
+        # deferred reconciliation remains a safety net, but the UI must never
+        # render two context dropdowns open while Textual drains messages.
+        assert not first.is_open
         await pilot.pause()
 
         assert newest.is_open
