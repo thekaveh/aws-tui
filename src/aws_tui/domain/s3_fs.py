@@ -50,6 +50,7 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderError,
     ProviderUnreachableError,
+    ThrottledError,
     TransferProgress,
 )
 
@@ -1324,19 +1325,16 @@ def _map_client_error(exc: ClientError, target: str) -> ProviderError:
         return _auth_error(exc)
     if code in {"AccessDenied", "403", "Forbidden"}:
         return PermissionDeniedError(target)
-    # S3 service-side transient failures map to ``ProviderUnreachableError``
-    # so the UI surfaces them with the "endpoint unreachable" placeholder
-    # rather than the generic error one. Botocore's adaptive retry policy
-    # (total_max_attempts=6) usually absorbs these, but a sustained
-    # ``ServiceUnavailable`` / ``SlowDown`` storm can still exhaust the
-    # retry budget. From the user's perspective the bucket is unreachable
-    # — same recovery action as a DNS / timeout failure (press ``r`` to
-    # retry, or wait + try again).
+    if code in {"SlowDown", "RequestLimitExceeded"}:
+        return ThrottledError(f"{code}: {target}")
+    # Service-side availability failures map to ``ProviderUnreachableError``
+    # so the UI surfaces them with the endpoint placeholder instead of the
+    # generic error one. Rate-limit responses are handled above as throttling;
+    # they must not poison connection-health fallback decisions.
     if code in {
         "ServiceUnavailable",
         "RequestTimeout",
         "RequestTimeoutException",
-        "SlowDown",
         "InternalError",
         "503",
         "504",

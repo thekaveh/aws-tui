@@ -243,8 +243,12 @@ class JobRunLogsPane(Widget, can_focus=True):
             self.call_after_refresh(self._refresh_chips)
         elif prop == "filter":
             self.call_after_refresh(self._refresh_filter_row)
-        elif prop in {"state", "lines", "progress"}:
+        elif prop == "state":
             self.call_after_refresh(self._refresh_body)
+            self.call_after_refresh(self._refresh_status)
+        elif prop == "lines":
+            self.call_after_refresh(self._refresh_body)
+        elif prop == "progress":
             self.call_after_refresh(self._refresh_status)
 
     def _refresh_filter_row(self) -> None:
@@ -305,29 +309,26 @@ class JobRunLogsPane(Widget, can_focus=True):
             body = self.query_one("#logs-body", VerticalScroll)
         except Exception:
             return
-        body.remove_children()
         state = self._vm.state
 
         if state is LogsState.EMPTY_TARGET:
-            body.mount(Static("(no run selected)", classes="logs-placeholder"))
+            self._update_body(body, "(no run selected)", classes="logs-placeholder")
             return
         if state is LogsState.IDLE:
-            body.mount(Static("(press Enter to load logs)", classes="logs-placeholder"))
+            self._update_body(body, "(press Enter to load logs)", classes="logs-placeholder")
             return
         if state is LogsState.NO_LOG_CONFIG:
-            body.mount(
-                Static(
-                    "(no log monitoring configured for this job)",
-                    classes="logs-placeholder",
-                )
+            self._update_body(
+                body,
+                "(no log monitoring configured for this job)",
+                classes="logs-placeholder",
             )
             return
         if state is LogsState.NO_FILES:
-            body.mount(
-                Static(
-                    "(no log files yet — try again once the run starts logging)",
-                    classes="logs-placeholder",
-                )
+            self._update_body(
+                body,
+                "(no log files yet — try again once the run starts logging)",
+                classes="logs-placeholder",
             )
             return
         if state is LogsState.LOADING:
@@ -337,7 +338,7 @@ class JobRunLogsPane(Widget, can_focus=True):
                 f"loading {file_label}: {self._vm.bytes_read} bytes, "
                 f"{self._vm.lines_scanned} lines scanned, {len(self._vm.lines)} matches"
             )
-            body.mount(Static(text, classes="logs-placeholder"))
+            self._update_body(body, text, classes="logs-placeholder")
             return
         if state is LogsState.ERROR:
             error_msg = self._vm.error_text or "error"
@@ -345,7 +346,7 @@ class JobRunLogsPane(Widget, can_focus=True):
             # raw text frequently contains brackets (boto's error
             # serialisation includes ``[ContainerError(...)]`` etc.)
             # which Rich's parser blows up on. Defensive default.
-            body.mount(Static(error_msg, classes="logs-placeholder -error", markup=False))
+            self._update_body(body, error_msg, classes="logs-placeholder -error")
             return
         if state in (LogsState.READY, LogsState.TRUNCATED):
             # Log lines are AWS-returned content — ``[INFO]``,
@@ -355,17 +356,34 @@ class JobRunLogsPane(Widget, can_focus=True):
             # (``MarkupError``) or silently corrupts the displayed
             # line. ``markup=False`` is the only safe default for
             # untrusted log content.
-            for line in self._vm.lines:
-                body.mount(Static(line, classes="logs-line -match", markup=False))
-            # Add truncation banner if needed
+            text = "\n".join(self._vm.lines)
             if state is LogsState.TRUNCATED:
-                body.mount(
-                    Static(
-                        "(truncated at 100 MB — press r to reload)",
-                        classes="logs-placeholder",
-                    )
-                )
+                text = (f"{text}\n" if text else "") + "(truncated at 100 MB — press r to reload)"
+            self._update_body(
+                body,
+                text,
+                classes="logs-line -match",
+            )
             return
+
+    @staticmethod
+    def _update_body(body: VerticalScroll, text: str, *, classes: str) -> None:
+        """Update one reusable text widget instead of remounting every log line."""
+        try:
+            content = body.query_one("#logs-content", Static)
+        except Exception:
+            body.remove_children()
+            body.mount(
+                Static(
+                    text,
+                    id="logs-content",
+                    classes=classes,
+                    markup=False,
+                )
+            )
+            return
+        content.set_classes(classes)
+        content.update(text)
 
     def _refresh_status(self) -> None:
         """Update status footer."""
@@ -409,7 +427,7 @@ def _format_log_file_label(log_file: LogFile) -> str:
     segments = log_file.key.split("/")
     suffixes: list[str] = []
     if "attempts" in segments:
-        index = segments.index("attempts")
+        index = len(segments) - 1 - segments[::-1].index("attempts")
         if index + 1 < len(segments):
             suffixes.append(f"try {segments[index + 1]}")
     filename = segments[-1]
@@ -424,20 +442,20 @@ def _format_log_file_label(log_file: LogFile) -> str:
     if kind == LogFileKind.DRIVER_STDERR:
         return decorated("DRIVER stderr")
     if kind == LogFileKind.EXECUTOR_STDOUT:
-        worker = segments[segments.index("SPARK_EXECUTOR") + 1]
+        worker = segments[len(segments) - segments[::-1].index("SPARK_EXECUTOR")]
         return decorated(f"EXEC {worker} stdout")
     if kind == LogFileKind.EXECUTOR_STDERR:
-        worker = segments[segments.index("SPARK_EXECUTOR") + 1]
+        worker = segments[len(segments) - segments[::-1].index("SPARK_EXECUTOR")]
         return decorated(f"EXEC {worker} stderr")
     if kind == LogFileKind.HIVE_DRIVER_STDOUT:
         return decorated("HIVE stdout")
     if kind == LogFileKind.HIVE_DRIVER_STDERR:
         return decorated("HIVE stderr")
     if kind == LogFileKind.TEZ_TASK_STDOUT:
-        worker = segments[segments.index("TEZ_TASK") + 1]
+        worker = segments[len(segments) - segments[::-1].index("TEZ_TASK")]
         return decorated(f"TEZ {worker} stdout")
     if kind == LogFileKind.TEZ_TASK_STDERR:
-        worker = segments[segments.index("TEZ_TASK") + 1]
+        worker = segments[len(segments) - segments[::-1].index("TEZ_TASK")]
         return decorated(f"TEZ {worker} stderr")
     return str(kind)
 

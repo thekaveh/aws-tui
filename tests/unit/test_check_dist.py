@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import tarfile
 import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,27 @@ def _write_complete_wheel(path: Path, *, omit: str | None = None) -> None:
             if member != omit:
                 archive.writestr(member, source.read_bytes())
         archive.writestr("aws_tui-0.8.0.dist-info/METADATA", "")
+
+
+def _write_complete_sdist(path: Path, *, omit: str | None = None) -> None:
+    root = "aws_tui-0.8.0"
+    package_root = REPO_ROOT / "src" / "aws_tui"
+    members = [
+        (f"{root}/src/aws_tui/{source.relative_to(package_root).as_posix()}", source.read_bytes())
+        for source in sorted(package_root.rglob("*"))
+        if source.is_file() and "__pycache__" not in source.parts
+    ]
+    members.extend(
+        (f"{root}/{name}", (REPO_ROOT / name).read_bytes())
+        for name in ("PYPI.md", "pyproject.toml")
+    )
+    with tarfile.open(path, "w:gz") as archive:
+        for member, payload in members:
+            if member == omit:
+                continue
+            info = tarfile.TarInfo(member)
+            info.size = len(payload)
+            archive.addfile(info, BytesIO(payload))
 
 
 def test_validate_sdist_rejects_transient_cache(tmp_path: Path) -> None:
@@ -49,9 +71,12 @@ def test_validate_wheel_rejects_repository_metadata(tmp_path: Path) -> None:
 
 def test_validate_clean_artifacts(tmp_path: Path) -> None:
     wheel = tmp_path / "aws_tui-0.8.0-py3-none-any.whl"
+    sdist = tmp_path / "aws_tui-0.8.0.tar.gz"
     _write_complete_wheel(wheel)
+    _write_complete_sdist(sdist)
 
     validate_artifact(wheel)
+    validate_artifact(sdist)
 
 
 @pytest.mark.parametrize(
@@ -70,6 +95,25 @@ def test_validate_wheel_rejects_missing_package_payload(
 
     with pytest.raises(ArtifactContentsError, match=re.escape(required_member)):
         validate_artifact(wheel)
+
+
+@pytest.mark.parametrize(
+    "required_member",
+    [
+        "aws_tui-0.8.0/src/aws_tui/py.typed",
+        "aws_tui-0.8.0/src/aws_tui/ui/themes/operational-panes.tcss",
+        "aws_tui-0.8.0/pyproject.toml",
+    ],
+)
+def test_validate_sdist_rejects_missing_package_payload(
+    tmp_path: Path,
+    required_member: str,
+) -> None:
+    sdist = tmp_path / "aws_tui-0.8.0.tar.gz"
+    _write_complete_sdist(sdist, omit=required_member)
+
+    with pytest.raises(ArtifactContentsError, match=re.escape(required_member)):
+        validate_artifact(sdist)
 
 
 def test_directory_mode_ignores_non_artifact_housekeeping_files(tmp_path: Path) -> None:

@@ -244,7 +244,9 @@ async def list_log_files(
                 resp = await s3.list_objects_v2(**list_kwargs)
                 for obj in resp.get("Contents", []):
                     key = obj["Key"]
-                    kind, sort_idx = _classify_key(key)
+                    prefix = f"{run_prefix.rstrip('/')}/"
+                    relative_key = key[len(prefix) :] if key.startswith(prefix) else key
+                    kind, sort_idx = _classify_key(relative_key)
                     if kind is None:
                         continue
                     if len(files) >= _MAX_LOG_DISCOVERY_FILES:

@@ -22,7 +22,12 @@ from botocore.exceptions import (
     UnauthorizedSSOTokenError,
 )
 
-from aws_tui.domain.filesystem import AuthRequiredError, PathRef, ProviderUnreachableError
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    PathRef,
+    ProviderUnreachableError,
+    ThrottledError,
+)
 from aws_tui.domain.s3_fs import _AUTH_HINT, S3FS, _auth_error, _map_client_error
 
 
@@ -33,6 +38,13 @@ def test_auth_error_wraps_no_credentials() -> None:
     msg = str(mapped)
     assert "AWS auth:" in msg
     assert _AUTH_HINT in msg
+
+
+@pytest.mark.parametrize("code", ["SlowDown", "RequestLimitExceeded"])
+def test_s3_throttling_is_not_mapped_to_unreachable(code: str) -> None:
+    error = ClientError({"Error": {"Code": code, "Message": "retry"}}, "ListObjectsV2")
+
+    assert isinstance(_map_client_error(error, "bucket"), ThrottledError)
 
 
 def test_auth_error_wraps_profile_not_found() -> None:

@@ -190,6 +190,9 @@ _CLIENT_ERROR_CODE_MAP: dict[str, type[ProviderError]] = {
     "ValidationException": ValidationError,
 }
 _TRANSPORT_FAILURE_EXCEPTIONS = AWS_TRANSPORT_EXCEPTIONS
+_MAX_EMR_LISTING_PAGES = 100
+_MAX_EMR_APPLICATIONS = 1000
+_EMR_PAGE_SIZE = 50
 
 
 def _map_boto_error(exc: BaseException) -> ProviderError | None:
@@ -258,12 +261,22 @@ class EmrServerlessClient:
                 items: list[dict[str, Any]] = []
                 next_token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
                 while True:
-                    kwargs: dict[str, Any] = {}
+                    if page_count >= _MAX_EMR_LISTING_PAGES:
+                        raise ProviderError(
+                            "EMR Serverless application pagination safety limit exceeded"
+                        )
+                    page_count += 1
+                    kwargs: dict[str, Any] = {"maxResults": _EMR_PAGE_SIZE}
                     if next_token is not None:
                         kwargs["nextToken"] = next_token
                     resp = await c.list_applications(**kwargs)
                     items.extend(resp.get("applications", []))
+                    if len(items) > _MAX_EMR_APPLICATIONS:
+                        raise ProviderError(
+                            "EMR Serverless application collection safety limit exceeded"
+                        )
                     next_token = resp.get("nextToken")
                     if next_token is None:
                         break
@@ -360,8 +373,17 @@ class EmrServerlessClient:
                 items: list[dict[str, object]] = []
                 next_token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
                 while len(items) < max_results:
-                    kwargs: dict[str, Any] = {"applicationId": application_id}
+                    if page_count >= _MAX_EMR_LISTING_PAGES:
+                        raise ProviderError(
+                            "EMR Serverless job-run pagination safety limit exceeded"
+                        )
+                    page_count += 1
+                    kwargs: dict[str, Any] = {
+                        "applicationId": application_id,
+                        "maxResults": min(_EMR_PAGE_SIZE, max_results - len(items)),
+                    }
                     if next_token is not None:
                         kwargs["nextToken"] = next_token
                     if states and states != set(JobRunState):

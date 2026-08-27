@@ -160,6 +160,15 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.3. Fixed
 
+- **Terminal maintenance safety and fidelity.** S3 rate limits now remain
+  throttling signals instead of marking a connection unreachable. EMR bounds
+  application and bulk-run pagination, classifies log paths relative to the
+  configured run prefix, preserves the last retry/worker marker in labels, and
+  renders streamed lines through one reusable widget. Crash dumps read at most
+  1 MiB while retaining up to 1,000 tail lines. Pane mount now reconciles VM
+  state that changes between composition and subscription, so snapshots use the
+  production reactive path. CI audits every locked dependency group, validates
+  complete wheel and sdist payloads, and smoke-installs both artifact types.
 - **Late maintenance contract guards.** Service swaps now await every cancelled
   transfer worker before disposing its panes, EMR log discovery rejects more
   than 100 listing pages or 200 classified files, and package validation checks

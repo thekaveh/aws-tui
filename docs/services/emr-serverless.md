@@ -22,14 +22,21 @@ region, and application identity.
 The runs pane provides state filters and drives the selected-run detail.
 Independent pollers refresh applications, runs, and active-run detail, with a
 slower cadence when no run is active and terminal-state suppression for
-detail. `r` refreshes the focused surface.
+detail. Application discovery requests at most 50 records per page and fails
+closed above 100 pages or 1,000 applications. The retained bulk job-run helper
+also requests at most 50 rows per page and stops above 100 pages. `r` refreshes
+the focused surface.
 
 The logs pane loads only on demand. It discovers the exact Spark or Hive log
 objects for the selected run, streams gzip content in bounded chunks, and
 applies the configured regular-expression filter. Discovery fails closed if a
 provider exceeds 100 listing pages or 200 classified log files, preventing an
-unbounded object list from becoming VM state or mounted widgets. Retry attempts
-and worker identity remain visible in the file choices.
+unbounded object list from becoming VM state. Classification uses only the
+run-relative key suffix, so a configured S3 prefix containing a reserved worker
+marker cannot change a log's role; labels use the last retry/worker marker.
+Retry attempts and worker identity remain visible in the file choices. The pane
+updates one reusable text widget for the streamed body and updates progress
+separately, keeping mounted widget count bounded as logs grow.
 
 ## 1.3. Clone workflow
 

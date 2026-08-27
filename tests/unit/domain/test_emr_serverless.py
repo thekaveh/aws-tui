@@ -325,6 +325,7 @@ async def test_list_applications_maps_response_to_records() -> None:
     assert apps[0].id == "00abc"
     assert apps[0].state.value == "STARTED"
     assert apps[1].name == "ad-hoc"
+    stub.list_applications.assert_awaited_once_with(maxResults=50)
 
 
 @pytest.mark.asyncio
@@ -336,6 +337,70 @@ async def test_list_applications_rejects_repeated_pagination_token() -> None:
     with pytest.raises(ProviderError, match="repeated an application continuation token"):
         await client.list_applications()
     assert stub.list_applications.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_list_applications_rejects_pagination_beyond_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_serverless
+
+    stub = _StubClient()
+    stub.list_applications.side_effect = [
+        {"applications": [], "nextToken": "page-2"},
+        {"applications": []},
+    ]
+    monkeypatch.setattr(emr_serverless, "_MAX_EMR_LISTING_PAGES", 1, raising=False)
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="application pagination safety limit"):
+        await client.list_applications()
+
+    assert stub.list_applications.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_list_applications_rejects_collection_beyond_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_serverless
+
+    stub = _StubClient()
+    stub.list_applications.return_value = _fake_app_response(
+        [
+            {
+                "id": f"app-{index}",
+                "state": "STARTED",
+                "createdAt": datetime(2026, 6, 25, tzinfo=UTC),
+            }
+            for index in range(2)
+        ]
+    )
+    monkeypatch.setattr(emr_serverless, "_MAX_EMR_APPLICATIONS", 1, raising=False)
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="application collection safety limit"):
+        await client.list_applications()
+
+
+@pytest.mark.asyncio
+async def test_bulk_job_runs_rejects_pagination_beyond_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_serverless
+
+    stub = _StubClient()
+    stub.list_job_runs.side_effect = [
+        {"jobRuns": [], "nextToken": "page-2"},
+        {"jobRuns": []},
+    ]
+    monkeypatch.setattr(emr_serverless, "_MAX_EMR_LISTING_PAGES", 1, raising=False)
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="job-run pagination safety limit"):
+        await client.list_job_runs("app-1")
+
+    assert stub.list_job_runs.await_count == 1
 
 
 @pytest.mark.asyncio

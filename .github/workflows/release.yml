@@ -149,7 +149,7 @@ jobs:
       - name: export locked requirements
         run: |
           for py in 3.11 3.12 3.13; do
-            uv export --locked --python "$py" --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit-$py.txt"
+            uv export --locked --all-groups --python "$py" --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit-$py.txt"
           done
 
       - name: pip-audit (locked dependencies)
@@ -293,6 +293,18 @@ jobs:
             AWS_TUI="smoke-venv/bin/aws-tui"
           fi
           uv pip install --python "$PY" dist/*.whl
+          "$AWS_TUI" --version
+          "$AWS_TUI" --help >/dev/null
+          "$PY" -m aws_tui --version
+
+      - name: install built sdist and run console entry point
+        if: matrix.os == 'ubuntu-24.04' && matrix.python == '3.12'
+        shell: bash
+        run: |
+          uv venv --python 3.12 sdist-venv
+          PY="sdist-venv/bin/python"
+          AWS_TUI="sdist-venv/bin/aws-tui"
+          uv pip install --python "$PY" dist/*.tar.gz
           "$AWS_TUI" --version
           "$AWS_TUI" --help >/dev/null
           "$PY" -m aws_tui --version

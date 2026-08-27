@@ -21,6 +21,7 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderError,
     ProviderUnreachableError,
+    ThrottledError,
 )
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 
@@ -407,6 +408,11 @@ class _ErrorFS(_UnreachableFS):
         raise ProviderError("boom")
 
 
+class _ThrottledFS(_UnreachableFS):
+    async def list(self, _path: PathRef) -> list[FileEntry]:
+        raise ThrottledError("slow down")
+
+
 class _EmptyBucketFS(_UnreachableFS):
     async def list(self, _path: PathRef) -> list[FileEntry]:
         raise NotFoundError("bucket-empty")
@@ -418,6 +424,15 @@ async def test_pane_unreachable_state() -> None:
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.UNREACHABLE
+    pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pane_throttling_uses_generic_error_state() -> None:
+    pane = PaneVM(provider=_ThrottledFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane.construct()
+    await pane.setup()
+    assert pane.state == PaneState.ERROR
     pane.dispose()
 
 

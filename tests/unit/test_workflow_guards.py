@@ -28,6 +28,7 @@ def _assert_hashed_audit_pair(workflow_path: str, job: str) -> None:
     assert "--no-emit-project" in export_run
     assert "--no-hashes" not in export_run
     assert "--python" in export_run
+    assert "--all-groups" in export_run
     assert "--require-hashes" in audit_run
     assert "--disable-pip" in audit_run
     assert "--python" in audit_run
@@ -439,6 +440,15 @@ def test_package_workflows_reject_denied_artifact_members() -> None:
             "-m scripts.check_dist",
             "dist/",
         )
+
+
+def test_release_smoke_installs_the_source_distribution() -> None:
+    workflow = _workflow(".github/workflows/release.yml")
+    step = _step(workflow, "smoke-install", "install built sdist and run console entry point")
+
+    assert step["if"] == "matrix.os == 'ubuntu-24.04' && matrix.python == '3.12'"
+    assert "dist/*.tar.gz" in step["run"]
+    assert "-m aws_tui --version" in step["run"]
 
 
 def test_wiki_deploy_key_is_validated_before_write() -> None:

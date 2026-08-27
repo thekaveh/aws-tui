@@ -49,10 +49,11 @@ Review the PR like any other change. Merge when CI is green.
   still available on both PyPI and TestPyPI before creating a tag.
 - **Clean install smoke.** Build the release artifacts, validate them with
   `uv run python -m scripts.check_dist dist/` and `uv run twine check dist/*`,
-  confirming that the validator finds the complete source module, `py.typed`,
-  and packaged theme payload; then install the wheel into a fresh temporary
+  confirming that both the wheel and sdist contain the complete source module,
+  `py.typed`, and packaged theme payload and that the sdist retains its build
+  metadata and PyPI readme. Install each artifact into its own fresh temporary
   environment and run `aws-tui --version`, `aws-tui --help`, and
-  `python -m aws_tui --version`.
+  `python -m aws_tui --version` in both.
 - **Supported-platform status.** Confirm the latest required CI run is green on
   macOS, Linux, and Windows for Python 3.11, 3.12, and 3.13. Record any
   platform-specific exception in the release PR instead of silently relying on
@@ -144,14 +145,16 @@ After approval the pipeline:
 1. Publishes only after `verify` builds and checks the artifacts, the mandatory
    `platform-tests` gate passes behavioral tests on macOS and Windows, and
    `smoke-install` clean-installs the built wheel on macOS, Linux, and Windows
-   across Python 3.11, 3.12, and 3.13.
+   across Python 3.11, 3.12, and 3.13. The same gate clean-installs the sdist on
+   Linux with Python 3.12, covering the artifact consumed by Homebrew.
 2. Requires `lowest-supported-dependencies` to install every declared direct
    dependency at its minimum compatible version with `--resolution
    lowest-direct`. It validates the S3 request-model members aws-tui uses and
    exercises representative runtime surfaces for Textual/app construction,
    aioboto3 client creation, LocalFS/AnyIO/aiofiles, SQLGlot, VMx reactive
    state, keyring/resolver behavior, and tomli-w configuration round trips.
-3. Publishes to PyPI via Trusted Publisher (sigstore attestation).
+3. Exports and audits every locked dependency group for Python 3.11, 3.12, and
+   3.13 before publishing to PyPI via Trusted Publisher (sigstore attestation).
 4. Creates the GitHub Release with the changelog section as body
    and wheel + sdist attached.
 5. Opens a PR in `thekaveh/homebrew-aws-tui` only when the formula has already

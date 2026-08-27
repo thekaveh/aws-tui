@@ -167,7 +167,7 @@ jobs:
       - name: install Python ${{ matrix.python }}
         run: uv python install ${{ matrix.python }}
       - name: export locked requirements
-        run: uv export --locked --python ${{ matrix.python }} --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit.txt"
+        run: uv export --locked --all-groups --python ${{ matrix.python }} --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit.txt"
       - name: pip-audit (locked dependencies)
         run: uv run --python ${{ matrix.python }} pip-audit -r "$RUNNER_TEMP/requirements-audit.txt" --require-hashes --disable-pip
 

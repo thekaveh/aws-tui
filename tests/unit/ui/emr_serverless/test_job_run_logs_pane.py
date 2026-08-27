@@ -7,6 +7,7 @@ file selector chips follow the current file.
 
 from __future__ import annotations
 
+import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from vmx import NULL_DISPATCHER, MessageHub
@@ -15,8 +16,11 @@ from vmx.messages.protocols import Message
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogFile, LogFileKind
 from aws_tui.infra.keymap_store import KeymapStore
-from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
-from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM
+from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import (
+    JobRunLogsPane,
+    _format_log_file_label,
+)
+from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
 
 
 def _make_vm() -> tuple[JobRunLogsVM, MessageHub[Message], _InMemoryEmr]:
@@ -67,6 +71,15 @@ def _placeholder_text(pane: JobRunLogsPane) -> str:
     return str(placeholders[0].render()).strip()
 
 
+def test_log_file_label_uses_the_last_worker_marker() -> None:
+    log_file = LogFile(
+        "SPARK_EXECUTOR/team/applications/a/jobs/r/SPARK_EXECUTOR/7/stderr.gz",
+        LogFileKind.EXECUTOR_STDERR,
+    )
+
+    assert _format_log_file_label(log_file) == "EXEC 7 stderr"
+
+
 # ── State rendering tests ────────────────────────────────────────────────────
 
 
@@ -106,6 +119,38 @@ async def test_no_log_config_renders_correct_placeholder() -> None:
         await pilot.pause()
         text = _placeholder_text(pane)
         assert "(no log monitoring configured" in text
+
+
+async def test_ready_logs_render_with_a_bounded_widget_count() -> None:
+    vm, hub, _fake = _make_vm()
+    app = _PaneApp(vm, hub)
+    async with app.run_test() as pilot:
+        pane = pilot.app.query_one(JobRunLogsPane)
+        vm._lines = tuple(f"line-{index}" for index in range(50))
+        vm._set_state(LogsState.READY)
+        await pilot.pause()
+
+        body = pane.query_one("#logs-body", VerticalScroll)
+        assert len(body.children) == 1
+        rendered = str(body.children[0].render())
+        assert "line-0" in rendered
+        assert "line-49" in rendered
+
+
+async def test_progress_change_does_not_schedule_body_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, hub, _fake = _make_vm()
+    app = _PaneApp(vm, hub)
+    async with app.run_test() as pilot:
+        pane = pilot.app.query_one(JobRunLogsPane)
+        scheduled: list[object] = []
+        monkeypatch.setattr(pane, "call_after_refresh", scheduled.append)
+
+        pane._on_vm_property_changed("progress")
+
+        assert pane._refresh_status in scheduled
+        assert pane._refresh_body not in scheduled
 
 
 # ── Key binding tests ────────────────────────────────────────────────────────

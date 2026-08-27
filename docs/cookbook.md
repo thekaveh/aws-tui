@@ -416,6 +416,10 @@ exception: TypeError: unsupported operand type(s) for +: ...
 ... (last 1000 lines of aws-tui.log)
 ```
 
+The writer reads backward across the active log and numbered rotations. It
+retains up to 1,000 lines while reading at most 1 MiB in total, so producing a
+crash report does not load every retained log into memory.
+
 The crash dump writer is live in v0.8.x. The interactive crash modal
 below exists as UI scaffolding but is not wired into the unhandled
 exception path yet:

@@ -238,6 +238,29 @@ async def test_list_log_files_supports_retries_rotation_and_hive_workers() -> No
 
 
 @pytest.mark.asyncio
+async def test_list_log_files_classifies_only_the_run_relative_suffix() -> None:
+    from aws_tui.domain.emr_logs import list_log_files
+
+    run_prefix = "SPARK_DRIVER/SPARK_EXECUTOR/team/applications/a/jobs/r"
+    fake_keys = [
+        (f"{run_prefix}/SPARK_EXECUTOR/7/stdout.gz", 10),
+        (f"{run_prefix}/TEZ_TASK/4/stderr.gz", 20),
+    ]
+
+    files = await list_log_files(  # type: ignore[arg-type]
+        session=_StubSessionListObjectsV2(_StubS3ListObjectsV2(fake_keys)),
+        region_name="us-east-1",
+        bucket="b",
+        run_prefix=run_prefix,
+    )
+
+    assert [(file.kind, file.key) for file in files] == [
+        (LogFileKind.EXECUTOR_STDOUT, fake_keys[0][0]),
+        (LogFileKind.TEZ_TASK_STDERR, fake_keys[1][0]),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_list_log_files_rejects_pagination_beyond_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -73,6 +73,11 @@ def _required_wheel_members() -> frozenset[str]:
     )
 
 
+def _required_sdist_members(root: str) -> frozenset[str]:
+    package_members = {f"{root}/src/{member}" for member in _required_wheel_members()}
+    return frozenset({*package_members, f"{root}/PYPI.md", f"{root}/pyproject.toml"})
+
+
 def validate_artifact(path: str | Path) -> None:
     artifact = Path(path)
     members = _member_names(artifact)
@@ -85,12 +90,17 @@ def validate_artifact(path: str | Path) -> None:
         raise ArtifactContentsError(f"{artifact} contains denied members: {preview}{suffix}")
     if artifact.name.endswith(".whl"):
         missing = sorted(_required_wheel_members().difference(members))
-        if missing:
-            preview = ", ".join(missing[:8])
-            suffix = "" if len(missing) <= 8 else f", and {len(missing) - 8} more"
-            raise ArtifactContentsError(
-                f"{artifact} is missing required package members: {preview}{suffix}"
-            )
+    elif artifact.name.endswith(".tar.gz"):
+        root = artifact.name.removesuffix(".tar.gz")
+        missing = sorted(_required_sdist_members(root).difference(members))
+    else:
+        missing = []
+    if missing:
+        preview = ", ".join(missing[:8])
+        suffix = "" if len(missing) <= 8 else f", and {len(missing) - 8} more"
+        raise ArtifactContentsError(
+            f"{artifact} is missing required package members: {preview}{suffix}"
+        )
 
 
 def _artifact_paths(arguments: Iterable[str]) -> tuple[Path, ...]:
