@@ -143,9 +143,9 @@ async def test_results_stop_paging_at_cumulative_row_budget(
     await vm.load_more()
 
     assert vm.rows == (("one",),)
-    assert vm.state is PaneState.ERROR
-    assert vm.error_text is not None
-    assert "safety limit" in vm.error_text
+    assert vm.state is PaneState.IDLE
+    assert vm.error_text is None
+    assert vm.limit_reached
     assert not vm.has_more
 
 

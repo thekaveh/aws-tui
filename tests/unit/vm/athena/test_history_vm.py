@@ -191,6 +191,26 @@ async def test_history_hydrates_only_the_current_token_page() -> None:
 
 
 @pytest.mark.asyncio
+async def test_history_stops_at_item_budget_and_prunes_rejected_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.vm.athena import history_vm
+
+    monkeypatch.setattr(history_vm, "_MAX_HISTORY_ITEMS", 1, raising=False)
+    client = _seeded_client()
+    vm = make_history_vm(client)
+    await vm.setup()
+
+    await vm.load_more()
+
+    assert tuple(row.ref.execution_id for row in vm.items) == ("q-2",)
+    assert not vm.has_more
+    assert vm.limit_reached
+    assert vm.state is PaneState.IDLE
+    assert set(vm._worker.details) == {"q-2"}  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
 async def test_history_load_more_exposes_busy_state_for_the_continuation_page() -> None:
     client = _seeded_client()
     vm = make_history_vm(client)

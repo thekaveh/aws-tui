@@ -33,12 +33,17 @@ from aws_tui.vm.athena._domain_validation import (
     valid_prepared_statement_summary,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena._pager_compat import (
+    PagerCollectionLimitError,
+    SnapshotTokenPager,
+    seed_token_pager,
+)
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _SAVED_ERROR = "Athena saved query request failed"
 _PREPARED_ERROR = "Athena prepared statement request failed"
+_MAX_SAVED_ITEMS = 1_000
 
 T = TypeVar("T")
 
@@ -145,11 +150,19 @@ class AthenaSavedVM:
 
     @property
     def has_more_named_queries(self) -> bool:
-        return bool(self._workgroup) and self._named_pager.current_token is not None
+        return bool(self._workgroup) and self._named_pager.has_more
 
     @property
     def has_more_prepared_statements(self) -> bool:
-        return bool(self._workgroup) and self._prepared_pager.current_token is not None
+        return bool(self._workgroup) and self._prepared_pager.has_more
+
+    @property
+    def named_limit_reached(self) -> bool:
+        return self._named_pager.limit_reached
+
+    @property
+    def prepared_limit_reached(self) -> bool:
+        return self._prepared_pager.limit_reached
 
     @property
     def selected_kind(self) -> SavedQueryKind | None:
@@ -454,6 +467,8 @@ class AthenaSavedVM:
             or type(snapshot.named_queries) is not tuple
             or type(snapshot.named_query_details) is not tuple
             or type(snapshot.prepared_statements) is not tuple
+            or len(snapshot.named_queries) > _MAX_SAVED_ITEMS
+            or len(snapshot.prepared_statements) > _MAX_SAVED_ITEMS
             or not optional_non_empty_exact_string(snapshot.named_next_token)
             or not optional_non_empty_exact_string(snapshot.prepared_next_token)
             or (
@@ -652,6 +667,20 @@ class AthenaSavedVM:
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
+        except PagerCollectionLimitError:
+            if self._is_current_named(worker):
+                accepted_ids = {row.query_id for row in worker.pager.items}
+                worker.named_query_details = {
+                    query_id: detail
+                    for query_id, detail in worker.named_query_details.items()
+                    if query_id in accepted_ids
+                }
+                self._named_error_text = None
+                self._notify("named_queries")
+                self._notify("has_more_named_queries")
+                self._notify("named_error_text")
+                self._set_named_state(PaneState.IDLE if self.named_queries else PaneState.EMPTY)
+            return
         except ProviderError as exc:
             if self._is_current_named(worker):
                 self._named_state, self._named_error_text = map_provider_error(
@@ -691,6 +720,16 @@ class AthenaSavedVM:
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
+        except PagerCollectionLimitError:
+            if self._is_current_prepared(worker):
+                self._prepared_error_text = None
+                self._notify("prepared_statements")
+                self._notify("has_more_prepared_statements")
+                self._notify("prepared_error_text")
+                self._set_prepared_state(
+                    PaneState.IDLE if self.prepared_statements else PaneState.EMPTY
+                )
+            return
         except ProviderError as exc:
             if self._is_current_prepared(worker):
                 self._prepared_state, self._prepared_error_text = map_provider_error(
@@ -753,7 +792,7 @@ class AthenaSavedVM:
             worker.named_query_details.update(by_id)
             return [_named_query_summary(by_id[query_id]) for query_id in ids], next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_SAVED_ITEMS)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more_named(worker))
@@ -786,7 +825,7 @@ class AthenaSavedVM:
                 return [], None
             return rows, next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_SAVED_ITEMS)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more_prepared(worker))
@@ -870,20 +909,14 @@ class AthenaSavedVM:
                 task.cancel()
 
     def _can_load_more_named(self, worker: _SavedWorker[NamedQuerySummary]) -> bool:
-        return (
-            self._is_current_named(worker)
-            and bool(worker.workgroup)
-            and worker.pager.current_token is not None
-        )
+        return self._is_current_named(worker) and bool(worker.workgroup) and worker.pager.has_more
 
     def _can_load_more_prepared(
         self,
         worker: _SavedWorker[PreparedStatementSummary],
     ) -> bool:
         return (
-            self._is_current_prepared(worker)
-            and bool(worker.workgroup)
-            and worker.pager.current_token is not None
+            self._is_current_prepared(worker) and bool(worker.workgroup) and worker.pager.has_more
         )
 
     def _is_current_named(

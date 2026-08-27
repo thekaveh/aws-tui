@@ -143,13 +143,20 @@ class AthenaResultsView(Widget):
             status.update(placeholder[0])
         status.set_class(self._vm.state is PaneState.FORBIDDEN, "-warning")
         status.set_class(self._vm.state is PaneState.ERROR, "-error")
-        suffix = " · more available" if self._vm.has_more else ""
+        suffix = (
+            " · safety limit"
+            if self._vm.limit_reached
+            else " · more available"
+            if self._vm.has_more
+            else ""
+        )
         footer.update(f"{len(self._vm.rows)} rows{suffix}")
         load_more.sync(
             has_more=self._vm.has_more,
             busy=self._vm.is_loading_more,
             state=self._vm.state,
             error_text=self._vm.error_text,
+            limit_reached=self._vm.limit_reached,
         )
 
 

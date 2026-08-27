@@ -35,7 +35,11 @@ from aws_tui.vm.athena._domain_validation import (
     valid_table_ref,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena._pager_compat import (
+    PagerCollectionLimitError,
+    SnapshotTokenPager,
+    seed_token_pager,
+)
 from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
 from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
@@ -58,6 +62,7 @@ _CONTEXT_ERROR = "Athena context request failed"
 _WORKGROUP_DETAIL_ERROR = "Athena workgroup request failed"
 _DISCOVERY_PAGE_LIMIT = 64
 _DISCOVERY_EMPTY_PAGE_LIMIT = 3
+_MAX_CONTEXT_ITEMS = 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,15 +252,27 @@ class AthenaPageVM:
 
     @property
     def has_more_workgroups(self) -> bool:
-        return self._workgroup_pager.current_token is not None
+        return self._workgroup_pager.has_more
 
     @property
     def has_more_catalogs(self) -> bool:
-        return self._catalog_pager.current_token is not None
+        return self._catalog_pager.has_more
 
     @property
     def has_more_databases(self) -> bool:
-        return self._database_pager.current_token is not None
+        return self._database_pager.has_more
+
+    @property
+    def workgroup_limit_reached(self) -> bool:
+        return self._workgroup_pager.limit_reached
+
+    @property
+    def catalog_limit_reached(self) -> bool:
+        return self._catalog_pager.limit_reached
+
+    @property
+    def database_limit_reached(self) -> bool:
+        return self._database_pager.limit_reached
 
     @property
     def is_loading_more_workgroups(self) -> bool:
@@ -1513,6 +1530,17 @@ class AthenaPageVM:
             self._page_tasks.add(task)
         try:
             await command()
+        except PagerCollectionLimitError:
+            if self._is_current_worker(worker, kind):
+                setattr(self, f"_{kind}_error_text", None)
+                items = {
+                    "workgroups": self.workgroups,
+                    "catalogs": self.catalogs,
+                    "databases": self.databases,
+                }[kind]
+                self._set_list_state(kind, PaneState.IDLE if items else PaneState.EMPTY)
+                self._notify_context_lists()
+            return
         except ProviderError as exc:
             if self._is_current_worker(worker, kind):
                 state, error_text = map_provider_error(
@@ -1573,7 +1601,7 @@ class AthenaPageVM:
                 return [], None
             return rows, next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_CONTEXT_ITEMS)
         return worker
 
     def _make_catalog_worker(
@@ -1604,7 +1632,7 @@ class AthenaPageVM:
                 return [], None
             return rows, next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_CONTEXT_ITEMS)
         return worker
 
     def _make_database_worker(
@@ -1644,7 +1672,7 @@ class AthenaPageVM:
                     raise ValueError("Athena database response identity mismatch")
             return rows, next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_CONTEXT_ITEMS)
         return worker
 
     def _replace_workgroup_worker(
@@ -1897,6 +1925,9 @@ def _snapshot_context_stage_is_valid(
         or type(value.workgroups) is not tuple
         or type(value.catalogs) is not tuple
         or type(value.databases) is not tuple
+        or len(value.workgroups) > _MAX_CONTEXT_ITEMS
+        or len(value.catalogs) > _MAX_CONTEXT_ITEMS
+        or len(value.databases) > _MAX_CONTEXT_ITEMS
         or not optional_non_empty_exact_string(value.workgroups_token)
         or not optional_non_empty_exact_string(value.catalogs_token)
         or not optional_non_empty_exact_string(value.databases_token)

@@ -165,7 +165,7 @@ Why this is useful day-to-day:
 
 The `,` key opens **Settings** where you can add, edit, or delete
 `s3-compatible` connections (see the
-[`docs/cookbook.md` S3Mock walkthrough](cookbook.md#11-connect-to-and-switch-between-data-sources)).
+[`docs/cookbook.md` S3Mock walkthrough](cookbook.md#11-connect-to-and-switch-between-data-sources).
 AWS profiles are read-only from aws-tui's perspective — manage those
 through the standard `~/.aws/` tooling.
 

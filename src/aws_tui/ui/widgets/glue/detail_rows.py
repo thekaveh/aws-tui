@@ -117,6 +117,7 @@ class ResourceListPane(Widget):
         state: PaneState,
         error_text: str | None,
         has_more: bool,
+        limit_reached: bool = False,
     ) -> None:
         options = self.option_list
         options.clear_options()
@@ -148,7 +149,7 @@ class ResourceListPane(Widget):
                     options.highlighted = index
                     break
         count = len(rows)
-        suffix = " · more available" if has_more else ""
+        suffix = " · safety limit" if limit_reached else " · more available" if has_more else ""
         self._footer_text = f"{count} item{'s' if count != 1 else ''}{suffix}"
         self._refresh_footer()
 

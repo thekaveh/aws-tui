@@ -233,6 +233,27 @@ async def test_catalog_uses_token_pagers_and_loads_more_at_each_level() -> None:
 
 
 @pytest.mark.asyncio
+async def test_database_pager_stops_at_explicit_item_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.vm.glue import catalog_vm
+
+    monkeypatch.setattr(catalog_vm, "_MAX_DATABASE_ITEMS", 1, raising=False)
+    fake = seeded_glue()
+    fake.database_page_size = 1
+    fake.add_database("warehouse")
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+
+    await vm.load_more_databases()
+
+    assert len(vm.databases) == 1
+    assert not vm.has_more_databases
+    assert vm.database_limit_reached
+    assert vm.databases_state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_catalog_pagers_reject_multi_token_cycles_before_mutation() -> None:
     fake = seeded_glue()
     ref = fake.tables["analytics"][0].ref

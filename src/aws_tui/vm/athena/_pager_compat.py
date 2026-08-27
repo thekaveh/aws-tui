@@ -42,6 +42,7 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._items: list[T] = []
         self._current_token: TToken | None = None
         self._loaded_once = False
+        self._limit_reached = False
         self._page_sizes: list[int] = []
         self._page_tokens: list[TToken | None] = []
         self._consumed_tokens: set[TToken] = set()
@@ -76,7 +77,13 @@ class SnapshotTokenPager(Generic[T, TToken]):
 
     @property
     def has_more(self) -> bool:
-        return not self._loaded_once or self._current_token is not None
+        return not self._limit_reached and (
+            not self._loaded_once or self._current_token is not None
+        )
+
+    @property
+    def limit_reached(self) -> bool:
+        return self._limit_reached
 
     @property
     def load_more_command(self) -> AsyncRelayCommand:
@@ -102,12 +109,13 @@ class SnapshotTokenPager(Generic[T, TToken]):
         restored = list(items)
         self._check_item_budget(len(restored), snapshot=True)
         self._items = restored
-        self._current_token = next_token
+        self._limit_reached = self._at_limit_with_more(len(restored), next_token)
+        self._current_token = None if self._limit_reached else next_token
         self._loaded_once = True
         # Snapshots do not carry page boundaries, so treat the entire restored
         # sequence as one page. A shorter refresh must replace it conservatively.
         self._page_sizes = [len(restored)]
-        self._page_tokens = [next_token]
+        self._page_tokens = [self._current_token]
         self._consumed_tokens = set()
         self._notify_reset()
 
@@ -129,20 +137,23 @@ class SnapshotTokenPager(Generic[T, TToken]):
         if self._max_items is not None and len(self._items) + len(additions) > self._max_items:
             self._current_token = None
             self._loaded_once = True
+            self._limit_reached = True
             self._notify_properties()
             raise PagerCollectionLimitError("Athena collection safety limit exceeded")
         self._items.extend(additions)
-        self._current_token = next_token
+        self._limit_reached = self._at_limit_with_more(len(self._items), next_token)
+        self._current_token = None if self._limit_reached else next_token
         self._consumed_tokens = consumed
         self._loaded_once = True
         self._page_sizes.append(len(additions))
-        self._page_tokens.append(next_token)
+        self._page_tokens.append(self._current_token)
         self._notify_reset()
 
     async def _refresh(self) -> None:
         self._operation_generation += 1
         generation = self._operation_generation
         self._refreshing = True
+        self._limit_reached = False
         self._command_changed.on_next(None)
         try:
             page, next_token = await self._fetch_next(None)
@@ -154,23 +165,25 @@ class SnapshotTokenPager(Generic[T, TToken]):
             return
         fresh = list(page)
         self._check_item_budget(len(fresh), snapshot=False)
+        self._limit_reached = self._at_limit_with_more(len(fresh), next_token)
+        bounded_next_token = None if self._limit_reached else next_token
         first_page_size = self._page_sizes[0] if self._page_sizes else None
         if (
             first_page_size is not None
             and len(fresh) == first_page_size
             and fresh == self._items[:first_page_size]
-            and next_token == self._page_tokens[0]
+            and bounded_next_token == self._page_tokens[0]
         ):
-            self._page_tokens[0] = next_token
+            self._page_tokens[0] = bounded_next_token
             self._current_token = self._page_tokens[-1]
             self._loaded_once = True
             self._notify_properties()
             return
         self._items = fresh
-        self._current_token = next_token
+        self._current_token = bounded_next_token
         self._loaded_once = True
         self._page_sizes = [len(fresh)]
-        self._page_tokens = [next_token]
+        self._page_tokens = [bounded_next_token]
         self._consumed_tokens = set()
         self._notify_reset()
 
@@ -180,6 +193,9 @@ class SnapshotTokenPager(Generic[T, TToken]):
         if snapshot:
             raise ValueError("Athena snapshot collection safety limit exceeded")
         raise PagerCollectionLimitError("Athena collection safety limit exceeded")
+
+    def _at_limit_with_more(self, count: int, next_token: TToken | None) -> bool:
+        return self._max_items is not None and count >= self._max_items and next_token is not None
 
     def _notify_reset(self) -> None:
         self._collection_changed.on_next(CollectionChangedEvent(action="reset"))

@@ -112,10 +112,13 @@ VMs to build service pages, but it cannot import Textual widgets.
   storage, while `S3FS`, `EmrServerlessClient`, `GlueClient`, and
   `AthenaClient` issue service operations and map external responses/errors
   into domain values. `TableRef` and `QueryContext` carry immutable table and
-  execution identity. `IcebergInspector` uses `AthenaQueryRunner` to read
-  bounded Iceberg metadata tables; Athena history hydrates each bounded page
-  with one batch request. `ReadOnlySqlPolicy` validates both user and generated
-  SQL. Raw AWS responses remain below VMs.
+  execution identity. User-driven Athena, Glue, and EMR lists use VMx token
+  paging through the app's bounded pager specialization and stop at explicit
+  cumulative collection ceilings; the UI distinguishes a safety-limit stop
+  from an ordinary continuation. `IcebergInspector` uses `AthenaQueryRunner`
+  to read bounded Iceberg metadata tables; Athena history hydrates each bounded
+  page with one batch request. `ReadOnlySqlPolicy` validates both user and
+  generated SQL. Raw AWS responses remain below VMs.
 - **Infrastructure** — Infrastructure owns sessions, credentials,
   configuration, SDK client construction, and OS-backed stores.
   `AwsSession` and `ConnectionResolver` provide configured AWS identities and

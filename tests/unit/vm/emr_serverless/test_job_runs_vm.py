@@ -211,6 +211,33 @@ async def test_load_more_appends_next_page_then_clears_has_more() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_more_stops_at_explicit_item_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.vm.emr_serverless import job_runs_vm
+
+    monkeypatch.setattr(job_runs_vm, "_MAX_JOB_RUN_ITEMS", 2, raising=False)
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.page_size = 1
+    for index in range(3):
+        fake.add_job_run(
+            application_id="a1",
+            job_run_id=f"r{index}",
+            state=JobRunState.SUCCESS,
+        )
+    vm.set_application("a1")
+    await vm.refresh()
+
+    await vm.load_more()
+
+    assert len(vm.runs) == 2
+    assert not vm.has_more
+    assert vm.limit_reached
+    assert vm.state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_load_more_is_noop_when_no_more_pages() -> None:
     """Defensive: the pane keeps the PgDn binding even on
     fully-drained lists; calling load_more then must NOT re-fetch

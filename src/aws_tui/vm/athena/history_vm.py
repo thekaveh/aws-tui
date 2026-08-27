@@ -33,12 +33,17 @@ from aws_tui.vm.athena._domain_validation import (
     valid_query_execution_summary,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena._pager_compat import (
+    PagerCollectionLimitError,
+    SnapshotTokenPager,
+    seed_token_pager,
+)
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _HISTORY_ERROR = "Athena history request failed"
+_MAX_HISTORY_ITEMS = 1_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +117,11 @@ class AthenaHistoryVM:
 
     @property
     def has_more(self) -> bool:
-        return bool(self._workgroup) and self._pager.current_token is not None
+        return bool(self._workgroup) and self._pager.has_more
+
+    @property
+    def limit_reached(self) -> bool:
+        return self._pager.limit_reached
 
     @property
     def selected_execution_id(self) -> str | None:
@@ -259,6 +268,7 @@ class AthenaHistoryVM:
             or not valid_query_context(snapshot.context)
             or type(snapshot.items) is not tuple
             or type(snapshot.details) is not tuple
+            or len(snapshot.items) > _MAX_HISTORY_ITEMS
             or not optional_non_empty_exact_string(snapshot.next_token)
             or not optional_exact_string(snapshot.selected_execution_id)
             or type(snapshot.state) is not PaneState
@@ -388,6 +398,20 @@ class AthenaHistoryVM:
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
+        except PagerCollectionLimitError:
+            if self._is_current(worker):
+                accepted_ids = {row.ref.execution_id for row in worker.pager.items}
+                worker.details = {
+                    execution_id: detail
+                    for execution_id, detail in worker.details.items()
+                    if execution_id in accepted_ids
+                }
+                self._error_text = None
+                self._notify("items")
+                self._notify("has_more")
+                self._notify("error_text")
+                self._set_state(PaneState.IDLE if self.items else PaneState.EMPTY)
+            return
         except ProviderError as exc:
             if self._is_current(worker):
                 self._state, self._error_text = map_provider_error(
@@ -444,7 +468,7 @@ class AthenaHistoryVM:
                 worker.details[ref.execution_id] = detail
             return [detail.summary for detail in details], next_token
 
-        worker.pager = SnapshotTokenPager(fetch)
+        worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_HISTORY_ITEMS)
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more(worker))
@@ -511,11 +535,7 @@ class AthenaHistoryVM:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _can_load_more(self, worker: _HistoryWorker) -> bool:
-        return (
-            self._is_current(worker)
-            and bool(worker.workgroup)
-            and worker.pager.current_token is not None
-        )
+        return self._is_current(worker) and bool(worker.workgroup) and worker.pager.has_more
 
     def _is_current(self, worker: _HistoryWorker) -> bool:
         return (

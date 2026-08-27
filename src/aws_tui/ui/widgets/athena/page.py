@@ -786,7 +786,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         self,
         buttons: tuple[AthenaLoadMoreButton, ...],
     ) -> None:
-        for button, (has_more, busy, state, error_text) in zip(
+        for button, (has_more, busy, state, error_text, limit_reached) in zip(
             buttons,
             (
                 (
@@ -794,18 +794,21 @@ class AthenaPage(HubSubscriberMixin, Widget):
                     self._vm.is_loading_more_workgroups,
                     self._vm.workgroups_state,
                     self._vm.workgroups_error_text,
+                    self._vm.workgroup_limit_reached,
                 ),
                 (
                     self._vm.has_more_catalogs,
                     self._vm.is_loading_more_catalogs,
                     self._vm.catalogs_state,
                     self._vm.catalogs_error_text,
+                    self._vm.catalog_limit_reached,
                 ),
                 (
                     self._vm.has_more_databases,
                     self._vm.is_loading_more_databases,
                     self._vm.databases_state,
                     self._vm.databases_error_text,
+                    self._vm.database_limit_reached,
                 ),
             ),
             strict=True,
@@ -815,6 +818,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 busy=busy,
                 state=state,
                 error_text=error_text,
+                limit_reached=limit_reached,
             )
 
     def _view_controls(self) -> tuple[tuple[Widget, ...], ServiceTabStrip] | None:

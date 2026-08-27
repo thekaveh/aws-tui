@@ -32,7 +32,6 @@ from vmx import (
     Message,
     MessageHub,
     PropertyChangedMessage,
-    TokenPagedComposition,
 )
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
@@ -48,9 +47,11 @@ from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.paging import BoundedTokenPagedComposition
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _ALL_STATES: frozenset[JobRunState] = frozenset(JobRunState)
+_MAX_JOB_RUN_ITEMS = 1_000
 
 # Pre-terminal states the poller uses to keep the active (60-s)
 # cadence. See ``has_active_runs`` for the rationale; ``CANCELLING``
@@ -127,7 +128,7 @@ class JobRunsVM:
         self._application_id: str | None = None
         self._pager_refresh_existing_count: int = 0
         self._paging_identity: tuple[str | None, str | None] | None = None
-        self._pager: TokenPagedComposition[JobRunItemVM, str] = self._new_pager()
+        self._pager: BoundedTokenPagedComposition[JobRunItemVM, str] = self._new_pager()
         self._has_more_suppressed: bool = False
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
@@ -192,7 +193,11 @@ class JobRunsVM:
         """``True`` when at least one more page of runs is available
         for the current application. The pane shows a "load more"
         sentinel row in that case; ``PgDn`` triggers ``load_more``."""
-        return self._pager.current_token is not None and not self._has_more_suppressed
+        return self._pager.has_more and not self._has_more_suppressed
+
+    @property
+    def limit_reached(self) -> bool:
+        return self._pager.limit_reached
 
     @property
     def status(self) -> ConstructionStatus:
@@ -437,12 +442,13 @@ class JobRunsVM:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _new_pager(self) -> TokenPagedComposition[JobRunItemVM, str]:
-        return TokenPagedComposition(
+    def _new_pager(self) -> BoundedTokenPagedComposition[JobRunItemVM, str]:
+        return BoundedTokenPagedComposition(
             reject_token_cycles(
                 self._fetch_page,
                 message="EMR Serverless repeated a job-run continuation token",
             ),
+            max_items=_MAX_JOB_RUN_ITEMS,
             pages_equal=self._pages_equal,
         )
 

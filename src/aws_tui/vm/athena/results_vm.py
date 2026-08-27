@@ -156,6 +156,10 @@ class AthenaResultsVM:
         return self._execution_id is not None and self._pager.current_token is not None
 
     @property
+    def limit_reached(self) -> bool:
+        return self._pager.limit_reached
+
+    @property
     def state(self) -> PaneState:
         return self._state
 
