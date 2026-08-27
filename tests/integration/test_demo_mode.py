@@ -107,23 +107,26 @@ async def test_demo_emr_profiles_use_disjoint_clients_and_catalogs(tmp_path) -> 
     from aws_tui.services.emr_serverless.service import EmrServerlessService
 
     ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
-    service = ctx.registry.get("emr-serverless")
-    assert isinstance(service, EmrServerlessService)
-    assert service._client_factory is not None
-    dev = ctx.connection_resolver.resolve("demo-dev")
-    prod = ctx.connection_resolver.resolve("demo-prod")
+    try:
+        service = ctx.registry.get("emr-serverless")
+        assert isinstance(service, EmrServerlessService)
+        assert service._client_factory is not None
+        dev = ctx.connection_resolver.resolve("demo-dev")
+        prod = ctx.connection_resolver.resolve("demo-prod")
 
-    dev_client = service._client_factory(dev)
-    prod_client = service._client_factory(prod)
-    dev_apps = await dev_client.list_applications()
-    prod_apps = await prod_client.list_applications()
+        dev_client = service._client_factory(dev)
+        prod_client = service._client_factory(prod)
+        dev_apps = await dev_client.list_applications()
+        prod_apps = await prod_client.list_applications()
 
-    assert dev_client is not prod_client
-    assert {app.id for app in dev_apps}.isdisjoint(app.id for app in prod_apps)
-    assert set(ctx.demo_emrs) == {"demo-dev", "demo-prod"}
+        assert dev_client is not prod_client
+        assert {app.id for app in dev_apps}.isdisjoint(app.id for app in prod_apps)
+        assert set(ctx.demo_emrs) == {"demo-dev", "demo-prod"}
 
-    dev_client.add_application(app_id="dev-only", name="dev-only")  # type: ignore[attr-defined]
-    assert "dev-only" not in {app.id for app in await prod_client.list_applications()}
+        dev_client.add_application(app_id="dev-only", name="dev-only")  # type: ignore[attr-defined]
+        assert "dev-only" not in {app.id for app in await prod_client.list_applications()}
+    finally:
+        ctx.close_unstarted()
 
 
 async def test_demo_mode_renders_s3_pane_with_demo_files(tmp_path) -> None:
