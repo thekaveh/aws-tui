@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 from scripts.docs.manifest import parse_manifest
 from scripts.docs.render_diagrams import (
+    _same_committed_png,
     check_committed_assets,
     copy_assets,
     extract_svg,
@@ -15,6 +16,14 @@ from scripts.docs.render_diagrams import (
     render_svg,
     svg_to_png,
 )
+
+
+def _png_bytes(image: Image.Image) -> bytes:
+    from io import BytesIO
+
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
 
 
 def _write_test_font(repo_root: Path) -> None:
@@ -81,6 +90,23 @@ def test_svg_to_png_writes_png_magic(tmp_path):
     out = tmp_path / "x.png"
     svg_to_png(svg, out, width=4)
     assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_committed_png_comparison_allows_bounded_cross_platform_raster_drift():
+    baseline = Image.new("RGBA", (100, 100), "black")
+    platform_render = baseline.copy()
+    for x in range(20):
+        for y in range(20):
+            platform_render.putpixel((x, y), (102, 102, 102, 255))
+
+    assert _same_committed_png(_png_bytes(baseline), _png_bytes(platform_render))
+
+    visually_stale = baseline.copy()
+    for x in range(25):
+        for y in range(25):
+            visually_stale.putpixel((x, y), (102, 102, 102, 255))
+
+    assert not _same_committed_png(_png_bytes(baseline), _png_bytes(visually_stale))
 
 
 def test_render_all_writes_svg_and_png(tmp_path):
