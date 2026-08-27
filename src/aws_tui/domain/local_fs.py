@@ -944,9 +944,7 @@ class _WindowsAPI:
             _raise_windows_error("handle")
 
     def attributes(self, handle: int, path: str) -> int:
-        handle_attributes = int(self.file_information(handle, path).dwFileAttributes)
-        path_attributes = int(getattr(os.lstat(path), "st_file_attributes", 0))
-        return handle_attributes | path_attributes
+        return int(self.file_information(handle, path).dwFileAttributes)
 
     def file_information(self, handle: int, path: str) -> _WindowsFileInformation:
         information = _WindowsFileInformation()

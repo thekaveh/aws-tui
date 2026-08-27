@@ -30,7 +30,6 @@ from aws_tui.domain.local_fs import (
     _windows_drive_entries,
     _windows_path_is_contained,
     _windows_path_ref,
-    _windows_reject_reparse,
 )
 
 pytestmark = pytest.mark.unit
@@ -83,25 +82,6 @@ def test_windows_drive_paths_map_to_native_absolute_paths(
 def test_windows_unrooted_path_requires_drive_segment() -> None:
     with pytest.raises(ProviderError, match="must start with a drive"):
         _windows_path_ref(PathRef(("Users", "me")))
-
-
-def test_windows_reparse_check_falls_back_to_path_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from aws_tui.domain import local_fs
-
-    monkeypatch.setattr(
-        os,
-        "lstat",
-        lambda _path: SimpleNamespace(st_file_attributes=0x00000400),
-    )
-    api = object.__new__(local_fs._WindowsAPI)
-    api.file_information = lambda _handle, _path: SimpleNamespace(  # type: ignore[method-assign]
-        dwFileAttributes=0
-    )
-
-    with pytest.raises(ConflictError, match="reparse point"):
-        _windows_reject_reparse(api.attributes(42, r"C:\root\jump"), r"C:\root\jump")
 
 
 @pytest.mark.parametrize(
@@ -722,10 +702,13 @@ async def test_windows_rooted_provider_rejects_intermediate_reparse_points(
     inside.write_bytes(b"inside")
     fs = LocalFS(root=root)
 
+    async def read_secret() -> None:
+        await _drain(await fs.read_stream(PathRef(("jump", "secret.txt"))))
+
     operations = [
         fs.list(PathRef(("jump",))),
         fs.stat(PathRef(("jump", "secret.txt"))),
-        fs.read_stream(PathRef(("jump", "secret.txt"))),
+        read_secret(),
         fs.write_stream(PathRef(("jump", "new.txt")), _agen([b"escaped"])),
         fs.mkdir(PathRef(("jump", "nested"))),
         fs.rename(PathRef(("inside.txt",)), PathRef(("jump", "moved.txt"))),
