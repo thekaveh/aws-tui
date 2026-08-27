@@ -248,15 +248,15 @@ class AthenaPageVM:
 
     @property
     def has_more_workgroups(self) -> bool:
-        return self._workgroup_pager.has_more
+        return self._workgroup_pager.current_token is not None
 
     @property
     def has_more_catalogs(self) -> bool:
-        return self._catalog_pager.has_more
+        return self._catalog_pager.current_token is not None
 
     @property
     def has_more_databases(self) -> bool:
-        return self._database_pager.has_more
+        return self._database_pager.current_token is not None
 
     @property
     def workgroup_limit_reached(self) -> bool:

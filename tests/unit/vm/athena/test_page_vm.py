@@ -1955,11 +1955,11 @@ async def test_selection_restore_is_validated_and_scoped_by_connection_region() 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("level", "state_attribute"),
+    ("level", "state_attribute", "has_more_attribute"),
     [
-        ("workgroup", "workgroups_state"),
-        ("catalog", "catalogs_state"),
-        ("database", "databases_state"),
+        ("workgroup", "workgroups_state", "has_more_workgroups"),
+        ("catalog", "catalogs_state", "has_more_catalogs"),
+        ("database", "databases_state", "has_more_databases"),
     ],
 )
 @pytest.mark.parametrize(
@@ -1974,6 +1974,7 @@ async def test_selection_restore_is_validated_and_scoped_by_connection_region() 
 async def test_transient_context_errors_preserve_all_persisted_selections(
     level: str,
     state_attribute: str,
+    has_more_attribute: str,
     error: ProviderError,
     expected_state: PaneState,
 ) -> None:
@@ -1993,6 +1994,7 @@ async def test_transient_context_errors_preserve_all_persisted_selections(
     await page.setup()
 
     assert getattr(page, state_attribute) is expected_state
+    assert not getattr(page, has_more_attribute)
     assert {key: store.get(scope, key) for key in expected} == expected
 
 
