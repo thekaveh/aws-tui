@@ -125,6 +125,7 @@ async def test_ready_logs_render_with_a_bounded_widget_count() -> None:
     vm, hub, _fake = _make_vm()
     app = _PaneApp(vm, hub)
     async with app.run_test() as pilot:
+        await pilot.pause()
         pane = pilot.app.query_one(JobRunLogsPane)
         vm._lines = tuple(f"line-{index}" for index in range(50))
         vm._set_state(LogsState.READY)

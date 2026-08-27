@@ -30,6 +30,7 @@ from aws_tui.domain.local_fs import (
     _windows_drive_entries,
     _windows_path_is_contained,
     _windows_path_ref,
+    _windows_reject_reparse,
 )
 
 pytestmark = pytest.mark.unit
@@ -82,6 +83,25 @@ def test_windows_drive_paths_map_to_native_absolute_paths(
 def test_windows_unrooted_path_requires_drive_segment() -> None:
     with pytest.raises(ProviderError, match="must start with a drive"):
         _windows_path_ref(PathRef(("Users", "me")))
+
+
+def test_windows_reparse_check_falls_back_to_path_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import local_fs
+
+    monkeypatch.setattr(
+        os,
+        "lstat",
+        lambda _path: SimpleNamespace(st_file_attributes=0x00000400),
+    )
+    api = object.__new__(local_fs._WindowsAPI)
+    api.file_information = lambda _handle, _path: SimpleNamespace(  # type: ignore[method-assign]
+        dwFileAttributes=0
+    )
+
+    with pytest.raises(ConflictError, match="reparse point"):
+        _windows_reject_reparse(api.attributes(42, r"C:\root\jump"), r"C:\root\jump")
 
 
 @pytest.mark.parametrize(
@@ -1177,7 +1197,8 @@ async def test_read_stream_closes_descriptor_when_fstat_fails(
 
     (tmp_path / "payload.txt").write_bytes(b"payload")
     closed: list[int] = []
-    monkeypatch.setattr(local_fs, "_rooted_open", lambda *_args, **_kwargs: 777)
+    open_name = "_windows_open" if os.name == "nt" else "_rooted_open"
+    monkeypatch.setattr(local_fs, open_name, lambda *_args, **_kwargs: 777)
     monkeypatch.setattr(local_fs.os, "fstat", lambda _fd: (_ for _ in ()).throw(OSError("boom")))
     monkeypatch.setattr(local_fs.os, "close", closed.append)
 

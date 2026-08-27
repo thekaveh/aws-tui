@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -55,7 +54,6 @@ async def test_initial_mount_bounds_the_entire_fallback_chain(
     ) -> str:
         del self
         attempts.append((connection.name, timeout))
-        await asyncio.sleep(timeout)
         return "timeout"
 
     async def no_toast(

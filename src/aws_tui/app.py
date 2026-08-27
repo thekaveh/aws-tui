@@ -978,6 +978,13 @@ class AwsTuiApp(App[None]):
                     attempt=index,
                     outcome=outcome,
                 )
+                if outcome == "timeout":
+                    ctx.log_sink.info(
+                        "app.boot_chain.budget_exhausted",
+                        attempted=index,
+                        total=len(chain),
+                    )
+                    break
             # Chain exhausted — mount local on both panes and
             # remember the decision so a subsequent Settings → S3
             # toggle reproduces the local-on-both state instead of
