@@ -89,6 +89,7 @@ class AthenaHistoryVM:
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
         self._is_loading_more = False
+        self._loading_more_worker: _HistoryWorker | None = None
         self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -169,11 +170,11 @@ class AthenaHistoryVM:
         worker = self._worker
         if not self._can_load_more(worker):
             return
-        self._set_loading_more(True)
+        self._begin_loading_more(worker)
         try:
             await self._run_pager(worker, refresh=False)
         finally:
-            self._set_loading_more(False)
+            self._finish_loading_more(worker)
 
     async def select_execution(self, execution_id: str) -> None:
         if self._disposed or self._shutdown_started:
@@ -521,6 +522,7 @@ class AthenaHistoryVM:
 
     def _replace_worker(self, workgroup: str, generation: int) -> _HistoryWorker:
         old_worker = self._worker
+        self._finish_loading_more(old_worker)
         worker = self._make_worker(workgroup, generation)
         self._worker = worker
         self._pager = worker.pager
@@ -603,11 +605,19 @@ class AthenaHistoryVM:
         self._state = state
         self._notify("state")
 
-    def _set_loading_more(self, value: bool) -> None:
-        if self._is_loading_more == value:
+    def _begin_loading_more(self, worker: _HistoryWorker) -> None:
+        self._loading_more_worker = worker
+        if not self._is_loading_more:
+            self._is_loading_more = True
+            self._notify("is_loading_more")
+
+    def _finish_loading_more(self, worker: _HistoryWorker) -> None:
+        if self._loading_more_worker is not worker:
             return
-        self._is_loading_more = value
-        self._notify("is_loading_more")
+        self._loading_more_worker = None
+        if self._is_loading_more:
+            self._is_loading_more = False
+            self._notify("is_loading_more")
 
     def _notify(self, property_name: str) -> None:
         if self._disposed:

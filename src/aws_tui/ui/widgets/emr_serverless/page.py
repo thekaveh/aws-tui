@@ -193,13 +193,9 @@ class EmrServerlessPage(Widget):
             box.border_title = "source / application"
         except Exception:
             pass
-        # NOTE: ``ContentHostVM.set_content`` already dispatches
-        # ``EmrServerlessPageVM.setup()`` as a background asyncio
-        # task when the page VM is adopted (see PR #67 — and the
-        # follow-up of the maintenance loop confirming the double
-        # dispatch). We do NOT re-launch a second setup worker here:
-        # that would race the host's task and double the boot-time
-        # ``list_applications`` API call on every EMR mount.
+        # ``ContentHostVM.set_content`` already dispatches page setup when the
+        # VM is adopted. Launching another setup worker here would race the
+        # host and duplicate the boot-time ``list_applications`` request.
         # Set up the three pollers per spec §6.
         # Poller cadence — user feedback (post-PR-#93, restated):
         # "the EMR page still refreshes quite a lot so many times

@@ -24,6 +24,8 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import datetime, timedelta
 
+from aws_tui.demo._bounded_log import BoundedCallLog
+from aws_tui.demo.clock import DEMO_NOW
 from aws_tui.domain.emr_logs import LogChunk, LogFile, LogFileKind, LogFilter
 from aws_tui.domain.emr_serverless import (
     EMR_BOTO_CONFIG,
@@ -54,11 +56,11 @@ class InMemoryEmr:
         self._details: dict[tuple[str, str], JobRunDetail] = {}
         # Counter so each call is observable in tests that pin the
         # auto-refresh cadence.
-        self.calls: list[tuple[str, tuple[object, ...]]] = []
+        self.calls: BoundedCallLog[tuple[str, tuple[object, ...]]] = BoundedCallLog()
         # Monotonic suffix so multiple ``start_job_run`` calls produce
         # unique ids without the tests needing to seed them.
         self._next_run_seq: int = 1
-        self._clock = datetime.fromisoformat("2026-06-25T12:00:00+00:00")
+        self._clock = DEMO_NOW - timedelta(days=1)
         # Hook for tests that need ``start_job_run`` to raise — set
         # this to a ``ProviderError`` (or any exception) to drive the
         # error-path assertions on ``JobRunCloneVM.submit``.
@@ -164,7 +166,7 @@ class InMemoryEmr:
             name=name,
             state=state,
             type=app_type,
-            created_at=created_at or datetime.fromisoformat("2026-06-25T12:00:00+00:00"),
+            created_at=created_at or DEMO_NOW - timedelta(days=1),
         )
         self._apps[app_id] = s
         self._runs.setdefault(app_id, {})
@@ -181,7 +183,7 @@ class InMemoryEmr:
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
     ) -> JobRunSummary:
-        ts = created_at or datetime.fromisoformat("2026-06-25T12:00:00+00:00")
+        ts = created_at or DEMO_NOW - timedelta(days=1)
         s = JobRunSummary(
             application_id=application_id,
             job_run_id=job_run_id,
@@ -367,8 +369,7 @@ class InMemoryEmr:
         # loop. The done callback drains task.exception() before
         # discarding so a future regression in _advance_state can't
         # silently lose the exception via asyncio's "never retrieved"
-        # warning (invisible in a TUI). Same shield round-36 added
-        # to CommandPaletteVM._spawn_awaitable.
+        # warning, which would otherwise be invisible in the TUI.
         task = asyncio.create_task(self._advance_state(application_id, new_id))
         self._state_tasks.add(task)
         task.add_done_callback(self._on_state_task_done)

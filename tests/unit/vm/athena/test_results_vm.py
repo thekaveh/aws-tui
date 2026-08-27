@@ -610,6 +610,22 @@ async def test_replacement_load_more_uses_new_generation_while_old_page_is_block
     ]
 
 
+def test_retired_result_worker_cannot_clear_current_busy_state() -> None:
+    vm = make_results_vm(ResultClient({}))
+    old_worker = vm._worker  # type: ignore[attr-defined]
+    vm._begin_loading_more(old_worker)  # type: ignore[attr-defined]
+
+    vm.clear()
+    current_worker = vm._worker  # type: ignore[attr-defined]
+    vm._begin_loading_more(current_worker)  # type: ignore[attr-defined]
+    vm._finish_loading_more(old_worker)  # type: ignore[attr-defined]
+
+    assert vm.is_loading_more
+    vm._finish_loading_more(current_worker)  # type: ignore[attr-defined]
+    assert not vm.is_loading_more
+    vm.dispose()
+
+
 @pytest.mark.asyncio
 async def test_shutdown_drains_retired_generation_that_ignores_cancellation() -> None:
     client = ResultClient(

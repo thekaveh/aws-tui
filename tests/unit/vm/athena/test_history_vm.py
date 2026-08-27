@@ -197,6 +197,30 @@ async def test_history_load_more_exposes_busy_state_for_the_continuation_page() 
     assert not vm.is_loading_more
 
 
+def test_retired_history_worker_cannot_clear_current_busy_state() -> None:
+    vm = make_history_vm(_seeded_client())
+    old_worker = vm._worker  # type: ignore[attr-defined]
+    vm._begin_loading_more(old_worker)  # type: ignore[attr-defined]
+
+    vm.replace_context(
+        QueryContext(
+            "analytics",
+            "us-west-2",
+            "engineering",
+            "AwsDataCatalog",
+            "events",
+        )
+    )
+    current_worker = vm._worker  # type: ignore[attr-defined]
+    vm._begin_loading_more(current_worker)  # type: ignore[attr-defined]
+    vm._finish_loading_more(old_worker)  # type: ignore[attr-defined]
+
+    assert vm.is_loading_more
+    vm._finish_loading_more(current_worker)  # type: ignore[attr-defined]
+    assert not vm.is_loading_more
+    vm.dispose()
+
+
 @pytest.mark.asyncio
 async def test_history_load_more_retry_clears_stale_error() -> None:
     client = _seeded_client()

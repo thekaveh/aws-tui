@@ -113,6 +113,8 @@ class AthenaSavedVM:
         self._detail_error_text: str | None = None
         self._is_loading_more_named_queries = False
         self._is_loading_more_prepared_statements = False
+        self._loading_more_named_worker: _SavedWorker[NamedQuerySummary] | None = None
+        self._loading_more_prepared_worker: _SavedWorker[PreparedStatementSummary] | None = None
         self._detail_tasks: set[asyncio.Task[Any]] = set()
         self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
@@ -253,20 +255,20 @@ class AthenaSavedVM:
     async def load_more_named_queries(self) -> None:
         worker = self._named_worker
         if self._can_load_more_named(worker):
-            self._set_loading_more_named(True)
+            self._begin_loading_more_named(worker)
             try:
                 await self._run_named_pager(worker, refresh=False)
             finally:
-                self._set_loading_more_named(False)
+                self._finish_loading_more_named(worker)
 
     async def load_more_prepared_statements(self) -> None:
         worker = self._prepared_worker
         if self._can_load_more_prepared(worker):
-            self._set_loading_more_prepared(True)
+            self._begin_loading_more_prepared(worker)
             try:
                 await self._run_prepared_pager(worker, refresh=False)
             finally:
-                self._set_loading_more_prepared(False)
+                self._finish_loading_more_prepared(worker)
 
     async def select_named_query(self, query_id: str) -> None:
         if self._disposed or self._shutdown_started:
@@ -797,6 +799,7 @@ class AthenaSavedVM:
 
     def _replace_named_worker(self) -> _SavedWorker[NamedQuerySummary]:
         old_worker = self._named_worker
+        self._finish_loading_more_named(old_worker)
         worker = self._make_named_worker()
         self._named_worker = worker
         self._named_pager = worker.pager
@@ -805,6 +808,7 @@ class AthenaSavedVM:
 
     def _replace_prepared_worker(self) -> _SavedWorker[PreparedStatementSummary]:
         old_worker = self._prepared_worker
+        self._finish_loading_more_prepared(old_worker)
         worker = self._make_prepared_worker()
         self._prepared_worker = worker
         self._prepared_pager = worker.pager
@@ -975,17 +979,45 @@ class AthenaSavedVM:
         self._prepared_state = state
         self._notify("prepared_state")
 
-    def _set_loading_more_named(self, value: bool) -> None:
-        if self._is_loading_more_named_queries == value:
-            return
-        self._is_loading_more_named_queries = value
-        self._notify("is_loading_more_named_queries")
+    def _begin_loading_more_named(
+        self,
+        worker: _SavedWorker[NamedQuerySummary],
+    ) -> None:
+        self._loading_more_named_worker = worker
+        if not self._is_loading_more_named_queries:
+            self._is_loading_more_named_queries = True
+            self._notify("is_loading_more_named_queries")
 
-    def _set_loading_more_prepared(self, value: bool) -> None:
-        if self._is_loading_more_prepared_statements == value:
+    def _finish_loading_more_named(
+        self,
+        worker: _SavedWorker[NamedQuerySummary],
+    ) -> None:
+        if self._loading_more_named_worker is not worker:
             return
-        self._is_loading_more_prepared_statements = value
-        self._notify("is_loading_more_prepared_statements")
+        self._loading_more_named_worker = None
+        if self._is_loading_more_named_queries:
+            self._is_loading_more_named_queries = False
+            self._notify("is_loading_more_named_queries")
+
+    def _begin_loading_more_prepared(
+        self,
+        worker: _SavedWorker[PreparedStatementSummary],
+    ) -> None:
+        self._loading_more_prepared_worker = worker
+        if not self._is_loading_more_prepared_statements:
+            self._is_loading_more_prepared_statements = True
+            self._notify("is_loading_more_prepared_statements")
+
+    def _finish_loading_more_prepared(
+        self,
+        worker: _SavedWorker[PreparedStatementSummary],
+    ) -> None:
+        if self._loading_more_prepared_worker is not worker:
+            return
+        self._loading_more_prepared_worker = None
+        if self._is_loading_more_prepared_statements:
+            self._is_loading_more_prepared_statements = False
+            self._notify("is_loading_more_prepared_statements")
 
     def _notify(self, property_name: str) -> None:
         if self._disposed:

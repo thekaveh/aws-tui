@@ -51,6 +51,7 @@ def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
         "Authorization: Bearer SECRETBEARER "
         "api_key=SECRETAPI private_key=SECRETPRIVATE "
         "secret_access_key=SECRET "
+        "payload={'secret_access_key': 'REPRSECRET'} "
         '{"access_token": "JSONTOKEN", "password": "JSONPASS"} '
         'credentials = "TOMLCREDS"\n',
         encoding="utf-8",
@@ -70,6 +71,7 @@ def test_write_redacts_exception_log_tail_and_actions(tmp_path: Path) -> None:
         "user:pass",
         "abc123",
         "SECRET",
+        "REPRSECRET",
         "SECRETBEARER",
         "SECRETAPI",
         "SECRETPRIVATE",

@@ -42,8 +42,8 @@ subscriptions.
 - The dependency floor and lock now resolve VMx 3.23.0.
 - Settings widgets rebuild a complete form VM when validator-bearing UI state
   changes, instead of mutating a constructed validator graph.
-- Focus tests assert nested modal restoration through the public discriminator
-  API.
+- Focus tests assert single-modal save/restore and repeated-open no-op behavior
+  through the public discriminator API.
 - Athena query and result tests cover cancellation-resistant provider work and
   teardown admission.
 - Test-only stand-ins were removed where they masked the installed package's
@@ -88,7 +88,7 @@ production savings.
 The maintenance slice adds or updates focused coverage for:
 
 - immutable VMx form construction, dynamic validators, and approve gating;
-- nested modal focus open/close and restoration;
+- single-modal focus open/close restoration and repeated-open no-op behavior;
 - Athena query cancellation, command admission, provider-task drain, and result
   shutdown;
 - installed-package smoke behavior rather than test shims;

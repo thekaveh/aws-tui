@@ -106,7 +106,9 @@ def test_theme_changed_round_trip() -> None:
 
 def test_service_failure_retains_redacted_traceback_text() -> None:
     try:
-        raise RuntimeError("Authorization: Bearer TRACE_SECRET")
+        raise RuntimeError(
+            "Authorization: Bearer TRACE_SECRET {'secret_access_key': 'REPR_TRACE_SECRET'}"
+        )
     except RuntimeError as error:
         message = ServiceOperationFailedMessage.from_error(
             service="athena",
@@ -117,6 +119,7 @@ def test_service_failure_retains_redacted_traceback_text() -> None:
     assert "test_service_failure_retains_redacted_traceback_text" in message.safe_traceback
     assert "RuntimeError" in message.safe_traceback
     assert "TRACE_SECRET" not in message.safe_traceback
+    assert "REPR_TRACE_SECRET" not in message.safe_traceback
     assert "Authorization: Bearer [REDACTED]" in message.safe_traceback
 
 

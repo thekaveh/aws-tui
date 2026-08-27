@@ -1398,6 +1398,19 @@ async def test_unrooted_read_fails_when_no_follow_open_is_unavailable(
         await _drain(await LocalFS().read_stream(PathRef.from_posix(target.as_posix())))
 
 
+async def test_listing_rejects_results_beyond_safety_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aws_tui.domain import local_fs
+
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "b.txt").write_text("b")
+    monkeypatch.setattr(local_fs, "_MAX_LISTING_ENTRIES", 1)
+
+    with pytest.raises(ProviderError, match="listing safety limit"):
+        await LocalFS(root=tmp_path).list(PathRef(()))
+
+
 # ---------------------------------------------------------------------------
 # Permissions
 # ---------------------------------------------------------------------------

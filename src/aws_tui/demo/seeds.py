@@ -9,8 +9,9 @@ for the curated content rationale.
 from __future__ import annotations
 
 import zlib
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
+from aws_tui.demo.clock import DEMO_NOW
 from aws_tui.demo.in_memory_athena import (
     InMemoryAthena,
     serialize_result_pages_csv,
@@ -43,10 +44,9 @@ from aws_tui.domain.query import (
     ResultPage,
 )
 
-# Fixed "now" for deterministic timestamps. Anchored at the spec's
-# write date so the seed reads as "recently active" forever — bumping
-# the anchor is a one-line change.
-_NOW: datetime = datetime(2026, 6, 28, 12, 0, 0, tzinfo=UTC)
+# Alias the shared deterministic clock so every service timeline advances
+# together when the showcase data is refreshed.
+_NOW: datetime = DEMO_NOW
 _DEV_SUCCESS_ROWS: tuple[tuple[str | None, ...], ...] = (
     ("Ada", "42"),
     ("Lin", ""),
@@ -196,6 +196,7 @@ _RESULT_ARTIFACTS: dict[str, dict[str, bytes]] = {
 
 def seed_s3_data(fs: InMemoryFS, *, profile: str) -> None:
     """Populate ``fs`` with the per-profile showcase objects."""
+    fs._mtime[PathRef(())] = _NOW
     objects = _PROFILE_OBJECTS.get(profile, _DEFAULT_OBJECTS)
     result_artifacts = _RESULT_ARTIFACTS.get(profile, {})
     for key, size in objects:

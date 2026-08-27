@@ -82,6 +82,11 @@ _MAX_COPY_OBJECT_SIZE: int = 5 * 1024 * 1024 * 1024
 # S3 batch-delete limit.
 _DELETE_BATCH_SIZE: int = 1000
 _S3_REVISION_PREFIX = "s3:v1:"
+# The file-manager protocol returns a complete directory as one value. Keep
+# remote traversal bounded until that protocol grows an explicit continuation
+# contract; fail instead of presenting a partial listing as complete.
+_MAX_LISTING_ENTRIES: int = 10_000
+_MAX_LISTING_PAGES: int = 100
 
 # Alias for the builtin ``list`` so internal method annotations don't
 # accidentally resolve to ``S3FS.list`` (which the class defines).
@@ -221,7 +226,13 @@ class S3FS:
             async with self._client() as s3:
                 token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
                 while True:
+                    if page_count >= _MAX_LISTING_PAGES:
+                        raise ProviderError(
+                            "S3 bucket listing exceeded the pagination safety limit"
+                        )
+                    page_count += 1
                     kwargs: dict[str, Any] = {"MaxBuckets": 1000}
                     if token is not None:
                         kwargs["ContinuationToken"] = token
@@ -235,6 +246,8 @@ class S3FS:
                                 modified=_to_aware(bucket.get("CreationDate")),
                             )
                         )
+                    if len(entries) > _MAX_LISTING_ENTRIES:
+                        raise ProviderError("S3 bucket listing exceeded the listing safety limit")
                     next_token = resp.get("ContinuationToken")
                     if not next_token:
                         break
@@ -271,7 +284,13 @@ class S3FS:
             async with self._client() as s3:
                 token: str | None = None
                 seen_tokens: set[str] = set()
+                page_count = 0
                 while True:
+                    if page_count >= _MAX_LISTING_PAGES:
+                        raise ProviderError(
+                            "S3 object listing exceeded the pagination safety limit"
+                        )
+                    page_count += 1
                     kwargs: dict[str, Any] = {
                         "Bucket": target_bucket,
                         "Prefix": prefix,
@@ -308,6 +327,8 @@ class S3FS:
                                 etag=_s3_revision_token(obj),
                             )
                         )
+                    if len(entries) > _MAX_LISTING_ENTRIES:
+                        raise ProviderError("S3 object listing exceeded the listing safety limit")
                     if not resp.get("IsTruncated"):
                         break
                     token = resp.get("NextContinuationToken")

@@ -339,9 +339,17 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         await pilot.pause()
         assert hint_enabled("athena.load_more")
 
-        vm._set_loading_more("workgroups", True)  # type: ignore[attr-defined]
+        workgroup_worker = vm._workgroup_worker  # type: ignore[attr-defined]
+        vm._begin_loading_more(  # type: ignore[attr-defined]
+            "workgroups",
+            workgroup_worker,
+        )
         await pilot.pause()
         assert not hint_enabled("athena.load_more")
+        vm._finish_loading_more(  # type: ignore[attr-defined]
+            "workgroups",
+            workgroup_worker,
+        )
 
 
 @pytest.mark.asyncio

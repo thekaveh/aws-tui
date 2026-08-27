@@ -9,15 +9,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
+
+from markdown import Markdown
 
 REPO_URL = "https://github.com/thekaveh/aws-tui"
 WIKI_URL = "https://github.com/thekaveh/aws-tui/wiki"
 SITE_URL = "https://thekaveh.github.io/aws-tui/"
 
-# Matches both [text](target) links and ![alt](target) images.
-_LINK_RE = re.compile(r"!?\[[^\]]*\]\(\s*([^)\s]+)")
-_CODE_FENCE_RE = re.compile(r"^\s*(`{3,})([^`]*)$")
-_INLINE_CODE_RE = re.compile(r"(`+)(.+?)\1")
+_RAW_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 _FORBIDDEN = {
     "site": {"repo", "wiki"},
@@ -31,22 +31,49 @@ class Link:
     target: str
 
 
+class _RenderedLinkParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[Link] = []
+        self._code_depth = 0
+        self._link_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if self._code_depth == 0:
+            target = attributes.get("href") if tag == "a" else attributes.get("src")
+            if target is not None and tag in {"a", "img"}:
+                self.links.append(Link(target))
+        if tag in {"code", "pre"}:
+            self._code_depth += 1
+        if tag == "a":
+            self._link_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"code", "pre"} and self._code_depth:
+            self._code_depth -= 1
+        if tag == "a" and self._link_depth:
+            self._link_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._code_depth or self._link_depth:
+            return
+        self.links.extend(Link(match.group(0)) for match in _RAW_URL_RE.finditer(data))
+
+
 def find_links(md: str) -> list[Link]:
-    rendered_lines: list[str] = []
-    fence_length: int | None = None
-    for line in md.splitlines():
-        fence = _CODE_FENCE_RE.match(line)
-        if fence is not None:
-            ticks = len(fence.group(1))
-            if fence_length is None:
-                fence_length = ticks
-            elif ticks >= fence_length and not fence.group(2).strip():
-                fence_length = None
-            continue
-        if fence_length is None:
-            rendered_lines.append(_INLINE_CODE_RE.sub("", line))
-    rendered = "\n".join(rendered_lines)
-    return [Link(match.group(1)) for match in _LINK_RE.finditer(rendered)]
+    """Return rendered links, images, autolinks, and visible bare URLs.
+
+    Rendering through Python-Markdown resolves reference-style links and
+    distinguishes code from visible content. Parsing the resulting HTML also
+    covers raw HTML anchors without relying on Markdown-shaped regular
+    expressions.
+    """
+    rendered = Markdown(extensions=["fenced_code"]).convert(md)
+    parser = _RenderedLinkParser()
+    parser.feed(rendered)
+    parser.close()
+    return parser.links
 
 
 def _classify(target: str) -> str | None:

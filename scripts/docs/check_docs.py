@@ -48,11 +48,20 @@ def check_self_containment(generated_root: str | Path, repo_root: str | Path) ->
             if is_forbidden(link.target, surface):
                 rel = md_path.relative_to(generated_root)
                 findings.append(Finding("error", f"{rel}: forbidden link {link.target}"))
-    readme = repo_root / "README.md"
-    if readme.is_file():
-        for link in find_links(readme.read_text(encoding="utf-8")):
+    repository_docs = [repo_root / "README.md"]
+    manifest_path = repo_root / "docs" / "manifest.yaml"
+    if manifest_path.is_file():
+        manifest = load_manifest(manifest_path, repo_root)
+        repository_docs.extend(
+            repo_root / leaf.source for leaf in manifest.leaves() if leaf.source is not None
+        )
+    for repository_doc in repository_docs:
+        if not repository_doc.is_file():
+            continue
+        for link in find_links(repository_doc.read_text(encoding="utf-8")):
             if is_forbidden(link.target, "repo"):
-                findings.append(Finding("error", f"README.md: forbidden link {link.target}"))
+                rel = repository_doc.relative_to(repo_root)
+                findings.append(Finding("error", f"{rel}: forbidden link {link.target}"))
     return findings
 
 
@@ -227,60 +236,60 @@ def check_local_anchors(repo_root: str | Path) -> list[Finding]:
     for source_path in _local_markdown_paths(repo_root):
         source_path = source_path.resolve()
         source_rel = source_path.relative_to(repo_root)
-        for line_number, line in _unfenced_lines(source_path.read_text(encoding="utf-8")):
-            for link in find_links(line):
-                target = urlsplit(link.target)
-                if target.scheme or target.netloc:
-                    continue
-                target_path = source_path
-                if target.path:
-                    target_path = (source_path.parent / unquote(target.path)).resolve()
-                try:
-                    target_path.relative_to(repo_root)
-                except ValueError:
-                    continue
-                if target.path and not target_path.exists():
-                    findings.append(
-                        Finding(
-                            "error",
-                            f"{source_rel}:{line_number}: local link target {target.path} does not exist",
-                        )
+        markdown = source_path.read_text(encoding="utf-8")
+        for link in find_links(markdown):
+            target = urlsplit(link.target)
+            if target.scheme or target.netloc:
+                continue
+            target_path = source_path
+            if target.path:
+                target_path = (source_path.parent / unquote(target.path)).resolve()
+            try:
+                target_path.relative_to(repo_root)
+            except ValueError:
+                continue
+            if target.path and not target_path.exists():
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{source_rel}: local link target {target.path} does not exist",
                     )
-                    continue
-                if not target.fragment:
-                    continue
-                if not target_path.is_file():
-                    findings.append(
-                        Finding(
-                            "error",
-                            f"{source_rel}:{line_number}: local anchor target {target.path} is not a file",
-                        )
+                )
+                continue
+            if not target.fragment:
+                continue
+            if not target_path.is_file():
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{source_rel}: local anchor target {target.path} is not a file",
                     )
-                    continue
-                if target_path not in anchors_by_path:
-                    target_markdown = target_path.read_text(encoding="utf-8")
-                    anchors_by_path[target_path] = (
-                        _github_anchors(target_markdown),
-                        _mkdocs_anchors(target_markdown, extensions, extension_configs),
+                )
+                continue
+            if target_path not in anchors_by_path:
+                target_markdown = target_path.read_text(encoding="utf-8")
+                anchors_by_path[target_path] = (
+                    _github_anchors(target_markdown),
+                    _mkdocs_anchors(target_markdown, extensions, extension_configs),
+                )
+            github_anchors, mkdocs_anchors = anchors_by_path[target_path]
+            anchor = unquote(target.fragment)
+            if anchor not in github_anchors:
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{source_rel}: unknown GitHub local anchor #{anchor} in "
+                        f"{target_path.relative_to(repo_root)}",
                     )
-                github_anchors, mkdocs_anchors = anchors_by_path[target_path]
-                anchor = unquote(target.fragment)
-                if anchor not in github_anchors:
-                    findings.append(
-                        Finding(
-                            "error",
-                            f"{source_rel}:{line_number}: unknown GitHub local anchor #{anchor} in "
-                            f"{target_path.relative_to(repo_root)}",
-                        )
+                )
+            if anchor not in mkdocs_anchors:
+                findings.append(
+                    Finding(
+                        "error",
+                        f"{source_rel}: unknown MkDocs local anchor #{anchor} in "
+                        f"{target_path.relative_to(repo_root)}",
                     )
-                if anchor not in mkdocs_anchors:
-                    findings.append(
-                        Finding(
-                            "error",
-                            f"{source_rel}:{line_number}: unknown MkDocs local anchor #{anchor} in "
-                            f"{target_path.relative_to(repo_root)}",
-                        )
-                    )
+                )
     return findings
 
 

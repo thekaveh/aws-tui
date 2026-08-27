@@ -115,6 +115,7 @@ class AthenaResultsVM:
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
         self._is_loading_more = False
+        self._loading_more_worker: _PagerGeneration | None = None
         self._workers: set[_PagerGeneration] = set()
         self._worker = self._make_worker(None, self._generation)
         self._pager = self._worker.pager
@@ -425,8 +426,7 @@ class AthenaResultsVM:
     async def _load_more(self, worker: _PagerGeneration) -> None:
         if not self._can_load_more(worker):
             return
-        self._is_loading_more = True
-        self._notify("is_loading_more")
+        self._begin_loading_more(worker)
         task = self._track_current_task(worker)
         try:
             await worker.pager.load_more_command.execute_async()
@@ -461,8 +461,7 @@ class AthenaResultsVM:
             return
         finally:
             self._untrack_task(worker, task)
-            self._is_loading_more = False
-            self._notify("is_loading_more")
+            self._finish_loading_more(worker)
         if not self._is_current(worker):
             return
         self._error_text = None
@@ -480,6 +479,20 @@ class AthenaResultsVM:
             and worker.execution_id is not None
             and worker.pager.current_token is not None
         )
+
+    def _begin_loading_more(self, worker: _PagerGeneration) -> None:
+        self._loading_more_worker = worker
+        if not self._is_loading_more:
+            self._is_loading_more = True
+            self._notify("is_loading_more")
+
+    def _finish_loading_more(self, worker: _PagerGeneration) -> None:
+        if self._loading_more_worker is not worker:
+            return
+        self._loading_more_worker = None
+        if self._is_loading_more:
+            self._is_loading_more = False
+            self._notify("is_loading_more")
 
     def _make_worker(
         self,
@@ -534,6 +547,7 @@ class AthenaResultsVM:
         restored_page: ResultPage | None = None,
     ) -> _PagerGeneration:
         old_worker = self._worker
+        self._finish_loading_more(old_worker)
         worker = self._make_worker(
             execution_id,
             generation,

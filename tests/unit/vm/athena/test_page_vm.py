@@ -1978,6 +1978,23 @@ async def test_context_load_more_exposes_busy_state_without_reloading_page_one()
     assert not page.is_loading_more_catalogs
 
 
+def test_retired_context_worker_cannot_clear_current_busy_state() -> None:
+    page = make_page_vm(PageClient())
+    old_worker = page._catalog_worker  # type: ignore[attr-defined]
+    page._begin_loading_more("catalogs", old_worker)  # type: ignore[attr-defined]
+
+    page._catalog_generation += 1  # type: ignore[attr-defined]
+    page._replace_catalog_worker("primary")  # type: ignore[attr-defined]
+    current_worker = page._catalog_worker  # type: ignore[attr-defined]
+    page._begin_loading_more("catalogs", current_worker)  # type: ignore[attr-defined]
+    page._finish_loading_more("catalogs", old_worker)  # type: ignore[attr-defined]
+
+    assert page.is_loading_more_catalogs
+    page._finish_loading_more("catalogs", current_worker)  # type: ignore[attr-defined]
+    assert not page.is_loading_more_catalogs
+    page.dispose()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error_attribute", "loader_name", "pager_attribute", "state_attribute", "text_attribute"),

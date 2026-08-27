@@ -21,6 +21,33 @@ def test_find_links_ignores_code_but_keeps_links_with_code_labels():
     assert [link.target for link in find_links(md)] == ["real.md"]
 
 
+def test_find_links_covers_reference_autolink_raw_and_html_targets():
+    md = (
+        "[reference][docs]\n"
+        "<https://example.test/autolink>\n"
+        "https://example.test/raw\n"
+        '<a href="https://example.test/html">HTML</a>\n'
+        "[docs]: https://example.test/reference\n"
+    )
+
+    assert [link.target for link in find_links(md)] == [
+        "https://example.test/reference",
+        "https://example.test/autolink",
+        "https://example.test/raw",
+        "https://example.test/html",
+    ]
+
+
+def test_find_links_ignores_raw_urls_inside_code():
+    md = (
+        "`https://example.test/inline`\n"
+        "```text\nhttps://example.test/fenced\n```\n"
+        "https://example.test/rendered\n"
+    )
+
+    assert [link.target for link in find_links(md)] == ["https://example.test/rendered"]
+
+
 def test_site_forbids_repo_and_wiki_links():
     assert is_forbidden(f"{REPO_URL}/blob/main/src/x.py", "site") is True
     assert is_forbidden(f"{WIKI_URL}/Home", "site") is True

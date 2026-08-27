@@ -156,6 +156,10 @@ class AthenaPageVM:
         self._is_loading_more_workgroups = False
         self._is_loading_more_catalogs = False
         self._is_loading_more_databases = False
+        self._loading_more_workers: dict[
+            Literal["workgroups", "catalogs", "databases"],
+            _PageWorker[Any] | None,
+        ] = {"workgroups": None, "catalogs": None, "databases": None}
         self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -908,7 +912,7 @@ class AthenaPageVM:
             return
         worker = self._workgroup_worker
         if self.has_more_workgroups and self._is_current_workgroup(worker):
-            self._set_loading_more("workgroups", True)
+            self._begin_loading_more("workgroups", worker)
             try:
                 await self._run_page_command(
                     worker.pager.load_more_command.execute_async,
@@ -916,14 +920,14 @@ class AthenaPageVM:
                     "workgroups",
                 )
             finally:
-                self._set_loading_more("workgroups", False)
+                self._finish_loading_more("workgroups", worker)
 
     async def load_more_catalogs(self) -> None:
         if not self._is_alive():
             return
         worker = self._catalog_worker
         if self.has_more_catalogs and self._is_current_catalog(worker):
-            self._set_loading_more("catalogs", True)
+            self._begin_loading_more("catalogs", worker)
             try:
                 await self._run_page_command(
                     worker.pager.load_more_command.execute_async,
@@ -931,14 +935,14 @@ class AthenaPageVM:
                     "catalogs",
                 )
             finally:
-                self._set_loading_more("catalogs", False)
+                self._finish_loading_more("catalogs", worker)
 
     async def load_more_databases(self) -> None:
         if not self._is_alive():
             return
         worker = self._database_worker
         if self.has_more_databases and self._is_current_database(worker):
-            self._set_loading_more("databases", True)
+            self._begin_loading_more("databases", worker)
             try:
                 await self._run_page_command(
                     worker.pager.load_more_command.execute_async,
@@ -946,7 +950,7 @@ class AthenaPageVM:
                     "databases",
                 )
             finally:
-                self._set_loading_more("databases", False)
+                self._finish_loading_more("databases", worker)
 
     async def select_history_execution(self, execution_id: str) -> None:
         if not self._is_alive():
@@ -1649,6 +1653,7 @@ class AthenaPageVM:
         restored_page: tuple[tuple[AthenaWorkgroupSummary, ...], str | None] | None = None,
     ) -> _PageWorker[AthenaWorkgroupSummary]:
         old_worker = self._workgroup_worker
+        self._finish_loading_more("workgroups", old_worker)
         worker = self._make_workgroup_worker(restored_page=restored_page)
         self._workgroup_worker = worker
         self._workgroup_pager = worker.pager
@@ -1662,6 +1667,7 @@ class AthenaPageVM:
         restored_page: tuple[tuple[AthenaCatalogSummary, ...], str | None] | None = None,
     ) -> _PageWorker[AthenaCatalogSummary]:
         old_worker = self._catalog_worker
+        self._finish_loading_more("catalogs", old_worker)
         worker = self._make_catalog_worker(workgroup, restored_page=restored_page)
         self._catalog_worker = worker
         self._catalog_pager = worker.pager
@@ -1676,6 +1682,7 @@ class AthenaPageVM:
         restored_page: tuple[tuple[DatabaseSummary, ...], str | None] | None = None,
     ) -> _PageWorker[DatabaseSummary]:
         old_worker = self._database_worker
+        self._finish_loading_more("databases", old_worker)
         worker = self._make_database_worker(
             workgroup,
             catalog,
@@ -1794,16 +1801,29 @@ class AthenaPageVM:
             if state in {PaneState.IDLE, PaneState.EMPTY}:
                 self._databases_error_text = None
 
-    def _set_loading_more(
+    def _begin_loading_more(
         self,
         kind: Literal["workgroups", "catalogs", "databases"],
-        value: bool,
+        worker: _PageWorker[Any],
     ) -> None:
+        self._loading_more_workers[kind] = worker
         attribute = f"_is_loading_more_{kind}"
-        if getattr(self, attribute) == value:
+        if not getattr(self, attribute):
+            setattr(self, attribute, True)
+            self._notify(f"is_loading_more_{kind}")
+
+    def _finish_loading_more(
+        self,
+        kind: Literal["workgroups", "catalogs", "databases"],
+        worker: _PageWorker[Any],
+    ) -> None:
+        if self._loading_more_workers[kind] is not worker:
             return
-        setattr(self, attribute, value)
-        self._notify(f"is_loading_more_{kind}")
+        self._loading_more_workers[kind] = None
+        attribute = f"_is_loading_more_{kind}"
+        if getattr(self, attribute):
+            setattr(self, attribute, False)
+            self._notify(f"is_loading_more_{kind}")
 
     def _notify_context_lists(self) -> None:
         for property_name in (

@@ -1,12 +1,10 @@
-"""Action registry — string id -> callable.
+"""Registry for configurable app-level actions — string id -> callable.
 
-Every user-visible interaction in aws-tui is named by an action id
-(e.g. ``pane.copy``, ``app.command_palette``). The :class:`ActionRegistry`
-maps those ids to handler callables that perform the actual work, typically
-by calling a VM command. The View layer never invokes a VM command directly
-by attribute access; it always goes through the action registry so the
-input router stays uniform and keymap customization (via
-:class:`KeymapStore`) is free.
+Keyboard and command-palette interactions that participate in the configurable
+app keymap are named by an action id (for example ``pane.copy`` or
+``app.command_palette``). Views may still relay local widget events directly to
+commands on the VM they own; those interactions are outside the global input
+router and keymap.
 
 Handlers may be synchronous (returns ``None``) or asynchronous (returns
 ``Awaitable[None]``). The caller decides whether to ``await`` the result.

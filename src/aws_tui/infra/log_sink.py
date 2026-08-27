@@ -74,8 +74,7 @@ class _PrivateRotatingFileHandler(RotatingFileHandler):
     shared systems. The parent directory is already chmod'd ``0o700``
     by :func:`ensure_private_dir`; this brings the files themselves in
     line. Best-effort: filesystems without POSIX permission bits
-    silently no-op the chmod (matches the crash-dump posture from the
-    second loop).
+    silently no-op the chmod, matching the crash-dump permission posture.
     """
 
     @staticmethod

@@ -212,6 +212,30 @@ async def test_saved_load_more_exposes_independent_busy_states() -> None:
     assert client.prepared_list_calls[-1] == ("analysts", "prepared-next")
 
 
+def test_retired_saved_workers_cannot_clear_current_busy_states() -> None:
+    vm = make_saved_vm(_seeded_client())
+    old_named = vm._named_worker  # type: ignore[attr-defined]
+    old_prepared = vm._prepared_worker  # type: ignore[attr-defined]
+    vm._begin_loading_more_named(old_named)  # type: ignore[attr-defined]
+    vm._begin_loading_more_prepared(old_prepared)  # type: ignore[attr-defined]
+
+    vm.replace_workgroup("engineering")
+    current_named = vm._named_worker  # type: ignore[attr-defined]
+    current_prepared = vm._prepared_worker  # type: ignore[attr-defined]
+    vm._begin_loading_more_named(current_named)  # type: ignore[attr-defined]
+    vm._begin_loading_more_prepared(current_prepared)  # type: ignore[attr-defined]
+    vm._finish_loading_more_named(old_named)  # type: ignore[attr-defined]
+    vm._finish_loading_more_prepared(old_prepared)  # type: ignore[attr-defined]
+
+    assert vm.is_loading_more_named_queries
+    assert vm.is_loading_more_prepared_statements
+    vm._finish_loading_more_named(current_named)  # type: ignore[attr-defined]
+    vm._finish_loading_more_prepared(current_prepared)  # type: ignore[attr-defined]
+    assert not vm.is_loading_more_named_queries
+    assert not vm.is_loading_more_prepared_statements
+    vm.dispose()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("kind", "loader_name", "state_attribute", "text_attribute", "request_attribute"),

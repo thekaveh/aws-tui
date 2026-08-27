@@ -244,6 +244,53 @@ async def test_bucket_listing_follows_continuation_tokens(
     ]
 
 
+async def test_object_listing_rejects_results_beyond_safety_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import s3_fs
+
+    stub = _StubS3Client(list_response={})
+    stub.list_objects_v2 = AsyncMock(
+        side_effect=[
+            {
+                "Contents": [{"Key": "a.txt", "Size": 1, "LastModified": None, "ETag": '"a"'}],
+                "IsTruncated": True,
+                "NextContinuationToken": "next",
+            },
+            {
+                "Contents": [{"Key": "b.txt", "Size": 1, "LastModified": None, "ETag": '"b"'}],
+                "IsTruncated": False,
+            },
+        ]
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+    monkeypatch.setattr(s3_fs, "_MAX_LISTING_ENTRIES", 1)
+
+    with pytest.raises(ProviderError, match="listing safety limit"):
+        await _build_fs().list(PathRef(()))
+
+
+async def test_bucket_listing_rejects_pagination_beyond_page_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import s3_fs
+
+    stub = _StubS3Client(list_response={})
+    stub.list_buckets = AsyncMock(
+        side_effect=[
+            {"Buckets": [], "ContinuationToken": "page-2"},
+            {"Buckets": [], "ContinuationToken": "page-3"},
+        ]
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+    monkeypatch.setattr(s3_fs, "_MAX_LISTING_PAGES", 1)
+
+    with pytest.raises(ProviderError, match="pagination safety limit"):
+        await S3FS(session=MagicMock(), bucket=None).list(PathRef(()))
+
+    assert stub.list_buckets.await_count == 1
+
+
 async def test_stat_maps_directory_probe_client_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

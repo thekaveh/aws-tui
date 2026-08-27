@@ -9,11 +9,13 @@ import secrets
 import unicodedata
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import Enum
 from hashlib import sha256
 from typing import Protocol, TypeVar
 
+from aws_tui.demo._bounded_log import BoundedCallLog
+from aws_tui.demo.clock import DEMO_NOW
 from aws_tui.domain.athena import (
     AthenaCatalogSummary,
     AthenaWorkgroupDetail,
@@ -212,7 +214,7 @@ class InMemoryAthena:
         self.storage_namespace = storage_namespace or connection_name
         self._result_store = result_store
         self.page_size = 100
-        self.calls: list[AthenaCall] = []
+        self.calls: BoundedCallLog[AthenaCall] = BoundedCallLog()
         self.workgroups: list[AthenaWorkgroupSummary] = []
         self.workgroup_details: dict[str, AthenaWorkgroupDetail] = {}
         self.catalogs: dict[str, list[AthenaCatalogSummary]] = {}
@@ -544,7 +546,7 @@ class InMemoryAthena:
                 await self._publish_result_object(detail)
             return detail
         state = _STARTED_STATES[state_index]
-        now = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+        now = DEMO_NOW
         updated = replace(
             detail,
             summary=replace(
@@ -630,7 +632,7 @@ class InMemoryAthena:
             QueryExecutionSummary(
                 ref,
                 QueryState.QUEUED,
-                datetime(2026, 7, 26, 12, 0, tzinfo=UTC),
+                DEMO_NOW,
                 None,
                 "DML",
             ),
@@ -663,7 +665,7 @@ class InMemoryAthena:
             summary=replace(
                 detail.summary,
                 state=QueryState.CANCELLED,
-                completed_at=datetime(2026, 7, 26, 12, 0, tzinfo=UTC),
+                completed_at=DEMO_NOW,
             ),
             state_reason="Cancelled from the demo query page",
         )

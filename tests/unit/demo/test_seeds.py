@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
 
 import pytest
 
 from aws_tui.demo.seeds import (
+    seeded_demo_athena,
     seeded_demo_emr,
     seeded_demo_fs,
 )
@@ -115,6 +117,47 @@ async def test_seeded_demo_emr_has_runs_across_states() -> None:
     assert JobRunState.FAILED in all_states
     assert JobRunState.RUNNING in all_states
     assert JobRunState.PENDING in all_states
+
+
+def test_demo_services_share_one_recent_bounded_clock() -> None:
+    from aws_tui.demo.clock import DEMO_NOW
+
+    fs = seeded_demo_fs("demo-dev")
+    emr = seeded_demo_emr()
+    athena = seeded_demo_athena("demo-dev")
+    timestamps = [
+        *fs._mtime.values(),
+        *(
+            run.created_at
+            for application_runs in emr._runs.values()
+            for run in application_runs.values()
+        ),
+        *(
+            timestamp
+            for detail in athena.query_executions.values()
+            for timestamp in (detail.summary.submitted_at, detail.summary.completed_at)
+            if timestamp is not None
+        ),
+    ]
+
+    assert timestamps
+    assert max(timestamps) <= DEMO_NOW
+    assert min(timestamps) >= DEMO_NOW - timedelta(days=7)
+
+
+def test_demo_call_recorders_keep_only_the_recent_bounded_window() -> None:
+    from aws_tui.demo._bounded_log import MAX_RECORDED_CALLS, BoundedCallLog
+
+    emr = seeded_demo_emr()
+    athena = seeded_demo_athena("demo-dev")
+
+    assert isinstance(emr.calls, BoundedCallLog)
+    assert isinstance(athena.calls, BoundedCallLog)
+    for index in range(MAX_RECORDED_CALLS + 5):
+        emr.calls.append(("probe", (index,)))
+
+    assert len(emr.calls) == MAX_RECORDED_CALLS
+    assert emr.calls[0] == ("probe", (5,))
 
 
 @pytest.mark.asyncio

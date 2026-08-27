@@ -49,6 +49,9 @@ _DEFAULT_CHUNK_SIZE: int = 8 * 1024 * 1024
 _WINDOWS = os.name == "nt"
 _O_DIRECTORY = cast(int, os.__dict__.get("O_DIRECTORY", 0))
 _STAGE_IDENTITY_PREFIX = "local-stage:v1:"
+# PaneVM consumes one complete listing. Bound the provider-side materialization
+# until the shared filesystem protocol exposes continuation tokens.
+_MAX_LISTING_ENTRIES: int = 10_000
 
 
 class LocalFS:
@@ -169,7 +172,14 @@ class LocalFS:
             return rooted_entries
         host = self._resolve(path)
         try:
-            children = [child async for child in host.iterdir()]
+            children: list[AnyioPath] = []
+            async for child in host.iterdir():
+                if len(children) >= _MAX_LISTING_ENTRIES:
+                    raise ProviderError(
+                        f"local directory listing exceeded the listing safety limit "
+                        f"of {_MAX_LISTING_ENTRIES} entries"
+                    )
+                children.append(child)
         except FileNotFoundError as exc:
             raise NotFoundError(host.as_posix()) from exc
         except PermissionError as exc:
@@ -1181,6 +1191,11 @@ def _windows_list(root: Path | None, path: PathRef) -> list[tuple[str, os.stat_r
                 revision = api.revision(handle, child_path)
             finally:
                 api.close(handle)
+            if len(rows) >= _MAX_LISTING_ENTRIES:
+                raise ProviderError(
+                    f"local directory listing exceeded the listing safety limit "
+                    f"of {_MAX_LISTING_ENTRIES} entries"
+                )
             rows.append((child.name, value, revision))
         return rows
 
@@ -1833,12 +1848,18 @@ def _rooted_list(root: Path, path: PathRef) -> list[tuple[str, os.stat_result]]:
     directory_fd = _open_rooted_directory(root, path)
     try:
         rows: list[tuple[str, os.stat_result]] = []
-        for name in os.listdir(directory_fd):  # noqa: PTH208 - descriptor-relative API
-            try:
-                value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                continue
-            rows.append((name, value))
+        with os.scandir(directory_fd) as children:
+            for child in children:
+                try:
+                    value = child.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if len(rows) >= _MAX_LISTING_ENTRIES:
+                    raise ProviderError(
+                        f"local directory listing exceeded the listing safety limit "
+                        f"of {_MAX_LISTING_ENTRIES} entries"
+                    )
+                rows.append((child.name, value))
         return rows
     finally:
         os.close(directory_fd)

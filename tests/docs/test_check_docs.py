@@ -58,6 +58,33 @@ def test_self_containment_flags_forbidden_link_in_readme(tmp_path):
     assert any("README" in f.message for f in findings)
 
 
+def test_self_containment_scans_every_canonical_repository_doc(tmp_path):
+    gen = tmp_path / "generated"
+    (gen / "site").mkdir(parents=True)
+    (gen / "wiki").mkdir(parents=True)
+    _write_docs(tmp_path)
+    (tmp_path / "README.md").write_text("clean\n")
+    (tmp_path / "docs" / "manifest.yaml").write_text(
+        textwrap.dedent(
+            """
+            surfaces: [repo, site, wiki]
+            numbering: per-doc
+            sections:
+              - { id: overview, title: Overview, source: docs/index.md }
+              - { id: architecture, title: Architecture, source: docs/architecture.md }
+            diagrams: []
+            """
+        )
+    )
+    (tmp_path / "docs" / "architecture.md").write_text(
+        "# 1. Architecture\n\nSee https://thekaveh.github.io/aws-tui/architecture/.\n"
+    )
+
+    findings = check_self_containment(gen, tmp_path)
+
+    assert any("docs/architecture.md" in finding.message for finding in findings)
+
+
 def test_completeness_flags_unreferenced_published_doc(tmp_path):
     _write_docs(tmp_path)
     (tmp_path / "docs" / "orphan.md").write_text("# 1. Orphan\n")
@@ -220,6 +247,20 @@ def test_local_anchors_flag_missing_same_document_fragment(tmp_path):
 
     assert any("unknown GitHub local anchor #11-missing" in finding.message for finding in findings)
     assert any("unknown MkDocs local anchor #11-missing" in finding.message for finding in findings)
+
+
+def test_local_anchors_validate_reference_style_links(tmp_path):
+    _write_docs(tmp_path)
+    _write_mkdocs_config(tmp_path)
+    (tmp_path / "README.md").write_text(
+        "# 1. README\n\nSee [missing][architecture].\n\n"
+        "[architecture]: docs/architecture.md#missing\n"
+    )
+
+    findings = check_local_anchors(tmp_path)
+
+    assert any("unknown GitHub local anchor #missing" in finding.message for finding in findings)
+    assert any("unknown MkDocs local anchor #missing" in finding.message for finding in findings)
 
 
 def test_local_anchors_ignore_links_inside_fenced_code_blocks(tmp_path):
