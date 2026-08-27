@@ -209,6 +209,13 @@ async def test_history_stops_at_item_budget_and_prunes_rejected_details(
     assert vm.state is PaneState.IDLE
     assert set(vm._worker.details) == {"q-2"}  # type: ignore[attr-defined]
 
+    snapshot = vm.export_snapshot()
+    destination = make_history_vm(_seeded_client())
+    destination.restore_snapshot(snapshot)
+
+    assert destination.items == vm.items
+    assert destination.limit_reached
+
 
 @pytest.mark.asyncio
 async def test_history_load_more_exposes_busy_state_for_the_continuation_page() -> None:

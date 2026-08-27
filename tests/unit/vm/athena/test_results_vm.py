@@ -148,6 +148,12 @@ async def test_results_stop_paging_at_cumulative_row_budget(
     assert vm.limit_reached
     assert not vm.has_more
 
+    destination = make_results_vm(ResultClient({}))
+    await destination.restore_snapshot(vm.export_snapshot())
+
+    assert destination.rows == vm.rows
+    assert destination.limit_reached
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(

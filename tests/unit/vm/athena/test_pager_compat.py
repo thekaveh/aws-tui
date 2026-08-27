@@ -37,6 +37,20 @@ async def test_seed_token_pager_contract_matches_vmx_3_23() -> None:
     assert not pager.has_more
 
 
+def test_seed_token_pager_restores_explicit_limit_state() -> None:
+    async def fetch(_token: str | None) -> tuple[list[str], str | None]:
+        return [], None
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch, max_items=2)
+
+    seed_token_pager(pager, ["first"], None, limit_reached=True)
+
+    assert pager.items == ["first"]
+    assert pager.current_token is None
+    assert not pager.has_more
+    assert pager.limit_reached
+
+
 @pytest.mark.asyncio
 async def test_snapshot_token_pager_refresh_replaces_restored_items() -> None:
     calls: list[str | None] = []
@@ -101,6 +115,28 @@ async def test_snapshot_token_pager_refresh_preserves_loaded_later_pages_for_unc
         "current_token",
         "has_more",
     ]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_token_pager_refresh_preserves_exact_cap_for_unchanged_prefix() -> None:
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token is None:
+            return ["first"], "next"
+        return ["second"], "more"
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch, max_items=2)
+    await pager.load_more_command.execute_async()
+    await pager.load_more_command.execute_async()
+
+    assert pager.items == ["first", "second"]
+    assert pager.limit_reached
+
+    await pager.refresh_command.execute_async()
+
+    assert pager.items == ["first", "second"]
+    assert pager.current_token is None
+    assert not pager.has_more
+    assert pager.limit_reached
 
 
 @pytest.mark.asyncio
@@ -299,6 +335,13 @@ async def test_snapshot_token_pager_rejects_cumulative_items_beyond_limit() -> N
     assert pager.items == ["first"]
     assert pager.current_token is None
     assert not pager.has_more
+
+    await pager.refresh_command.execute_async()
+
+    assert pager.items == ["first"]
+    assert pager.current_token is None
+    assert not pager.has_more
+    assert pager.limit_reached
 
 
 def test_seed_token_pager_uses_aws_tui_owned_public_restore_boundary() -> None:

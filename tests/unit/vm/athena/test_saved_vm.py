@@ -10,7 +10,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import NamedQuery, PreparedStatement, PreparedStatementSummary
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager
+from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 from aws_tui.vm.athena.saved_vm import AthenaSavedVM, SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -161,6 +161,30 @@ async def test_saved_lists_use_independent_token_pagers_without_fetch_all() -> N
     assert tuple(query.query_id for query in vm.named_queries) == ("named-1", "named-2")
     assert client.named_list_calls[-1] == ("analysts", "named-next")
     assert client.named_detail_calls[-1] == ("named-2",)
+
+
+@pytest.mark.asyncio
+async def test_saved_snapshot_restores_both_collection_limit_states() -> None:
+    source = make_saved_vm(_seeded_client())
+    await source.setup()
+    seed_token_pager(
+        source._named_pager,  # type: ignore[attr-defined]
+        source.named_queries,
+        None,
+        limit_reached=True,
+    )
+    seed_token_pager(
+        source._prepared_pager,  # type: ignore[attr-defined]
+        source.prepared_statements,
+        None,
+        limit_reached=True,
+    )
+
+    destination = make_saved_vm(_seeded_client())
+    destination.restore_snapshot(source.export_snapshot())
+
+    assert destination.named_limit_reached
+    assert destination.prepared_limit_reached
 
 
 @pytest.mark.asyncio

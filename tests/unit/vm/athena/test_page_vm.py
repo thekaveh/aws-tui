@@ -999,6 +999,38 @@ async def test_page_snapshot_round_trip_restores_query_results_and_selections_wi
 
 
 @pytest.mark.asyncio
+async def test_page_snapshot_restores_all_context_collection_limit_states() -> None:
+    source = make_page_vm(PageClient())
+    await source.setup()
+    seed_token_pager(
+        source._workgroup_pager,  # type: ignore[attr-defined]
+        source.workgroups,
+        None,
+        limit_reached=True,
+    )
+    seed_token_pager(
+        source._catalog_pager,  # type: ignore[attr-defined]
+        source.catalogs,
+        None,
+        limit_reached=True,
+    )
+    seed_token_pager(
+        source._database_pager,  # type: ignore[attr-defined]
+        source.databases,
+        None,
+        limit_reached=True,
+    )
+
+    destination = make_page_vm(PageClient())
+    await destination.setup()
+    await destination.restore_snapshot(source.export_snapshot())
+
+    assert destination.workgroup_limit_reached
+    assert destination.catalog_limit_reached
+    assert destination.database_limit_reached
+
+
+@pytest.mark.asyncio
 async def test_page_snapshot_rejects_forged_cross_component_state_without_leaking(
     tmp_path: Path,
 ) -> None:

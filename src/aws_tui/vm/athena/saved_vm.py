@@ -71,6 +71,8 @@ class AthenaSavedSnapshot:
     named_error_text: str | None = field(repr=False)
     prepared_error_text: str | None = field(repr=False)
     detail_error_text: str | None = field(repr=False)
+    named_limit_reached: bool = field(default=False, repr=False)
+    prepared_limit_reached: bool = field(default=False, repr=False)
 
 
 @dataclass(eq=False)
@@ -413,6 +415,8 @@ class AthenaSavedVM:
             named_error_text=self._named_error_text,
             prepared_error_text=self._prepared_error_text,
             detail_error_text=self._detail_error_text,
+            named_limit_reached=self._named_pager.limit_reached,
+            prepared_limit_reached=self._prepared_pager.limit_reached,
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena saved query snapshot is invalid")
@@ -437,11 +441,17 @@ class AthenaSavedVM:
         named.named_query_details.update(
             {detail.query_id: detail for detail in snapshot.named_query_details}
         )
-        seed_token_pager(named.pager, snapshot.named_queries, snapshot.named_next_token)
+        seed_token_pager(
+            named.pager,
+            snapshot.named_queries,
+            snapshot.named_next_token,
+            limit_reached=snapshot.named_limit_reached,
+        )
         seed_token_pager(
             prepared.pager,
             snapshot.prepared_statements,
             snapshot.prepared_next_token,
+            limit_reached=snapshot.prepared_limit_reached,
         )
         self._selected_kind = snapshot.selected_kind
         self._selected_query_id = snapshot.selected_query_id
@@ -471,6 +481,10 @@ class AthenaSavedVM:
             or len(snapshot.prepared_statements) > _MAX_SAVED_ITEMS
             or not optional_non_empty_exact_string(snapshot.named_next_token)
             or not optional_non_empty_exact_string(snapshot.prepared_next_token)
+            or type(snapshot.named_limit_reached) is not bool
+            or type(snapshot.prepared_limit_reached) is not bool
+            or (snapshot.named_limit_reached and snapshot.named_next_token is not None)
+            or (snapshot.prepared_limit_reached and snapshot.prepared_next_token is not None)
             or (
                 snapshot.selected_kind is not None
                 and type(snapshot.selected_kind) is not SavedQueryKind

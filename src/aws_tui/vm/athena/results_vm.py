@@ -66,6 +66,7 @@ class AthenaResultsSnapshot:
     state: PaneState = field(repr=False)
     error_text: str | None = field(repr=False)
     is_loading_more: bool = field(repr=False)
+    limit_reached: bool = field(default=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +259,7 @@ class AthenaResultsVM:
             state=self._state,
             error_text=self._error_text,
             is_loading_more=self._is_loading_more,
+            limit_reached=self._pager.limit_reached,
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError(_SNAPSHOT_ERROR)
@@ -283,7 +285,12 @@ class AthenaResultsVM:
             generation,
         )
         worker.columns = snapshot.columns
-        seed_token_pager(worker.pager, snapshot.rows, snapshot.next_token)
+        seed_token_pager(
+            worker.pager,
+            snapshot.rows,
+            snapshot.next_token,
+            limit_reached=snapshot.limit_reached,
+        )
         self._state = snapshot.state
         self._error_text = snapshot.error_text
         self._is_loading_more = snapshot.is_loading_more
@@ -303,6 +310,8 @@ class AthenaResultsVM:
             or type(snapshot.rows) is not tuple
             or type(snapshot.is_loading_more) is not bool
             or snapshot.is_loading_more
+            or type(snapshot.limit_reached) is not bool
+            or (snapshot.limit_reached and snapshot.next_token is not None)
             or type(snapshot.state) is not PaneState
             or snapshot.state is PaneState.LOADING
             or not optional_exact_string(snapshot.execution_id)

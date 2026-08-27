@@ -89,6 +89,9 @@ class _SnapshotContextStage:
     catalogs_token: str | None = field(repr=False)
     databases: tuple[DatabaseSummary, ...] = field(repr=False)
     databases_token: str | None = field(repr=False)
+    workgroups_limit_reached: bool = field(default=False, repr=False)
+    catalogs_limit_reached: bool = field(default=False, repr=False)
+    databases_limit_reached: bool = field(default=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,6 +409,9 @@ class AthenaPageVM:
                 catalogs_token=self._catalog_pager.current_token,
                 databases=self.databases,
                 databases_token=self._database_pager.current_token,
+                workgroups_limit_reached=self._workgroup_pager.limit_reached,
+                catalogs_limit_reached=self._catalog_pager.limit_reached,
+                databases_limit_reached=self._database_pager.limit_reached,
             ),
             active_view=self._active_view,
             query=self.query.export_snapshot(),
@@ -749,16 +755,19 @@ class AthenaPageVM:
             workgroup_worker.pager,
             context.workgroups,
             context.workgroups_token,
+            limit_reached=context.workgroups_limit_reached,
         )
         seed_token_pager(
             catalog_worker.pager,
             context.catalogs,
             context.catalogs_token,
+            limit_reached=context.catalogs_limit_reached,
         )
         seed_token_pager(
             database_worker.pager,
             context.databases,
             context.databases_token,
+            limit_reached=context.databases_limit_reached,
         )
         self.query._install_snapshot(snapshot.query)
         self.history._install_snapshot(stage.history)
@@ -1931,6 +1940,12 @@ def _snapshot_context_stage_is_valid(
         or not optional_non_empty_exact_string(value.workgroups_token)
         or not optional_non_empty_exact_string(value.catalogs_token)
         or not optional_non_empty_exact_string(value.databases_token)
+        or type(value.workgroups_limit_reached) is not bool
+        or type(value.catalogs_limit_reached) is not bool
+        or type(value.databases_limit_reached) is not bool
+        or (value.workgroups_limit_reached and value.workgroups_token is not None)
+        or (value.catalogs_limit_reached and value.catalogs_token is not None)
+        or (value.databases_limit_reached and value.databases_token is not None)
         or type(value.workgroup_detail) is not AthenaWorkgroupDetail
         or not valid_athena_workgroup_detail(value.workgroup_detail)
         or not all(valid_athena_workgroup_summary(row) for row in value.workgroups)

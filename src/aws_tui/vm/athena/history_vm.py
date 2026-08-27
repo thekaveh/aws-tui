@@ -55,6 +55,7 @@ class AthenaHistorySnapshot:
     selected_execution_id: str | None = field(repr=False)
     state: PaneState = field(repr=False)
     error_text: str | None = field(repr=False)
+    limit_reached: bool = field(default=False, repr=False)
 
 
 @dataclass(eq=False)
@@ -225,6 +226,7 @@ class AthenaHistoryVM:
             selected_execution_id=self._selected_execution_id,
             state=self._state,
             error_text=self._error_text,
+            limit_reached=self._pager.limit_reached,
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena history snapshot is invalid")
@@ -246,7 +248,12 @@ class AthenaHistoryVM:
         worker.details.update(
             {detail.summary.ref.execution_id: detail for detail in snapshot.details}
         )
-        seed_token_pager(worker.pager, snapshot.items, snapshot.next_token)
+        seed_token_pager(
+            worker.pager,
+            snapshot.items,
+            snapshot.next_token,
+            limit_reached=snapshot.limit_reached,
+        )
         self._selected_execution_id = snapshot.selected_execution_id
         self._detail = (
             None
@@ -274,6 +281,8 @@ class AthenaHistoryVM:
             or type(snapshot.state) is not PaneState
             or snapshot.state is PaneState.LOADING
             or not optional_exact_string(snapshot.error_text)
+            or type(snapshot.limit_reached) is not bool
+            or (snapshot.limit_reached and snapshot.next_token is not None)
             or not all(valid_query_execution_summary(item) for item in snapshot.items)
             or not all(valid_query_execution_detail(detail) for detail in snapshot.details)
         ):
