@@ -29,6 +29,8 @@ _DENIED_SEQUENCES = (
     ("scripts", "test-services"),
 )
 _ARTIFACT_SUFFIXES = (".whl", ".tar.gz")
+_SOURCE_PACKAGE = Path(__file__).resolve().parents[1] / "src" / "aws_tui"
+_PACKAGE_FILE_SUFFIXES = frozenset({".py", ".tcss"})
 
 
 class ArtifactContentsError(ValueError):
@@ -61,17 +63,34 @@ def _denied_reason(name: str) -> str | None:
     return None
 
 
+def _required_wheel_members() -> frozenset[str]:
+    return frozenset(
+        f"aws_tui/{source.relative_to(_SOURCE_PACKAGE).as_posix()}"
+        for source in _SOURCE_PACKAGE.rglob("*")
+        if source.is_file()
+        and "__pycache__" not in source.parts
+        and (source.suffix in _PACKAGE_FILE_SUFFIXES or source.name == "py.typed")
+    )
+
+
 def validate_artifact(path: str | Path) -> None:
     artifact = Path(path)
+    members = _member_names(artifact)
     violations = [
-        f"{name} ({reason})"
-        for name in _member_names(artifact)
-        if (reason := _denied_reason(name)) is not None
+        f"{name} ({reason})" for name in members if (reason := _denied_reason(name)) is not None
     ]
     if violations:
         preview = ", ".join(violations[:8])
         suffix = "" if len(violations) <= 8 else f", and {len(violations) - 8} more"
         raise ArtifactContentsError(f"{artifact} contains denied members: {preview}{suffix}")
+    if artifact.name.endswith(".whl"):
+        missing = sorted(_required_wheel_members().difference(members))
+        if missing:
+            preview = ", ".join(missing[:8])
+            suffix = "" if len(missing) <= 8 else f", and {len(missing) - 8} more"
+            raise ArtifactContentsError(
+                f"{artifact} is missing required package members: {preview}{suffix}"
+            )
 
 
 def _artifact_paths(arguments: Iterable[str]) -> tuple[Path, ...]:

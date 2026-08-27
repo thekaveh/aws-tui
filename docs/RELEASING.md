@@ -49,8 +49,10 @@ Review the PR like any other change. Merge when CI is green.
   still available on both PyPI and TestPyPI before creating a tag.
 - **Clean install smoke.** Build the release artifacts, validate them with
   `uv run python -m scripts.check_dist dist/` and `uv run twine check dist/*`,
-  then install the wheel into a fresh temporary environment and run
-  `aws-tui --version`, `aws-tui --help`, and `python -m aws_tui --version`.
+  confirming that the validator finds the complete source module, `py.typed`,
+  and packaged theme payload; then install the wheel into a fresh temporary
+  environment and run `aws-tui --version`, `aws-tui --help`, and
+  `python -m aws_tui --version`.
 - **Supported-platform status.** Confirm the latest required CI run is green on
   macOS, Linux, and Windows for Python 3.11, 3.12, and 3.13. Record any
   platform-specific exception in the release PR instead of silently relying on

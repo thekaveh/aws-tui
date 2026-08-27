@@ -1529,8 +1529,15 @@ class AwsTuiApp(App[None]):
 
         workers = self.workers.cancel_group(self, "transfer-ops")
         if workers:
-            with contextlib.suppress(WorkerCancelled):
-                await self.workers.wait_for_complete(workers)
+            results = await asyncio.gather(
+                *(worker.wait() for worker in workers),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, WorkerCancelled):
+                    continue
+                if isinstance(result, BaseException):
+                    raise result
 
     # ── Action handlers ────────────────────────────────────────────────────
 

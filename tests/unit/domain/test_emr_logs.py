@@ -238,6 +238,66 @@ async def test_list_log_files_supports_retries_rotation_and_hive_workers() -> No
 
 
 @pytest.mark.asyncio
+async def test_list_log_files_rejects_pagination_beyond_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_logs
+    from aws_tui.domain.filesystem import ProviderError
+
+    class _PagedS3(_StubS3ListObjectsV2):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.calls = 0
+
+        async def list_objects_v2(self, **kwargs: object) -> dict[str, object]:
+            self.calls += 1
+            if self.calls > 1:
+                return {"Contents": [], "IsTruncated": False}
+            return {
+                "Contents": [],
+                "IsTruncated": True,
+                "NextContinuationToken": f"page-{self.calls + 1}",
+            }
+
+    stub = _PagedS3()
+    monkeypatch.setattr(emr_logs, "_MAX_LOG_DISCOVERY_PAGES", 1, raising=False)
+
+    with pytest.raises(ProviderError, match="pagination safety limit"):
+        await emr_logs.list_log_files(  # type: ignore[arg-type]
+            session=_StubSessionListObjectsV2(stub),
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+    assert stub.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_list_log_files_rejects_more_files_than_ui_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_logs
+    from aws_tui.domain.filesystem import ProviderError
+
+    monkeypatch.setattr(emr_logs, "_MAX_LOG_DISCOVERY_FILES", 1, raising=False)
+    stub = _StubS3ListObjectsV2(
+        [
+            ("logs/applications/a/jobs/r/SPARK_DRIVER/stdout.gz", 10),
+            ("logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz", 20),
+        ]
+    )
+
+    with pytest.raises(ProviderError, match="file safety limit"):
+        await emr_logs.list_log_files(  # type: ignore[arg-type]
+            session=_StubSessionListObjectsV2(stub),
+            region_name="us-east-1",
+            bucket="b",
+            run_prefix="logs/applications/a/jobs/r",
+        )
+
+
+@pytest.mark.asyncio
 async def test_stream_log_yields_matched_lines() -> None:
     from aws_tui.domain.emr_logs import (
         DEFAULT_LOG_FILTER,

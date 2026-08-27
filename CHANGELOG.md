@@ -160,6 +160,13 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.3. Fixed
 
+- **Late maintenance contract guards.** Service swaps now await every cancelled
+  transfer worker before disposing its panes, EMR log discovery rejects more
+  than 100 listing pages or 200 classified files, and package validation checks
+  that wheels contain the complete Python, typing-marker, and theme payload.
+  Documentation publication, including manual dispatch, is restricted to
+  `main`; the generated hero replaces unsupported selector glyphs explicitly
+  and rejects any future missing font glyph instead of rendering `.notdef`.
 - **Bounded startup, transfers, and service hydration.** Automatic connection
   fallback now shares one 90-second launch budget, copy and move reject batches
   above 1,000 selected entries before creating journals, and Athena history

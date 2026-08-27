@@ -99,6 +99,9 @@ DEFAULT_LOG_FILTER: LogFilter = LogFilter(
     case_insensitive=True,
 )
 
+_MAX_LOG_DISCOVERY_FILES = 200
+_MAX_LOG_DISCOVERY_PAGES = 100
+
 
 @dataclass(frozen=True, slots=True)
 class S3LogLocation:
@@ -218,7 +221,7 @@ async def list_log_files(
     run_prefix: str,
     boto_config: BotoConfig | None = None,
 ) -> list[LogFile]:
-    """List all log files under the run's S3 prefix. Returns
+    """List a bounded set of log files under the run's S3 prefix. Returns
     ``LogFile``s with ``kind`` parsed from the key path and ``size``
     from each object's ``Size`` field. Driver-first sort so the
     default selection (``DRIVER_STDERR``) is at a stable index."""
@@ -230,7 +233,11 @@ async def list_log_files(
         async with session.client("s3", **kwargs) as s3:
             next_token: str | None = None
             seen_tokens: set[str] = set()
+            page_count = 0
             while True:
+                if page_count >= _MAX_LOG_DISCOVERY_PAGES:
+                    raise ProviderError("EMR log discovery exceeded the pagination safety limit")
+                page_count += 1
                 list_kwargs: dict[str, object] = {"Bucket": bucket, "Prefix": run_prefix}
                 if next_token is not None:
                     list_kwargs["ContinuationToken"] = next_token
@@ -240,6 +247,8 @@ async def list_log_files(
                     kind, sort_idx = _classify_key(key)
                     if kind is None:
                         continue
+                    if len(files) >= _MAX_LOG_DISCOVERY_FILES:
+                        raise ProviderError("EMR log discovery exceeded the file safety limit")
                     files.append((sort_idx, LogFile(key=key, kind=kind, size=obj.get("Size"))))
                 next_token = resp.get("NextContinuationToken")
                 if not resp.get("IsTruncated"):

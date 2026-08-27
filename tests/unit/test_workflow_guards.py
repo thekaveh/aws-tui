@@ -381,13 +381,13 @@ def test_ci_and_release_require_documentation_contracts() -> None:
     )
 
 
-def test_pages_push_is_main_only_and_manual_dispatch_accepts_a_branch() -> None:
+def test_pages_publication_is_main_only_including_manual_dispatch() -> None:
     workflow = _workflow(".github/workflows/pages.yml")
 
     assert workflow[True]["workflow_dispatch"] is None
-    manual_or_main = "github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'"
-    assert workflow["jobs"]["build"]["if"] == manual_or_main
-    assert workflow["jobs"]["wiki"]["if"] == manual_or_main
+    main_only = "github.ref == 'refs/heads/main'"
+    assert workflow["jobs"]["build"]["if"] == main_only
+    assert workflow["jobs"]["wiki"]["if"] == main_only
     assert workflow["env"]["UV_VERSION"] == "0.11.19"
     for job_name in ("build", "wiki"):
         setup_uv = next(

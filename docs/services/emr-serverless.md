@@ -26,8 +26,10 @@ detail. `r` refreshes the focused surface.
 
 The logs pane loads only on demand. It discovers the exact Spark or Hive log
 objects for the selected run, streams gzip content in bounded chunks, and
-applies the configured regular-expression filter. Retry attempts and worker
-identity remain visible in the file choices.
+applies the configured regular-expression filter. Discovery fails closed if a
+provider exceeds 100 listing pages or 200 classified log files, preventing an
+unbounded object list from becoming VM state or mounted widgets. Retry attempts
+and worker identity remain visible in the file choices.
 
 ## 1.3. Clone workflow
 
@@ -55,6 +57,6 @@ surface is in [Keybindings](../keybindings.md).
 Demo mode provides profile-isolated applications, terminal and active runs,
 clone transitions, and streamable success and failure logs without network
 access. Unit tests cover poller cadence, stale-target rejection, clone
-validation, provider errors, and bounded log streaming. Snapshot and
-end-to-end tests cover selectors, focus order, master-detail behavior, modal
-submission, and log filtering.
+validation, provider errors, bounded discovery, and bounded log streaming.
+Snapshot and end-to-end tests cover selectors, focus order, master-detail
+behavior, modal submission, and log filtering.

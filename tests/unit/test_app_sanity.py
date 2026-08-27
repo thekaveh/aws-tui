@@ -349,6 +349,37 @@ def test_bound_action_records_action_id(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_content_swap_waits_for_every_cancelled_transfer_worker() -> None:
+    from textual.worker import WorkerCancelled
+
+    from aws_tui import app as app_module
+
+    slow_worker_drained = asyncio.Event()
+
+    class _CancelledWorker:
+        async def wait(self) -> None:
+            raise WorkerCancelled
+
+    class _SlowWorker:
+        async def wait(self) -> None:
+            slow_worker_drained.set()
+
+    class _Workers:
+        def cancel_group(self, *_args: object) -> tuple[object, ...]:
+            return (_CancelledWorker(), _SlowWorker())
+
+        async def wait_for_complete(self, workers: tuple[object, ...]) -> None:
+            await workers[0].wait()  # type: ignore[attr-defined]
+
+    app = object.__new__(app_module.AwsTuiApp)
+    app._workers = _Workers()  # type: ignore[attr-defined]
+
+    await app._cancel_transfer_workers_before_content_swap()
+
+    assert slow_worker_drained.is_set()
+
+
+@pytest.mark.asyncio
 async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> None:
     from aws_tui import app as app_module
 
