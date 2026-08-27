@@ -143,6 +143,7 @@ class ContextPicker(Widget, can_focus=True):
         self._error = False
         self._focus_intent = PickerFocusIntent()
         self._open_intent = open_intent
+        self._open_intent_epoch: int | None = None
         self._value_widget: Static | None = None
         self._indicator_widget: Static | None = None
         self._option_list: OverlayOptionList | None = None
@@ -236,6 +237,7 @@ class ContextPicker(Widget, can_focus=True):
         intent_epoch = (
             self._open_intent.observe(self, True) if self._open_intent is not None else None
         )
+        self._open_intent_epoch = intent_epoch
         if not was_open or intent_epoch is not None:
             self.post_message(self.OpenChanged(self, True, intent_epoch=intent_epoch))
         self.call_after_refresh(partial(self._focus_options, epoch))
@@ -333,8 +335,17 @@ class ContextPicker(Widget, can_focus=True):
 
     def _focus_options(self, epoch: int) -> None:
         option_list = self._option_list
+        open_intent = self._open_intent
         if (
             not self._focus_intent.is_current(epoch)
+            or (
+                open_intent is not None
+                and (
+                    self._open_intent_epoch is None
+                    or not open_intent.is_current(self._open_intent_epoch)
+                    or open_intent.desired is not self
+                )
+            )
             or not self.is_open
             or not self.is_attached
             or option_list is None

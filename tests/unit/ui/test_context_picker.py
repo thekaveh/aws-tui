@@ -14,7 +14,7 @@ from textual.widgets import OptionList, Static
 
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
-from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList
+from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList, PickerOpenIntent
 
 _OPTIONS = (
     ContextOption("primary", "primary"),
@@ -73,6 +73,17 @@ class _FocusCycleHost(App[None]):
 
     def compose(self) -> ComposeResult:
         yield self.picker
+
+
+class _SharedPickerHost(App[None]):
+    def __init__(self, first: ContextPicker, newest: ContextPicker) -> None:
+        super().__init__()
+        self.first = first
+        self.newest = newest
+
+    def compose(self) -> ComposeResult:
+        yield self.first
+        yield self.newest
 
 
 class _ThemedPickerHost(PickerHost):
@@ -229,6 +240,42 @@ async def test_context_picker_close_reopen_invalidates_stale_refocus(
         await pilot.pause()
         assert picker.is_open
         assert pilot.app.focused is picker.query_one(OverlayOptionList)
+
+
+@pytest.mark.asyncio
+async def test_shared_open_intent_invalidates_older_picker_focus_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    intent = PickerOpenIntent()
+    first = ContextPicker(
+        "First",
+        _OPTIONS,
+        selected="primary",
+        open_intent=intent,
+        id="first-picker",
+    )
+    newest = ContextPicker(
+        "Newest",
+        _OPTIONS,
+        selected="primary",
+        open_intent=intent,
+        id="newest-picker",
+    )
+    async with _SharedPickerHost(first, newest).run_test() as pilot:
+        await pilot.pause()
+        first_callbacks: list[Callable[[], None]] = []
+        newest_callbacks: list[Callable[[], None]] = []
+        monkeypatch.setattr(first, "call_after_refresh", first_callbacks.append)
+        monkeypatch.setattr(newest, "call_after_refresh", newest_callbacks.append)
+
+        first.open()
+        newest.open()
+        newest_callbacks[0]()
+        first_callbacks[0]()
+        await pilot.pause()
+
+        assert newest.is_open
+        assert pilot.app.focused is newest.query_one(OverlayOptionList)
 
 
 @pytest.mark.asyncio
