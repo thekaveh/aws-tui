@@ -427,12 +427,14 @@ def _page_restore_state(
         page.results.state,
         page.results.error_text,
         page.results.has_more,
+        page.results.limit_reached,
         page.history.selected_execution_id,
         page.history.items,
         page.history.detail,
         page.history.state,
         page.history.error_text,
         page.history.has_more,
+        page.history.limit_reached,
         page.saved.selected_kind,
         page.saved.selected_query_id,
         page.saved.named_queries,
@@ -445,6 +447,8 @@ def _page_restore_state(
         page.saved.named_error_text,
         page.saved.prepared_error_text,
         page.saved.detail_error_text,
+        page.saved.named_limit_reached,
+        page.saved.prepared_limit_reached,
         tuple(page.workgroups),
         tuple(page.catalogs),
         tuple(page.databases),
@@ -456,6 +460,9 @@ def _page_restore_state(
         page.workgroups_error_text,
         page.catalogs_error_text,
         page.databases_error_text,
+        page.workgroup_limit_reached,
+        page.catalog_limit_reached,
+        page.database_limit_reached,
         frozenset(page._loaded_views),  # type: ignore[attr-defined]
         dict(store._values),  # type: ignore[attr-defined]
         tuple(
@@ -1333,6 +1340,49 @@ async def test_page_snapshot_restore_preflights_context_without_any_mutation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["oversized", "duplicate"])
+async def test_cross_context_preflight_rejects_unsafe_discovery_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from aws_tui.vm.athena import page_vm
+
+    client = PageClient()
+    source = make_page_vm(client)
+    await source.setup()
+    await source.select_workgroup("analysts")
+    snapshot = source.export_snapshot()
+
+    store = ServiceSelectionStore()
+    destination = make_page_vm(client, selection_store=store)
+    await destination.setup()
+    before = _page_restore_state(destination, store)
+    other = AthenaWorkgroupSummary("other", "ENABLED", None, None)
+
+    async def unsafe_workgroups(
+        *,
+        start_token: str | None = None,
+    ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
+        client.workgroup_calls.append(start_token)
+        if start_token is None:
+            if failure == "oversized":
+                return [client.workgroups[0], other], "next"
+            return [client.workgroups[0]], "next"
+        if failure == "duplicate":
+            return [client.workgroups[0], client.workgroups[1]], None
+        return [client.workgroups[1]], None
+
+    client.list_workgroups_page = unsafe_workgroups  # type: ignore[method-assign]
+    if failure == "oversized":
+        monkeypatch.setattr(page_vm, "_MAX_CONTEXT_ITEMS", 2, raising=False)
+
+    with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
+        await destination.restore_snapshot(snapshot)
+
+    assert _page_restore_state(destination, store) == before
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_attribute",
     [
@@ -1828,6 +1878,17 @@ async def test_page_snapshot_restores_context_from_later_discovery_pages() -> No
     await source.select_catalog("AwsDataCatalog")
     await source.load_more_databases()
     await source.select_database("events")
+    await source.select_view("history")
+    await source.select_view("saved")
+    for pager, items in (
+        (source._workgroup_pager, source.workgroups),  # type: ignore[attr-defined]
+        (source._catalog_pager, source.catalogs),  # type: ignore[attr-defined]
+        (source._database_pager, source.databases),  # type: ignore[attr-defined]
+        (source.history._pager, source.history.items),  # type: ignore[attr-defined]
+        (source.saved._named_pager, source.saved.named_queries),  # type: ignore[attr-defined]
+        (source.saved._prepared_pager, source.saved.prepared_statements),  # type: ignore[attr-defined]
+    ):
+        seed_token_pager(pager, items, None, limit_reached=True)
     snapshot = source.export_snapshot()
     assert source.context == QueryContext(
         "analytics",
@@ -1845,6 +1906,7 @@ async def test_page_snapshot_restores_context_from_later_discovery_pages() -> No
 
     assert destination.context == source.context
     assert destination.query.context == source.context
+    assert destination.export_snapshot() == snapshot
 
 
 @pytest.mark.asyncio

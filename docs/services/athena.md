@@ -53,10 +53,14 @@ artifact in S3. None of these handoffs substitutes another profile.
 ## 1.5. Architecture and verification
 
 `AthenaService` composes `AthenaPageVM` from query, history, results, and saved
-VMs. VMx owns commands, observable state, lifecycle, and paging; SQLGlot owns
-parsing; the domain client owns public Athena API calls and response mapping.
-Generation and execution identity guards prevent retired async work from
-publishing into a replacement context.
+VMs. VMx owns commands, observable state, and lifecycle. Athena's app-owned
+snapshot pager retains VMx commands while adding immutable hydration and
+cumulative ceilings: 1,000 context, history, and saved-query items, and 10,000
+result rows. Reaching a ceiling replaces load-more with a visible safety-limit
+state that survives refresh and snapshot rollback. SQLGlot owns parsing; the
+domain client owns public Athena API calls and response mapping. Generation
+and execution identity guards prevent retired async work from publishing into
+a replacement context.
 
 Demo mode provides profile-isolated workgroups, query states, result pages,
 saved SQL, managed-output cases, customer-S3 artifacts, and scoped denial.
