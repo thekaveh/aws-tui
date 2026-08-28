@@ -117,6 +117,17 @@ class _HintApp(App[None]):
         yield HintLegend(self._hint_vm, hub=self._hint_hub)
 
 
+def _assert_hint_row_centered(legend: HintLegend) -> None:
+    chips = list(legend.query(".hint-chip"))
+    assert chips
+    left_space = chips[0].region.x - legend.content_region.x
+    right_space = legend.content_region.right - chips[-1].region.right
+    assert abs(left_space - right_space) <= 1
+    assert chips[-1].styles.margin.right == 0
+    assert all(chip.styles.margin.right == 1 for chip in chips[:-1])
+    assert {chip.region.y for chip in chips} == {legend.content_region.y}
+
+
 @pytest.mark.asyncio
 async def test_hint_legend_initializes_before_test_driver_control(
     monkeypatch: pytest.MonkeyPatch,
@@ -224,6 +235,7 @@ async def test_hint_legend_is_one_compact_row_at_wide_athena_width() -> None:
             await pilot.pause()
             legend = pilot.app.query_one(HintLegend)
             chips = list(legend.query(".hint-chip"))
+            _assert_hint_row_centered(legend)
             assert {chip.region.y for chip in chips} == {legend.content_region.y}
             assert legend.region.height == 3
             assert not any(chip.action.overflow_only for chip in chips)
@@ -240,16 +252,15 @@ async def test_hint_legend_uses_more_instead_of_wrapping_when_narrow() -> None:
     try:
         async with _HintApp(vm, hub).run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            chips = list(pilot.app.query(".hint-chip"))
+            legend = pilot.app.query_one(HintLegend)
+            chips = list(legend.query(".hint-chip"))
+            _assert_hint_row_centered(legend)
             assert len({chip.region.y for chip in chips}) == 1
             assert {chip.action.action_id for chip in chips} >= {
                 "app.command_palette",
                 "app.quit",
             }
-            assert all(
-                chip.region.right <= pilot.app.query_one(HintLegend).content_region.right
-                for chip in chips
-            )
+            assert all(chip.region.right <= legend.content_region.right for chip in chips)
     finally:
         vm.dispose()
         hub.dispose()
