@@ -918,7 +918,7 @@ def _seed_iceberg_queries(
     add(
         (
             f'SELECT * FROM "AwsDataCatalog"."{database}"."{table}" '
-            f"FOR VERSION AS OF {older} LIMIT 100"
+            f"FOR VERSION AS OF {older} LIMIT 5"
         ),
         (
             ("dimension", "varchar"),

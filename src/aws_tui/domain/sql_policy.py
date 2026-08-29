@@ -537,7 +537,7 @@ def select_starter_sql(
         raise ValueError("snapshot ID must be a non-negative integer")
     qualified = quote_athena_table_ref(ref)
     travel = f" FOR VERSION AS OF {snapshot_id}" if snapshot_id is not None else ""
-    return f"SELECT * FROM {qualified}{travel} LIMIT 100"
+    return f"SELECT * FROM {qualified}{travel} LIMIT 5"
 
 
 __all__ = [

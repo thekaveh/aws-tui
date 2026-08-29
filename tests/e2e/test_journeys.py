@@ -509,7 +509,7 @@ async def test_journey_9_iceberg_snapshot_runs_only_on_explicit_execute(
             assert athena.context.database == "dev_analytics"
             assert athena.query.sql == (
                 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
-                "FOR VERSION AS OF 4201 LIMIT 100"
+                "FOR VERSION AS OF 4201 LIMIT 5"
             )
             assert athena.query.execution_ref is None
             assert athena.results.rows == ()

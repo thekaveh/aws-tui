@@ -134,7 +134,7 @@ async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> No
             None,
             "Q",
             "Query table in Athena",
-            'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 100',
+            'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5',
             id="table-key-Q",
         ),
         pytest.param(
@@ -142,7 +142,7 @@ async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> No
             None,
             None,
             "Query table in Athena",
-            'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 100',
+            'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5',
             id="table-palette",
         ),
         pytest.param(
@@ -152,7 +152,7 @@ async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> No
             "Query Iceberg snapshot in Athena",
             (
                 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
-                "FOR VERSION AS OF 4201 LIMIT 100"
+                "FOR VERSION AS OF 4201 LIMIT 5"
             ),
             id="snapshot-key-V",
         ),
@@ -163,7 +163,7 @@ async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> No
             "Query Iceberg snapshot in Athena",
             (
                 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
-                "FOR VERSION AS OF 4201 LIMIT 100"
+                "FOR VERSION AS OF 4201 LIMIT 5"
             ),
             id="snapshot-palette",
         ),
@@ -216,7 +216,11 @@ async def test_glue_handoff_surfaces_preserve_source_and_prefill_without_executi
             assert athena.context.workgroup == "dev-analytics"
             assert athena.context.catalog == "AwsDataCatalog"
             assert athena.context.database == "dev_analytics"
+            editor = app.query_one("#athena-editor", TextArea)
             assert athena.query.sql == expected_sql
+            assert editor.text == expected_sql
+            assert athena.active_view == "query"
+            assert athena.query.execute_command.can_execute()
             assert athena.query.execution_ref is None
             assert athena.results.rows == ()
             assert not any(call.method == "start_query" for call in client.calls)
@@ -262,9 +266,10 @@ async def test_glue_to_athena_preserves_identity_and_prefills_without_running(
             assert page.context.workgroup == "dev-analytics"
             assert page.context.catalog == "AwsDataCatalog"
             assert page.context.database == "dev_analytics"
-            assert page.query.sql == (
-                'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 100'
-            )
+            expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+            editor = app.query_one("#athena-editor", TextArea)
+            assert page.query.sql == expected_sql
+            assert editor.text == expected_sql
             assert page.query.execution_ref is None
             assert not any(call.method == "start_query" for call in client.calls)
     finally:
@@ -760,7 +765,7 @@ async def test_latest_cross_navigation_request_wins_without_auto_execution(
             assert page.context.connection_name == "demo-prod"
             assert page.context.workgroup == "prod-reporting"
             assert page.query.sql.endswith(
-                '"AwsDataCatalog"."prod_warehouse"."prod_sales" FOR VERSION AS OF 77 LIMIT 100'
+                '"AwsDataCatalog"."prod_warehouse"."prod_sales" FOR VERSION AS OF 77 LIMIT 5'
             )
             assert not any(call.method == "start_query" for call in dev_client.calls)
             assert not any(call.method == "start_query" for call in prod_client.calls)
@@ -919,7 +924,7 @@ async def test_superseded_table_handoff_is_one_serialized_transaction(
                 assert ctx.root_vm.active_connection.name == "demo-dev"
                 assert current.context.connection_name == "demo-dev"
                 assert current.query.sql.endswith(
-                    '"AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 100'
+                    '"AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
                 )
             else:
                 assert isinstance(current, GluePageVM)

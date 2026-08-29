@@ -462,12 +462,23 @@ async def test_demo_iceberg_time_travel_is_explicit_and_profile_local(
             assert isinstance(athena, AthenaPageVM)
             expected_sql = (
                 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
-                "FOR VERSION AS OF 4201 LIMIT 100"
+                "FOR VERSION AS OF 4201 LIMIT 5"
             )
             assert athena.query.sql == expected_sql
             assert athena.query.execution_ref is None
             assert athena.results.execution_id is None
             assert not any(call.method == "start_query" for call in client.calls)
+
+            await _invoke(app, "athena.execute")
+
+            assert athena.query.execution_ref is not None
+            assert athena.results.rows == (
+                ("2026-07-24T12:00:00Z", "dev-checkout", "17"),
+                ("2026-07-24T12:05:00Z", "dev-search", "9"),
+            )
+            start_calls = [call for call in client.calls if call.method == "start_query"]
+            assert len(start_calls) == 1
+            assert start_calls[0].arguments[0] == expected_sql
 
             await _invoke(app, "athena.open_in_glue")
             await _wait_for_service_setup(ctx, pilot)

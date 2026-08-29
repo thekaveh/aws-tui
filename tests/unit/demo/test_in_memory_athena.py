@@ -28,7 +28,11 @@ from aws_tui.domain.query import (
     ResultColumn,
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
-from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
+from aws_tui.domain.sql_policy import (
+    QueryRejectedError,
+    ReadOnlySqlPolicy,
+    select_starter_sql,
+)
 from aws_tui.infra.crash_dump import CrashDump
 
 DEV_CONTEXT = QueryContext(
@@ -550,7 +554,7 @@ async def test_fake_exposes_terminal_empty_denied_and_missing_output_scenarios()
         ),
     ],
 )
-async def test_seeded_iceberg_time_travel_query_returns_exact_profile_rows(
+async def test_seeded_iceberg_time_travel_query_executes_generated_starter_sql(
     profile: str,
     region: str,
     workgroup: str,
@@ -567,9 +571,15 @@ async def test_seeded_iceberg_time_travel_query_returns_exact_profile_rows(
         "AwsDataCatalog",
         database,
     )
-    sql = (
-        f'SELECT * FROM "AwsDataCatalog"."{database}"."{table}" '
-        f"FOR VERSION AS OF {snapshot_id} LIMIT 100"
+    sql = select_starter_sql(
+        TableRef(
+            "AwsDataCatalog",
+            database,
+            table,
+            profile,
+            region,
+        ),
+        snapshot_id,
     )
 
     ref = await fake.start_query(
@@ -1223,7 +1233,7 @@ async def test_start_query_rejects_non_string_sql_without_python_type_error() ->
         ("SELECT 1", replace(DEV_CONTEXT, database="prod_warehouse")),
         (
             'SELECT * FROM "AwsDataCatalog"."prod_warehouse"."prod_sales_iceberg" '
-            "FOR VERSION AS OF 7701 LIMIT 100",
+            "FOR VERSION AS OF 7701 LIMIT 5",
             replace(
                 DEV_CONTEXT,
                 catalog="AwsDataCatalog",
