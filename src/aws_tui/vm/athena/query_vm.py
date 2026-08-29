@@ -148,7 +148,7 @@ class AthenaQueryVM:
         )
         self._cancel_command: AsyncRelayCommand = (
             AsyncRelayCommand.builder()
-            .predicate(self._can_cancel)
+            .predicate(self._can_interrupt)
             .triggers(self._on_property_changed)
             .task(self._cancel_active)
             .build()
@@ -465,8 +465,6 @@ class AthenaQueryVM:
     async def cancel(self) -> None:
         if self._cancel_command.can_execute():
             await self._cancel_command.execute_async()
-        elif self._can_interrupt():
-            await self._cancel_active()
 
     async def shutdown(self) -> None:
         async with self._lifecycle_lock:
@@ -818,15 +816,6 @@ class AthenaQueryVM:
         except QueryRejectedError:
             return False
         return True
-
-    def _can_cancel(self) -> bool:
-        return (
-            not self._disposed
-            and not self._shutdown_started
-            and self._busy
-            and self._owns_active_query
-            and self._execution_ref is not None
-        )
 
     def _can_interrupt(self) -> bool:
         return (
