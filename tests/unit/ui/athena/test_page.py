@@ -1177,6 +1177,55 @@ async def test_default_focus_and_tab_cycle_are_stable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_controls_are_compact_above_editor_and_inside_their_frame() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        controls = app.query_one("#athena-query-controls")
+        editor = app.query_one("#athena-editor", TextArea)
+        execute = app.query_one("#athena-execute", Button)
+        cancel = app.query_one("#athena-cancel", Button)
+
+        assert controls.border_title == "query controls"
+        assert controls.region.bottom <= editor.region.y
+        assert controls.region.x <= execute.region.x < execute.region.right <= controls.region.right
+        assert controls.region.x <= cancel.region.x < cancel.region.right <= controls.region.right
+        assert (
+            controls.region.y <= execute.region.y < execute.region.bottom <= controls.region.bottom
+        )
+        assert controls.region.y <= cancel.region.y < cancel.region.bottom <= controls.region.bottom
+        assert execute.region.y == cancel.region.y
+
+
+@pytest.mark.asyncio
+async def test_query_buttons_follow_vmx_command_state() -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        execute = app.query_one("#athena-execute", Button)
+        cancel = app.query_one("#athena-cancel", Button)
+        assert execute.disabled
+        assert cancel.disabled
+
+        vm.query.set_sql("SELECT 1")
+        await pilot.pause()
+        assert not execute.disabled
+        assert cancel.disabled
+
+        vm.query._busy = True  # type: ignore[attr-defined]
+        vm.query._is_submitting = True  # type: ignore[attr-defined]
+        vm.query._notify("is_submitting")  # type: ignore[attr-defined]
+        await pilot.pause()
+        assert execute.disabled
+        assert not cancel.disabled
+
+
+@pytest.mark.asyncio
 async def test_query_view_shows_enforced_managed_workgroup_output_before_execution() -> None:
     client = PageClient()
     vm, _client = _build_vm(client)
