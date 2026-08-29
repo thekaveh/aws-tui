@@ -60,6 +60,26 @@ def test_athena_compact_snapshot(
     )
 
 
+@pytest.mark.parametrize(
+    ("fixture", "theme"),
+    [
+        pytest.param(fixture, theme, id=f"{fixture}-{theme}")
+        for fixture, theme in product(FIXTURES, THEMES)
+    ],
+)
+def test_athena_all_theme_narrow_snapshot(
+    fixture: AthenaFixture,
+    theme: str,
+    snap_compare,
+) -> None:
+    app = AthenaPageApp(theme=theme, fixture=fixture)
+    assert snap_compare(
+        app,
+        terminal_size=NARROW,
+        run_before=app.assert_narrow_layout,
+    )
+
+
 def test_athena_query_narrow_snapshot(snap_compare) -> None:
     assert snap_compare(
         AthenaPageApp(theme="carbon", fixture="empty-query"),
@@ -115,6 +135,17 @@ def _compact_snapshot(fixture: AthenaFixture, theme: str) -> str:
     return path.read_text()
 
 
+def _narrow_snapshot(fixture: AthenaFixture, theme: str) -> str:
+    path = (
+        Path(__file__).parent
+        / "__snapshots__"
+        / "test_athena"
+        / f"test_athena_all_theme_narrow_snapshot[{fixture}-{theme}].raw"
+    )
+    assert path.is_file(), f"missing snapshot {path.name}; run --snapshot-update"
+    return path.read_text()
+
+
 def _named_snapshot(test_name: str) -> str:
     path = Path(__file__).parent / "__snapshots__" / "test_athena" / f"{test_name}.raw"
     assert path.is_file(), f"missing snapshot {path.name}; run --snapshot-update"
@@ -138,6 +169,32 @@ def test_athena_picker_and_legend_snapshot_content_guards() -> None:
     assert "quit" in narrow
 
 
+def test_athena_query_narrow_snapshot_content_guard() -> None:
+    raw = _named_snapshot("test_athena_query_narrow_snapshot")
+    assert "AWS&#160;context" not in raw
+    assert "query&#160;controls" in raw
+    assert "query&#160;editor" in raw
+    assert raw.index("query&#160;controls") < raw.index("query&#160;editor")
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_athena_narrow_snapshot_content_guards(theme: str) -> None:
+    empty = _narrow_snapshot("empty-query", theme)
+    running = _narrow_snapshot("running", theme)
+    failure = _narrow_snapshot("failure-detail", theme)
+    missing = _narrow_snapshot("missing-result-config", theme)
+
+    assert "analytics-prod·us-west-2" in empty
+    assert "query&#160;controls" in empty
+    assert "query&#160;editor" in empty
+    assert empty.index("query&#160;controls") < empty.index("query&#160;editor")
+    assert "Enter&#160;a&#160;read-only&#160;query" in empty
+    assert "q-20260726-running" in running
+    assert "RUNNING" in running
+    assert "TABLE_NOT_FOUND" in failure
+    assert "result&#160;configuration&#160;is&#160;required" in missing
+
+
 @pytest.mark.parametrize("theme", THEMES)
 def test_athena_snapshot_content_guards(theme: str) -> None:
     empty = _snapshot("empty-query", theme)
@@ -152,7 +209,6 @@ def test_athena_snapshot_content_guards(theme: str) -> None:
 
     source = "analytics-prod·us-west-2"
     assert source in empty
-    assert "&#160;AWS&#160;context&#160;" in empty
     assert "&#160;Views&#160;" not in empty
     assert "Enter&#160;a&#160;read-only&#160;query" in empty
     assert "q-20260726-running" in running

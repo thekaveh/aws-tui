@@ -85,9 +85,11 @@ Review the PR like any other change. Merge when CI is green.
 - **Athena release smoke.** On `demo-dev`, execute a valid bounded query and
   observe QUEUED/RUNNING/SUCCEEDED lifecycle state. Enter `DELETE FROM events`
   and verify that aws-tui will reject an unsafe statement before dispatch.
-  Start the demo running query, confirm `Esc` can cancel only the active query
-  started by this page, and confirm a History-only execution is not
-  cancellable. Open Results, page results when a continuation is available,
+  During submission, confirm `Esc` interrupts query submission before an
+  execution is available. Start the demo running query, confirm `Esc` stops
+  only the active app-owned execution started by this page, and confirm a
+  History-only execution is not cancellable. Open Results, page results when a
+  continuation is available,
   and verify null/empty rendering. Inspect bytes scanned and reuse in the
   actual Query and History surfaces: Query shows bytes scanned, while History
   shows both bytes scanned and reused-result state. From the successful
@@ -99,7 +101,7 @@ Review the PR like any other change. Merge when CI is green.
   `dev_analytics.dev_events_iceberg` in Glue. Inspect Snapshots, History,
   Manifests, Files, Partitions, and References. Select snapshot `4201`, press
   `Shift+V`, and verify Athena is mounted under the same connection and region
-  with `FOR VERSION AS OF 4201 LIMIT 100` in the editor, while no query starts
+  with `FOR VERSION AS OF 4201 LIMIT 5` in the editor, while no query starts
   automatically. Execute explicitly with `Ctrl+Enter`, compare displayed rows
   with the downloaded CSV, and hand the artifact to S3. Verify **Open query table in
   Glue** returns only for one unambiguous table. Repeat enough of the flow on

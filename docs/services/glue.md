@@ -45,7 +45,7 @@ queries incur ordinary Athena workgroup and result-storage behavior.
 ## 1.4. Athena handoffs
 
 `Shift+Q` opens the selected table in Athena with a quoted
-`SELECT * ... LIMIT 100` statement. `Shift+V` on a visible selected snapshot
+`SELECT * ... LIMIT 5` statement. `Shift+V` on a visible selected snapshot
 adds `FOR VERSION AS OF <snapshot-id>`. Both requests preserve catalog,
 database, table, connection, and region in immutable messages. The destination
 editor is prefilled for review; neither command executes SQL.

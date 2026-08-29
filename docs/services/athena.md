@@ -6,12 +6,14 @@ results, saved queries, and exact-source handoffs to Glue and S3.
 
 ## 1.1. Query context
 
-Source, Workgroup, Catalog, and Database are dependent overlay selectors in
-one AWS context frame. `Shift+S` rebuilds the page under the next supported AWS
-source. `Shift+W`, `Shift+C`, and `Shift+D` open the corresponding selector.
-Changing any parent context retires loaders, results, and app-owned execution
-state from the prior identity.
+Source, Workgroup, Catalog, and Database are four individually framed,
+dependent overlay selectors in one unframed row. `Shift+S` rebuilds the page
+under the next supported AWS source. `Shift+W`, `Shift+C`, and `Shift+D` open
+the corresponding selector. Changing any parent context retires loaders,
+results, and app-owned execution state from the prior identity.
 
+Focus moves through Source, Workgroup, Catalog, Database, the tabs, and the
+active view; enabled load-more controls appear immediately after their selector.
 The segmented frame contains Query (`1`), History (`2`), Results (`3`), and
 Saved (`4`). Unavailable controls are omitted from the active focus ring.
 
@@ -31,7 +33,7 @@ boundary after local validation.
 ## 1.3. Query lifecycle and results
 
 The Query VM records an app-owned execution identity and polls until a terminal
-state. `Esc` can stop only that active app-owned query. Results load at most
+state. `Esc` interrupts query submission or stops the active app-owned execution. Results load at most
 1,000 rows per Athena page and retain the continuation token for `l` to load
 more. History hydrates selected execution detail, including bytes scanned and
 result reuse, with one `BatchGetQueryExecution` request per bounded 50-row
@@ -41,6 +43,10 @@ opening either copies SQL into the editor without executing it.
 Workgroup configuration determines customer-S3 output or Athena managed
 results. Only a successful customer-S3 execution has an artifact that can be
 opened in the S3 service.
+
+The Query view orders Query controls, Query editor, then Execution detail. Glue
+table and Iceberg snapshot handoffs prefill a quoted `SELECT *` starter ending
+in `LIMIT 5`; the handoff never executes that starter.
 
 ## 1.4. Cross-service handoffs
 

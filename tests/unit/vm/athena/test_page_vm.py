@@ -517,7 +517,7 @@ async def test_open_table_preserves_context_and_prefills_without_execution() -> 
         "default",
     )
     assert page.query.sql == (
-        'SELECT * FROM "AwsDataCatalog"."default"."events""archive" FOR VERSION AS OF 42 LIMIT 100'
+        'SELECT * FROM "AwsDataCatalog"."default"."events""archive" FOR VERSION AS OF 42 LIMIT 5'
     )
     assert page.query.execution_ref is None
     assert client.start_calls == []

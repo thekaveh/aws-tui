@@ -147,8 +147,8 @@ same size.
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Glue under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard; OS clipboard delivery is best effort. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
-| Query selected table in Athena | `Shift+Q` (`Q`) or `:` / `Ctrl+K`, then **Query table in Athena** | Runs `glue.query_in_athena` for a visible selected Glue table. It opens Athena and prefills the exact bounded `SELECT * FROM "catalog"."database"."table" LIMIT 100`; it does not execute the query. |
-| Query selected Iceberg snapshot in Athena | `Shift+V` (`V`), `:` / `Ctrl+K`, then **Query Iceberg snapshot in Athena**, or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It opens Athena with the same exact source and bounded SQL plus `FOR VERSION AS OF <snapshot-id>` before `LIMIT 100`; it does not execute the query. |
+| Query selected table in Athena | `Shift+Q` (`Q`) or `:` / `Ctrl+K`, then **Query table in Athena** | Runs `glue.query_in_athena` for a visible selected Glue table. It opens Athena and prefills the exact quoted `SELECT * FROM "catalog"."database"."table" LIMIT 5`; it does not execute the query. |
+| Query selected Iceberg snapshot in Athena | `Shift+V` (`V`), `:` / `Ctrl+K`, then **Query Iceberg snapshot in Athena**, or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It opens Athena with the same exact source and bounded SQL plus `FOR VERSION AS OF <snapshot-id>` before `LIMIT 5`; it does not execute the query. |
 
 Glue's forward focus order is:
 
@@ -165,22 +165,20 @@ walks the same active ring in reverse.
 ### 1.1.10. Amazon Athena
 
 Athena is a single-context AWS service; its controls do not appear for
-S3-compatible connections. Source, Workgroup, Catalog, and Database are
-bordered selectors in the **AWS context** pane. Focus one and press `Enter` or
-`Space` to open it. Each option list overlays the current layout; opening or
-closing a picker does not resize the context pane, view tabs, or query surface.
+S3-compatible connections. Source, Workgroup, Catalog, and Database are four
+individually framed selectors in one unframed row. Focus one and press `Enter`
+or `Space` to open it. Each option list overlays the current layout; opening or
+closing a picker does not resize the selector row, view tabs, or query surface.
 
 The untitled segmented view frame uses the same persistent active accent text,
-focused soft fill, and single keyboard focus stop as Glue; Athena's grouped
-**AWS context** frame remains because its selectors form one dependent control
-region.
+focused soft fill, and single keyboard focus stop as Glue.
 
 | Action | Default | Notes |
 |---|---|---|
 | Query / History / Results / Saved | `1` / `2` / `3` / `4` | Selects the matching Athena view. |
 | Choose workgroup / catalog / database | `Shift+W` / `Shift+C` / `Shift+D` | Runs `athena.choose_workgroup`, `athena.choose_catalog`, or `athena.choose_database` and opens the corresponding selector. |
 | Execute editor SQL | `Ctrl+Enter` | Runs `athena.execute` only after the local read-only SQL validation succeeds. |
-| Cancel active query | `Esc` | Runs `athena.cancel`; it can stop only an app-owned active execution. |
+| Stop query | `Esc` | Runs `athena.cancel`; Stop interrupts query submission or stops the active app-owned execution. |
 | Load more result rows | `l` | Runs `athena.load_more` when the selected result has another page. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Athena under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Insert copied table reference | `i` | Runs `athena.insert_table_ref`, selecting Query when needed and inserting at the editor cursor or replacing its active selection. It refuses a copied connection/region that differs from Athena's active source and leaves both editor and typed clipboard unchanged; it never switches profiles because that could discard unrelated editor state. |
@@ -190,7 +188,8 @@ region.
 Athena's forward focus order is Source, Workgroup, its enabled load-more
 button, Catalog, its enabled load-more button, Database, its enabled load-more
 button, view tabs, the active view's controls, and the navigation rail. The
-active-view controls are:
+Query view lays out Query controls above the Query editor, then Execution
+detail. The active-view controls are:
 
 - **Query:** editor, enabled Execute, enabled Cancel, query detail.
 - **History:** history list, enabled Load more, enabled Results, history detail.
@@ -299,7 +298,7 @@ unbound until a handler ships.
 | `glue.choose_crawler_state` | `G` (`shift+g`) | yes | Focus and open the Crawlers state selector |
 | `glue.copy_table_ref` | `y` | yes | Copy the selected table's canonical identifier and source identity |
 | `glue.open_s3_location` | none (command palette) | yes | Open the selected Glue table's S3 location under the exact source connection and region |
-| `glue.query_in_athena` | `Q` (`shift+q`) | yes | Open the selected Glue table in Athena and prefill exact `SELECT * ... LIMIT 100` SQL without executing it |
+| `glue.query_in_athena` | `Q` (`shift+q`) | yes | Open the selected Glue table in Athena and prefill exact quoted `SELECT * ... LIMIT 5` SQL without executing it |
 | `glue.time_travel_in_athena` | `V` (`shift+v`) | yes | Open the selected visible Iceberg snapshot in Athena and prefill exact bounded `FOR VERSION AS OF` SQL without executing it |
 | `athena.query` | `1` | yes | Select the Athena Query view |
 | `athena.history` | `2` | yes | Select the Athena History view |
@@ -310,7 +309,7 @@ unbound until a handler ships.
 | `athena.choose_database` | `D` (`shift+d`) | yes | Focus and open the Database selector |
 | `athena.insert_table_ref` | `i` | yes | Insert the same-source typed table clipboard value into the query editor |
 | `athena.execute` | `ctrl+enter` | yes | Submit validated, read-only editor SQL |
-| `athena.cancel` | `escape` | yes | Stop an app-owned active Athena query |
+| `athena.cancel` | `escape` | yes | Stop interrupts query submission or stops an active app-owned Athena execution |
 | `athena.load_more` | `l` | yes | Fetch the next available result page |
 | `athena.open_result_location` | none (command palette) | yes | Open a validated successful Athena result artifact in S3 under its exact source identity |
 | `athena.open_in_glue` | none (command palette) | yes | Open the one unambiguous visible query table in Glue |

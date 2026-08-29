@@ -358,20 +358,19 @@ class NavMenu(Widget, can_focus=True):
         settings_container.remove_children()
 
         self._items = list(self._vm.items)
-        cursor_idx = self._cursor_index()
         # Mount the rows. Services first, Settings last (visually
         # pushed to the bottom by the flex spacer). The Settings row
         # uses the descriptor's ICON (a gear glyph ``⚙️``) instead of
         # the textual ``Settings`` label so the rail can stay narrow.
         # User feedback (post-PR-#97): "Let's switch back the Settings
         # to the gear emoji and then make the menu pane narrower."
-        for idx, item in enumerate(self._items):
+        for item in self._items:
             is_settings = item.descriptor.id == SETTINGS_NAV_ID
             display = item.descriptor.icon if is_settings else item.descriptor.label
             row = NavRow(
                 descriptor_id=item.descriptor.id,
                 label=display,
-                is_selected=(idx == cursor_idx and self._nav_slot_is_visual_focus()),
+                is_selected=(item.descriptor.id == self._vm.selected_id),
                 is_settings=is_settings,
             )
             if is_settings:
@@ -400,13 +399,7 @@ class NavMenu(Widget, can_focus=True):
         """
         selected_id = self._vm.selected_id
         for row in self.query(NavRow):
-            row.set_selected(self._nav_slot_is_visual_focus() and row.descriptor_id == selected_id)
-
-    def _nav_slot_is_visual_focus(self) -> bool:
-        return (
-            self._focus_coordinator is None
-            or self._focus_coordinator.focused_slot is FocusSlot.NAV_MENU
-        )
+            row.set_selected(row.descriptor_id == selected_id)
 
 
 __all__ = ["NAV_MENU_WIDTH", "NavMenu"]

@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Button, Static, TextArea
@@ -13,12 +14,17 @@ from aws_tui.vm.athena.page_vm import AthenaPageVM
 
 
 class AthenaQueryView(Widget):
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("tab", "focus_next", show=False),
+        Binding("shift+tab", "focus_previous", show=False),
+    ]
+
     DEFAULT_CSS: ClassVar[str] = """
     AthenaQueryView {
         height: 1fr;
         layout: grid;
         grid-size: 1 3;
-        grid-rows: 1fr 5 7;
+        grid-rows: 3 1fr 7;
         grid-columns: 1fr;
     }
     AthenaQueryView > TextArea {
@@ -28,22 +34,22 @@ class AthenaQueryView(Widget):
     }
     AthenaQueryView > #athena-query-controls {
         width: 1fr;
-        height: 5;
+        height: 3;
         layout: horizontal;
-        padding: 1 1 0 1;
+        padding: 0 1;
         border-title-align: left;
     }
     AthenaQueryView #athena-execute,
     AthenaQueryView #athena-cancel {
-        width: 5;
-        min-width: 5;
-        height: 3;
+        width: 3;
+        min-width: 3;
+        height: 1;
         margin: 0 1 0 0;
     }
     AthenaQueryView #athena-query-status {
         width: 1fr;
-        height: 3;
-        padding: 1 1 0 1;
+        height: 1;
+        content-align: left middle;
         text-overflow: ellipsis;
     }
     AthenaQueryView > #athena-query-detail {
@@ -67,6 +73,24 @@ class AthenaQueryView(Widget):
         self._syncing_editor = False
 
     def compose(self) -> ComposeResult:
+        with Horizontal(id="athena-query-controls"):
+            yield Button(
+                "▶",
+                id="athena-execute",
+                classes="-primary",
+                compact=True,
+                flat=True,
+                tooltip="Run the valid read-only query",
+            )
+            yield Button(
+                "■",
+                id="athena-cancel",
+                classes="-danger",
+                compact=True,
+                flat=True,
+                tooltip="Stop query submission or the active query",
+            )
+            yield Static("", id="athena-query-status", markup=False)
         yield TextArea(
             self._vm.sql,
             language="sql",
@@ -76,30 +100,12 @@ class AthenaQueryView(Widget):
             placeholder="Enter a read-only query",
             id="athena-editor",
         )
-        with Horizontal(id="athena-query-controls"):
-            yield Button(
-                "▶",
-                id="athena-execute",
-                classes="-primary",
-                compact=True,
-                flat=True,
-                tooltip="Execute query",
-            )
-            yield Button(
-                "■",
-                id="athena-cancel",
-                classes="-danger",
-                compact=True,
-                flat=True,
-                tooltip="Cancel active query",
-            )
-            yield Static("", id="athena-query-status", markup=False)
         with VerticalScroll(id="athena-query-detail"):
             yield Static("", id="athena-query-detail-text", markup=False)
 
     def on_mount(self) -> None:
         self.query_one("#athena-editor", TextArea).border_title = "query editor"
-        self.query_one("#athena-query-controls").border_title = "query status"
+        self.query_one("#athena-query-controls").border_title = "query controls"
         self.query_one("#athena-query-detail").border_title = "execution detail"
         self._refresh()
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
@@ -135,6 +141,12 @@ class AthenaQueryView(Widget):
     async def cancel(self) -> None:
         await self._vm.cancel()
 
+    def action_focus_next(self) -> None:
+        self._move_focus(forward=True)
+
+    def action_focus_previous(self) -> None:
+        self._move_focus(forward=False)
+
     def insert_table_reference(self, identifier: str) -> bool:
         if not identifier:
             return False
@@ -154,6 +166,49 @@ class AthenaQueryView(Widget):
 
     def refresh_from_vm(self) -> None:
         self._refresh()
+
+    def _move_focus(self, *, forward: bool) -> None:
+        targets: tuple[Widget, ...] = (
+            self.query_one("#athena-editor", TextArea),
+            self.query_one("#athena-execute", Button),
+            self.query_one("#athena-cancel", Button),
+            self.query_one("#athena-query-detail", VerticalScroll),
+        )
+        focus_chain = self.screen.focus_chain
+        focused = self.app.focused
+        try:
+            index = targets.index(focused)
+        except ValueError:
+            return
+        candidates = targets[index + 1 :] if forward else targets[:index][::-1]
+        for target in candidates:
+            if target in focus_chain:
+                target.focus()
+                return
+        self._move_focus_outside_surface(focus_chain, forward=forward)
+
+    def _move_focus_outside_surface(
+        self,
+        focus_chain: list[Widget],
+        *,
+        forward: bool,
+    ) -> None:
+        focused = self.app.focused
+        if focused is None:
+            return
+        try:
+            index = focus_chain.index(focused)
+        except ValueError:
+            return
+        ordered = (
+            [*focus_chain[index + 1 :], *focus_chain[:index]]
+            if forward
+            else [*focus_chain[:index][::-1], *focus_chain[index + 1 :][::-1]]
+        )
+        for target in ordered:
+            if self not in target.ancestors_with_self:
+                target.focus()
+                return
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh)

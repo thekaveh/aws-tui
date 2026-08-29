@@ -63,12 +63,12 @@ class AthenaPage(HubSubscriberMixin, Widget):
         height: 1fr;
         layout: vertical;
     }
-    AthenaPage > #athena-context-header {
+    AthenaPage > #athena-context-row {
         width: 1fr;
         height: auto;
-        min-height: 5;
+        min-height: 3;
         layout: horizontal;
-        border-title-align: left;
+        border: none;
     }
     AthenaPage #athena-source-header {
         width: 29;
@@ -76,20 +76,21 @@ class AthenaPage(HubSubscriberMixin, Widget):
         height: auto;
         min-height: 3;
     }
-    AthenaPage #athena-context-header > ContextPicker {
+    AthenaPage #athena-context-row > ContextPicker {
         width: 1fr;
         min-width: 16;
         height: auto;
         min-height: 3;
+        border: solid $primary;
     }
-    AthenaPage #athena-context-header > #athena-catalog {
+    AthenaPage #athena-context-row > #athena-catalog {
         width: 1fr;
         min-width: 19;
     }
-    AthenaPage #athena-context-header > #athena-database {
+    AthenaPage #athena-context-row > #athena-database {
         min-width: 12;
     }
-    AthenaPage #athena-context-header > AthenaLoadMoreButton {
+    AthenaPage #athena-context-row > AthenaLoadMoreButton {
         width: 3;
         min-width: 3;
     }
@@ -138,7 +139,7 @@ class AthenaPage(HubSubscriberMixin, Widget):
         return self._vm
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="athena-context-header"):
+        with Horizontal(id="athena-context-row"):
             yield ServiceSourceHeader(
                 self._vm.source,
                 candidates=self._source_candidates,
@@ -203,7 +204,6 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 yield child
 
     def on_mount(self) -> None:
-        self.query_one("#athena-context-header").border_title = "AWS context"
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,

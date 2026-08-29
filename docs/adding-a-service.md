@@ -270,8 +270,8 @@ the compact read-only page reference:
   service-to-service import. Its app subscriber resolves the exact
   connection name, verifies the region, rebuilds S3 through `RootVM`,
   navigates the requested pane, and focuses it.
-- `Shift+Q` opens a visible selected table in Athena with exact bounded
-  `SELECT * ... LIMIT 100` SQL. `Shift+V`, the corresponding palette entry, and
+- `Shift+Q` opens a visible selected table in Athena with exact quoted
+  `SELECT * ... LIMIT 5` SQL. `Shift+V`, the corresponding palette entry, and
   the Iceberg arrow button open a visible selected snapshot with
   `FOR VERSION AS OF <snapshot-id>`. Both actions use the same registered action
   and typed request path, preserve exact source identity, and never execute the
@@ -300,8 +300,8 @@ query-service reference:
   an `OpenS3LocationRequest` carrying the execution's exact connection and
   region, not an Athena-to-S3 import.
 - `AthenaPageVM.open_table(...)` discovers the exact catalog/database in
-  bounded pages, updates context, and inserts a quoted `SELECT * ... LIMIT
-  100` statement. A snapshot request adds `FOR VERSION AS OF <id>`. It never
+  bounded pages, updates context, and inserts a quoted `SELECT * ... LIMIT 5`
+  statement. A snapshot request adds `FOR VERSION AS OF <id>`. It never
   executes the generated SQL. `open_table_in_glue()` publishes
   `OpenGlueTableRequest` only when the current read-only SQL exposes one
   unambiguous table reference.

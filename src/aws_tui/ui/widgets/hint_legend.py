@@ -100,6 +100,7 @@ class HintLegend(HubSubscriberMixin, Widget):
         width: 1fr;
         height: 1;
         layout: horizontal;
+        align: center middle;
         overflow: hidden hidden;
     }
     HintLegend .hint-chip {
@@ -107,6 +108,9 @@ class HintLegend(HubSubscriberMixin, Widget):
         min-width: 0;
         height: 1;
         margin-right: 1;
+    }
+    HintLegend .hint-chip:last-child {
+        margin-right: 0;
     }
     HintLegend .hint-key {
         width: auto;

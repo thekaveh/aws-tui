@@ -347,7 +347,6 @@ def test_operational_pane_structure_is_shared_theme_owned() -> None:
 
     for content, selector in (
         (shared, "GluePage GlueIcebergView"),
-        (shared, "AthenaPage > #athena-context-header"),
         (shared, "AthenaPage TextArea"),
         (shared, "AthenaPage #athena-query-controls"),
         (shared, "AthenaPage #athena-query-detail"),
@@ -360,7 +359,6 @@ def test_operational_pane_structure_is_shared_theme_owned() -> None:
 
     for content, selector in (
         (shared, "GluePage GlueIcebergView:focus-within"),
-        (shared, "AthenaPage > #athena-context-header:focus-within"),
         (shared, "AthenaPage TextArea:focus"),
         (
             shared,
@@ -381,7 +379,7 @@ def test_operational_pane_structure_is_shared_theme_owned() -> None:
         assert any("border: solid $accent;" in body for body in bodies)
 
 
-def test_glue_context_layout_has_no_theme_owned_frame() -> None:
+def test_service_context_layout_has_no_theme_owned_frame() -> None:
     shared = (
         resources.files("aws_tui.ui.themes")
         .joinpath("operational-panes.tcss")
@@ -390,8 +388,8 @@ def test_glue_context_layout_has_no_theme_owned_frame() -> None:
 
     assert not _bodies_for_selector(shared, "GluePage > #glue-context-pane")
     assert not _bodies_for_selector(shared, "GluePage > #glue-context-row")
-    assert _bodies_for_selector(shared, "AthenaPage > #athena-context-header")
-    assert _bodies_for_selector(shared, "AthenaPage > #athena-context-header:focus-within")
+    assert not _bodies_for_selector(shared, "AthenaPage > #athena-context-row")
+    assert not _bodies_for_selector(shared, "AthenaPage > #athena-context-row:focus-within")
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
@@ -401,7 +399,6 @@ def test_builtin_themes_do_not_duplicate_operational_structure(name: str) -> Non
 
     for selector in (
         "GluePage GlueIcebergView",
-        "AthenaPage > #athena-context-header",
         "AthenaPage TextArea",
         "AthenaPage #athena-query-controls",
         "AthenaPage #athena-query-detail",
@@ -415,7 +412,6 @@ def test_builtin_themes_do_not_duplicate_operational_structure(name: str) -> Non
 
     for selector in (
         "GluePage GlueIcebergView:focus-within",
-        "AthenaPage > #athena-context-header:focus-within",
         "AthenaPage TextArea:focus",
         "AthenaPage DataTable:focus",
         "AthenaPage #athena-query-controls:focus-within",
@@ -425,6 +421,8 @@ def test_builtin_themes_do_not_duplicate_operational_structure(name: str) -> Non
         assert all(
             "border: solid $accent;" not in body for body in _bodies_for_selector(content, selector)
         )
+
+    assert "AthenaPage > #athena-context-header" not in content
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)

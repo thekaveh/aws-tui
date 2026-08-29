@@ -22,6 +22,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets import nav_menu as nav_menu_module
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.nav_row import NavRow
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.messages import ConnectionListChangedMessage
 from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
@@ -320,4 +321,48 @@ async def test_cursor_can_reach_settings_row_via_arrow_keys() -> None:
                 "Arrow-walking down should land on Settings and switch_service_command should fire."
             )
     finally:
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_active_service_stays_selected_when_focus_moves_into_content() -> None:
+    vm, hub = _vm_with_services()
+    coordinator = FocusCoordinatorVM(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        initial=FocusSlot.NAV_MENU,
+    )
+    coordinator.construct()
+    nav = NavMenu(vm=vm, hub=hub, focus_coordinator=coordinator)
+    app = _Host(nav)
+    try:
+        async with app.run_test() as pilot:
+            vm.switch_service_command.execute("athena")
+            await pilot.pause()
+            athena = next(row for row in nav.query(NavRow) if row.descriptor_id == "athena")
+            assert athena.has_class("-selected")
+
+            coordinator.project_focused_slot(FocusSlot.ATHENA_PRIMARY)
+            await pilot.pause()
+
+            assert athena.has_class("-selected")
+            assert sum(row.has_class("-selected") for row in nav.query(NavRow)) == 1
+
+            vm.switch_service_command.execute("settings")
+            await pilot.pause()
+            settings = next(row for row in nav.query(NavRow) if row.descriptor_id == "settings")
+            assert settings.has_class("-selected")
+
+            coordinator.project_focused_slot(FocusSlot.SETTINGS)
+            await pilot.pause()
+            assert settings.has_class("-selected")
+            assert sum(row.has_class("-selected") for row in nav.query(NavRow)) == 1
+
+            coordinator.project_focused_slot(FocusSlot.ATHENA_PRIMARY)
+            await pilot.pause()
+
+            assert settings.has_class("-selected")
+            assert sum(row.has_class("-selected") for row in nav.query(NavRow)) == 1
+    finally:
+        coordinator.dispose()
         vm.dispose()

@@ -125,6 +125,16 @@ async def test_context_picker_renders_its_label_and_selected_value() -> None:
 
 
 @pytest.mark.asyncio
+async def test_context_picker_has_no_default_border_without_a_theme() -> None:
+    picker = _picker()
+
+    async with PickerHost(picker).run_test() as pilot:
+        await pilot.pause()
+
+        assert picker.styles.border_top[0] in {"", "none"}
+
+
+@pytest.mark.asyncio
 async def test_context_picker_indicator_tracks_open_state() -> None:
     picker = _picker()
 

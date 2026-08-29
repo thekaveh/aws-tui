@@ -1466,6 +1466,10 @@ def test_commands_follow_vmx_gating_and_disposal() -> None:
     vm.set_sql("DELETE FROM sales")
     assert not vm.execute_command.can_execute()
 
+    vm._busy = True  # type: ignore[attr-defined]
+    vm._is_submitting = True  # type: ignore[attr-defined]
+    assert vm.cancel_command.can_execute()
+
     vm.dispose()
     assert not vm.execute_command.can_execute()
     assert not vm.cancel_command.can_execute()
@@ -1481,7 +1485,7 @@ async def test_execute_command_requires_a_complete_context() -> None:
     assert not vm.execute_command.can_execute()
 
 
-def test_cancel_command_requires_an_owned_active_query() -> None:
+def test_cancel_command_tracks_every_interruptible_query_phase() -> None:
     vm = make_query_vm(InMemoryAthena())
     ref = QueryExecutionRef(
         "q-owned",
@@ -1489,15 +1493,21 @@ def test_cancel_command_requires_an_owned_active_query() -> None:
         _CONTEXT.region,
         _CONTEXT.workgroup,
     )
-    vm._busy = True  # type: ignore[attr-defined]
-    vm._execution_ref = ref  # type: ignore[attr-defined]
 
+    assert not vm.cancel_command.can_execute()
+
+    vm._busy = True  # type: ignore[attr-defined]
+    vm._is_submitting = True  # type: ignore[attr-defined]
+    assert vm.cancel_command.can_execute()
+
+    vm._is_submitting = False  # type: ignore[attr-defined]
+    vm._execution_ref = ref  # type: ignore[attr-defined]
     assert not vm.cancel_command.can_execute()
 
     vm._owns_active_query = True  # type: ignore[attr-defined]
     assert vm.cancel_command.can_execute()
 
-    vm._execution_ref = None  # type: ignore[attr-defined]
+    vm._busy = False  # type: ignore[attr-defined]
     assert not vm.cancel_command.can_execute()
 
 

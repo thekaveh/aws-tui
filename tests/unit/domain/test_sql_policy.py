@@ -590,14 +590,11 @@ def test_table_refs_does_not_log_full_sql(
     [
         (
             None,
-            'SELECT * FROM "Catalog""Name"."db name"."table""name" LIMIT 100',
+            'SELECT * FROM "Catalog""Name"."db name"."table""name" LIMIT 5',
         ),
         (
             42,
-            (
-                'SELECT * FROM "Catalog""Name"."db name"."table""name" '
-                "FOR VERSION AS OF 42 LIMIT 100"
-            ),
+            ('SELECT * FROM "Catalog""Name"."db name"."table""name" FOR VERSION AS OF 42 LIMIT 5'),
         ),
     ],
 )
@@ -646,7 +643,7 @@ def test_select_starter_sql_delegates_qualified_identifier_quoting(
 
     monkeypatch.setattr(sql_policy, "quote_athena_table_ref", quote)
 
-    assert select_starter_sql(ref) == 'SELECT * FROM "canonical"."table"."reference" LIMIT 100'
+    assert select_starter_sql(ref) == 'SELECT * FROM "canonical"."table"."reference" LIMIT 5'
     assert seen == [ref]
 
 
