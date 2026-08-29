@@ -53,18 +53,15 @@ def _focused_panes(app: AwsTuiApp) -> list[Pane]:
 def _assert_one_visual_focus(app: AwsTuiApp, *, slot: FocusSlot) -> None:
     selected_nav = _selected_nav_rows(app)
     focused_panes = _focused_panes(app)
-    assert len(selected_nav) + len(focused_panes) == 1
+    assert [row.descriptor_id for row in selected_nav] == ["s3"]
     if slot is FocusSlot.NAV_MENU:
         assert "-rail-active" in app.screen.classes
-        assert [row.descriptor_id for row in selected_nav] == ["s3"]
         assert focused_panes == []
     elif slot is FocusSlot.S3_LEFT:
         assert "-rail-active" not in app.screen.classes
-        assert selected_nav == []
         assert [pane.id for pane in focused_panes] == ["pane-left"]
     elif slot is FocusSlot.S3_RIGHT:
         assert "-rail-active" not in app.screen.classes
-        assert selected_nav == []
         assert [pane.id for pane in focused_panes] == ["pane-right"]
     else:  # pragma: no cover - helper is S3-only by design
         raise AssertionError(f"unexpected S3 focus slot {slot!r}")
