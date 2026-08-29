@@ -152,7 +152,6 @@ def test_athena_snapshot_content_guards(theme: str) -> None:
 
     source = "analytics-prod·us-west-2"
     assert source in empty
-    assert "&#160;AWS&#160;context&#160;" in empty
     assert "&#160;Views&#160;" not in empty
     assert "Enter&#160;a&#160;read-only&#160;query" in empty
     assert "q-20260726-running" in running

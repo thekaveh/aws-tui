@@ -82,12 +82,12 @@ async def test_shift_t_cycles_theme(
 
 
 @pytest.mark.asyncio
-async def test_user_overlay_overrides_shared_operational_border(
+async def test_user_overlay_styles_athena_context_row(
     tmp_path: Path,
 ) -> None:
     overlay = tmp_path / "theme.tcss"
     overlay.write_text(
-        "AthenaPage > #athena-context-header { border: solid #ff00ff; }\n",
+        "AthenaPage > #athena-context-row { border: solid #ff00ff; }\n",
         encoding="utf-8",
     )
     theme = ThemeStore(
@@ -99,8 +99,8 @@ async def test_user_overlay_overrides_shared_operational_border(
 
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        header = app.query_one("#athena-context-header")
-        assert header.styles.border_top == ("solid", Color.parse("#ff00ff"))
+        row = app.query_one("#athena-context-row")
+        assert row.styles.border_top == ("solid", Color.parse("#ff00ff"))
 
 
 @pytest.mark.asyncio

@@ -150,14 +150,14 @@ class AthenaPageApp(App[None]):
 
     async def open_catalog_picker_with_geometry_check(self, pilot: Pilot) -> None:
         await pilot.pause()
-        header = self.query_one("#athena-context-header", Horizontal)
+        row = self.query_one("#athena-context-row", Horizontal)
         source = self.query_one("#athena-source-header", ServiceSourceHeader)
         workgroup = self.query_one("#athena-workgroup", ContextPicker)
         catalog = self.query_one("#athena-catalog", ContextPicker)
         database = self.query_one("#athena-database", ContextPicker)
         tabs = self.query_one("#athena-view-tabs", ServiceTabStrip)
         view_host = self.query_one("#athena-view-host")
-        widgets = (header, source, workgroup, catalog, database, tabs, view_host)
+        widgets = (row, source, workgroup, catalog, database, tabs, view_host)
         closed_regions = tuple(widget.region for widget in widgets)
 
         catalog.open()

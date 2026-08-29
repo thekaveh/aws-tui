@@ -392,20 +392,22 @@ def test_results_view_coalesces_property_bursts_into_one_refresh() -> None:
 
 
 @pytest.mark.asyncio
-async def test_athena_retains_its_grouped_context_header() -> None:
+async def test_athena_context_uses_an_unframed_row_of_bordered_selectors() -> None:
     vm, _client = _build_vm()
     await vm.setup()
     app = _AthenaApp(vm)
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        header = app.query_one("#athena-context-header", Horizontal)
+        row = app.query_one("#athena-context-row", Horizontal)
 
-        assert header.border_title == "AWS context"
-        assert app.query_one("#athena-source-header") in header.children
-        assert app.query_one("#athena-workgroup") in header.children
-        assert app.query_one("#athena-catalog") in header.children
-        assert app.query_one("#athena-database") in header.children
+        assert row.border_title is None
+        assert row.styles.border_top[0] in {"", "none"}
+        assert app.query_one("#athena-source-header") in row.children
+        for selector in ("#athena-workgroup", "#athena-catalog", "#athena-database"):
+            picker = app.query_one(selector, ContextPicker)
+            assert picker in row.children
+            assert picker.styles.border_top[0] in {"solid", "heavy"}
 
 
 @pytest.mark.asyncio
@@ -469,6 +471,30 @@ async def test_named_context_action_focuses_and_opens_picker(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("picker_id", ["athena-workgroup", "athena-catalog", "athena-database"])
+async def test_populated_athena_context_picker_opens_by_mouse_and_keyboard(
+    picker_id: str,
+) -> None:
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test(size=(245, 62)) as pilot:
+        picker = app.query_one(f"#{picker_id}", ContextPicker)
+        assert picker.disabled is False
+
+        await pilot.click(f"#{picker_id}")
+        await pilot.pause()
+        assert picker.is_open
+
+        await pilot.press("escape")
+        picker.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert picker.is_open
+
+
+@pytest.mark.asyncio
 async def test_open_athena_context_picker_preserves_page_regions() -> None:
     vm, _client = _build_vm()
     await vm.setup()
@@ -477,20 +503,20 @@ async def test_open_athena_context_picker_preserves_page_regions() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         page = app.query_one(AthenaPage)
-        header = page.query_one("#athena-context-header", Horizontal)
+        row = page.query_one("#athena-context-row", Horizontal)
         tabs = page.query_one("#athena-view-tabs", ServiceTabStrip)
         view_host = page.query_one("#athena-view-host")
-        before = (header.region, tabs.region, view_host.region)
+        before = (row.region, tabs.region, view_host.region)
 
         page.action_choose_catalog()
         await pilot.pause()
 
-        assert (header.region, tabs.region, view_host.region) == before
+        assert (row.region, tabs.region, view_host.region) == before
 
         await pilot.press("escape")
         await pilot.pause()
 
-        assert (header.region, tabs.region, view_host.region) == before
+        assert (row.region, tabs.region, view_host.region) == before
 
 
 @pytest.mark.asyncio
@@ -506,12 +532,19 @@ async def test_unfocused_source_picker_is_dim_while_focused_content_uses_accent(
     async with app.run_test() as pilot:
         await pilot.pause()
         source = app.query_one("#athena-source-header-picker", ContextPicker)
+        workgroup = app.query_one("#athena-workgroup", ContextPicker)
         editor = app.query_one("#athena-editor", TextArea)
         editor.focus()
         await pilot.pause()
 
         assert source.styles.border_top == ("solid", Color.parse("#2a2d33"))
+        assert workgroup.styles.border_top == ("solid", Color.parse("#2a2d33"))
         assert editor.styles.border_top == ("solid", Color.parse("#6fb8ff"))
+
+        workgroup.focus()
+        await pilot.pause()
+
+        assert workgroup.styles.border_top == ("heavy", Color.parse("#6fb8ff"))
 
 
 @pytest.mark.asyncio
