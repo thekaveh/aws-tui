@@ -179,7 +179,7 @@ _ACTION_EFFECTS: dict[str, str] = {
     "athena.choose_database": "Open the Athena database selector.",
     "athena.insert_table_ref": "Insert the same-source copied Glue table at the editor cursor.",
     "athena.execute": "Execute the validated read-only SQL in the active Athena context.",
-    "athena.cancel": "Stop the active app-owned Athena query execution.",
+    "athena.cancel": "Stop interrupts query submission or the active app-owned Athena query.",
     "athena.load_more": "Load the next available page for the active Athena view.",
 }
 
@@ -192,7 +192,7 @@ _ACTION_REQUIREMENTS: dict[str, str] = {
     "glue.time_travel_in_athena": "Requires a visible selected snapshot row.",
     "athena.insert_table_ref": "Requires a copied table from the active Athena source.",
     "athena.execute": "Requires valid non-empty read-only SQL and an idle query runner.",
-    "athena.cancel": "Requires an active app-owned Athena query.",
+    "athena.cancel": "Requires query submission or an active app-owned Athena query.",
     "athena.load_more": "Requires another result page in the active Athena view.",
 }
 

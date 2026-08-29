@@ -793,9 +793,10 @@ bucket, and KMS policies remain the authorization boundary.
 After submission, Query records an app-owned execution identity and polls its
 detail through queued, running, and terminal states. On `SUCCEEDED`, it loads
 the first Results page; `FAILED` and `CANCELLED` retain terminal detail. `Esc`
-can call `stop_query_execution` only for a still-active query started by this
-page. Switching context or source requests cancellation and awaits Athena
-shutdown before disposal; History rows are never assumed safe to stop.
+interrupts query submission before an execution is available and stops only an
+active app-owned execution started by this page through `stop_query_execution`.
+Switching context or source requests cancellation and awaits Athena shutdown
+before disposal; History rows are never assumed safe to stop.
 
 Results are fetched one page at a time and never fully materialized. `l` loads
 the next page only when Athena returns a continuation token; each domain

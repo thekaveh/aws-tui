@@ -178,7 +178,7 @@ focused soft fill, and single keyboard focus stop as Glue.
 | Query / History / Results / Saved | `1` / `2` / `3` / `4` | Selects the matching Athena view. |
 | Choose workgroup / catalog / database | `Shift+W` / `Shift+C` / `Shift+D` | Runs `athena.choose_workgroup`, `athena.choose_catalog`, or `athena.choose_database` and opens the corresponding selector. |
 | Execute editor SQL | `Ctrl+Enter` | Runs `athena.execute` only after the local read-only SQL validation succeeds. |
-| Cancel active query | `Esc` | Runs `athena.cancel`; it can stop only an app-owned active execution. |
+| Stop query | `Esc` | Runs `athena.cancel`; Stop interrupts query submission or stops the active app-owned execution. |
 | Load more result rows | `l` | Runs `athena.load_more` when the selected result has another page. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Athena under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Insert copied table reference | `i` | Runs `athena.insert_table_ref`, selecting Query when needed and inserting at the editor cursor or replacing its active selection. It refuses a copied connection/region that differs from Athena's active source and leaves both editor and typed clipboard unchanged; it never switches profiles because that could discard unrelated editor state. |
@@ -309,7 +309,7 @@ unbound until a handler ships.
 | `athena.choose_database` | `D` (`shift+d`) | yes | Focus and open the Database selector |
 | `athena.insert_table_ref` | `i` | yes | Insert the same-source typed table clipboard value into the query editor |
 | `athena.execute` | `ctrl+enter` | yes | Submit validated, read-only editor SQL |
-| `athena.cancel` | `escape` | yes | Stop an app-owned active Athena query |
+| `athena.cancel` | `escape` | yes | Stop interrupts query submission or stops an active app-owned Athena execution |
 | `athena.load_more` | `l` | yes | Fetch the next available result page |
 | `athena.open_result_location` | none (command palette) | yes | Open a validated successful Athena result artifact in S3 under its exact source identity |
 | `athena.open_in_glue` | none (command palette) | yes | Open the one unambiguous visible query table in Glue |

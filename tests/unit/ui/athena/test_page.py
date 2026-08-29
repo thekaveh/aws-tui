@@ -493,6 +493,18 @@ async def test_populated_athena_context_picker_opens_by_mouse_and_keyboard(
         await pilot.pause()
         assert picker.is_open
 
+        await pilot.press("escape")
+        picker.focus()
+        await pilot.press("space")
+        await pilot.pause()
+        assert picker.is_open
+
+        selected = picker.value
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not picker.is_open
+        assert picker.value == selected
+
 
 @pytest.mark.asyncio
 async def test_open_athena_context_picker_preserves_page_regions() -> None:

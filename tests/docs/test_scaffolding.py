@@ -136,6 +136,17 @@ def test_public_docs_cover_athena_read_only_contract() -> None:
     assert "get_prepared_statement" in ledger
     assert "athena.execute" in keybindings
     assert "athena.open_result_location" in keybindings
+    assert "| Stop query | `Esc` |" in keybindings
+    assert (
+        "Stop interrupts query submission or stops the active app-owned execution." in keybindings
+    )
+    assert "`Esc` interrupts query submission before an execution is available" in _squash(cookbook)
+    assert "stops only an active app-owned execution started by this page" in _squash(cookbook)
+    assert "`Esc` interrupts query submission before an execution is available" in _squash(
+        releasing
+    )
+    assert "stops only the active app-owned execution started by this page" in _squash(releasing)
+    assert "can interrupt submission and stop only app-started active executions" in ledger
     assert "Athena" in releasing
     assert "Athena" in changelog
     assert (
@@ -359,7 +370,8 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
     for step in (
         "execute a valid bounded query",
         "reject an unsafe statement before dispatch",
-        "cancel only the active query started by this page",
+        "interrupts query submission before an execution is available",
+        "stops only the active app-owned execution started by this page",
         "page results when a continuation is available",
         "Query and History surfaces",
         "exact S3 artifact",

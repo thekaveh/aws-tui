@@ -33,7 +33,7 @@ boundary after local validation.
 ## 1.3. Query lifecycle and results
 
 The Query VM records an app-owned execution identity and polls until a terminal
-state. `Esc` can stop only that active app-owned query. Results load at most
+state. `Esc` interrupts query submission or stops the active app-owned execution. Results load at most
 1,000 rows per Athena page and retain the continuation token for `l` to load
 more. History hydrates selected execution detail, including bytes scanned and
 result reuse, with one `BatchGetQueryExecution` request per bounded 50-row

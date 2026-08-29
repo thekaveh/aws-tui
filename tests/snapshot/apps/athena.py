@@ -176,6 +176,45 @@ class AthenaPageApp(App[None]):
         assert tuple(widget.region for widget in widgets) == closed_regions
         self._assert_one_row_legend()
 
+    async def assert_narrow_layout(self, pilot: Pilot) -> None:
+        """Keep the narrow context row and visible query controls on-screen."""
+
+        await pilot.pause()
+        page = self.query_one("#athena-page", AthenaPage)
+        row = self.query_one("#athena-context-row", Horizontal)
+        source = self.query_one("#athena-source-header", ServiceSourceHeader)
+        workgroup = self.query_one("#athena-workgroup", ContextPicker)
+        catalog = self.query_one("#athena-catalog", ContextPicker)
+        database = self.query_one("#athena-database", ContextPicker)
+        tabs = self.query_one("#athena-view-tabs", ServiceTabStrip)
+        view_host = self.query_one("#athena-view-host")
+
+        for widget in (page, row, source, workgroup, catalog, database, tabs, view_host):
+            assert 0 <= widget.region.x <= widget.region.right <= self.size.width
+            assert 0 <= widget.region.y <= widget.region.bottom <= self.size.height
+        assert row.region.bottom <= tabs.region.y <= tabs.region.bottom <= view_host.region.y
+
+        query_view = self.query_one("#athena-query-view")
+        if query_view.display:
+            controls = self.query_one("#athena-query-controls")
+            editor = self.query_one("#athena-editor")
+            execute = self.query_one("#athena-execute")
+            cancel = self.query_one("#athena-cancel")
+            assert controls.region.bottom <= editor.region.y
+            for control in (execute, cancel):
+                assert (
+                    controls.region.x
+                    <= control.region.x
+                    < control.region.right
+                    <= controls.region.right
+                )
+                assert (
+                    controls.region.y
+                    <= control.region.y
+                    < control.region.bottom
+                    <= controls.region.bottom
+                )
+
     def _assert_one_row_legend(self) -> None:
         assert self._hint_vm is not None
         legend = self.query_one(HintLegend)
