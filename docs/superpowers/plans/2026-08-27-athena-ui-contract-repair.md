@@ -49,7 +49,7 @@
 
 ## 1.3. Task Plan
 
-### Task 1: Center the Shared One-Line Command Legend
+### 1.3.1. Center the Shared One-Line Command Legend
 
 **Files:**
 - Modify: `tests/unit/ui/test_chrome_widgets.py`
@@ -122,7 +122,7 @@ git commit -m "fix(ui): center fitted command legends"
 
 ---
 
-### Task 2: Keep the Active Service Selected Outside Rail Focus
+### 1.3.2. Keep the Active Service Selected Outside Rail Focus
 
 **Files:**
 - Modify: `tests/unit/ui/test_nav_menu.py`
@@ -214,7 +214,7 @@ git commit -m "fix(ui): persist active service selection"
 
 ---
 
-### Task 3: Unframe and Restore Athena Context Selectors
+### 1.3.3. Unframe and Restore Athena Context Selectors
 
 **Files:**
 - Modify: `tests/unit/ui/athena/test_page.py`
@@ -356,7 +356,7 @@ git commit -m "fix(athena): restore context picker interactions"
 
 ---
 
-### Task 4: Align VMx Stop Availability with Interruptibility
+### 1.3.4. Align VMx Stop Availability with Interruptibility
 
 **Files:**
 - Modify: `tests/unit/vm/athena/test_query_vm.py`
@@ -455,7 +455,7 @@ git commit -m "fix(athena): align stop command with query lifecycle"
 
 ---
 
-### Task 5: Put Compact Query Controls Above the Editor
+### 1.3.5. Put Compact Query Controls Above the Editor
 
 **Files:**
 - Modify: `tests/unit/ui/athena/test_page.py`
@@ -605,7 +605,7 @@ git commit -m "fix(athena): place compact query controls above editor"
 
 ---
 
-### Task 6: Prefill Five-Row SQL in the Visible Athena Editor
+### 1.3.6. Prefill Five-Row SQL in the Visible Athena Editor
 
 **Files:**
 - Modify: `tests/unit/domain/test_sql_policy.py`
@@ -707,7 +707,7 @@ git commit -m "fix(athena): prefill visible five-row starter queries"
 
 ---
 
-### Task 7: Synchronize Documentation and Visual Contracts
+### 1.3.7. Synchronize Documentation and Visual Contracts
 
 **Files:**
 - Modify: `docs/services/athena.md`
@@ -792,7 +792,7 @@ git commit -m "docs: synchronize Athena interaction contracts"
 
 ---
 
-### Task 8: Full Verification, Review, and Gitflow Delivery
+### 1.3.8. Full Verification, Review, and Gitflow Delivery
 
 **Files:**
 - Verify: all changed source, tests, docs, generated outputs, and snapshots.

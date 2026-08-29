@@ -47,8 +47,9 @@ VMs to build service pages, but it cannot import Textual widgets.
     `HintLegendVM` owns service-scoped action
     membership, configured shortcut labels, complete effect/prerequisite
     tooltips, availability, and fitting priority. The `HintLegend` view performs
-    terminal-width measurement and renders exactly one compact command row;
-    lower-priority hints yield to `[:] more` and `[q] quit` rather than wrapping.
+    terminal-width measurement and centers a fitted one-line command row;
+    lower-priority hints still yield to `[:] more` and `[q] quit` rather than
+    wrapping, without changing shortcut bindings.
   - `vm/file_manager/` — `DualPaneVM`, two `PaneVM` children, entry VMs, and
     transfer state. `DualPaneVM` owns cross-provider copy/move orchestration;
     each `PaneVM` owns one provider-backed projection and cursor.
@@ -79,20 +80,23 @@ VMs to build service pages, but it cannot import Textual widgets.
     `OpenAthenaTableRequest` messages from the visible snapshot. They never mount
     a Textual view or construct a destination service themselves.
   - `vm/athena/` — `AthenaPageVM` with Query, History, Results, and Saved
-    child VMs. Its context and remembered selections are scoped by connection
+    child VMs. The view composes Source, Workgroup, Catalog, and Database as
+    individually framed selectors in an unframed row, followed by the tabs and
+    active view. Its context and remembered selections are scoped by connection
     name and region; changing workgroup, catalog, or database invalidates the
     query context. Query work stays in the VM layer, while `domain/athena.py`
     owns boto mapping and `domain/sql_policy.py` fails closed before dispatch.
     `AthenaPageVM.open_table(...)` sets exact catalog/database context and
-    prefills bounded starter SQL. `open_table_in_glue()` publishes
+    prefills a quoted `LIMIT 5` starter without executing it. `open_table_in_glue()` publishes
     `OpenGlueTableRequest` only when the current SQL resolves to one visible
     table.
   - `vm/settings/` — `SettingsVM` (built per-mount when the user
     selects the Settings nav peer) and `S3ConnectionsVM` (singleton
     on `AppContext`, drives the in-app Connections CRUD).
   - Top-level `vm/nav_menu_vm.py` — `NavMenuVM` (renamed from
-    `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias),
-    `vm/content_host_vm.py`, `vm/root_vm.py`.
+    `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias) keeps the active
+    service selected while focus moves into its content. The same layer includes
+    `vm/content_host_vm.py` and `vm/root_vm.py`.
 - **Service plugins** — One folder per top-level service
   (`src/aws_tui/services/`). The current tree ships `s3`,
   `emr-serverless` (read-only browser + clone-job-run plus job-run
@@ -200,7 +204,7 @@ connection name, and region; the Athena request may add a validated snapshot
 ID. `app.py` serializes table handoffs, resolves the exact connection, rejects
 region drift, snapshots the outgoing Glue/Athena state for rollback, and
 mounts the destination through `RootVM`. A table request prefills the exact
-bounded `SELECT * FROM "catalog"."database"."table" LIMIT 100`; a snapshot
+quoted `SELECT * FROM "catalog"."database"."table" LIMIT 5`; a snapshot
 request adds `FOR VERSION AS OF <snapshot-id>` before the limit. Athena receives
 that generated SQL in the editor but does not execute it. For S3,
 `OpenS3LocationRequest` carries the

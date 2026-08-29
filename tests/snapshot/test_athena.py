@@ -138,6 +138,14 @@ def test_athena_picker_and_legend_snapshot_content_guards() -> None:
     assert "quit" in narrow
 
 
+def test_athena_query_narrow_snapshot_content_guard() -> None:
+    raw = _named_snapshot("test_athena_query_narrow_snapshot")
+    assert "AWS&#160;context" not in raw
+    assert "query&#160;controls" in raw
+    assert "query&#160;editor" in raw
+    assert raw.index("query&#160;controls") < raw.index("query&#160;editor")
+
+
 @pytest.mark.parametrize("theme", THEMES)
 def test_athena_snapshot_content_guards(theme: str) -> None:
     empty = _snapshot("empty-query", theme)

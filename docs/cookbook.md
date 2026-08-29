@@ -860,7 +860,7 @@ immutable `TableRef`; it does not pass a client or reuse a different profile.
 3. Review the generated statement:
 
     ```sql
-    SELECT * FROM "AwsDataCatalog"."database"."table" LIMIT 100
+    SELECT * FROM "AwsDataCatalog"."database"."table" LIMIT 5
     ```
 
 4. Edit it if needed, then press `Ctrl+Enter` to execute.
@@ -925,7 +925,7 @@ destination editor receives:
 
 ```sql
 SELECT * FROM "AwsDataCatalog"."database"."table"
-FOR VERSION AS OF 4201 LIMIT 100
+FOR VERSION AS OF 4201 LIMIT 5
 ```
 
 The snapshot ID must be a non-negative integer present in the visible snapshot

@@ -44,7 +44,7 @@ inspection workflows.
   into the VMx-backed app clipboard and best-effort OS clipboard.
   From a selected Catalog table, the command palette can open its exact
   location in S3. Press `Shift+Q` to open that table in Athena and prefill the
-  bounded `SELECT * ... LIMIT 100` statement. Iceberg tables add bounded,
+  quoted `SELECT * ... LIMIT 5` statement. Iceberg tables add bounded,
   on-demand Snapshots, History, Manifests, Files, Partitions, and References
   views. Select a visible snapshot and press `Shift+V`, or activate the real
   arrow button, to open Athena with the same statement plus
