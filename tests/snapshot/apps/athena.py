@@ -214,6 +214,8 @@ class AthenaPageApp(App[None]):
                     < control.region.bottom
                     <= controls.region.bottom
                 )
+                assert control.content_region.height >= 1
+                assert controls.content_region.contains_region(control.region)
 
     def _assert_one_row_legend(self) -> None:
         assert self._hint_vm is not None

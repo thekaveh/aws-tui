@@ -138,6 +138,10 @@ class AthenaPage(HubSubscriberMixin, Widget):
     def vm(self) -> AthenaPageVM:
         return self._vm
 
+    def refresh_from_vm(self) -> None:
+        """Project the current page and query state into mounted controls."""
+        self._refresh_page()
+
     def compose(self) -> ComposeResult:
         with Horizontal(id="athena-context-row"):
             yield ServiceSourceHeader(

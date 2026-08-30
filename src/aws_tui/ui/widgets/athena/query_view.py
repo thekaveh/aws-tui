@@ -24,7 +24,7 @@ class AthenaQueryView(Widget):
         height: 1fr;
         layout: grid;
         grid-size: 1 3;
-        grid-rows: 3 1fr 7;
+        grid-rows: 5 1fr 7;
         grid-columns: 1fr;
     }
     AthenaQueryView > TextArea {
@@ -34,7 +34,7 @@ class AthenaQueryView(Widget):
     }
     AthenaQueryView > #athena-query-controls {
         width: 1fr;
-        height: 3;
+        height: 5;
         layout: horizontal;
         padding: 0 1;
         border-title-align: left;
@@ -43,12 +43,12 @@ class AthenaQueryView(Widget):
     AthenaQueryView #athena-cancel {
         width: 3;
         min-width: 3;
-        height: 1;
+        height: 3;
         margin: 0 1 0 0;
     }
     AthenaQueryView #athena-query-status {
         width: 1fr;
-        height: 1;
+        height: 3;
         content-align: left middle;
         text-overflow: ellipsis;
     }

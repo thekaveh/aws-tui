@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from collections import Counter
+from inspect import isawaitable
+from typing import cast
 
 from rich.cells import cell_len
 from textual.app import ComposeResult
 from textual.containers import Horizontal
-from textual.events import Resize
+from textual.events import Click, Resize
 from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub
 
+from aws_tui.ui.actions import ActionDispatcher
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.vm.chrome.hint_legend_vm import HintAction, HintLegendVM
 
@@ -76,6 +79,17 @@ class _HintChip(Horizontal):
         self._key = key
         self._label = label
         self.tooltip = action.tooltip
+
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        if event.button != 1 or not self.action.enabled or not self.display:
+            return
+        result = cast(ActionDispatcher, self.app).action_dispatch(self.action.action_id)
+        if isawaitable(result):
+            self.app.run_worker(
+                result,
+                group=f"hint-action:{self.action.action_id}",
+            )
 
     def retire(self) -> None:
         """Remove this chip from layout and semantic queries before pruning."""

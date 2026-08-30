@@ -16,8 +16,11 @@ from aws_tui.domain.query import QueryState, ResultColumn
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
+from aws_tui.ui.widgets.athena.page import AthenaPage
+from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.context_picker import ContextPicker
+from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.messages import (
@@ -324,6 +327,75 @@ async def test_glue_handoff_leaves_athena_catalog_picker_interactive_without_exe
             assert editor.text == expected_sql
             assert page.query.execution_ref is None
             assert not any(call.method == "start_query" for call in client.calls)
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_glue_handoff_explicitly_projects_starter_sql_after_revisiting_athena(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The transaction must not rely solely on a reactive editor notification."""
+    monkeypatch.setattr(AthenaQueryView, "_on_vm_changed", lambda *_args: None)
+    monkeypatch.setattr(AthenaPage, "_on_page_changed", lambda *_args: None)
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            first_athena = await _open_service(ctx, app, pilot, "athena")
+            assert isinstance(first_athena, AthenaPageVM)
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+
+            await pilot.press("Q")
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            page = ctx.root_vm.content_host.current
+            expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+            assert isinstance(page, AthenaPageVM)
+            assert page.query.sql == expected_sql
+            assert app.query_one("#athena-editor", TextArea).text == expected_sql
+            assert page.query.execution_ref is None
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_clicking_glue_athena_hint_uses_the_registered_handoff_action(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(180, 44)) as pilot:
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+            legend = app.query_one(HintLegend)
+            chip = next(
+                candidate
+                for candidate in legend.query(".hint-chip")
+                if candidate.action.action_id == "glue.query_in_athena"
+            )
+
+            await pilot.click(chip)
+            await _wait_for_service_setup(ctx, app, pilot)
+
+            page = ctx.root_vm.content_host.current
+            expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+            assert isinstance(page, AthenaPageVM)
+            assert page.query.sql == expected_sql
+            assert app.query_one("#athena-editor", TextArea).text == expected_sql
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()

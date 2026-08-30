@@ -3526,6 +3526,10 @@ class AwsTuiApp(App[None]):
                 if not isinstance(target, AthenaPageVM):
                     raise RuntimeError("Athena destination is unavailable")
                 await target.open_table(ref, request.snapshot_id)
+                page = self._athena_page()
+                if page is None or page.vm is not target:
+                    raise RuntimeError("Athena destination view is unavailable")
+                page.refresh_from_vm()
             else:
                 if not isinstance(target, GluePageVM):
                     raise RuntimeError("Glue destination is unavailable")
