@@ -1,4 +1,4 @@
-# Athena Controls and Clickable Commands Design
+# 1. Athena Controls and Clickable Commands Design
 
 **Status:** Approved for implementation on 2026-08-29.
 
@@ -7,7 +7,7 @@ follow-up issues found during hands-on review of `develop`. The existing
 read-only Athena policy, Glue-to-Athena transaction, command registry, keymap,
 VMx command ownership, focus order, and one-row command fitting remain intact.
 
-## Problems and Evidence
+## 1.1. Problems and Evidence
 
 The Athena query controls pane is three terminal rows high, but each Textual
 `Button` computes to two outer rows because of its own border. The pane has only
@@ -28,9 +28,9 @@ label, and tooltip but is presentation-only. Users should be able to click an
 enabled command and receive exactly the same behavior as its keybinding or
 command-palette entry.
 
-## Chosen Design
+## 1.2. Chosen Design
 
-### Query Controls
+### 1.2.1. Query Controls
 
 Keep the current order of Query controls, Query editor, and Execution detail.
 Increase the controls track enough to contain standard three-row Textual icon
@@ -40,7 +40,7 @@ editor -> Run -> Stop -> detail keyboard sequence. Geometry tests must assert
 positive button content height as well as containment at wide, compact, and
 narrow terminal sizes.
 
-### Starter Query Projection
+### 1.2.2. Starter Query Projection
 
 `AthenaPageVM.open_table()` remains the owner of context resolution and starter
 SQL generation. After it succeeds, the app-level handoff transaction explicitly
@@ -53,13 +53,14 @@ Tests cover ordinary and Iceberg tables, a first Athena visit, a previously
 visited Athena destination, exact `LIMIT 5` text in both VM and editor, and the
 absence of `start_query` calls.
 
-### Clickable Command Hints
+### 1.2.3. Clickable Command Hints
 
 Each `_HintChip` remains content-sized and excluded from keyboard focus so the
 current Tab order does not change. An enabled chip accepts a primary mouse
 click and calls `AwsTuiApp.action_dispatch(action.action_id)`. This is the same
 `ActionRegistry` route used by runtime bindings and command-palette entries.
-The chip schedules an awaitable handler as a Textual worker when necessary.
+The chip schedules an awaitable handler as an app-owned Textual worker when
+necessary, so navigation may replace the chip without abandoning the action.
 
 Disabled chips remain visible, dimmed, and tooltip-capable but ignore clicks.
 Click handling does not synthesize a key event, depend on the displayed key,
@@ -67,7 +68,7 @@ or bypass the action registry. Rebuilt and retired chips cannot dispatch stale
 actions. The pointer treatment distinguishes enabled commands without adding
 focus rings or changing one-row fitting.
 
-## Alternatives Considered
+## 1.3. Alternatives Considered
 
 Keeping the three-row pane and replacing `Button` with custom clickable
 `Static` glyphs would be slightly shorter, but it would duplicate button
@@ -82,18 +83,18 @@ Making command chips keyboard-focusable was rejected because every command
 already has a keybinding and palette entry; adding many footer Tab stops would
 damage service navigation.
 
-## Error and Lifecycle Behavior
+## 1.4. Error and Lifecycle Behavior
 
 Unknown or unavailable actions remain governed by the existing action registry
-and legend VM. Disabled chips do not dispatch. Awaitable handlers run under a
-dedicated worker group so exceptions follow Textual's normal worker handling
-and repeated clicks cannot create an unbounded task set.
+and legend VM. Disabled chips do not dispatch. Awaitable handlers run under an
+app-owned worker group so exceptions follow Textual's normal worker handling and
+the action can outlive a chip removed by navigation.
 
 The handoff retains generation guards, rollback, source identity validation,
 and cancellation ownership. A superseded request must not project stale SQL
 onto a newer Athena page.
 
-## Verification
+## 1.5. Verification
 
 Focused widget tests prove positive button content geometry and clickable
 enabled/disabled behavior. Integration tests prove click/key/palette action

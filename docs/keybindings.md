@@ -340,7 +340,10 @@ including `Shift+↑` / `Shift+↓` for extend-selection. Their
 > execution or mutation behavior, and any unmet prerequisite. When all hints do
 > not fit, lower-priority entries are removed deterministically instead of
 > wrapping; `[:] more` and `[q] quit` remain visible, and `[:] more` opens the
-> service-scoped command palette. Hidden actions remain bound and palette-visible.
+> service-scoped command palette. Clicking an enabled visible chip dispatches
+> the same registered action as its shortcut and command-palette entry; disabled
+> chips remain inert. Chips do not enter the Tab sequence. Hidden actions remain
+> bound and palette-visible.
 
 ## 1.4. Modal Forwarding for Enter Escape and Arrow Keys
 

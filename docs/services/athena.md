@@ -44,9 +44,11 @@ Workgroup configuration determines customer-S3 output or Athena managed
 results. Only a successful customer-S3 execution has an artifact that can be
 opened in the S3 service.
 
-The Query view orders Query controls, Query editor, then Execution detail. Glue
-table and Iceberg snapshot handoffs prefill a quoted `SELECT *` starter ending
-in `LIMIT 5`; the handoff never executes that starter.
+The Query view orders Query controls, Query editor, then Execution detail. The
+framed controls row fully contains its Run and Stop buttons at every supported
+terminal width. Glue table and Iceberg snapshot handoffs prefill a quoted
+`SELECT *` starter ending in `LIMIT 5`; the transaction explicitly projects the
+starter into the mounted editor and never executes it.
 
 ## 1.4. Cross-service handoffs
 

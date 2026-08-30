@@ -112,9 +112,13 @@ class _HintApp(App[None]):
         super().__init__()
         self._hint_vm = vm
         self._hint_hub = hub
+        self.dispatched_actions: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield HintLegend(self._hint_vm, hub=self._hint_hub)
+
+    def action_dispatch(self, action_id: str) -> None:
+        self.dispatched_actions.append(action_id)
 
 
 def _assert_hint_row_centered(legend: HintLegend) -> None:
@@ -261,6 +265,42 @@ async def test_hint_legend_uses_more_instead_of_wrapping_when_narrow() -> None:
                 "app.quit",
             }
             assert all(chip.region.right <= legend.content_region.right for chip in chips)
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_hint_chip_click_dispatches_enabled_action_but_not_disabled_action() -> None:
+    vm, hub = _athena_hint_vm()
+    app = _HintApp(vm, hub)
+    try:
+        async with app.run_test(size=(245, 62)) as pilot:
+            await pilot.pause()
+            legend = app.query_one(HintLegend)
+
+            enabled = next(
+                chip
+                for chip in legend.query(".hint-chip")
+                if chip.action.action_id == "athena.query"
+            )
+            assert not enabled.can_focus
+            await pilot.click(enabled)
+            await pilot.pause()
+            assert app.dispatched_actions == ["athena.query"]
+
+            vm.set_disabled_actions(frozenset(("athena.query",)))
+            await pilot.pause()
+            disabled = next(
+                chip
+                for chip in legend.query(".hint-chip")
+                if chip.action.action_id == "athena.query"
+            )
+            assert not disabled.action.enabled
+            assert not disabled.can_focus
+            await pilot.click(disabled)
+            await pilot.pause()
+            assert app.dispatched_actions == ["athena.query"]
     finally:
         vm.dispose()
         hub.dispose()

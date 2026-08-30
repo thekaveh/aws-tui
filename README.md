@@ -159,10 +159,12 @@ inspection workflows.
   snapshot in Athena**, and **Open query table in Glue**; each preserves the
   active connection name and region.
 - **Compact command guidance.** The bottom Commands pane is always one compact
-  content row. Hover a visible command to see its full shortcut, effect,
-  execution or mutation behavior, and any unmet prerequisite. At narrow widths,
-  lower-priority hints are hidden deterministically while `[:] more` opens the
-  active service's command palette and `[q] quit` remains visible.
+  content row. Click any enabled visible command to invoke the same registered
+  action as its shortcut or command-palette entry. Hover a command to see its
+  full shortcut, effect, execution or mutation behavior, and any unmet
+  prerequisite. At narrow widths, lower-priority hints are hidden
+  deterministically while `[:] more` opens the active service's command palette
+  and `[q] quit` remains visible.
 - **Layered architecture with enforced forbidden edges.** View ▸ ViewModel
   ▸ Service ▸ Domain ▸ Infra, with `app.py` / `composition.py` as trusted
   composition roots and services allowed to compose concrete VMs; enforced

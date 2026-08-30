@@ -1210,6 +1210,10 @@ async def test_query_controls_are_compact_above_editor_and_inside_their_frame() 
         )
         assert controls.region.y <= cancel.region.y < cancel.region.bottom <= controls.region.bottom
         assert execute.region.y == cancel.region.y
+        assert execute.content_region.height >= 1
+        assert cancel.content_region.height >= 1
+        assert controls.content_region.contains_region(execute.region)
+        assert controls.content_region.contains_region(cancel.region)
 
 
 @pytest.mark.asyncio
