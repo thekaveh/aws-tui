@@ -114,6 +114,22 @@ async def _invoke(app: AwsTuiApp, action_id: str) -> None:
         await result
 
 
+async def _wait_for_static_text(
+    app: AwsTuiApp,
+    pilot: object,
+    selector: str,
+    expected: str,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + 1
+    actual = ""
+    while asyncio.get_running_loop().time() < deadline:
+        actual = str(app.query_one(selector, Static).render())
+        if actual == expected:
+            return
+        await pilot.pause(0.01)  # type: ignore[attr-defined]
+    assert actual == expected
+
+
 async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> None:
     if key is not None:
         await pilot.press(key)  # type: ignore[attr-defined]
@@ -325,9 +341,11 @@ async def test_glue_prefills_before_athena_setup_completes(
                 assert app.query_one("#athena-editor", TextArea).text == expected_sql
                 assert page.query.is_context_resolving
                 assert not page.query.execute_command.can_execute()
-                assert (
-                    str(app.query_one("#athena-query-status", Static).render())
-                    == "RESOLVING TABLE CONTEXT"
+                await _wait_for_static_text(
+                    app,
+                    pilot,
+                    "#athena-query-status",
+                    "RESOLVING TABLE CONTEXT",
                 )
                 assert not any(call.method == "start_query" for call in client.calls)
 
