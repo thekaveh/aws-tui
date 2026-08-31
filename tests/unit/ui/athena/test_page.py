@@ -1229,14 +1229,20 @@ async def test_query_buttons_follow_vmx_command_state() -> None:
         assert cancel.disabled
 
         vm.query.set_sql("SELECT 1")
-        await pilot.pause()
+        for _ in range(10):
+            await pilot.pause(0.01)
+            if not execute.disabled:
+                break
         assert not execute.disabled
         assert cancel.disabled
 
         vm.query._busy = True  # type: ignore[attr-defined]
         vm.query._is_submitting = True  # type: ignore[attr-defined]
         vm.query._notify("is_submitting")  # type: ignore[attr-defined]
-        await pilot.pause()
+        for _ in range(10):
+            await pilot.pause(0.01)
+            if execute.disabled and not cancel.disabled:
+                break
         assert execute.disabled
         assert not cancel.disabled
 

@@ -128,6 +128,7 @@ class AthenaQueryVM:
         self._owns_active_query = False
         self._busy = False
         self._is_submitting = False
+        self._is_context_resolving = False
         self._sql = ""
         self._validation_error: str | None = None
         self._execution_ref: QueryExecutionRef | None = None
@@ -215,6 +216,10 @@ class AthenaQueryVM:
         return self._busy
 
     @property
+    def is_context_resolving(self) -> bool:
+        return self._is_context_resolving
+
+    @property
     def owns_active_query(self) -> bool:
         return self._owns_active_query
 
@@ -249,6 +254,18 @@ class AthenaQueryVM:
         self._validation_error = None
         self._notify("sql")
         self._notify("validation_error")
+
+    def begin_context_resolution(self) -> None:
+        if self._disposed or self._shutdown_started or self._is_context_resolving:
+            return
+        self._is_context_resolving = True
+        self._notify("is_context_resolving")
+
+    def end_context_resolution(self) -> None:
+        if not self._is_context_resolving:
+            return
+        self._is_context_resolving = False
+        self._notify("is_context_resolving")
 
     def export_snapshot(self) -> AthenaQuerySnapshot:
         if self._disposed or self._shutdown_started:
@@ -809,7 +826,13 @@ class AthenaQueryVM:
         self._notify("is_executing")
 
     def _can_execute(self) -> bool:
-        if self._disposed or self._shutdown_started or not self._sql.strip() or self._busy:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._is_context_resolving
+            or not self._sql.strip()
+            or self._busy
+        ):
             return False
         try:
             self._validate()

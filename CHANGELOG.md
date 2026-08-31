@@ -160,6 +160,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.3. Fixed
 
+- **Immediate Glue-to-Athena starter query projection.** Glue table handoffs
+  now populate the mounted Athena editor before waiting for remote workgroup,
+  catalog, and database discovery. The existing VMx Run command remains
+  disabled with a resolving status until the exact destination context is
+  ready, and generated queries still never execute automatically.
 - **Terminal maintenance safety and fidelity.** S3 rate limits now remain
   throttling signals instead of marking a connection unreachable. EMR bounds
   application and bulk-run pagination, classifies log paths relative to the

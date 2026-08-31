@@ -42,12 +42,14 @@ narrow terminal sizes.
 
 ### 1.2.2. Starter Query Projection
 
-`AthenaPageVM.open_table()` remains the owner of context resolution and starter
-SQL generation. After it succeeds, the app-level handoff transaction explicitly
-refreshes the currently mounted `AthenaPage` and waits for Textual refresh. The
-transaction is visibly complete only when the mounted query view has projected
-the VM value. It must not synthesize editor input, duplicate SQL policy in the
-View, or execute the query.
+`AthenaPageVM` remains the owner of context resolution and starter SQL
+generation. The 2026-08-30 eager-prefill design supersedes this section's
+original post-discovery projection order: the app-level handoff transaction
+asks the PageVM to publish starter SQL immediately after mount, explicitly
+refreshes the mounted `AthenaPage`, and only then awaits remote Athena setup.
+The VMx Run command remains disabled until context resolution completes. The
+View does not synthesize editor input, duplicate SQL policy, or execute the
+query.
 
 Tests cover ordinary and Iceberg tables, a first Athena visit, a previously
 visited Athena destination, exact `LIMIT 5` text in both VM and editor, and the
@@ -98,6 +100,7 @@ onto a newer Athena page.
 
 Focused widget tests prove positive button content geometry and clickable
 enabled/disabled behavior. Integration tests prove click/key/palette action
-parity and durable starter SQL on fresh and revisited Athena destinations.
+parity, durable starter SQL on fresh and revisited Athena destinations, and
+visible prefill while a real-provider-shaped setup request is blocked.
 Affected Athena snapshots are regenerated and inspected at wide, compact, and
 narrow sizes. The full test, lint, and type-check suites run before completion.

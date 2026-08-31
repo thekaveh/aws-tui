@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from textual.widgets import TextArea
+from textual.widgets import Static, TextArea
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
@@ -111,6 +112,22 @@ async def _invoke(app: AwsTuiApp, action_id: str) -> None:
     result = app.action_dispatch(action_id)
     if inspect.isawaitable(result):
         await result
+
+
+async def _wait_for_static_text(
+    app: AwsTuiApp,
+    pilot: object,
+    selector: str,
+    expected: str,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + 1
+    actual = ""
+    while asyncio.get_running_loop().time() < deadline:
+        actual = str(app.query_one(selector, Static).render())
+        if actual == expected:
+            return
+        await pilot.pause(0.01)  # type: ignore[attr-defined]
+    assert actual == expected
 
 
 async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> None:
@@ -277,6 +294,75 @@ async def test_glue_to_athena_preserves_identity_and_prefills_without_running(
             assert page.query.execution_ref is None
             assert not any(call.method == "start_query" for call in client.calls)
     finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_glue_prefills_before_athena_setup_completes(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    client = _athena_client(ctx, "demo-dev")
+    original_list_workgroups = client.list_workgroups_page
+    setup_started = asyncio.Event()
+    release_setup = asyncio.Event()
+
+    async def blocked_list_workgroups(
+        *,
+        start_token: str | None = None,
+    ) -> object:
+        setup_started.set()
+        await release_setup.wait()
+        return await original_list_workgroups(start_token=start_token)
+
+    client.list_workgroups_page = blocked_list_workgroups  # type: ignore[method-assign]
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            try:
+                glue = await _open_service(ctx, app, pilot, "glue")
+                assert isinstance(glue, GluePageVM)
+                client.calls.clear()
+
+                await _invoke(app, "glue.query_in_athena")
+                await asyncio.wait_for(setup_started.wait(), timeout=1)
+                await pilot.pause()
+
+                page = ctx.root_vm.content_host.current
+                expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+                assert isinstance(page, AthenaPageVM)
+                assert page.active_view == "query"
+                assert page.query.sql == expected_sql
+                assert app.query_one("#athena-editor", TextArea).text == expected_sql
+                assert page.query.is_context_resolving
+                assert not page.query.execute_command.can_execute()
+                await _wait_for_static_text(
+                    app,
+                    pilot,
+                    "#athena-query-status",
+                    "RESOLVING TABLE CONTEXT",
+                )
+                assert not any(call.method == "start_query" for call in client.calls)
+
+                release_setup.set()
+                await _wait_for_service_setup(ctx, app, pilot)
+
+                assert page.context.catalog == "AwsDataCatalog"
+                assert page.context.database == "dev_analytics"
+                assert page.query.sql == expected_sql
+                assert app.query_one("#athena-editor", TextArea).text == expected_sql
+                assert not page.query.is_context_resolving
+                assert page.query.execute_command.can_execute()
+                assert not any(call.method == "start_query" for call in client.calls)
+            finally:
+                release_setup.set()
+    finally:
+        release_setup.set()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
 
@@ -944,6 +1030,8 @@ async def test_superseded_table_handoff_is_one_serialized_transaction(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if (
                     pause_stage == "switch"
@@ -952,7 +1040,12 @@ async def test_superseded_table_handoff_is_one_serialized_transaction(
                 ):
                     pause_started.set()
                     await release_pause.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             async def pause_mount(
                 service_id: str,
@@ -1097,11 +1190,18 @@ async def test_user_navigation_supersedes_inflight_table_handoff(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if pause_stage == "switch" and service_id == "athena":
                     pause_started.set()
                     await release_pause.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             async def pause_mount(
                 service_id: str,
@@ -1198,9 +1298,16 @@ async def test_table_handoff_preflight_rejects_active_athena_without_mutation(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 switch_calls.append(service_id)
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             monkeypatch.setattr(
                 ctx.root_vm,
@@ -1282,11 +1389,18 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if rollback_active and rollback_stage == "switch" and service_id == "athena":
                     rollback_started.set()
                     await release_rollback.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             async def pause_mount(
                 service_id: str,
@@ -1673,11 +1787,18 @@ async def test_table_handoff_rollback_survives_repeated_cancellation_and_restore
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if service_id == "athena":
                     rollback_started.set()
                     await release_rollback.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             monkeypatch.setattr(GluePageVM, "open_table", pause_open)
             monkeypatch.setattr(
@@ -1759,11 +1880,18 @@ async def test_shutdown_drains_inflight_table_handoff_rollback(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if service_id == "athena":
                     rollback_started.set()
                     await release_rollback.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             monkeypatch.setattr(GluePageVM, "open_table", pause_open)
             monkeypatch.setattr(

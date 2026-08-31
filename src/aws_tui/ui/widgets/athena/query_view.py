@@ -247,7 +247,9 @@ class AthenaQueryView(Widget):
 
     def _status_text(self) -> str:
         ref = self._vm.execution_ref
-        if self._vm.is_submitting:
+        if self._vm.is_context_resolving:
+            state = "RESOLVING TABLE CONTEXT"
+        elif self._vm.is_submitting:
             state = "SUBMITTING"
         elif self._vm.state is not None:
             state = self._vm.state.value

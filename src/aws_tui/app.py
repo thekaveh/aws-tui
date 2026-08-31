@@ -15,7 +15,7 @@ import os
 import sys
 import weakref
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
@@ -3485,6 +3485,7 @@ class AwsTuiApp(App[None]):
             return
         destination = "athena" if isinstance(request, OpenAthenaTableRequest) else "glue"
         mutation_started = False
+        primed_athena: AthenaPageVM | None = None
         try:
             try:
                 auth_state = ctx.aws_session.probe_token(connection).state
@@ -3500,23 +3501,54 @@ class AwsTuiApp(App[None]):
 
             suppression = (asyncio.current_task(), destination)
             self._service_navigation_suppressed_selection = suppression
+            prepare_candidate: Callable[[object], None] | None = None
+            if isinstance(request, OpenAthenaTableRequest):
+
+                def prime_athena_candidate(candidate: object) -> None:
+                    nonlocal primed_athena
+                    if not isinstance(candidate, AthenaPageVM):
+                        raise RuntimeError("Athena destination is unavailable")
+                    candidate.prime_table_query(ref, request.snapshot_id)
+                    primed_athena = candidate
+
+                prepare_candidate = prime_athena_candidate
+
             try:
                 mutation_started = True
                 await ctx.root_vm.switch_connection_and_service(
                     connection,
                     auth_state,
                     destination,
+                    prepare_vm=prepare_candidate,
                 )
             finally:
                 if self._service_navigation_suppressed_selection is suppression:
                     self._service_navigation_suppressed_selection = None
             if await self._restore_superseded_table_handoff(generation, snapshot):
+                if primed_athena is not None:
+                    primed_athena.abandon_table_query_prime()
+                    primed_athena = None
                 return
             if not await self._mount_service_view(
                 destination,
                 required_connection=connection,
             ):
                 raise RuntimeError("destination mount failed")
+            if isinstance(request, OpenAthenaTableRequest):
+                target = ctx.root_vm.content_host.current
+                if not isinstance(target, AthenaPageVM):
+                    raise RuntimeError("Athena destination is unavailable")
+                if primed_athena is not target:
+                    raise RuntimeError("Athena destination was not prepared")
+                page = self._athena_page()
+                if page is None or page.vm is not target:
+                    raise RuntimeError("Athena destination view is unavailable")
+                page.refresh_from_vm()
+                await self.wait_for_refresh()
+                if await self._restore_superseded_table_handoff(generation, snapshot):
+                    primed_athena.abandon_table_query_prime()
+                    primed_athena = None
+                    return
             await self._wait_for_current_service_setup()
             if await self._restore_superseded_table_handoff(generation, snapshot):
                 return
@@ -3526,6 +3558,7 @@ class AwsTuiApp(App[None]):
                 if not isinstance(target, AthenaPageVM):
                     raise RuntimeError("Athena destination is unavailable")
                 await target.open_table(ref, request.snapshot_id)
+                primed_athena = None
                 page = self._athena_page()
                 if page is None or page.vm is not target:
                     raise RuntimeError("Athena destination view is unavailable")
@@ -3537,6 +3570,8 @@ class AwsTuiApp(App[None]):
             await self.wait_for_refresh()
             await self._restore_superseded_table_handoff(generation, snapshot)
         except asyncio.CancelledError:
+            if primed_athena is not None:
+                primed_athena.abandon_table_query_prime()
             if mutation_started and self._table_handoff_should_restore(generation):
                 await self._restore_table_handoff_durably(
                     snapshot,
@@ -3544,6 +3579,8 @@ class AwsTuiApp(App[None]):
                 )
             raise
         except Exception as exc:
+            if primed_athena is not None:
+                primed_athena.abandon_table_query_prime()
             rollback_cancelled = False
             if mutation_started and self._table_handoff_should_restore(generation):
                 _, rollback_cancelled = await self._restore_table_handoff_durably(

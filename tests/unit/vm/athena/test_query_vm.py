@@ -334,6 +334,28 @@ def test_query_vm_owns_reusable_runner_when_not_injected() -> None:
     assert isinstance(vm.runner, AthenaQueryRunner)
 
 
+def test_context_resolution_gates_execution_and_publishes_both_transitions() -> None:
+    fake = InMemoryAthena()
+    vm = make_query_vm(fake)
+    changed: list[str] = []
+    subscription = vm.on_property_changed.subscribe(changed.append)
+    vm.set_sql("SELECT 1")
+
+    assert vm.execute_command.can_execute()
+
+    vm.begin_context_resolution()
+
+    assert vm.is_context_resolving
+    assert not vm.execute_command.can_execute()
+
+    vm.end_context_resolution()
+
+    assert not vm.is_context_resolving
+    assert vm.execute_command.can_execute()
+    assert changed.count("is_context_resolving") == 2
+    subscription.dispose()
+
+
 @pytest.mark.asyncio
 async def test_query_vm_delegates_execution_operations_to_injected_runner() -> None:
     fake = seeded_athena([QueryState.SUCCEEDED])

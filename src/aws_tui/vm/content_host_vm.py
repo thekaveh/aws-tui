@@ -103,6 +103,7 @@ class ContentHostVM:
         vm: Any | None,
         *,
         service_id: str | None,
+        prepare: Callable[[Any], None] | None = None,
         before_publish: Callable[[], None] | None = None,
     ) -> None:
         try:
@@ -110,6 +111,7 @@ class ContentHostVM:
                 await self._set_content_locked(
                     vm,
                     service_id=service_id,
+                    prepare=prepare,
                     before_publish=before_publish,
                 )
         except BaseException:
@@ -124,6 +126,7 @@ class ContentHostVM:
         vm: Any | None,
         *,
         service_id: str | None,
+        prepare: Callable[[Any], None] | None,
         before_publish: Callable[[], None] | None,
     ) -> None:
         """Swap the hosted VM. Idempotent only for the identical VM instance.
@@ -131,7 +134,10 @@ class ContentHostVM:
         Adoption + the ``"current"`` :class:`PropertyChangedMessage`
         fire synchronously inside the await — the View layer can mount
         the new widget tree as soon as this returns. If the hosted VM
-        exposes a ``setup`` callable it is dispatched as a background
+        has handoff state, ``prepare`` applies it after construction but
+        before outgoing teardown, publication, or background setup. A
+        preparation failure therefore leaves the outgoing VM authoritative.
+        A hosted ``setup`` callable is dispatched as a background
         ``asyncio.Task`` (not awaited inline); the pane VMs reflect
         its outcome through their reactive ``state`` so the View
         re-renders LOADING → IDLE / UNREACHABLE / FORBIDDEN without
@@ -146,6 +152,8 @@ class ContentHostVM:
             # fail. Complete it while the outgoing VM is still intact so a
             # bad replacement cannot empty the content host.
             vm.construct()
+            if prepare is not None:
+                prepare(vm)
         # Cancel any in-flight setup for the OUTGOING VM before we
         # dispose it (the task holds a reference to the VM; if we
         # dispose first the task may dereference disposed state).
