@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -1011,6 +1012,8 @@ async def test_superseded_table_handoff_is_one_serialized_transaction(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if (
                     pause_stage == "switch"
@@ -1019,7 +1022,12 @@ async def test_superseded_table_handoff_is_one_serialized_transaction(
                 ):
                     pause_started.set()
                     await release_pause.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             async def pause_mount(
                 service_id: str,
@@ -1164,11 +1172,18 @@ async def test_user_navigation_supersedes_inflight_table_handoff(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if pause_stage == "switch" and service_id == "athena":
                     pause_started.set()
                     await release_pause.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             async def pause_mount(
                 service_id: str,
@@ -1265,9 +1280,16 @@ async def test_table_handoff_preflight_rejects_active_athena_without_mutation(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 switch_calls.append(service_id)
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             monkeypatch.setattr(
                 ctx.root_vm,
@@ -1349,11 +1371,18 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if rollback_active and rollback_stage == "switch" and service_id == "athena":
                     rollback_started.set()
                     await release_rollback.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             async def pause_mount(
                 service_id: str,
@@ -1740,11 +1769,18 @@ async def test_table_handoff_rollback_survives_repeated_cancellation_and_restore
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if service_id == "athena":
                     rollback_started.set()
                     await release_rollback.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             monkeypatch.setattr(GluePageVM, "open_table", pause_open)
             monkeypatch.setattr(
@@ -1826,11 +1862,18 @@ async def test_shutdown_drains_inflight_table_handoff_rollback(
                 connection: Connection,
                 auth_state: TokenState,
                 service_id: str,
+                *,
+                prepare_vm: Callable[[object], None] | None = None,
             ) -> None:
                 if service_id == "athena":
                     rollback_started.set()
                     await release_rollback.wait()
-                await original_switch(connection, auth_state, service_id)
+                await original_switch(
+                    connection,
+                    auth_state,
+                    service_id,
+                    prepare_vm=prepare_vm,
+                )
 
             monkeypatch.setattr(GluePageVM, "open_table", pause_open)
             monkeypatch.setattr(

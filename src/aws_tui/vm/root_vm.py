@@ -208,6 +208,8 @@ class RootVM:
         connection: Connection,
         auth_state: TokenState,
         service_id: str,
+        *,
+        prepare_vm: Callable[[object], None] | None = None,
     ) -> None:
         """Atomically switch connection and rebuild one supported service."""
         service = self._registry.get(service_id)
@@ -223,6 +225,7 @@ class RootVM:
         await self._adopt_service_vm(
             service_id,
             vm,
+            prepare_vm=prepare_vm,
             before_publish=lambda: self._set_connection_state(connection, auth_state),
         )
         self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
@@ -264,6 +267,7 @@ class RootVM:
         service_id: str,
         vm: object,
         *,
+        prepare_vm: Callable[[object], None] | None = None,
         before_publish: Callable[[], None] | None = None,
     ) -> None:
         """Adopt one prebuilt service VM with selection rollback."""
@@ -284,6 +288,7 @@ class RootVM:
             await self._content_host.set_content(
                 vm,
                 service_id=service_id,
+                prepare=prepare_vm,
                 before_publish=before_publish,
             )
         except (Exception, asyncio.CancelledError):

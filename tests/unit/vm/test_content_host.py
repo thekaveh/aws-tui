@@ -258,6 +258,61 @@ async def test_set_content_does_not_block_on_slow_setup() -> None:
     host.dispose()
 
 
+async def test_set_content_prepares_constructed_vm_before_setup() -> None:
+    events: list[str] = []
+
+    class _PreparedSetupVM:
+        status = ConstructionStatus.DESTRUCTED
+
+        def construct(self) -> None:
+            events.append("construct")
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            events.append("setup")
+
+        def dispose(self) -> None:
+            self.status = ConstructionStatus.DISPOSED
+
+    host = _build()
+    vm = _PreparedSetupVM()
+
+    await host.set_content(
+        cast("ComponentVM", vm),
+        service_id="athena",
+        prepare=lambda candidate: events.append(
+            "prepare" if candidate is vm else "wrong candidate"
+        ),
+    )
+    assert host._setup_task is not None
+    await host._setup_task
+
+    assert events == ["construct", "prepare", "setup"]
+    host.dispose()
+
+
+async def test_failed_content_preparation_preserves_current_vm() -> None:
+    host = _build()
+    current = _component()
+    candidate = _component()
+    await host.set_content(current, service_id="current")
+
+    def fail_preparation(_candidate: object) -> None:
+        raise RuntimeError("preparation failed")
+
+    with pytest.raises(RuntimeError, match="preparation failed"):
+        await host.set_content(
+            candidate,
+            service_id="candidate",
+            prepare=fail_preparation,
+        )
+
+    assert host.current is current
+    assert current.status is ConstructionStatus.CONSTRUCTED
+    assert candidate.status is ConstructionStatus.DISPOSED
+    host.dispose()
+
+
 async def test_concurrent_content_swaps_are_last_request_wins() -> None:
     first_shutdown_started = asyncio.Event()
     second_shutdown_started = asyncio.Event()
