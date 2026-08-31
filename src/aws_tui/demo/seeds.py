@@ -916,10 +916,7 @@ def _seed_iceberg_queries(
         ((ref_name, "BRANCH", str(newest), None, "2", "604800000"),),
     )
     add(
-        (
-            f'SELECT * FROM "AwsDataCatalog"."{database}"."{table}" '
-            f"FOR VERSION AS OF {older} LIMIT 5"
-        ),
+        (f'SELECT * FROM "{database}"."{table}" FOR VERSION AS OF {older} LIMIT 5'),
         (
             ("dimension", "varchar"),
             ("name", "varchar"),
