@@ -1,8 +1,8 @@
-# Athena Eager Glue Prefill Design
+# 1. Athena Eager Glue Prefill Design
 
-**Status:** Approved for implementation on 2026-08-30.
+**Status:** Implemented and verified on 2026-08-30.
 
-## Problem
+## 1.1. Problem
 
 The Glue-to-Athena handoff mounts the Athena page and then waits for
 `ContentHostVM`'s Athena setup task before calling `AthenaPageVM.open_table()`.
@@ -15,7 +15,7 @@ The handoff must show its deterministic, local starter SQL before the first
 remote Athena setup await. It must still refuse execution until the destination
 workgroup, catalog, and database have been resolved and validated.
 
-## Chosen Design
+## 1.2. Chosen Design
 
 `AthenaPageVM` remains the owner of starter-SQL generation and Athena context
 resolution. It gains a synchronous, idempotent `prime_table_query()` operation
@@ -39,7 +39,7 @@ a `finally` block. The app also abandons a prime if setup fails or the handoff i
 cancelled before `open_table()` begins. Shutdown and disposal continue to make
 all query commands unavailable.
 
-## VMx Command Contract
+## 1.3. VMx Command Contract
 
 `AthenaQueryVM` exposes read-only `is_context_resolving` state and owns its
 transitions. Its existing VMx `AsyncRelayCommand` remains the execution
@@ -52,7 +52,7 @@ No view-local execution boolean, duplicate command, timer, or direct
 `TextArea` mutation is introduced. The generated query remains read-only,
 quoted, limited to five rows, and is never run automatically.
 
-## Failure, Cancellation, and Supersession
+## 1.4. Failure, Cancellation, and Supersession
 
 The existing generation guards, source validation, rollback, and toast behavior
 remain authoritative. A failed or cancelled handoff abandons the pending query
@@ -64,7 +64,7 @@ The early SQL is provisional UI state inside the destination VM. If the
 handoff fails, existing snapshot rollback restores the source service and its
 previous state; no provisional query is retained as a successful handoff.
 
-## Verification
+## 1.5. Verification
 
 An integration regression test blocks real-provider-shaped Athena setup after
 the destination page mounts. Before releasing the provider it proves:

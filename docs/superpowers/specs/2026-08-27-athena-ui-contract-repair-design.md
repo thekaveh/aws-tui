@@ -157,11 +157,13 @@ Identifiers continue to use the canonical Athena quoting helper. A selected
 Iceberg snapshot keeps the existing `FOR VERSION AS OF <snapshot-id>` clause and
 also ends with `LIMIT 5`.
 
-The handoff transaction continues to resolve and select the matching connection,
-region, workgroup, catalog, and database before selecting Athena's Query view.
-It then updates `AthenaQueryVM.sql` through its public API. The mounted
-`AthenaQueryView` must reflect that property change in `TextArea.text` before the
-transaction is considered visibly complete.
+The 2026-08-30 eager-prefill design supersedes the original discovery-first
+ordering in this section. The handoff now selects Athena's Query view and
+updates `AthenaQueryVM.sql` immediately after the destination mounts, before
+awaiting remote workgroup/catalog/database discovery. The mounted
+`AthenaQueryView` must reflect that property change in `TextArea.text` while
+setup may still be pending. VMx command state keeps Run disabled until the
+matching connection, region, workgroup, catalog, and database are resolved.
 
 No `start_query` call occurs. Run becomes enabled only after the populated SQL
 passes the existing read-only policy. Tests assert both VM SQL and visible editor
@@ -226,11 +228,11 @@ command type.
 Existing provider-error mapping, toast behavior, handoff rollback, cancellation
 ownership, generation guards, and shutdown semantics remain unchanged.
 
-If a handoff fails before the starter query is committed, the existing
-transaction restores the previous service and context. A superseded handoff must
-not overwrite a newer editor value. Deferred view refresh callbacks must verify
-that the widget remains mounted and that the VM notification still belongs to
-the current page.
+If a handoff fails after its provisional starter query is projected, the
+existing transaction restores the previous service and context. A superseded
+handoff must not overwrite a newer editor value. Deferred view refresh
+callbacks must verify that the widget remains mounted and that the VM
+notification still belongs to the current page.
 
 ## 1.11. Test strategy
 

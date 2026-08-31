@@ -376,6 +376,10 @@ class AthenaPageVM:
     async def select_view(self, view: AthenaView) -> None:
         if not self._is_alive():
             return
+        self._select_view_state(view)
+        await self._setup_view(view, self._context_generation)
+
+    def _select_view_state(self, view: AthenaView) -> None:
         if view not in _VIEWS:
             raise ValueError(f"unknown Athena view: {view}")
         changed = view != self._active_view
@@ -383,7 +387,6 @@ class AthenaPageVM:
         self._selection_store.set(self._selection_scope, "active_view", view)
         if changed:
             self._notify("active_view")
-        await self._setup_view(view, self._context_generation)
 
     def export_snapshot(self) -> AthenaPageSnapshot:
         if not self._is_alive():
@@ -879,13 +882,47 @@ class AthenaPageVM:
         snapshot_id: int | None = None,
     ) -> None:
         """Prefill one exact table in the editor without executing it."""
+        starter_sql = select_starter_sql(table_ref, snapshot_id)
+        already_primed = (
+            self._active_view == "query"
+            and self.query.is_context_resolving
+            and self.query.sql == starter_sql
+        )
+        previous_view = self._active_view
+        previous_sql = self.query.sql
+        self.prime_table_query(table_ref, snapshot_id)
+        try:
+            await self._resolve_table_context(table_ref)
+        except BaseException:
+            if not already_primed and self._is_alive():
+                self._select_view_state(previous_view)
+                self.query.set_sql(previous_sql)
+            raise
+        finally:
+            self.query.end_context_resolution()
+
+    def prime_table_query(
+        self,
+        table_ref: TableRef,
+        snapshot_id: int | None = None,
+    ) -> None:
+        """Publish local handoff state before remote Athena discovery."""
         if (
             not self._is_alive()
             or not valid_table_ref(table_ref)
             or table_ref.connection_name != self._connection.name
             or table_ref.region != self._connection.region
-            or not self._context.workgroup
         ):
+            raise ValueError("table is unavailable in the active Athena source")
+        self._select_view_state("query")
+        self.query.begin_context_resolution()
+        self.query.set_sql(select_starter_sql(table_ref, snapshot_id))
+
+    def abandon_table_query_prime(self) -> None:
+        self.query.end_context_resolution()
+
+    async def _resolve_table_context(self, table_ref: TableRef) -> None:
+        if not self._context.workgroup:
             raise ValueError("table is unavailable in the active Athena source")
         if not await self._ensure_catalog_loaded(table_ref):
             raise ValueError("table is unavailable in the active Athena source")
@@ -902,8 +939,6 @@ class AthenaPageVM:
             or self._context.database != table_ref.database_name
         ):
             raise ValueError("table is unavailable in the active Athena source")
-        await self.select_view("query")
-        self.query.set_sql(select_starter_sql(table_ref, snapshot_id))
 
     def open_table_in_glue(self) -> bool:
         """Request Glue navigation for one unambiguous visible SQL table."""

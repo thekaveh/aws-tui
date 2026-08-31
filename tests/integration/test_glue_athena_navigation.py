@@ -6,7 +6,7 @@ import inspect
 from pathlib import Path
 
 import pytest
-from textual.widgets import TextArea
+from textual.widgets import Static, TextArea
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
@@ -277,6 +277,73 @@ async def test_glue_to_athena_preserves_identity_and_prefills_without_running(
             assert page.query.execution_ref is None
             assert not any(call.method == "start_query" for call in client.calls)
     finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_glue_prefills_before_athena_setup_completes(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    client = _athena_client(ctx, "demo-dev")
+    original_list_workgroups = client.list_workgroups_page
+    setup_started = asyncio.Event()
+    release_setup = asyncio.Event()
+
+    async def blocked_list_workgroups(
+        *,
+        start_token: str | None = None,
+    ) -> object:
+        setup_started.set()
+        await release_setup.wait()
+        return await original_list_workgroups(start_token=start_token)
+
+    client.list_workgroups_page = blocked_list_workgroups  # type: ignore[method-assign]
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            try:
+                glue = await _open_service(ctx, app, pilot, "glue")
+                assert isinstance(glue, GluePageVM)
+                client.calls.clear()
+
+                await _invoke(app, "glue.query_in_athena")
+                await asyncio.wait_for(setup_started.wait(), timeout=1)
+                await pilot.pause()
+
+                page = ctx.root_vm.content_host.current
+                expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+                assert isinstance(page, AthenaPageVM)
+                assert page.active_view == "query"
+                assert page.query.sql == expected_sql
+                assert app.query_one("#athena-editor", TextArea).text == expected_sql
+                assert page.query.is_context_resolving
+                assert not page.query.execute_command.can_execute()
+                assert (
+                    str(app.query_one("#athena-query-status", Static).render())
+                    == "RESOLVING TABLE CONTEXT"
+                )
+                assert not any(call.method == "start_query" for call in client.calls)
+
+                release_setup.set()
+                await _wait_for_service_setup(ctx, app, pilot)
+
+                assert page.context.catalog == "AwsDataCatalog"
+                assert page.context.database == "dev_analytics"
+                assert page.query.sql == expected_sql
+                assert app.query_one("#athena-editor", TextArea).text == expected_sql
+                assert not page.query.is_context_resolving
+                assert page.query.execute_command.can_execute()
+                assert not any(call.method == "start_query" for call in client.calls)
+            finally:
+                release_setup.set()
+    finally:
+        release_setup.set()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
 

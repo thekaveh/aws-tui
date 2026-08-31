@@ -868,10 +868,13 @@ immutable `TableRef`; it does not pass a client or reuse a different profile.
 
 aws-tui quotes each identifier independently, discovers the destination
 catalog/database through bounded pagination, and selects an enabled workgroup
-for the same source. It never executes generated queries automatically. If the
-handoff is cancelled, superseded, or cannot mount the destination, the
-composition root restores the prior Glue/Athena state instead of leaving a
-partially switched page.
+for the same source. The editor shows the starter statement as soon as Athena
+mounts, even while remote context discovery is still in progress. Run remains
+disabled and the query controls report `RESOLVING TABLE CONTEXT` until that
+exact context is ready. aws-tui never executes generated queries
+automatically. If the handoff is cancelled, superseded, or cannot mount the
+destination, the composition root restores the prior Glue/Athena state instead
+of leaving a partially switched page.
 
 From an Athena Query view, **Open query table in Glue** is available through
 the command palette when the read-only SQL resolves to exactly one visible
