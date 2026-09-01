@@ -1,6 +1,6 @@
 # 1. Athena Query Execution Repair Design
 
-**Status:** Approved for implementation on 2026-08-31.
+**Status:** Implemented and verified on 2026-08-31.
 
 ## 1.1. Problem
 
@@ -63,11 +63,11 @@ result configuration keep their existing typed behavior.
 
 ## 1.4. Query Controls
 
-Run and Stop will use a fixed `6x3` terminal-cell footprint. Six conventional
-half-width character cells approximate the physical width of three terminal
-rows, producing a visually square control while retaining a one-row centered
-glyph inside the border. Width, height, minimums, and maximums will be locked
-so disabled, focused, and hover states cannot alter layout.
+Run and Stop will use a fixed `5x3` terminal-cell footprint. The visible border
+spans four conventional half-width character intervals and two row intervals,
+producing a visually square control while retaining a one-row centered glyph
+inside the border. Width, height, minimums, and maximums will be locked so
+disabled, focused, and hover states cannot alter layout.
 
 Terminal applications cannot know every font's pixel aspect ratio, so the
 contract is exact terminal geometry plus a visually square result under normal
@@ -81,7 +81,7 @@ Focused tests will cover:
 - exact `StartQueryExecution` arguments for enforced S3 workgroups;
 - categorized rejection mapping without sensitive-value disclosure;
 - query-VM presentation of each actionable category;
-- exact `6x3` outer geometry and centered positive-size content for Run and
+- exact `5x3` outer geometry and centered positive-size content for Run and
   Stop; and
 - stable geometry while controls are disabled, enabled, and focused.
 
