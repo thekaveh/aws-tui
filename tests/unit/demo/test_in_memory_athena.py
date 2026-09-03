@@ -1232,8 +1232,7 @@ async def test_start_query_rejects_non_string_sql_without_python_type_error() ->
         ("SELECT 1", replace(DEV_CONTEXT, catalog="ProdDataCatalog")),
         ("SELECT 1", replace(DEV_CONTEXT, database="prod_warehouse")),
         (
-            'SELECT * FROM "AwsDataCatalog"."prod_warehouse"."prod_sales_iceberg" '
-            "FOR VERSION AS OF 7701 LIMIT 5",
+            'SELECT * FROM "prod_warehouse"."prod_sales_iceberg" FOR VERSION AS OF 7701 LIMIT 5',
             replace(
                 DEV_CONTEXT,
                 catalog="AwsDataCatalog",

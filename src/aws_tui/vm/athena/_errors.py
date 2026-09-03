@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from aws_tui.domain.athena import ResultConfigurationRequiredError
+from aws_tui.domain.athena import (
+    QueryContextRejectedError,
+    ResultConfigurationRequiredError,
+    ResultLocationUnavailableError,
+    WorkgroupRejectedError,
+)
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     NotFoundError,
@@ -31,6 +36,12 @@ def map_provider_error(
         return PaneState.ERROR, "Athena request was throttled"
     if isinstance(exc, ResultConfigurationRequiredError):
         return PaneState.ERROR, "Athena result configuration is required"
+    if isinstance(exc, ResultLocationUnavailableError):
+        return PaneState.ERROR, "Athena cannot access the workgroup result location"
+    if isinstance(exc, QueryContextRejectedError):
+        return PaneState.ERROR, "Athena rejected the selected query context"
+    if isinstance(exc, WorkgroupRejectedError):
+        return PaneState.ERROR, "Athena rejected the selected workgroup"
     if isinstance(exc, ValidationError):
         return PaneState.ERROR, "Athena rejected the request"
     return PaneState.ERROR, fallback

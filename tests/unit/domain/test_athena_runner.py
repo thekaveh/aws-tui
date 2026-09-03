@@ -11,7 +11,12 @@ from typing import Any
 
 import pytest
 
-from aws_tui.domain.athena import ResultConfigurationRequiredError
+from aws_tui.domain.athena import (
+    QueryContextRejectedError,
+    ResultConfigurationRequiredError,
+    ResultLocationUnavailableError,
+    WorkgroupRejectedError,
+)
 from aws_tui.domain.athena_runner import (
     AthenaQueryCancelledError,
     AthenaQueryFailedError,
@@ -1124,5 +1129,49 @@ async def test_runner_preserves_provider_taxonomy_with_private_phase_errors(
     _assert_runner_failure_is_private(
         raised.value,
         crash_dir=tmp_path / f"{phase}-{error_type.__name__}",
+        secrets=(sql_secret, provider_secret),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "expected_message"),
+    [
+        (
+            ResultLocationUnavailableError,
+            "Athena cannot access the workgroup result location",
+        ),
+        (
+            QueryContextRejectedError,
+            "Athena rejected the selected query context",
+        ),
+        (
+            WorkgroupRejectedError,
+            "Athena rejected the selected workgroup",
+        ),
+    ],
+)
+async def test_runner_preserves_safe_start_rejection_categories(
+    error_type: type[ValidationError],
+    expected_message: str,
+    tmp_path: Path,
+) -> None:
+    sql_secret = "SQL_START_REJECTION_SECRET_7F4C2A9D"
+    provider_secret = "PROVIDER_START_REJECTION_SECRET_7F4C2A9D"
+    client = ProviderTypedFailureClient("start", error_type(provider_secret))
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+
+    with pytest.raises(error_type) as raised:
+        await runner.run(
+            f"SELECT '{sql_secret}'",
+            CONTEXT,
+            request_token="metadata-start-rejection",
+            max_rows=1,
+        )
+
+    assert str(raised.value) == expected_message
+    _assert_runner_failure_is_private(
+        raised.value,
+        crash_dir=tmp_path / error_type.__name__,
         secrets=(sql_secret, provider_secret),
     )

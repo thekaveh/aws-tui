@@ -18,7 +18,10 @@ from aws_tui.domain.athena import (
     AthenaClient,
     AthenaWorkgroupDetail,
     AthenaWorkgroupSummary,
+    QueryContextRejectedError,
     ResultConfigurationRequiredError,
+    ResultLocationUnavailableError,
+    WorkgroupRejectedError,
     map_athena_error,
 )
 from aws_tui.domain.data_catalog import (
@@ -712,6 +715,50 @@ async def test_missing_result_configuration_maps_to_typed_error() -> None:
         await client.start_query(sql, CONTEXT, request_token="token-123")
 
     assert sql not in str(raised.value)
+    assert raised.value.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_type", "expected_message", "secret"),
+    [
+        (
+            "Unable to verify/create output bucket s3://RESULT_SECRET_7F4C2A9D/",
+            ResultLocationUnavailableError,
+            "Athena cannot access the workgroup result location",
+            "RESULT_SECRET_7F4C2A9D",
+        ),
+        (
+            "Catalog CATALOG_SECRET_7F4C2A9D does not exist",
+            QueryContextRejectedError,
+            "Athena rejected the selected query context",
+            "CATALOG_SECRET_7F4C2A9D",
+        ),
+        (
+            "WorkGroup WORKGROUP_SECRET_7F4C2A9D is disabled",
+            WorkgroupRejectedError,
+            "Athena rejected the selected workgroup",
+            "WORKGROUP_SECRET_7F4C2A9D",
+        ),
+    ],
+)
+async def test_start_query_classifies_known_invalid_requests_without_raw_values(
+    message: str,
+    expected_type: type[ValidationError],
+    expected_message: str,
+    secret: str,
+) -> None:
+    client, boto, _ = _athena_client()
+    boto.start_query_execution.side_effect = _client_error(
+        "InvalidRequestException",
+        message,
+        operation="StartQueryExecution",
+    )
+
+    with pytest.raises(expected_type, match=expected_message) as raised:
+        await client.start_query("SELECT 1", CONTEXT, request_token="token-123")
+
+    assert str(raised.value) == expected_message
+    assert secret not in str(raised.value)
     assert raised.value.__cause__ is None
 
 

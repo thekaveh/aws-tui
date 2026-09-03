@@ -9,7 +9,12 @@ from typing import Any, NoReturn, Protocol, TypeVar
 
 import anyio
 
-from aws_tui.domain.athena import ResultConfigurationRequiredError
+from aws_tui.domain.athena import (
+    QueryContextRejectedError,
+    ResultConfigurationRequiredError,
+    ResultLocationUnavailableError,
+    WorkgroupRejectedError,
+)
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     NotFoundError,
@@ -554,6 +559,12 @@ def _prepared_provider_error(exc: BaseException, *, phase: str) -> _PreparedRunE
     error_type: type[ProviderError]
     if isinstance(exc, ResultConfigurationRequiredError):
         error_type = ResultConfigurationRequiredError
+    elif isinstance(exc, ResultLocationUnavailableError):
+        error_type = ResultLocationUnavailableError
+    elif isinstance(exc, QueryContextRejectedError):
+        error_type = QueryContextRejectedError
+    elif isinstance(exc, WorkgroupRejectedError):
+        error_type = WorkgroupRejectedError
     elif isinstance(exc, AuthRequiredError):
         error_type = AuthRequiredError
     elif isinstance(exc, ProviderUnreachableError):
@@ -591,6 +602,12 @@ def _provider_phase_message(error_type: type[ProviderError], *, phase: str) -> s
         return f"Athena {operation} was throttled"
     if issubclass(error_type, ResultConfigurationRequiredError):
         return f"Athena result configuration is required during {operation}"
+    if issubclass(error_type, ResultLocationUnavailableError):
+        return "Athena cannot access the workgroup result location"
+    if issubclass(error_type, QueryContextRejectedError):
+        return "Athena rejected the selected query context"
+    if issubclass(error_type, WorkgroupRejectedError):
+        return "Athena rejected the selected workgroup"
     if issubclass(error_type, AthenaResultShapeError):
         return f"Athena returned invalid data during {operation}"
     if issubclass(error_type, ValidationError):

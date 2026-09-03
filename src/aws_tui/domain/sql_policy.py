@@ -527,6 +527,11 @@ def quote_athena_table_ref(ref: TableRef) -> str:
     )
 
 
+def quote_athena_query_table_ref(ref: TableRef) -> str:
+    """Quote a table relative to the request's resolved catalog context."""
+    return ".".join(quote_athena_identifier(part) for part in (ref.database_name, ref.table_name))
+
+
 def select_starter_sql(
     ref: TableRef,
     snapshot_id: int | None = None,
@@ -535,7 +540,7 @@ def select_starter_sql(
         isinstance(snapshot_id, bool) or not isinstance(snapshot_id, int) or snapshot_id < 0
     ):
         raise ValueError("snapshot ID must be a non-negative integer")
-    qualified = quote_athena_table_ref(ref)
+    qualified = quote_athena_query_table_ref(ref)
     travel = f" FOR VERSION AS OF {snapshot_id}" if snapshot_id is not None else ""
     return f"SELECT * FROM {qualified}{travel} LIMIT 5"
 
@@ -544,6 +549,7 @@ __all__ = [
     "QueryRejectedError",
     "ReadOnlySqlPolicy",
     "quote_athena_identifier",
+    "quote_athena_query_table_ref",
     "quote_athena_table_ref",
     "select_starter_sql",
 ]

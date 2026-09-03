@@ -13,6 +13,11 @@ import pytest
 from vmx import NULL_DISPATCHER, AsyncRelayCommand, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.domain.athena import (
+    QueryContextRejectedError,
+    ResultLocationUnavailableError,
+    WorkgroupRejectedError,
+)
 from aws_tui.domain.athena_runner import AthenaQueryRunner
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import (
@@ -1116,6 +1121,41 @@ async def test_provider_failure_is_scoped_and_never_exposes_sql() -> None:
     assert vm.error_text == "Athena query request failed"
     assert "SQL_SECRET" not in vm.error_text
     assert "SQL_SECRET" not in repr(vm)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "expected_message"),
+    [
+        (
+            ResultLocationUnavailableError,
+            "Athena cannot access the workgroup result location",
+        ),
+        (
+            QueryContextRejectedError,
+            "Athena rejected the selected query context",
+        ),
+        (
+            WorkgroupRejectedError,
+            "Athena rejected the selected workgroup",
+        ),
+    ],
+)
+async def test_start_rejection_category_reaches_query_detail_without_raw_message(
+    error_type: type[ProviderError],
+    expected_message: str,
+) -> None:
+    provider_secret = "PROVIDER_REJECTION_SECRET_7F4C2A9D"
+    fake = InMemoryAthena()
+    fake.start_error = error_type(provider_secret)
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 1")
+
+    await vm.execute()
+
+    assert vm.pane_state is PaneState.ERROR
+    assert vm.error_text == expected_message
+    assert provider_secret not in vm.error_text
 
 
 @pytest.mark.asyncio
