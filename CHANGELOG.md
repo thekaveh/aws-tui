@@ -160,6 +160,13 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.3. Fixed
 
+- **Athena query execution and controls.** Glue-generated starter SQL now uses
+  the resolved Athena catalog context with a quoted database/table reference,
+  avoiding redundant catalog qualification in the query text. Known Athena
+  start-time rejections identify an inaccessible result location, rejected
+  catalog/database context, or rejected workgroup without exposing raw AWS
+  values. Run and Stop retain exact `5x3` terminal geometry across disabled,
+  enabled, and focused states so their visible borders render square.
 - **Immediate Glue-to-Athena starter query projection.** Glue table handoffs
   now populate the mounted Athena editor before waiting for remote workgroup,
   catalog, and database discovery. The existing VMx Run command remains

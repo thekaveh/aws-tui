@@ -41,9 +41,12 @@ class AthenaQueryView(Widget):
     }
     AthenaQueryView #athena-execute,
     AthenaQueryView #athena-cancel {
-        width: 3;
-        min-width: 3;
+        width: 5;
+        min-width: 5;
+        max-width: 5;
         height: 3;
+        min-height: 3;
+        max-height: 3;
         margin: 0 1 0 0;
     }
     AthenaQueryView #athena-query-status {

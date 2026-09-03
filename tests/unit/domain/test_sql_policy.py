@@ -10,6 +10,7 @@ from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import (
     QueryRejectedError,
     ReadOnlySqlPolicy,
+    quote_athena_query_table_ref,
     quote_athena_table_ref,
     select_starter_sql,
 )
@@ -590,11 +591,11 @@ def test_table_refs_does_not_log_full_sql(
     [
         (
             None,
-            'SELECT * FROM "Catalog""Name"."db name"."table""name" LIMIT 5',
+            'SELECT * FROM "db name"."table""name" LIMIT 5',
         ),
         (
             42,
-            ('SELECT * FROM "Catalog""Name"."db name"."table""name" FOR VERSION AS OF 42 LIMIT 5'),
+            ('SELECT * FROM "db name"."table""name" FOR VERSION AS OF 42 LIMIT 5'),
         ),
     ],
 )
@@ -625,6 +626,18 @@ def test_quote_athena_table_ref_quotes_all_segments_and_embedded_quotes() -> Non
     assert quote_athena_table_ref(ref) == '"Catalog""Name"."db name"."table""name"'
 
 
+def test_quote_athena_query_table_ref_uses_resolved_database_context() -> None:
+    ref = TableRef(
+        'Catalog"Name',
+        "db name",
+        'table"name',
+        "prod-west",
+        "us-west-2",
+    )
+
+    assert quote_athena_query_table_ref(ref) == '"db name"."table""name"'
+
+
 def test_select_starter_sql_delegates_qualified_identifier_quoting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -639,11 +652,11 @@ def test_select_starter_sql_delegates_qualified_identifier_quoting(
 
     def quote(candidate: TableRef) -> str:
         seen.append(candidate)
-        return '"canonical"."table"."reference"'
+        return '"canonical"."reference"'
 
-    monkeypatch.setattr(sql_policy, "quote_athena_table_ref", quote)
+    monkeypatch.setattr(sql_policy, "quote_athena_query_table_ref", quote)
 
-    assert select_starter_sql(ref) == 'SELECT * FROM "canonical"."table"."reference" LIMIT 5'
+    assert select_starter_sql(ref) == 'SELECT * FROM "canonical"."reference" LIMIT 5'
     assert seen == [ref]
 
 

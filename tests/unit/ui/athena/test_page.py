@@ -7,6 +7,7 @@ from textual.app import App, ComposeResult
 from textual.color import Color
 from textual.containers import Horizontal
 from textual.css.query import NoMatches
+from textual.geometry import Size
 from textual.widgets import Button, DataTable, OptionList, Static, TextArea
 from vmx import NULL_DISPATCHER
 
@@ -1210,8 +1211,24 @@ async def test_query_controls_are_compact_above_editor_and_inside_their_frame() 
         )
         assert controls.region.y <= cancel.region.y < cancel.region.bottom <= controls.region.bottom
         assert execute.region.y == cancel.region.y
+        assert execute.region.size == Size(5, 3)
+        assert cancel.region.size == Size(5, 3)
         assert execute.content_region.height >= 1
         assert cancel.content_region.height >= 1
+        assert controls.content_region.contains_region(execute.region)
+        assert controls.content_region.contains_region(cancel.region)
+
+        vm.query.set_sql("SELECT 1")
+        for _ in range(10):
+            await pilot.pause(0.01)
+            if not execute.disabled:
+                break
+        execute.focus()
+        await pilot.pause()
+
+        assert execute.has_focus
+        assert execute.region.size == Size(5, 3)
+        assert cancel.region.size == Size(5, 3)
         assert controls.content_region.contains_region(execute.region)
         assert controls.content_region.contains_region(cancel.region)
 

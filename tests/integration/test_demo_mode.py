@@ -461,8 +461,7 @@ async def test_demo_iceberg_time_travel_is_explicit_and_profile_local(
             athena = ctx.root_vm.content_host.current
             assert isinstance(athena, AthenaPageVM)
             expected_sql = (
-                'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
-                "FOR VERSION AS OF 4201 LIMIT 5"
+                'SELECT * FROM "dev_analytics"."dev_events_iceberg" FOR VERSION AS OF 4201 LIMIT 5'
             )
             assert athena.query.sql == expected_sql
             assert athena.query.execution_ref is None

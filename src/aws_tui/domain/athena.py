@@ -90,6 +90,18 @@ class ResultConfigurationRequiredError(ValidationError):
     """Athena reported no workgroup or caller-provided result destination."""
 
 
+class ResultLocationUnavailableError(ValidationError):
+    """Athena could not use the selected workgroup's result destination."""
+
+
+class QueryContextRejectedError(ValidationError):
+    """Athena rejected the selected catalog or database context."""
+
+
+class WorkgroupRejectedError(ValidationError):
+    """Athena rejected the selected workgroup."""
+
+
 _ACCESS_DENIED_CODES = frozenset({"AccessDenied", "AccessDeniedException"})
 _NOT_FOUND_CODES = frozenset({"ResourceNotFoundException"})
 _THROTTLED_CODES = frozenset(
@@ -187,6 +199,30 @@ def _is_missing_result_configuration_error(exc: Exception) -> bool:
     if str(error.get("Code", "")) != "InvalidRequestException":
         return False
     return "no output location provided" in str(error.get("Message", "")).lower()
+
+
+def _classified_start_query_rejection(exc: Exception) -> ValidationError | None:
+    if not isinstance(exc, botocore.exceptions.ClientError):
+        return None
+    error = exc.response.get("Error", {})
+    if str(error.get("Code", "")) != "InvalidRequestException":
+        return None
+    message = str(error.get("Message", "")).casefold()
+    if ("output bucket" in message or "output location" in message) and any(
+        marker in message for marker in ("access", "create", "invalid", "verify")
+    ):
+        return ResultLocationUnavailableError("Athena cannot access the workgroup result location")
+    if ("catalog" in message or "database" in message) and any(
+        marker in message
+        for marker in ("cannot be found", "does not exist", "invalid", "not found")
+    ):
+        return QueryContextRejectedError("Athena rejected the selected query context")
+    if "workgroup" in message and any(
+        marker in message
+        for marker in ("disabled", "does not exist", "invalid", "not found", "reject")
+    ):
+        return WorkgroupRejectedError("Athena rejected the selected workgroup")
+    return None
 
 
 def _sanitize_message(message: str, sensitive_values: Sequence[str]) -> str:
@@ -625,6 +661,9 @@ class AthenaClient:
                 raise ResultConfigurationRequiredError(
                     "Athena result configuration is required"
                 ) from None
+            classified = _classified_start_query_rejection(exc)
+            if classified is not None:
+                raise classified from None
             _raise_mapped_athena_error(
                 exc,
                 sensitive_values=(
@@ -1229,6 +1268,9 @@ __all__ = [
     "AthenaClient",
     "AthenaWorkgroupDetail",
     "AthenaWorkgroupSummary",
+    "QueryContextRejectedError",
     "ResultConfigurationRequiredError",
+    "ResultLocationUnavailableError",
+    "WorkgroupRejectedError",
     "map_athena_error",
 ]

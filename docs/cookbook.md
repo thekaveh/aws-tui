@@ -654,6 +654,12 @@ S3** remains on Athena and shows an advisory because there is no customer S3
 artifact. Workgroup-enforced customer S3 and managed output are never treated
 as interchangeable.
 
+When Athena rejects `StartQueryExecution`, Execution detail distinguishes an
+inaccessible workgroup result destination, a rejected catalog/database
+context, and a rejected workgroup. These categories use fixed copy and do not
+echo raw SQL, S3 locations, profiles, workgroups, catalogs, databases, tables,
+or request tokens. Other validation failures retain the generic safe fallback.
+
 ### 1.6.3. Exact read-only SQL grammar
 
 Press `Ctrl+Enter` only after setting workgroup, catalog, and database. The
@@ -843,6 +849,14 @@ state. All of this is in-memory and resets on launch.
 - **Result configuration is required.** Set an output location or managed
   query-results configuration on the selected workgroup. aws-tui will not
   silently send results to another bucket.
+- **Cannot access the workgroup result location.** The workgroup can still be
+  configured for enforced S3 output while the active principal lacks the
+  required bucket, object, or KMS permissions. Check the result-prefix grants
+  listed in §1.6.2; aws-tui does not replace the enforced destination.
+- **Selected query context or workgroup was rejected.** Re-select the catalog,
+  database, and enabled workgroup for the active profile and region. The
+  generated SQL is database/table relative because the exact catalog and
+  database travel in `QueryExecutionContext`.
 - **No rows or cannot load more.** A successful query can return no rows; `l`
   only works when Athena supplied another page token. Check the query state and
   execution detail in History.
@@ -861,14 +875,15 @@ immutable `TableRef`; it does not pass a client or reuse a different profile.
 3. Review the generated statement:
 
     ```sql
-    SELECT * FROM "AwsDataCatalog"."database"."table" LIMIT 5
+    SELECT * FROM "database"."table" LIMIT 5
     ```
 
 4. Edit it if needed, then press `Ctrl+Enter` to execute.
 
-aws-tui quotes each identifier independently, discovers the destination
-catalog/database through bounded pagination, and selects an enabled workgroup
-for the same source. The editor shows the starter statement as soon as Athena
+aws-tui quotes the database and table identifiers independently, discovers the
+destination catalog/database through bounded pagination, sends both through
+Athena's query execution context, and selects an enabled workgroup for the same
+source. The editor shows the starter statement as soon as Athena
 mounts, even while remote context discovery is still in progress. Run remains
 disabled and the query controls report `RESOLVING TABLE CONTEXT` until that
 exact context is ready. aws-tui never executes generated queries
@@ -928,7 +943,7 @@ time-travel control, or choose **Query Iceberg snapshot in Athena**. The
 destination editor receives:
 
 ```sql
-SELECT * FROM "AwsDataCatalog"."database"."table"
+SELECT * FROM "database"."table"
 FOR VERSION AS OF 4201 LIMIT 5
 ```
 
