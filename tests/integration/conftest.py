@@ -43,7 +43,7 @@ from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 _S3MOCK_IMAGE = (
-    "adobe/s3mock:5.1.0@sha256:65cf60155a2e235fe7d5bf6c633747d6fc7ed93f9f5a6727d86470026b83c2a2"
+    "adobe/s3mock:5.2.0@sha256:7a37f0d796e81a28b970c892dcae532797014616b3312b467af8f0274ebf0c26"
 )
 
 _AWS_CREDENTIAL_ENV_VARS = (
