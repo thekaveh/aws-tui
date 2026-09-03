@@ -87,9 +87,9 @@ VMs to build service pages, but it cannot import Textual widgets.
     query context. Query work stays in the VM layer, while `domain/athena.py`
     owns boto mapping and `domain/sql_policy.py` fails closed before dispatch.
     `AthenaPageVM.open_table(...)` sets exact catalog/database context and
-    prefills a quoted `LIMIT 5` starter without executing it. `open_table_in_glue()` publishes
-    `OpenGlueTableRequest` only when the current SQL resolves to one visible
-    table.
+    prefills a quoted, context-relative `LIMIT 5` starter without executing it.
+    `open_table_in_glue()` publishes `OpenGlueTableRequest` only when the
+    current SQL resolves to one visible table.
   - `vm/settings/` — `SettingsVM` (built per-mount when the user
     selects the Settings nav peer) and `S3ConnectionsVM` (singleton
     on `AppContext`, drives the in-app Connections CRUD).
@@ -205,12 +205,14 @@ ID. `app.py` serializes table handoffs, resolves the exact connection, rejects
 region drift, snapshots the outgoing Glue/Athena state for rollback, and
 mounts the destination through `RootVM`. For an Athena destination, the
 `AthenaPageVM` publishes the exact quoted
-`SELECT * FROM "catalog"."database"."table" LIMIT 5` immediately after mount
+`SELECT * FROM "database"."table" LIMIT 5` immediately after mount
 and before awaiting remote Athena setup; a snapshot request adds
 `FOR VERSION AS OF <snapshot-id>` before the limit. The query VM keeps its VMx
 Run command disabled while the exact workgroup, catalog, and database context
-is resolving. Athena receives that generated SQL in the editor but does not
-execute it automatically. For S3,
+is resolving. `AthenaClient` sends that selected catalog and database through
+`QueryExecutionContext`, and categorized start-query validation failures cross
+the runner as fixed redacted domain errors. Athena receives the generated SQL
+in the editor but does not execute it automatically. For S3,
 `OpenS3LocationRequest` carries the
 exact connection, region, URI, pane, and reveal-object intent. The Results VM
 reloads an execution and publishes only when it succeeded, belongs to the

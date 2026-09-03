@@ -155,7 +155,7 @@ async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> No
             None,
             "Q",
             "Query table in Athena",
-            'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5',
+            'SELECT * FROM "dev_analytics"."dev_events" LIMIT 5',
             id="table-key-Q",
         ),
         pytest.param(
@@ -163,7 +163,7 @@ async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> No
             None,
             None,
             "Query table in Athena",
-            'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5',
+            'SELECT * FROM "dev_analytics"."dev_events" LIMIT 5',
             id="table-palette",
         ),
         pytest.param(
@@ -171,10 +171,7 @@ async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> No
             4201,
             "V",
             "Query Iceberg snapshot in Athena",
-            (
-                'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
-                "FOR VERSION AS OF 4201 LIMIT 5"
-            ),
+            ('SELECT * FROM "dev_analytics"."dev_events_iceberg" FOR VERSION AS OF 4201 LIMIT 5'),
             id="snapshot-key-V",
         ),
         pytest.param(
@@ -182,10 +179,7 @@ async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> No
             4201,
             None,
             "Query Iceberg snapshot in Athena",
-            (
-                'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events_iceberg" '
-                "FOR VERSION AS OF 4201 LIMIT 5"
-            ),
+            ('SELECT * FROM "dev_analytics"."dev_events_iceberg" FOR VERSION AS OF 4201 LIMIT 5'),
             id="snapshot-palette",
         ),
     ],
@@ -287,7 +281,7 @@ async def test_glue_to_athena_preserves_identity_and_prefills_without_running(
             assert page.context.workgroup == "dev-analytics"
             assert page.context.catalog == "AwsDataCatalog"
             assert page.context.database == "dev_analytics"
-            expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+            expected_sql = 'SELECT * FROM "dev_analytics"."dev_events" LIMIT 5'
             editor = app.query_one("#athena-editor", TextArea)
             assert page.query.sql == expected_sql
             assert editor.text == expected_sql
@@ -334,7 +328,7 @@ async def test_glue_prefills_before_athena_setup_completes(
                 await pilot.pause()
 
                 page = ctx.root_vm.content_host.current
-                expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+                expected_sql = 'SELECT * FROM "dev_analytics"."dev_events" LIMIT 5'
                 assert isinstance(page, AthenaPageVM)
                 assert page.active_view == "query"
                 assert page.query.sql == expected_sql
@@ -393,7 +387,7 @@ async def test_glue_handoff_leaves_athena_catalog_picker_interactive_without_exe
 
             page = ctx.root_vm.content_host.current
             assert isinstance(page, AthenaPageVM)
-            expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+            expected_sql = 'SELECT * FROM "dev_analytics"."dev_events" LIMIT 5'
             editor = app.query_one("#athena-editor", TextArea)
             context_before = page.context
             assert page.query.sql == expected_sql
@@ -443,7 +437,7 @@ async def test_glue_handoff_explicitly_projects_starter_sql_after_revisiting_ath
             await _wait_for_service_setup(ctx, app, pilot)
 
             page = ctx.root_vm.content_host.current
-            expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+            expected_sql = 'SELECT * FROM "dev_analytics"."dev_events" LIMIT 5'
             assert isinstance(page, AthenaPageVM)
             assert page.query.sql == expected_sql
             assert app.query_one("#athena-editor", TextArea).text == expected_sql
@@ -478,7 +472,7 @@ async def test_clicking_glue_athena_hint_uses_the_registered_handoff_action(
             await _wait_for_service_setup(ctx, app, pilot)
 
             page = ctx.root_vm.content_host.current
-            expected_sql = 'SELECT * FROM "AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
+            expected_sql = 'SELECT * FROM "dev_analytics"."dev_events" LIMIT 5'
             assert isinstance(page, AthenaPageVM)
             assert page.query.sql == expected_sql
             assert app.query_one("#athena-editor", TextArea).text == expected_sql
@@ -975,7 +969,7 @@ async def test_latest_cross_navigation_request_wins_without_auto_execution(
             assert page.context.connection_name == "demo-prod"
             assert page.context.workgroup == "prod-reporting"
             assert page.query.sql.endswith(
-                '"AwsDataCatalog"."prod_warehouse"."prod_sales" FOR VERSION AS OF 77 LIMIT 5'
+                '"prod_warehouse"."prod_sales" FOR VERSION AS OF 77 LIMIT 5'
             )
             assert not any(call.method == "start_query" for call in dev_client.calls)
             assert not any(call.method == "start_query" for call in prod_client.calls)
@@ -1140,9 +1134,7 @@ async def test_superseded_table_handoff_is_one_serialized_transaction(
                 assert isinstance(current, AthenaPageVM)
                 assert ctx.root_vm.active_connection.name == "demo-dev"
                 assert current.context.connection_name == "demo-dev"
-                assert current.query.sql.endswith(
-                    '"AwsDataCatalog"."dev_analytics"."dev_events" LIMIT 5'
-                )
+                assert current.query.sql.endswith('"dev_analytics"."dev_events" LIMIT 5')
             else:
                 assert isinstance(current, GluePageVM)
                 assert ctx.root_vm.active_connection.name == "demo-dev"
