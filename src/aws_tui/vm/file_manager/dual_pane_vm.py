@@ -677,9 +677,11 @@ class DualPaneVM:
                 return_when=asyncio.FIRST_COMPLETED,
             )
         except BaseException:
-            # Outer-worker cancellation (a second ``c``/``d`` press
-            # cancels the prior ``run_worker(group="transfer-ops")``
-            # via exclusive=True; Settings switch; shutdown). Without
+            # Outer-worker cancellation (a second press of the SAME
+            # operation cancels the prior ``run_worker`` via
+            # exclusive=True within its own group; Settings switch;
+            # shutdown). Copy and delete use separate groups, so a
+            # delete no longer cancels an in-flight copy. Without
             # this branch the asyncio.wait raises CancelledError, the
             # finally below only cleans up cancel_task, and copy_task
             # is left running in the background — a multi-MB S3

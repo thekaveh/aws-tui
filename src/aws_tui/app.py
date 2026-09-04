@@ -145,6 +145,16 @@ class _ThemeApplyFailure:
 _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
 _GLUE_SERVICE_IDS = frozenset({"glue"})
 _ATHENA_SERVICE_IDS = frozenset({"athena"})
+
+# Copy and delete run in SEPARATE exclusive groups. Sharing one group meant
+# ``exclusive=True`` made a confirmed delete cancel an in-flight copy: the copy
+# worker awaits the whole byte-streaming batch, so it died mid-transfer leaving
+# a partial object at the destination, and because ``_run_copy`` catches only
+# ``Exception`` the ``CancelledError`` produced no toast and no log line.
+# Exclusivity within each group still prevents two concurrent copies.
+_TRANSFER_COPY_GROUP = "transfer-copy"
+_TRANSFER_DELETE_GROUP = "transfer-delete"
+_TRANSFER_WORKER_GROUPS = (_TRANSFER_COPY_GROUP, _TRANSFER_DELETE_GROUP)
 _EMR_SERVICE_IDS = frozenset({"emr-serverless"})
 
 _MODAL_ROUTED_ACTIONS = frozenset(
@@ -1531,10 +1541,18 @@ class AwsTuiApp(App[None]):
         )
 
     async def _cancel_transfer_workers_before_content_swap(self) -> None:
-        """Stop copy/delete workers before disposing the active file panes."""
+        """Stop copy and delete workers before disposing the active file panes.
+
+        Both groups must be cancelled: they are deliberately separate so that
+        confirming a delete does not cancel an in-flight copy.
+        """
         from textual.worker import WorkerCancelled
 
-        workers = self.workers.cancel_group(self, "transfer-ops")
+        workers = [
+            worker
+            for group in _TRANSFER_WORKER_GROUPS
+            for worker in self.workers.cancel_group(self, group)
+        ]
         if workers:
             results = await asyncio.gather(
                 *(worker.wait() for worker in workers),
@@ -2228,7 +2246,7 @@ class AwsTuiApp(App[None]):
             self.run_worker(
                 self._run_copy(dual, targets, used_cursor_fallback),
                 exclusive=True,
-                group="transfer-ops",
+                group=_TRANSFER_COPY_GROUP,
             )
         finally:
             self._confirmation_pending = False
@@ -2337,7 +2355,7 @@ class AwsTuiApp(App[None]):
             self.run_worker(
                 self._run_delete(dual, targets, used_cursor_fallback),
                 exclusive=True,
-                group="transfer-ops",
+                group=_TRANSFER_DELETE_GROUP,
             )
         finally:
             self._confirmation_pending = False
