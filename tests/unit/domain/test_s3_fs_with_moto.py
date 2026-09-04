@@ -332,6 +332,36 @@ async def test_delete_refuses_a_name_that_is_both_an_object_and_a_prefix(
     )
 
 
+async def test_recursive_delete_does_not_reach_siblings_sharing_a_name_prefix(
+    s3_endpoint: str,
+) -> None:
+    """Deleting folder ``a/b`` must not touch ``a/bar.txt`` or ``a/backup/``.
+
+    The enumeration uses ``Prefix`` with NO ``Delimiter``, so the trailing slash
+    is the only thing separating a folder from its string-prefix siblings.
+    Removing the ``not`` from ``prefix = f"{key}/" if not key.endswith("/")``
+    left the whole repo suite green while a single folder delete also destroyed
+    every sibling key whose name starts with the same characters.
+    """
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "a/b/inside.txt", b"delete me")
+    await _put(s3_endpoint, "mybkt", "a/b/nested/deep.txt", b"delete me too")
+    # Siblings that share "a/b" as a plain string prefix but are NOT inside it.
+    await _put(s3_endpoint, "mybkt", "a/bar.txt", b"keep")
+    await _put(s3_endpoint, "mybkt", "a/b-old.txt", b"keep")
+    await _put(s3_endpoint, "mybkt", "a/backup/x.txt", b"keep")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    await fs.delete(PathRef.from_posix("/a/b"))
+
+    survivors = sorted(entry.name for entry in await fs.list(PathRef.from_posix("/a")))
+    assert survivors == ["b-old.txt", "backup", "bar.txt"], (
+        "recursive delete reached siblings that merely share a name prefix"
+    )
+    assert await _drain(await fs.read_stream(PathRef.from_posix("/a/bar.txt"))) == b"keep"
+    assert await _drain(await fs.read_stream(PathRef.from_posix("/a/backup/x.txt"))) == b"keep"
+
+
 async def test_delete_still_removes_unambiguous_files_and_directories(
     s3_endpoint: str,
 ) -> None:

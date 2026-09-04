@@ -619,3 +619,62 @@ def test_malformed_aws_config_is_tolerated(tmp_path: Path, store: ConfigStore) -
 
     assert [connection.name for connection in connections] == ["broken"]
     assert connections[0].region == "us-east-1"
+
+
+def test_explicit_aws_entry_without_a_region_inherits_the_profile_region(
+    tmp_path: Path,
+    store: ConfigStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Step 2 of the documented region chain was pinned by nothing.
+
+    ``docs/connections.md`` states region resolution follows the explicit
+    connection region, then the selected profile's configured region, then
+    ``AWS_DEFAULT_REGION``, then ``us-east-1``. Every existing region test
+    exercises the AUTO-DISCOVERED path or supplies an explicit region, so
+    neutralising ``or self._profile_region(entry.profile)`` survived the whole
+    suite — an explicit ``[connections.*]`` entry with no region silently fell
+    through to ``us-east-1`` and every Glue/Athena/EMR/S3 call for that
+    connection targeted the wrong region.
+    """
+    config, credentials = _write_aws_files(
+        tmp_path,
+        config_body="[profile prod]\nregion = eu-west-1\n",
+        credentials_body="",
+    )
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    store.add_connection(
+        ConnectionEntry(name="prod-explicit", kind="aws", profile="prod", region=None)
+    )
+    resolver = ConnectionResolver(config_store=store)
+
+    regions = {item.name: item.region for item in resolver.list()}
+    assert regions["prod-explicit"] == "eu-west-1", (
+        "explicit entry did not inherit its profile's region"
+    )
+
+
+def test_explicit_region_still_wins_over_the_profile_region(
+    tmp_path: Path,
+    store: ConfigStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Positive control for the precedence order: step 1 beats step 2."""
+    config, credentials = _write_aws_files(
+        tmp_path,
+        config_body="[profile prod]\nregion = eu-west-1\n",
+        credentials_body="",
+    )
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+
+    store.add_connection(
+        ConnectionEntry(name="pinned", kind="aws", profile="prod", region="ap-south-1")
+    )
+    resolver = ConnectionResolver(config_store=store)
+
+    regions = {item.name: item.region for item in resolver.list()}
+    assert regions["pinned"] == "ap-south-1"

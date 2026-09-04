@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -182,6 +183,44 @@ async def test_rename_above_copy_object_limit_uses_multipart_copy(
     client.delete_object.assert_awaited_once_with(
         Bucket="bucket", Key="source", IfMatch='"source-etag"'
     )
+
+
+async def test_multipart_copy_ranges_cover_every_byte_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The byte ranges are the whole point of a multipart copy, and were unasserted.
+
+    The sibling test above pins the create/complete/abort/delete calls and
+    `CopySourceIfMatch`, but never looked at a single `CopySourceRange`. Both an
+    off-by-one on the range end (`- 1` -> `- 2`) and a wrong start offset
+    (`range(0, ...)` -> `range(1, ...)`) survived the whole repo suite. Either
+    one silently drops bytes from the destination while
+    `complete_multipart_upload` still succeeds — and `rename` then issues the
+    conditional `delete_object` on the SOURCE. Corrupted copy, deleted original.
+    """
+    total_size = 5 * 1024**3 + 1
+    client = _CopyClient()
+    await _rename_with_size(monkeypatch, client, total_size)
+
+    ranges = [call.kwargs["CopySourceRange"] for call in client.upload_part_copy.await_args_list]
+    parsed: list[tuple[int, int]] = []
+    for raw in ranges:
+        assert raw.startswith("bytes="), raw
+        start_text, _, end_text = raw.removeprefix("bytes=").partition("-")
+        parsed.append((int(start_text), int(end_text)))
+
+    # Contiguous, gapless, non-overlapping, and covering [0, total_size - 1].
+    assert parsed[0][0] == 0, f"first part does not start at byte 0: {parsed[0]}"
+    assert parsed[-1][1] == total_size - 1, f"last part does not reach EOF: {parsed[-1]}"
+    for (_, previous_end), (next_start, _) in itertools.pairwise(parsed):
+        assert next_start == previous_end + 1, f"gap or overlap at {previous_end}->{next_start}"
+    covered = sum(end - start + 1 for start, end in parsed)
+    assert covered == total_size, f"ranges cover {covered} bytes, object is {total_size}"
+
+    # Part numbers must be 1-based and contiguous, or complete_multipart_upload
+    # would reject the manifest.
+    numbers = [call.kwargs["PartNumber"] for call in client.upload_part_copy.await_args_list]
+    assert numbers == list(range(1, len(parsed) + 1))
 
 
 async def test_rename_maps_concurrent_source_change_to_conflict(

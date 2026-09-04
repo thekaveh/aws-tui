@@ -368,6 +368,61 @@ def test_save_fsyncs_file_and_parent_directory(
     assert len(calls) >= expected_calls
 
 
+def test_save_flushes_the_payload_before_fsync(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fsync on an unflushed buffered writer syncs nothing.
+
+    `_save_unlocked` writes through a buffered `os.fdopen(..., "wb")`. Without
+    the `fh.flush()`, the payload is still in userspace when `os.fsync` runs, so
+    the fsync is a no-op and the bytes only reach the kernel at `with`-block
+    exit — after the fsync and immediately before `tmp_path.replace()`. A power
+    loss in that window leaves config.toml renamed into place but empty, taking
+    every connection with it, including static credential material.
+
+    The sibling test above only COUNTS fsync calls, so it cannot see the flush
+    disappear. This asserts the file actually has its bytes on disk at the
+    moment fsync is called.
+    """
+    sizes: list[int] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        try:
+            sizes.append(os.fstat(fd).st_size)
+        except OSError:  # pragma: no cover - directory fd on some platforms
+            sizes.append(-1)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+
+    store = ConfigStore(path=config_path)
+    store.save(
+        Config(
+            connections={
+                "prod": ConnectionEntry(
+                    name="prod",
+                    kind="s3-compatible",
+                    endpoint_url="https://example.com",
+                    region="us-east-1",
+                    credentials="static",
+                    access_key_id="AKIAEXAMPLE",
+                    secret_access_key="SECRETEXAMPLE",
+                )
+            },
+            defaults=Defaults(),
+            keybindings=Keybindings(),
+        )
+    )
+
+    on_disk = config_path.read_bytes()
+    assert on_disk, "precondition: the config was written"
+    assert any(size >= len(on_disk) for size in sizes), (
+        f"fsync ran before the payload was flushed: sizes at fsync were {sizes}, "
+        f"final file is {len(on_disk)} bytes"
+    )
+
+
 def test_static_credentials_round_trip(config_path: Path) -> None:
     store = ConfigStore(path=config_path)
     entry = ConnectionEntry(
