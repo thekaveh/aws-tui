@@ -30,6 +30,7 @@ from aws_tui.vm.messages import (
     OpenS3LocationRequest,
 )
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
+from tests.helpers import drain_workers
 
 SERVICE_SETUP_TIMEOUT_SECONDS = 30
 
@@ -39,13 +40,7 @@ async def _wait_for_service_setup(
     app: AwsTuiApp,
     pilot: object,
 ) -> None:
-    await asyncio.wait_for(
-        asyncio.gather(
-            *(worker.wait() for worker in list(app.workers._workers)),
-            return_exceptions=True,
-        ),
-        timeout=SERVICE_SETUP_TIMEOUT_SECONDS,
-    )
+    await drain_workers(app, timeout=SERVICE_SETUP_TIMEOUT_SECONDS)
     while app._table_navigation_tasks:
         await asyncio.wait_for(
             asyncio.gather(
