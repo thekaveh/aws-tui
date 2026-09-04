@@ -328,6 +328,14 @@ class DualPaneVM:
             return
         copier = CrossFsCopy(source=src_pane.provider, destination=dst_pane.provider)
         transfer_ids = self._pre_register_pending(targets, src_pane, dst_pane)
+        # Bind both directories ONCE, next to the provider pair already
+        # snapshotted above. Re-reading ``*_pane.path`` per iteration lets a
+        # navigation between two transfers redirect the rest of the batch, and
+        # ``_pre_register_pending`` has already recorded the ORIGINAL paths in
+        # the journal and the transfers overlay — so the record would name a
+        # destination the bytes never reached.
+        src_base = src_pane.path
+        dst_base = dst_pane.path
         # Track which ``transfer_id`` the loop has actually consumed
         # (success, fail, or user-cancel). If an entry's
         # ``_run_one_transfer`` raises, the loop exits early and the
@@ -337,8 +345,8 @@ class DualPaneVM:
         consumed: set[str] = set()
         try:
             for entry, transfer_id in transfer_ids:
-                src_path = src_pane.path.join(entry.entry.name)
-                dst_path = dst_pane.path.join(entry.entry.name)
+                src_path = src_base.join(entry.entry.name)
+                dst_path = dst_base.join(entry.entry.name)
                 # Mark BEFORE awaiting so a raise from
                 # ``_run_one_transfer`` (which has already
                 # ``mark_aborted``-ed its own transfer's journal
@@ -406,14 +414,22 @@ class DualPaneVM:
             return
         mover = CrossFsMove(source=src_pane.provider, destination=dst_pane.provider)
         transfer_ids = self._pre_register_pending(targets, src_pane, dst_pane)
+        # Bind both directories ONCE, next to the provider pair already
+        # snapshotted above. Re-reading ``*_pane.path`` per iteration lets a
+        # navigation between two transfers redirect the rest of the batch, and
+        # ``_pre_register_pending`` has already recorded the ORIGINAL paths in
+        # the journal and the transfers overlay — so the record would name a
+        # destination the bytes never reached.
+        src_base = src_pane.path
+        dst_base = dst_pane.path
         # See ``copy_across`` for the rationale on the ``consumed``
         # set — mid-batch failure must not strand PENDING journal
         # entries for ids the loop never reached.
         consumed: set[str] = set()
         try:
             for entry, transfer_id in transfer_ids:
-                src_path = src_pane.path.join(entry.entry.name)
-                dst_path = dst_pane.path.join(entry.entry.name)
+                src_path = src_base.join(entry.entry.name)
+                dst_path = dst_base.join(entry.entry.name)
                 # See ``copy_across`` for why consumed.add precedes the await.
                 consumed.add(transfer_id)
                 self._active_transfer_ids.add(transfer_id)

@@ -555,3 +555,43 @@ async def test_pane_emits_property_changed_on_state() -> None:
     assert "state" in received
     assert "entries" in received
     pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_delete_marked_stays_in_the_directory_the_marks_came_from() -> None:
+    """Navigating mid-delete must not redirect the batch.
+
+    ``delete_marked`` runs in a worker while the UI stays live. Resolving the
+    pane's path per iteration let a navigation between two awaits send the
+    remaining deletes into the newly-entered directory, destroying same-named
+    files the user never marked — silently, with no error raised.
+    """
+    fs = InMemoryFS()
+    await fs.mkdir(PathRef(("dirA",)))
+    await fs.mkdir(PathRef(("dirB",)))
+    for name in ("f1", "f2", "f3"):
+        await fs.write_stream(PathRef(("dirA", name)), _astream(b"x"))
+    for name in ("f2", "f3"):
+        await fs.write_stream(PathRef(("dirB", name)), _astream(b"y"))
+
+    deleted: list[str] = []
+    real_delete = fs.delete
+    pane = await _make_pane(fs)
+
+    async def spy(path: PathRef, **kwargs: object) -> None:
+        deleted.append(str(path))
+        if len(deleted) == 1:
+            await pane.navigate_to(PathRef(("dirB",)))
+        await real_delete(path, **kwargs)  # type: ignore[arg-type]
+
+    fs.delete = spy  # type: ignore[method-assign]
+    await pane.navigate_to(PathRef(("dirA",)))
+    for index in range(len(pane.entries)):
+        pane.mark_at(index, marked=True)
+
+    await pane.delete_marked()
+
+    assert deleted == ["/dirA/f1", "/dirA/f2", "/dirA/f3"]
+    assert [entry.name for entry in await fs.list(PathRef(("dirA",)))] == []
+    # The unmarked files in the directory the pane moved to are untouched.
+    assert sorted(entry.name for entry in await fs.list(PathRef(("dirB",)))) == ["f2", "f3"]

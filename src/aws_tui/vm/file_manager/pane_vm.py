@@ -741,11 +741,18 @@ class PaneVM:
         targets = [e.entry.name for e in self.marked_entries]
         if not targets:
             return
+        # Bind the directory and provider ONCE. This runs in a worker while the
+        # UI stays live, so reading ``self._path``/``self._provider`` per
+        # iteration lets a navigation between two awaits redirect the remaining
+        # deletes into whatever directory the pane moved to — destroying
+        # same-named files the user never selected, with no error raised.
+        provider = self._provider
+        base = self._path
         failures: list[tuple[str, BaseException]] = []
         try:
             for name in targets:
                 try:
-                    await self._provider.delete(self._path.join(name))
+                    await provider.delete(base.join(name))
                 except (OSError, ProviderError) as exc:
                     failures.append((name, exc))
         finally:
