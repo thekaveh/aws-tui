@@ -476,6 +476,31 @@ def _join_path(base: str, name: str) -> str:
     return f"{base}/{name}"
 
 
+def _mutation_log_context(dual: object) -> dict[str, str]:
+    """Identity for a data-mutation log line.
+
+    `app.copy.failed` and `app.delete.failed` are the ONLY log lines covering
+    user data mutation — `src/aws_tui/domain/` and `src/aws_tui/vm/file_manager/`
+    emit none — and they carried just an error and a file count. "My copy
+    failed" therefore produced one context-free line that could not be
+    correlated to a file, bucket or connection.
+    """
+    context: dict[str, str] = {}
+    for side in ("left", "right"):
+        pane = getattr(dual, side, None)
+        path = getattr(pane, "path", None)
+        if path is not None:
+            context[f"{side}_path"] = str(path)
+        provider = getattr(pane, "provider", None)
+        identity = getattr(provider, "storage_identity", None)
+        if identity is not None:
+            context[f"{side}_storage"] = str(identity() if callable(identity) else identity)
+    focused = getattr(dual, "focused_side", None)
+    if focused is not None:
+        context["focused_side"] = str(getattr(focused, "value", focused))
+    return context
+
+
 class AwsTuiApp(App[None]):
     """The aws-tui Textual application.
 
@@ -2282,6 +2307,7 @@ class AwsTuiApp(App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
                 file_count=len(targets),
+                **_mutation_log_context(dual),
             )
             # User feedback: "when a copy or delete fails, I see an
             # error box shown ON the command section at the bottom
@@ -2390,6 +2416,7 @@ class AwsTuiApp(App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
                 file_count=len(targets),
+                **_mutation_log_context(dual),
             )
             # See action_copy for the rationale — same Commands-strip
             # paint-over problem when using bare ``self.notify``.

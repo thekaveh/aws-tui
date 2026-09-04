@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -46,10 +47,23 @@ class FocusedPane(StrEnum):
     RIGHT = "right"
 
 
+_logger = logging.getLogger(__name__)
+
+
 def _drain_refresh_exception(task: asyncio.Task[None]) -> None:
     if task.cancelled():
         return
-    _ = task.exception()
+    exception = task.exception()
+    if exception is None:
+        return
+    # Retrieving the exception silences asyncio's "never retrieved" warning;
+    # discarding it left a background refresh that died on expired credentials
+    # or a dropped connection with NO toast and NO log line, so the pane kept
+    # showing a stale listing and the user saw files that no longer exist.
+    _logger.warning(
+        "pane background refresh failed",
+        extra={"error_type": type(exception).__name__, "error": str(exception)},
+    )
 
 
 def _pane_uri(pane: PaneVM, leaf: str) -> str:

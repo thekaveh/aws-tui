@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
@@ -43,6 +44,8 @@ from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
+
+_logger = logging.getLogger(__name__)
 
 _QUERY_ERROR = "Athena query request failed"
 _CONTEXT_ERROR = "Athena returned a query outside the active context"
@@ -796,6 +799,24 @@ class AthenaQueryVM:
         self._notify_execution()
 
     def _apply_provider_error(self, exc: ProviderError) -> None:
+        # ProviderError covers throttling, AccessDenied, malformed SQL and a
+        # denied result location — i.e. essentially every real query failure.
+        # Only `_apply_unexpected_error` reported anything, so an operator
+        # answering "my query failed" found nothing whatsoever in the durable
+        # log. Record the execution identity; `LogSink` redacts the message and
+        # the SQL never enters the record.
+        ref = self._execution_ref
+        _logger.warning(
+            "athena query failed",
+            extra={
+                "execution_id": ref.execution_id if ref is not None else None,
+                "workgroup": self._context.workgroup,
+                "catalog": self._context.catalog,
+                "database": self._context.database,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
         self._pane_state, self._error_text = map_provider_error(
             exc,
             fallback=_QUERY_ERROR,
