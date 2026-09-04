@@ -123,7 +123,12 @@ def test_report_is_frozen() -> None:
 
 
 def test_is_safe_to_continue_for_known_actions() -> None:
-    for action in ("pane.refresh", "pane.cursor_up", "command_palette.open"):
+    # These must be ids ``AwsTuiApp.record_action`` actually emits. The previous
+    # values (``pane.cursor_up``, ``command_palette.open``) were from a
+    # vocabulary the app never records, so they asserted membership for ids that
+    # could never reach ``is_safe_to_continue`` at runtime. See
+    # ``test_safe_continue_actions_are_ids_the_app_actually_records``.
+    for action in ("pane.refresh", "pane.move_up", "app.command_palette"):
         assert CrashReport.is_safe_to_continue(action) is True
         assert action in SAFE_CONTINUE_ACTIONS
 
@@ -133,3 +138,35 @@ def test_is_safe_to_continue_for_writes_and_unknowns() -> None:
     assert CrashReport.is_safe_to_continue("pane.delete_marked") is False
     assert CrashReport.is_safe_to_continue("dualpane.copy") is False
     assert CrashReport.is_safe_to_continue("pane.rename") is False
+
+
+def test_safe_continue_actions_are_ids_the_app_actually_records() -> None:
+    """The safe set must speak the same vocabulary as ``record_action``.
+
+    An earlier version named a parallel vocabulary — ``pane.cursor_up``,
+    ``quick_look.open``, ``theme.switch`` and 20 others the app never emits — so
+    only ``pane.refresh`` and ``pane.switch_focus`` ever matched and
+    ``CrashReport.can_continue`` was False after essentially every read-only
+    action, leaving the crash modal effectively quit-only.
+    """
+    import ast
+    from pathlib import Path
+
+    from aws_tui.vm.chrome.crash_vm import SAFE_CONTINUE_ACTIONS
+
+    app_source = Path(__file__).parents[4] / "src" / "aws_tui" / "app.py"
+    tree = ast.parse(app_source.read_text(encoding="utf-8"))
+    recorded = {
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "record_action"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+
+    assert recorded, "expected record_action call sites in app.py"
+    orphans = sorted(set(SAFE_CONTINUE_ACTIONS) - recorded)
+    assert orphans == [], f"safe-continue ids the app never records: {orphans}"

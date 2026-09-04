@@ -1546,13 +1546,15 @@ class AwsTuiApp(App[None]):
         Both groups must be cancelled: they are deliberately separate so that
         confirming a delete does not cancel an in-flight copy.
         """
-        from textual.worker import WorkerCancelled
+        from textual.worker import Worker, WorkerCancelled
 
-        workers = [
-            worker
-            for group in _TRANSFER_WORKER_GROUPS
-            for worker in self.workers.cancel_group(self, group)
-        ]
+        workers: list[Worker[object]] = []
+        for group in _TRANSFER_WORKER_GROUPS:
+            # Tolerate a falsy return: the real manager yields a list, but
+            # callers stub this and a bare `for ... in None` would raise.
+            cancelled = self.workers.cancel_group(self, group)
+            if cancelled:
+                workers.extend(cancelled)
         if workers:
             results = await asyncio.gather(
                 *(worker.wait() for worker in workers),
@@ -2105,7 +2107,11 @@ class AwsTuiApp(App[None]):
 
     async def action_modal_left_or_ascend(self) -> None:
         """In modals, move focus to the previous button; in panes, ascend to parent."""
-        self.record_action("pane.ascend")
+        # Record the id this handler is REGISTERED under. Recording
+        # "pane.ascend" attributed the keystroke to a different action in the
+        # crash-dump ring buffer, which an operator then could not cross-
+        # reference against the keymap.
+        self.record_action("pane.modal_left")
         # In a modal: Left moves arrow-key focus to the previous footer
         # button (or whatever the modal exposes as ``action_focus_prev``).
         # Outside any modal: behaves like ``ascend`` so file-pane
@@ -2119,7 +2125,9 @@ class AwsTuiApp(App[None]):
 
     def action_modal_right(self) -> None:
         """In modals, move focus to the next button. No-op in panes."""
-        self.record_action("modal.focus_next")
+        # "modal.focus_next" exists in neither the ActionRegistry nor the
+        # keymap; use the registered id.
+        self.record_action("pane.modal_right")
         # In a modal: Right moves arrow-key focus to the next footer
         # button. Outside any modal: no-op (panes don't currently bind
         # Right to anything).
