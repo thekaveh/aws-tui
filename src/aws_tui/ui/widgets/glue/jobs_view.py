@@ -7,6 +7,7 @@ from typing import ClassVar
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList
 from textual.worker import Worker
@@ -104,40 +105,48 @@ class GlueJobsView(Widget):
             jobs = self.query_one("#glue-jobs-pane", ResourceListPane)
             runs = self.query_one("#glue-runs-pane", ResourceListPane)
             detail = self.query_one("#glue-job-detail-pane", DetailRows)
-        except Exception:
+        except NoMatches:
             return
-        jobs.replace(
-            tuple((row.name, f"{row.name}  {row.command_name}") for row in self._vm.jobs),
-            selected_id=self._vm.selected_job_name,
-            state=self._vm.jobs_state,
-            error_text=self._vm.jobs_error_text,
-            has_more=self._vm.has_more_jobs,
-            limit_reached=self._vm.job_limit_reached,
-        )
-        runs.replace(
-            tuple(
-                (
-                    row.run_id,
-                    f"{row.state:<10}  {row.run_id}",
-                )
-                for row in self._vm.runs
-            ),
-            selected_id=self._vm.selected_run_id,
-            state=self._vm.runs_state,
-            error_text=self._vm.runs_error_text,
-            has_more=self._vm.has_more_runs,
-            limit_reached=self._vm.run_limit_reached,
-        )
-        detail.replace(
-            self._detail_values(),
-            state=(
-                PaneState.IDLE
-                if self._vm.selected_job is not None and self._vm.runs_state is PaneState.EMPTY
-                else self._vm.runs_state
-            ),
-            error_text=self._vm.runs_error_text,
-            empty_text="select a job and run",
-        )
+        # The panes resolved above can still be mounted while their inner
+        # OptionList has already been removed: `ResourceListPane.replace`
+        # calls `query_one(OptionList)`, so `NoMatches` escapes into the
+        # Textual message pump. `glue/catalog_view` and `athena/history_view`
+        # already double-guard for this reason.
+        try:
+            jobs.replace(
+                tuple((row.name, f"{row.name}  {row.command_name}") for row in self._vm.jobs),
+                selected_id=self._vm.selected_job_name,
+                state=self._vm.jobs_state,
+                error_text=self._vm.jobs_error_text,
+                has_more=self._vm.has_more_jobs,
+                limit_reached=self._vm.job_limit_reached,
+            )
+            runs.replace(
+                tuple(
+                    (
+                        row.run_id,
+                        f"{row.state:<10}  {row.run_id}",
+                    )
+                    for row in self._vm.runs
+                ),
+                selected_id=self._vm.selected_run_id,
+                state=self._vm.runs_state,
+                error_text=self._vm.runs_error_text,
+                has_more=self._vm.has_more_runs,
+                limit_reached=self._vm.run_limit_reached,
+            )
+            detail.replace(
+                self._detail_values(),
+                state=(
+                    PaneState.IDLE
+                    if self._vm.selected_job is not None and self._vm.runs_state is PaneState.EMPTY
+                    else self._vm.runs_state
+                ),
+                error_text=self._vm.runs_error_text,
+                empty_text="select a job and run",
+            )
+        except NoMatches:
+            return
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         job = self._vm.selected_job

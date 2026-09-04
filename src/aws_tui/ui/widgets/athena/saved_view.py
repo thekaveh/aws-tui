@@ -5,6 +5,7 @@ from typing import ClassVar
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, OptionList
 
@@ -161,65 +162,73 @@ class AthenaSavedView(Widget):
                 "#athena-more-prepared",
                 AthenaLoadMoreButton,
             )
-        except Exception:
+        except NoMatches:
             return
-        named.replace(
-            tuple(
-                (
-                    row.query_id,
-                    f"{row.name}  {row.database}",
-                )
-                for row in self._vm.named_queries
-            ),
-            selected_id=(
-                self._vm.selected_query_id
-                if self._vm.selected_kind is SavedQueryKind.NAMED
-                else None
-            ),
-            state=self._vm.named_state,
-            error_text=self._vm.named_error_text,
-            has_more=self._vm.has_more_named_queries,
-            limit_reached=self._vm.named_limit_reached,
-        )
-        prepared.replace(
-            tuple(
-                (
-                    row.name,
-                    f"{row.name}  {display_time(row.last_modified_at)}",
-                )
-                for row in self._vm.prepared_statements
-            ),
-            selected_id=(
-                self._vm.selected_query_id
-                if self._vm.selected_kind is SavedQueryKind.PREPARED
-                else None
-            ),
-            state=self._vm.prepared_state,
-            error_text=self._vm.prepared_error_text,
-            has_more=self._vm.has_more_prepared_statements,
-            limit_reached=self._vm.prepared_limit_reached,
-        )
-        detail.replace(
-            self._detail_values(),
-            state=self._vm.detail_state,
-            error_text=self._vm.detail_error_text,
-            empty_text="Select a saved query",
-        )
-        open_editor.disabled = self._vm.selected_sql() is None
-        load_more_named.sync(
-            has_more=self._vm.has_more_named_queries,
-            busy=self._vm.is_loading_more_named_queries,
-            state=self._vm.named_state,
-            error_text=self._vm.named_error_text,
-            limit_reached=self._vm.named_limit_reached,
-        )
-        load_more_prepared.sync(
-            has_more=self._vm.has_more_prepared_statements,
-            busy=self._vm.is_loading_more_prepared_statements,
-            state=self._vm.prepared_state,
-            error_text=self._vm.prepared_error_text,
-            limit_reached=self._vm.prepared_limit_reached,
-        )
+        # The panes resolved above can still be mounted while their inner
+        # OptionList has already been removed: `ResourceListPane.replace`
+        # calls `query_one(OptionList)`, so `NoMatches` escapes into the
+        # Textual message pump. `glue/catalog_view` and `athena/history_view`
+        # already double-guard for this reason.
+        try:
+            named.replace(
+                tuple(
+                    (
+                        row.query_id,
+                        f"{row.name}  {row.database}",
+                    )
+                    for row in self._vm.named_queries
+                ),
+                selected_id=(
+                    self._vm.selected_query_id
+                    if self._vm.selected_kind is SavedQueryKind.NAMED
+                    else None
+                ),
+                state=self._vm.named_state,
+                error_text=self._vm.named_error_text,
+                has_more=self._vm.has_more_named_queries,
+                limit_reached=self._vm.named_limit_reached,
+            )
+            prepared.replace(
+                tuple(
+                    (
+                        row.name,
+                        f"{row.name}  {display_time(row.last_modified_at)}",
+                    )
+                    for row in self._vm.prepared_statements
+                ),
+                selected_id=(
+                    self._vm.selected_query_id
+                    if self._vm.selected_kind is SavedQueryKind.PREPARED
+                    else None
+                ),
+                state=self._vm.prepared_state,
+                error_text=self._vm.prepared_error_text,
+                has_more=self._vm.has_more_prepared_statements,
+                limit_reached=self._vm.prepared_limit_reached,
+            )
+            detail.replace(
+                self._detail_values(),
+                state=self._vm.detail_state,
+                error_text=self._vm.detail_error_text,
+                empty_text="Select a saved query",
+            )
+            open_editor.disabled = self._vm.selected_sql() is None
+            load_more_named.sync(
+                has_more=self._vm.has_more_named_queries,
+                busy=self._vm.is_loading_more_named_queries,
+                state=self._vm.named_state,
+                error_text=self._vm.named_error_text,
+                limit_reached=self._vm.named_limit_reached,
+            )
+            load_more_prepared.sync(
+                has_more=self._vm.has_more_prepared_statements,
+                busy=self._vm.is_loading_more_prepared_statements,
+                state=self._vm.prepared_state,
+                error_text=self._vm.prepared_error_text,
+                limit_reached=self._vm.prepared_limit_reached,
+            )
+        except NoMatches:
+            return
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         named = self._vm.selected_named_query
