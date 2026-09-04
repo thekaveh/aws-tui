@@ -666,12 +666,18 @@ async def test_glue_sync_is_safe_during_page_teardown() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(GluePage)
-        removal = app.screen.remove_children(GluePage)
-        assert not page.display
+        # AWAIT the removal before driving the sync. Without this the widget is
+        # merely display=False with its DOM fully intact, so
+        # ``_focus_projection_available`` returns early on ``display`` alone and
+        # the ``is_attached`` clause -- the one that matters during a real
+        # teardown -- is never exercised. Forcing that helper to True used to
+        # leave this test green, i.e. the queries below could not have raised.
+        await app.screen.remove_children(GluePage)
+        await pilot.pause()
+        assert not page.is_attached
 
         page._sync_view()  # type: ignore[attr-defined]
         page._sync_context()  # type: ignore[attr-defined]
-        await removal
 
 
 @pytest.mark.asyncio

@@ -74,6 +74,60 @@ async def test_command_palette_renders_entries() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("danger", "expected_button", "resolves_to"),
+    [(True, "cancel", False), (False, "confirm", True)],
+)
+async def test_confirm_modal_reflex_enter_routes_to_the_safe_side(
+    danger: bool, expected_button: str, resolves_to: bool
+) -> None:
+    """A danger prompt must answer a bare Enter with Cancel, not Confirm.
+
+    Nothing pinned this. Flipping the default to ``"confirm"`` left 131 tests
+    and 50 modal snapshots green, because ``-focused`` is deliberately not
+    painted at mount so every snapshot is byte-identical either way — while a
+    reflex Enter on a delete prompt would have destroyed the selected file.
+    Asserting the resolved OUTCOME rather than the focus ring, since the ring
+    is intentionally invisible here.
+    """
+    hub: MessageHub = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = ConfirmationVM(hub=hub, dispatcher=dispatcher)
+    vm.construct()
+    try:
+        request = ConfirmRequest(
+            title="Delete 1 object?",
+            confirm_label="Delete",
+            cancel_label="Cancel",
+            danger=danger,
+        )
+
+        answered: list[bool | None] = []
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield from ()
+
+            async def on_mount(self) -> None:
+                self.push_screen(ConfirmModal(vm, request, hub=hub), answered.append)
+
+        app = _App()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            modal = app.screen
+            assert isinstance(modal, ConfirmModal)
+            assert modal._focused_button_id == expected_button
+
+            # A bare Enter, with no navigation first.
+            modal.action_commit_focused()
+            await pilot.pause()
+
+        assert answered == [resolves_to]
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
 async def test_confirm_modal_renders_request() -> None:
     hub: MessageHub = MessageHub()
     dispatcher = RxDispatcher.immediate()

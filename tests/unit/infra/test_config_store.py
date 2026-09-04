@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from aws_tui.infra import config_store as config_store_module
 from aws_tui.infra.config_store import (
     Config,
     ConfigError,
@@ -474,11 +475,18 @@ def test_update_connection_rename_disallowed(tmp_path: Path) -> None:
 # ── Defense-in-depth: parent dir permission tightening ──────────────────────
 
 
-def test_save_chmods_parent_dir_to_0o700(tmp_path: Path) -> None:
-    """Regression: ConfigStore.save() must chmod the config parent dir to 0o700
-    (defense-in-depth — the config.toml file itself is 0o600 via mkstemp, but
-    the parent dir would otherwise inherit umask 0o755 and leak the dir
-    listing). If a future change silently drops the chmod call, this catches it.
+def test_save_chmods_parent_dir_to_0o700(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: ConfigStore.save() must chmod the config parent dir to 0o700.
+
+    Defense-in-depth — the config.toml file itself is 0o600 via mkstemp, but the
+    parent dir would otherwise inherit umask 0o755 and leak the dir listing.
+
+    The 0o700 has TWO independent producers: ``save`` itself, and
+    ``_acquire_os_file_lock``, which runs on every ``transaction()``. This test
+    previously claimed that "if a future change silently drops the chmod call,
+    this catches it" and it did not — dropping either producer alone left the
+    other to satisfy the assertion. The lock's chmod is neutralised below so the
+    one in ``save`` is genuinely pinned.
 
     Skipped on Windows / filesystems that do not preserve permission bits."""
     import stat
@@ -486,6 +494,20 @@ def test_save_chmods_parent_dir_to_0o700(tmp_path: Path) -> None:
 
     if sys.platform.startswith("win"):
         pytest.skip("POSIX permission bits not enforced on Windows")
+
+    real_acquire = config_store_module._acquire_os_file_lock
+
+    def acquire_without_chmod(path: Path, timeout: float):  # type: ignore[no-untyped-def]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mode_before = stat.S_IMODE(path.parent.stat().st_mode)
+        handle = real_acquire(path, timeout)
+        # Undo only the lock helper's hardening, leaving save() as the sole
+        # remaining producer of 0o700.
+        path.parent.chmod(mode_before)
+        return handle
+
+    monkeypatch.setattr(config_store_module, "_acquire_os_file_lock", acquire_without_chmod)
+
     config_path = tmp_path / "nested" / "aws-tui" / "config.toml"
     store = ConfigStore(path=config_path)
     store.add_connection(
