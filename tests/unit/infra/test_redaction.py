@@ -56,6 +56,23 @@ def test_redact_text_covers_common_secret_carriers() -> None:
     assert "private_key=[REDACTED]" in text
 
 
+def test_redact_text_covers_authorization_values_without_a_scheme() -> None:
+    """A schemeless or ``=``-separated Authorization value must not survive.
+
+    The scheme-preserving header pass only matches ``Authorization: <scheme>
+    <credential>``. Values in either other shape reach the key/value pass, which
+    previously exempted every unquoted ``authorization`` key on the assumption
+    the header pass had already handled it — so they were emitted verbatim into
+    durable logs and crash dumps.
+    """
+    for text in (
+        "Authorization: SECRETOPAQUE",
+        "authorization=SECRETOPAQUE",
+        "Authorization:SECRETOPAQUE",
+    ):
+        assert "SECRETOPAQUE" not in redact_text(text)
+
+
 def test_redact_text_covers_single_quoted_mapping_representations() -> None:
     text = redact_text(
         "{'secret_access_key': 'SECRET', "

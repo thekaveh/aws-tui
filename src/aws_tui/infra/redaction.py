@@ -59,9 +59,14 @@ def _redact_key_value(match: re.Match[str]) -> str:
         match.group("key").casefold() == "authorization"
         and not key_quote
         and not value.startswith(("'", '"'))
+        and match.string[match.end() :].lstrip().startswith(_REDACTED)
     ):
-        # The authorization-header pass already preserves the scheme in the
-        # ordinary ``Authorization: Bearer value`` form.
+        # The authorization-header pass already replaced the credential and
+        # deliberately preserved the scheme, so ``value`` here is just the
+        # scheme token and the redacted credential follows it. That pass
+        # requires a scheme, so a schemeless (``Authorization: <opaque>``) or
+        # ``=``-separated value arrives here intact and must NOT be exempted —
+        # it falls through and gets redacted below.
         return match.group(0)
     return f"{key_quote}{match.group('key')}{key_quote}{match.group('separator')}{_REDACTED}"
 
