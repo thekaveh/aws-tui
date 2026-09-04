@@ -189,6 +189,13 @@ class TransferJournal:
     def _append(self, transfer_id: str, record: dict[str, Any]) -> None:
         path = self._path_for(transfer_id)
         line = json.dumps(record, separators=(",", ":"))
+        # A directory fsync makes the file's ENTRY durable, which only changes
+        # when the file is created. Doing it on every append doubled the sync
+        # cost of a batch: pre-registering the 1,000-entry cap performed ~2,000
+        # fsyncs synchronously on the event loop before the first byte moved
+        # (measured: 400 for 200 entries). The per-file fsync in
+        # `_write_journal_line` still makes the CONTENT durable on every record.
+        created = not path.exists()
         if os.name == "posix":
             with open(
                 path,
@@ -203,7 +210,8 @@ class TransferJournal:
         if os.name == "posix":
             with contextlib.suppress(OSError, NotImplementedError):
                 path.chmod(0o600)
-        _fsync_directory(path.parent)
+        if created:
+            _fsync_directory(path.parent)
 
     def _replay(self, path: Path) -> TransferJournalEntry | None:
         filename_id = path.stem
