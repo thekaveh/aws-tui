@@ -1717,3 +1717,115 @@ def test_other_credential_failures_still_report_their_reason() -> None:
     assert isinstance(mapped, AuthRequiredError)
     assert str(mapped), "the message was blanked entirely"
     assert str(mapped) != "credential process failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("context", "axis"),
+    [
+        # Name differs, region matches the active connection.
+        (QueryContext("prod", "us-east-1", "analysts", "AwsDataCatalog", "analytics"), "name"),
+        # Region differs, name matches.
+        (QueryContext("dev", "eu-west-1", "analysts", "AwsDataCatalog", "analytics"), "region"),
+    ],
+)
+async def test_start_query_rejects_a_single_axis_context_mismatch(
+    context: QueryContext, axis: str
+) -> None:
+    """Each operand of the connection guard must reject on its own.
+
+    The sibling test above mismatches name AND region together, so either
+    operand alone still rejected it — and a mutation sweep found both operands
+    individually survivable. With one neutered, a context built for another
+    account (or another region) is submitted through THIS connection's client:
+    the query runs against the wrong account with the wrong workgroup and
+    database.
+    """
+    client, boto, session = _athena_client()
+
+    with pytest.raises(ValidationError, match="query context"):
+        await client.start_query("SELECT 1", context, request_token="token-123")
+
+    boto.start_query_execution.assert_not_awaited(), axis
+    assert session.requests == []
+
+
+@pytest.mark.asyncio
+async def test_query_detail_for_a_different_execution_id_is_rejected() -> None:
+    """A detail response must belong to the execution that was asked for.
+
+    `get_query_execution` trusts the service to echo the id back; the identity
+    check is the only thing stopping a mismatched response being attributed to
+    the requested execution. It was pinned by nothing — with it removed, asking
+    for one id returned another execution's detail as if it were the requested
+    one.
+    """
+    client, _boto, _session = _athena_client(
+        "get_query_execution",
+        {
+            "QueryExecution": {
+                "QueryExecutionId": "OTHER-EXECUTION",
+                "Status": {"State": "SUCCEEDED"},
+                "WorkGroup": "analysts",
+                "Query": "SELECT 1",
+                "StatusUpdateDateTime": None,
+            }
+        },
+    )
+
+    with pytest.raises(ProviderError):
+        await client.get_query_execution("REQUESTED-EXECUTION")
+
+
+async def test_first_page_without_a_header_row_keeps_every_data_row() -> None:
+    """The header heuristic must compare, not assume.
+
+    Athena includes the column-name header row only for queries that produce
+    one; a first page whose row 0 is real data must keep it. Forcing the
+    name-comparison to True survived the whole suite — the existing first-page
+    test uses a response whose row 0 IS the header, so dropping row 0
+    unconditionally looked identical. Under that mutation the first data row of
+    every headerless first page was silently discarded.
+    """
+    response = {
+        "ResultSet": {
+            "ResultSetMetadata": {
+                "ColumnInfo": [
+                    {"Name": "event_id", "Type": "varchar"},
+                    {"Name": "count", "Type": "bigint"},
+                ]
+            },
+            "Rows": [
+                {"Data": [{"VarCharValue": "row-1"}, {"VarCharValue": "10"}]},
+                {"Data": [{"VarCharValue": "row-2"}, {"VarCharValue": "20"}]},
+            ],
+        }
+    }
+    client, _boto, _session = _athena_client("get_query_results", response)
+
+    page = await client.get_results_page("q-123")
+
+    assert page.rows == (("row-1", "10"), ("row-2", "20")), (
+        "a data row was mistaken for the header and dropped"
+    )
+
+
+async def test_empty_first_result_page_is_an_empty_table_not_an_error() -> None:
+    """A SELECT with zero rows must render as empty, not raise.
+
+    Forcing the `rows` truthiness operand made an empty first page reach
+    `rows[0]` and surface `ValidationError: malformed Athena response` — an
+    empty result set reported as a broken one.
+    """
+    response = {
+        "ResultSet": {
+            "ResultSetMetadata": {"ColumnInfo": [{"Name": "event_id", "Type": "varchar"}]},
+            "Rows": [],
+        }
+    }
+    client, _boto, _session = _athena_client("get_query_results", response)
+
+    page = await client.get_results_page("q-123")
+
+    assert page.rows == ()
+    assert page.columns == (ResultColumn("event_id", "varchar", "UNKNOWN"),)

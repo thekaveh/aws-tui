@@ -2099,3 +2099,30 @@ async def test_unrelated_programming_error_is_not_rewritten(
         tb = tb.tb_next
     assert original_traceback[0] in traceback_nodes
     assert "_raise_unknown" in frame_names
+
+
+async def test_list_jobs_page_forwards_the_continuation_token() -> None:
+    """The Jobs paginator was the only Glue paginator without a paging test.
+
+    Its siblings (databases, tables, partitions, job runs, crawlers) all pin
+    that `start_token` becomes `NextToken`; dropping it here survived the whole
+    suite while the Jobs pane silently re-fetched page 1 forever — a workspace
+    with more than 100 jobs could never show job 101.
+    """
+    client, glue, _, _ = _client()
+    glue.get_jobs.return_value = {
+        "Jobs": [
+            {
+                "Name": "job-on-page-2",
+                "Role": "GlueJobRole",
+                "Command": {"Name": "glueetl"},
+            }
+        ],
+        "NextToken": "page-3",
+    }
+
+    rows, token = await client.list_jobs_page(start_token="page-2")
+
+    assert [row.name for row in rows] == ["job-on-page-2"]
+    assert token == "page-3"
+    glue.get_jobs.assert_awaited_once_with(MaxResults=100, NextToken="page-2")

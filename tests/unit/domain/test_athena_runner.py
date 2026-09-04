@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import traceback
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from traceback import TracebackException
@@ -1175,3 +1176,63 @@ async def test_runner_preserves_safe_start_rejection_categories(
         crash_dir=tmp_path / error_type.__name__,
         secrets=(sql_secret, provider_secret),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("axis", ["connection_name", "region", "workgroup"])
+async def test_runner_rejects_a_ref_mismatched_on_any_single_axis(axis: str) -> None:
+    """Each operand of `_ref_matches_context` must reject on its own.
+
+    A mutation sweep found all three individually survivable: with any one
+    neutered, `run` accepted and returned the result rows of an execution
+    belonging to a different connection, region, or workgroup — and skipped the
+    `stop_query` the rejection normally issues. No existing test hands the
+    runner a ref that differs on exactly one axis.
+    """
+    # Isolating the ref-vs-context operands took three shapes; the failures of
+    # the first two are the map of the layered defence and worth keeping:
+    #   v1: detail built from CONTEXT, start ref foreign -> rejected by
+    #       ``detail.summary.ref == ref`` instead; every operand mutation passed.
+    #   v2: detail AND ref both foreign-consistent -> rejected by
+    #       ``detail.context == context`` (full QueryContext equality) instead;
+    #       every operand mutation still passed.
+    #   v3 (this one): the detail CLAIMS the requested context while its ref
+    #       carries the foreign axis — the shape of a confused/lying service
+    #       echo, which is exactly what these operands exist to catch. Now the
+    #       operand under test is the only thing standing.
+    foreign_ref = QueryExecutionRef(
+        "query-1",
+        "prod" if axis == "connection_name" else CONTEXT.connection_name,
+        "eu-west-1" if axis == "region" else CONTEXT.region,
+        "wg-other" if axis == "workgroup" else CONTEXT.workgroup,
+    )
+    detail = _detail(QueryState.SUCCEEDED)
+    detail = replace(detail, summary=replace(detail.summary, ref=foreign_ref))
+
+    class _ForeignRefClient(RunnerClient):
+        async def start_query(
+            self,
+            sql: str,
+            context: QueryContext,
+            *,
+            request_token: str,
+        ) -> QueryExecutionRef:
+            self.start_calls.append((sql, context, request_token))
+            return foreign_ref
+
+    client = _ForeignRefClient(
+        states=(detail,),
+        pages={None: ResultPage((COLUMN,), (("leaked-row",),), None)},
+    )
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=_no_sleep)
+
+    with pytest.raises(ValidationError):
+        await runner.run(
+            "SELECT snapshot_id FROM x LIMIT 100",
+            CONTEXT,
+            request_token="metadata-1",
+            max_rows=2,
+        )
+
+    assert client.result_calls == [], f"result rows were fetched for a foreign {axis}"
+    assert client.stop_calls == ["query-1"], f"the foreign-{axis} execution was not stopped"
