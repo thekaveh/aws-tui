@@ -1466,3 +1466,140 @@ async def test_failed_etag_delete_restores_the_quarantined_original(tmp_path: Pa
         assert [p.name for p in tmp_path.iterdir()] == ["payload"]
     finally:
         (payload / "sub").chmod(0o700)
+
+
+# ── Unrooted LocalFS: the only production configuration ──────────────────────
+#
+# `composition.py` builds `S3Service` without a `local_root`, and nothing in
+# `src/` ever sets one, so `LocalFS()` with no root is what every local-pane
+# operation runs against. A census of the whole suite found unrooted `mkdir`,
+# `write_stream` and `delete_empty_directory` were never called at all, and no
+# unrooted `delete` ever SUCCEEDED anywhere — the calls that existed were two
+# rejections and one induced-failure restore. The tests below exercise the
+# unrooted success paths and the guards that protect them.
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unrooted contract")
+async def test_unrooted_delete_removes_a_file_and_a_directory(tmp_path: Path) -> None:
+    """No unrooted delete succeeded anywhere in the suite before this.
+
+    `local_fs.py:416` routes directories to `shutil.rmtree` and everything else
+    to `unlink`. All four operand mutations of that branch survived: inverting
+    it broke directory deletion entirely (or file deletion entirely) while the
+    only existing test still passed, because it asserts `PermissionDeniedError`
+    and gets one either way.
+    """
+    fs = LocalFS()
+    victim_file = tmp_path / "gone.txt"
+    victim_file.write_bytes(b"bye")
+    victim_dir = tmp_path / "tree"
+    (victim_dir / "nested").mkdir(parents=True)
+    (victim_dir / "nested" / "leaf.txt").write_bytes(b"leaf")
+
+    await fs.delete(PathRef.from_posix(str(victim_file)))
+    assert not victim_file.exists(), "unrooted file delete did not remove the file"
+
+    await fs.delete(PathRef.from_posix(str(victim_dir)))
+    assert not victim_dir.exists(), "unrooted directory delete did not remove the tree"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unrooted contract")
+async def test_unrooted_conditional_delete_refuses_a_changed_source(tmp_path: Path) -> None:
+    """`CrossFsMove` deletes the source only after a revision match.
+
+    That check is the sole protection against deleting a source the user
+    modified after the copy read it. Neutralising any of its three lines let the
+    delete proceed, destroying the newer content while the destination kept the
+    older bytes.
+    """
+    fs = LocalFS()
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"ORIGINAL")
+    ref = PathRef.from_posix(str(target))
+    stale = (await fs.stat(ref)).etag
+
+    target.write_bytes(b"NEWER USER DATA")
+
+    with pytest.raises(ConflictError):
+        await fs.delete(ref, expected_etag=stale)
+
+    assert target.read_bytes() == b"NEWER USER DATA", "newer content was destroyed"
+
+    # Positive control: the same call succeeds against a current revision.
+    current = (await fs.stat(ref)).etag
+    await fs.delete(ref, expected_etag=current)
+    assert not target.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unrooted contract")
+async def test_unrooted_delete_empty_directory_refuses_a_non_empty_one(tmp_path: Path) -> None:
+    """A non-empty directory must survive, visibly.
+
+    Two mutations made this report success while renaming the directory to a
+    hidden `.<name>.aws-tui-rmdir-<uuid>` quarantine — so the user's directory
+    and everything in it appeared to vanish while the operation claimed to have
+    worked.
+    """
+    fs = LocalFS()
+    occupied = tmp_path / "busy"
+    occupied.mkdir()
+    (occupied / "child.txt").write_bytes(b"still here")
+
+    with pytest.raises(ConflictError):
+        await fs.delete_empty_directory(PathRef.from_posix(str(occupied)))
+
+    assert occupied.is_dir(), "the directory was not restored after the refusal"
+    assert (occupied / "child.txt").read_bytes() == b"still here"
+    hidden = [p.name for p in tmp_path.iterdir() if p.name.startswith(".")]
+    assert hidden == [], f"the directory was left quarantined under {hidden}"
+
+    # Positive control: an actually-empty directory is removed.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    await fs.delete_empty_directory(PathRef.from_posix(str(empty)))
+    assert not empty.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unrooted contract")
+async def test_unrooted_rename_refuses_to_replace_an_existing_destination(
+    tmp_path: Path,
+) -> None:
+    """`_rename_no_replace` must not clobber a destination the user never named.
+
+    Forcing its Windows branch made it fall through to `Path.rename`, which
+    silently replaces. Nothing caught it: unrooted rename had exactly one call
+    in the suite, a dot-segment rejection that never reaches this code.
+    """
+    fs = LocalFS()
+    source = tmp_path / "src.txt"
+    source.write_bytes(b"source")
+    occupied = tmp_path / "dst.txt"
+    occupied.write_bytes(b"PRE-EXISTING")
+
+    with pytest.raises(ConflictError):
+        await fs.rename(PathRef.from_posix(str(source)), PathRef.from_posix(str(occupied)))
+
+    assert occupied.read_bytes() == b"PRE-EXISTING", "rename replaced the destination"
+    assert source.read_bytes() == b"source", "rename consumed the source anyway"
+
+    # Positive control: renaming onto a free name works.
+    free = tmp_path / "free.txt"
+    await fs.rename(PathRef.from_posix(str(source)), PathRef.from_posix(str(free)))
+    assert free.read_bytes() == b"source"
+    assert not source.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unrooted contract")
+async def test_unrooted_mkdir_and_write_stream_actually_create(tmp_path: Path) -> None:
+    """Neither had a single unrooted call anywhere in the suite.
+
+    Both bodies could be replaced with `pass` while reporting success.
+    """
+    fs = LocalFS()
+    made = tmp_path / "made"
+    await fs.mkdir(PathRef.from_posix(str(made)))
+    assert made.is_dir(), "unrooted mkdir reported success without creating anything"
+
+    written = made / "out.txt"
+    await fs.write_stream(PathRef.from_posix(str(written)), _agen([b"payload"]))
+    assert written.read_bytes() == b"payload", "unrooted write_stream wrote nothing"
