@@ -84,8 +84,15 @@ class ContentHostVM:
 
     def destruct(self) -> None:
         self._cancel_pending_setup()
-        if self._current is not None:
-            self._current.destruct()
+        # Only DualPaneVM implements destruct; the EMR, Glue and Athena page VMs
+        # expose construct/setup/shutdown/dispose and no destruct. Calling it
+        # unconditionally raised AttributeError for three of the four hosted
+        # services, aborting RootVM.destruct mid-cascade and leaving the nav
+        # menu, chrome and inner host un-destructed. Tolerate it the same way
+        # this class already tolerates a missing `shutdown`.
+        destruct = getattr(self._current, "destruct", None)
+        if callable(destruct):
+            destruct()
         self._inner.destruct()
 
     def dispose(self) -> None:
