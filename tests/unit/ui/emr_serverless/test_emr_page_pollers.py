@@ -194,7 +194,10 @@ async def test_explicit_log_refresh_bypasses_vm_cache() -> None:
     )
 
     page.on_job_run_logs_pane_refresh_requested(object())  # type: ignore[arg-type]
-    await workers[0][0]
+    # The page hands ``run_worker`` a zero-argument callable, not a coroutine:
+    # an exclusive worker that is superseded before it starts would otherwise
+    # never await the coroutine it was given.
+    await workers[0][0]()
 
     assert workers[0][1] == "emr-logs"
     assert captured == [False]

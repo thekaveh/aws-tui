@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -9,6 +10,7 @@ from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, OptionList
 
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
@@ -21,7 +23,7 @@ from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.athena.saved_vm import SavedQueryKind
 
 
-class AthenaSavedView(Widget):
+class AthenaSavedView(DeferredWorkerMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     AthenaSavedView {
         height: 1fr;
@@ -110,38 +112,33 @@ class AthenaSavedView(Widget):
                 self._vm.selected_kind is not SavedQueryKind.NAMED
                 or option_id != self._vm.selected_query_id
             ):
-                self.run_worker(
-                    self._page_vm.select_named_query(option_id),
-                    exclusive=True,
+                self._run_lifecycle_worker(
+                    partial(self._page_vm.select_named_query, option_id),
                     group="athena-select-saved",
                 )
         elif event.option_list.id == "athena-prepared-pane-options" and (
             self._vm.selected_kind is not SavedQueryKind.PREPARED
             or option_id != self._vm.selected_query_id
         ):
-            self.run_worker(
-                self._page_vm.select_prepared_statement(option_id),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._page_vm.select_prepared_statement, option_id),
                 group="athena-select-saved",
             )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-open-editor":
-            self.run_worker(
-                self._page_vm.open_saved_in_editor(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._page_vm.open_saved_in_editor,
                 group="athena-open-saved",
             )
         elif event.button.id == "athena-more-named":
-            self.run_worker(
-                self._vm.load_more_named_queries(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.load_more_named_queries,
                 group="athena-more-named",
             )
         elif event.button.id == "athena-more-prepared":
-            self.run_worker(
-                self._vm.load_more_prepared_statements(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.load_more_prepared_statements,
                 group="athena-more-prepared",
             )
 

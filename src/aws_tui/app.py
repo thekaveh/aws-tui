@@ -50,6 +50,7 @@ from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.command_palette import CommandPalette
@@ -501,7 +502,7 @@ def _mutation_log_context(dual: object) -> dict[str, str]:
     return context
 
 
-class AwsTuiApp(App[None]):
+class AwsTuiApp(DeferredWorkerMixin, App[None]):
     """The aws-tui Textual application.
 
     Composition root, real version. Constructor accepts an optional
@@ -856,9 +857,8 @@ class AwsTuiApp(App[None]):
             # builds a LocalFS-only DualPane directly with a toast
             # telling the user how to recover.
             self._boot_in_flight = True
-            self.run_worker(
-                self._initial_mount_worker(initial_conn=initial_conn),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._initial_mount_worker, initial_conn=initial_conn),
                 group="content-mount",
             )
         else:
@@ -1615,7 +1615,7 @@ class AwsTuiApp(App[None]):
         # Synchronous fallback for the BindingResolver bridge that
         # cannot await. Schedule the async path on the event loop
         # so cleanup still runs instead of being silently dropped.
-        self.run_worker(self.action_quit(), exclusive=True, group="shutdown")
+        self._run_lifecycle_worker(self.action_quit, group="shutdown")
 
     def action_dispatch(self, action_id: str) -> Awaitable[None] | None:
         """Single Textual action behind every resolver-materialized binding.
@@ -2276,9 +2276,8 @@ class AwsTuiApp(App[None]):
             dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
-            self.run_worker(
-                self._run_copy(dual, targets, used_cursor_fallback),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._run_copy, dual, targets, used_cursor_fallback),
                 group=_TRANSFER_COPY_GROUP,
             )
         finally:
@@ -2386,9 +2385,8 @@ class AwsTuiApp(App[None]):
             dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
-            self.run_worker(
-                self._run_delete(dual, targets, used_cursor_fallback),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._run_delete, dual, targets, used_cursor_fallback),
                 group=_TRANSFER_DELETE_GROUP,
             )
         finally:
@@ -3362,9 +3360,8 @@ class AwsTuiApp(App[None]):
         # deferred). Skip on 'added' — new connections aren't bound yet.
         if msg.change == "added":
             return
-        self.run_worker(
-            self._reload_panes_for(msg.names, deleted=(msg.change == "deleted")),
-            exclusive=True,
+        self._run_lifecycle_worker(
+            partial(self._reload_panes_for, msg.names, deleted=msg.change == "deleted"),
             group="settings-reload",
         )
 
@@ -3400,10 +3397,8 @@ class AwsTuiApp(App[None]):
                 "external",
                 cancel_table_tasks=True,
             )
-            self.run_worker(
-                self._open_s3_location_request(msg, generation),
-                exclusive=True,
-                group="content-mount",
+            self._run_lifecycle_worker(
+                partial(self._open_s3_location_request, msg, generation), group="content-mount"
             )
             return
         if isinstance(msg, CopyTableReferenceRequest):
@@ -4355,9 +4350,8 @@ class AwsTuiApp(App[None]):
             if selected != "s3":
                 self._boot_in_flight = False
                 self.workers.cancel_group(self, "content-mount")
-                self.run_worker(
-                    self._mount_external_navigation(selected, generation),
-                    exclusive=True,
+                self._run_lifecycle_worker(
+                    partial(self._mount_external_navigation, selected, generation),
                     group="content-mount",
                 )
             return
@@ -4375,17 +4369,15 @@ class AwsTuiApp(App[None]):
         # Textual cancel any in-flight worker in the group before
         # starting the new one.
         if selected == SETTINGS_NAV_ID:
-            self.run_worker(
-                self._mount_external_navigation(selected, generation),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._mount_external_navigation, selected, generation),
                 group="content-mount",
             )
         else:
             # Re-use the S3 content if it's already hosted; switch_service
             # is idempotent on the same service_id.
-            self.run_worker(
-                self._mount_external_navigation(selected, generation),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._mount_external_navigation, selected, generation),
                 group="content-mount",
             )
 
@@ -4800,11 +4792,10 @@ class AwsTuiApp(App[None]):
             # Claim recovery before yielding to the worker. Textual may surface
             # more than one lifecycle exception while unwinding a failed mount.
             self._content_mount_recovering.add(replacement)
-            self.run_worker(
-                self._recover_content_mount_lifecycle(replacement, host, error),
+            self._run_lifecycle_worker(
+                partial(self._recover_content_mount_lifecycle, replacement, host, error),
                 name="content mount recovery",
                 group="content-mount-recovery",
-                exclusive=True,
             )
             return
         try:

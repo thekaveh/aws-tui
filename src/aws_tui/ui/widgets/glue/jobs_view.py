@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar
 
@@ -10,8 +9,8 @@ from textual.containers import VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList
-from textual.worker import Worker
 
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
     DetailValue,
@@ -23,7 +22,7 @@ from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 
 
-class GlueJobsView(Widget):
+class GlueJobsView(DeferredWorkerMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     GlueJobsView {
         height: 1fr;
@@ -85,17 +84,6 @@ class GlueJobsView(Widget):
             and option_id != self._vm.selected_run_id
         ):
             self._page_vm.select_job_run(option_id)
-
-    def _run_lifecycle_worker(
-        self,
-        work: Callable[[], Awaitable[None]],
-        *,
-        group: str,
-    ) -> Worker[None]:
-        async def deferred() -> None:
-            await work()
-
-        return self.run_worker(deferred, exclusive=True, group=group)
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self._refresh_all()

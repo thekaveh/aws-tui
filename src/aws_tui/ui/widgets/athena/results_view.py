@@ -9,13 +9,14 @@ from textual.containers import Horizontal
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Static
 
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.glue.detail_rows import state_placeholder
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 
-class AthenaResultsView(Widget):
+class AthenaResultsView(DeferredWorkerMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     AthenaResultsView {
         height: 1fr;
@@ -84,9 +85,8 @@ class AthenaResultsView(Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-more-results":
-            self.run_worker(
-                self._vm.load_more(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.load_more,
                 group="athena-more-results",
             )
 
