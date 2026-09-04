@@ -8,7 +8,24 @@
 # S3 endpoint: http://localhost:9000
 
 services:
+  # The named volume's mountpoint is created root-owned, but the S3Mock image
+  # runs as uid 1000 (cnb) and writes bucket directories directly into the
+  # store root. Without this one-shot chown every CreateBucket fails with
+  # HTTP 500 InternalError. Runs as root only long enough to hand the volume
+  # to the unprivileged runtime user.
+  s3mock-init:
+    image: adobe/s3mock:5.2.0@sha256:7a37f0d796e81a28b970c892dcae532797014616b3312b467af8f0274ebf0c26
+    container_name: aws-tui-dev-s3mock-init
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown 1000:1000 /containers3root"]
+    volumes:
+      - aws-tui-dev-s3mock-data:/containers3root
+    restart: "no"
+
   s3mock:
+    depends_on:
+      s3mock-init:
+        condition: service_completed_successfully
     # Pinned by tag + digest for supply-chain reproducibility — a
     # breaking change upstream can't silently wedge the local dev seed
     # flow with no immutable version to revert to.
@@ -22,8 +39,10 @@ services:
     volumes:
       - aws-tui-dev-s3mock-data:/containers3root
     healthcheck:
-      # S3Mock's always-on readiness endpoint. seed.py also polls the S3 API.
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/favicon.ico"]
+      # ListBuckets, not /favicon.ico: the static endpoint answers 200 before
+      # the object store is touched, so it reports healthy on a container whose
+      # store is unusable. A real S3 operation exercises the store root.
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/"]
       interval: 2s
       timeout: 2s
       retries: 30
