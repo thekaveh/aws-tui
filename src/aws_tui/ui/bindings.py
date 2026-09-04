@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from textual.binding import Binding
 
-from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
+from aws_tui.infra.keymap_store import KeymapStore, textual_key_name
 from aws_tui.ui.actions import ActionRegistry
 
 #: Human-readable label per action id used in Textual binding descriptions.
@@ -30,7 +30,16 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
     "app.help": "Help",
     "app.themes": "Theme picker",
     "app.cycle_theme": "Cycle theme",
-    "app.swap_source": "Swap pane source",
+    "app.swap_source": "Switch source",
+    "glue.choose_run_state": "Choose Glue run state",
+    "glue.choose_crawler_state": "Choose Glue crawler state",
+    "glue.copy_table_ref": "Copy Glue table reference",
+    "glue.query_in_athena": "Open selected Glue table in Athena",
+    "athena.choose_workgroup": "Choose Athena workgroup",
+    "athena.choose_catalog": "Choose Athena catalog",
+    "athena.choose_database": "Choose Athena database",
+    "athena.insert_table_ref": "Insert copied table reference",
+    "emr.next_application": "Next EMR application",
     "pane.move_up": "Up",
     "pane.move_down": "Down",
     "pane.descend": "Open",
@@ -49,7 +58,8 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
     "pane.new": "New",
     "pane.refresh": "Refresh",
     "auth.authenticate": "Sign in",
-    "modal.cancel": "Cancel",
+    "emr.clone": "Clone EMR run",
+    "emr.logs.filter": "Filter EMR logs",
 }
 
 
@@ -79,25 +89,22 @@ _VISIBLE_ACTIONS: frozenset[str] = frozenset(
         "pane.copy",
         "pane.delete",
         "app.swap_source",
+        "emr.next_application",
     }
 )
 
-#: Every handled action binds with ``priority=True`` (so the App handler wins
-#: over Textual's Screen-level focus traversal) EXCEPT quit. Listing only the
-#: exception keeps this in step with Textual's ``priority=False`` default.
-_NON_PRIORITY_ACTIONS: frozenset[str] = frozenset({"app.quit"})
+#: Actions that must yield to a focused widget even when their configured key
+#: is non-printable.
+_NON_PRIORITY_ACTIONS: frozenset[str] = frozenset(
+    {"app.quit", "athena.cancel", "pane.modal_left", "pane.modal_right"}
+)
 
-#: The keymap stores user-facing key literals, but Textual delivers punctuation
-#: under key *names* (a ``:`` press arrives as ``"colon"``) and treats ``","``
-#: as the multi-key separator (``Binding(",")`` raises ``InvalidBinding``). Map
-#: the punctuation we bind to Textual's names; letters, named keys, and
-#: modifier combos (``tab``, ``ctrl+c``, ``shift+up``) pass through unchanged.
-_KEY_NAME_OVERRIDES: dict[str, str] = {
-    ",": "comma",
-    ":": "colon",
-    "?": "question_mark",
-    "/": "slash",
-}
+
+def _binding_priority(action_id: str, key: str) -> bool:
+    """Let editable widgets consume printable keys before app shortcuts."""
+    return action_id not in _NON_PRIORITY_ACTIONS and not (
+        key == "space" or (len(key) == 1 and key.isprintable())
+    )
 
 
 class BindingResolver:
@@ -132,50 +139,34 @@ class BindingResolver:
 
         For each ``(action_id, keys)`` in the keymap we emit one Binding
         per keystroke — but **only when the action has a registered handler**
-        (``ActionRegistry.has``). Deferred/unwired actions (e.g.
-        ``pane.quick_look``, ``app.command_palette``) stay in the keymap for
-        documentation but produce no runtime binding, so no keystroke maps to
-        a handler that does not exist.
+        (``ActionRegistry.has``). Deferred/unwired actions stay in the keymap
+        for documentation but produce no runtime binding, so no keystroke maps
+        to a handler that does not exist.
 
         ``action`` is the parameterized ``dispatch('<action_id>')`` form;
         ``AwsTuiApp.action_dispatch`` forwards it to the
         :class:`ActionRegistry`, which holds the real handler. Only the first
-        keystroke of a chip-worthy action is shown in Textual's footer;
-        every handled action binds ``priority=True`` except quit (see
-        :data:`_VISIBLE_ACTIONS` / :data:`_NON_PRIORITY_ACTIONS`).
+        keystroke of a chip-worthy action is shown in Textual's footer.
+        Modified and named keys bind with priority, while bare printable keys
+        yield to editable widgets. See :func:`_binding_priority`.
         """
         bindings: list[Binding] = []
         for action_id, keys in self._keymap.all().items():
             if not self._actions.has(action_id):
                 continue  # handlerless (deferred) action stays unbound
             description = _describe(action_id)
-            priority = action_id not in _NON_PRIORITY_ACTIONS
             visible = action_id in _VISIBLE_ACTIONS
             for index, key in enumerate(keys):
                 bindings.append(
                     Binding(
-                        key=_KEY_NAME_OVERRIDES.get(key, key),
+                        key=textual_key_name(key),
                         action=f"dispatch({action_id!r})",
                         description=description,
                         show=index == 0 and visible,
-                        priority=priority,
+                        priority=_binding_priority(action_id, key),
                     )
                 )
         return bindings
-
-    def resolve_action_id(self, key: str) -> str | None:
-        """Return the action id bound to ``key``, or None when unbound."""
-        for action_id, keys in self._keymap.all().items():
-            if key in keys:
-                return action_id
-        return None
-
-    def keys_for(self, action_id: str) -> tuple[str, ...]:
-        """Return the keys bound to ``action_id`` (empty tuple if unknown)."""
-        try:
-            return self._keymap.resolve(action_id)
-        except UnknownAction:
-            return ()
 
 
 __all__ = ["BindingResolver"]

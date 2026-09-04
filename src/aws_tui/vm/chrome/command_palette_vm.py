@@ -17,10 +17,9 @@ projection; the facade still exposes the app-specific
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import inspect
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from vmx import (
     ComponentVM,
@@ -36,8 +35,10 @@ from vmx import (
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm.messages import PaletteActionFailedMessage
+
 #: User-supplied callable for a palette entry — sync or async (returns an awaitable).
-PaletteAction = Callable[[], None | Awaitable[None]]
+PaletteAction = Callable[[], Awaitable[None] | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,12 +57,15 @@ class PaletteEntry:
         the view layer as a chip.
     keywords:
         Additional search tokens that match even if the label doesn't.
+    service_ids:
+        Eligible content-host service IDs. An empty set means the entry is global.
     """
 
     id: str
     label: str
     category: str
     keywords: tuple[str, ...] = ()
+    service_ids: frozenset[str] = field(default_factory=frozenset)
 
 
 def _subsequence_span(text: str, query: str) -> int | None:
@@ -191,13 +195,14 @@ class CommandPaletteVM:
         )
 
         self._filter_text: str = ""
+        self._active_service_id: str | None = None
         self._scored_filter: ScoredFilteredCompositeVM[ComponentVMOf[PaletteEntry]] = (
             ScoredFilteredCompositeVM(self._inner_registry, scorer=self._score_for_vmx)
         )
         self._filtered: tuple[PaletteEntry, ...] = ()
         self._selected_index: int = 0
         self._is_open: bool = False
-        self._pending_tasks: set[asyncio.Task[None]] = set()
+        self._pending_tasks: dict[asyncio.Task[None], str] = {}
 
         self._inner: ComponentVM = (
             ComponentVM.builder().name("command_palette").services(hub, dispatcher).build()
@@ -242,6 +247,17 @@ class CommandPaletteVM:
         self._recompute_filtered()
 
     @property
+    def active_service_id(self) -> str | None:
+        return self._active_service_id
+
+    def set_active_service(self, service_id: str | None) -> None:
+        if self._active_service_id == service_id:
+            return
+        self._active_service_id = service_id
+        self._hub.send(PropertyChangedMessage.create(self, self.name, "active_service_id"))
+        self._recompute_filtered()
+
+    @property
     def filtered_entries(self) -> tuple[PaletteEntry, ...]:
         return self._filtered
 
@@ -282,6 +298,17 @@ class CommandPaletteVM:
     def destruct(self) -> None:
         self._inner_registry.destruct()
         self._inner.destruct()
+
+    async def shutdown(self) -> None:
+        """Cancel and drain every asynchronous palette action."""
+        tasks = tuple(self._pending_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for task in tasks:
+            self._pending_tasks.pop(task, None)
 
     def dispose(self) -> None:
         for task in list(self._pending_tasks):
@@ -355,17 +382,25 @@ class CommandPaletteVM:
         self._set_open(False)
         if action is None:
             return
-        result = action()
+        try:
+            result = action()
+        except Exception as exc:
+            self._publish_action_failure(entry.id, exc)
+            return
         if inspect.isawaitable(result):
-            self._spawn_awaitable(result)
+            self._spawn_awaitable(entry.id, result)
 
-    def _spawn_awaitable(self, awaitable: Awaitable[None]) -> None:
+    def _spawn_awaitable(self, entry_id: str, awaitable: Awaitable[None]) -> None:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            close = getattr(awaitable, "close", None)
+            if close is not None:
+                close()
+            self._publish_action_failure(entry_id, RuntimeError("no running event loop"))
             return
         task = loop.create_task(self._await_action(awaitable))
-        self._pending_tasks.add(task)
+        self._pending_tasks[task] = entry_id
         task.add_done_callback(self._on_action_done)
 
     def _on_action_done(self, task: asyncio.Task[None]) -> None:
@@ -377,18 +412,21 @@ class CommandPaletteVM:
         toast subscriber can surface it; today the bare drain
         prevents the silent-loss antipattern even without a
         subscriber wired."""
-        self._pending_tasks.discard(task)
+        entry_id = self._pending_tasks.pop(task, "unknown")
         if task.cancelled():
             return
         exc = task.exception()
         if exc is None:
             return
-        # Surface via the hub so a subscribed toast widget can
-        # render it. Without an active subscriber the message is
-        # a no-op, but the bare call to ``task.exception()`` above
-        # has already drained asyncio's "never retrieved" warning.
-        with contextlib.suppress(Exception):
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "action_failed"))
+        self._publish_action_failure(entry_id, exc)
+
+    def _publish_action_failure(self, entry_id: str, exc: BaseException) -> None:
+        self._hub.send(
+            PaletteActionFailedMessage(
+                entry_id=entry_id,
+                error_type=type(exc).__name__,
+            )
+        )
 
     async def _await_action(self, awaitable: Awaitable[None]) -> None:
         await awaitable
@@ -412,7 +450,10 @@ class CommandPaletteVM:
         return tuple(item.inner for item in self._items.values())
 
     def _score_for_vmx(self, item_inner: ComponentVMOf[PaletteEntry]) -> int | None:
-        score = _score(item_inner.model, self._filter_text)
+        entry = item_inner.model
+        if entry.service_ids and self._active_service_id not in entry.service_ids:
+            return None
+        score = _score(entry, self._filter_text)
         if score is None:
             return None
         # VMx ScoredFilteredCompositeVM ranks higher scores first; aws-tui's

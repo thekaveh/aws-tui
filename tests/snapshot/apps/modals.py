@@ -1,7 +1,7 @@
 """Modal-snapshot harness apps.
 
 Each app composes one overlay (CommandPalette, ConfirmModal, QuickLook,
-CrashModal, ResumeModal, FirstRunModal) on top of a near-empty base so
+or CrashModal) on top of a near-empty base so
 the snapshot focuses on the overlay's rendering.
 """
 
@@ -15,20 +15,15 @@ from textual.app import App, ComposeResult
 from textual.widgets import Static
 from vmx import MessageHub, RxDispatcher
 
-from aws_tui.domain.transfer_journal import TransferJournalEntry
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.crash_modal import CrashModal
-from aws_tui.ui.widgets.first_run_modal import FirstRunModal
 from aws_tui.ui.widgets.quick_look import QuickLook
-from aws_tui.ui.widgets.resume_modal import ResumeModal
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM, PaletteEntry
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashReport, CrashVM
-from aws_tui.vm.chrome.first_run_vm import FirstRunVM
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent, QuickLookVM
-from aws_tui.vm.chrome.resume_vm import ResumeVM
 
 
 def _load_css(theme: str) -> str:
@@ -188,77 +183,10 @@ class CrashModalApp(App[None]):
         await self.push_screen(CrashModal(self._vm, hub=self._hub))
 
 
-# ── Resume modal ───────────────────────────────────────────────────────────
-
-
-def _resume_entries() -> list[TransferJournalEntry]:
-    return [
-        TransferJournalEntry(
-            transfer_id="abc123",
-            source_uri="local:///Users/kaveh/data/api-2026-06-13.json",
-            destination_uri="s3://kaveh-dev/uploads/api-2026-06-13.json",
-            upload_id="mpu-aaa-111",
-            bytes_total=4 * 1024 * 1024 + 200_000,
-            started_at=datetime(2026, 6, 13, 23, 30, 0, tzinfo=UTC),
-            last_progress=datetime(2026, 6, 13, 23, 45, 0, tzinfo=UTC),
-            completed_parts=(1, 2, 3),
-            completed_etags=("e1", "e2", "e3"),
-        ),
-        TransferJournalEntry(
-            transfer_id="def456",
-            source_uri="local:///Users/kaveh/data/db-slowq-06-13.csv",
-            destination_uri="s3://kaveh-dev/uploads/db-slowq-06-13.csv",
-            upload_id="mpu-bbb-222",
-            bytes_total=892_000,
-            started_at=datetime(2026, 6, 13, 23, 50, 0, tzinfo=UTC),
-            last_progress=datetime(2026, 6, 13, 23, 55, 0, tzinfo=UTC),
-            completed_parts=(1,),
-            completed_etags=("e1",),
-        ),
-    ]
-
-
-class ResumeModalApp(App[None]):
-    def __init__(self, *, theme: str = "carbon") -> None:
-        super().__init__()
-        self.CSS = _load_css(theme)
-        self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
-        self._vm = ResumeVM(_resume_entries(), hub=self._hub, dispatcher=self._dispatcher)
-
-    def compose(self) -> ComposeResult:
-        yield Static("aws-tui main view (behind resume modal)", id="placeholder")
-
-    async def on_mount(self) -> None:
-        self._vm.construct()
-        await self.push_screen(ResumeModal(self._vm, hub=self._hub))
-
-
-# ── First-run modal ────────────────────────────────────────────────────────
-
-
-class FirstRunModalApp(App[None]):
-    def __init__(self, *, theme: str = "carbon") -> None:
-        super().__init__()
-        self.CSS = _load_css(theme)
-        self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
-        self._vm = FirstRunVM(hub=self._hub, dispatcher=self._dispatcher)
-
-    def compose(self) -> ComposeResult:
-        yield Static("aws-tui main view (behind first-run modal)", id="placeholder")
-
-    async def on_mount(self) -> None:
-        self._vm.construct()
-        await self.push_screen(FirstRunModal(self._vm, hub=self._hub))
-
-
 __all__ = [
     "CommandPaletteApp",
     "ConfirmModalApp",
     "CopyConfirmModalApp",
     "CrashModalApp",
-    "FirstRunModalApp",
     "QuickLookApp",
-    "ResumeModalApp",
 ]

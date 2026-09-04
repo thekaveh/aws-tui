@@ -12,8 +12,8 @@ Wraps ``aioboto3`` to expose object storage as a filesystem:
   every key under the prefix and batch-deletes 1000 at a time.
 - ``rename``: server-side ``CopyObject`` + ``DeleteObject``.
 - ``read_stream``: streams ``GetObject``'s body in fixed-size chunks.
-- ``write_stream``: uses ``upload_fileobj``'s multipart machinery via a
-  blocking adapter that reads from the async source iterator.
+- ``write_stream``: performs explicit sequential multipart upload, aborting
+  the upload on failure or cancellation; empty streams use ``PutObject``.
 
 Botocore ``ClientError`` codes are mapped to the ProviderError taxonomy
 (NoSuchKey/NoSuchBucket → NotFound, AccessDenied → PermissionDenied,
@@ -22,28 +22,23 @@ EndpointConnection → Unreachable).
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 import aioboto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import (
     ClientError,
-    ConnectTimeoutError,
     CredentialRetrievalError,
-    EndpointConnectionError,
-    EndpointResolutionError,
-    NoCredentialsError,
-    PartialCredentialsError,
-    ProfileNotFound,
-    ReadTimeoutError,
-    TokenRetrievalError,
-)
-from botocore.exceptions import (
-    ConnectionError as BotoConnectionError,
 )
 
+from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
+from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     ConflictError,
@@ -55,6 +50,7 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderError,
     ProviderUnreachableError,
+    ThrottledError,
     TransferProgress,
 )
 
@@ -71,28 +67,27 @@ from aws_tui.domain.filesystem import (
 #   EndpointConnectionError`` chain missed them.
 # - ``BotoConnectionError`` — the base ``ConnectionError`` for any
 #   other transport failure shape botocore introduces in the future.
-_TRANSPORT_FAILURE_EXCEPTIONS = (
-    EndpointConnectionError,
-    EndpointResolutionError,
-    ConnectTimeoutError,
-    ReadTimeoutError,
-    BotoConnectionError,
-)
-_AUTH_FAILURE_EXCEPTIONS = (
-    NoCredentialsError,
-    PartialCredentialsError,
-    ProfileNotFound,
-    TokenRetrievalError,
-    CredentialRetrievalError,
-)
+_TRANSPORT_FAILURE_EXCEPTIONS = AWS_TRANSPORT_EXCEPTIONS
+_AUTH_FAILURE_EXCEPTIONS = AWS_CREDENTIAL_EXCEPTIONS
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
 # Default streaming chunk size.
 _DEFAULT_CHUNK_SIZE: int = 8 * 1024 * 1024
+# Multipart bounds from the public S3 API.
+_MAX_MULTIPART_PARTS: int = 10_000
+_MAX_MULTIPART_PART_SIZE: int = 5 * 1024 * 1024 * 1024
+_MAX_OBJECT_SIZE: int = _MAX_MULTIPART_PARTS * _MAX_MULTIPART_PART_SIZE
+_MAX_COPY_OBJECT_SIZE: int = 5 * 1024 * 1024 * 1024
 # S3 batch-delete limit.
 _DELETE_BATCH_SIZE: int = 1000
+_S3_REVISION_PREFIX = "s3:v1:"
+# The file-manager protocol returns a complete directory as one value. Keep
+# remote traversal bounded until that protocol grows an explicit continuation
+# contract; fail instead of presenting a partial listing as complete.
+_MAX_LISTING_ENTRIES: int = 10_000
+_MAX_LISTING_PAGES: int = 100
 
 # Alias for the builtin ``list`` so internal method annotations don't
 # accidentally resolve to ``S3FS.list`` (which the class defines).
@@ -146,10 +141,17 @@ class S3FS:
         self._config = BotoConfig(
             s3={"addressing_style": "path" if force_path_style else "auto"},
             signature_version="s3v4",
-            retries={"max_attempts": 6, "mode": "adaptive"},
+            retries={"total_max_attempts": 6, "mode": "adaptive"},
             connect_timeout=10,
             read_timeout=60,
         )
+
+    @property
+    def storage_identity(self) -> tuple[str, str | None, str | None, str]:
+        return ("s3", self._endpoint_url, self._bucket, self._prefix)
+
+    atomic_write_replaces = True
+    atomic_directory_replace = False
 
     # ------------------------------------------------------------------
     # Client helper
@@ -220,25 +222,48 @@ class S3FS:
         return await self._list_objects(prefix)
 
     async def _list_buckets(self) -> _List[FileEntry]:
+        entries: list[FileEntry] = []
         try:
             async with self._client() as s3:
-                resp = await s3.list_buckets()
+                token: str | None = None
+                seen_tokens: set[str] = set()
+                page_count = 0
+                while True:
+                    if page_count >= _MAX_LISTING_PAGES:
+                        raise ProviderError(
+                            "S3 bucket listing exceeded the pagination safety limit"
+                        )
+                    page_count += 1
+                    kwargs: dict[str, Any] = {"MaxBuckets": 1000}
+                    if token is not None:
+                        kwargs["ContinuationToken"] = token
+                    resp = await s3.list_buckets(**kwargs)
+                    for bucket in resp.get("Buckets", []):
+                        entries.append(
+                            FileEntry(
+                                name=bucket["Name"],
+                                kind=EntryKind.DIRECTORY,
+                                size=None,
+                                modified=_to_aware(bucket.get("CreationDate")),
+                            )
+                        )
+                    if len(entries) > _MAX_LISTING_ENTRIES:
+                        raise ProviderError("S3 bucket listing exceeded the listing safety limit")
+                    next_token = resp.get("ContinuationToken")
+                    if not next_token:
+                        break
+                    if next_token in seen_tokens:
+                        raise ProviderError(
+                            "S3 returned a repeated bucket-listing continuation token"
+                        )
+                    seen_tokens.add(next_token)
+                    token = next_token
         except _AUTH_FAILURE_EXCEPTIONS as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
             raise _map_client_error(exc, "buckets") from exc
-        entries: list[FileEntry] = []
-        for b in resp.get("Buckets", []):
-            entries.append(
-                FileEntry(
-                    name=b["Name"],
-                    kind=EntryKind.DIRECTORY,
-                    size=None,
-                    modified=_to_aware(b.get("CreationDate")),
-                )
-            )
         entries.sort(key=lambda e: e.name)
         return entries
 
@@ -259,7 +284,14 @@ class S3FS:
         try:
             async with self._client() as s3:
                 token: str | None = None
+                seen_tokens: set[str] = set()
+                page_count = 0
                 while True:
+                    if page_count >= _MAX_LISTING_PAGES:
+                        raise ProviderError(
+                            "S3 object listing exceeded the pagination safety limit"
+                        )
+                    page_count += 1
                     kwargs: dict[str, Any] = {
                         "Bucket": target_bucket,
                         "Prefix": prefix,
@@ -293,27 +325,19 @@ class S3FS:
                                 kind=EntryKind.FILE,
                                 size=int(obj.get("Size", 0)),
                                 modified=_to_aware(obj.get("LastModified")),
-                                etag=_clean_etag(obj.get("ETag")),
+                                etag=_s3_revision_token(obj),
                             )
                         )
+                    if len(entries) > _MAX_LISTING_ENTRIES:
+                        raise ProviderError("S3 object listing exceeded the listing safety limit")
                     if not resp.get("IsTruncated"):
                         break
                     token = resp.get("NextContinuationToken")
-                    if not token:
-                        # Defensive: a well-behaved S3 returns
-                        # ``NextContinuationToken`` whenever ``IsTruncated``
-                        # is true, but S3-compatible providers (MinIO,
-                        # Cloudflare R2, Backblaze B2, …) have shipped
-                        # responses with ``IsTruncated=True`` and no
-                        # token (or with the empty string). Without
-                        # this break the loop re-sends the SAME
-                        # request (token is None → the
-                        # ``if token is not None`` guard above keeps
-                        # ``ContinuationToken`` off the kwargs) and the
-                        # pane hangs. ``emr_logs.py::list_log_files``
-                        # uses the same ``if not token`` form for the
-                        # same reason.
-                        break
+                    if not token or token in seen_tokens:
+                        raise ProviderError(
+                            "S3 returned a truncated listing without a new continuation token"
+                        )
+                    seen_tokens.add(token)
         except _AUTH_FAILURE_EXCEPTIONS as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
@@ -359,12 +383,14 @@ class S3FS:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            raise _map_client_error(exc, key) from exc
         return FileEntry(
             name=path.name,
             kind=EntryKind.FILE,
             size=int(resp.get("ContentLength", 0)),
             modified=_to_aware(resp.get("LastModified")),
-            etag=_clean_etag(resp.get("ETag")),
+            etag=_s3_revision_token(resp),
         )
 
     # ------------------------------------------------------------------
@@ -391,12 +417,35 @@ class S3FS:
         except ClientError as exc:
             raise _map_client_error(exc, key) from exc
 
-    async def delete(self, path: PathRef) -> None:
+    async def preflight_move_revision(self, path: PathRef, revision: str | None) -> None:
+        if revision is None:
+            raise ProviderError(f"S3 move source has no revision: {path.as_posix()}")
+        parsed = _parse_s3_revision(revision)
+        if parsed.version_id is not None:
+            raise ProviderError(
+                "cannot move a versioned S3 object: "
+                "DeleteObject cannot condition the current key on VersionId"
+            )
+        if parsed.etag is None:
+            raise ProviderError(f"S3 move source has no ETag: {path.as_posix()}")
+
+    async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
+        if path.is_root:
+            raise ProviderError("cannot delete the S3 filesystem provider root")
+        if self._bucket is None and len(path.segments) == 1:
+            # On a bucketless provider the first path segment is a bucket,
+            # even when a configured prefix makes ``_resolve`` return a
+            # non-empty key. Deleting it must never become a recursive
+            # deletion of that configured prefix.
+            raise ProviderError("cannot delete a bucket via S3FS — use the AWS console / CLI")
         bucket, key = self._resolve(path)
         if not key:
             raise ProviderError("cannot delete a bucket via S3FS — use the AWS console / CLI")
         try:
             async with self._client() as s3:
+                if expected_etag is not None:
+                    await s3.delete_object(**_conditional_delete_args(bucket, key, expected_etag))
+                    return
                 # Try object delete first; if that "succeeds" but no
                 # such object existed, fall through to prefix-delete.
                 try:
@@ -416,7 +465,16 @@ class S3FS:
                 prefix = f"{key}/" if not key.endswith("/") else key
                 deleted_any = False
                 token: str | None = None
+                seen_tokens: set[str] = set()
+                page_count = 0
+                deleted_count = 0
                 while True:
+                    if page_count >= _MAX_LISTING_PAGES:
+                        raise ProviderError(
+                            "S3 delete pagination safety limit exceeded after deleting "
+                            f"{deleted_count} object(s)"
+                        )
+                    page_count += 1
                     list_kwargs: dict[str, Any] = {
                         "Bucket": bucket,
                         "Prefix": prefix,
@@ -424,29 +482,42 @@ class S3FS:
                     if token is not None:
                         list_kwargs["ContinuationToken"] = token
                     resp = await s3.list_objects_v2(**list_kwargs)
+                    next_token = resp.get("NextContinuationToken")
+                    if resp.get("IsTruncated") and (not next_token or next_token in seen_tokens):
+                        raise ProviderError(
+                            "S3 returned a truncated delete listing without a new continuation token"
+                        )
                     objects = resp.get("Contents") or []
                     if objects:
+                        if deleted_count + len(objects) > _MAX_LISTING_ENTRIES:
+                            raise ProviderError(
+                                "S3 delete collection safety limit exceeded after deleting "
+                                f"{deleted_count} object(s)"
+                            )
                         deleted_any = True
                         for batch in _chunks(objects, _DELETE_BATCH_SIZE):
-                            await s3.delete_objects(
+                            delete_response = await s3.delete_objects(
                                 Bucket=bucket,
                                 Delete={
                                     "Objects": [{"Key": o["Key"]} for o in batch],
                                     "Quiet": True,
                                 },
                             )
+                            errors = delete_response.get("Errors") or []
+                            if errors:
+                                codes = sorted(
+                                    {str(error.get("Code") or "Unknown") for error in errors}
+                                )
+                                raise ProviderError(
+                                    f"failed to delete {len(errors)} object(s) "
+                                    f"from S3 (codes: {', '.join(codes)})"
+                                )
+                            deleted_count += len(batch)
                     if not resp.get("IsTruncated"):
                         break
-                    token = resp.get("NextContinuationToken")
-                    if not token:
-                        # Same defensive break as the list() path
-                        # above — protects against S3-compatible
-                        # providers that return ``IsTruncated=True``
-                        # with no continuation token, which would
-                        # otherwise re-issue the same request forever
-                        # and either hang the delete or delete the
-                        # same batch repeatedly.
-                        break
+                    token = next_token
+                    assert token is not None
+                    seen_tokens.add(token)
                 if not deleted_any:
                     raise NotFoundError(path.as_posix())
         except _AUTH_FAILURE_EXCEPTIONS as exc:
@@ -462,7 +533,46 @@ class S3FS:
             # ProviderError taxonomy DualPaneVM expects.
             raise _map_client_error(exc, key) from exc
 
+    async def delete_empty_directory(self, path: PathRef) -> None:
+        if path.is_root:
+            raise ProviderError("cannot delete the S3 filesystem provider root")
+        if self._bucket is None and len(path.segments) == 1:
+            raise ProviderError("cannot delete a bucket via S3FS — use the AWS console / CLI")
+        bucket, key = self._resolve(path)
+        if not key:
+            raise ProviderError("cannot delete a bucket via S3FS — use the AWS console / CLI")
+        marker = f"{key.rstrip('/')}/"
+        try:
+            async with self._client() as s3:
+                response = await s3.list_objects_v2(Bucket=bucket, Prefix=marker, MaxKeys=2)
+                objects = response.get("Contents") or []
+                if any(obj.get("Key") != marker for obj in objects):
+                    raise ConflictError(f"directory is not empty: {path.as_posix()}")
+                marker_object = next((obj for obj in objects if obj.get("Key") == marker), None)
+                if marker_object is None:
+                    return
+                kwargs: dict[str, Any] = {"Bucket": bucket, "Key": marker}
+                marker_etag = marker_object.get("ETag")
+                if marker_etag:
+                    kwargs["IfMatch"] = _quoted_etag(str(marker_etag))
+                await s3.delete_object(**kwargs)
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            raise _map_client_error(exc, marker) from exc
+
     async def rename(self, src: PathRef, dst: PathRef) -> None:
+        source_entry = await self.stat(src)
+        if source_entry.kind == EntryKind.DIRECTORY:
+            raise ProviderError("S3 directory rename is unsupported; move the directory instead")
+        try:
+            await self.stat(dst)
+        except NotFoundError:
+            pass
+        else:
+            raise ConflictError(dst.as_posix())
         src_bucket, src_key = self._resolve(src)
         dst_bucket, dst_key = self._resolve(dst)
         if not src_key or not dst_key:
@@ -472,22 +582,96 @@ class S3FS:
         bucket = src_bucket
         try:
             async with self._client() as s3:
-                # ConflictError if dst exists.
                 try:
-                    await s3.head_object(Bucket=bucket, Key=dst_key)
-                    raise ConflictError(dst.as_posix())
-                except ClientError as exc:
-                    if _error_code(exc) not in {"404", "NoSuchKey", "NotFound"}:
-                        raise _map_client_error(exc, dst_key) from exc
-                try:
-                    await s3.copy_object(
-                        Bucket=bucket,
-                        Key=dst_key,
-                        CopySource={"Bucket": bucket, "Key": src_key},
-                    )
+                    if source_entry.size is None:
+                        raise ProviderError(f"S3 returned no size for {src.as_posix()}")
+                    if source_entry.etag is None:
+                        raise ProviderError(f"S3 returned no revision for {src.as_posix()}")
+                    source_revision = _parse_s3_revision(source_entry.etag)
+                    if source_revision.etag is None:
+                        raise ProviderError(f"S3 returned no ETag for {src.as_posix()}")
+                    if source_revision.version_id is not None:
+                        raise ProviderError(
+                            "cannot atomically rename a versioned S3 object: "
+                            "DeleteObject cannot condition the current key on VersionId"
+                        )
+                    source_etag = _quoted_etag(source_revision.etag)
+                    if source_entry.size <= _MAX_COPY_OBJECT_SIZE:
+                        copy_task = asyncio.create_task(
+                            s3.copy_object(
+                                Bucket=bucket,
+                                Key=dst_key,
+                                CopySource={"Bucket": bucket, "Key": src_key},
+                                CopySourceIfMatch=source_etag,
+                                IfNoneMatch="*",
+                            )
+                        )
+                        copy_response, copy_cancelled = await _drain_task(copy_task)
+                    else:
+                        copy_response, copy_cancelled = await self._multipart_copy(
+                            s3,
+                            bucket=bucket,
+                            src_key=src_key,
+                            dst_key=dst_key,
+                            total_size=source_entry.size,
+                            source_etag=source_etag,
+                        )
                 except ClientError as exc:
                     raise _map_client_error(exc, src_key) from exc
-                await s3.delete_object(Bucket=bucket, Key=src_key)
+                response_revision = _copy_response_revision(copy_response, size=source_entry.size)
+                if response_revision is None:
+                    message = _manual_cleanup_message(
+                        dst_key,
+                        "the copy response ETag ownership token was missing",
+                    )
+                    if copy_cancelled:
+                        cancellation = asyncio.CancelledError()
+                        cancellation.add_note(message)
+                        raise cancellation
+                    raise ProviderError(message)
+                if copy_cancelled:
+                    failure = asyncio.CancelledError()
+                    await _cleanup_failed_rename_copy(
+                        s3,
+                        bucket=bucket,
+                        key=dst_key,
+                        ownership_revision=response_revision,
+                        failure=failure,
+                    )
+                    raise failure
+                try:
+                    delete_task = asyncio.create_task(
+                        s3.delete_object(
+                            **_conditional_delete_args(bucket, src_key, source_entry.etag)
+                        )
+                    )
+                    _, cancelled = await _drain_task(delete_task)
+                except BaseException as exc:
+                    if not isinstance(exc, asyncio.CancelledError) and _cancellation_pending():
+                        cancellation = asyncio.CancelledError()
+                        cancellation.add_note(
+                            f"S3 source delete failed after caller cancellation: {exc}"
+                        )
+                        await _cleanup_failed_rename_copy(
+                            s3,
+                            bucket=bucket,
+                            key=dst_key,
+                            ownership_revision=response_revision,
+                            failure=cancellation,
+                        )
+                        raise cancellation from exc
+                    await _cleanup_failed_rename_copy(
+                        s3,
+                        bucket=bucket,
+                        key=dst_key,
+                        ownership_revision=response_revision,
+                        failure=exc,
+                    )
+                    if isinstance(exc, ClientError):
+                        raise _map_client_error(exc, src_key) from exc
+                    raise
+                if cancelled:
+                    raise asyncio.CancelledError
         except _AUTH_FAILURE_EXCEPTIONS as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
@@ -498,6 +682,91 @@ class S3FS:
             # delete denied) otherwise propagates raw botocore
             # ClientError instead of going through ProviderError.
             raise _map_client_error(exc, src_key) from exc
+
+    async def _multipart_copy(
+        self,
+        s3: Any,
+        *,
+        bucket: str,
+        src_key: str,
+        dst_key: str,
+        total_size: int,
+        source_etag: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Copy a large object with the public multipart-copy API."""
+        copy_source = {"Bucket": bucket, "Key": src_key}
+        source_args: dict[str, Any] = {"Bucket": bucket, "Key": src_key}
+        head = await s3.head_object(**source_args, IfMatch=source_etag)
+        create_args = _multipart_copy_metadata(head)
+        tag_response = await s3.get_object_tagging(**source_args)
+        tags = tag_response.get("TagSet") or []
+        if tags:
+            create_args["Tagging"] = urlencode(
+                [(str(tag["Key"]), str(tag["Value"])) for tag in tags]
+            )
+
+        upload_id: str | None = None
+        try:
+            create_task = asyncio.create_task(
+                s3.create_multipart_upload(Bucket=bucket, Key=dst_key, **create_args)
+            )
+            created, cancelled = await _drain_task(create_task)
+            upload_id = str(created["UploadId"])
+            if cancelled:
+                raise asyncio.CancelledError
+
+            part_size = _multipart_part_size(total_size)
+            parts: list[dict[str, Any]] = []
+            for part_number, start in enumerate(range(0, total_size, part_size), start=1):
+                end = min(start + part_size, total_size) - 1
+                response = await s3.upload_part_copy(
+                    Bucket=bucket,
+                    Key=dst_key,
+                    UploadId=upload_id,
+                    PartNumber=part_number,
+                    CopySource=copy_source,
+                    CopySourceRange=f"bytes={start}-{end}",
+                    CopySourceIfMatch=source_etag,
+                )
+                etag = (response.get("CopyPartResult") or {}).get("ETag")
+                if not etag:
+                    raise ProviderError(
+                        f"S3 multipart copy returned no ETag for part {part_number}"
+                    )
+                parts.append({"ETag": etag, "PartNumber": part_number})
+
+            complete_task = asyncio.create_task(
+                s3.complete_multipart_upload(
+                    Bucket=bucket,
+                    Key=dst_key,
+                    UploadId=upload_id,
+                    MultipartUpload={"Parts": parts},
+                    IfNoneMatch="*",
+                )
+            )
+            completed, cancelled = await _drain_task(complete_task)
+            upload_id = None
+            return completed, cancelled
+        except BaseException as exc:
+            if upload_id is not None:
+                cleanup_cancelled, cleanup_error = await _abort_multipart_upload(
+                    s3,
+                    bucket=bucket,
+                    key=dst_key,
+                    upload_id=upload_id,
+                )
+                if cleanup_error is not None:
+                    message = (
+                        "S3 multipart copy failed and cleanup also failed; "
+                        f"upload ID {upload_id!r} may require manual abort: {cleanup_error}"
+                    )
+                    if isinstance(exc, asyncio.CancelledError):
+                        exc.add_note(message)
+                        raise
+                    raise ProviderError(message) from cleanup_error
+                if cleanup_cancelled and not isinstance(exc, asyncio.CancelledError):
+                    raise asyncio.CancelledError from None
+            raise
 
     # ------------------------------------------------------------------
     # Streaming I/O
@@ -563,6 +832,7 @@ class S3FS:
         *,
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
+        overwrite: bool = True,
     ) -> None:
         if path.is_root:
             raise ConflictError("cannot write to root")
@@ -571,6 +841,7 @@ class S3FS:
             raise ProviderError("cannot write to a bucket itself — pass a key path")
 
         reader = _AsyncStreamReader(source)
+        part_size = _multipart_part_size(total_size)
         bytes_written = 0
 
         def _on_progress(delta: int) -> None:
@@ -581,15 +852,140 @@ class S3FS:
 
         try:
             async with self._client() as s3:
+                upload_id: str | None = None
                 try:
-                    await s3.upload_fileobj(
-                        reader,
-                        bucket,
-                        key,
-                        Callback=_on_progress,
+                    chunk = await reader.read(part_size)
+                    if not chunk:
+                        put_args: dict[str, Any] = {"Bucket": bucket, "Key": key, "Body": b""}
+                        if not overwrite:
+                            put_args["IfNoneMatch"] = "*"
+                        put_task = asyncio.create_task(s3.put_object(**put_args))
+                        put_response, put_cancelled = await _drain_publication_task(put_task)
+                        if put_cancelled:
+                            cancellation = asyncio.CancelledError()
+                            await _rollback_cancelled_upload(
+                                s3,
+                                bucket=bucket,
+                                key=key,
+                                response=put_response,
+                                cancellation=cancellation,
+                            )
+                            raise cancellation
+                        return
+                    create_task = asyncio.create_task(
+                        s3.create_multipart_upload(Bucket=bucket, Key=key)
                     )
-                except ClientError as exc:
-                    raise _map_client_error(exc, key) from exc
+                    try:
+                        created = await asyncio.shield(create_task)
+                    except asyncio.CancelledError:
+                        while not create_task.done():
+                            try:
+                                await asyncio.shield(create_task)
+                            except asyncio.CancelledError:
+                                continue
+                        if not create_task.cancelled():
+                            created = create_task.result()
+                            upload_id = str(created["UploadId"])
+                        raise
+                    upload_id = str(created["UploadId"])
+                    parts: list[dict[str, Any]] = []
+                    part_number = 1
+                    while chunk:
+                        if part_number > _MAX_MULTIPART_PARTS:
+                            raise ProviderError(
+                                "S3 multipart upload exceeded 10,000 parts; provide total_size "
+                                "so aws-tui can choose a valid part size"
+                            )
+                        response = await s3.upload_part(
+                            Bucket=bucket,
+                            Key=key,
+                            UploadId=upload_id,
+                            PartNumber=part_number,
+                            Body=chunk,
+                        )
+                        etag = response.get("ETag")
+                        if not etag:
+                            raise ProviderError(
+                                f"S3 multipart upload returned no ETag for part {part_number}"
+                            )
+                        parts.append({"ETag": etag, "PartNumber": part_number})
+                        _on_progress(len(chunk))
+                        part_number += 1
+                        chunk = await reader.read(part_size)
+                    complete_args: dict[str, Any] = {
+                        "Bucket": bucket,
+                        "Key": key,
+                        "UploadId": upload_id,
+                        "MultipartUpload": {"Parts": parts},
+                    }
+                    if not overwrite:
+                        complete_args["IfNoneMatch"] = "*"
+                    complete_task = asyncio.create_task(
+                        s3.complete_multipart_upload(**complete_args)
+                    )
+                    complete_response, complete_cancelled = await _drain_publication_task(
+                        complete_task
+                    )
+                    upload_id = None
+                    if complete_cancelled:
+                        cancellation = asyncio.CancelledError()
+                        await _rollback_cancelled_upload(
+                            s3,
+                            bucket=bucket,
+                            key=key,
+                            response=complete_response,
+                            cancellation=cancellation,
+                        )
+                        raise cancellation
+                except BaseException as exc:
+                    abort_error: Exception | None = None
+                    cancelled_during_abort = False
+                    if upload_id is not None:
+                        current = asyncio.current_task()
+                        cancellation_count = current.cancelling() if current is not None else 0
+                        abort_task = asyncio.create_task(
+                            s3.abort_multipart_upload(
+                                Bucket=bucket,
+                                Key=key,
+                                UploadId=upload_id,
+                            )
+                        )
+                        try:
+                            while not abort_task.done():
+                                try:
+                                    await asyncio.shield(abort_task)
+                                except asyncio.CancelledError:
+                                    # Cleanup owns the multipart upload ID.
+                                    # Repeated cancellation must not orphan it.
+                                    current_count = (
+                                        current.cancelling() if current is not None else 0
+                                    )
+                                    if current_count > cancellation_count:
+                                        cancelled_during_abort = True
+                                        cancellation_count = current_count
+                                    continue
+                            if not abort_task.cancelled():
+                                abort_task.result()
+                        except Exception as cleanup_exc:
+                            abort_error = cleanup_exc
+                    if abort_error is not None:
+                        message = (
+                            "S3 multipart upload failed and cleanup also failed; "
+                            f"upload ID {upload_id!r} may require manual abort: {abort_error}"
+                        )
+                        if isinstance(exc, asyncio.CancelledError):
+                            exc.add_note(message)
+                            raise
+                        if cancelled_during_abort:
+                            cancelled = asyncio.CancelledError()
+                            cancelled.add_note(message)
+                            raise cancelled from None
+                        raise ProviderError(message) from abort_error
+                    if cancelled_during_abort and not isinstance(exc, asyncio.CancelledError):
+                        raise asyncio.CancelledError from None
+                    if isinstance(exc, ClientError):
+                        raise _map_client_error(exc, key) from exc
+                    raise
         except _AUTH_FAILURE_EXCEPTIONS as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
@@ -601,13 +997,274 @@ class S3FS:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _S3Revision:
+    etag: str | None
+    version_id: str | None = None
+    modified: datetime | None = None
+    size: int | None = None
+
+
+def _s3_revision_token(response: dict[str, Any]) -> str | None:
+    revision = _S3Revision(
+        etag=_clean_etag(response.get("ETag")),
+        version_id=_owned_version_id(response.get("VersionId")),
+        modified=_to_aware(response.get("LastModified")),
+        size=(int(response["ContentLength"]) if "ContentLength" in response else None),
+    )
+    if revision.size is None and "Size" in response:
+        revision = _S3Revision(
+            etag=revision.etag,
+            version_id=revision.version_id,
+            modified=revision.modified,
+            size=int(response["Size"]),
+        )
+    if revision.etag is None and revision.version_id is None:
+        return None
+    payload = {
+        "etag": revision.etag,
+        "version_id": revision.version_id,
+        "modified": revision.modified.isoformat() if revision.modified is not None else None,
+        "size": revision.size,
+    }
+    return _S3_REVISION_PREFIX + json.dumps(payload, separators=(",", ":"), sort_keys=True)
+
+
+def _copy_response_revision(response: dict[str, Any], *, size: int) -> str | None:
+    result = response.get("CopyObjectResult") or response
+    if _clean_etag(result.get("ETag")) is None:
+        return None
+    return _s3_revision_token(
+        {
+            "ETag": result.get("ETag"),
+            "VersionId": response.get("VersionId"),
+            "ContentLength": size,
+        }
+    )
+
+
+def _parse_s3_revision(token: str) -> _S3Revision:
+    if not token.startswith(_S3_REVISION_PREFIX):
+        return _S3Revision(etag=_clean_etag(token))
+    try:
+        payload = json.loads(token.removeprefix(_S3_REVISION_PREFIX))
+        modified_raw = payload.get("modified")
+        return _S3Revision(
+            etag=_clean_etag(payload.get("etag")),
+            version_id=_owned_version_id(payload.get("version_id")),
+            modified=datetime.fromisoformat(modified_raw) if modified_raw else None,
+            size=int(payload["size"]) if payload.get("size") is not None else None,
+        )
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ProviderError("invalid S3 revision token") from exc
+
+
+def _owned_version_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    version_id = str(value)
+    normalized = version_id.strip()
+    if not normalized or normalized.casefold() == "null":
+        return None
+    return version_id
+
+
+def _conditional_delete_args(bucket: str, key: str, token: str) -> dict[str, Any]:
+    revision = _parse_s3_revision(token)
+    kwargs: dict[str, Any] = {"Bucket": bucket, "Key": key}
+    if revision.version_id is not None:
+        raise ProviderError(
+            "cannot atomically delete a versioned S3 object: "
+            "DeleteObject cannot condition the current key on VersionId"
+        )
+    if revision.etag is None:
+        raise ProviderError("S3 conditional deletion requires an object revision")
+    kwargs["IfMatch"] = _quoted_etag(revision.etag)
+    # S3 only supports the additional atomic size/time predicates for
+    # directory buckets. General-purpose buckets expose ETag as their
+    # documented unversioned conditional-delete token.
+    if bucket.endswith("--x-s3"):
+        if revision.modified is not None:
+            kwargs["IfMatchLastModifiedTime"] = revision.modified
+        if revision.size is not None:
+            kwargs["IfMatchSize"] = revision.size
+    return kwargs
+
+
+def _cleanup_revision_args(bucket: str, key: str, token: str) -> dict[str, Any]:
+    """Delete only the destination revision created by this operation."""
+    revision = _parse_s3_revision(token)
+    if revision.version_id is None:
+        raise ProviderError("S3 automatic cleanup requires an operation-owned VersionId")
+    return {"Bucket": bucket, "Key": key, "VersionId": revision.version_id}
+
+
+def _manual_cleanup_message(key: str, detail: str) -> str:
+    return f"S3 rename could not safely remove {key}; manual cleanup required: {detail}"
+
+
+async def _rollback_cancelled_upload(
+    s3: Any,
+    *,
+    bucket: str,
+    key: str,
+    response: dict[str, Any],
+    cancellation: asyncio.CancelledError,
+) -> None:
+    """Remove only the exact object version published by a cancelled write."""
+    version_id = _owned_version_id(response.get("VersionId"))
+    if version_id is None:
+        cancellation.add_note(
+            f"S3 upload may have published {key}; manual cleanup required because "
+            "the response contained no operation-owned VersionId"
+        )
+        return
+    cleanup_task = asyncio.create_task(
+        s3.delete_object(Bucket=bucket, Key=key, VersionId=version_id)
+    )
+    try:
+        await _drain_task(cleanup_task)
+    except BaseException as cleanup_exc:
+        cancellation.add_note(
+            f"S3 upload published version {version_id!r} for {key}; manual cleanup "
+            f"required because exact-version rollback failed: {cleanup_exc}"
+        )
+
+
+async def _cleanup_failed_rename_copy(
+    s3: Any,
+    *,
+    bucket: str,
+    key: str,
+    ownership_revision: str,
+    failure: BaseException,
+) -> None:
+    revision = _parse_s3_revision(ownership_revision)
+    if revision.version_id is None:
+        message = _manual_cleanup_message(
+            key,
+            "the copy response contained no VersionId, so automatic rollback is unsafe",
+        )
+        if isinstance(failure, asyncio.CancelledError):
+            failure.add_note(message)
+            return
+        if _cancellation_pending():
+            cancellation = asyncio.CancelledError()
+            cancellation.add_note(message)
+            raise cancellation from None
+        raise ProviderError(message) from failure
+    cleanup_task = asyncio.create_task(
+        s3.delete_object(**_cleanup_revision_args(bucket, key, ownership_revision))
+    )
+    try:
+        _, cleanup_cancelled = await _drain_task(cleanup_task)
+    except BaseException as cleanup_exc:
+        message = _manual_cleanup_message(key, f"conditional rollback failed: {cleanup_exc}")
+        if isinstance(failure, asyncio.CancelledError):
+            failure.add_note(message)
+            return
+        if _cancellation_pending():
+            cancellation = asyncio.CancelledError()
+            cancellation.add_note(message)
+            raise cancellation from None
+        raise ProviderError(message) from failure
+    if cleanup_cancelled and not isinstance(failure, asyncio.CancelledError):
+        raise asyncio.CancelledError from None
+
+
+def _multipart_part_size(total_size: int | None) -> int:
+    """Choose a bounded part size that cannot exceed S3's part-count limit."""
+    if total_size is None:
+        return _DEFAULT_CHUNK_SIZE
+    if total_size < 0:
+        raise ProviderError("S3 upload total_size cannot be negative")
+    if total_size > _MAX_OBJECT_SIZE:
+        raise ProviderError("S3 objects cannot exceed 50 TB (48.8 TiB)")
+    required = (total_size + _MAX_MULTIPART_PARTS - 1) // _MAX_MULTIPART_PARTS
+    mebibyte = 1024 * 1024
+    rounded_required = ((required + mebibyte - 1) // mebibyte) * mebibyte
+    part_size = max(_DEFAULT_CHUNK_SIZE, rounded_required)
+    if part_size > _MAX_MULTIPART_PART_SIZE:
+        raise ProviderError("S3 multipart part size cannot exceed 5 GiB")
+    return part_size
+
+
+def _multipart_copy_metadata(head: dict[str, Any]) -> dict[str, Any]:
+    """Translate source HEAD fields accepted by CreateMultipartUpload."""
+    fields = (
+        "CacheControl",
+        "ContentDisposition",
+        "ContentEncoding",
+        "ContentLanguage",
+        "ContentType",
+        "Expires",
+        "Metadata",
+        "WebsiteRedirectLocation",
+        "StorageClass",
+        "ServerSideEncryption",
+        "SSEKMSKeyId",
+        "BucketKeyEnabled",
+        "ObjectLockMode",
+        "ObjectLockRetainUntilDate",
+        "ObjectLockLegalHoldStatus",
+    )
+    return {field: head[field] for field in fields if field in head}
+
+
+async def _drain_task(task: asyncio.Task[Any]) -> tuple[Any, bool]:
+    """Drain a remote mutation despite cancellation and return its result."""
+    current = asyncio.current_task()
+    cancellation_count = current.cancelling() if current is not None else 0
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            current_count = current.cancelling() if current is not None else 0
+            if current_count > cancellation_count:
+                cancelled = True
+                cancellation_count = current_count
+    return task.result(), cancelled
+
+
+async def _drain_publication_task(task: asyncio.Task[Any]) -> tuple[Any, bool]:
+    """Drain a final publication while preserving cancellation as primary."""
+    try:
+        return await _drain_task(task)
+    except BaseException as exc:
+        if not isinstance(exc, asyncio.CancelledError) and _cancellation_pending():
+            cancellation = asyncio.CancelledError()
+            cancellation.add_note(
+                f"S3 publication also failed while cancellation was pending: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            raise cancellation from exc
+        raise
+
+
+def _cancellation_pending() -> bool:
+    current = asyncio.current_task()
+    return current is not None and current.cancelling() > 0
+
+
+async def _abort_multipart_upload(
+    s3: Any, *, bucket: str, key: str, upload_id: str
+) -> tuple[bool, Exception | None]:
+    task = asyncio.create_task(
+        s3.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+    )
+    try:
+        _, cancelled = await _drain_task(task)
+    except Exception as exc:
+        return False, exc
+    return cancelled, None
+
+
 class _AsyncStreamReader:
     """Async file-like adapter exposing an ``async read(n)`` interface.
 
-    ``aioboto3.s3.upload_fileobj`` awaits ``Fileobj.read(...)`` if it
-    returns a coroutine. We satisfy that contract by buffering chunks
-    pulled from the underlying async iterator until enough bytes are
-    available (or EOF).
+    Multipart parts have a fixed target size, so this adapter buffers chunks
+    from the source iterator until enough bytes are available (or EOF).
     """
 
     def __init__(self, source: AsyncIterator[bytes]) -> None:
@@ -676,21 +1333,22 @@ def _map_client_error(exc: ClientError, target: str) -> ProviderError:
     code = _error_code(exc)
     if code in {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}:
         return NotFoundError(target)
-    if code in {"AccessDenied", "403", "Forbidden", "SignatureDoesNotMatch"}:
+    if code in {"PreconditionFailed", "ConditionalRequestConflict", "409", "412"}:
+        return ConflictError(target)
+    if code in AWS_AUTH_ERROR_CODES:
+        return _auth_error(exc)
+    if code in {"AccessDenied", "403", "Forbidden"}:
         return PermissionDeniedError(target)
-    # S3 service-side transient failures map to ``ProviderUnreachableError``
-    # so the UI surfaces them with the "endpoint unreachable" placeholder
-    # rather than the generic error one. Botocore's adaptive retry policy
-    # (max_attempts=6) usually absorbs these, but a sustained
-    # ``ServiceUnavailable`` / ``SlowDown`` storm can still exhaust the
-    # retry budget. From the user's perspective the bucket is unreachable
-    # — same recovery action as a DNS / timeout failure (press ``r`` to
-    # retry, or wait + try again).
+    if code in {"SlowDown", "RequestLimitExceeded"}:
+        return ThrottledError(f"{code}: {target}")
+    # Service-side availability failures map to ``ProviderUnreachableError``
+    # so the UI surfaces them with the endpoint placeholder instead of the
+    # generic error one. Rate-limit responses are handled above as throttling;
+    # they must not poison connection-health fallback decisions.
     if code in {
         "ServiceUnavailable",
         "RequestTimeout",
         "RequestTimeoutException",
-        "SlowDown",
         "InternalError",
         "503",
         "504",
@@ -703,6 +1361,11 @@ def _clean_etag(raw: str | None) -> str | None:
     if not raw:
         return None
     return raw.strip('"')
+
+
+def _quoted_etag(etag: str) -> str:
+    """Return an ETag in the quoted form expected by S3 conditions."""
+    return f'"{etag.strip(chr(34))}"'
 
 
 def _to_aware(dt: datetime | None) -> datetime | None:

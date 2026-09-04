@@ -161,6 +161,34 @@ async def test_log_filter_modal_cancel_dismisses_with_none() -> None:
 
 
 @pytest.mark.asyncio
+async def test_log_filter_button_is_keyboard_focusable_and_activates() -> None:
+    current = LogFilter(patterns=("ERROR",), mode=FilterMode.MATCH)
+
+    class _App(App[None]):
+        def compose(self) -> ComposeResult:
+            yield from ()
+
+        async def on_mount(self) -> None:
+            await self.push_screen(LogFilterModal(current))
+
+    app = _App()
+    async with app.run_test(size=(100, 40)) as pilot:
+        modal = app.screen
+        assert isinstance(modal, LogFilterModal)
+        apply_button = next(
+            button for button in modal.query(ModalButton) if button.button_id == "apply"
+        )
+        apply_button.focus()
+        await pilot.pause()
+        assert app.focused is apply_button
+
+        await pilot.press("space")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, LogFilterModal)
+
+
+@pytest.mark.asyncio
 async def test_log_filter_modal_reset_repopulates_from_defaults() -> None:
     """Pressing Reset to defaults repopulates the form without dismissing.
 

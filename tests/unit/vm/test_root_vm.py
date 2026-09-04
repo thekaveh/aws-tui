@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 from vmx import NULL_DISPATCHER, ComponentVM
 from vmx.lifecycle.status import ConstructionStatus
@@ -35,6 +38,30 @@ class _FakeService:
         )
         self.constructed.append(vm)
         return vm
+
+
+class _FailingVM:
+    def __init__(self) -> None:
+        self.disposed = False
+
+    def construct(self) -> None:
+        raise RuntimeError("candidate construction failed")
+
+    def dispose(self) -> None:
+        self.disposed = True
+
+
+class _FailingService(_FakeService):
+    def __init__(self, id_: str, *, fail_during: str) -> None:
+        super().__init__(id_)
+        self._fail_during = fail_during
+        self.failed_vm: _FailingVM | None = None
+
+    def build_vm(self, connection: Connection) -> ComponentVM | _FailingVM:
+        if self._fail_during == "build":
+            raise RuntimeError("candidate build failed")
+        self.failed_vm = _FailingVM()
+        return self.failed_vm
 
 
 def _aws_conn(name: str = "kaveh-dev") -> Connection:
@@ -85,12 +112,12 @@ def test_root_constructs_three_aggregates() -> None:
     root.dispose()
 
 
-async def test_switch_connection_updates_status_and_menu() -> None:
+async def test_switch_connection_updates_connection_and_menu() -> None:
     s3 = _FakeService("s3")
     ec2 = _FakeService("ec2", accepts_s3=False)
     root = _build_root(s3, ec2)
     await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
-    assert root.chrome.status_bar.connection_label == "kaveh-dev (aws)"
+    assert root.active_connection == _aws_conn()
     ids = {item.descriptor.id for item in root.services_menu.items}
     assert ids == {"s3", "ec2", "settings"}
     root.dispose()
@@ -115,6 +142,64 @@ async def test_switch_service_builds_and_hosts() -> None:
     assert root.content_host.current_id == "ec2"
     assert ec2.constructed
     assert ec2.constructed[0].is_constructed
+    root.dispose()
+
+
+async def test_cancelled_switch_disposes_unadopted_vm() -> None:
+    s3 = _FakeService("s3")
+    root = _build_root(s3)
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+    await root.content_host._swap_lock.acquire()  # type: ignore[attr-defined]
+    switch = asyncio.create_task(root.switch_service("s3"))
+    await asyncio.sleep(0)
+    switch.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await switch
+    root.content_host._swap_lock.release()  # type: ignore[attr-defined]
+
+    assert s3.constructed[0].status is ConstructionStatus.DISPOSED
+    root.dispose()
+
+
+async def test_shutdown_failure_disposes_candidate_exactly_once() -> None:
+    class _LifecycleVM:
+        def __init__(self, *, shutdown_error: bool = False) -> None:
+            self.shutdown_error = shutdown_error
+            self.dispose_calls = 0
+
+        def construct(self) -> None:
+            pass
+
+        async def shutdown(self) -> None:
+            if self.shutdown_error:
+                raise RuntimeError("outgoing shutdown failed")
+
+        def dispose(self) -> None:
+            self.dispose_calls += 1
+
+    class _LifecycleService(_FakeService):
+        def __init__(self, id_: str, vm: _LifecycleVM) -> None:
+            super().__init__(id_)
+            self.vm = vm
+
+        def build_vm(self, connection: Connection) -> _LifecycleVM:
+            del connection
+            return self.vm
+
+    outgoing = _LifecycleVM(shutdown_error=True)
+    candidate = _LifecycleVM()
+    old_service = _LifecycleService("old", outgoing)
+    new_service = _LifecycleService("new", candidate)
+    root = _build_root(old_service, new_service)
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+    await root.switch_service("old")
+
+    with pytest.raises(RuntimeError, match="outgoing shutdown failed"):
+        await root.switch_service("new")
+
+    assert root.content_host.current is outgoing
+    assert root.services_menu.selected_id == "old"
+    assert candidate.dispose_calls == 1
     root.dispose()
 
 
@@ -156,6 +241,137 @@ async def test_switch_connection_disposes_active_service_content() -> None:
     root.dispose()
 
 
+async def test_switch_connection_and_service_rebuilds_same_service() -> None:
+    emr = _FakeService("emr-serverless", accepts_s3=False)
+    root = _build_root(emr)
+    dev = _aws_conn("dev")
+    prod = _aws_conn("prod")
+
+    await root.switch_connection_with(dev, TokenState.CONNECTED)
+    await root.switch_service("emr-serverless")
+    old_vm = root.content_host.current
+
+    await root.switch_connection_and_service(
+        prod,
+        TokenState.CONNECTED,
+        "emr-serverless",
+    )
+
+    assert old_vm is not None
+    assert old_vm.status == ConstructionStatus.DISPOSED
+    assert root.active_connection == prod
+    assert root.active_auth_state is TokenState.CONNECTED
+    assert root.content_host.current_id == "emr-serverless"
+    assert len(emr.constructed) == 2
+    root.dispose()
+
+
+async def test_switch_connection_and_service_prepares_constructed_candidate() -> None:
+    target = _FakeService("target")
+    root = _build_root(target)
+    prepared: list[object] = []
+
+    await root.switch_connection_and_service(
+        _aws_conn("prod"),
+        TokenState.CONNECTED,
+        "target",
+        prepare_vm=prepared.append,
+    )
+
+    assert prepared == [root.content_host.current]
+    candidate = prepared[0]
+    assert isinstance(candidate, ComponentVM)
+    assert candidate.is_constructed
+    root.dispose()
+
+
+async def test_atomic_switch_never_publishes_new_content_with_old_connection() -> None:
+    stable = _FakeService("stable")
+    target = _FakeService("target")
+    root = _build_root(stable, target)
+    dev = _aws_conn("dev")
+    prod = _aws_conn("prod")
+    await root.switch_connection_with(dev, TokenState.CONNECTED)
+    await root.switch_service("stable")
+
+    observed: list[tuple[Connection | None, TokenState | None]] = []
+
+    def capture_state(_message: object) -> None:
+        if root.content_host.current_id == "target":
+            observed.append((root.active_connection, root.active_auth_state))
+
+    subscription = root.message_hub.messages.subscribe(on_next=capture_state)
+    await root.switch_connection_and_service(prod, TokenState.EXPIRED, "target")
+    subscription.dispose()
+
+    assert observed
+    assert observed == [(prod, TokenState.EXPIRED)] * len(observed)
+    root.dispose()
+
+
+async def test_atomic_switch_rejects_unsupported_connection_before_disposal() -> None:
+    emr = _FakeService("emr-serverless", accepts_s3=False)
+    root = _build_root(emr)
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+    await root.switch_service("emr-serverless")
+    old_vm = root.content_host.current
+
+    with pytest.raises(RuntimeError, match="does not support"):
+        await root.switch_connection_and_service(
+            _minio_conn(),
+            TokenState.CONNECTED,
+            "emr-serverless",
+        )
+
+    assert root.content_host.current is old_vm
+    root.dispose()
+
+
+@pytest.mark.parametrize("fail_during", ["build", "construct"])
+async def test_atomic_switch_preserves_state_on_candidate_failure(fail_during: str) -> None:
+    stable = _FakeService("stable")
+    failing = _FailingService("failing", fail_during=fail_during)
+    root = _build_root(stable, failing)
+    original_connection = _aws_conn("dev")
+    original_auth = TokenState.CONNECTED
+    await root.switch_connection_with(original_connection, original_auth)
+    await root.switch_service("stable")
+    original_content = root.content_host.current
+
+    expected = (
+        "candidate build failed" if fail_during == "build" else "candidate construction failed"
+    )
+    with pytest.raises(RuntimeError, match=expected):
+        await root.switch_connection_and_service(
+            _aws_conn("prod"),
+            TokenState.EXPIRED,
+            "failing",
+        )
+
+    assert root.active_connection == original_connection
+    assert root.active_auth_state is original_auth
+    assert root.content_host.current is original_content
+    assert root.services_menu.selected_id == "stable"
+    if failing.failed_vm is not None:
+        assert failing.failed_vm.disposed
+    root.dispose()
+
+
+async def test_failed_initial_service_adoption_clears_tentative_selection() -> None:
+    failing = _FailingService("failing", fail_during="construct")
+    root = _build_root(failing)
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+
+    with pytest.raises(RuntimeError, match="candidate construction failed"):
+        await root.switch_service("failing")
+
+    assert root.content_host.current is None
+    assert root.services_menu.selected_id is None
+    assert failing.failed_vm is not None
+    assert failing.failed_vm.disposed
+    root.dispose()
+
+
 async def test_switch_service_unknown_id_raises() -> None:
     from aws_tui.vm.services_protocol import ServiceNotFound
 
@@ -177,6 +393,90 @@ async def test_switch_theme_publishes_message() -> None:
     await root.switch_theme("voidline")
     sub.dispose()
     assert "voidline" in seen
+    root.dispose()
+
+
+def test_unexpected_service_failure_is_logged_with_active_source() -> None:
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    root = _build_root()
+    entries: list[tuple[str, dict[str, object]]] = []
+    root._connection = _aws_conn("prod")  # type: ignore[attr-defined]
+    root._log = SimpleNamespace(  # type: ignore[attr-defined]
+        error=lambda event, **fields: entries.append((event, fields))
+    )
+
+    root.message_hub.send(
+        ServiceOperationFailedMessage.from_error(
+            service="athena",
+            operation="list_catalogs",
+            error=RuntimeError("Authorization: Bearer TOP_SECRET"),
+        )
+    )
+
+    assert entries == [
+        (
+            "service.operation.unexpected_failure",
+            {
+                "service": "athena",
+                "operation": "list_catalogs",
+                "source": "prod",
+                "region": "us-east-1",
+                "error_type": "RuntimeError",
+                "error": "Authorization: Bearer [REDACTED]",
+                "traceback": "RuntimeError: Authorization: Bearer [REDACTED]",
+            },
+        )
+    ]
+    root.dispose()
+
+
+def test_service_failure_logging_tracks_root_lifecycle() -> None:
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    root = _build_root()
+    entries: list[str] = []
+    root._log = SimpleNamespace(  # type: ignore[attr-defined]
+        error=lambda event, **_fields: entries.append(event)
+    )
+    message = ServiceOperationFailedMessage.from_error(
+        service="localfs",
+        operation="list",
+        error=RuntimeError("disk failed"),
+        source="local",
+    )
+
+    root.destruct()
+    root.message_hub.send(message)
+    assert entries == []
+
+    root.construct()
+    root.message_hub.send(message)
+    assert entries == ["service.operation.unexpected_failure"]
+    root.dispose()
+
+
+def test_explicit_service_source_does_not_inherit_another_connections_region() -> None:
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    root = _build_root()
+    entries: list[dict[str, object]] = []
+    root._connection = _aws_conn("account-a")  # type: ignore[attr-defined]
+    root._log = SimpleNamespace(  # type: ignore[attr-defined]
+        error=lambda _event, **fields: entries.append(fields)
+    )
+
+    root.message_hub.send(
+        ServiceOperationFailedMessage.from_error(
+            service="s3",
+            operation="list",
+            error=RuntimeError("request failed"),
+            source="account-b",
+        )
+    )
+
+    assert entries[0]["source"] == "account-b"
+    assert entries[0]["region"] is None
     root.dispose()
 
 

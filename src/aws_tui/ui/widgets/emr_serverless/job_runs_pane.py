@@ -575,6 +575,14 @@ class JobRunsPane(Widget, can_focus=True):
                     classes="runs-row runs-load-more",
                 )
             )
+        elif self._vm.limit_reached:
+            body.mount(
+                Static(
+                    f"Showing first {len(runs)} runs · safety limit",
+                    classes="runs-row runs-load-more",
+                    markup=False,
+                )
+            )
 
 
 __all__ = ["JobRunsPane"]

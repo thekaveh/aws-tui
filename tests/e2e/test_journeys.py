@@ -1,8 +1,9 @@
 """End-to-end journeys per spec §8.5.
 
-Five canonical user journeys driven by ``App.run_test()`` Pilot. Where a
-real network backend is required (journey #3, MinIO container) we skip
-cleanly when Docker isn't available.
+Canonical user journeys spanning full ``App.run_test()`` Pilot flows and
+lower-level orchestration checks. Real provider contracts live in the
+separate S3Mock integration tier so this suite remains deterministic and
+Docker-free.
 
 The journeys are intentionally pragmatic — they assert the journey hits
 its key checkpoint rather than tracing every keystroke. The unit + snapshot
@@ -11,14 +12,23 @@ tiers already cover widget-level rendering.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import inspect
 import json
-from collections.abc import AsyncIterator
+import os
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import pytest
+from textual.widgets import Button, Static
 
 from aws_tui.app import AwsTuiApp
-from aws_tui.composition import AppContext
+from aws_tui.composition import AppContext, build_app_context
+from aws_tui.demo.in_memory_athena import InMemoryAthena
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
+from aws_tui.demo.in_memory_fs import InMemoryFS
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import (
     FileSystemProvider,
     PathRef,
@@ -26,12 +36,23 @@ from aws_tui.domain.filesystem import (
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.services.athena.service import AthenaService
+from aws_tui.services.emr_serverless.service import EmrServerlessService
+from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
+from aws_tui.vm.glue.page_vm import GluePageVM
+from tests.e2e.conftest import _AWS_CREDENTIAL_ENV_VARS
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def test_e2e_environment_disables_host_aws_credentials() -> None:
+    assert set(_AWS_CREDENTIAL_ENV_VARS).isdisjoint(os.environ)
+    assert os.environ["AWS_EC2_METADATA_DISABLED"] == "true"
+    boto_config = Path(os.environ["BOTO_CONFIG"])
+    assert boto_config.read_text(encoding="utf-8") == ""
 
 
 async def _astream(data: bytes) -> AsyncIterator[bytes]:
@@ -46,6 +67,12 @@ def _aws_connection() -> Connection:
         source="config",
         profile="kaveh-dev",
     )
+
+
+async def _wait_until(predicate: Callable[[], bool]) -> None:
+    async with asyncio.timeout(10):
+        while not predicate():
+            await asyncio.sleep(0.01)
 
 
 # ── Journey 1: silent SSO on cold start ─────────────────────────────────────
@@ -93,7 +120,7 @@ async def test_journey_1_silent_sso(
 
     app = AwsTuiApp(app_context)
     async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
+        await _wait_until(lambda: app_context.root_vm.content_host.current is not None)
         await pilot.pause()
         # No toast was raised on launch.
         assert app_context.root_vm.chrome.toast_stack.count == 0
@@ -159,7 +186,7 @@ async def test_journey_2_copy_object_to_local(app_context: AppContext, tmp_path:
     dual.dispose()
 
 
-# ── Journey 3: switch AWS -> MinIO mid-session (requires Docker) ────────────
+# ── Journey 3: switch AWS -> S3-compatible source mid-session ──────────────
 
 
 @pytest.mark.e2e
@@ -167,8 +194,8 @@ async def test_journey_2_copy_object_to_local(app_context: AppContext, tmp_path:
 async def test_journey_3_switch_connection(app_context: AppContext) -> None:
     """Connection switch fires the right hub message + tears down old content.
 
-    A full AWS->MinIO swap with active transfers needs Docker; we cover the
-    in-process orchestration only here so the suite stays Docker-free.
+    A full provider swap with active transfers belongs to the S3Mock tier; this
+    test covers in-process connection orchestration and stays Docker-free.
     """
     aws = _aws_connection()
     minio = Connection(
@@ -186,17 +213,19 @@ async def test_journey_3_switch_connection(app_context: AppContext) -> None:
     # First, settle on AWS.
     await app_context.root_vm.switch_connection_with(aws, TokenState.CONNECTED)
 
-    # Then switch to MinIO. The ContentHostVM should go through dispose-then-construct.
+    # Then switch to a configured S3-compatible source.
     await app_context.root_vm.switch_connection_with(minio, TokenState.MISSING)
     assert app_context.root_vm.content_host.current_id is None
 
 
-# ── Journey 4: resume from journal ──────────────────────────────────────────
+# ── Journey 4: detect an interrupted journal ────────────────────────────────
 
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
-async def test_journey_4_resume_from_journal(app_context: AppContext, tmp_path: Path) -> None:
+async def test_journey_4_detect_interrupted_journal(
+    app_context: AppContext, tmp_path: Path
+) -> None:
     """Write a half-finished journal entry, scan, assert it's detected."""
     journal = app_context.transfer_journal
     # Start a new transfer
@@ -218,15 +247,15 @@ class _SpyProvider(InMemoryFS):
         super().__init__()
         self.delete_calls: list[PathRef] = []
 
-    async def delete(self, path: PathRef) -> None:
+    async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
         self.delete_calls.append(path)
-        await super().delete(path)
+        await super().delete(path, expected_etag=expected_etag)
 
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_journey_5_delete_cancel(app_context: AppContext) -> None:
-    """Press 'd' on a file, confirm modal -> Esc -> no delete fired."""
+    """A cancelled confirmation decision leaves the provider untouched."""
     fs = _SpyProvider()
     await fs.write_stream(PathRef(("foo.txt",)), _astream(b"keep me"))
 
@@ -270,3 +299,257 @@ async def test_journey_5_delete_cancel(app_context: AppContext) -> None:
     # We assert the provider was untouched.
     assert fs.delete_calls == []
     pane.dispose()
+
+
+# ── Journey 6: EMR source switch ──────────────────────────────────────────
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_journey_6_switch_emr_profile_updates_visible_source(tmp_path: Path) -> None:
+    """EMR keeps its nav selection while ``Shift+S`` remounts its source."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        "[connections.dev]\n"
+        'kind = "aws"\n'
+        'profile = "dev"\n'
+        'region = "us-east-1"\n'
+        "[connections.prod]\n"
+        'kind = "aws"\n'
+        'profile = "prod"\n'
+        'region = "us-west-2"\n'
+        "[defaults]\n"
+        'connection = "dev"\n'
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    dev = ctx.connection_resolver.resolve("dev")
+    prod = ctx.connection_resolver.resolve("prod")
+    ctx.connection_resolver.list = lambda: [dev, prod]  # type: ignore[method-assign]
+
+    def build_client(connection: Connection) -> _InMemoryEmr:
+        client = _InMemoryEmr()
+        client.add_application(app_id=f"{connection.name}-app", name=connection.name)
+        return client
+
+    for service in ctx.registry.all():
+        if isinstance(service, EmrServerlessService):
+            service._client_factory = build_client
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_service_mount(pilot, app)
+
+            source_value = app.query_one(
+                "#emr-source-header-picker .context-picker-value",
+                Static,
+            )
+            initial_source = str(source_value.render())
+            assert initial_source in {"dev·us-east-1", "prod·us-west-2"}
+
+            await pilot.press("S")
+            await _await_service_mount(pilot, app)
+
+            source_value = app.query_one(
+                "#emr-source-header-picker .context-picker-value",
+                Static,
+            )
+            assert str(source_value.render()) != initial_source
+            assert ctx.root_vm.services_menu.selected_id == "emr-serverless"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+async def _await_service_mount(pilot: object, app: AwsTuiApp) -> None:
+    await app.workers.wait_for_complete(list(app.workers._workers))
+    setup_task = app.app_ctx.root_vm.content_host._setup_task
+    if setup_task is not None and not setup_task.done():
+        await setup_task
+    await pilot.pause()  # type: ignore[attr-defined]
+
+
+# ── Journey 7: Glue table -> S3 under the same profile ──────────────────────
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_journey_7_glue_table_opens_s3_under_same_profile(tmp_path: Path) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_service_mount(pilot, app)
+            ctx.root_vm.services_menu.switch_service_command.execute("glue")
+            await _await_service_mount(pilot, app)
+
+            result = app.action_dispatch("glue.open_s3_location")
+            if inspect.isawaitable(result):
+                await result
+            await _await_service_mount(pilot, app)
+
+            assert ctx.root_vm.content_host.current_id == "s3"
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            current = ctx.root_vm.content_host.current
+            assert isinstance(current, DualPaneVM)
+            pane = current.left
+            assert pane.current_connection_key == ("aws", "demo-dev")
+            assert pane.path.as_posix() == "/demo-dev/dev_analytics/dev_events"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+# ── Journey 8: Athena result -> S3 under the same profile ───────────────────
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_journey_8_athena_result_opens_s3_under_same_profile(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_service_mount(pilot, app)
+            ctx.root_vm.services_menu.switch_service_command.execute("athena")
+            await _await_service_mount(pilot, app)
+            page = ctx.root_vm.content_host.current
+            from aws_tui.vm.athena.page_vm import AthenaPageVM
+
+            assert isinstance(page, AthenaPageVM)
+            await page.select_view("history")
+            await page.select_history_execution("q-dev-succeeded")
+
+            result = app.action_dispatch("athena.open_result_location")
+            if inspect.isawaitable(result):
+                await result
+            await _await_service_mount(pilot, app)
+
+            assert ctx.root_vm.content_host.current_id == "s3"
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            current = ctx.root_vm.content_host.current
+            assert isinstance(current, DualPaneVM)
+            pane = current.left
+            assert pane.current_connection_key == ("aws", "demo-dev")
+            assert pane.path.as_posix() == "/athena-results/dev"
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+# ── Journey 9: Iceberg snapshot -> Athena -> S3 ─────────────────────────────
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_journey_9_iceberg_snapshot_runs_only_on_explicit_execute(
+    tmp_path: Path,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_service_mount(pilot, app)
+            ctx.root_vm.services_menu.switch_service_command.execute("glue")
+            await _await_service_mount(pilot, app)
+            glue = ctx.root_vm.content_host.current
+            assert isinstance(glue, GluePageVM)
+            await glue.open_table(
+                TableRef(
+                    "AwsDataCatalog",
+                    "dev_analytics",
+                    "dev_events_iceberg",
+                    "demo-dev",
+                    "us-east-1",
+                )
+            )
+            await glue.catalog.iceberg.select_view("snapshots")
+            assert glue.catalog.iceberg.select_snapshot(4201)
+            await pilot.pause()
+            service = ctx.registry.get("athena")
+            assert isinstance(service, AthenaService)
+            assert service._client_factory is not None
+            client = service._client_factory(ctx.connection_resolver.resolve("demo-dev"))
+            assert isinstance(client, InMemoryAthena)
+            client.calls.clear()
+
+            button = app.query_one("#glue-iceberg-time-travel", Button)
+            assert not button.disabled
+            await pilot.click("#glue-iceberg-time-travel")
+            await _await_service_mount(pilot, app)
+            athena = ctx.root_vm.content_host.current
+            assert isinstance(athena, AthenaPageVM)
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            assert ctx.root_vm.active_connection.region == "us-east-1"
+            assert athena.context.connection_name == "demo-dev"
+            assert athena.context.region == "us-east-1"
+            assert athena.context.workgroup == "dev-analytics"
+            assert athena.context.catalog == "AwsDataCatalog"
+            assert athena.context.database == "dev_analytics"
+            assert athena.query.sql == (
+                'SELECT * FROM "dev_analytics"."dev_events_iceberg" FOR VERSION AS OF 4201 LIMIT 5'
+            )
+            assert athena.query.execution_ref is None
+            assert athena.results.rows == ()
+            assert not any(call.method == "start_query" for call in client.calls)
+
+            await app.action_execute_athena()
+            assert athena.query.execution_ref is not None
+            assert athena.query.execution_ref.connection_name == "demo-dev"
+            execution_id = athena.query.execution_ref.execution_id
+            assert athena.results.rows == (
+                ("2026-07-24T12:00:00Z", "dev-checkout", "17"),
+                ("2026-07-24T12:05:00Z", "dev-search", "9"),
+            )
+            assert athena.query.output_location is not None
+            assert athena.query.output_location.startswith("s3://athena-results/dev/")
+
+            await athena.select_view("results")
+            result = app.action_dispatch("athena.open_result_location")
+            if inspect.isawaitable(result):
+                await result
+            await _await_service_mount(pilot, app)
+            assert ctx.root_vm.content_host.current_id == "s3"
+            assert ctx.root_vm.active_connection is not None
+            assert ctx.root_vm.active_connection.name == "demo-dev"
+            pane = ctx.root_vm.content_host.current.left
+            assert pane.current_connection_key == ("aws", "demo-dev")
+            assert pane.path.as_posix() == "/athena-results/dev"
+            assert pane.selected_entry is not None
+            assert pane.selected_entry.entry.name == f"{execution_id}.csv"
+            assert isinstance(pane.provider, InMemoryFS)
+            chunks = await pane.provider.read_stream(
+                pane.path.join(pane.selected_entry.entry.name),
+            )
+            artifact = b"".join([chunk async for chunk in chunks])
+            assert artifact == (
+                b"dimension,name,value\r\n"
+                b"2026-07-24T12:00:00Z,dev-checkout,17\r\n"
+                b"2026-07-24T12:05:00Z,dev-search,9\r\n"
+            )
+            assert b"_col0" not in artifact
+            assert b"\r\n1\r\n" not in artifact
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()

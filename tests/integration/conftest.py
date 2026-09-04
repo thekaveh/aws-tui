@@ -1,7 +1,7 @@
 """Integration-tier shared fixtures.
 
-- :func:`minio_endpoint` — session-scoped MinIO testcontainer. Used by
-  the two MinIO smoke suites (opt-in via ``-m integration``).
+- :func:`s3_compat_endpoint` — session-scoped Adobe S3Mock container.
+  Used by the two real S3-protocol suites (opt-in via ``-m integration``).
 - :func:`app_context_factory` — per-test fixture returning a builder
   callable that constructs an :class:`AppContext` for full-app pilot
   tests. Pass ``fs=`` to inject a seeded :class:`InMemoryFS` as the
@@ -13,16 +13,18 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from vmx import MessageHub, RxDispatcher
 
 from aws_tui.composition import AppContext
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import FileSystemProvider
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.aws_session import AwsSession
@@ -39,40 +41,92 @@ from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
-_MINIO_IMAGE = (
-    "minio/minio:RELEASE.2025-09-07T16-13-09Z"
-    "@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+_S3MOCK_IMAGE = (
+    "adobe/s3mock:5.2.0@sha256:7a37f0d796e81a28b970c892dcae532797014616b3312b467af8f0274ebf0c26"
+)
+
+_AWS_CREDENTIAL_ENV_VARS = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_SECURITY_TOKEN",
+    "AWS_PROFILE",
+    "AWS_DEFAULT_PROFILE",
+    "AWS_ROLE_ARN",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_ROLE_SESSION_NAME",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+    "AWS_CREDENTIAL_FILE",
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_aws_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep integration tests independent of host credential providers."""
+    for variable in _AWS_CREDENTIAL_ENV_VARS:
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+    for variable, filename in (
+        ("AWS_CONFIG_FILE", "aws-config"),
+        ("AWS_SHARED_CREDENTIALS_FILE", "aws-credentials"),
+        ("BOTO_CONFIG", "boto-config"),
+    ):
+        path = tmp_path / filename
+        path.write_text("", encoding="utf-8")
+        monkeypatch.setenv(variable, str(path))
+
+
+def _s3_compat_unavailable(message: str) -> None:
+    """Fail required CI coverage while keeping local Docker tests optional."""
+    if os.environ.get("CI"):
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def _start_s3mock_or_unavailable(container: Any) -> None:
+    """Start S3Mock or tear down any partially allocated container."""
+    try:
+        container.start()
+    except Exception as exc:  # pragma: no cover - exercised through helper tests
+        with contextlib.suppress(Exception):
+            container.stop()
+        _s3_compat_unavailable(f"could not start S3Mock container (Docker missing?): {exc}")
+
+
 @pytest.fixture(scope="session")
-def minio_endpoint() -> Iterator[tuple[str, str, str]]:
-    """Spin up a real MinIO container.
+def s3_compat_endpoint() -> Iterator[tuple[str, str, str]]:
+    """Spin up a real Adobe S3Mock container.
 
     Returns ``(endpoint_url, access_key, secret_key)``. The container is
     reused for every test in the session. Skipped if Docker / the
     container client isn't available.
     """
     try:
-        from testcontainers.minio import MinioContainer  # lazy import
+        from testcontainers.core.container import DockerContainer
+        from testcontainers.core.wait_strategies import HttpWaitStrategy
     except Exception as exc:  # pragma: no cover
-        pytest.skip(f"testcontainers MinIO unavailable: {exc}")
+        _s3_compat_unavailable(f"testcontainers S3Mock unavailable: {exc}")
 
     try:
-        container = MinioContainer(image=_MINIO_IMAGE)
-        container.start()
+        container = (
+            DockerContainer(_S3MOCK_IMAGE)
+            .with_exposed_ports(9090)
+            .waiting_for(HttpWaitStrategy(9090, "/favicon.ico"))
+        )
     except Exception as exc:  # pragma: no cover
-        pytest.skip(f"could not start MinIO container (Docker missing?): {exc}")
+        _s3_compat_unavailable(f"could not construct S3Mock container: {exc}")
+    _start_s3mock_or_unavailable(container)
 
     try:
         host = container.get_container_host_ip()
-        port = container.get_exposed_port(9000)
+        port = container.get_exposed_port(9090)
         endpoint = f"http://{host}:{port}"
-        access_key = container.access_key
-        secret_key = container.secret_key
-        yield (endpoint, access_key, secret_key)
+        yield (endpoint, "test", "test")
     finally:
         with contextlib.suppress(Exception):  # pragma: no cover
             container.stop()
@@ -144,9 +198,9 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
             transfer_journal=journal,
             hub=hub,
             dispatcher=dispatcher,
+            local_root=tmp,
             s3_fs_factory=_factory,
         )
-        svc._local_root = tmp  # type: ignore[attr-defined]
 
         registry = ServiceRegistry()
         registry.register(cast(Service, svc))
@@ -202,31 +256,3 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
             # background worker still holding a file open at teardown
             # time on Windows) doesn't fail the whole test.
             shutil.rmtree(tmp, ignore_errors=True)
-
-
-_INTEGRATION_DIR = Path(__file__).parent
-
-
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Auto-retry the integration tier (pytest-rerunfailures).
-
-    The full-app Textual ``pilot`` tests under ``tests/integration/`` are
-    timing-sensitive: under concurrent-matrix load on slow CI runners
-    (notably Windows) a pilot step can miss its window and the test fails
-    non-deterministically (``asyncio.CancelledError``, an assertion on a
-    not-yet-settled state, etc.). A different test flakes each run, so
-    this is inherent timing jitter, not a product bug. Retry integration
-    items up to twice so a transient miss doesn't redden CI; a real,
-    deterministic failure still fails after every attempt.
-
-    A subdir conftest's ``pytest_collection_modifyitems`` receives the
-    whole session's items, so scope the marker to files under this
-    directory — unit tests must keep failing fast on the first attempt.
-    """
-    flaky = pytest.mark.flaky(reruns=2, reruns_delay=1)
-    for item in items:
-        try:
-            item.path.relative_to(_INTEGRATION_DIR)
-        except ValueError:
-            continue
-        item.add_marker(flaky)

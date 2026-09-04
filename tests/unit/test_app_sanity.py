@@ -6,9 +6,12 @@ unit/, integration/, snapshot/, and e2e/.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 import runpy
+import subprocess
 import sys
 from collections import deque
 from pathlib import Path
@@ -100,6 +103,44 @@ def test_cli_version_prints_without_launching_app(
     app_module.main()
 
     assert capsys.readouterr().out == f"aws-tui {__version__} (demo: disabled)\n"
+
+
+def test_cli_version_survives_malformed_transfer_linger_override() -> None:
+    env = {**os.environ, "AWS_TUI_TRANSFER_LINGER": "not-a-number"}
+
+    result = subprocess.run(
+        [sys.executable, "-m", "aws_tui", "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"aws-tui {__version__} (demo: disabled)\n"
+
+
+@pytest.mark.parametrize("value", ["not-a-number", "nan", "inf", "-1"])
+def test_invalid_transfer_linger_override_falls_back_to_default(value: str) -> None:
+    env = {**os.environ, "AWS_TUI_TRANSFER_LINGER": value}
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from aws_tui.ui.widgets.transfers_overlay import _LINGER_SECONDS; "
+            "print(_LINGER_SECONDS)",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "3.0\n"
 
 
 def test_cli_version_reports_demo_flag_without_launching_app(
@@ -208,18 +249,339 @@ def test_cli_env_demo_reaches_app_context(monkeypatch: pytest.MonkeyPatch) -> No
     assert demos == [True]
 
 
+def test_cli_returns_failure_when_textual_swallows_fatal_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui import app as app_module
+
+    report = SimpleNamespace(
+        exception_type="RuntimeError",
+        exception_message="boom",
+        dump_path=Path("/tmp/crash.txt"),
+    )
+
+    class FakeApp:
+        crash_report = report
+
+        def __init__(self, *, context: object) -> None:
+            pass
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(sys, "argv", ["aws-tui"])
+    monkeypatch.setattr(app_module, "build_app_context", lambda *, demo: object())
+    monkeypatch.setattr(app_module, "AwsTuiApp", FakeApp)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.main()
+
+    assert exc_info.value.code == 1
+
+
+def test_cli_reports_redacted_startup_failure_before_app_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aws_tui import app as app_module
+
+    def fail_build_context(*, demo: bool) -> object:
+        del demo
+        raise RuntimeError("secret_access_key=SUPERSECRET")
+
+    monkeypatch.setattr(sys, "argv", ["aws-tui"])
+    monkeypatch.setattr(app_module, "build_app_context", fail_build_context)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.main()
+
+    assert exc_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert "aws-tui failed to start" in stderr
+    assert "RuntimeError" in stderr
+    assert "[REDACTED]" in stderr
+    assert "SUPERSECRET" not in stderr
+
+
+def test_cli_closes_context_when_app_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui import app as app_module
+
+    class Context:
+        closed = False
+
+        def close_unstarted(self) -> None:
+            self.closed = True
+
+    context = Context()
+
+    class FailingApp:
+        def __init__(self, *, context: object) -> None:
+            del context
+            raise RuntimeError("app construction failed")
+
+    monkeypatch.setattr(sys, "argv", ["aws-tui"])
+    monkeypatch.setattr(app_module, "build_app_context", lambda *, demo: context)
+    monkeypatch.setattr(app_module, "AwsTuiApp", FailingApp)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.main()
+
+    assert exc_info.value.code == 1
+    assert context.closed
+
+
 def test_bound_action_records_action_id(monkeypatch: pytest.MonkeyPatch) -> None:
     from aws_tui import app as app_module
 
     app = object.__new__(app_module.AwsTuiApp)
     app._action_ring = deque(maxlen=100)  # type: ignore[attr-defined]
     app._last_action_id = None  # type: ignore[attr-defined]
+    app._current_mode = "default"  # type: ignore[attr-defined]
+    app._screen_stacks = {"default": []}  # type: ignore[attr-defined]
     monkeypatch.setattr(app, "_cycle_focus", lambda *, reverse: None)
 
     app.action_switch_focus()
 
     assert app.last_action_id == "pane.switch_focus"
     assert str(app._action_ring[-1]).endswith(" pane.switch_focus")  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_content_swap_waits_for_every_cancelled_transfer_worker() -> None:
+    from textual.worker import WorkerCancelled
+
+    from aws_tui import app as app_module
+
+    slow_worker_drained = asyncio.Event()
+
+    class _CancelledWorker:
+        async def wait(self) -> None:
+            raise WorkerCancelled
+
+    class _SlowWorker:
+        async def wait(self) -> None:
+            slow_worker_drained.set()
+
+    class _Workers:
+        def cancel_group(self, *_args: object) -> tuple[object, ...]:
+            return (_CancelledWorker(), _SlowWorker())
+
+        async def wait_for_complete(self, workers: tuple[object, ...]) -> None:
+            await workers[0].wait()  # type: ignore[attr-defined]
+
+    app = object.__new__(app_module.AwsTuiApp)
+    app._workers = _Workers()  # type: ignore[attr-defined]
+
+    await app._cancel_transfer_workers_before_content_swap()
+
+    assert slow_worker_drained.is_set()
+
+
+@pytest.mark.asyncio
+async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> None:
+    from aws_tui import app as app_module
+
+    events: list[str] = []
+
+    class _ContentHost:
+        async def shutdown(self) -> None:
+            events.append("content.shutdown")
+
+    class _RootVM:
+        content_host = _ContentHost()
+
+        def dispose(self) -> None:
+            events.append("root.dispose")
+
+    class _Disposable:
+        def dispose(self) -> None:
+            pass
+
+    async def close_clients() -> None:
+        events.append("clients.close")
+
+    app = object.__new__(app_module.AwsTuiApp)
+    app._workers = SimpleNamespace(cancel_group=lambda *_args: None)  # type: ignore[attr-defined]
+    app._pane_state_sub = None  # type: ignore[attr-defined]
+    app._connection_list_sub = None  # type: ignore[attr-defined]
+    app._nav_selection_sub = None  # type: ignore[attr-defined]
+    app._cursor_sub = None  # type: ignore[attr-defined]
+    app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
+        transfers_vm=SimpleNamespace(
+            cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
+        ),
+        aws_session=SimpleNamespace(aclose_all_clients=close_clients),
+        log_sink=SimpleNamespace(
+            flush=lambda: events.append("logs.flush"),
+            close=lambda: events.append("logs.close"),
+        ),
+        s3_connections_vm=_Disposable(),
+        command_palette_vm=_Disposable(),
+        quick_look_vm=_Disposable(),
+        confirm_vm=_Disposable(),
+        table_clipboard_vm=SimpleNamespace(dispose=lambda: events.append("clipboard.dispose")),
+        root_vm=_RootVM(),
+        focus_coordinator=_Disposable(),
+        demo_emrs={},
+    )
+
+    await app._aws_tui_shutdown()
+
+    assert events == [
+        "content.shutdown",
+        "clients.close",
+        "clipboard.dispose",
+        "root.dispose",
+        "logs.flush",
+        "logs.close",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_app_shutdown_records_failures_continues_and_closes_logging_last() -> None:
+    from aws_tui import app as app_module
+
+    events: list[str] = []
+
+    class _ContentHost:
+        async def shutdown(self) -> None:
+            events.append("content.shutdown")
+
+    class _Disposable:
+        def __init__(self, name: str, *, fail: bool = False) -> None:
+            self._name = name
+            self._fail = fail
+
+        def dispose(self) -> None:
+            events.append(f"{self._name}.dispose")
+            if self._fail:
+                raise RuntimeError(f"{self._name} failed")
+
+    class _Root(_Disposable):
+        content_host = _ContentHost()
+
+    class _Log:
+        def error(self, event: str, **fields: object) -> None:
+            events.append(f"log.error:{event}:{fields['step']}")
+
+        def flush(self) -> None:
+            events.append("logs.flush")
+
+        def close(self) -> None:
+            events.append("logs.close")
+
+    async def close_clients() -> None:
+        events.append("clients.close")
+        raise RuntimeError("clients failed")
+
+    async def close_demo() -> None:
+        events.append("demo.close")
+
+    app = object.__new__(app_module.AwsTuiApp)
+    app._workers = SimpleNamespace(cancel_group=lambda *_args: None)  # type: ignore[attr-defined]
+    app._pane_state_sub = None  # type: ignore[attr-defined]
+    app._connection_list_sub = None  # type: ignore[attr-defined]
+    app._nav_selection_sub = None  # type: ignore[attr-defined]
+    app._cursor_sub = None  # type: ignore[attr-defined]
+    app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
+        transfers_vm=SimpleNamespace(
+            cancel_all_command=SimpleNamespace(execute=lambda: None),
+            dispose=lambda: events.append("transfers.dispose"),
+        ),
+        aws_session=SimpleNamespace(aclose_all_clients=close_clients),
+        log_sink=_Log(),
+        s3_connections_vm=_Disposable("connections", fail=True),
+        command_palette_vm=SimpleNamespace(
+            shutdown=_complete,
+            dispose=lambda: events.append("palette.dispose"),
+        ),
+        quick_look_vm=_Disposable("quick-look"),
+        confirm_vm=_Disposable("confirm"),
+        table_clipboard_vm=_Disposable("clipboard"),
+        root_vm=_Root("root"),
+        focus_coordinator=_Disposable("focus"),
+        demo_emrs={"demo": SimpleNamespace(aclose=close_demo)},
+    )
+
+    await app._aws_tui_shutdown()
+
+    assert events.index("root.dispose") < events.index("logs.flush")
+    assert events.index("focus.dispose") < events.index("logs.flush")
+    assert events.index("demo.close") < events.index("logs.flush")
+    assert "log.error:app.shutdown.cleanup_failed:aws_session.aclose_all_clients" in events
+    assert "log.error:app.shutdown.cleanup_failed:s3_connections_vm.dispose" in events
+    assert events[-1] == "logs.close"
+    assert app._shutdown_errors == (  # type: ignore[attr-defined]
+        ("aws_session.aclose_all_clients", "RuntimeError"),
+        ("s3_connections_vm.dispose", "RuntimeError"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
+    from aws_tui import app as app_module
+
+    events: list[str] = []
+    shutdown_started = asyncio.Event()
+    finish_shutdown = asyncio.Event()
+
+    class _ContentHost:
+        async def shutdown(self) -> None:
+            events.append("content.shutdown.started")
+            shutdown_started.set()
+            await finish_shutdown.wait()
+            events.append("content.shutdown.finished")
+
+    class _RootVM:
+        content_host = _ContentHost()
+
+        def dispose(self) -> None:
+            events.append("root.dispose")
+
+    class _Disposable:
+        def dispose(self) -> None:
+            pass
+
+    app = object.__new__(app_module.AwsTuiApp)
+    app._workers = SimpleNamespace(cancel_group=lambda *_args: None)  # type: ignore[attr-defined]
+    app._pane_state_sub = None  # type: ignore[attr-defined]
+    app._connection_list_sub = None  # type: ignore[attr-defined]
+    app._nav_selection_sub = None  # type: ignore[attr-defined]
+    app._cursor_sub = None  # type: ignore[attr-defined]
+    app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
+        transfers_vm=SimpleNamespace(
+            cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
+        ),
+        aws_session=SimpleNamespace(aclose_all_clients=lambda: _complete()),
+        log_sink=SimpleNamespace(flush=lambda: None, close=lambda: None),
+        s3_connections_vm=_Disposable(),
+        command_palette_vm=_Disposable(),
+        quick_look_vm=_Disposable(),
+        confirm_vm=_Disposable(),
+        table_clipboard_vm=_Disposable(),
+        root_vm=_RootVM(),
+        focus_coordinator=_Disposable(),
+        demo_emrs={},
+    )
+
+    shutdown_task = asyncio.create_task(app._aws_tui_shutdown())
+    await asyncio.wait_for(shutdown_started.wait(), timeout=1.0)
+    shutdown_task.cancel()
+    await asyncio.sleep(0)
+
+    assert events == ["content.shutdown.started"]
+    assert not shutdown_task.done()
+
+    finish_shutdown.set()
+    await shutdown_task
+
+    assert events == ["content.shutdown.started", "content.shutdown.finished", "root.dispose"]
+
+
+async def _complete() -> None:
+    return None
 
 
 def test_build_crash_report_writes_crash_log_event(tmp_path: Path) -> None:
@@ -301,7 +663,8 @@ def test_build_crash_report_writes_redacted_fallback_when_dump_write_fails(
     finally:
         log_sink.close()
 
-    assert report.dump_path == tmp_path / "log" / "crash-fallback.txt"
+    assert report.dump_path.parent == tmp_path / "log"
+    assert report.dump_path.name.startswith("crash-fallback-")
     fallback = report.dump_path.read_text(encoding="utf-8")
     assert "crash dump unavailable" in fallback
     for leaked in ["SECRETAPI", "SECRETPRIVATE"]:
@@ -429,7 +792,11 @@ async def test_rebind_pane_to_local_preserves_s3_service_local_root(tmp_path: Pa
 
     app = object.__new__(app_module.AwsTuiApp)
     app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
-        registry=SimpleNamespace(get=lambda _service_id: SimpleNamespace(_local_root=tmp_path)),
+        registry=SimpleNamespace(
+            get=lambda _service_id: SimpleNamespace(
+                build_local_provider=lambda: LocalFS(root=tmp_path)
+            )
+        ),
     )
 
     await app._rebind_pane_to_local(FakePane())
@@ -437,6 +804,92 @@ async def test_rebind_pane_to_local_preserves_s3_service_local_root(tmp_path: Pa
     [provider] = providers
     assert isinstance(provider, LocalFS)
     assert provider._root == tmp_path.resolve()  # type: ignore[attr-defined]
+
+
+def test_open_settings_records_registered_action_id() -> None:
+    from collections import deque
+    from types import SimpleNamespace
+
+    from aws_tui import app as app_module
+
+    executed: list[str] = []
+    app = object.__new__(app_module.AwsTuiApp)
+    app._action_ring = deque(maxlen=100)  # type: ignore[attr-defined]
+    app._last_action_id = None  # type: ignore[attr-defined]
+    app._app_ctx = SimpleNamespace(  # type: ignore[attr-defined]
+        root_vm=SimpleNamespace(
+            services_menu=SimpleNamespace(
+                switch_service_command=SimpleNamespace(execute=executed.append)
+            )
+        )
+    )
+
+    app.action_open_settings()
+
+    assert app.last_action_id == "app.open_settings"
+    assert executed == ["settings"]
+
+
+def test_move_cursor_routes_emr_through_public_page_api_only() -> None:
+    from aws_tui import app as app_module
+
+    class FakeEmrPage:
+        def __init__(self) -> None:
+            self.moves: list[int] = []
+
+        @property
+        def _picker(self) -> object:
+            raise AssertionError("app must not inspect the EMR picker")
+
+        @property
+        def left_pane(self) -> object:
+            raise AssertionError("app must not inspect EMR panes")
+
+        def move_focused(self, delta: int) -> bool:
+            self.moves.append(delta)
+            return False
+
+    page = FakeEmrPage()
+    app = object.__new__(app_module.AwsTuiApp)
+    app._nav_has_focus = lambda: False  # type: ignore[method-assign]
+    app._glue_page = lambda: None  # type: ignore[method-assign]
+    app._athena_page = lambda: None  # type: ignore[method-assign]
+    app._emr_page = lambda: page  # type: ignore[method-assign]
+
+    app._move_cursor(1)
+
+    assert page.moves == [1]
+
+
+@pytest.mark.asyncio
+async def test_descend_routes_emr_through_public_page_api_only() -> None:
+    from aws_tui import app as app_module
+
+    class FakeEmrPage:
+        def __init__(self) -> None:
+            self.activations = 0
+
+        @property
+        def _picker(self) -> object:
+            raise AssertionError("app must not inspect the EMR picker")
+
+        def activate_focused(self) -> bool:
+            self.activations += 1
+            return True
+
+    page = FakeEmrPage()
+    app = object.__new__(app_module.AwsTuiApp)
+    app.record_action = lambda _action_id: None  # type: ignore[method-assign]
+    app._current_mode = "default"  # type: ignore[attr-defined]
+    app._screen_stacks = {"default": []}  # type: ignore[attr-defined]
+    app._nav_has_focus = lambda: False  # type: ignore[method-assign]
+    app._glue_page = lambda: None  # type: ignore[method-assign]
+    app._athena_page = lambda: None  # type: ignore[method-assign]
+    app._emr_page = lambda: page  # type: ignore[method-assign]
+
+    await app.action_descend()
+
+    assert page.activations == 1
 
 
 @pytest.mark.asyncio
@@ -473,11 +926,10 @@ async def test_initial_service_mount_awaits_content_host_operations(
     events: list[str] = []
 
     class FakeHost:
-        async def remove_children(self) -> None:
-            events.append("remove")
+        pass
 
-        async def mount(self, widget: object) -> None:
-            events.append(f"mount:{widget!r}")
+    async def replace(_host: object, widget: object) -> None:
+        events.append(f"replace:{widget!r}")
 
     class FakeLogSink:
         def error(self, *_args: object, **_kwargs: object) -> None:
@@ -491,15 +943,21 @@ async def test_initial_service_mount_awaits_content_host_operations(
         ),
         hub=object(),
         focus_coordinator=object(),
+        registry=SimpleNamespace(
+            get=lambda _service_id: SimpleNamespace(supports=lambda _connection: True)
+        ),
+        connection_resolver=SimpleNamespace(list=lambda: ()),
+        unreachable_connections=set(),
         log_sink=FakeLogSink(),
     )
 
     monkeypatch.setattr(app, "query_one", lambda *_args, **_kwargs: FakeHost())
+    monkeypatch.setattr(app, "_replace_content_widget", replace)
     monkeypatch.setattr(app_module, "DualPane", lambda *_args, **_kwargs: "dual-pane")
 
     await app._mount_initial_service_view()
 
-    assert events == ["remove", "mount:'dual-pane'"]
+    assert events == ["replace:'dual-pane'"]
 
 
 @pytest.mark.asyncio
@@ -513,18 +971,27 @@ async def test_no_connection_placeholder_mount_awaits_content_host(
     config_path = tmp_path / "platform-config" / "config.toml"
 
     class FakeHost:
-        async def remove_children(self) -> None:
-            mounted.append("remove")
+        pass
 
-        async def mount(self, widget: object) -> None:
-            mounted.append(widget)
+    async def replace(_host: object, widget: object) -> None:
+        mounted.append(widget)
 
     app = object.__new__(app_module.AwsTuiApp)
     app._app_ctx = SimpleNamespace(config_store=SimpleNamespace(path=config_path))
     monkeypatch.setattr(app, "query_one", lambda *_args, **_kwargs: FakeHost())
+    monkeypatch.setattr(app, "_replace_content_widget", replace)
 
     await app._mount_no_connection_placeholder()
 
-    assert len(mounted) == 2
-    assert mounted[0] == "remove"
-    assert str(config_path) in str(getattr(mounted[1], "content", ""))
+    assert len(mounted) == 1
+    assert str(config_path) in str(getattr(mounted[0], "content", ""))
+
+
+def test_app_uses_public_service_page_operations() -> None:
+    app_source = (Path(__file__).parents[2] / "src" / "aws_tui" / "app.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "page._project_focus_slot" not in app_source
+    assert "emr_page._project_focus_slot" not in app_source
+    assert "emr_page._picker" not in app_source

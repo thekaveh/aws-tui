@@ -29,7 +29,7 @@ class ThemePickerSnapshotApp(App[None]):
         self._picker = ThemePickerVM(
             themes=THEMES,
             active_theme=theme,
-            on_pick=lambda _name: None,
+            on_pick=lambda _name: True,
             hub=self._hub,
             dispatcher=self._dispatcher,
         )

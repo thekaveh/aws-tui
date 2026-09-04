@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aws-tui Operational Flows</title>
+  <style>
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Regular.ttf") format("truetype"); font-style: normal; font-weight: 400; }
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Bold.ttf") format("truetype"); font-style: normal; font-weight: 600 700; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px; background: #020617; color: #f8fafc; font-family: "Fira Code Embedded", monospace; }
+    main { width: min(1600px, 100%); margin: auto; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+    p { margin: 8px 0 0; color: #94a3b8; font-size: 14px; }
+    .frame { margin-top: 20px; padding: 16px; overflow-x: auto; border: 1px solid #1e293b; border-radius: 8px; background: #07101f; }
+    svg { display: block; width: 100%; min-width: 1120px; height: auto; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>aws-tui Operational Flows</h1>
+  <p>Transfer control, catalog-to-query transactions, and bounded EMR log inspection</p>
+  <section class="frame">
+    <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+      <title id="title">aws-tui operational flows</title>
+      <desc id="desc">Three orthogonal flows show DualPaneVM controlling cross-filesystem transfer, Glue publishing a typed message through the application transaction to Athena and Amazon Athena, and EMR log loading from S3 into the log pane.</desc>
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
+        <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
+      </defs>
+      <rect width="1600" height="900" fill="#020617"/><rect width="1600" height="900" fill="url(#grid)"/>
+      <g fill="#07101f" stroke="#1e293b" stroke-width="1.5">
+        <rect x="30" y="35" width="1540" height="255" rx="8"/>
+        <rect x="30" y="310" width="1540" height="300" rx="8"/>
+        <rect x="30" y="630" width="1540" height="235" rx="8"/>
+      </g>
+      <g font-family="Fira Code Embedded" font-size="12" font-weight="700" text-anchor="start">
+        <text x="52" y="62" fill="#22d3ee">FILE TRANSFER · CONTROL AND DATA OWNERSHIP</text>
+        <text x="52" y="337" fill="#34d399">GLUE TO ATHENA TO RESULT ARTIFACT</text>
+        <text x="52" y="657" fill="#a78bfa">EMR SERVERLESS LOG INSPECTION</text>
+      </g>
+
+      <g fill="none" stroke-width="2" marker-end="url(#arrow)">
+        <path d="M300 165H380" stroke="#22d3ee"/>
+        <path d="M620 140H675V115H730" stroke="#fbbf24"/>
+        <path d="M620 190H675V225H730" stroke="#fbbf24"/>
+        <path d="M180 215V270H1230V215" stroke="#34d399" data-owner="DualPaneVM" data-target="TransferJournal"/>
+        <path d="M250 440H300" stroke="#34d399"/><path d="M500 440H550" stroke="#34d399"/>
+        <path d="M770 440H830" stroke="#34d399"/><path d="M1030 440H1080" stroke="#fbbf24"/>
+        <path d="M1280 440H1330" stroke="#fbbf24"/><path d="M1430 490V525" stroke="#fbbf24"/>
+        <path d="M330 750H390" stroke="#a78bfa"/><path d="M650 750H720" stroke="#fbbf24"/>
+        <path d="M980 750H1050" stroke="#22d3ee"/>
+      </g>
+
+      <g font-family="Fira Code Embedded" text-anchor="middle">
+        <g fill="#0f172a" stroke-width="2">
+          <rect x="60" y="115" width="240" height="100" rx="5" stroke="#22d3ee"/>
+          <rect x="380" y="115" width="240" height="100" rx="5" stroke="#34d399"/>
+          <rect x="730" y="75" width="240" height="80" rx="5" stroke="#fbbf24"/>
+          <rect x="730" y="185" width="240" height="80" rx="5" stroke="#fbbf24"/>
+          <rect x="1080" y="115" width="300" height="100" rx="5" stroke="#34d399"/>
+        </g>
+        <g fill="#f8fafc" font-size="11.5" font-weight="700">
+          <text x="180" y="150">DualPaneVM</text><text x="500" y="150">CrossFsCopy / Move</text>
+          <text x="850" y="106">Source provider</text><text x="850" y="216">Destination provider</text>
+          <text x="1230" y="150">TransferJournal</text>
+        </g>
+        <g fill="#94a3b8" font-size="9.5">
+          <text x="180" y="177">owns request + cancellation</text><text x="500" y="177">drives read · stage · commit</text>
+          <text x="850" y="130">LocalFS or S3FS read</text><text x="850" y="240">LocalFS or S3FS write</text>
+          <text x="1230" y="177">side evidence · terminal cleanup</text>
+        </g>
+
+        <g fill="#0f172a" stroke-width="2">
+          <rect x="50" y="390" width="200" height="100" rx="5" stroke="#34d399"/>
+          <rect x="300" y="390" width="200" height="100" rx="5" stroke="#34d399"/>
+          <rect x="550" y="390" width="220" height="100" rx="5" stroke="#22d3ee"/>
+          <rect x="830" y="390" width="200" height="100" rx="5" stroke="#34d399"/>
+          <rect x="1080" y="390" width="200" height="100" rx="5" stroke="#fbbf24"/>
+          <rect x="1330" y="390" width="200" height="100" rx="5" stroke="#fbbf24"/>
+          <rect x="1330" y="525" width="200" height="60" rx="5" stroke="#fb7185"/>
+        </g>
+        <g fill="#f8fafc" font-size="10.5" font-weight="700">
+          <text x="150" y="425">GlueCatalogVM</text><text x="400" y="425">MessageHub</text>
+          <text x="660" y="425">AwsTuiApp transaction</text><text x="930" y="425">AthenaPageVM</text>
+          <text x="1180" y="425">AthenaClient</text><text x="1430" y="425">Amazon Athena</text>
+          <text x="1430" y="561">Customer S3 result</text>
+        </g>
+        <g fill="#94a3b8" font-size="9">
+          <text x="150" y="451">TableRef + snapshot?</text><text x="400" y="451">typed handoff request</text>
+          <text x="660" y="451">validate identity · serialize</text><text x="660" y="470">mount · rollback on mutation failure</text>
+          <text x="930" y="451">prefill; user executes</text><text x="1180" y="451">public SDK operations</text>
+          <text x="1430" y="451">query engine</text>
+        </g>
+
+        <g fill="#0f172a" stroke-width="2">
+          <rect x="60" y="700" width="270" height="100" rx="5" stroke="#fbbf24"/>
+          <rect x="390" y="700" width="260" height="100" rx="5" stroke="#a78bfa"/>
+          <rect x="720" y="700" width="260" height="100" rx="5" stroke="#fbbf24"/>
+          <rect x="1050" y="700" width="270" height="100" rx="5" stroke="#22d3ee"/>
+        </g>
+        <g fill="#f8fafc" font-size="11" font-weight="700">
+          <text x="195" y="736">EMR run detail</text><text x="520" y="736">JobRunLogsVM</text>
+          <text x="850" y="736">S3 log objects</text><text x="1185" y="736">Textual log pane</text>
+        </g>
+        <g fill="#94a3b8" font-size="9.5">
+          <text x="195" y="762">exact application + run</text><text x="520" y="762">owned on-demand load</text>
+          <text x="850" y="762">attempts · driver · workers</text><text x="1185" y="762">object chips · gzip bounds · filter</text>
+        </g>
+      </g>
+    </svg>
+  </section>
+</main>
+</body>
+</html>

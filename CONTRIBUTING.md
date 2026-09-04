@@ -37,7 +37,9 @@ Scopes follow the layer names (`infra`, `domain`, `vm`, `services`, `ui`, `app`,
 
 ## 1.4. Pull requests
 
-- Branch from `main`. Open the PR early; mark draft until ready.
+- Branch feature, fix, and maintenance work from `develop`. Reserve `main`
+  for release-promotion PRs from `develop`. Open the PR early; mark draft
+  until ready.
 - CI must be green. Snapshot test changes need explicit review of the goldens diff.
 - New services go under `src/aws_tui/services/<name>/` and register in `src/aws_tui/composition.py`. See [docs/adding-a-service.md](docs/adding-a-service.md).
 - Adding an AWS API call? Run integration tests against `moto`. For S3-compatible quirks, add a note in [docs/connections.md](docs/connections.md).

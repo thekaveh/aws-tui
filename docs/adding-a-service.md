@@ -1,12 +1,15 @@
 # 1. Adding a new service
 
-> v0.8.0 ships the `s3` and `emr-serverless` services; EMR includes
+> The current tree ships `s3`, `emr-serverless`, `glue`, and `athena`;
+> Glue and Athena are linked by immutable table-navigation messages, and EMR includes
 > the read-only browser, job-run logs, and clone-job-run modal. This
 > doc is the pattern for the
-> next ones (EC2, IAM, Lambda, ...). For a richer reference than S3
+> next ones (EC2, IAM, Lambda, ...). For richer references than S3
 > (dedicated domain client + per-service VM subtree + per-service
 > UI widget tree + service-specific modal), read
-> `src/aws_tui/services/emr_serverless/` alongside `s3/`.
+> `src/aws_tui/services/emr_serverless/`,
+> `src/aws_tui/services/glue/`, and `src/aws_tui/services/athena/` alongside
+> `s3/`.
 
 aws-tui's service-plugin spine keeps service construction additive: a
 new folder under `src/aws_tui/services/<name>/` and one registration
@@ -62,7 +65,7 @@ needs a `construct → destruct → dispose` surface.
         descriptor: ClassVar[ServiceDescriptor] = ServiceDescriptor(
             id="ec2",
             label="EC2",
-            icon="•",
+            icon="EC2",
         )
 
         def __init__(self, *, aws_session: AwsSession, ...) -> None:
@@ -75,6 +78,12 @@ needs a `construct → destruct → dispose` surface.
             return InstancesPaneVM(self._aws_session, connection)
     ```
 
+    The service rail renders `descriptor.label` for service rows. The `icon`
+    field remains reserved descriptor metadata; Settings is the current
+    exception and renders its gear icon to keep the rail narrow. Do not choose
+    an emoji or assume terminal cell width as part of a service's navigation
+    contract.
+
 3. **Register** in `src/aws_tui/composition.py` (near the existing
    `s3_service = S3Service(...)` block):
 
@@ -84,9 +93,10 @@ needs a `construct → destruct → dispose` surface.
     ```
 
 4. **Add app-shell view routing** if the service does not return a
-   `DualPaneVM`. `AwsTuiApp` currently maps `emr-serverless` to
-   `EmrServerlessPage` and wraps every other service VM in `DualPane`.
-   Add the matching widget factory branch alongside that EMR route.
+   `DualPaneVM`. `build_service_view(...)` currently maps
+   `emr-serverless` to `EmrServerlessPage`, `glue` to `GluePage`, `athena` to
+   `AthenaPage`, and `s3` to `DualPane`. Add the matching widget factory branch and pass
+   it from both app mount paths.
 
 5. **Reuse existing VM families** where possible:
     - For storage-like services (lists with hierarchy): the file-
@@ -97,6 +107,16 @@ needs a `construct → destruct → dispose` surface.
     - For flat resource lists (EC2 instances, IAM users): write a new
       `ListPaneVM` under `vm/<service>/` and a corresponding widget
       family under `ui/widgets/<service>/`.
+    - Reuse `ServiceSourceHeader` and `ContextPicker` for shared source and
+      context controls, and `ServiceTabStrip` for a one-stop segmented view
+      selector. `ContextPicker` and specialized wrappers such as EMR's
+      `ApplicationPicker` must compose `OverlayOptionList`, retain their compact
+      trigger footprint while open, and leave parent and sibling regions
+      unchanged. Keep that transient overlay geometry in the Textual view.
+      Extend `FocusCoordinatorVM` instead of creating another focus authority.
+      Add an enclosing context frame only when multiple dependent controls form
+      one coherent region; a standalone source control does not require a
+      second frame.
 
 6. **Layer rules.** Services live one layer above domain, so they may
     import from `domain/`, `infra/`, and the public VM surface
@@ -108,11 +128,36 @@ needs a `construct → destruct → dispose` surface.
 
 7. **Tests.** Add unit tests under `tests/unit/services/<name>/` and,
     if your service touches AWS, integration tests under
-    `tests/integration/services/<name>/` against `moto` or a vendor
-    container.
+    `tests/integration/test_<name>_*.py`. Use a modeled fake for deterministic
+    behavior and a vendor container only where an independent implementation
+    materially strengthens the contract.
 
 8. **Update docs.** Add any vendor / API quirks to
-    `docs/connections.md`. Update the README's features list.
+   `docs/connections.md`. Update the README's features list.
+
+9. **Commands, palette, and cross-service state.** Declare service-specific
+   action IDs in `HintLegendVM`, including compact labels, complete shortcut /
+   effect / execution / prerequisite tooltip metadata, and deterministic
+   fitting priorities. The Commands pane remains one content row; reserve the
+   protected `[:] more` command-palette hint and `[q] quit` at narrow widths,
+   while hidden actions remain bound and palette-visible. Publish immutable
+   typed requests for app-level cross-service state; the composition root owns
+   delivery and Textual integration. Buttons, keys, and palette entries must
+   dispatch the same registered action rather than calling a VM through a
+   separate path.
+
+For cross-service links, publish an immutable VM message carrying plain
+identifiers and source identity. The app composition root resolves the
+destination connection and owns `RootVM` switching plus Textual mounting.
+`OpenS3LocationRequest` carries connection, region, URI, pane, and reveal
+intent. `OpenAthenaTableRequest` and `OpenGlueTableRequest` carry a shared
+`TableRef`; the Athena request may add a non-negative snapshot ID. `app.py`
+rejects missing connections or region mismatches, serializes table handoffs,
+and reuses registered service factories. Do not pass clients, VMs, widgets,
+raw SDK responses, or credentials in cross-service messages. A navigation
+handoff may prefill destination state, but it must document whether it executes
+or mutates anything; Glue's `Shift+Q` and `Shift+V` actions prefill bounded
+Athena SQL and do not execute it.
 
 ## 1.3. Layer rules cheat-sheet for services
 A service module **may** import from:
@@ -145,16 +190,11 @@ protocol applies.
 ## 1.5. Reference: the shipped services
 
 ### 1.5.1. S3
-`src/aws_tui/services/s3/service.py` is the first concrete service.
-Read it end-to-end (~80 lines):
+`src/aws_tui/services/s3/service.py` is the first concrete service. Read its
+`S3Service` implementation end to end:
 
-- `descriptor` declares `id = "s3"`, label `"S3"`, icon `"🪣"`
-  (U+1FAA3 BUCKET — true emoji codepoint, renders coloured in any
-  terminal with a modern emoji font). The icon literal in the
-  template at §2 (``"•"``) is a placeholder — the convention is to
-  pick an emoji glyph; see the docstring on
-  ``services/s3/service.py::S3Service.descriptor`` for the icon
-  rationale.
+- `descriptor` declares `id = "s3"`, label `"S3"`, and retained icon
+  metadata. The service rail renders the label, not the icon.
 - `supports()` accepts both `aws` and `s3-compatible` connections.
 - `build_vm(connection)` composes
   `DualPaneVM(left=PaneVM(S3FS), right=PaneVM(LocalFS))` each call.
@@ -167,17 +207,9 @@ Read it end-to-end (~80 lines):
 `src/aws_tui/services/emr_serverless/service.py` is the second
 shipped service and demonstrates the richer per-service pattern:
 
-- `descriptor` declares `id = "emr-serverless"`, label `"EMR"`, icon
-  `"🔥"` — U+1F525 FIRE (SMP single-codepoint, 2 cells, in
-  colour reliably across SF Mono / JetBrains Mono / Fira Code). See
-  the ``services/emr_serverless/service.py`` module docstring for
-  the full icon saga (PR #76 bare ``⚡`` U+26A1 → PR #77 ``⚡️``
-  with VS-16 → PR #79 ``🔥`` → PR #81 back to ``⚡️`` → PR #83
-  ``💥`` → reverted to ``🔥`` after ``💥`` rendered too small). The
-  documented "icon contract" future services should follow up front:
-  **SMP single-codepoint, no VS-16 dance** — the glyph must reliably
-  occupy 2 cells in monospace terminals
-  without a variation-selector trick.
+- `descriptor` declares `id = "emr-serverless"`, label `"EMR"`, and retained
+  fire-icon metadata. The service rail renders `"EMR"`; the icon does not
+  define service-row width or alignment.
 - `supports()` is AWS-only (`connection.kind == "aws"`).
 - Domain client lives at `domain/emr_serverless.py` (async
   `EmrServerlessClient` facade over `aioboto3`, with read-only
@@ -191,7 +223,9 @@ shipped service and demonstrates the richer per-service pattern:
 - UI widget tree at `ui/widgets/emr_serverless/`
   (`ApplicationPicker` + `JobRunsPane` + `JobRunDetailPane` +
   `JobRunLogsPane` + `EmrServerlessPage` composer +
-  `JobRunCloneModal` + `LogFilterModal`).
+  `JobRunCloneModal` + `LogFilterModal`). `ApplicationPicker` uses the shared
+  screen-overlaid option list, so opening or closing it leaves the runs, detail,
+  and logs regions unchanged.
 - Three independent production `set_interval` pollers (apps 60 s /
   runs 60 s with terminal-state suppression / detail 30 s). Demo mode
   uses shorter 30 s / 30 s / 5 s cadences so sample data feels live.
@@ -208,3 +242,66 @@ shipped service and demonstrates the richer per-service pattern:
   a human label in the Commands strip. Future services with
   their own actions follow the same three-touch-point pattern:
   default binding + service-actions tuple + action label.
+
+### 1.5.3. AWS Glue
+`src/aws_tui/services/glue/service.py` is the third shipped service and
+the compact read-only page reference:
+
+- `descriptor` declares `id = "glue"` and `supports()` accepts only
+  AWS connections.
+- Every `build_vm(connection)` returns a fresh `GluePageVM`; the
+  long-lived service retains only `ServiceSelectionStore`, keyed by
+  service id, connection name, and region.
+- `domain/glue.py` owns boto response mapping and pagination for
+  databases/tables/partitions/statistics, jobs/runs, and crawlers.
+  Raw boto responses never enter the VM or view layers.
+- `vm/glue/` separates Catalog, Jobs, and Crawlers behavior; the
+  Textual tree lives under `ui/widgets/glue/`. `GlueCatalogVM` additionally
+  owns `GlueIcebergVM`; it binds only when `TableDetail.table_format` is
+  `ICEBERG`.
+- `glue_client_factory` injects profile-keyed in-memory clients for
+  tests and demo mode without changing production composition.
+- `_ContextualIcebergInspector` revalidates a remembered enabled Athena
+  workgroup in the same connection and region, then constructs
+  `IcebergInspector` with a matching `QueryContext`. Each metadata tab is
+  loaded independently, so one denied or malformed metadata table does not
+  erase successful siblings.
+- The selected table's S3 handoff is an immutable message, not a
+  service-to-service import. Its app subscriber resolves the exact
+  connection name, verifies the region, rebuilds S3 through `RootVM`,
+  navigates the requested pane, and focuses it.
+- `Shift+Q` opens a visible selected table in Athena with exact quoted
+  `SELECT * ... LIMIT 5` SQL. `Shift+V`, the corresponding palette entry, and
+  the Iceberg arrow button open a visible selected snapshot with
+  `FOR VERSION AS OF <snapshot-id>`. Both actions use the same registered action
+  and typed request path, preserve exact source identity, and never execute the
+  generated query.
+
+### 1.5.4. Amazon Athena
+`AthenaService` in `src/aws_tui/services/athena/service.py` is the
+query-service reference:
+
+- `descriptor` declares `id = "athena"`; `supports()` accepts only AWS
+  connections. A `build_vm(connection)` call makes a fresh `AthenaPageVM`,
+  while `ServiceSelectionStore` retains only connection- and region-scoped
+  UI selections.
+- `domain/athena.py` performs one paginated AWS request at a time and maps
+  workgroups, catalogs, databases, tables, query history/detail, runtime
+  statistics, result pages, named queries, and prepared statements. It owns
+  the `start_query_execution` / `stop_query_execution` boundary; views and
+  VMs never receive raw boto responses.
+- `domain/sql_policy.py` parses one Athena-dialect statement before dispatch.
+  It accepts `SELECT` roots and set operations (including `VALUES` operands),
+  the implemented bounded `SHOW` and `DESCRIBE` forms, and non-`ANALYZE`
+  `EXPLAIN` of an allowed statement. Standalone `VALUES` is rejected. The
+  parser is defense in depth, not an authorization system.
+- `vm/athena/` separates Query, History, Results, and Saved behavior; the
+  Textual widget tree lives in `ui/widgets/athena/`. A result-to-S3 handoff is
+  an `OpenS3LocationRequest` carrying the execution's exact connection and
+  region, not an Athena-to-S3 import.
+- `AthenaPageVM.open_table(...)` discovers the exact catalog/database in
+  bounded pages, updates context, and inserts a quoted `SELECT * ... LIMIT 5`
+  statement. A snapshot request adds `FOR VERSION AS OF <id>`. It never
+  executes the generated SQL. `open_table_in_glue()` publishes
+  `OpenGlueTableRequest` only when the current read-only SQL exposes one
+  unambiguous table reference.

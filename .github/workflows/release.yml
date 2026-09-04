@@ -4,7 +4,8 @@ name: release
 #
 # - ``push: tags: ['v*']`` — the routine release path. Tag a
 #   commit ``vX.Y.Z`` and push: the pipeline runs verify →
-#   smoke-install → pypi → github-release → homebrew-bump.
+#   platform-tests + lowest-supported-dependencies + smoke-install → pypi →
+#   github-release → homebrew-bump.
 #
 # - ``workflow_dispatch`` with ``target = testpypi | pypi`` — the
 #   dry-run lane. ``testpypi`` publishes to test.pypi.org and
@@ -45,23 +46,26 @@ jobs:
   # ── Gate: tag matches __version__ + green tests + clean build ──────────
   verify:
     name: verify (tag ↔ version, tests, build)
+    timeout-minutes: 45
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
       target: ${{ steps.target.outputs.target }}
       tag_sha: ${{ steps.version.outputs.tag_sha }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - name: install supported Python versions
         run: uv python install 3.11 3.12 3.13
+      - name: install libcairo2
+        run: sudo apt-get update && sudo apt-get install -y libcairo2
       - name: sync
-        run: uv sync --frozen --python 3.12
+        run: uv sync --locked --python 3.12 --group docs
 
       # Resolve the target channel: ``testpypi`` for the rehearsal
       # ``workflow_dispatch``, ``pypi`` for everything else (tag
@@ -87,7 +91,7 @@ jobs:
           PUBLISH_VERSION="$PKG_VERSION"
           if [[ "${{ steps.target.outputs.target }}" == "testpypi" ]]; then
             PUBLISH_VERSION="${PKG_VERSION}.dev${GITHUB_RUN_NUMBER}"
-            PKG_VERSION="$PKG_VERSION" PUBLISH_VERSION="$PUBLISH_VERSION" uv run --python 3.12 python -c 'import os; from pathlib import Path; path = Path("src/aws_tui/version.py"); text = path.read_text(); old = "__version__ = \"" + os.environ["PKG_VERSION"] + "\""; new = "__version__ = \"" + os.environ["PUBLISH_VERSION"] + "\""; path.write_text(text.replace(old, new))'
+            uv run --python 3.12 python -m scripts.release_version stage-testpypi "$PKG_VERSION" "$PUBLISH_VERSION"
           fi
           echo "version=$PUBLISH_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag_sha=$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -110,6 +114,7 @@ jobs:
           fi
           TAG_SHA="$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || true)"
           if [[ "${{ steps.target.outputs.target }}" == "pypi" ]]; then
+            uv run --python 3.12 python -m scripts.release_version check-changelog "$PKG_VERSION"
             if [[ -z "$TAG_SHA" ]]; then
               echo "::error::missing release tag '$TAG_REF'" >&2
               exit 1
@@ -121,18 +126,18 @@ jobs:
             echo "release tag $TAG_REF points to main history ($TAG_SHA)"
           fi
 
-      - name: pytest supported Python matrix
+      - name: pytest supported Python edge versions
         run: |
-          for py in 3.11 3.12 3.13; do
-            uv sync --frozen --python "$py"
+          for py in 3.11 3.13; do
+            uv sync --locked --python "$py" --group docs
             uv run --python "$py" pytest tests/unit tests/integration -v
           done
-          uv sync --frozen --python 3.12
+          uv sync --locked --python 3.12 --group docs
 
       - name: pytest coverage (unit + in-process integration)
         run: uv run --python 3.12 pytest tests/unit tests/integration --cov=aws_tui --cov-report=term-missing --cov-report=xml
 
-      - name: pytest (MinIO integration tier)
+      - name: pytest (S3Mock integration tier)
         run: uv run --python 3.12 pytest -m integration -v
 
       - name: pytest (snapshot tier)
@@ -144,7 +149,7 @@ jobs:
       - name: export locked requirements
         run: |
           for py in 3.11 3.12 3.13; do
-            uv export --frozen --python "$py" --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit-$py.txt"
+            uv export --locked --all-groups --python "$py" --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit-$py.txt"
           done
 
       - name: pip-audit (locked dependencies)
@@ -156,25 +161,108 @@ jobs:
       - name: pre-commit (all hooks)
         run: uv run --python 3.12 pre-commit run --all-files --show-diff-on-failure
 
+      - name: documentation drift and strict build
+        run: make docs-check
+
+      - name: pytest (documentation contracts)
+        run: uv run --python 3.12 pytest tests/docs -v
+
       - name: layer rules
         run: ./scripts/check-layers.sh
 
       - name: build wheel + sdist
         run: uv build --no-build-isolation
 
+      - name: validate artifact contents
+        run: uv run python -m scripts.check_dist dist/
+
       - name: twine check
         run: uv run twine check dist/*
 
       - name: upload built artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
           retention-days: 7
 
+  # ── Gate: behavioral tests on non-Linux supported platforms ───────────
+  platform-tests:
+    name: platform tests (${{ matrix.os }} / py3.12)
+    timeout-minutes: 30
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: install Python 3.12
+        run: uv python install 3.12
+      - name: sync
+        run: uv sync --locked --python 3.12
+      - name: pytest platform behavior
+        run: uv run --python 3.12 pytest tests/unit tests/integration -v
+
+  # ── Gate: minimum runtime dependency models support S3 conditions ──────
+  lowest-supported-dependencies:
+    name: lowest supported dependencies (py3.11)
+    timeout-minutes: 20
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: install Python 3.11
+        run: uv python install 3.11
+      - name: install declared minimum dependencies
+        shell: bash
+        run: |
+          uv venv --python 3.11 lowest-supported-venv
+          PY="lowest-supported-venv/bin/python"
+          uv pip install --resolution lowest-direct --python "$PY" .
+          uv pip install --python "$PY" pytest pytest-asyncio "pytest-timeout>=2.4"
+      - name: assert required S3 request model members
+        shell: bash
+        run: |
+          lowest-supported-venv/bin/python - <<'PY'
+          import aws_tui
+          import botocore.session
+
+          model = botocore.session.get_session().get_service_model("s3")
+          required_members = {
+              "CopyObject": {"CopySourceIfMatch"},
+              "DeleteObject": {"IfMatch", "IfMatchLastModifiedTime", "IfMatchSize"},
+          }
+          for operation_name, members in required_members.items():
+              input_shape = model.operation_model(operation_name).input_shape
+              assert input_shape is not None, f"{operation_name} has no input shape"
+              missing = members - set(input_shape.members)
+              assert not missing, f"{operation_name} lacks required members: {sorted(missing)}"
+          PY
+      - name: exercise minimum dependency runtime
+        run: |
+          lowest-supported-venv/bin/python -m pytest \
+            tests/minimum_runtime/test_dependency_floors.py \
+            tests/unit/infra/test_connection_resolver.py \
+            tests/unit/infra/test_keychain.py \
+            tests/unit/test_app_sanity.py \
+            tests/unit/domain/test_sql_policy.py \
+            tests/unit/vm/test_vmx_smoke.py \
+            -q
+
   # ── Gate: clean install from the built wheel on every supported OS ─────
   smoke-install:
     name: smoke install (${{ matrix.os }} / py${{ matrix.python }})
+    timeout-minutes: 20
     needs: verify
     strategy:
       fail-fast: false
@@ -183,11 +271,11 @@ jobs:
         python: ["3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -206,11 +294,26 @@ jobs:
           fi
           uv pip install --python "$PY" dist/*.whl
           "$AWS_TUI" --version
+          "$AWS_TUI" --help >/dev/null
+          "$PY" -m aws_tui --version
+
+      - name: install built sdist and run console entry point
+        if: matrix.os == 'ubuntu-24.04' && matrix.python == '3.12'
+        shell: bash
+        run: |
+          uv venv --python 3.12 sdist-venv
+          PY="sdist-venv/bin/python"
+          AWS_TUI="sdist-venv/bin/aws-tui"
+          uv pip install --python "$PY" dist/*.tar.gz
+          "$AWS_TUI" --version
+          "$AWS_TUI" --help >/dev/null
+          "$PY" -m aws_tui --version
 
   # ── PyPI / TestPyPI publish via Trusted Publisher (OIDC) ───────────────
   publish-pypi:
     name: publish (${{ needs.verify.outputs.target }})
-    needs: [verify, smoke-install]
+    timeout-minutes: 15
+    needs: [verify, platform-tests, lowest-supported-dependencies, smoke-install]
     runs-on: ubuntu-24.04
     # Environment gates the publish step on the maintainer's
     # approval click. ``pypi`` is configured with a required
@@ -227,27 +330,28 @@ jobs:
       contents: read
     steps:
       - name: download built artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
 
       - name: publish to TestPyPI
         if: needs.verify.outputs.target == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
           attestations: true
 
       - name: publish to PyPI
         if: needs.verify.outputs.target == 'pypi'
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           attestations: true
 
   # ── GitHub Release with the per-version CHANGELOG section ──────────────
   publish-github:
     name: github release
+    timeout-minutes: 15
     needs: [verify, publish-pypi]
     # Only on real PyPI publishes — testpypi is a rehearsal and
     # shouldn't leave artifacts on the Releases tab.
@@ -258,10 +362,10 @@ jobs:
       # create the release and attach the wheel + sdist.
       contents: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: download built artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
@@ -379,13 +483,16 @@ jobs:
   # ── Open a bump PR against the Homebrew tap ────────────────────────────
   bump-homebrew:
     name: homebrew bump
+    timeout-minutes: 15
     needs: [verify, publish-pypi, publish-github]
     # Same gate as github-release — testpypi rehearsal should not
     # touch the Homebrew tap.
-    if: needs.verify.outputs.target == 'pypi'
+    # Keep this disabled until the tap repo, formula, and cross-repo token
+    # have completed their one-time bootstrap.
+    if: needs.verify.outputs.target == 'pypi' && vars.HOMEBREW_TAP_ENABLED == 'true'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: thekaveh/homebrew-aws-tui
           # ``HOMEBREW_TAP_TOKEN`` is a fine-grained Personal
@@ -393,6 +500,7 @@ jobs:
           # ``Pull requests: read & write`` on the tap repo only.
           # See docs/RELEASING.md for the one-time setup.
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          persist-credentials: false
           path: tap
 
       - name: check formula exists
@@ -408,7 +516,7 @@ jobs:
 
       - name: download built artifacts
         if: steps.formula.outputs.exists == 'true'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
@@ -467,7 +575,7 @@ jobs:
 
       - name: open bump PR
         if: steps.formula.outputs.exists == 'true'
-        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           path: tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}

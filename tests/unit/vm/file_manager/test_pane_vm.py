@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import cast
 
@@ -10,6 +11,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     FileEntry,
@@ -19,9 +21,9 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderError,
     ProviderUnreachableError,
+    ThrottledError,
 )
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 def _hub() -> MessageHub[Message]:
@@ -64,7 +66,10 @@ class _EndpointSecretFailureFS:
     async def mkdir(self, _path: PathRef) -> None:
         raise NotImplementedError
 
-    async def delete(self, _path: PathRef) -> None:
+    async def delete(self, _path: PathRef, *, expected_etag: str | None = None) -> None:
+        raise NotImplementedError
+
+    async def delete_empty_directory(self, _path: PathRef) -> None:
         raise NotImplementedError
 
     async def rename(self, _src: PathRef, _dst: PathRef) -> None:
@@ -82,6 +87,7 @@ class _EndpointSecretFailureFS:
         *,
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
+        overwrite: bool = False,
     ) -> None:
         raise NotImplementedError
 
@@ -96,6 +102,47 @@ async def test_pane_setup_lists_root() -> None:
     assert pane.state == PaneState.IDLE
     pane.dispose()
     assert pane.status == ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_pane_dispose_clears_filtered_projection_before_entries() -> None:
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    assert pane.filtered_entries
+
+    pane.dispose()
+
+    assert pane.entries == ()
+    assert pane.filtered_entries == ()
+
+
+@pytest.mark.asyncio
+async def test_stale_reload_cannot_publish_after_provider_swap() -> None:
+    old = InMemoryFS()
+    new = InMemoryFS()
+    await old.write_stream(PathRef(("old.txt",)), _astream(b"old"))
+    await new.write_stream(PathRef(("new.txt",)), _astream(b"new"))
+    old_list = old.list
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_list(path: PathRef) -> list[FileEntry]:
+        started.set()
+        await release.wait()
+        return await old_list(path)
+
+    old.list = blocked_list  # type: ignore[method-assign]
+    pane = PaneVM(provider=old, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane.construct()
+    stale = asyncio.create_task(pane.refresh())
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await pane.swap_provider(new, identity_label="new")
+    release.set()
+    await stale
+
+    assert [entry.entry.name for entry in pane.entries] == ["new.txt"]
+    pane.dispose()
 
 
 @pytest.mark.asyncio
@@ -212,9 +259,9 @@ async def test_pane_delete_marked_ignores_manually_marked_parent_link() -> None:
             super().__init__()
             self.deleted: list[PathRef] = []
 
-        async def delete(self, path: PathRef) -> None:
+        async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
             self.deleted.append(path)
-            await super().delete(path)
+            await super().delete(path, expected_etag=expected_etag)
 
     fs = _RecordingFS()
     await fs.mkdir(PathRef(("b",)))
@@ -242,12 +289,12 @@ async def test_pane_delete_marked_partial_failure_aggregates_and_reloads() -> No
     though the first N-1 were already gone."""
 
     class _FailOnAlpha(InMemoryFS):
-        async def delete(self, path: PathRef) -> None:
+        async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
             # Refuse to delete ``a.txt`` specifically; the other
             # marked entries still complete.
             if path.name == "a.txt":
                 raise PermissionDeniedError("forbidden a.txt")
-            await super().delete(path)
+            await super().delete(path, expected_etag=expected_etag)
 
     fs = _FailOnAlpha()
     await fs.mkdir(PathRef(("b",)))
@@ -269,6 +316,39 @@ async def test_pane_delete_marked_partial_failure_aggregates_and_reloads() -> No
     names = [e.entry.name for e in pane.entries]
     assert "c.json" not in names
     assert "a.txt" in names
+    pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_delete_marked_cancellation_drains_final_reload() -> None:
+    class _BlockingReloadFS(InMemoryFS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.list_calls = 0
+            self.reload_started = asyncio.Event()
+            self.release_reload = asyncio.Event()
+
+        async def list(self, path: PathRef) -> list[FileEntry]:
+            self.list_calls += 1
+            if self.list_calls == 2:
+                self.reload_started.set()
+                await self.release_reload.wait()
+            return await super().list(path)
+
+    fs = _BlockingReloadFS()
+    await fs.write_stream(PathRef(("delete-me.txt",)), _astream(b"payload"))
+    pane = await _make_pane(fs)
+    pane.toggle_select_command.execute()
+    deletion = asyncio.create_task(pane.delete_marked())
+    await asyncio.wait_for(fs.reload_started.wait(), timeout=1)
+
+    deletion.cancel()
+    fs.release_reload.set()
+    with pytest.raises(asyncio.CancelledError):
+        await deletion
+
+    assert pane.state is PaneState.EMPTY
+    assert pane.entries == ()
     pane.dispose()
 
 
@@ -326,14 +406,14 @@ class _UnreachableFS:
         raise NotFoundError("never")
 
     async def mkdir(self, _path: PathRef) -> None: ...
-    async def delete(self, _path: PathRef) -> None: ...
+    async def delete(self, _path: PathRef, *, expected_etag: str | None = None) -> None: ...
+    async def delete_empty_directory(self, _path: PathRef) -> None: ...
     async def rename(self, _s: PathRef, _d: PathRef) -> None: ...
 
     async def read_stream(
         self, _path: PathRef, *, chunk_size: int = 8 * 1024 * 1024
     ) -> AsyncIterator[bytes]:  # pragma: no cover
         raise NotFoundError("never")
-        yield b""
 
     async def write_stream(  # pragma: no cover
         self,
@@ -342,6 +422,7 @@ class _UnreachableFS:
         *,
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
+        overwrite: bool = False,
     ) -> None: ...
 
 
@@ -360,6 +441,11 @@ class _ErrorFS(_UnreachableFS):
         raise ProviderError("boom")
 
 
+class _ThrottledFS(_UnreachableFS):
+    async def list(self, _path: PathRef) -> list[FileEntry]:
+        raise ThrottledError("slow down")
+
+
 class _EmptyBucketFS(_UnreachableFS):
     async def list(self, _path: PathRef) -> list[FileEntry]:
         raise NotFoundError("bucket-empty")
@@ -371,6 +457,15 @@ async def test_pane_unreachable_state() -> None:
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.UNREACHABLE
+    pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pane_throttling_uses_generic_error_state() -> None:
+    pane = PaneVM(provider=_ThrottledFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane.construct()
+    await pane.setup()
+    assert pane.state == PaneState.ERROR
     pane.dispose()
 
 
@@ -409,15 +504,6 @@ async def test_pane_root_notfound_renders_empty() -> None:
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.EMPTY
-    pane.dispose()
-
-
-@pytest.mark.asyncio
-async def test_pane_set_auth_required_external() -> None:
-    fs = await _seed_fs()
-    pane = await _make_pane(fs)
-    pane.set_auth_required()
-    assert pane.state == PaneState.AUTH_REQUIRED
     pane.dispose()
 
 

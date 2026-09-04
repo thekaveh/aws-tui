@@ -9,6 +9,7 @@ ships the static cadences from spec §6)."""
 from __future__ import annotations
 
 import contextlib
+from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
@@ -16,20 +17,27 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 if TYPE_CHECKING:
     from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
+from textual.widgets import OptionList
 from vmx import Message, MessageHub
 
+from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui import notifications
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
 from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
+from aws_tui.ui.widgets.overlay_option_list import PickerOpenIntent
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 
 class EmrServerlessPage(Widget):
@@ -48,14 +56,46 @@ class EmrServerlessPage(Widget):
         height: 1fr;
         layout: vertical;
     }
-    /* Apps box grows in-place when the application picker is open
-       (its OptionList drops down inside the box). ``min-height: 3``
-       holds the closed-state row height; ``height: auto`` lets the
-       box expand up to the column's available space, with
-       JobRunsPane ``1fr`` shrinking to make room. */
+    /* Source + application share one bordered context box. */
     EmrServerlessPage > .emr-left-column > .emr-app-box {
         height: auto;
-        min-height: 3;
+        min-height: 2;
+        layout: vertical;
+    }
+    EmrServerlessPage .emr-app-box > .emr-context-row {
+        width: 1fr;
+        height: auto;
+        min-height: 1;
+    }
+    EmrServerlessPage .emr-context-row > ServiceSourceHeader {
+        width: 2fr;
+        height: auto;
+        min-height: 1;
+    }
+    EmrServerlessPage .emr-context-row > ApplicationPicker {
+        width: 3fr;
+    }
+    EmrServerlessPage .emr-context-row > ServiceSourceHeader > ContextPicker {
+        height: 1;
+        min-height: 1;
+        border: none;
+    }
+    EmrServerlessPage .emr-app-box ContextPicker > .context-picker-trigger,
+    EmrServerlessPage .emr-app-box ApplicationPicker > .app-trigger {
+        height: 1;
+        border: none;
+        padding: 0 1;
+    }
+    EmrServerlessPage .emr-app-box ServiceSourceHeader
+        > ContextPicker > .context-picker-trigger {
+        padding: 0;
+    }
+    EmrServerlessPage .emr-context-row > ServiceSourceHeader
+        ContextPicker > OverlayOptionList {
+        width: 30;
+    }
+    EmrServerlessPage .emr-app-box ApplicationPicker > .app-trigger > Static {
+        height: 1;
     }
     EmrServerlessPage > .emr-left-column > JobRunsPane {
         height: 1fr;
@@ -81,13 +121,6 @@ class EmrServerlessPage(Widget):
         Binding("a", "open_application_picker", "Apps"),
         Binding("tab", "cycle_panes_forward", "Tab"),
         Binding("shift+tab", "cycle_panes_back", "←Tab"),
-        # ``emr.clone`` action id — re-runs the currently selected
-        # job with all fields pre-populated. The ``c`` keystroke
-        # overlaps with the file-manager's ``pane.copy`` but the two
-        # never share a focus context (the EMR page is not a
-        # DualPaneVM host), so the binding is unambiguous at the
-        # widget scope.
-        Binding("c", "clone_selected_run", "Clone"),
     ]
 
     def __init__(
@@ -95,6 +128,8 @@ class EmrServerlessPage(Widget):
         vm: EmrServerlessPageVM,
         *,
         hub: MessageHub[Message],
+        keymap: KeymapStore | None = None,
+        source_candidates: tuple[ServiceSourceContext, ...] = (),
         focus_coordinator: FocusCoordinatorVM | None = None,
         id: str | None = None,
         classes: str | None = None,
@@ -102,24 +137,46 @@ class EmrServerlessPage(Widget):
         super().__init__(id=id, classes=classes)
         self._vm: EmrServerlessPageVM = vm
         self._hub: MessageHub[Message] = hub
+        self._keymap = keymap or KeymapStore()
+        self._source_candidates = source_candidates
         self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
+        self._source_header: ServiceSourceHeader | None = None
         self._picker: ApplicationPicker | None = None
         self._left: JobRunsPane | None = None
         self._right_detail: JobRunDetailPane | None = None
         self._right_logs: JobRunLogsPane | None = None
         self._runs_tick_counter: int = 0
+        self._picker_open_intent = PickerOpenIntent()
 
     def compose(self) -> ComposeResult:
-        self._picker = ApplicationPicker(self._vm.applications, id="emr-app-picker")
+        self._picker = ApplicationPicker(
+            self._vm.applications,
+            open_intent=self._picker_open_intent,
+            id="emr-app-picker",
+        )
         self._left = JobRunsPane(self._vm.job_runs, id="emr-runs-pane")
         self._right_detail = JobRunDetailPane(self._vm.job_run_detail, id="emr-detail-pane")
-        self._right_logs = JobRunLogsPane(self._vm.job_run_logs, id="emr-logs-pane")
+        self._right_logs = JobRunLogsPane(
+            self._vm.job_run_logs,
+            keymap=self._keymap,
+            id="emr-logs-pane",
+        )
+        self._source_header = ServiceSourceHeader(
+            self._vm.source,
+            candidates=self._source_candidates,
+            open_intent=self._picker_open_intent,
+            id="emr-source-header",
+        )
         # Page layout — 1fr:2fr horizontal split with LEFT column
         # containing the picker + runs pane, and RIGHT column
         # containing detail (top, 1fr) + logs (bottom, 1fr) in a
         # 50/50 vertical split.
         with Vertical(classes="emr-left-column"):
-            with Horizontal(classes="emr-app-box", id="emr-app-box"):
+            with (
+                Vertical(classes="emr-app-box", id="emr-app-box"),
+                Horizontal(classes="emr-context-row"),
+            ):
+                yield self._source_header
                 yield self._picker
             yield self._left
         with Vertical(classes="emr-right-column"):
@@ -132,20 +189,13 @@ class EmrServerlessPage(Widget):
         # ``:focus-within`` border-accent style is in the per-theme
         # .tcss so the box highlights when the picker is open.
         try:
-            box = self.query_one("#emr-app-box", Horizontal)
-            # Singular ``application`` reads better in the UI —
-            # the box shows the CURRENT app (one) and a dropdown to
-            # switch to a different one; it's not a list of apps.
-            box.border_title = "application"
+            box = self.query_one("#emr-app-box", Vertical)
+            box.border_title = "source / application"
         except Exception:
             pass
-        # NOTE: ``ContentHostVM.set_content`` already dispatches
-        # ``EmrServerlessPageVM.setup()`` as a background asyncio
-        # task when the page VM is adopted (see PR #67 — and the
-        # follow-up of the maintenance loop confirming the double
-        # dispatch). We do NOT re-launch a second setup worker here:
-        # that would race the host's task and double the boot-time
-        # ``list_applications`` API call on every EMR mount.
+        # ``ContentHostVM.set_content`` already dispatches page setup when the
+        # VM is adopted. Launching another setup worker here would race the
+        # host and duplicate the boot-time ``list_applications`` request.
         # Set up the three pollers per spec §6.
         # Poller cadence — user feedback (post-PR-#93, restated):
         # "the EMR page still refreshes quite a lot so many times
@@ -187,6 +237,13 @@ class EmrServerlessPage(Widget):
         if self._left is not None:
             self.call_after_refresh(self._maybe_focus_left)
 
+    def on_unmount(self) -> None:
+        self._picker_open_intent.cancel()
+        if self._source_header is not None:
+            self._source_header.picker.close(refocus=False)
+        if self._picker is not None:
+            self._picker.close(refocus=False)
+
     def _maybe_focus_left(self) -> None:
         """Auto-focus the LEFT pane on initial page mount UNLESS a
         widget outside this page (typically the NavMenu rail) already
@@ -216,9 +273,19 @@ class EmrServerlessPage(Widget):
                 # Textual focus is on the rail. Leave it alone.
                 return
         if textual_focused is None or self.has_focus_within:
+            if self._focus_coordinator is not None:
+                self._focus_coordinator.project_focused_slot(FocusSlot.EMR_RUNS)
             self._left.focus()
 
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        if event.widget is self.app.focused:
+            self._sync_focused_widget(event.widget)
+
     # ── Public accessors ────────────────────────────────────────────────────
+
+    @property
+    def vm(self) -> EmrServerlessPageVM:
+        return self._vm
 
     @property
     def left_pane(self) -> JobRunsPane | None:
@@ -230,29 +297,19 @@ class EmrServerlessPage(Widget):
 
     @property
     def right_pane(self) -> JobRunLogsPane | None:
-        """RIGHT pane (job-run logs — the focusable half of the right
-        column). Public for the same reason as :attr:`left_pane`.
-
-        Note: the detail pane is the top half of the right column but
-        is non-focusable and not part of the 2-slot Tab cycle, so it's
-        not returned here. Callers can reach it via ``right_detail`` if
-        needed for testing or direct access."""
+        """RIGHT-bottom job-run logs pane, one slot in the page focus ring."""
         return self._right_logs
 
     @property
     def right_detail(self) -> JobRunDetailPane | None:
-        """RIGHT-top pane (job-run detail — the passive, non-focusable
-        display half of the right column). Exposed for testing/debugging;
-        the main Tab cycle is only LEFT ↔ RIGHT-logs."""
+        """RIGHT-top job-run detail pane, one slot in the page focus ring."""
         return self._right_detail
 
     # ── Pollers ─────────────────────────────────────────────────────────────
 
     def _tick_applications(self) -> None:
-        # ``exclusive=True`` so a slow ``list_applications`` doesn't
-        # have a second tick land while the first is mid-flight —
-        # Textual silently skips overlapping ticks rather than
-        # queueing them, which is the right semantic for a poller.
+        # The latest tick supersedes any in-flight refresh in this group;
+        # cancellation guards keep the older result from mutating the VM.
         self.run_worker(
             self._vm.refresh_focused("applications"), exclusive=True, group="emr-poll-apps"
         )
@@ -261,13 +318,13 @@ class EmrServerlessPage(Widget):
         # Cadence-decay: when no active runs, only refresh every 6th tick (~6 min).
         if not self._vm.job_runs.has_active_runs() and self._poll_runs_decay():
             return
-        self.run_worker(self._vm.job_runs.refresh(), exclusive=True, group="emr-poll-runs")
+        self.run_worker(self._vm.refresh_job_runs(), exclusive=True, group="emr-poll-runs")
 
     def _tick_detail(self) -> None:
         # Only poll while the run is non-terminal.
         if self._vm.job_run_detail.is_terminal_state():
             return
-        self.run_worker(self._vm.job_run_detail.refresh(), exclusive=True, group="emr-poll-detail")
+        self.run_worker(self._vm.refresh_job_run_detail(), exclusive=True, group="emr-poll-detail")
 
     def _poll_runs_decay(self) -> bool:
         """Return True if THIS tick should be skipped (6:1 decay)."""
@@ -280,18 +337,42 @@ class EmrServerlessPage(Widget):
         if self._picker is not None:
             self._picker.toggle_open()
 
-    def action_cycle_application_forward(self) -> None:
-        """Select the next application in the picker's list
-        (wraps at the end). Drives the ``Shift+S`` "switch app"
-        affordance — user feedback: the keypress should ACTUALLY
-        switch, not just open the picker. The picker is still
-        opened explicitly with ``a``.
-        """
-        self.run_worker(
-            self._vm.cycle_application(1),
-            exclusive=True,
-            group="emr-cycle-app",
-        )
+    def on_context_picker_open_changed(self, event: ContextPicker.OpenChanged) -> None:
+        event.stop()
+        self._queue_picker_reconcile(event.picker, event.is_open, event.intent_epoch)
+
+    def _queue_picker_reconcile(
+        self,
+        picker: Widget,
+        is_open: bool,
+        intent_epoch: int | None,
+    ) -> None:
+        if not self._picker_coordination_available():
+            return
+        epoch = intent_epoch
+        if epoch is None:
+            epoch = self._picker_open_intent.observe(picker, is_open)
+        self.call_after_refresh(partial(self._reconcile_open_pickers, epoch))
+
+    def _reconcile_open_pickers(self, epoch: int) -> None:
+        if not self._picker_coordination_available() or not self._picker_open_intent.is_current(
+            epoch
+        ):
+            return
+        pickers: tuple[ContextPicker | ApplicationPicker, ...] = tuple(self.query(ContextPicker))
+        if self._picker is not None:
+            pickers = (*pickers, self._picker)
+        desired = self._picker_open_intent.desired
+        if not isinstance(desired, ContextPicker | ApplicationPicker) or (
+            not desired.is_attached or not desired.is_open
+        ):
+            desired = None
+        for picker in pickers:
+            if picker is not desired and picker.is_open:
+                picker.close(refocus=False)
+
+    def _picker_coordination_available(self) -> bool:
+        return self.is_running and self.is_attached and self.display
 
     def on_application_picker_application_committed(
         self, event: ApplicationPicker.ApplicationCommitted
@@ -311,11 +392,76 @@ class EmrServerlessPage(Widget):
             group="emr-select-app",
         )
 
+    def on_application_picker_open_changed(self, event: ApplicationPicker.OpenChanged) -> None:
+        event.stop()
+        self._queue_picker_reconcile(event.picker, event.is_open, event.intent_epoch)
+
     def action_cycle_panes_forward(self) -> None:
         self._cycle("right")
 
     def action_cycle_panes_back(self) -> None:
         self._cycle("left")
+
+    def activate_focused(self) -> bool:
+        """Activate the focused EMR selector or pane."""
+        focused = self.app.focused
+        if focused is None or not self._contains_focus(focused):
+            return False
+        if isinstance(focused, OptionList):
+            if self._picker is not None and self._is_within(focused, self._picker):
+                self._picker.action_commit()
+            else:
+                focused.action_select()
+            return True
+        if self._source_header is not None and self._is_within(focused, self._source_header):
+            self._source_header.open()
+            return True
+        if self._picker is not None and self._is_within(focused, self._picker):
+            self._picker.action_activate()
+            return True
+        if self._left is not None and self._is_within(focused, self._left):
+            self._left.action_commit_selection()
+            return True
+        if self._right_logs is not None and self._is_within(focused, self._right_logs):
+            self._right_logs.action_load()
+            return True
+        # Detail has no activation action but must consume Enter.
+        return self._right_detail is not None and self._is_within(focused, self._right_detail)
+
+    def move_focused(self, delta: int) -> bool:
+        """Move inside, or open, the currently focused EMR selector or pane."""
+        focused = self.app.focused
+        if focused is None or not self._contains_focus(focused):
+            return False
+        if isinstance(focused, OptionList):
+            if delta < 0:
+                focused.action_cursor_up()
+            else:
+                focused.action_cursor_down()
+            return True
+        if isinstance(focused, ContextPicker):
+            focused.open()
+            return True
+        if self._source_header is not None and self._is_within(focused, self._source_header):
+            self._source_header.open()
+            return True
+        if self._picker is not None and self._is_within(focused, self._picker):
+            self._picker.toggle_open()
+            return True
+        if self._left is not None and self._is_within(focused, self._left):
+            if delta < 0:
+                self._left.action_cursor_up()
+            else:
+                self._left.action_cursor_down()
+            return True
+        if self._right_logs is not None and self._is_within(focused, self._right_logs):
+            if delta < 0:
+                self._right_logs.action_scroll_up()
+            else:
+                self._right_logs.action_scroll_down()
+            return True
+        # Detail has no cursor action but must consume Up and Down.
+        return self._right_detail is not None and self._is_within(focused, self._right_detail)
 
     async def action_clone_selected_run(self) -> None:
         """Open the clone modal pre-populated from the currently-
@@ -363,12 +509,37 @@ class EmrServerlessPage(Widget):
             # Re-fresh the runs list so the new SUBMITTED row appears
             # immediately rather than waiting for the next 60-s tick.
             self.run_worker(
-                self._vm.job_runs.refresh(),
+                self._vm.refresh_job_runs(),
                 exclusive=True,
                 group="emr-poll-runs",
             )
         finally:
             clone_vm.dispose()
+
+    def open_focused_log_filter(self) -> bool:
+        focused = self.app.focused
+        if (
+            focused is None
+            or self._right_logs is None
+            or not self._is_within(focused, self._right_logs)
+        ):
+            return False
+        self._right_logs.action_open_filter()
+        return True
+
+    def select_adjacent_log_file(self, delta: int) -> bool:
+        focused = self.app.focused
+        if (
+            focused is None
+            or self._right_logs is None
+            or not self._is_within(focused, self._right_logs)
+        ):
+            return False
+        if delta < 0:
+            self._right_logs.action_previous_file()
+        else:
+            self._right_logs.action_next_file()
+        return True
 
     def _post_clone_success_toast(self, new_id: str) -> None:
         """Reach the canonical ``ToastStackVM`` through the running
@@ -394,27 +565,34 @@ class EmrServerlessPage(Widget):
             notifications.advise(stack, subject=subject, message=message)
 
     def _cycle(self, direction: Literal["left", "right"]) -> None:
-        """4-slot Tab cycle on the EMR page: NAV → LEFT → DETAIL →
-        LOGS. User feedback (post-PR-#93): "On EMR, should be able
-        to switch among the menu, left application job runs pane,
-        and the right job details pane" + follow-up confirmed the
-        4-slot variant so the focusable Logs pane (Enter to load,
-        ``f`` to filter, etc.) stays reachable too.
+        """6-slot Tab cycle: NAV → SOURCE → APPLICATION → RUNS → DETAIL → LOGS.
 
         Direction:
-        - ``"right"``: forward — NAV → LEFT → DETAIL → LOGS → NAV
-        - ``"left"``: backward — NAV → LOGS → DETAIL → LEFT → NAV
+        - ``"right"``: forward through the order above, then NAV
+        - ``"left"``: backward through the order above, then NAV
 
         Pane widgets in the EMR page DO accept Textual focus (unlike
         the S3 file panes), so the slot ID is derived from
         ``has_focus`` / ``has_focus_within`` rather than from a VM
         flag. The NAV slot lives outside this page — when we're
-        about to leave one of our 3 panes for NAV, we drop our
+        about to leave one of our five page-owned targets for NAV, we drop our
         focus and ask the App to focus the NavMenu.
         """
-        if self._left is None or self._right_detail is None or self._right_logs is None:
+        if (
+            self._source_header is None
+            or self._picker is None
+            or self._left is None
+            or self._right_detail is None
+            or self._right_logs is None
+        ):
             return
-        slots = [self._left, self._right_detail, self._right_logs]
+        slots = [
+            self._source_header,
+            self._picker,
+            self._left,
+            self._right_detail,
+            self._right_logs,
+        ]
         # Find which slot currently owns focus (or focus-within for
         # rare picker-open / dropdown-open cases). -1 marks "NAV
         # owns focus or nothing is focused yet".
@@ -428,14 +606,17 @@ class EmrServerlessPage(Widget):
             if next_idx >= len(slots):
                 # Last slot → NAV (wrap by handing focus back to
                 # the rail).
+                self._close_departed_selector(focused_idx)
                 self._focus_nav_menu()
                 return
         else:
             next_idx = focused_idx - 1
             if next_idx < 0:
                 # First slot → NAV (Shift+Tab wraps backwards).
+                self._close_departed_selector(focused_idx)
                 self._focus_nav_menu()
                 return
+        self._close_departed_selector(focused_idx)
         slots[next_idx].focus()
         # Project the new slot through the coordinator so the
         # ``-rail-active`` Screen class set by NavMenu.on_focus
@@ -444,10 +625,61 @@ class EmrServerlessPage(Widget):
         # border dim instead of accent-highlighted. Sibling to
         # DualPane's _sync_focus projection.
         if self._focus_coordinator is not None:
-            slot_to_project = (FocusSlot.EMR_RUNS, FocusSlot.EMR_DETAIL, FocusSlot.EMR_LOGS)[
-                next_idx
-            ]
-            self._focus_coordinator.set_focused_slot(slot_to_project)
+            slot_to_project = (
+                FocusSlot.EMR_SOURCE,
+                FocusSlot.EMR_APPLICATION,
+                FocusSlot.EMR_RUNS,
+                FocusSlot.EMR_DETAIL,
+                FocusSlot.EMR_LOGS,
+            )[next_idx]
+            self._focus_coordinator.project_focused_slot(slot_to_project)
+
+    def _close_departed_selector(self, focused_idx: int) -> None:
+        if focused_idx == 0 and self._source_header is not None:
+            self._source_header.picker.close(refocus=False)
+        elif focused_idx == 1 and self._picker is not None:
+            self._picker.close(refocus=False)
+
+    def _focus_targets(self) -> tuple[tuple[FocusSlot, Widget], ...]:
+        targets: list[tuple[FocusSlot, Widget]] = []
+        for slot, widget in (
+            (FocusSlot.EMR_SOURCE, self._source_header),
+            (FocusSlot.EMR_APPLICATION, self._picker),
+            (FocusSlot.EMR_RUNS, self._left),
+            (FocusSlot.EMR_DETAIL, self._right_detail),
+            (FocusSlot.EMR_LOGS, self._right_logs),
+        ):
+            if widget is not None:
+                targets.append((slot, widget))
+        return tuple(targets)
+
+    def _project_focus_slot(self, slot: FocusSlot) -> None:
+        target = dict(self._focus_targets()).get(slot)
+        if target is None:
+            return
+        if self._focus_coordinator is not None:
+            self._focus_coordinator.project_focused_slot(slot)
+        self.app.set_focus(target)
+
+    def project_focus_slot(self, slot: FocusSlot) -> None:
+        """Project an app-coordinated focus slot onto this page."""
+        self._project_focus_slot(slot)
+
+    def commit_open_application_picker(self) -> bool:
+        """Commit the highlighted application when its selector is open."""
+        if self._picker is None or not self._picker.has_class("-open"):
+            return False
+        self._picker.action_commit()
+        return True
+
+    def _sync_focused_widget(self, focused: Widget) -> None:
+        if self._focus_coordinator is None:
+            return
+        ancestors = set(focused.ancestors_with_self)
+        for slot, target in self._focus_targets():
+            if target in ancestors:
+                self._focus_coordinator.project_focused_slot(slot)
+                return
 
     def _focus_nav_menu(self) -> None:
         """Hand focus back to the App-level NavMenu. The App
@@ -462,6 +694,13 @@ class EmrServerlessPage(Widget):
             nav = self.app.query_one("#nav-menu", NavMenu)
             self.app._focus_active_nav_list(nav)  # type: ignore[attr-defined]
 
+    def _contains_focus(self, focused: Widget) -> bool:
+        return focused is self or self in focused.ancestors_with_self
+
+    @staticmethod
+    def _is_within(focused: Widget, parent: Widget) -> bool:
+        return focused is parent or parent in focused.ancestors_with_self
+
     # ── Message routing ─────────────────────────────────────────────────────
 
     def on_job_runs_pane_run_selected(self, event: JobRunsPane.RunSelected) -> None:
@@ -472,9 +711,9 @@ class EmrServerlessPage(Widget):
     def on_job_runs_pane_refresh_requested(self, _event: JobRunsPane.RefreshRequested) -> None:
         # Use the same ``emr-poll-runs`` group as ``_tick_runs`` and the
         # clone-success refresh in ``action_clone_selected_run`` so a
-        # manual ``r`` press while the periodic poller is mid-flight is
-        # silently dropped by Textual rather than allowed to race the
-        # poller's worker. Both end up calling ``job_runs.refresh()``,
+        # manual ``r`` press while the periodic poller is mid-flight
+        # supersedes the older worker rather than racing it. Both end up
+        # calling ``job_runs.refresh()``,
         # which mutates the same VM state and fires the same ``runs``
         # PropertyChangedMessage — two concurrent calls produced a
         # double UI redraw and an extra ``list_job_runs`` round-trip
@@ -489,12 +728,10 @@ class EmrServerlessPage(Widget):
 
     def on_job_runs_pane_load_more_requested(self, _event: JobRunsPane.LoadMoreRequested) -> None:
         """User asked for the next page of runs (PgDn or click on
-        the bottom sentinel). Run as ``exclusive=True`` so a slow
-        page response can't be double-fired by an impatient
-        keypress — the second call is dropped by Textual rather
-        than queued behind the first."""
+        the bottom sentinel). The latest request supersedes an in-flight
+        request in the same worker group."""
         self.run_worker(
-            self._vm.job_runs.load_more(),
+            self._vm.load_more_job_runs(),
             exclusive=True,
             group="emr-load-more",
         )
@@ -507,11 +744,15 @@ class EmrServerlessPage(Widget):
         self, _event: JobRunLogsPane.RefreshRequested
     ) -> None:
         """User pressed r to refresh/reload logs."""
-        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+        self.run_worker(
+            self._vm.job_run_logs.load(use_cache=False),
+            exclusive=True,
+            group="emr-logs",
+        )
 
     def on_job_run_logs_pane_log_file_selected(self, event: JobRunLogsPane.LogFileSelected) -> None:
         """User selected a different log file from the chip strip."""
-        self._vm.job_run_logs.select_log_file(event.kind)
+        self._vm.job_run_logs.select_log_file_key(event.key)
         self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
 
     async def on_job_run_logs_pane_open_filter_requested(

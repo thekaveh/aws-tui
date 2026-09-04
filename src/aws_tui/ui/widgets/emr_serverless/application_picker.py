@@ -1,30 +1,14 @@
-"""ApplicationPicker — top-strip application selector for the EMR page.
-
-Inline-expanding dropdown. The picker uses ``height: auto`` so it
-grows to wrap whatever children are visible: just the trigger row
-when closed, trigger + OptionList when open. The parent
-``emr-app-box`` is ``height: auto, min-height: 3`` so it grows
-in lockstep; the sibling ``JobRunsPane`` (``height: 1fr``)
-shrinks to make room.
-
-Why not a floating overlay: the prior layered-overlay approaches
-(PR #83 declaring ``dropdown`` on Screen, PR #85 mounting the
-OptionList directly to the Screen) both broke the popover —
-layers are z-order only (don't escape parent clipping in PR #83)
-and Screen-mount put the popover after Screen's vertical-flow
-children (so it ended up below the Commands pane in PR #85).
-The inline-expanding pattern is simpler and reliable: the
-OptionList stays a normal child of the picker, no layers, no
-absolute positioning, no cross-widget message routing.
-"""
+"""ApplicationPicker — screen-overlaid application selector for the EMR page."""
 
 from __future__ import annotations
 
-import contextlib
+from collections.abc import Iterable
+from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from rich.markup import escape as _escape_markup
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Horizontal
@@ -35,70 +19,93 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from aws_tui.domain.emr_serverless import ApplicationState
+from aws_tui.ui.widgets.overlay_option_list import (
+    OverlayOptionList,
+    PickerFocusIntent,
+    PickerOpenIntent,
+)
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 #: Colored Rich-markup glyphs per application state. The glyph SHAPE
-#: alone is distinguishable on monochrome terminals (●/◐/◑/○/◌/✗
+#: alone is distinguishable on monochrome terminals (●/◐/◑/◇/○/◌/✗
 #: are all visually different); the colour is icing for the colour-
-#: capable case. User feedback: "show a green block circle to denote
-#: they have already been started … similarly apt status indicator
-#: for the rest … we don't need to show the STARTED OR STOPPED text".
-_APP_STATE_MARKER: dict[ApplicationState, str] = {
-    ApplicationState.STARTED: "[green]●[/green]",
-    ApplicationState.STARTING: "[yellow]◐[/yellow]",
-    ApplicationState.STOPPING: "[yellow]◑[/yellow]",
-    ApplicationState.CREATING: "[dim]◌[/dim]",
-    ApplicationState.CREATED: "[white]○[/white]",
-    ApplicationState.STOPPED: "[dim]○[/dim]",
-    ApplicationState.TERMINATED: "[red]✗[/red]",
+#: capable case. Option rows pair this compact marker with literal state
+#: text; the selected trigger stays compact and exposes its state by tooltip.
+_APP_STATE_MARKER: dict[ApplicationState, tuple[str, str]] = {
+    ApplicationState.STARTED: ("green", "●"),
+    ApplicationState.STARTING: ("yellow", "◐"),
+    ApplicationState.STOPPING: ("yellow", "◑"),
+    ApplicationState.CREATING: ("dim", "◌"),
+    ApplicationState.CREATED: ("white", "◇"),
+    ApplicationState.STOPPED: ("dim", "○"),
+    ApplicationState.TERMINATED: ("red", "✗"),
 }
 
 
-class ApplicationPicker(Widget):
-    """Top-strip application selector — inline-expanding."""
+def _state_marker(state: ApplicationState) -> str:
+    style, glyph = _APP_STATE_MARKER.get(state, ("white", "?"))
+    return f"[{style}]{glyph}[/{style}]"
+
+
+def _state_option(state: ApplicationState, name: str) -> Text:
+    """Render a styled row with a literal state for non-color access."""
+    style, glyph = _APP_STATE_MARKER.get(state, ("white", "?"))
+    prompt = Text(no_wrap=True, overflow="ellipsis")
+    prompt.append(f"{glyph} {state.value}", style=style)
+    prompt.append(f" · {name}")
+    return prompt
+
+
+class ApplicationPicker(Widget, can_focus=True):
+    """Top-strip application selector with a screen-overlaid option list."""
 
     DEFAULT_CSS: ClassVar[str] = """
     ApplicationPicker {
         width: 1fr;
-        height: auto;
+        height: 3;
         min-height: 3;
         layout: vertical;
     }
-    /* The trigger row is always 3 cells tall (matches the apps-box
-       minimum). Wrapped in a Horizontal so its width takes the full
-       picker; the Static fills that Horizontal. */
-    ApplicationPicker > Horizontal {
-        width: 1fr;
-        height: 3;
-    }
-    ApplicationPicker > Horizontal > .app-trigger {
-        width: 1fr;
+    /* Keep the state marker and application name in separate cells.
+       Rich's styled marker segment can otherwise consume the compact
+       one-row render while leaving the following name clipped. */
+    ApplicationPicker > .app-trigger {
+        width: 100%;
         height: 3;
         padding: 0 1;
-        content-align: left middle;
+    }
+    ApplicationPicker > .app-trigger > .app-marker {
+        width: 1;
+        min-width: 1;
+        height: 1;
+    }
+    ApplicationPicker > .app-trigger > .app-value {
+        width: 1fr;
+        min-width: 0;
+        height: 1;
+        padding-left: 1;
+        text-overflow: ellipsis;
         text-style: bold;
     }
-    /* OptionList is collapsed by default; ``-open`` flips display
-       to block AND the picker's ``height: auto`` grows to wrap the
-       newly-visible OptionList. Parent ``emr-app-box`` grows in
-       lockstep (its ``height: auto, min-height: 3`` lets it expand
-       up to the column's available space; the sibling JobRunsPane
-       with ``height: 1fr`` shrinks to make room). */
-    ApplicationPicker > OptionList {
+    ApplicationPicker > OverlayOptionList {
         width: 1fr;
         height: auto;
         max-height: 16;
         display: none;
+        overlay: screen;
+        constrain: none inside;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
     }
-    ApplicationPicker.-open > OptionList {
+    ApplicationPicker.-open > OverlayOptionList {
         display: block;
     }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "close", "Close"),
-        ("enter", "commit", "Pick"),
+        ("enter,space", "activate", "Open application selector"),
     ]
 
     class ApplicationCommitted(TextualMessage):
@@ -114,24 +121,51 @@ class ApplicationPicker(Widget):
             super().__init__()
             self.app_id = app_id
 
+    class OpenChanged(TextualMessage):
+        """Posted whenever option-list visibility intent changes."""
+
+        def __init__(
+            self,
+            picker: ApplicationPicker,
+            is_open: bool,
+            *,
+            intent_epoch: int | None = None,
+        ) -> None:
+            super().__init__()
+            self.picker = picker
+            self.is_open = is_open
+            self.intent_epoch = intent_epoch
+
+        @property
+        def control(self) -> ApplicationPicker:
+            return self.picker
+
     def __init__(
         self,
         vm: ApplicationsVM,
         *,
+        open_intent: PickerOpenIntent | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: ApplicationsVM = vm
         self._sub: DisposableBase | None = None
+        self._focus_intent = PickerFocusIntent()
+        self._open_intent = open_intent
+        self._marker_widget: Static | None = None
+        self._value_widget: Static | None = None
+        self._option_list: OverlayOptionList | None = None
 
     def compose(self) -> ComposeResult:
-        # Trigger row + OptionList both as children of the picker.
-        # The OptionList is hidden by default via ``display: none``
-        # and revealed when the picker gains the ``-open`` class.
-        with Horizontal():
-            yield Static(self._trigger_label(), classes="app-trigger")
-        yield OptionList(*self._build_options(), id="app-options")
+        marker, value = self._trigger_fragments()
+        self._marker_widget = Static(marker, classes="app-marker")
+        self._value_widget = Static(value, classes="app-value")
+        self._option_list = OverlayOptionList(*self._build_options(), id="app-options")
+        with Horizontal(classes="app-trigger"):
+            yield self._marker_widget
+            yield self._value_widget
+        yield self._option_list
 
     def on_mount(self) -> None:
         # Round-3 directive §9.bis.11 / PR #103 retirement: subscribe
@@ -140,54 +174,115 @@ class ApplicationPicker(Widget):
         # this subscription only fires for THIS ApplicationsVM
         # instance.
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
+        self._refresh_accessibility_text()
 
     def on_unmount(self) -> None:
+        was_open = self.is_open
+        self._focus_intent.advance()
+        self.remove_class("-open")
+        if was_open and self.parent is not None:
+            intent_epoch = (
+                self._open_intent.observe(self, False) if self._open_intent is not None else None
+            )
+            self.parent.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
 
     # ── Public API ──────────────────────────────────────────────────────────
 
+    @property
+    def is_open(self) -> bool:
+        """Whether the application option list is currently visible."""
+
+        return self.has_class("-open")
+
     def toggle_open(self) -> None:
-        if "-open" in self.classes:
-            self.remove_class("-open")
+        if self.is_open:
+            self.close()
         else:
-            self.add_class("-open")
-            # Focus the dropdown so arrow keys / Enter / Esc are
-            # routed there immediately. ``call_after_refresh`` waits
-            # for the layout-pass that the ``-open`` class triggered
-            # so the OptionList is laid out and focusable.
-            self.call_after_refresh(self._focus_dropdown)
-            self._refresh_options()
+            self.open()
+
+    def open(self) -> None:
+        """Show and focus the application option list."""
+
+        was_open = self.is_open
+        epoch = self._focus_intent.advance()
+        self.add_class("-open")
+        intent_epoch = (
+            self._open_intent.observe(self, True) if self._open_intent is not None else None
+        )
+        if not was_open or intent_epoch is not None:
+            self.post_message(self.OpenChanged(self, True, intent_epoch=intent_epoch))
+        self.call_after_refresh(partial(self._prepare_open_dropdown, epoch))
 
     def action_close(self) -> None:
+        self.close()
+
+    def close(self, *, refocus: bool = True) -> None:
+        """Collapse the list without stealing an in-progress focus transfer."""
+
+        was_open = self.is_open
+        epoch = self._focus_intent.advance()
         self.remove_class("-open")
+        if was_open:
+            intent_epoch = (
+                self._open_intent.observe(self, False) if self._open_intent is not None else None
+            )
+            self.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
+        if was_open and refocus and self.is_attached:
+            self.call_after_refresh(partial(self._refocus, epoch))
+
+    def action_activate(self) -> None:
+        if self.has_class("-open"):
+            self.action_commit()
+        else:
+            self.toggle_open()
 
     def action_commit(self) -> None:
-        try:
-            opts = self.query_one("#app-options", OptionList)
-        except Exception:
+        opts = self._option_list
+        if opts is None or not opts.is_attached:
             return
         if opts.highlighted is None:
             return
         opt = opts.get_option_at_index(opts.highlighted)
+        self.close()
         if opt.id is not None:
             self._vm.select(opt.id)
             # Post up so the page widget can cascade through
             # ``page_vm.select_application(id)`` — see the
             # ``ApplicationCommitted`` docstring.
             self.post_message(self.ApplicationCommitted(opt.id))
-        self.remove_class("-open")
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    def focus_on_click(self) -> bool:
+        """Keep the option list focused while its owner trigger is clicked."""
+
+        return not self.is_open
 
     def on_click(self, event: Click) -> None:
         # Click on the trigger row toggles open/closed. Click on a
         # row inside the dropdown is handled by Textual's OptionList
         # which posts ``OptionSelected`` — see the handler below.
-        if event.widget is not None and getattr(event.widget, "id", None) == "app-options":
+        if isinstance(event.widget, OptionList):
             return
         self.toggle_open()
+
+    def on_overlay_option_list_dismissed(self, event: OverlayOptionList.Dismissed) -> None:
+        self.close(refocus=not event.lost_focus)
+
+    @classmethod
+    def close_open_for_outside_mouse_down(
+        cls,
+        pickers: Iterable[ApplicationPicker],
+        target: Widget | None,
+    ) -> None:
+        """Close open pickers that don't own a mouse-down target."""
+
+        for picker in pickers:
+            if picker.is_open and (target is None or picker not in target.ancestors_with_self):
+                picker.close(refocus=False)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         # ``__placeholder__`` is the synthetic disabled row used for
@@ -195,10 +290,10 @@ class ApplicationPicker(Widget):
         # braces guard — Textual's OptionList already suppresses
         # selection on disabled rows, but a key-driven Enter while
         # the row is the only option could slip through.
+        self.close()
         if event.option.id is not None and event.option.id != "__placeholder__":
             self._vm.select(event.option.id)
             self.post_message(self.ApplicationCommitted(event.option.id))
-        self.remove_class("-open")
 
     def _on_vm_property_changed(self, prop: str) -> None:
         """Round-3 directive: per-VM Observable subscription. The
@@ -217,37 +312,94 @@ class ApplicationPicker(Widget):
             self.call_after_refresh(self._refresh_options)
 
     def _refresh_trigger(self) -> None:
-        try:
-            trigger = self.query_one(".app-trigger", Static)
-        except Exception:
+        marker = self._marker_widget
+        value = self._value_widget
+        if marker is None or value is None or not marker.is_attached or not value.is_attached:
             return
-        trigger.update(self._trigger_label())
+        marker_text, value_text = self._trigger_fragments()
+        marker.update(marker_text)
+        value.update(value_text)
+        self._refresh_accessibility_text(marker=marker, value=value)
+
+    def _refresh_accessibility_text(
+        self,
+        *,
+        marker: Static | None = None,
+        value: Static | None = None,
+    ) -> None:
+        """Expose the selected application's full name and literal state."""
+
+        selected = next(
+            (app for app in self._vm.applications if app.id == self._vm.selected_id),
+            None,
+        )
+        tooltip = None if selected is None else f"{selected.name} · {selected.state.value}"
+        self.tooltip = tooltip
+        marker = marker or self._marker_widget
+        value = value or self._value_widget
+        if marker is not None and marker.is_attached:
+            marker.tooltip = tooltip
+        if value is not None and value.is_attached:
+            value.tooltip = tooltip
+
+    def _trigger_fragments(self) -> tuple[str, str]:
+        """Split the selected-state marker from the trigger text."""
+        if self._vm.state in {
+            PaneState.LOADING,
+            PaneState.UNREACHABLE,
+            PaneState.AUTH_REQUIRED,
+            PaneState.FORBIDDEN,
+            PaneState.ERROR,
+        }:
+            return "", self._trigger_label()
+        apps = self._vm.applications
+        sid = self._vm.selected_id
+        match = next((app for app in apps if app.id == sid), None)
+        if match is None:
+            return "", self._trigger_label()
+        return _state_marker(match.state), _escape_markup(match.name)
 
     def _refresh_options(self) -> None:
-        try:
-            opts = self.query_one("#app-options", OptionList)
-        except Exception:
+        opts = self._option_list
+        if opts is None or not opts.is_attached:
             return
         # The dedup-on-set guard that used to live here (PR #100(b)) has
         # moved into ApplicationsVM.refresh() per the round-3 directive
         # (spec §9.bis.11 + §9.bis.9 / Q-A): the VM no-ops on a no-change
         # poll, so a PropertyChangedMessage reaching this handler means
         # the data actually changed. The View just rebuilds.
-        opts.clear_options()
-        for opt in self._build_options():
-            opts.add_option(opt)
+        options = self._build_options()
+        opts.set_options(options)
 
-    def _focus_dropdown(self) -> None:
-        with contextlib.suppress(Exception):
-            opts = self.query_one("#app-options", OptionList)
-            opts.focus()
+    def _focus_dropdown(self, epoch: int) -> None:
+        opts = self._option_list
+        if (
+            not self._focus_intent.is_current(epoch)
+            or not self.is_open
+            or not self.is_attached
+            or opts is None
+            or not opts.is_attached
+        ):
+            return
+        self.app.set_focus(opts)
+
+    def _prepare_open_dropdown(self, epoch: int) -> None:
+        if not self._focus_intent.is_current(epoch) or not self.is_open:
+            return
+        self._refresh_options()
+        self._focus_dropdown(epoch)
+
+    def _refocus(self, epoch: int) -> None:
+        if self._focus_intent.is_current(epoch) and not self.is_open and self.is_attached:
+            self.focus()
 
     def _trigger_label(self) -> str:
         """Render the trigger row.
 
         Format: ``<colored-glyph>  <name>``. The colored glyph
         encodes the state visually (green ● = STARTED, yellow ◐ /
-        ◑ = transitional, dim ○ / ◌ = idle, red ✗ = terminated) so
+        ◑ = transitional, white ◇ = CREATED, dim ○ = STOPPED,
+        dim ◌ = CREATING, red ✗ = terminated) so
         the textual STATE pill is no longer needed. User feedback
         (post-PR-#92): "the dropdown … shows the fire emoji at the
         beginning of every application name, followed by the name
@@ -286,7 +438,7 @@ class ApplicationPicker(Widget):
         match = next((a for a in apps if a.id == sid), None)
         if match is None:
             return "(select application)"
-        marker = _APP_STATE_MARKER.get(match.state, "?")
+        marker = _state_marker(match.state)
         # Application name is AWS-controlled — escape any Rich
         # markup characters so a name like ``my-app [v2]`` doesn't
         # crash the parser. The leading marker is the only
@@ -297,15 +449,14 @@ class ApplicationPicker(Widget):
         """Build the dropdown options.
 
         Sort comes from :attr:`ApplicationsVM.sorted_applications` —
-        the single source of truth shared with the Shift+S cycle so
+        the single source of truth shared with the Shift+A cycle so
         the order the user reads in the dropdown is the order they
         cycle through with the keybinding.
 
-        Prompt: ``<colored-glyph>  <name>`` — no fire emoji, no
-        textual state name. The colour + shape of the glyph carries
-        the state semantics. User feedback drove the fire-emoji
-        drop; the colored-glyph + name format keeps the row short
-        and visually grouped.
+        Prompt: ``<colored-glyph> <STATE> · <name>`` — no fire emoji.
+        State-first ordering keeps the literal state visible when a narrow
+        selector must ellipsize the application name; matching marker/state
+        styling preserves fast scanning.
 
         Error states (UNREACHABLE / AUTH_REQUIRED / FORBIDDEN /
         ERROR) and LOADING surface as a single non-selectable
@@ -341,7 +492,7 @@ class ApplicationPicker(Widget):
                 # characters so a name like ``my-app [v2]`` doesn't
                 # crash the OptionList renderer. Marker is the only
                 # intentional markup in the prompt.
-                prompt=f"{_APP_STATE_MARKER.get(a.state, '?')}  {_escape_markup(a.name)}",
+                prompt=_state_option(a.state, a.name),
                 id=a.id,
             )
             for a in self._vm.sorted_applications

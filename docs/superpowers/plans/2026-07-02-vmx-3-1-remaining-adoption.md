@@ -34,6 +34,8 @@
 
 ---
 
+## 1.3. Tasks
+
 ### 1.3.1. Task 1: CommandPaletteVM Uses ScoredFilteredCompositeVM
 
 **Files:**

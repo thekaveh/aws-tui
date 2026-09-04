@@ -4,21 +4,30 @@ EmrServerlessPage in the content host."""
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from aws_tui import app as app_module
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
+from aws_tui.infra.aws_session import TokenState
+from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
+from aws_tui.ui.widgets.context_picker import ContextPicker
+from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
 from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.nav_menu import NavMenu
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 
 
 def _prep(tmp_path: Path, toml_text: str) -> Path:
@@ -48,6 +57,12 @@ async def _await_emr_mount(pilot: object, app: AwsTuiApp) -> None:
     await pilot.pause()  # type: ignore[attr-defined]
 
 
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
 _AWS_TOML = (
     "[connections.dev]\n"
     'kind = "aws"\n'
@@ -57,11 +72,25 @@ _AWS_TOML = (
     'connection = "dev"\n'
 )
 
+_MULTI_PROFILE_AWS_TOML = (
+    "[connections.dev]\n"
+    'kind = "aws"\n'
+    'profile = "dev"\n'
+    'region = "us-east-1"\n'
+    "[connections.prod]\n"
+    'kind = "aws"\n'
+    'profile = "prod"\n'
+    'region = "us-west-2"\n'
+    "[defaults]\n"
+    'connection = "dev"\n'
+)
+
 _S3COMPAT_TOML = (
     "[connections.minio]\n"
     'kind = "s3-compatible"\n'
     'endpoint_url = "http://127.0.0.1:1"\n'
     'region = "us-east-1"\n'
+    'credentials = "static"\n'
     'access_key_id = "x"\n'
     'secret_access_key = "y"\n'
     "[defaults]\n"
@@ -70,9 +99,20 @@ _S3COMPAT_TOML = (
 
 
 @pytest.mark.asyncio
-async def test_emr_page_mounts_on_aws_connection(tmp_path: Path) -> None:
+async def test_emr_page_mounts_on_aws_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    factory_calls: list[str] = []
+    original_factory = app_module.build_service_view
+
+    def recording_factory(service_id: str, vm: object, **kwargs: object) -> object:
+        factory_calls.append(service_id)
+        return original_factory(service_id, vm, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(app_module, "build_service_view", recording_factory)
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
@@ -85,6 +125,7 @@ async def test_emr_page_mounts_on_aws_connection(tmp_path: Path) -> None:
             assert len(host.query(EmrServerlessPage)) == 1, (
                 "expected EmrServerlessPage mounted in #content-host"
             )
+            assert "emr-serverless" in factory_calls
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
@@ -113,17 +154,10 @@ async def test_emr_nav_row_hidden_on_s3_compatible_connection(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_emr_page_tab_cycle_includes_nav_then_left_detail_logs(tmp_path: Path) -> None:
-    """Post-PR-#94 contract: Tab on the EMR page cycles through 4
-    slots — NAV → LEFT → DETAIL → LOGS → NAV (and reverse on
-    Shift+Tab). User feedback: "I also want the menu pane be
-    treated like any other pane in the app, which mean tab
-    switching should allow for it being among the switchable panes
-    to be selected / focused: … On EMR, should be able to switch
-    among the menu, left application job runs pane, and the right
-    job details pane" — clarified in follow-up as 4-slot to keep
-    Logs reachable for ``Enter``-to-load.
-    """
+async def test_emr_page_tab_cycle_includes_source_application_and_panes(
+    tmp_path: Path,
+) -> None:
+    """The EMR ring includes every visible selector and pane."""
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
     app = AwsTuiApp(ctx)
@@ -139,6 +173,8 @@ async def test_emr_page_tab_cycle_includes_nav_then_left_detail_logs(tmp_path: P
             right_detail = pilot.app.query_one(JobRunDetailPane)
             right_logs = pilot.app.query_one(JobRunLogsPane)
             nav = pilot.app.query_one(NavMenu)
+            source = pilot.app.query_one(ServiceSourceHeader)
+            application = pilot.app.query_one(ApplicationPicker)
 
             # The page lands focus on the LEFT pane on mount.
             await pilot.pause()
@@ -165,6 +201,58 @@ async def test_emr_page_tab_cycle_includes_nav_then_left_detail_logs(tmp_path: P
             assert nav.has_focus_within, (
                 f"Tab on LOGS should move to NAV; got {pilot.app.focused!r}."
             )
+
+            # NAV → SOURCE → APPLICATION → RUNS.
+            await pilot.press("tab")
+            await pilot.pause()
+            assert source.has_focus or source.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert application.has_focus or application.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert left.has_focus or left.has_focus_within
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_focus_projects_bidirectionally_through_coordinator(tmp_path: Path) -> None:
+    """Direct Textual focus and app-level slot projection stay in sync."""
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            left = app.query_one(JobRunsPane)
+            await _wait_until(lambda: left.has_focus_within)
+
+            source = app.query_one(ServiceSourceHeader)
+            source.focus()
+            await _wait_until(lambda: ctx.focus_coordinator.focused_slot is FocusSlot.EMR_SOURCE)
+            assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_SOURCE
+
+            application = app.query_one(ApplicationPicker)
+            application.focus()
+            await _wait_until(
+                lambda: ctx.focus_coordinator.focused_slot is FocusSlot.EMR_APPLICATION
+            )
+            assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_APPLICATION
+
+            app._project_focus_slot(FocusSlot.EMR_DETAIL)
+            await pilot.pause()
+            assert app.query_one(JobRunDetailPane).has_focus_within
+            assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_DETAIL
+
+            app.focus_active_service_pane()
+            await pilot.pause()
+            assert app.query_one(JobRunsPane).has_focus_within
+            assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_RUNS
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
@@ -244,6 +332,52 @@ async def test_emr_left_pane_auto_focuses_and_arrow_keys_move_cursor(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_emr_public_routing_delegates_to_focused_panes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    calls: list[str] = []
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            page = app.query_one(EmrServerlessPage)
+            left = app.query_one(JobRunsPane)
+            detail = app.query_one(JobRunDetailPane)
+            logs = app.query_one(JobRunLogsPane)
+            monkeypatch.setattr(left, "action_cursor_down", lambda: calls.append("runs-down"))
+            monkeypatch.setattr(left, "action_commit_selection", lambda: calls.append("runs-enter"))
+            monkeypatch.setattr(logs, "action_scroll_down", lambda: calls.append("logs-down"))
+            monkeypatch.setattr(logs, "action_load", lambda: calls.append("logs-enter"))
+
+            left.focus()
+            await pilot.pause()
+            assert page.move_focused(1)
+            assert page.activate_focused()
+
+            detail.focus()
+            await pilot.pause()
+            assert page.move_focused(1)
+            assert page.activate_focused()
+
+            logs.focus()
+            await pilot.pause()
+            assert page.move_focused(1)
+            assert page.activate_focused()
+
+            assert calls == ["runs-down", "runs-enter", "logs-down", "logs-enter"]
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_emr_left_cursor_move_repoints_right_detail(tmp_path: Path) -> None:
     """User-reported bug: "The right pane showing the details for
     each job doesn't automatically get repopulated when the selected
@@ -309,7 +443,7 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
 
     app = AwsTuiApp(ctx)
     try:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(80, 30)) as pilot:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
@@ -342,12 +476,113 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_emr_application_picker_closes_on_outside_click(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path, _MULTI_PROFILE_AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(80, 30)) as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            picker = app.query_one(ApplicationPicker)
+            picker.toggle_open()
+            await pilot.pause()
+            assert picker.is_open
+
+            source_picker = app.query_one("#emr-source-header-picker", ContextPicker)
+            await pilot.click(source_picker)
+            await pilot.pause()
+
+            assert not picker.is_open
+            assert source_picker.is_open
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_application_picker_overlay_preserves_global_geometry(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            widgets = (
+                app.query_one(ApplicationPicker),
+                app.query_one("#emr-app-box"),
+                app.query_one(".emr-context-row"),
+                app.query_one(ServiceSourceHeader),
+                app.query_one(JobRunsPane),
+                app.query_one(JobRunDetailPane),
+                app.query_one(NavMenu),
+                app.query_one("#content-host"),
+            )
+            closed_regions = tuple(widget.region for widget in widgets)
+            picker = app.query_one(ApplicationPicker)
+
+            picker.toggle_open()
+            await pilot.pause()
+            assert tuple(widget.region for widget in widgets) == closed_regions
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert tuple(widget.region for widget in widgets) == closed_regions
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_switching_away_from_emr_closes_open_application_picker(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, _fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(80, 30)) as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            picker = app.query_one(ApplicationPicker)
+            refocus_calls = 0
+
+            def record_refocus() -> None:
+                nonlocal refocus_calls
+                refocus_calls += 1
+
+            picker._refocus = record_refocus  # type: ignore[method-assign]
+            picker.toggle_open()
+            await pilot.pause()
+            assert picker.is_open
+
+            ctx.root_vm.services_menu.switch_service_command.execute("s3")
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+
+            assert not picker.is_open
+            assert not picker.is_running
+            assert refocus_calls == 0
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_emr_page_c_key_pushes_clone_modal(tmp_path: Path) -> None:
     """Pressing ``c`` on the EMR page opens the clone-job-run modal
     pre-populated from the currently-selected job run.
 
-    Verifies the full wiring from PR-C-clone: the page widget's
-    ``c`` binding routes to ``action_clone_selected_run``, which
+    Verifies the full wiring from PR-C-clone: the App's configurable
+    ``emr.clone`` binding routes to ``action_clone_selected_run``, which
     builds a ``JobRunCloneVM`` from the page VM's
     ``job_run_detail.detail`` and pushes ``JobRunCloneModal``
     onto Textual's screen stack. No submit is exercised here — the
@@ -472,17 +707,14 @@ async def test_emr_picker_commit_cascades_to_runs_pane(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
-    """``Shift+S`` on the EMR page cycles to the next application
-    (wraps at the end). User feedback: pre-fix it just opened the
-    picker; user expected an actual app switch.
-
-    The keystroke routes through ``AwsTuiApp.action_swap_source``
-    which short-circuits to ``EmrServerlessPage.action_cycle_application_forward``
-    when the EMR page is mounted.
-    """
+async def test_emr_shift_s_rebuilds_under_current_profile_when_only_one_exists(
+    tmp_path: Path,
+) -> None:
+    """``Shift+S`` remounts EMR without cycling its application selection."""
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    dev = ctx.connection_resolver.resolve("dev")
+    ctx.connection_resolver.list = lambda: [dev]  # type: ignore[method-assign]
     fake.add_application(app_id="00other", name="ad-hoc")
     fake.add_job_run(application_id="00other", job_run_id="r-other")
     fake.add_job_run_detail(application_id="00other", job_run_id="r-other")
@@ -492,6 +724,7 @@ async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
+            await ctx.root_vm.switch_connection_with(dev, TokenState.CONNECTED)
             ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
             await _await_emr_mount(pilot, app)
 
@@ -499,17 +732,69 @@ async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
             initial_app_id = page_vm.applications.selected_id
             assert initial_app_id is not None
 
-            await pilot.press("S")  # Shift+S
+            await app.action_swap_source()
+            await _await_emr_mount(pilot, app)
+
+            replacement = ctx.root_vm.content_host.current
+            assert replacement is not page_vm
+            assert replacement.source.connection_key == ("dev", "us-east-1")
+            assert replacement.applications.selected_id == initial_app_id
+            assert replacement.job_runs.application_id == initial_app_id
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_emr_shift_s_switches_profile_and_shift_a_cycles_application(
+    tmp_path: Path,
+) -> None:
+    config_dir = _prep(tmp_path, _MULTI_PROFILE_AWS_TOML)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    dev = ctx.connection_resolver.resolve("dev")
+    prod = ctx.connection_resolver.resolve("prod")
+    ctx.connection_resolver.list = lambda: [dev, prod]  # type: ignore[method-assign]
+
+    def build_client(connection: Connection) -> _InMemoryEmr:
+        fake = _InMemoryEmr()
+        if connection == dev:
+            fake.add_application(app_id="dev-app", name="development")
+        else:
+            fake.add_application(app_id="prod-app-a", name="analytics")
+            fake.add_application(app_id="prod-app-b", name="reporting")
+        return fake
+
+    for service in ctx.root_vm._registry.all():  # type: ignore[attr-defined]
+        if isinstance(service, EmrServerlessService):
+            service._client_factory = build_client  # type: ignore[assignment]
+
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            await pilot.pause()
+            await ctx.root_vm.switch_connection_with(dev, TokenState.CONNECTED)
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+
+            page = ctx.root_vm.content_host.current
+            initial_source = page.source.connection_key
+            initial_application = page.applications.selected_id
+            assert initial_application == "dev-app"
+
+            await pilot.press("S")
+            await _await_emr_mount(pilot, app)
+
+            page = ctx.root_vm.content_host.current
+            assert page.source.connection_key != initial_source
+            assert page.applications.selected_id != initial_application
+            selected_after_source_switch = page.applications.selected_id
+
+            await pilot.press("A")
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
             await pilot.pause()
 
-            # Selection moved off the initial app.
-            assert page_vm.applications.selected_id != initial_app_id, (
-                "Shift+S should actually switch the application — pre-fix "
-                "it only opened the picker, which the user reported as a bug."
-            )
-            # Cascade ran: runs pane is bound to the new app.
-            assert page_vm.job_runs.application_id == page_vm.applications.selected_id
+            assert page.applications.selected_id != selected_after_source_switch
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
@@ -517,12 +802,7 @@ async def test_emr_shift_s_cycles_to_next_application(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> None:
-    """Post-PR-#94 cycle now includes the Detail pane as a real
-    slot — Detail's ``can_focus = True``. Verifies one full
-    rotation LEFT → DETAIL → LOGS → NAV → LEFT lands each slot
-    once and detail isn't skipped (the prior 2-slot cycle did skip
-    it).
-    """
+    """One full rotation visits selectors as well as all three data panes."""
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
     fake.add_job_run(application_id="00emr", job_run_id="r-001", name="test-run")
@@ -540,13 +820,15 @@ async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> N
             right_logs = pilot.app.query_one(JobRunLogsPane)
             right_detail = pilot.app.query_one(JobRunDetailPane)
             nav = pilot.app.query_one(NavMenu)
+            source = pilot.app.query_one(ServiceSourceHeader)
+            application = pilot.app.query_one(ApplicationPicker)
 
             # Focus the LEFT pane (the page auto-focuses it on mount).
             left.focus()
             await pilot.pause()
             assert left.has_focus or left.has_focus_within
 
-            # LEFT → DETAIL → LOGS → NAV → LEFT (one full rotation).
+            # RUNS → DETAIL → LOGS → NAV → SOURCE → APPLICATION → RUNS.
             await pilot.press("tab")
             await pilot.pause()
             assert right_detail.has_focus or right_detail.has_focus_within
@@ -556,6 +838,12 @@ async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> N
             await pilot.press("tab")
             await pilot.pause()
             assert nav.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert source.has_focus or source.has_focus_within
+            await pilot.press("tab")
+            await pilot.pause()
+            assert application.has_focus or application.has_focus_within
             await pilot.press("tab")
             await pilot.pause()
             assert left.has_focus or left.has_focus_within, (

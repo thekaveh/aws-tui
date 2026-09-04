@@ -9,9 +9,9 @@ and ``botocore``. It serves two roles:
 2. ``client`` returns an async context manager for an aioboto3 client,
    pre-configured with retries, timeouts, and the right credentials.
 
-``AwsSession`` does NOT initiate sign-in; that's a shell-out
-(``aws sso login --profile <name>``) orchestrated by callers higher up
-the stack. We only observe.
+``AwsSession`` does not initiate sign-in, and aws-tui does not orchestrate an
+AWS CLI shell-out. Users run ``aws sso login --profile <name>`` themselves;
+we only observe the resulting shared configuration and token cache.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -65,6 +66,9 @@ def _default_sso_cache_dir() -> Path:
 
 
 def _default_aws_config_path() -> Path:
+    configured = os.environ.get("AWS_CONFIG_FILE")
+    if configured is not None:
+        return Path(os.path.expandvars(configured)).expanduser()
     return Path.home() / ".aws" / "config"
 
 
@@ -153,7 +157,7 @@ class AwsSession:
             return None
 
         parser = configparser.ConfigParser()
-        parser.read(self._aws_config_path, encoding="utf-8")
+        parser.read(self._aws_config_path, encoding="utf-8-sig")
 
         section: str | None = None
         if parser.has_section(f"profile {profile}"):
@@ -185,7 +189,7 @@ class AwsSession:
         """
         boto_config = BotoConfig(
             s3={"addressing_style": "path" if connection.force_path_style else "auto"},
-            retries={"max_attempts": 6, "mode": "adaptive"},
+            retries={"total_max_attempts": 6, "mode": "adaptive"},
             connect_timeout=10,
             read_timeout=60,
             user_agent_extra=f"aws-tui/{__version__}",
@@ -213,9 +217,7 @@ class AwsSession:
         else:
             raise ValueError(f"unsupported connection kind: {connection.kind!r}")
 
-        tracked = _TrackedClientCM(client_cm, self._open_clients)
-        self._open_clients.append(tracked)
-        return tracked
+        return _TrackedClientCM(client_cm, self._open_clients)
 
     async def aclose_all_clients(self) -> None:
         """Exit every still-open client context manager. Safe to call twice."""
@@ -225,8 +227,7 @@ class AwsSession:
         # "clear-up-front" approach silently leaked the unfinished CMs
         # on cancellation — open sockets / botocore client sessions
         # would live until process exit.
-        while self._open_clients:
-            cm = self._open_clients.pop()
+        for cm in reversed(tuple(self._open_clients)):
             try:
                 await cm.__aexit__(None, None, None)
             except Exception as exc:
@@ -238,11 +239,6 @@ class AwsSession:
                     extra={"error": str(exc), "error_type": type(exc).__name__},
                 )
             except BaseException:
-                # CancelledError / KeyboardInterrupt / SystemExit:
-                # this CM never fully closed. Put it back so a
-                # subsequent retry can finish the job (otherwise the
-                # registry-clear-up-front leaked).
-                self._open_clients.append(cm)
                 raise
 
 
@@ -274,14 +270,16 @@ class _TrackedClientCM(AbstractAsyncContextManager[Any]):
 
     async def __aenter__(self) -> Any:
         self._client = await self._inner.__aenter__()
+        if self not in self._registry:
+            self._registry.append(self)
         return self._client
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
-        # Best-effort: remove ourselves so aclose_all_clients doesn't
-        # double-exit if the caller manages lifecycle directly.
+        result = await self._inner.__aexit__(exc_type, exc, tb)
         with contextlib.suppress(ValueError):
             self._registry.remove(self)
-        return await self._inner.__aexit__(exc_type, exc, tb)
+        self._client = None
+        return result
 
 
 __all__ = [

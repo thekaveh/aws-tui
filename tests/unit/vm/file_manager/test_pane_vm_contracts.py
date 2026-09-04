@@ -27,9 +27,9 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 def _hub() -> MessageHub[Message]:

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime
+
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.emr_serverless import ApplicationState
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
+from aws_tui.domain.emr_serverless import ApplicationState, ApplicationSummary
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _make() -> tuple[ApplicationsVM, _InMemoryEmr]:
@@ -32,6 +35,27 @@ async def test_starts_loading_then_idle_after_refresh() -> None:
         "a2",
         "a1",
     ]
+
+
+@pytest.mark.asyncio
+async def test_throwing_property_observer_does_not_interrupt_refresh() -> None:
+    vm, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    observed: list[str] = []
+
+    def fail(_property: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    failing = vm.on_property_changed.subscribe(fail)
+    healthy = vm.on_property_changed.subscribe(observed.append)
+    try:
+        await vm.refresh()
+    finally:
+        failing.dispose()
+        healthy.dispose()
+
+    assert vm.state is PaneState.IDLE
+    assert "applications" in observed
 
 
 @pytest.mark.asyncio
@@ -65,7 +89,7 @@ async def test_sorted_applications_is_started_first_then_alphabetical() -> None:
     user-facing application order: STARTED first, then transitional
     (STARTING / STOPPING), then non-active (CREATING / CREATED /
     STOPPED), then terminal (TERMINATED); alphabetical within each
-    state group. The picker dropdown AND the Shift+S cycle consume
+    state group. The picker dropdown AND the Shift+A cycle consume
     this property — pinning it pins both consumers."""
     vm, fake = _make()
     # Deliberately shuffled — confirms the sort, not insertion order, drives.
@@ -126,6 +150,34 @@ async def test_refresh_is_no_op_when_application_list_unchanged() -> None:
         assert "selected_id" not in notified
     finally:
         sub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_is_no_op_when_provider_only_changes_application_order() -> None:
+    vm, fake = _make()
+    fake.add_application(app_id="stopped", name="zeta", state=ApplicationState.STOPPED)
+    fake.add_application(app_id="started-b", name="bravo", state=ApplicationState.STARTED)
+    fake.add_application(app_id="started-a", name="alpha", state=ApplicationState.STARTED)
+
+    applications = list(await fake.list_applications())
+    orders = iter((applications, list(reversed(applications))))
+
+    async def list_in_permuted_order():  # type: ignore[no-untyped-def]
+        return next(orders)
+
+    fake.list_applications = list_in_permuted_order  # type: ignore[method-assign]
+    await vm.refresh()
+    assert [app.id for app in vm.applications] == ["started-a", "started-b", "stopped"]
+
+    notified: list[str] = []
+    sub = vm.on_property_changed.subscribe(notified.append)
+    try:
+        await vm.refresh()
+    finally:
+        sub.dispose()
+
+    assert "applications" not in notified
+    assert [app.id for app in vm.applications] == ["started-a", "started-b", "stopped"]
 
 
 # -------------------- Phase 1: composite-backed selection (§4.2.3) --------------------
@@ -316,3 +368,55 @@ async def test_refresh_failure_surfaces_unreachable_state() -> None:
     vm.construct()
     await vm.refresh()
     assert vm.state is PaneState.UNREACHABLE
+
+
+@pytest.mark.asyncio
+async def test_concurrent_refreshes_commit_in_request_order() -> None:
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+    first = ApplicationSummary(
+        id="old",
+        name="old",
+        state=ApplicationState.STARTED,
+        type="SPARK",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    second = ApplicationSummary(
+        id="new",
+        name="new",
+        state=ApplicationState.STARTED,
+        type="SPARK",
+        created_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    class _SequencedClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def list_applications(self) -> list[ApplicationSummary]:
+            self.calls += 1
+            if self.calls == 1:
+                first_started.set()
+                await release_first.wait()
+                return [first]
+            second_started.set()
+            return [second]
+
+    client = _SequencedClient()
+    hub: MessageHub[Message] = MessageHub()
+    vm = ApplicationsVM(client=client, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    first_refresh = asyncio.create_task(vm.refresh())
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    second_refresh = asyncio.create_task(vm.refresh())
+    await asyncio.sleep(0)
+
+    assert not second_started.is_set()
+
+    release_first.set()
+    await asyncio.gather(first_refresh, second_refresh)
+
+    assert second_started.is_set()
+    assert vm.applications == (second,)
+    vm.dispose()

@@ -14,19 +14,21 @@ re-mounts children on each batch update.
 
 from __future__ import annotations
 
+import math
 import os
+from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
-from textual.events import Click
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import Button, Static
 from vmx import Message, MessageHub, PropertyChangedMessage
 
+from aws_tui.ui.formatters import humanize_bytes
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
-from aws_tui.vm.chrome.resume_vm import humanize_bytes
 from aws_tui.vm.file_manager.transfer_vm import TransferState, TransferVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 
@@ -34,12 +36,41 @@ from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 # fades out. Long enough that the user notices completion; short enough
 # that the box doesn't accumulate cruft. Override with $AWS_TUI_TRANSFER_LINGER
 # (used by tests so they don't have to sleep).
-_LINGER_SECONDS: float = float(os.environ.get("AWS_TUI_TRANSFER_LINGER", "3.0"))
+_DEFAULT_LINGER_SECONDS = 3.0
+
+
+def _read_linger_seconds() -> float:
+    try:
+        value = float(os.environ.get("AWS_TUI_TRANSFER_LINGER", _DEFAULT_LINGER_SECONDS))
+    except (TypeError, ValueError):
+        return _DEFAULT_LINGER_SECONDS
+    return value if math.isfinite(value) and value >= 0 else _DEFAULT_LINGER_SECONDS
+
+
+_LINGER_SECONDS = _read_linger_seconds()
 
 #: Width of the custom progress bar in cells.
 _BAR_CELLS: int = 10
 _BAR_FILLED: str = "▰"  # ▰
 _BAR_EMPTY: str = "▱"  # ▱
+
+
+class _TransferCancelButton(Button):
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("enter", "press", show=False),
+        Binding("space", "press", show=False),
+    ]
+
+    def __init__(self, *, disabled: bool) -> None:
+        super().__init__(
+            "x",
+            id="cancel-btn",
+            classes="transfer-cancel",
+            compact=True,
+            flat=True,
+            tooltip="Cancel transfer",
+            disabled=disabled,
+        )
 
 
 def _last_segment(uri: str) -> str:
@@ -69,8 +100,8 @@ def _state_class(state: TransferState) -> str:
     return {
         TransferState.PENDING: "-pending",
         TransferState.RUNNING: "-running",
-        TransferState.PAUSED: "-paused",
         TransferState.COMPLETED: "-done",
+        TransferState.SKIPPED: "-cancelled",
         TransferState.FAILED: "-failed",
         TransferState.CANCELLED: "-cancelled",
     }.get(state, "-pending")
@@ -113,9 +144,13 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
     TransferRowWidget .transfer-bar { width: 1fr; }
     TransferRowWidget .transfer-cancel {
         width: 5;
+        min-width: 5;
         height: 1;
+        min-height: 1;
         text-align: center;
         margin: 0 0 0 1;
+        padding: 0;
+        border: none;
     }
     TransferRowWidget .transfer-bytes { width: 1fr; }
     TransferRowWidget .transfer-rate { width: auto; text-align: right; }
@@ -137,7 +172,7 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         yield Static(self._dest_text(), classes="transfer-dest-row", markup=False)
         with Horizontal(classes="transfer-bar-row"):
             yield Static(self._bar_text(), classes="transfer-bar", markup=False)
-            yield Static("[✕]", id="cancel-btn", classes="transfer-cancel", markup=False)
+            yield _TransferCancelButton(disabled=self._vm.is_finished)
         with Horizontal(classes="transfer-meta-row"):
             yield Static(self._bytes_text(), classes="transfer-bytes", markup=False)
             yield Static(self._rate_text(), classes="transfer-rate", markup=False)
@@ -153,18 +188,11 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()
 
-    def on_click(self, event: Click) -> None:
-        # Bubble: react when the click landed on our Cancel Static.
-        # Cancelled / completed / failed rows ignore clicks (the chip is dim).
-        if self._vm.is_finished:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "cancel-btn" or self._vm.is_finished:
             return
-        target = event.widget if hasattr(event, "widget") else None
-        node: object | None = target
-        while node is not None:
-            if isinstance(node, Static) and getattr(node, "id", None) == "cancel-btn":
-                self._vm.cancel_command.execute()
-                return
-            node = getattr(node, "parent", None)
+        event.stop()
+        self._vm.cancel_command.execute()
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name != "state":
@@ -181,11 +209,12 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
             self.query_one(".transfer-bar", Static).update(self._bar_text())
             self.query_one(".transfer-bytes", Static).update(self._bytes_text())
             self.query_one(".transfer-rate", Static).update(self._rate_text())
+            self.query_one("#cancel-btn", Button).disabled = self._vm.is_finished
         except NoMatches:
             return
 
     def _sync_state_class(self) -> None:
-        for cls in ("-pending", "-running", "-paused", "-done", "-failed", "-cancelled"):
+        for cls in ("-pending", "-running", "-done", "-failed", "-cancelled"):
             self.remove_class(cls)
         self.add_class(_state_class(self._vm.state))
 
@@ -207,10 +236,10 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         pct = self._percentage()
         if state is TransferState.RUNNING:
             return f"↑ {pct}%" if pct is not None else "↑ ..."
-        if state is TransferState.PAUSED:
-            return f"⏸ {pct}%" if pct is not None else "⏸ ..."
         if state is TransferState.COMPLETED:
             return "✓ done"
+        if state is TransferState.SKIPPED:
+            return "skipped"
         if state is TransferState.FAILED:
             return "✗ failed"
         if state is TransferState.CANCELLED:
@@ -344,6 +373,8 @@ class TransfersOverlay(Widget):
         self.call_after_refresh(self._rebuild)
 
     def _rebuild(self) -> None:
+        represented_ids = {transfer.id for transfer in self._vm.transfers}
+        self._expired_ids.intersection_update(represented_ids)
         try:
             container = self.query_one("#transfers-overlay-inner", Vertical)
         except NoMatches:

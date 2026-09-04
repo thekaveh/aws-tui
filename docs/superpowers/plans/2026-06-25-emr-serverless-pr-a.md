@@ -14,7 +14,7 @@ These apply to every task — repeated here so the reviewer can fail fast on any
 
 - **Spec reference:** `docs/superpowers/specs/2026-06-25-emr-serverless-service-design.md` (commit `c47fce6`). PR-A scope == sections §1 (architecture), §2 (layout/keybindings minus log surface), §3 (every design-language row applies), §6 (auto-refresh + error states minus cancel/lifecycle). §4 (submit), §5 (logs), §6 cancel/lifecycle are PR-B/C and explicitly out of scope.
 - **Theme tokens only.** Every CSS color is one of: `$bg`, `$bg-elev`, `$bg-sel`, `$accent`, `$accent-soft`, `$rule-dim`, `$success`, `$warning`, `$danger`, `$text`, `$text-muted`. NO hex literals. NO `$accent-hot` (PR #72 dropped this for modal-shape surfaces and EMR follows).
-- **Service icon:** `⚡` (U+26A1 HIGH VOLTAGE). Single-cell. Symmetric with `🪣 S3` / `⚙️ Settings` / `🖥️ EC2`.
+- **Service icon:** U+26A1 HIGH VOLTAGE. Single-cell. Symmetric with U+1FAA3 BUCKET for S3, U+2699 GEAR for Settings, and U+1F5A5 DESKTOP COMPUTER for EC2.
 - **Service id:** `"emr-serverless"`.
 - **Service label:** `"EMR"`.
 - **Supports rule:** `connection.kind == "aws"` only. S3-compatible connections must NOT see the ⚡ icon in the nav rail.
@@ -497,7 +497,7 @@ git commit -m "feat(domain): _map_boto_error + AuthRequired/Throttled/Validation
 - Produces:
   - `class EmrServerlessClient` with constructor `(session: aioboto3.Session, *, region_name: str | None = None)` and async methods:
     - `async list_applications() -> list[ApplicationSummary]` — paginates; returns all.
-    - `async list_job_runs(application_id: str, *, states: set[JobRunState] | None = None, max_results: int = 100) -> list[JobRunSummary]` — fetches up to `max_results`; `states` filter is applied client-side after paging because the boto3 filter is one-state-at-a-time.
+    - `async list_job_runs(application_id: str, *, states: set[JobRunState] | None = None, max_results: int = 100) -> list[JobRunSummary]` — fetches up to `max_results`; the list-valued `states` filter is passed to EMR Serverless and checked again while mapping responses.
     - `async get_job_run(application_id: str, job_run_id: str) -> JobRunDetail`
   - All three re-raise as `ProviderError` subclasses on AWS errors (via `_map_boto_error`).
 
@@ -717,10 +717,8 @@ class EmrServerlessClient:
     ) -> list[JobRunSummary]:
         """List most-recent runs (sorted descending by createdAt).
 
-        ``states`` filters CLIENT-side after paging. boto3 supports
-        a single-state ``states`` parameter but multi-state requires
-        client-side filtering anyway, so we fetch unfiltered and
-        keep the logic in one place."""
+        ``states`` uses the service's list-valued filter and is checked
+        again while mapping responses."""
         async with self._session.client("emr-serverless", region_name=self._region_name) as c:
             try:
                 items: list[dict] = []
@@ -1143,8 +1141,7 @@ class EmrServerlessService:
         label="EMR",
         # ⚡ U+26A1 HIGH VOLTAGE — Spark's literal primitive glyph.
         # Single terminal cell, font-stack-safe, no VS-16 needed.
-        # Symmetric with the rail's literal-object naming: 🪣 bucket,
-        # ⚡ spark, ⚙️ gear, 🖥️ computer.
+        # Symmetric with the rail's literal-object icon naming.
         icon="⚡",
     )
 
@@ -3297,7 +3294,7 @@ git commit -m "feat(ui,themes): EMR Serverless page styling across 10 themes"
 """Pin that EmrServerlessService is registered post-PR-A.
 
 The nav rail is order-sensitive — services appear in registration
-order, so ⚡ EMR must sit AFTER 🪣 S3 in the registry."""
+order, so EMR must sit after S3 in the registry."""
 
 from __future__ import annotations
 
@@ -3793,14 +3790,14 @@ The final commit history for PR-A should be 17 commits, one per task — keeps `
 
 **Spec coverage:**
 
-- ✅ §1 Architecture — Tasks 1-3 (records + client), Task 5 (service), Tasks 6-9 (VMs). No speculative Protocol layer (spec §1 ban honoured).
-- ✅ §2 Layout & navigation — Task 13 implements top strip + 2-pane composition. Task 10 implements the OptionList-in-popover dropdown. Tab cycle = 2 slots (Task 13). Empty states across LEFT/RIGHT panes (Tasks 11, 12).
-- ✅ §3 Design language reuse — Task 14 wires per-theme tokens. Tasks 11/12 use the canonical class names (`-selected`, `runs-row`, etc.). Pane focus uses `:focus-within` (spec rule).
-- ✅ §6 Auto-refresh + error states — Task 13 sets up the three intervals at 30/10/5 s with the 6:1 decay on the runs list. Error states LOADING/IDLE/EMPTY/UNREACHABLE/AUTH_REQUIRED/FORBIDDEN propagated by Tasks 6/7/8 and rendered by Tasks 11/12. Throttle back-off is OUT OF PR-A scope per the spec (cancel/lifecycle/throttle land in PR-B); PR-A's pollers fire fixed intervals.
-- ⚠️ Spec §6 throttle handling — PR-A's pollers don't implement exponential back-off; that ships with PR-B. This is acceptable because PR-A's audience is monitoring — a few extra polls during a throttle event is non-fatal; the toast advisory is added in PR-B. Documented as deliberate.
-- ✅ Out-of-scope ban honoured — no log surface (no `LogViewVM`, no `LogView`), no cancel (no `x` keybinding), no submit (no `+`/`c` keybindings, no `SubmitFormVM`).
-- ✅ Snapshot content-presence guards required by global constraint — Task 17 includes them.
-- ✅ All 10 themes covered — Task 14 enumerates explicitly.
+- §1 Architecture — Tasks 1-3 (records + client), Task 5 (service), Tasks 6-9 (VMs). No speculative Protocol layer (spec §1 ban honoured).
+- §2 Layout & navigation — Task 13 implements top strip + 2-pane composition. Task 10 implements the OptionList-in-popover dropdown. Tab cycle = 2 slots (Task 13). Empty states across LEFT/RIGHT panes (Tasks 11, 12).
+- §3 Design language reuse — Task 14 wires per-theme tokens. Tasks 11/12 use the canonical class names (`-selected`, `runs-row`, etc.). Pane focus uses `:focus-within` (spec rule).
+- §6 Auto-refresh + error states — Task 13 sets up the three intervals at 30/10/5 s with the 6:1 decay on the runs list. Error states LOADING/IDLE/EMPTY/UNREACHABLE/AUTH_REQUIRED/FORBIDDEN propagated by Tasks 6/7/8 and rendered by Tasks 11/12. Throttle back-off is OUT OF PR-A scope per the spec (cancel/lifecycle/throttle land in PR-B); PR-A's pollers fire fixed intervals.
+- Spec §6 throttle handling — PR-A's pollers don't implement exponential back-off; that ships with PR-B. This is acceptable because PR-A's audience is monitoring — a few extra polls during a throttle event is non-fatal; the toast advisory is added in PR-B. Documented as deliberate.
+- Out-of-scope ban honoured — no log surface (no `LogViewVM`, no `LogView`), no cancel (no `x` keybinding), no submit (no `+`/`c` keybindings, no `SubmitFormVM`).
+- Snapshot content-presence guards required by global constraint — Task 17 includes them.
+- All 10 themes covered — Task 14 enumerates explicitly.
 
 **Placeholder scan:** No TBD/TODO; every code block contains the implementation. Every test step shows the exact pytest invocation + expected outcome.
 

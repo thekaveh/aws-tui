@@ -51,6 +51,12 @@ if TYPE_CHECKING:
     from aws_tui.vm.nav_menu_vm import NavItemVM, NavMenuVM
 
 
+#: Fixed outer width for the always-visible service rail. Twelve cells
+#: leave a ten-cell content row: enough to center ``Athena`` with space on
+#: both sides while retaining the selected-row ribbon at the far left.
+NAV_MENU_WIDTH = 12
+
+
 #: Round-3 / PR #101: per-service default focus slot. On ENTER,
 #: ``action_commit`` projects this slot through the coordinator so
 #: VM subscribers observe the user's intent to "enter" the service
@@ -67,17 +73,10 @@ _SERVICE_DEFAULT_SLOT: dict[str, FocusSlot] = {
 class NavMenu(Widget, can_focus=True):
     """Always-visible left rail of :class:`NavRow` widgets."""
 
-    DEFAULT_CSS: ClassVar[str] = """
-    NavMenu {
+    DEFAULT_CSS: ClassVar[str] = f"""
+    NavMenu {{
         display: block;
-        /* Width: 10 cells. User feedback (post-PR-#97): since all
-           AWS service labels are at most three letters and Settings
-           is rendered as the gear glyph (⚙️, 2 cells) instead of
-           the 8-char "Settings" word, 10 cells fits the longest row
-           (ribbon 1 + space 1 + "EMR" 3 = 5 cells of content + the
-           per-row padding 2 + NavMenu borders 2 = 9 total) with
-           1 cell of slack. */
-        width: 10;
+        width: {NAV_MENU_WIDTH};
         /* Fill the available vertical space so the flex spacer
            below has room to push Settings to the bottom. Without
            an explicit ``height: 1fr`` the rail collapses to the
@@ -86,14 +85,14 @@ class NavMenu(Widget, can_focus=True):
            bottom. */
         height: 1fr;
         layout: vertical;
-    }
+    }}
     /* The spacer is the flex-height filler between the services
        and the Settings row. Pushes Settings to the bottom of the
        rail without needing dock: bottom on a separate container
        (which was the prior OptionList approach). */
-    NavMenu > #menu-spacer {
+    NavMenu > #menu-spacer {{
         height: 1fr;
-    }
+    }}
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -177,7 +176,7 @@ class NavMenu(Widget, can_focus=True):
         the legacy direct mutation when no coordinator is wired
         (e.g. test harnesses that haven't migrated yet)."""
         if self._focus_coordinator is not None:
-            self._focus_coordinator.set_focused_slot(FocusSlot.NAV_MENU)
+            self._focus_coordinator.project_focused_slot(FocusSlot.NAV_MENU)
             return
         with contextlib.suppress(Exception):
             self.screen.add_class("-rail-active")
@@ -301,7 +300,7 @@ class NavMenu(Widget, can_focus=True):
         if self._focus_coordinator is not None:
             slot = _SERVICE_DEFAULT_SLOT.get(target_id)
             if slot is not None:
-                self._focus_coordinator.set_focused_slot(slot)
+                self._focus_coordinator.project_focused_slot(slot)
         focus_active = getattr(app, "focus_active_service_pane", None)
         if callable(focus_active):
             focus_active()
@@ -359,20 +358,19 @@ class NavMenu(Widget, can_focus=True):
         settings_container.remove_children()
 
         self._items = list(self._vm.items)
-        cursor_idx = self._cursor_index()
         # Mount the rows. Services first, Settings last (visually
         # pushed to the bottom by the flex spacer). The Settings row
         # uses the descriptor's ICON (a gear glyph ``⚙️``) instead of
         # the textual ``Settings`` label so the rail can stay narrow.
         # User feedback (post-PR-#97): "Let's switch back the Settings
         # to the gear emoji and then make the menu pane narrower."
-        for idx, item in enumerate(self._items):
+        for item in self._items:
             is_settings = item.descriptor.id == SETTINGS_NAV_ID
             display = item.descriptor.icon if is_settings else item.descriptor.label
             row = NavRow(
                 descriptor_id=item.descriptor.id,
                 label=display,
-                is_selected=(idx == cursor_idx and self._nav_slot_is_visual_focus()),
+                is_selected=(item.descriptor.id == self._vm.selected_id),
                 is_settings=is_settings,
             )
             if is_settings:
@@ -401,13 +399,7 @@ class NavMenu(Widget, can_focus=True):
         """
         selected_id = self._vm.selected_id
         for row in self.query(NavRow):
-            row.set_selected(self._nav_slot_is_visual_focus() and row.descriptor_id == selected_id)
-
-    def _nav_slot_is_visual_focus(self) -> bool:
-        return (
-            self._focus_coordinator is None
-            or self._focus_coordinator.focused_slot is FocusSlot.NAV_MENU
-        )
+            row.set_selected(row.descriptor_id == selected_id)
 
 
-__all__ = ["NavMenu"]
+__all__ = ["NAV_MENU_WIDTH", "NavMenu"]

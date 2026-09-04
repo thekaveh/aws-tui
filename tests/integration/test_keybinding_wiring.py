@@ -1,18 +1,29 @@
 """Keystone wiring: the App installs BindingResolver-materialized bindings.
 
 Guards that routing bindings through KeymapStore + BindingResolver +
-ActionRegistry keeps default behavior byte-identical to the previous
-hard-coded ``BINDINGS`` (same keys, same dispatch target, same priority),
-while ``[keybindings]`` overlays now take effect.
+ActionRegistry preserves dispatch targets while ``[keybindings]`` overlays
+take effect. Bare printable keys yield to editors; modified and named keys
+retain priority routing.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
+from vmx import NULL_DISPATCHER, MessageHub
+from vmx.messages.protocols import Message
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.composition import build_app_context
+from aws_tui.domain.data_catalog import TableFormat
+from aws_tui.ui.widgets.help_modal import HelpModal
+from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM
+from aws_tui.vm.messages import OpenAthenaTableRequest
+from tests.unit.vm.glue.test_iceberg_vm import ICEBERG_REF, RecordingInspector
 
-# The full set the App must install under the default keymap: our 23
+# The full set the App must install under the default keymap: our
 # resolver-materialized bindings (dispatch form, Textual key names) plus
 # Textual's built-in ctrl+q (alt-quit) and ctrl+p (command palette) that
 # survive super().__init__(). (key, action, show, priority).
@@ -22,26 +33,48 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("tab", "dispatch('pane.switch_focus')", True, True),
     ("shift+tab", "dispatch('pane.switch_focus_back')", False, True),
     ("up", "dispatch('pane.move_up')", True, True),
-    ("k", "dispatch('pane.move_up')", False, True),
+    ("k", "dispatch('pane.move_up')", False, False),
     ("down", "dispatch('pane.move_down')", True, True),
-    ("j", "dispatch('pane.move_down')", False, True),
+    ("j", "dispatch('pane.move_down')", False, False),
     ("enter", "dispatch('pane.descend')", True, True),
     ("backspace", "dispatch('pane.ascend')", True, True),
-    ("left", "dispatch('pane.modal_left')", False, True),
-    ("right", "dispatch('pane.modal_right')", False, True),
-    ("r", "dispatch('pane.refresh')", True, True),
-    ("question_mark", "dispatch('app.help')", True, True),
-    ("colon", "dispatch('app.command_palette')", True, True),
+    ("left", "dispatch('pane.modal_left')", False, False),
+    ("right", "dispatch('pane.modal_right')", False, False),
+    ("r", "dispatch('pane.refresh')", True, False),
+    ("question_mark", "dispatch('app.help')", True, False),
+    ("colon", "dispatch('app.command_palette')", True, False),
     ("ctrl+k", "dispatch('app.command_palette')", False, True),
-    ("t", "dispatch('app.themes')", True, True),
-    ("T", "dispatch('app.cycle_theme')", True, True),
-    ("comma", "dispatch('app.open_settings')", True, True),
-    ("c", "dispatch('pane.copy')", True, True),
-    ("d", "dispatch('pane.delete')", True, True),
-    ("S", "dispatch('app.swap_source')", True, True),
+    ("t", "dispatch('app.themes')", True, False),
+    ("T", "dispatch('app.cycle_theme')", True, False),
+    ("comma", "dispatch('app.open_settings')", True, False),
+    ("c", "dispatch('pane.copy')", True, False),
+    ("d", "dispatch('pane.delete')", True, False),
+    ("S", "dispatch('app.swap_source')", True, False),
+    ("A", "dispatch('emr.next_application')", True, False),
+    ("c", "dispatch('emr.clone')", False, False),
+    ("f", "dispatch('emr.logs.filter')", False, False),
+    ("1", "dispatch('glue.catalog')", False, False),
+    ("2", "dispatch('glue.jobs')", False, False),
+    ("3", "dispatch('glue.crawlers')", False, False),
+    ("F", "dispatch('glue.choose_run_state')", False, False),
+    ("G", "dispatch('glue.choose_crawler_state')", False, False),
+    ("y", "dispatch('glue.copy_table_ref')", False, False),
+    ("Q", "dispatch('glue.query_in_athena')", False, False),
+    ("V", "dispatch('glue.time_travel_in_athena')", False, False),
+    ("1", "dispatch('athena.query')", False, False),
+    ("2", "dispatch('athena.history')", False, False),
+    ("3", "dispatch('athena.results')", False, False),
+    ("4", "dispatch('athena.saved')", False, False),
+    ("W", "dispatch('athena.choose_workgroup')", False, False),
+    ("C", "dispatch('athena.choose_catalog')", False, False),
+    ("D", "dispatch('athena.choose_database')", False, False),
+    ("i", "dispatch('athena.insert_table_ref')", False, False),
+    ("ctrl+enter", "dispatch('athena.execute')", False, True),
+    ("escape", "dispatch('athena.cancel')", False, False),
+    ("l", "dispatch('athena.load_more')", False, False),
     ("shift+up", "dispatch('pane.mark_up')", False, True),
     ("shift+down", "dispatch('pane.mark_down')", False, True),
-    ("space", "dispatch('pane.quick_look')", False, True),
+    ("space", "dispatch('pane.quick_look')", False, False),
     ("ctrl+q", "quit", False, True),
     ("ctrl+p", "command_palette", False, True),
 }
@@ -55,7 +88,7 @@ def _installed(app: AwsTuiApp) -> set[tuple[str, str, bool, bool]]:
     return out
 
 
-def test_default_bindings_are_byte_identical(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+def test_default_bindings_match_runtime_contract(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     app = AwsTuiApp(app_context_factory())
     assert _installed(app) == _EXPECTED
 
@@ -63,11 +96,27 @@ def test_default_bindings_are_byte_identical(app_context_factory) -> None:  # ty
 def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     app = AwsTuiApp(app_context_factory())
     keys = set(app._bindings.key_to_bindings)
+    assert ("Q", "dispatch('glue.query_in_athena')", False, False) in _installed(app)
     # Deferred (handlerless) actions' keys must NOT be bound: filter (slash),
     # enter_multiselect (v), select_all/authenticate (a), move (m), new (n).
     # (`space`->quick_look and `:`/`ctrl+k`->command_palette are now wired.)
     for k in ("slash", "v", "a", "m", "n"):
         assert k not in keys, f"{k} should be unbound (handlerless)"
+
+
+def test_printable_selector_bindings_yield_to_athena_editor(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    installed = _installed(app)
+
+    for key, action_id in (
+        ("F", "glue.choose_run_state"),
+        ("G", "glue.choose_crawler_state"),
+        ("W", "athena.choose_workgroup"),
+        ("C", "athena.choose_catalog"),
+        ("D", "athena.choose_database"),
+        ("i", "athena.insert_table_ref"),
+    ):
+        assert (key, f"dispatch('{action_id}')", False, False) in installed
 
 
 def test_dispatch_invokes_registered_handler(app_context_factory) -> None:  # type: ignore[no-untyped-def]
@@ -78,18 +127,185 @@ def test_dispatch_invokes_registered_handler(app_context_factory) -> None:  # ty
     assert calls == ["copy"]
 
 
+@pytest.mark.asyncio
+async def test_app_routes_emr_log_focus_actions_to_the_page(
+    app_context_factory,
+) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    adjacent: list[int] = []
+    filters: list[str] = []
+
+    page = SimpleNamespace(
+        select_adjacent_log_file=lambda delta: adjacent.append(delta) or True,
+        open_focused_log_filter=lambda: filters.append("open") or True,
+    )
+    app._emr_page = lambda: page  # type: ignore[method-assign,return-value]
+
+    await app.action_modal_left_or_ascend()
+    app.action_modal_right()
+    app.action_filter_emr_logs()
+
+    assert adjacent == [-1, 1]
+    assert filters == ["open"]
+
+
+@pytest.mark.asyncio
+async def test_priority_binding_does_not_dispatch_behind_modal(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+    calls: list[str] = []
+    app._actions.register("athena.execute", lambda: calls.append("execute"))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpModal)
+
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+
+        assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["q", "ctrl+c"])
+async def test_quit_keys_dispatch_through_action_registry(
+    app_context_factory,  # type: ignore[no-untyped-def]
+    key: str,
+) -> None:
+    app = AwsTuiApp(app_context_factory())
+    calls: list[str] = []
+    app._actions.register("app.quit", lambda: calls.append("quit"))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert calls == ["quit"]
+
+
+@pytest.mark.asyncio
+async def test_global_v_dispatch_uses_active_snapshot_action_guard(
+    app_context_factory,  # type: ignore[no-untyped-def]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = app_context_factory()
+    hub: MessageHub[Message] = MessageHub()
+    inspector = RecordingInspector()
+    iceberg = GlueIcebergVM(
+        inspector=inspector,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    iceberg.construct()
+    await iceberg.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await iceberg.select_view("snapshots")
+    assert iceberg.select_snapshot(43)
+    page = SimpleNamespace(
+        vm=SimpleNamespace(
+            actions_available=True,
+            time_travel_in_athena=iceberg.time_travel_in_athena,
+        )
+    )
+    received: list[OpenAthenaTableRequest] = []
+    subscription = hub.messages.subscribe(
+        on_next=lambda message: (
+            received.append(message) if isinstance(message, OpenAthenaTableRequest) else None
+        )
+    )
+    app = AwsTuiApp(ctx)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        monkeypatch.setattr(app, "_glue_page", lambda: page)
+        assert ("V", "dispatch('glue.time_travel_in_athena')", False, False) in _installed(app)
+
+        await pilot.press("V")
+        await pilot.pause()
+        assert received == [OpenAthenaTableRequest(table_ref=ICEBERG_REF, snapshot_id=43)]
+
+        await iceberg.select_view("history")
+        await pilot.press("V")
+        await pilot.pause()
+
+        assert received == [OpenAthenaTableRequest(table_ref=ICEBERG_REF, snapshot_id=43)]
+        assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
+            "glue-athena-snapshot-unavailable"
+        )
+
+    subscription.dispose()
+    iceberg.dispose()
+
+
 def test_overlay_remaps_a_handled_action() -> None:
     from aws_tui.infra.keymap_store import KeymapStore
     from aws_tui.ui.actions import ActionRegistry
     from aws_tui.ui.bindings import BindingResolver
 
-    keymap = KeymapStore(overlay={"pane.copy": "y"})
+    keymap = KeymapStore(overlay={"pane.copy": "ctrl+y"})
     actions = ActionRegistry()
     actions.register("pane.copy", lambda: None)
     resolver = BindingResolver(keymap=keymap, actions=actions)
     keys = {b.key for b in resolver.to_textual_bindings()}
-    assert "y" in keys
+    assert "ctrl+y" in keys
     assert "c" not in keys
+
+
+def test_config_overlay_reaches_live_textual_bindings(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    cache_dir = tmp_path / "cache"
+    config_dir.mkdir()
+    cache_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        "[keybindings]\n"
+        '"pane.copy" = "ctrl+y"\n'
+        '"pane.delete" = []\n'
+        '"emr.clone" = "ctrl+g"\n'
+        '"emr.logs.filter" = "ctrl+f"\n',
+        encoding="utf-8",
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=cache_dir)
+    try:
+        app = AwsTuiApp(ctx)
+        installed = _installed(app)
+        assert ("ctrl+y", "dispatch('pane.copy')", True, True) in installed
+        assert not any(
+            key == "c" and action == "dispatch('pane.copy')" for key, action, _, _ in installed
+        )
+        assert not any(action == "dispatch('pane.delete')" for _, action, _, _ in installed)
+        assert ("ctrl+g", "dispatch('emr.clone')", False, True) in installed
+        assert ("ctrl+f", "dispatch('emr.logs.filter')", False, True) in installed
+        assert not any(
+            key == "f" and action == "dispatch('emr.logs.filter')"
+            for key, action, _, _ in installed
+        )
+        assert ctx.keymap_store.resolve("pane.copy") == ("ctrl+y",)
+        assert ctx.root_vm.chrome.hint_legend._keymap is ctx.keymap_store
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+@pytest.mark.asyncio
+async def test_config_overlay_dispatches_the_registered_action_once(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    cache_dir = tmp_path / "cache"
+    config_dir.mkdir()
+    cache_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        '[keybindings]\n"pane.copy" = "ctrl+y"\n',
+        encoding="utf-8",
+    )
+    ctx = build_app_context(config_dir=config_dir, cache_dir=cache_dir)
+    app = AwsTuiApp(ctx)
+    calls: list[str] = []
+    app._actions.register("pane.copy", lambda: calls.append("copy"))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("ctrl+y")
+        await pilot.pause()
+
+    assert calls == ["copy"]
 
 
 @pytest.mark.asyncio

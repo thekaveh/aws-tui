@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from vmx import MessageHub, RxDispatcher
+from vmx import Message, MessageHub, RxDispatcher
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import FileSystemProvider, PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.aws_session import AwsSession
@@ -34,7 +35,6 @@ from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import Service, ServiceRegistry
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:
@@ -62,12 +62,15 @@ async def test_panes_populate_with_entries_after_mount(tmp_path: Path) -> None:
     """
 
     tmp = tmp_path
+    local_root = tmp / "local"
+    local_root.mkdir()
+    (local_root / "local.txt").write_text("local", encoding="utf-8")
 
     # Pre-seed the S3 provider so build_vm gets a populated FS. The local
     # pane reads the real OS filesystem under the rooted directory below.
     s3_fs = await _seed_fs()
 
-    hub: MessageHub = MessageHub()
+    hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
 
     log = LogSink(base_dir=tmp / "log")
@@ -97,7 +100,7 @@ async def test_panes_populate_with_entries_after_mount(tmp_path: Path) -> None:
         s3_fs_factory=_factory,
     )
     # Use the local_fs for the right pane regardless of host filesystem.
-    s3_service._local_root = tmp  # type: ignore[attr-defined]
+    s3_service._local_root = local_root
 
     registry = ServiceRegistry()
     registry.register(cast(Service, s3_service))

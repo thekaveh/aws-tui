@@ -53,9 +53,11 @@ The switch lives only for the session unless you also update
 `config.toml`. No restart needed — `ThemeChangedMessage` reflows
 the active stylesheet on the fly.
 
-> The command-palette path (`:` then `theme switch ▸ voidline`) is in
-> the design spec but the palette doesn't yet register theme entries
-> in v0.8.x — `t` / `Shift+T` are the working shortcuts.
+The command palette has two working global theme commands: `:` then
+**Theme picker** opens the same picker as `t`, and `:` then **Cycle theme**
+has the same effect as `Shift+T`. Per-theme dynamic entries such as
+`theme switch ▸ voidline` remain deferred and are not registered, so use
+**Theme picker** to select a specific built-in or custom theme.
 
 ## 1.3. User overrides
 ### 1.3.1. Single-token overrides
@@ -76,12 +78,23 @@ Screen {
 ```
 
 ### 1.3.2. Full custom themes
-Drop a full `.tcss` file under `<config-dir>/themes/<name>.tcss`
-and it's selectable like any built-in (palette: `theme switch ▸
-<name>`).
+Drop a full `.tcss` file under `<config-dir>/themes/<name>.tcss` and select
+it with `t` or `:` then **Theme picker**. A full replacement bypasses the
+built-in composition, so use a repository checkout to compose the raw
+built-in theme, then the shared operational layer, in that file:
 
-Use one of the built-ins as a starting point — they live in the
-package data at `src/aws_tui/ui/themes/<name>.tcss`.
+```bash
+THEME_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/aws-tui/themes"
+mkdir -p "$THEME_DIR"
+cat src/aws_tui/ui/themes/carbon.tcss \
+    src/aws_tui/ui/themes/operational-panes.tcss \
+    > "$THEME_DIR/midnight.tcss"
+```
+
+`operational-panes.tcss` retains the Glue and Athena borders and focus
+styling that built-in themes receive automatically. Per-theme dynamic entries
+such as `theme switch ▸ voidline` remain deferred and are not a way to select
+a custom theme.
 
 ## 1.4. Palette tokens
 The Carbon palette tokens (full spec table in §4.5):
@@ -106,11 +119,13 @@ See spec §4.5 for the matching Voidline / Lattice / Amber tables.
 ## 1.5. How the loader works
 `infra/theme_store.py` reads the active theme by:
 
-1. Loading the built-in `<name>.tcss` from the package data via
-   `importlib.resources`.
-2. If `<config-dir>/themes/<name>.tcss` exists, **replacing**
-   the built-in with it (custom theme wins).
-3. If `<config-dir>/theme.tcss` exists, **appending** it to the
+1. Loading the raw built-in `<name>.tcss` from package data via
+   `importlib.resources`, then appending `operational-panes.tcss` as the
+   shared operational layer.
+2. If `<config-dir>/themes/<name>.tcss` exists, **replacing** that composed
+   built-in. The full replacement bypasses the built-in composition (the raw
+   built-in theme, then the shared operational layer).
+3. If `<config-dir>/theme.tcss` exists, **appending** it last to the
    active CSS (overlay always wins).
 4. Returning the combined string; `App.stylesheet.add_source` injects
    it as additional rules and `App.stylesheet.update(self)` reflows.
@@ -128,7 +143,8 @@ find tests/snapshot/__snapshots__ -name '*.raw' | wc -l
 find tests/snapshot/__snapshots__ -mindepth 1 -maxdepth 1 -type d | wc -l
 ```
 
-Every new widget snapshot is paired with a content-presence guard test
-(per the PR #53 lesson). Updates:
+Every new widget snapshot is paired with a content-presence guard test so a
+visually plausible blank rendering cannot pass unnoticed. Updates:
 `uv run pytest tests/snapshot --snapshot-update`. Snapshots are
-CI-gated on Python 3.12 / Ubuntu to avoid tolerance flakes.
+CI-gated on Python 3.12 on Ubuntu and macOS to catch platform-specific
+rendering drift.

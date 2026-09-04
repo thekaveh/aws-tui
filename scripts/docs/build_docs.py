@@ -10,8 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from scripts.docs.manifest import Manifest, Section, load_manifest
-from scripts.docs.render_diagrams import copy_assets, extract_svg
+from scripts.docs.manifest import Manifest, ManifestError, Section, load_manifest
+from scripts.docs.render_diagrams import copy_assets, render_svg, write_svg
 from scripts.docs.transforms import (
     build_source_map,
     output_name,
@@ -20,6 +20,9 @@ from scripts.docs.transforms import (
 )
 
 _IMG_RE = re.compile(r"(!\[[^\]]*\]\()\s*((?:\.\./)*)diagrams/img/([\w-]+)\.png(\))")
+_HERO_RE = re.compile(
+    r"(<img\s+[^>]*src=[\"'])\.\./assets/screenshots/aws-tui-running\.png([\"'][^>]*>)"
+)
 
 
 def _rewrite_images(md: str, surface: str) -> str:
@@ -29,7 +32,18 @@ def _rewrite_images(md: str, surface: str) -> str:
             return f"{head}{prefix}assets/img/{name}.svg{tail}"
         return f"{head}{prefix}img/{name}.png{tail}"  # wiki
 
-    return _IMG_RE.sub(repl, md)
+    rewritten = _IMG_RE.sub(repl, md)
+    hero_target = (
+        "assets/img/aws-tui-running.png" if surface == "site" else "img/aws-tui-running.png"
+    )
+    return _HERO_RE.sub(rf"\1{hero_target}\2", rewritten)
+
+
+def _copy_hero(repo_root: Path, target: Path) -> None:
+    source = repo_root / "assets" / "screenshots" / "aws-tui-running.png"
+    if source.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
 
 
 def render_site(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) -> None:
@@ -47,19 +61,19 @@ def render_site(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
         (out_dir / output_name(leaf, "site")).write_text(md, encoding="utf-8")
     # theme assets
     (out_dir / "stylesheets").mkdir(exist_ok=True)
-    (out_dir / "javascripts").mkdir(exist_ok=True)
     shutil.copy2(
         repo_root / "docs" / "stylesheets" / "extra.css", out_dir / "stylesheets" / "extra.css"
-    )
-    shutil.copy2(
-        repo_root / "docs" / "javascripts" / "mathjax.js", out_dir / "javascripts" / "mathjax.js"
     )
     # diagram SVGs
     img_dir = out_dir / "assets" / "img"
     img_dir.mkdir(parents=True, exist_ok=True)
     for d in manifest.diagrams:
-        svg = extract_svg((repo_root / d.master).read_text(encoding="utf-8"))
-        (img_dir / f"{d.id}.svg").write_text(svg, encoding="utf-8")
+        svg = render_svg(
+            repo_root / d.master,
+            font_path=repo_root / "assets" / "fonts" / "fira-code" / "FiraCode-Regular.ttf",
+        )
+        write_svg(img_dir / f"{d.id}.svg", svg)
+    _copy_hero(repo_root, img_dir / "aws-tui-running.png")
 
 
 def render_wiki(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) -> None:
@@ -77,9 +91,11 @@ def render_wiki(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
         (out_dir / output_name(leaf, "wiki")).write_text(md, encoding="utf-8")
     (out_dir / "_Sidebar.md").write_text(_wiki_sidebar(manifest), encoding="utf-8")
     (out_dir / "_Footer.md").write_text(
-        "aws-tui documentation — generated; do not edit here.\n", encoding="utf-8"
+        "aws-tui documentation | Apache-2.0\n",
+        encoding="utf-8",
     )
     copy_assets(repo_root, out_dir / "img")
+    _copy_hero(repo_root, out_dir / "img" / "aws-tui-running.png")
 
 
 def _wiki_link_name(section: Section) -> str:
@@ -88,14 +104,16 @@ def _wiki_link_name(section: Section) -> str:
 
 def _wiki_sidebar(manifest: Manifest) -> str:
     lines: list[str] = []
-    for section in manifest.sections:
+    for section_index, section in enumerate(manifest.sections, start=1):
+        section_title = f"{section_index}. {section.title}"
         if section.is_group:
-            lines.append(f"**{section.title}**")
+            lines.append(f"**{section_title}**")
             lines.extend(
-                f"  - [{child.title}]({_wiki_link_name(child)})" for child in section.children
+                f"  - [{section_index}.{child_index}. {child.title}]({_wiki_link_name(child)})"
+                for child_index, child in enumerate(section.children, start=1)
             )
         else:
-            lines.append(f"- [{section.title}]({_wiki_link_name(section)})")
+            lines.append(f"- [{section_title}]({_wiki_link_name(section)})")
     return "\n".join(lines) + "\n"
 
 
@@ -146,31 +164,36 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.keys
-  - pymdownx.arithmatex:
-      generic: true
   - toc:
       permalink: true
-extra_javascript:
-  - javascripts/mathjax.js
-  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 nav:
 {nav}"""
 
 
 def _mkdocs_nav(manifest: Manifest) -> str:
     lines: list[str] = []
-    for section in manifest.sections:
+    for section_index, section in enumerate(manifest.sections, start=1):
+        section_title = f"{section_index}. {section.title}"
         if section.is_group:
-            lines.append(f"  - {section.title}:")
-            for child in section.children:
-                lines.append(f"      - {child.title}: {output_name(child, 'site')}")
+            lines.append(f"  - {section_title}:")
+            for child_index, child in enumerate(section.children, start=1):
+                lines.append(
+                    f"      - {section_index}.{child_index}. {child.title}: "
+                    f"{output_name(child, 'site')}"
+                )
         else:
-            lines.append(f"  - {section.title}: {output_name(section, 'site')}")
+            lines.append(f"  - {section_title}: {output_name(section, 'site')}")
     return "\n".join(lines) + "\n"
 
 
 def render_mkdocs_yml(manifest: Manifest) -> str:
     return _MKDOCS_TEMPLATE.format(nav=_mkdocs_nav(manifest))
+
+
+def render_package_readme(manifest: Manifest, repo_root: str | Path) -> str:
+    if manifest.package is None:
+        raise ManifestError("package surface is not configured")
+    return (Path(repo_root) / manifest.package.source).read_text(encoding="utf-8")
 
 
 def _hash_tree(root: Path) -> dict[str, str]:
@@ -192,29 +215,51 @@ def build(
     *,
     site: bool = False,
     wiki: bool = False,
+    package: bool = False,
     check: bool = False,
 ) -> None:
     repo_root = Path(repo_root)
     manifest = load_manifest(path, repo_root)
+    requested = {
+        name for name, enabled in (("site", site), ("wiki", wiki), ("package", package)) if enabled
+    }
+    unsupported = requested - set(manifest.surfaces)
+    if unsupported:
+        raise ManifestError(f"requested undeclared surfaces: {sorted(unsupported)}")
     generated = repo_root / "generated"
-    if site or check:
+    build_site = site or (check and "site" in manifest.surfaces)
+    build_wiki = wiki or (check and "wiki" in manifest.surfaces)
+    build_package = package or (check and "package" in manifest.surfaces)
+    if build_site:
         render_site(manifest, repo_root, generated / "site")
         (repo_root / "mkdocs.yml").write_text(render_mkdocs_yml(manifest), encoding="utf-8")
-    if wiki or check:
+    if build_wiki:
         render_wiki(manifest, repo_root, generated / "wiki")
+    if build_package:
+        assert manifest.package is not None
+        expected = render_package_readme(manifest, repo_root)
+        output = repo_root / manifest.package.output
+        if check:
+            actual = output.read_text(encoding="utf-8") if output.is_file() else ""
+            assert actual == expected, f"package README is stale: {manifest.package.output}"
+        else:
+            output.write_text(expected, encoding="utf-8")
     if check:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            render_site(manifest, repo_root, tmp_path / "site")
-            render_wiki(manifest, repo_root, tmp_path / "wiki")
-            _assert_dirs_equal(tmp_path / "site", generated / "site")
-            _assert_dirs_equal(tmp_path / "wiki", generated / "wiki")
+            if build_site:
+                render_site(manifest, repo_root, tmp_path / "site")
+                _assert_dirs_equal(tmp_path / "site", generated / "site")
+            if build_wiki:
+                render_wiki(manifest, repo_root, tmp_path / "wiki")
+                _assert_dirs_equal(tmp_path / "wiki", generated / "wiki")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="build_docs")
     parser.add_argument("--site", action="store_true")
     parser.add_argument("--wiki", action="store_true")
+    parser.add_argument("--package", action="store_true")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
     repo_root = Path.cwd()
@@ -223,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root,
         site=args.site,
         wiki=args.wiki,
+        package=args.package,
         check=args.check,
     )
     return 0

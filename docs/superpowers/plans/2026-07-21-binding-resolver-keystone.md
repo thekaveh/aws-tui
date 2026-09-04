@@ -1,4 +1,4 @@
-# BindingResolver Keystone — Implementation Plan
+# 1. BindingResolver Keystone — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-21-binding-resolver-keystone-design.md` (the §5 table of action id → keys/handler/show/priority is the single source of truth for every exact value below).
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - **Byte-identical default behavior.** With no overlay, every key that works today invokes the same handler with the same `priority`; footer `show` matches the spec table. One documented deviation: `:` no longer shows a duplicate "Help" chip (still opens help).
 - **Handlerless actions stay unbound.** The resolver emits a binding only when `ActionRegistry.has(action_id)`. Deferred actions (`app.command_palette`, `pane.quick_look`, `pane.filter`, `pane.fuzzy_find`, `pane.enter_multiselect`, `pane.toggle_select`, `pane.select_all`, `pane.move`, `pane.new`, `auth.authenticate`) remain in `DEFAULT_BINDINGS` but produce no runtime binding.
@@ -19,7 +19,7 @@
 - Existing `tests/unit/**` and `tests/integration/**` stay green (test edits below are spec-mandated behavior changes, not weakenings).
 - Run `uv run pytest <target>` and `uv run ruff check` / `uv run mypy` per repo config.
 
-## File Structure
+## 1.2. File Structure
 
 - Modify `src/aws_tui/infra/keymap_store.py` — reconcile `DEFAULT_BINDINGS` (Task 1).
 - Modify `src/aws_tui/ui/bindings.py` — skip guard, `_VISIBLE_ACTIONS`/`_PRIORITY_ACTIONS`, dispatch emission (Task 2).
@@ -28,7 +28,7 @@
 
 ---
 
-### Task 1: Reconcile `KeymapStore.DEFAULT_BINDINGS`
+### 1.2.1. Task 1: Reconcile `KeymapStore.DEFAULT_BINDINGS`
 
 **Files:**
 - Modify: `src/aws_tui/infra/keymap_store.py` (`DEFAULT_BINDINGS` dict, ~line 28)
@@ -92,7 +92,7 @@ git commit -m "feat(keymap): reconcile DEFAULT_BINDINGS to reproduce runtime key
 
 ---
 
-### Task 2: Resolver — skip-unregistered, dispatch action, priority/show metadata
+### 1.2.2. Task 2: Resolver — skip-unregistered, dispatch action, priority/show metadata
 
 **Files:**
 - Modify: `src/aws_tui/ui/bindings.py`
@@ -229,7 +229,7 @@ git commit -m "feat(bindings): dispatch-action emission, skip handlerless, prior
 
 ---
 
-### Task 3: Wire the App — register handlers, dispatch, install bindings, drop ClassVar
+### 1.2.3. Task 3: Wire the App — register handlers, dispatch, install bindings, drop ClassVar
 
 **Files:**
 - Modify: `src/aws_tui/app.py` (`BINDINGS` ~217-247; `__init__` ~249-259; add `action_dispatch`)
@@ -301,16 +301,16 @@ def test_no_handlerless_keys_bound() -> None:
 
 
 def test_overlay_remaps_a_handled_action(tmp_path, monkeypatch) -> None:
-    # Build an app whose KeymapStore carries an overlay {pane.copy: "y"}.
+    # Build an app whose KeymapStore carries an overlay {pane.copy: "ctrl+y"}.
     from aws_tui.infra.keymap_store import KeymapStore
     from aws_tui.ui.actions import ActionRegistry
     from aws_tui.ui.bindings import BindingResolver
-    keymap = KeymapStore(overlay={"pane.copy": "y"})
+    keymap = KeymapStore(overlay={"pane.copy": "ctrl+y"})
     actions = ActionRegistry()
     actions.register("pane.copy", lambda: None)
     resolver = BindingResolver(keymap=keymap, actions=actions)
     keys = {b.key for b in resolver.to_textual_bindings()}
-    assert "y" in keys and "c" not in keys
+    assert "ctrl+y" in keys and "c" not in keys
 
 
 @pytest.mark.asyncio
@@ -426,7 +426,7 @@ git commit -m "feat(app): install BindingResolver bindings at runtime; overlays 
 
 ---
 
-## Self-Review notes (author)
+## 1.3. Self-Review notes (author)
 
 - **Spec coverage:** Task 1 = §5 keymap edits; Task 2 = §2/§3/§4 resolver; Task 3 = §1/§6/§7 app wiring + backward-compat guarantee test. All spec sections mapped.
 - **Behavior-change tests, not weakenings:** the rewritten `test_bindings.py` assertions (dispatch form, skip-unregistered, `:`→help) and the keymap test edits encode the approved spec's intentional changes — flag this to the reviewer so they are not read as weakened tests.

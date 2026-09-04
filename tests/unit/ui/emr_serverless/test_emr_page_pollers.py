@@ -17,13 +17,14 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
+import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def _build_page() -> tuple[EmrServerlessPage, EmrServerlessPageVM, _InMemoryEmr]:
@@ -176,3 +177,24 @@ def test_tick_applications_always_dispatches() -> None:
     for _ in range(4):
         page._tick_applications()
     assert captured == ["emr-poll-apps"] * 4
+
+
+@pytest.mark.asyncio
+async def test_explicit_log_refresh_bypasses_vm_cache() -> None:
+    page, vm, _fake = _build_page()
+    captured: list[bool] = []
+    workers: list[Any] = []
+
+    async def record_load(*, use_cache: bool = True) -> None:
+        captured.append(use_cache)
+
+    vm.job_run_logs.load = record_load  # type: ignore[method-assign]
+    page.run_worker = (  # type: ignore[method-assign]
+        lambda coro, *args, **kwargs: workers.append((coro, kwargs.get("group")))
+    )
+
+    page.on_job_run_logs_pane_refresh_requested(object())  # type: ignore[arg-type]
+    await workers[0][0]
+
+    assert workers[0][1] == "emr-logs"
+    assert captured == [False]

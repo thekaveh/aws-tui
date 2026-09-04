@@ -1,13 +1,13 @@
-"""Smoke tests for the built-in themes.
+"""Structural, contrast, and parser checks for the built-in themes.
 
-We don't assert content; we just ensure each ``.tcss`` parses without errors
-through Textual's CSS parser. Snapshot tests (under ``tests/snapshot``)
-provide the rendering-level coverage.
+Snapshot tests under ``tests/snapshot`` provide rendering-level coverage.
 """
 
 from __future__ import annotations
 
 import re
+from importlib import resources
+from pathlib import Path
 
 import pytest
 from textual.css.parse import parse
@@ -62,10 +62,11 @@ def test_builtin_theme_styles_widgets(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
-def test_builtin_theme_retains_status_bar_compatibility_styles(name: str) -> None:
-    """The legacy StatusBar widget is not production chrome, but is retained."""
+def test_builtin_theme_does_not_retain_unmounted_status_bar_styles(name: str) -> None:
     content = ThemeStore().load(name)
-    assert "StatusBar" in content, f"theme {name} missing retained StatusBar styles"
+    assert re.search(r"status[\s_-]*bar", content, re.IGNORECASE) is None, (
+        f"theme {name} retains dead StatusBar styles"
+    )
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
@@ -115,6 +116,19 @@ def _theme_tokens(content: str) -> dict[str, str]:
     return tokens
 
 
+def _bodies_for_selector(content: str, selector: str) -> tuple[str, ...]:
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    return tuple(
+        body
+        for selector_list, body in re.findall(r"([^{}]+)\{([^}]*)\}", content)
+        if selector in (candidate.strip() for candidate in selector_list.split(","))
+    )
+
+
+def _raw_builtin_theme(name: str) -> str:
+    return resources.files("aws_tui.ui.themes").joinpath(f"{name}.tcss").read_text(encoding="utf-8")
+
+
 def _relative_luminance(hex_color: str) -> float:
     raw = hex_color.removeprefix("#")
     channels = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
@@ -146,6 +160,49 @@ def test_selected_state_tokens_have_readable_contrast(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
+def test_muted_text_is_readable_on_both_content_backgrounds(name: str) -> None:
+    tokens = _theme_tokens(ThemeStore().load(name))
+
+    for background_token in ("$bg", "$bg-elev"):
+        ratio = _contrast_ratio(tokens["$text-muted"], tokens[background_token])
+        assert ratio >= 4.5, (
+            f"theme {name}: $text-muted on {background_token} contrast is {ratio:.2f}:1"
+        )
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_brand_banner_titles_use_readable_text_token(name: str) -> None:
+    bodies = _bodies_for_selector(ThemeStore().load(name), "BrandBanner")
+
+    assert any("border-title-color: $text;" in body for body in bodies)
+    assert any("border-subtitle-color: $text;" in body for body in bodies)
+
+
+def test_docs_accent_meets_light_and_dark_theme_contrast() -> None:
+    css = (Path(__file__).parents[3] / "docs/stylesheets/extra.css").read_text(encoding="utf-8")
+    root = re.search(r":root\s*\{([^}]*)\}", css, re.DOTALL)
+    slate = re.search(r'\[data-md-color-scheme="slate"\]\s*\{([^}]*)\}', css, re.DOTALL)
+    assert root is not None
+    assert slate is not None
+
+    light_accent = re.search(r"--md-accent-fg-color:\s*(#[0-9a-fA-F]{6})", root.group(1))
+    dark_accent = re.search(r"--md-accent-fg-color:\s*(#[0-9a-fA-F]{6})", slate.group(1))
+    assert light_accent is not None
+    assert dark_accent is not None
+    assert _contrast_ratio(light_accent.group(1), "#ffffff") >= 4.5
+    assert _contrast_ratio(dark_accent.group(1), "#0b0f14") >= 4.5
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+@pytest.mark.parametrize("token", ["$accent", "$success", "$warning", "$danger"])
+def test_notification_tokens_have_readable_contrast(name: str, token: str) -> None:
+    tokens = _theme_tokens(ThemeStore().load(name))
+    ratio = _contrast_ratio(tokens[token], tokens["$bg-elev"])
+
+    assert ratio >= 4.5, f"theme {name}: {token} on $bg-elev contrast is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
 def test_selected_state_background_is_perceptible(name: str) -> None:
     content = ThemeStore().load(name)
     tokens = _theme_tokens(content)
@@ -171,6 +228,74 @@ def test_selected_state_blocks_use_readable_text_token(name: str) -> None:
     )
 
 
+def test_service_tab_strip_structure_is_shared_theme_owned() -> None:
+    shared = (
+        resources.files("aws_tui.ui.themes")
+        .joinpath("operational-panes.tcss")
+        .read_text(encoding="utf-8")
+    )
+    expected = {
+        "ServiceTabStrip": (
+            "background: $bg;",
+            "color: $text-muted;",
+            "border: solid $rule-dim;",
+        ),
+        "ServiceTabStrip > .service-tab": ("color: $text-muted;",),
+        "ServiceTabStrip > .service-tab.-divided": ("border-left: solid $rule-dim;",),
+        "ServiceTabStrip > .service-tab.-active": (
+            "color: $accent;",
+            "text-style: bold;",
+        ),
+        "ServiceTabStrip:focus > .service-tab.-active": (
+            "background: $bg-sel;",
+            "color: $text;",
+        ),
+    }
+
+    for selector, declarations in expected.items():
+        bodies = _bodies_for_selector(shared, selector)
+        assert bodies, f"shared stylesheet missing {selector}"
+        assert any(all(declaration in body for declaration in declarations) for body in bodies)
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_source_header_edge_is_scoped_to_emr(name: str) -> None:
+    content = _raw_builtin_theme(name)
+
+    assert not _bodies_for_selector(content, "ServiceSourceHeader")
+    bodies = _bodies_for_selector(content, "EmrServerlessPage ServiceSourceHeader")
+    assert bodies
+    assert any("border-left: solid $rule-dim;" in body for body in bodies)
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_focused_service_tab_uses_contrast_safe_tokens(name: str) -> None:
+    content = ThemeStore().load(name)
+    tokens = _theme_tokens(content)
+    bodies = _bodies_for_selector(
+        content,
+        "ServiceTabStrip:focus > .service-tab.-active",
+    )
+
+    assert bodies
+    assert any("background: $bg-sel;" in body and "color: $text;" in body for body in bodies)
+    ratio = _contrast_ratio(tokens["$text"], tokens["$bg-sel"])
+    assert ratio >= 4.5, f"theme {name}: focused service tab contrast is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_builtin_themes_do_not_retain_legacy_service_tab_selectors(name: str) -> None:
+    content = _raw_builtin_theme(name)
+
+    for selector in (
+        "GluePage > #glue-view-tabs",
+        "GluePage .glue-view-tab",
+        "AthenaPage > #athena-view-tabs",
+        "AthenaPage .athena-view-tab",
+    ):
+        assert selector not in content
+
+
 @pytest.mark.parametrize("name", ALL_THEMES)
 def test_command_palette_selectors_match_nested_widget_tree(name: str) -> None:
     content = ThemeStore().load(name)
@@ -191,35 +316,133 @@ def test_emr_logs_placeholder_selectors_match_nested_widget_tree(name: str) -> N
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
-@pytest.mark.parametrize(
-    ("selector", "minimum"),
-    [
-        ("status-conn", 4.5),
-        ("status-region", 4.5),
-        ("status-auth-ok", 4.5),
-        ("status-auth-warn", 4.5),
-        ("status-auth-err", 4.5),
-        ("status-transfers", 4.5),
-    ],
-)
-def test_status_bar_text_tokens_have_readable_contrast(
-    name: str,
-    selector: str,
-    minimum: float,
-) -> None:
+def test_glue_pane_titles_use_readable_theme_tokens(name: str) -> None:
     content = ThemeStore().load(name)
-    tokens = _theme_tokens(content)
-    match = re.search(
-        rf"StatusBar\s*>\s*\.{selector}\s*\{{[^}}]*color:\s*(\$[\w-]+);",
+
+    inactive = re.search(
+        r"GluePage\s+ResourceListPane,\s*"
+        r"GluePage\s+DetailRows\s*\{([^}]*)\}",
         content,
         re.MULTILINE,
     )
-    assert match is not None, f"theme {name}: missing StatusBar .{selector} color rule"
-
-    foreground = tokens[match.group(1)]
-    background = tokens["$bg-elev"]
-    ratio = _contrast_ratio(foreground, background)
-
-    assert ratio >= minimum, (
-        f"theme {name}: .{selector} contrast is {ratio:.2f}:1 for {foreground} on {background}"
+    focused = re.search(
+        r"GluePage\s+ResourceListPane:focus-within,\s*"
+        r"GluePage\s+DetailRows:focus-within\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
     )
+
+    assert inactive is not None
+    assert "border-title-color: $text;" in inactive.group(1)
+    assert focused is not None
+    assert "border-title-color: $accent;" in focused.group(1)
+
+
+def test_operational_pane_structure_is_shared_theme_owned() -> None:
+    shared = (
+        resources.files("aws_tui.ui.themes")
+        .joinpath("operational-panes.tcss")
+        .read_text(encoding="utf-8")
+    )
+
+    for content, selector in (
+        (shared, "GluePage GlueIcebergView"),
+        (shared, "AthenaPage TextArea"),
+        (shared, "AthenaPage #athena-query-controls"),
+        (shared, "AthenaPage #athena-query-detail"),
+        (shared, "AthenaPage #athena-results-summary"),
+        (shared, "AthenaPage DataTable"),
+    ):
+        bodies = _bodies_for_selector(content, selector)
+        assert bodies, f"shared stylesheet missing {selector}"
+        assert any("border: solid $rule-dim;" in body for body in bodies)
+
+    for content, selector in (
+        (shared, "GluePage GlueIcebergView:focus-within"),
+        (shared, "AthenaPage TextArea:focus"),
+        (
+            shared,
+            "AthenaPage #athena-query-controls:focus-within",
+        ),
+        (
+            shared,
+            "AthenaPage #athena-query-detail:focus-within",
+        ),
+        (
+            shared,
+            "AthenaPage #athena-results-summary:focus-within",
+        ),
+        (shared, "AthenaPage DataTable:focus"),
+    ):
+        bodies = _bodies_for_selector(content, selector)
+        assert bodies, f"shared stylesheet missing {selector}"
+        assert any("border: solid $accent;" in body for body in bodies)
+
+
+def test_service_context_layout_has_no_theme_owned_frame() -> None:
+    shared = (
+        resources.files("aws_tui.ui.themes")
+        .joinpath("operational-panes.tcss")
+        .read_text(encoding="utf-8")
+    )
+
+    assert not _bodies_for_selector(shared, "GluePage > #glue-context-pane")
+    assert not _bodies_for_selector(shared, "GluePage > #glue-context-row")
+    assert not _bodies_for_selector(shared, "AthenaPage > #athena-context-row")
+    assert not _bodies_for_selector(shared, "AthenaPage > #athena-context-row:focus-within")
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_builtin_themes_do_not_duplicate_operational_structure(name: str) -> None:
+    content = _raw_builtin_theme(name)
+    assert "Glue / Athena operational pane hierarchy" not in content
+
+    for selector in (
+        "GluePage GlueIcebergView",
+        "AthenaPage TextArea",
+        "AthenaPage #athena-query-controls",
+        "AthenaPage #athena-query-detail",
+        "AthenaPage #athena-results-summary",
+        "AthenaPage DataTable",
+    ):
+        assert all(
+            "border: solid $rule-dim;" not in body
+            for body in _bodies_for_selector(content, selector)
+        )
+
+    for selector in (
+        "GluePage GlueIcebergView:focus-within",
+        "AthenaPage TextArea:focus",
+        "AthenaPage DataTable:focus",
+        "AthenaPage #athena-query-controls:focus-within",
+        "AthenaPage #athena-query-detail:focus-within",
+        "AthenaPage #athena-results-summary:focus-within",
+    ):
+        assert all(
+            "border: solid $accent;" not in body for body in _bodies_for_selector(content, selector)
+        )
+
+    assert "AthenaPage > #athena-context-header" not in content
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_glue_list_placeholders_use_semantic_theme_tokens(name: str) -> None:
+    content = ThemeStore().load(name)
+
+    warning = re.search(
+        r"GluePage\s+OptionList\.-warning\s*>\s*"
+        r"\.option-list--option-disabled\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+    error = re.search(
+        r"GluePage\s+OptionList\.-error\s*>\s*"
+        r"\.option-list--option-disabled\s*\{([^}]*)\}",
+        content,
+        re.MULTILINE,
+    )
+
+    assert warning is not None
+    assert "color: $warning;" in warning.group(1)
+    assert error is not None
+    assert "color: $danger;" in error.group(1)

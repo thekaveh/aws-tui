@@ -19,10 +19,14 @@ production polishes over the original test fake:
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from aws_tui.domain.emr_logs import EmrServerlessLogsClient
+from aws_tui.demo._bounded_log import BoundedCallLog
+from aws_tui.demo.clock import DEMO_NOW
+from aws_tui.domain.emr_logs import LogChunk, LogFile, LogFileKind, LogFilter
 from aws_tui.domain.emr_serverless import (
     EMR_BOTO_CONFIG,
     ApplicationState,
@@ -35,6 +39,7 @@ from aws_tui.domain.emr_serverless import (
 # Mirrors aws_tui.demo.in_memory_fs._DEMO_LATENCY_SEC. Surfaces the
 # UI's loading… placeholders during demo runs.
 _DEMO_LATENCY_SEC: float = 0.05
+_logger = logging.getLogger(__name__)
 
 
 class InMemoryEmr:
@@ -51,10 +56,11 @@ class InMemoryEmr:
         self._details: dict[tuple[str, str], JobRunDetail] = {}
         # Counter so each call is observable in tests that pin the
         # auto-refresh cadence.
-        self.calls: list[tuple[str, tuple[object, ...]]] = []
+        self.calls: BoundedCallLog[tuple[str, tuple[object, ...]]] = BoundedCallLog()
         # Monotonic suffix so multiple ``start_job_run`` calls produce
         # unique ids without the tests needing to seed them.
         self._next_run_seq: int = 1
+        self._clock = DEMO_NOW - timedelta(days=1)
         # Hook for tests that need ``start_job_run`` to raise — set
         # this to a ``ProviderError`` (or any exception) to drive the
         # error-path assertions on ``JobRunCloneVM.submit``.
@@ -62,23 +68,86 @@ class InMemoryEmr:
         # Dummy attributes for JobRunLogsVM constructor (not used by fake).
         self._session = None
         self._region_name = None
+        self.boto_config = EMR_BOTO_CONFIG
         # Active state-walk tasks scheduled by ``start_job_run``.
         # Tracked so ``dispose()`` can cancel them on demo shutdown
         # (otherwise asyncio surfaces "Task was destroyed but it is
         # pending" warnings).
         self._state_tasks: set[asyncio.Task[None]] = set()
+        self._log_files: dict[str, tuple[LogFile, tuple[str, ...]]] = {}
 
-    def make_logs_client(self) -> EmrServerlessLogsClient:
+    def _observe_timestamp(self, timestamp: datetime) -> None:
+        if timestamp > self._clock:
+            self._clock = timestamp
+
+    def _tick(self, seconds: int = 1) -> datetime:
+        self._clock += timedelta(seconds=seconds)
+        return self._clock
+
+    def make_logs_client(self) -> InMemoryEmr:
         """Build the logs facade paired with this in-memory client.
 
-        Demo/test EMR jobs never fetch real S3 logs, but the page VM
-        still owns a JobRunLogsVM. Returning an explicit facade keeps
-        service composition from reaching into the fake's internals.
+        The fake implements the logs-client protocol directly so demo jobs can
+        exercise log discovery, filtering, and rendering without network I/O.
         """
-        return EmrServerlessLogsClient(
-            session=self._session,
-            region_name=self._region_name,
-            boto_config=EMR_BOTO_CONFIG,
+        return self
+
+    def add_log_file(
+        self,
+        *,
+        application_id: str,
+        job_run_id: str,
+        kind: LogFileKind,
+        lines: tuple[str, ...],
+    ) -> LogFile:
+        worker, filename = {
+            LogFileKind.DRIVER_STDOUT: ("SPARK_DRIVER", "stdout.gz"),
+            LogFileKind.DRIVER_STDERR: ("SPARK_DRIVER", "stderr.gz"),
+            LogFileKind.EXECUTOR_STDOUT: ("SPARK_EXECUTOR/1", "stdout.gz"),
+            LogFileKind.EXECUTOR_STDERR: ("SPARK_EXECUTOR/1", "stderr.gz"),
+            LogFileKind.HIVE_DRIVER_STDOUT: ("HIVE_DRIVER", "stdout.gz"),
+            LogFileKind.HIVE_DRIVER_STDERR: ("HIVE_DRIVER", "stderr.gz"),
+            LogFileKind.TEZ_TASK_STDOUT: ("TEZ_TASK/1", "stdout.gz"),
+            LogFileKind.TEZ_TASK_STDERR: ("TEZ_TASK/1", "stderr.gz"),
+        }[kind]
+        key = f"logs/applications/{application_id}/jobs/{job_run_id}/{worker}/{filename}"
+        log_file = LogFile(key=key, kind=kind, size=sum(len(line) + 1 for line in lines))
+        self._log_files[key] = (log_file, lines)
+        return log_file
+
+    async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]:
+        await asyncio.sleep(_DEMO_LATENCY_SEC)
+        _ = bucket
+        prefix = run_prefix.rstrip("/") + "/"
+        return [file for key, (file, _lines) in self._log_files.items() if key.startswith(prefix)]
+
+    async def stream(
+        self,
+        *,
+        log_file: LogFile,
+        bucket: str,
+        max_bytes: int,
+        filter_: LogFilter,
+    ) -> AsyncIterator[LogChunk]:
+        await asyncio.sleep(_DEMO_LATENCY_SEC)
+        _ = bucket
+        _file, lines = self._log_files[log_file.key]
+        budget = max(0, max_bytes)
+        bytes_read = 0
+        scanned: list[str] = []
+        for line in lines:
+            encoded_size = len((line + "\n").encode())
+            if bytes_read + encoded_size > budget:
+                break
+            bytes_read += encoded_size
+            scanned.append(line)
+        matched = tuple(line for line in scanned if filter_.matches(line))
+        yield LogChunk(
+            lines=matched,
+            bytes_read=bytes_read,
+            lines_scanned=len(scanned),
+            matched_count=len(matched),
+            truncated=len(scanned) < len(lines),
         )
 
     # ── Test seeding ────────────────────────────────────────────────────────
@@ -97,10 +166,11 @@ class InMemoryEmr:
             name=name,
             state=state,
             type=app_type,
-            created_at=created_at or datetime.fromisoformat("2026-06-25T12:00:00+00:00"),
+            created_at=created_at or DEMO_NOW - timedelta(days=1),
         )
         self._apps[app_id] = s
         self._runs.setdefault(app_id, {})
+        self._observe_timestamp(s.created_at)
         return s
 
     def add_job_run(
@@ -113,7 +183,7 @@ class InMemoryEmr:
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
     ) -> JobRunSummary:
-        ts = created_at or datetime.fromisoformat("2026-06-25T12:00:00+00:00")
+        ts = created_at or DEMO_NOW - timedelta(days=1)
         s = JobRunSummary(
             application_id=application_id,
             job_run_id=job_run_id,
@@ -123,6 +193,7 @@ class InMemoryEmr:
             updated_at=updated_at or ts,
         )
         self._runs.setdefault(application_id, {})[job_run_id] = s
+        self._observe_timestamp(s.updated_at)
         return s
 
     def add_job_run_detail(
@@ -155,6 +226,7 @@ class InMemoryEmr:
             s3_monitoring_log_uri=s3_monitoring_log_uri,
         )
         self._details[(application_id, job_run_id)] = d
+        self._observe_timestamp(d.updated_at)
         return d
 
     def set_run_state(self, application_id: str, job_run_id: str, state: JobRunState) -> None:
@@ -267,7 +339,7 @@ class InMemoryEmr:
             raise self.start_job_run_exc
         new_id = f"r-clone-{self._next_run_seq:03d}"
         self._next_run_seq += 1
-        ts = datetime.fromisoformat("2026-06-26T12:00:00+00:00")
+        ts = self._tick()
         s = JobRunSummary(
             application_id=application_id,
             job_run_id=new_id,
@@ -297,8 +369,7 @@ class InMemoryEmr:
         # loop. The done callback drains task.exception() before
         # discarding so a future regression in _advance_state can't
         # silently lose the exception via asyncio's "never retrieved"
-        # warning (invisible in a TUI). Same shield round-36 added
-        # to CommandPaletteVM._spawn_awaitable.
+        # warning, which would otherwise be invisible in the TUI.
         task = asyncio.create_task(self._advance_state(application_id, new_id))
         self._state_tasks.add(task)
         task.add_done_callback(self._on_state_task_done)
@@ -308,11 +379,16 @@ class InMemoryEmr:
         self._state_tasks.discard(task)
         if task.cancelled():
             return
-        # Drain task.exception() to suppress asyncio's "never
-        # retrieved" warning. Demo-mode-only blast radius — there
-        # is no production toast surface to route to; the bare
-        # drain is the contract.
-        _ = task.exception()
+        error = task.exception()
+        if error is not None:
+            _logger.error(
+                "demo.emr.state_walk.failed",
+                extra={
+                    "error": str(error),
+                    "error_type": type(error).__name__,
+                },
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def _advance_state(self, application_id: str, job_run_id: str) -> None:
         """Walk a freshly-submitted job through SUBMITTED → SCHEDULED →
@@ -325,13 +401,35 @@ class InMemoryEmr:
         # needed — the cancellation unwinds the coroutine naturally
         # and the task wrapper marks the task as cancelled.
         await asyncio.sleep(1.0)
-        self._set_run_state(application_id, job_run_id, JobRunState.SCHEDULED)
+        self._set_run_state(
+            application_id,
+            job_run_id,
+            JobRunState.SCHEDULED,
+            advance_seconds=1,
+        )
         await asyncio.sleep(1.0)
-        self._set_run_state(application_id, job_run_id, JobRunState.RUNNING)
+        self._set_run_state(
+            application_id,
+            job_run_id,
+            JobRunState.RUNNING,
+            advance_seconds=1,
+        )
         await asyncio.sleep(3.0)
-        self._set_run_state(application_id, job_run_id, JobRunState.SUCCESS)
+        self._set_run_state(
+            application_id,
+            job_run_id,
+            JobRunState.SUCCESS,
+            advance_seconds=3,
+        )
 
-    def _set_run_state(self, application_id: str, job_run_id: str, state: JobRunState) -> None:
+    def _set_run_state(
+        self,
+        application_id: str,
+        job_run_id: str,
+        state: JobRunState,
+        *,
+        advance_seconds: int,
+    ) -> None:
         """Mutate a run record's state by id.
 
         Uses ``dataclasses.replace`` — the idiomatic copy-with-changes
@@ -341,11 +439,28 @@ class InMemoryEmr:
         """
         runs = self._runs.get(application_id, {})
         existing = runs.get(job_run_id)
-        if existing is not None:
-            runs[job_run_id] = replace(existing, state=state)
         detail = self._details.get((application_id, job_run_id))
+        prior_updated_at = (
+            existing.updated_at
+            if existing is not None
+            else detail.updated_at
+            if detail is not None
+            else self._clock
+        )
+        updated_at = prior_updated_at + timedelta(seconds=advance_seconds)
+        self._observe_timestamp(updated_at)
+        if existing is not None:
+            runs[job_run_id] = replace(existing, state=state, updated_at=updated_at)
         if detail is not None:
-            self._details[(application_id, job_run_id)] = replace(detail, state=state)
+            duration_ms = detail.duration_ms
+            if state in {JobRunState.SUCCESS, JobRunState.FAILED, JobRunState.CANCELLED}:
+                duration_ms = int((updated_at - detail.created_at).total_seconds() * 1000)
+            self._details[(application_id, job_run_id)] = replace(
+                detail,
+                state=state,
+                updated_at=updated_at,
+                duration_ms=duration_ms,
+            )
 
     async def aclose(self) -> None:
         """Cancel and drain any in-flight clone state-machine tasks.

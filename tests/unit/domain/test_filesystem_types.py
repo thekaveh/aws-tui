@@ -6,15 +6,16 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import (
     ConflictError,
     EntryKind,
     FileSystemProvider,
     NotFoundError,
     PathRef,
+    ProviderError,
     TransferProgress,
 )
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 pytestmark = pytest.mark.unit
 
@@ -195,6 +196,76 @@ async def test_inmemory_write_into_missing_parent_raises() -> None:
     fs = InMemoryFS()
     with pytest.raises(NotFoundError):
         await fs.write_stream(PathRef.from_posix("/missing/x"), _agen([b"x"]))
+
+
+async def test_inmemory_listing_rejects_results_beyond_safety_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.demo import in_memory_fs
+
+    monkeypatch.setattr(in_memory_fs, "_MAX_LISTING_ENTRIES", 1, raising=False)
+    fs = InMemoryFS()
+    await fs.write_stream(PathRef(("one",)), _agen([b"1"]))
+    await fs.write_stream(PathRef(("two",)), _agen([b"2"]))
+
+    with pytest.raises(ProviderError, match="listing safety limit"):
+        await fs.list(PathRef(()))
+
+
+async def test_inmemory_write_rejects_known_oversized_object_before_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.demo import in_memory_fs
+
+    monkeypatch.setattr(in_memory_fs, "_MAX_OBJECT_BYTES", 2, raising=False)
+    read = False
+
+    async def source() -> AsyncIterator[bytes]:
+        nonlocal read
+        read = True
+        yield b"abc"
+
+    fs = InMemoryFS()
+    with pytest.raises(ProviderError, match="object safety limit"):
+        await fs.write_stream(PathRef(("large",)), source(), total_size=3)
+
+    assert not read
+    with pytest.raises(NotFoundError):
+        await fs.stat(PathRef(("large",)))
+
+
+async def test_inmemory_write_rejects_unknown_oversized_object_without_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.demo import in_memory_fs
+
+    monkeypatch.setattr(in_memory_fs, "_MAX_OBJECT_BYTES", 2, raising=False)
+    fs = InMemoryFS()
+
+    with pytest.raises(ProviderError, match="object safety limit"):
+        await fs.write_stream(PathRef(("large",)), _agen([b"ab", b"c"]))
+
+    with pytest.raises(NotFoundError):
+        await fs.stat(PathRef(("large",)))
+
+
+async def test_inmemory_write_enforces_aggregate_storage_budget_on_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.demo import in_memory_fs
+
+    monkeypatch.setattr(in_memory_fs, "_MAX_OBJECT_BYTES", 10, raising=False)
+    monkeypatch.setattr(in_memory_fs, "_MAX_STORAGE_BYTES", 4, raising=False)
+    fs = InMemoryFS()
+    await fs.write_stream(PathRef(("first",)), _agen([b"abc"]))
+
+    with pytest.raises(ProviderError, match="storage safety limit"):
+        await fs.write_stream(PathRef(("second",)), _agen([b"de"]))
+    await fs.write_stream(PathRef(("first",)), _agen([b"wxyz"]), overwrite=True)
+
+    assert await _drain(await fs.read_stream(PathRef(("first",)))) == b"wxyz"
+    with pytest.raises(NotFoundError):
+        await fs.stat(PathRef(("second",)))
 
 
 async def test_inmemory_rename_conflict() -> None:

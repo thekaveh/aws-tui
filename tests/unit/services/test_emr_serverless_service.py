@@ -1,7 +1,7 @@
 """Service-protocol tests for EmrServerlessService.
 
-Pins the 🔥 descriptor icon + supports(connection.kind == 'aws') contract
-so the nav rail correctly filters out s3-compatible connections."""
+Pins reserved descriptor metadata plus the AWS-only support contract used to
+filter service rows for s3-compatible connections."""
 
 from __future__ import annotations
 
@@ -33,17 +33,8 @@ def test_package_facade_exports_service_contract() -> None:
     assert EmrLogsClientFactory is service_module.EmrLogsClientFactory
 
 
-def test_descriptor_icon_is_fire_smp_label_is_emr() -> None:
-    # 🔥 = U+1F525 FIRE — SMP single-codepoint, renders as 2-cell
-    # colour emoji reliably AND draws to the full bounding box.
-    # Fifth icon attempt (back to PR #79's known-good pick after
-    # the PR #83 💥 COLLISION glyph rendered with a tighter
-    # bounding box than the 🪣 nav peer; user feedback). Trail:
-    #   PR #77 ⚡    BMP, 1-cell fallback  — broke nav-rail layout
-    #   PR #79 🔥    SMP, 2-cell, full box — worked
-    #   PR #81 ⚡️   BMP+VS-16, fallback   — broke layout again
-    #   PR #83 💥    SMP, tight box        — looked tiny vs 🪣
-    #         🔥    SMP, 2-cell, full box  — here, back to known good
+def test_descriptor_metadata_and_label_are_stable() -> None:
+    # The rail renders the label; the icon remains stable descriptor metadata.
     assert EmrServerlessService.descriptor == ServiceDescriptor(
         id="emr-serverless", label="EMR", icon="🔥"
     )
@@ -173,3 +164,50 @@ async def test_build_vm_degrades_session_construction_auth_failure(
         await page.client.list_applications()
     with pytest.raises(AuthRequiredError):
         await page.job_run_logs._client.list_files(bucket="logs", run_prefix="runs/x")  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_degraded_clients_raise_fresh_errors_on_every_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_profile_not_found(*_args: object, **_kwargs: object) -> object:
+        raise botocore.exceptions.ProfileNotFound(profile="missing")
+
+    monkeypatch.setattr(service_module.aioboto3, "Session", _raise_profile_not_found)
+    svc = EmrServerlessService(hub=MessageHub(), dispatcher=NULL_DISPATCHER)
+    page = svc.build_vm(
+        Connection(
+            name="missing",
+            kind="aws",
+            region="us-west-2",
+            source="config",
+            profile="missing",
+        )
+    )
+
+    async def capture_application_error() -> AuthRequiredError:
+        try:
+            await page.client.list_applications()
+        except AuthRequiredError as exc:
+            return exc
+        raise AssertionError("degraded client did not raise")
+
+    async def capture_logs_error() -> AuthRequiredError:
+        try:
+            await page.job_run_logs._client.list_files(  # type: ignore[attr-defined]
+                bucket="logs",
+                run_prefix="runs/x",
+            )
+        except AuthRequiredError as exc:
+            return exc
+        raise AssertionError("degraded logs client did not raise")
+
+    first_application = await capture_application_error()
+    second_application = await capture_application_error()
+    first_logs = await capture_logs_error()
+    second_logs = await capture_logs_error()
+
+    assert first_application is not second_application
+    assert first_logs is not second_logs
+    assert str(first_application) == str(second_application)
+    assert str(first_logs) == str(second_logs)

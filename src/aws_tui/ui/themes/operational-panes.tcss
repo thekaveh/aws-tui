@@ -1,0 +1,82 @@
+$error: $danger;
+
+/* Shared help overlay surface */
+HelpModal > #help-frame {
+    color: $text;
+    background: $bg-elev;
+    border: round $accent;
+}
+HelpModal #help-title,
+HelpModal .help-section {
+    color: $accent;
+}
+HelpModal #help-subtitle,
+HelpModal .help-dim,
+HelpModal #help-footer {
+    color: $text-muted;
+}
+
+/* Shared service context picker borders */
+ContextPicker {
+    border: solid $rule-dim;
+}
+ContextPicker:focus,
+ContextPicker:focus-within,
+ContextPicker.-open,
+ServiceSourceHeader:focus > ContextPicker {
+    border: heavy $accent;
+}
+ContextPicker.-disabled,
+ContextPicker.-loading {
+    border: solid $rule-dim;
+}
+ContextPicker.-warning,
+ContextPicker.-warning:focus-within {
+    border: solid $warning;
+}
+ContextPicker.-error,
+ContextPicker.-error:focus-within {
+    border: solid $error;
+}
+
+GluePage GlueIcebergView,
+AthenaPage TextArea,
+AthenaPage #athena-query-controls,
+AthenaPage #athena-query-detail,
+AthenaPage #athena-results-summary,
+AthenaPage DataTable {
+    background: $bg;
+    color: $text;
+    border: solid $rule-dim;
+    border-title-color: $text;
+}
+GluePage GlueIcebergView:focus-within,
+AthenaPage TextArea:focus,
+AthenaPage #athena-query-controls:focus-within,
+AthenaPage #athena-query-detail:focus-within,
+AthenaPage #athena-results-summary:focus-within,
+AthenaPage DataTable:focus {
+    border: solid $accent;
+    border-title-color: $accent;
+}
+
+/* Shared service-local segmented tab frame */
+ServiceTabStrip {
+    background: $bg;
+    color: $text-muted;
+    border: solid $rule-dim;
+}
+ServiceTabStrip > .service-tab {
+    color: $text-muted;
+}
+ServiceTabStrip > .service-tab.-divided {
+    border-left: solid $rule-dim;
+}
+ServiceTabStrip > .service-tab.-active {
+    color: $accent;
+    text-style: bold;
+}
+ServiceTabStrip:focus > .service-tab.-active {
+    background: $bg-sel;
+    color: $text;
+}

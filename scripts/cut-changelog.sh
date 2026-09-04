@@ -102,6 +102,31 @@ else:
         ]
     )
 out.extend(shift_numbering(line) for line in lines[unreleased_idx + 1 :])
+
+# Move the compare window forward with the release. Preserve the exact previous
+# Unreleased base (a tag or commit) for the new version's comparison link.
+unreleased_ref_idx: int | None = None
+unreleased_url: str | None = None
+for idx, line in enumerate(out):
+    if line.startswith("[Unreleased]: "):
+        unreleased_ref_idx = idx
+        unreleased_url = line.removeprefix("[Unreleased]: ")
+        break
+if unreleased_ref_idx is None or unreleased_url is None:
+    raise SystemExit("missing [Unreleased] comparison reference")
+marker = "/compare/"
+if marker not in unreleased_url or not unreleased_url.endswith("...HEAD"):
+    raise SystemExit("[Unreleased] reference must be a compare URL ending in ...HEAD")
+compare_root, comparison = unreleased_url.split(marker, maxsplit=1)
+previous_base = comparison.removesuffix("...HEAD")
+if not previous_base:
+    raise SystemExit("[Unreleased] comparison reference has no base")
+tag = f"v{version}"
+out[unreleased_ref_idx] = f"[Unreleased]: {compare_root}{marker}{tag}...HEAD"
+out.insert(
+    unreleased_ref_idx + 1,
+    f"[{version}]: {compare_root}{marker}{previous_base}...{tag}",
+)
 print("\n".join(out))
 print()
 PY

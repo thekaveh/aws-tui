@@ -1,6 +1,6 @@
 """ThemePickerVM — VMx-backed model for the help-modal theme switcher.
 
-Each built-in theme is exposed as a child :class:`ThemeOptionVM` with an
+Each available theme is exposed as a child :class:`ThemeOptionVM` with an
 observable ``is_active`` flag (mirrors the row-level reactivity the
 file-manager panes use for :class:`EntryVM.is_selected`). The picker
 owns a :class:`RelayCommandOf[str]` ``pick_theme_command`` that delegates
@@ -107,16 +107,16 @@ class ThemePickerVM:
         *,
         themes: tuple[str, ...],
         active_theme: str,
-        on_pick: Callable[[str], None],
-        on_preview: Callable[[str], None] | None = None,
+        on_pick: Callable[[str], bool],
+        on_preview: Callable[[str], bool] | None = None,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         id_prefix: str = "theme_picker",
     ) -> None:
         self._hub: MessageHub[Message] = hub
-        self._on_pick: Callable[[str], None] = on_pick
-        self._on_preview: Callable[[str], None] = (
-            on_preview if on_preview is not None else (lambda _name: None)
+        self._on_pick: Callable[[str], bool] = on_pick
+        self._on_preview: Callable[[str], bool] = (
+            on_preview if on_preview is not None else (lambda _name: True)
         )
         self._active_theme: str = active_theme
 
@@ -224,8 +224,8 @@ class ThemePickerVM:
         """Delegate to the injected callback then update the active row."""
         if not name:
             return
-        self._on_pick(name)
-        self.set_active(name)
+        if self._on_pick(name):
+            self.set_active(name)
 
     def _preview(self, name: str | None) -> None:
         """Live-preview ``name`` without committing the pick.
@@ -237,8 +237,8 @@ class ThemePickerVM:
         """
         if not name:
             return
-        self._on_preview(name)
-        self.set_active(name)
+        if self._on_preview(name):
+            self.set_active(name)
 
     def _initial_children(self) -> Iterable[ComponentVMOf[ThemeOptionState]]:
         return tuple(opt.inner for opt in self._options)

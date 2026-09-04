@@ -10,7 +10,7 @@ from textual.widgets import Button, Static
 from vmx import Message, MessageHub
 
 from aws_tui.infra.redaction import safe_endpoint_display
-from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+from aws_tui.ui.widgets.confirm_modal import TextualDialogService
 from aws_tui.ui.widgets.settings.connection_form import (
     ConnectionFormCancelled,
     ConnectionFormInline,
@@ -21,7 +21,7 @@ from aws_tui.vm.chrome.confirm_vm import (
     ConfirmPath,
     ConfirmRequest,
 )
-from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 
@@ -214,10 +214,8 @@ class S3ConnectionsPanel(Widget):
 
     @work(exclusive=True, group="s3-connections-delete")
     async def _do_delete(self, name: str) -> None:
-        # exclusive=True + group serializes rapid double-clicks on the
-        # same (or different) delete chip — without it, two concurrent
-        # workers can both pass the confirm dialog and the second's
-        # vm.remove() crashes with a missing-entry error.
+        # The latest delete request supersedes any in-flight request in
+        # this group, so two workers cannot confirm and remove concurrently.
         confirm_vm = ConfirmationVM(hub=self._hub, dispatcher=self._vm.dispatcher)
         confirm_vm.construct()
         try:
@@ -229,8 +227,9 @@ class S3ConnectionsPanel(Widget):
                 cancel_label="Cancel",
                 danger=True,
             )
-            confirmed = await self.app.push_screen_wait(
-                ConfirmModal(confirm_vm, request, hub=self._hub)
+            confirmed = await confirm_vm.ask(
+                request,
+                dialog_service=TextualDialogService(self.app, confirm_vm, hub=self._hub),
             )
         finally:
             confirm_vm.dispose()

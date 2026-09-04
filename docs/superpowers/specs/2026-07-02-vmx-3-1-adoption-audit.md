@@ -1,5 +1,15 @@
 # 1. VMx 3.1.0 adoption audit for aws-tui
 
+> **Maintenance note (2026-08-02):** The unwired `ResumeVM` and `FirstRunVM`
+> prototype stacks were removed after this audit. `S3CompatForm` now lives in
+> `vm/settings/s3_compat_form.py`; transfer byte formatting lives in
+> `ui/formatters.py`. References below describe the audited July snapshot.
+>
+> **Current dependency note (2026-08-25):** This is a historical VMx 3.1.0
+> adoption record, not the current dependency contract. The repository now
+> requires `vmx>=3.23.0,<4`; see the
+> [VMx 3.23 maintenance audit](2026-08-25-vmx-3-23-maintenance-audit.md).
+
 | Field | Value |
 |---|---|
 | Status | Drafted on `codex/vmx-3-1-adoption-audit` |

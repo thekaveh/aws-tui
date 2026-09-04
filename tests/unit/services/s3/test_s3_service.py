@@ -9,6 +9,8 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
+from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.connection_resolver import Connection
@@ -17,7 +19,6 @@ from aws_tui.services.s3 import service as s3_service_module
 from aws_tui.services.s3.service import _aioboto3_session_for
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.services_protocol import Service
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 def _hub() -> MessageHub[Message]:
@@ -109,10 +110,27 @@ def test_s3_service_provider_threads_verify_tls(
         local_root=tmp_path / "local",
     )
 
-    provider = svc._make_s3_provider(_minio_conn())
+    provider = svc.build_remote_provider(_minio_conn())
 
     assert isinstance(provider, RecordingS3FS)
     assert calls[0]["verify_tls"] is False
+
+
+def test_s3_service_exposes_app_orchestration_dependencies(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path / "journal")
+    svc = S3Service(
+        transfer_journal=journal,
+        hub=_hub(),
+        dispatcher=NULL_DISPATCHER,
+        local_root=tmp_path / "local",
+        s3_fs_factory=lambda _conn: InMemoryFS(),
+    )
+
+    assert svc.transfer_journal is journal
+    assert isinstance(svc.build_remote_provider(_aws_conn()), InMemoryFS)
+    local = svc.build_local_provider()
+    assert isinstance(local, LocalFS)
+    assert local._root == (tmp_path / "local").resolve()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -162,3 +180,15 @@ def test_aioboto3_session_factory_unsupported() -> None:
     rogue = Connection(name="x", kind="azure-blob", region="us-east-1", source="explicit")
     with pytest.raises(ValueError, match="unsupported connection kind"):
         _aioboto3_session_for(rogue)
+
+
+def test_aioboto3_session_factory_rejects_missing_compatible_credentials() -> None:
+    connection = Connection(
+        name="unsafe",
+        kind="s3-compatible",
+        region="us-east-1",
+        source="explicit",
+        endpoint_url="http://localhost:9000",
+    )
+    with pytest.raises(AuthRequiredError, match="requires an access key and secret key"):
+        _aioboto3_session_for(connection)

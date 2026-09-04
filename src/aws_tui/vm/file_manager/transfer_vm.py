@@ -68,9 +68,6 @@ class TransferVM:
         self._cancel_command: RelayCommand = (
             RelayCommand.builder().predicate(self._can_cancel).task(self._cancel).build()
         )
-        self._retry_command: RelayCommand = (
-            RelayCommand.builder().predicate(self._can_retry).task(self._retry).build()
-        )
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -88,12 +85,13 @@ class TransferVM:
 
     @property
     def is_active(self) -> bool:
-        return self._inner.model.state in (TransferState.RUNNING, TransferState.PAUSED)
+        return self._inner.model.state is TransferState.RUNNING
 
     @property
     def is_finished(self) -> bool:
         return self._inner.model.state in (
             TransferState.COMPLETED,
+            TransferState.SKIPPED,
             TransferState.FAILED,
             TransferState.CANCELLED,
         )
@@ -132,10 +130,6 @@ class TransferVM:
         return self._cancel_command
 
     @property
-    def retry_command(self) -> RelayCommand:
-        return self._retry_command
-
-    @property
     def status(self) -> ConstructionStatus:
         return self._inner.status
 
@@ -161,7 +155,6 @@ class TransferVM:
 
     def dispose(self) -> None:
         self._cancel_command.dispose()
-        self._retry_command.dispose()
         self._inner.dispose()
 
     # ── Mutators (driven by TransfersVM from the hub) ──────────────────────
@@ -190,6 +183,7 @@ class TransferVM:
         if self.is_finished:
             new_is_terminal = state in (
                 TransferState.COMPLETED,
+                TransferState.SKIPPED,
                 TransferState.FAILED,
                 TransferState.CANCELLED,
             )
@@ -235,11 +229,7 @@ class TransferVM:
         return self._inner.model.state in (
             TransferState.PENDING,
             TransferState.RUNNING,
-            TransferState.PAUSED,
         )
-
-    def _can_retry(self) -> bool:
-        return self._inner.model.state in (TransferState.FAILED, TransferState.CANCELLED)
 
     def _cancel(self) -> None:
         # Two-part cancel: (1) immediate VM-state transition so the
@@ -255,17 +245,6 @@ class TransferVM:
             state=TransferState.CANCELLED,
         )
         self._hub.send(TransferCancelRequestedMessage(transfer_id=self._inner.model.id))
-
-    def _retry(self) -> None:
-        # Retry must bypass terminal-state stickiness — by definition
-        # we're transitioning OUT of FAILED / CANCELLED back to
-        # PENDING in response to a user command.
-        self._apply_update_unchecked(
-            bytes_done=0,
-            bytes_total=self._inner.model.bytes_total,
-            state=TransferState.PENDING,
-            error=None,
-        )
 
     def _record_sample(self, bytes_done: int) -> None:
         """Append a sample to the rolling 5-second speed window."""

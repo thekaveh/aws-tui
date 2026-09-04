@@ -88,11 +88,21 @@ class Connection:
 
 
 def _default_aws_config_path() -> Path:
+    configured = os.environ.get("AWS_CONFIG_FILE")
+    if configured is not None:
+        return Path(os.path.expandvars(configured)).expanduser()
     return Path.home() / ".aws" / "config"
 
 
 def _default_aws_credentials_path() -> Path:
+    configured = os.environ.get("AWS_SHARED_CREDENTIALS_FILE")
+    if configured is not None:
+        return Path(os.path.expandvars(configured)).expanduser()
     return Path.home() / ".aws" / "credentials"
+
+
+def _default_aws_region() -> str:
+    return (os.environ.get("AWS_DEFAULT_REGION") or "").strip() or _DEFAULT_REGION
 
 
 class ConnectionResolver:
@@ -142,8 +152,12 @@ class ConnectionResolver:
     def materialize(self, name: str) -> ConnectionEntry:
         """Promote an auto-discovered connection to an explicit config entry.
 
-        Idempotent on already-explicit entries (writes the same body back).
+        Idempotent on already-explicit entries without rewriting their
+        credential-source metadata.
         """
+        explicit = self._config_store.load().connections.get(name)
+        if explicit is not None:
+            return explicit
         conn = self.resolve(name)
         entry = ConnectionEntry(
             name=conn.name,
@@ -172,7 +186,7 @@ class ConnectionResolver:
                         kind="aws",
                         region=entry.region
                         or self._profile_region(entry.profile)
-                        or _DEFAULT_REGION,
+                        or _default_aws_region(),
                         source=SOURCE_CONFIG,
                         profile=entry.profile,
                     )
@@ -207,7 +221,7 @@ class ConnectionResolver:
             Connection(
                 name=name,
                 kind="aws",
-                region=region or _DEFAULT_REGION,
+                region=region or _default_aws_region(),
                 source=SOURCE_AUTO,
                 profile=name,
             )

@@ -16,7 +16,6 @@ from collections import OrderedDict
 from enum import StrEnum
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
@@ -32,7 +31,10 @@ from aws_tui.domain.emr_logs import (
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
+from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.emr_serverless._errors import map_provider_error
+from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 
 class LogsState(StrEnum):
@@ -94,14 +96,16 @@ class JobRunLogsVM:
         self._lines_scanned: int = 0
         self._filter: LogFilter = DEFAULT_LOG_FILTER
         self._disposed: bool = False
+        self._operations = OperationOwner()
         # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement
         # path): fires the name of the property that just changed,
         # scoped to THIS VM instance. The logs-pane view subscribes
         # here instead of filtering shared MessageHub events by
         # ``sender_object``.
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         # LRU response cache: key=(app_id, run_id, file_key, patterns,
-        # mode, case_insensitive); value=(lines, truncated). Use the
+        # mode, case_insensitive); value=(lines, truncated, bytes_read,
+        # lines_scanned). Use the
         # raw filter triple instead of hash(triple) — hash() collapses
         # structurally-distinct filters to a single int, so two
         # different filter configurations can collide and the second
@@ -110,8 +114,8 @@ class JobRunLogsVM:
         # dataclass so the tuple is hashable directly. Cleared on
         # application switch in :meth:`set_target`.
         self._cache: OrderedDict[
-            tuple[str, str, str, tuple[str, ...], FilterMode, bool],
-            tuple[tuple[str, ...], bool],
+            tuple[str, str, str, int | None, tuple[str, ...], FilterMode, bool],
+            tuple[tuple[str, ...], bool, int, int],
         ] = OrderedDict()
 
     # ── Properties (snapshot accessors) ─────────────────────────────────────
@@ -217,9 +221,27 @@ class JobRunLogsVM:
         self._notify("current_file")
         self._notify("lines")
 
+    def select_log_file_key(self, key: str) -> None:
+        """Pick one exact object, preserving executor and retry identity."""
+        match = next((file for file in self._available_files if file.key == key), None)
+        if match is None or match == self._current_file:
+            return
+        self._current_file = match
+        self._lines = ()
+        self._bytes_read = 0
+        self._lines_scanned = 0
+        self._notify("current_file")
+        self._notify("lines")
+
     # ── Network actions ───────────────────────────────────────────────────
 
-    async def load(self) -> None:
+    async def load(self, *, use_cache: bool = True) -> None:
+        try:
+            await self._operations.run(lambda: self._load(use_cache=use_cache))
+        except OperationSuperseded:
+            return
+
+    async def _load(self, *, use_cache: bool) -> None:
         """Fetch + stream the selected log file.
 
         View-side ``exclusive=True, group="emr-logs"`` cancels any
@@ -270,34 +292,51 @@ class JobRunLogsVM:
             self._available_files = tuple(files)
             self._notify("available_files")
             if not files:
+                if self._current_file is not None:
+                    self._current_file = None
+                    self._notify("current_file")
                 self._set_state(LogsState.NO_FILES)
                 return
-            if self._current_file is None:
-                self._current_file = next(
+            current_key = self._current_file.key if self._current_file is not None else None
+            selected_file = next((file for file in files if file.key == current_key), None)
+            if selected_file is None:
+                selected_file = next(
                     (f for f in files if f.kind is LogFileKind.DRIVER_STDERR),
                     next(
-                        (f for f in files if f.kind is LogFileKind.DRIVER_STDOUT),
-                        files[0],
+                        (f for f in files if f.kind is LogFileKind.HIVE_DRIVER_STDERR),
+                        next(
+                            (f for f in files if f.kind is LogFileKind.DRIVER_STDOUT),
+                            files[0],
+                        ),
                     ),
                 )
+            if selected_file != self._current_file:
+                self._current_file = selected_file
                 self._notify("current_file")
+            assert self._current_file is not None
             truncated = False
             cache_key = (
                 self._application_id,
                 self._job_run_id,
                 self._current_file.key,
+                self._current_file.size,
                 self._filter.patterns,
                 self._filter.mode,
                 self._filter.case_insensitive,
             )
-            if cache_key in self._cache:
+            if use_cache and cache_key in self._cache:
                 # LRU bump: move the freshly-accessed entry to the
                 # "newest" end so eviction targets the least-recently
                 # used entry when the cache fills up.
                 self._cache.move_to_end(cache_key)
-                cached_lines, cached_truncated = self._cache[cache_key]
+                cached_lines, cached_truncated, cached_bytes, cached_scanned = self._cache[
+                    cache_key
+                ]
                 self._lines = cached_lines
+                self._bytes_read = cached_bytes
+                self._lines_scanned = cached_scanned
                 self._notify("lines")
+                self._notify("progress")
                 self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
             buffered: list[str] = []
@@ -332,7 +371,12 @@ class JobRunLogsVM:
                 # (would key under the wrong target) and the state
                 # transition (caller already moved on).
                 return
-            self._cache[cache_key] = (self._lines, truncated)
+            self._cache[cache_key] = (
+                self._lines,
+                truncated,
+                self._bytes_read,
+                self._lines_scanned,
+            )
             # LRU eviction: drop the oldest entry until back under cap.
             while len(self._cache) > _CACHE_MAX_ENTRIES:
                 self._cache.popitem(last=False)
@@ -362,6 +406,9 @@ class JobRunLogsVM:
             if (self._application_id, self._job_run_id, self._log_uri) != target:
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
+            report_unexpected_service_error(
+                self._hub, service="emr-serverless", operation="load_job_logs", error=exc
+            )
             self._set_state(LogsState.ERROR)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
@@ -373,6 +420,7 @@ class JobRunLogsVM:
         if self._disposed:
             return
         self._disposed = True
+        self._operations.close()
         # Drop the response cache so a recycled VM (e.g. test
         # harnesses or future content-host reuse) doesn't carry
         # stale entries forward. In-flight ``load()`` workers are
@@ -383,6 +431,10 @@ class JobRunLogsVM:
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
+
+    async def shutdown(self) -> None:
+        self._operations.close()
+        await self._operations.cancel_and_drain()
 
     # ── Internal ───────────────────────────────────────────────────────────
 

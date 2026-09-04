@@ -7,21 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 1.1. [Unreleased]
 
-These changes have landed on ``main`` since the v0.8.0 cut commit
-(``cd2c9e8``) but have not yet been packaged as a release. The v0.8.0
-PyPI publish is gated on
+The Unreleased section is the promotion queue for the next package release.
+Entries may reside on ``develop`` before promotion to ``main``; inclusion here
+does not by itself claim that every entry has landed on ``main``. Changes
+already promoted to ``main`` are tracked relative to the historical v0.8.0
+staging commit (``cd2c9e8``). That staging build was not published. The PyPI
+project-name request remains gated on
 [pypi/support#11264](https://github.com/pypi/support/issues/11264)
-(name-similarity exception for ``aws-tui`` vs ``awstui``). All work
-below will either ship as v0.8.1 (patch — UI polish + bug fixes) or
-roll into v0.9.0 if the maintainer chooses to recategorise the new
-nav-focus + demo-mode behaviour as feature work; the version label
-will be set at cut time.
+(name-similarity exception for ``aws-tui`` vs ``awstui``). Glue, Athena, and
+Iceberg integration target v0.9.0: they are new minor-version feature work
+under SemVer, not a v0.8.0
+headline or a v0.8.1 patch candidate. The package metadata remains ``0.8.0``
+until a v0.9.0 release-preparation PR bumps it and cuts a dated changelog
+section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.1. Added
 
+- **Glue and Athena interaction polish.** Bordered, keyboard-focusable AWS
+  context selectors now expose source, Glue state filters, and Athena
+  workgroup/catalog/database choices with named commands and complete
+  forward/reverse focus rings. Glue can copy a selected table's canonical,
+  fully quoted identifier to an authoritative VMx-backed in-app clipboard
+  (`y`) and best-effort OS clipboard, while Athena can insert that value at
+  the editor cursor (`i`) or replace a selection. Cross-source insertion is
+  refused without mutating the editor or switching profiles; the existing
+  source-preserving **Query table in Athena** workflow remains available.
+  The service rail is wider and centers all service names, including Athena.
+- **Integrated Glue, Athena, and Iceberg workflow.** Glue tables can prefill
+  exact, fully-qualified Athena queries; Athena can return to one unambiguous
+  visible Glue table; and Iceberg tables expose bounded, on-demand Snapshots,
+  History, Manifests, Files, Partitions, and References views. Snapshot
+  selection generates `FOR VERSION AS OF` SQL, but no generated query
+  executes automatically. Cross-service messages preserve connection, region,
+  catalog, database, and table identity; successful customer-S3 result
+  artifacts retain the same identity through the final S3 handoff. Demo mode
+  provides disjoint dev, prod, and shared Iceberg datasets and the complete
+  Glue → Athena → explicit execution → S3 journey.
+- **Amazon Athena service.** A fourth AWS-only nav service with
+  Query, History, Results, and Saved views; connection- and region-scoped
+  workgroup/catalog/database selections; fail-closed one-statement read-only
+  SQL validation; app-owned query cancellation; paginated results with bytes
+  scanned/reuse statistics; named and prepared query inspection; and exact
+  identity result-artifact handoff to S3. Demo mode supplies profile-isolated
+  dev/prod Athena state plus an access-denied shared profile.
+- **AWS Glue read-only service.** A third first-class nav service with
+  Catalog, Jobs, and Crawlers views; database/table pagination,
+  schema/storage detail, partitions and column statistics; job/run
+  inspection; crawler detail/metrics; profile- and region-scoped
+  selection memory; `1` / `2` / `3` view keys; `r` refresh; and
+  `Shift+S` whole-service profile switching. Demo mode supplies
+  disjoint `demo-dev` / `demo-prod` Glue resources plus a
+  `demo-shared` access-denied state.
+- **Connection-preserving Glue-to-S3 handoff.** The command palette's
+  **Open table location in S3** action publishes immutable
+  `OpenS3LocationRequest` identity, resolves the exact connection
+  name, rejects region drift instead of substituting a profile,
+  rebuilds S3 through the existing RootVM/service factory lifecycle,
+  and navigates/focuses the requested pane. Missing or malformed
+  locations remain on Glue with a redacted advisory.
 - **Command palette** (`:` / `Ctrl+K`). Opens a fuzzy-filterable palette of
-  app commands — Theme picker, Cycle theme, Swap pane source, Settings, Help,
-  Quit — each dispatching through the same `ActionRegistry` path as its key
+  app commands — Theme picker, Cycle theme, Swap pane source, Open table
+  location in S3, Settings, Help, Quit — each dispatching through the same
+  `ActionRegistry` path as its key
   binding. `:` moves back from help to the palette (help keeps `?`), per the
   keystone plan. Deferred: dynamic commands (`switch connection/theme <name>`)
   and consolidating with Textual's built-in `Ctrl+P` palette. Spec:
@@ -38,7 +85,7 @@ will be set at cut time.
   `AwsTuiApp` installs its key bindings at runtime from
   `BindingResolver.to_textual_bindings()` instead of a hard-coded
   `BINDINGS` ClassVar, so a `[keybindings]` table in `config.toml`
-  remaps any handled action on the live keymap (e.g. `pane.copy = "y"`).
+  remaps any handled action on the live keymap (e.g. `pane.copy = "ctrl+y"`).
   Each binding dispatches through a single `action_dispatch(id)` into the
   `ActionRegistry`; the resolver emits a binding only for actions with a
   registered handler, so deferred/unwired actions stay unbound. Default
@@ -46,12 +93,12 @@ will be set at cut time.
   fidelity test over every installed binding (key/action/show/priority)
   and a pilot test that the priority `tab` binding still fires (no "Tab
   does nothing" regression). Clears the `[0.8.0]` *"BindingResolver is
-  constructed but unwired"* deferred item; the features that ride on it
-  (Quick Look, command palette) still need their own handlers before
-  their keys bind. Spec:
+  constructed but unwired"* deferred item. Quick Look and the command
+  palette now register their handlers; the resolver still leaves other
+  handlerless deferred actions unbound. Spec:
   `docs/superpowers/specs/2026-07-21-binding-resolver-keystone-design.md`.
 - **Demo mode** (PR #97 + #104 polish). ``AWS_TUI_DEMO=1`` or
-  ``--demo`` boots the full UI against seeded in-memory S3 + EMR
+  ``--demo`` boots the full UI against seeded in-memory S3, EMR, and Glue
   fakes — no AWS credentials, no real network calls. Persistent
   ``DEMO MODE — no real AWS calls`` chip prepended to the
   BrandBanner subtitle (PR #104 keeps the credit pedigree visible
@@ -68,16 +115,132 @@ will be set at cut time.
 
 ### 1.1.2. Changed
 
+- **Live chrome cleanup.** Removed the unmounted legacy `StatusBar` widget,
+  its subscribed viewmodel, obsolete theme selectors, and the unused
+  `pytest-xdist` development dependency. Connection identity remains in the
+  service pane chrome where it is actually rendered.
+- **Independent S3-compatible test harness.** Replaced the vulnerable MinIO
+  community test image with the digest-pinned Adobe S3Mock 5.1.0 release while
+  preserving the same nine strict provider tests, Compose workflow, seeded
+  development data, and product support for user-configured MinIO endpoints.
+- **VMx 3.23 adoption.** Raised the VMx floor to 3.23.0, moved modal focus
+  restoration to public `DiscriminatorVM` APIs, rebuilt S3 validation through
+  immutable `FormVMBuilder` validators, and aligned Athena cancellation and
+  shutdown with public `AsyncRelayCommand` execution state. The dated audit
+  records substitutions, rejected candidates, production line deltas, and test
+  impact.
+- **Overlay pickers, compact commands, and unified Athena handoffs.** Inline
+  service-context and EMR application dropdowns now overlay without resizing
+  adjacent panes. The Commands pane is one tooltip-rich row with deterministic
+  `[:] more` overflow, and Glue exposes `Shift+Q` table and `Shift+V` visible
+  snapshot handoffs through the same key, palette, and button action paths.
+  Both preserve exact source identity, prefill bounded Athena SQL, and never
+  execute it.
+- Pin Textual to the audited `8.2.8` runtime because aws-tui's isolated
+  priority-binding, crash-recovery, and mount-lifecycle adapters consume
+  private Textual contracts. Supporting another release now requires an
+  explicit adapter review before the dependency pin is broadened.
+- Align AWS startup resolution with botocore: `AWS_DEFAULT_PROFILE` precedes
+  `AWS_PROFILE`, `AWS_DEFAULT_REGION` supplies the final configured-region
+  fallback, and `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` override
+  expanded shared-file paths.
+
+- **Interaction-surface parity.** Restored configured keymap overlays at
+  startup, filtered contextual palette commands by active service, clarified
+  CSS ownership for shared selectors and tabs, and aligned the canonical
+  documentation with the implemented Glue and Athena workflows.
+
 - ``docs/`` + ``ui/widgets/settings_view.py``: retargeted the
   ``Deferred / v0.8 roadmap`` references to ``Deferred / v0.9
   roadmap`` (and ``coming in v0.8`` placeholders to
-  ``coming in v0.9``) since v0.8.0 shipped without those items.
+  ``coming in v0.9``) because the v0.8.0 release candidate excludes those items.
   Historical CHANGELOG entries kept their original wording.
 - ``assets/screenshots/aws-tui-running.png``: refreshed the README
   hero image to a current EMR + demo-mode capture (PR #106).
 
 ### 1.1.3. Fixed
 
+- **Athena query execution and controls.** Glue-generated starter SQL now uses
+  the resolved Athena catalog context with a quoted database/table reference,
+  avoiding redundant catalog qualification in the query text. Known Athena
+  start-time rejections identify an inaccessible result location, rejected
+  catalog/database context, or rejected workgroup without exposing raw AWS
+  values. Run and Stop retain exact `5x3` terminal geometry across disabled,
+  enabled, and focused states so their visible borders render square.
+- **Immediate Glue-to-Athena starter query projection.** Glue table handoffs
+  now populate the mounted Athena editor before waiting for remote workgroup,
+  catalog, and database discovery. The existing VMx Run command remains
+  disabled with a resolving status until the exact destination context is
+  ready, and generated queries still never execute automatically.
+- **Terminal maintenance safety and fidelity.** S3 rate limits now remain
+  throttling signals instead of marking a connection unreachable. EMR bounds
+  application and bulk-run pagination, classifies log paths relative to the
+  configured run prefix, preserves the last retry/worker marker in labels, and
+  renders streamed lines through one reusable widget. Crash dumps read at most
+  1 MiB while retaining up to 1,000 tail lines. Pane mount now reconciles VM
+  state that changes between composition and subscription, so snapshots use the
+  production reactive path. CI audits every locked dependency group, validates
+  complete wheel and sdist payloads, and smoke-installs both artifact types.
+- **Late maintenance contract guards.** Service swaps now await every cancelled
+  transfer worker before disposing its panes, EMR log discovery rejects more
+  than 100 listing pages or 200 classified files, and package validation checks
+  that wheels contain the complete Python, typing-marker, and theme payload.
+  Documentation publication, including manual dispatch, is restricted to
+  `main`; the generated hero replaces unsupported selector glyphs explicitly
+  and rejects any future missing font glyph instead of rendering `.notdef`.
+- **Bounded startup, transfers, and service hydration.** Automatic connection
+  fallback now shares one 90-second launch budget, copy and move reject batches
+  above 1,000 selected entries before creating journals, and Athena history
+  hydrates each 50-row page with one `BatchGetQueryExecution` request. Persisted
+  S3-compatible connections use the same endpoint and credential validation as
+  Settings, explicit credential references survive materialization unchanged,
+  cross-filesystem overwrite races clean their staging container, and content
+  candidates have one disposal owner across failed service swaps.
+- **Atomic source and service changes.** Root service adoption now builds and
+  constructs the candidate before committing source identity, and publishes
+  the new content, connection, and authentication identity as one
+  observer-consistent tuple,
+  and retires an outgoing VM if cancellation arrives after its shutdown has
+  begun. Failed initial adoption clears the tentative selection without
+  disturbing a previously hosted service.
+- **Modal keyboard and focus routing.** Editable modal controls receive arrow,
+  Backspace, Tab, and Shift+Tab input before app-level navigation, and closing
+  a modal restores the VMx focus slot without a delayed widget projection
+  overwriting it or a newly opened modal.
+- **Athena pagination freshness.** Refresh invalidates in-flight continuation
+  loads so stale pages cannot append results after newer query state arrives.
+- **Resilient shutdown.** Teardown continues after individual cleanup errors,
+  reports every failed step, and flushes/closes structured logging last.
+- **Maintenance correctness.** CI now verifies the lowest supported dependency
+  set, S3Mock seeding creates only genuinely missing buckets, wiki publication
+  distinguishes changes from command failures, installed help uses published
+  documentation URLs, dead status-bar references are rejected, and current
+  command/contract guidance matches runtime behavior and VMx 3.23.
+- **Accessible chrome and docs.** Banner title tokens, Solarized muted text,
+  and documentation accent colors now meet their intended contrast thresholds.
+- **Runtime lifecycle and interaction hardening.** Athena now drains the real
+  provider task behind cancelled query/result commands, Settings has a complete
+  forward/reverse Tab ring, command-palette empty-result and repeated-open flows
+  remain stable, Help reflects the active keymap, EMR logs retarget immediately,
+  source swaps avoid invalid authentication fallbacks, and startup failures are
+  redacted before the CLI exits with status 1.
+- **Maintenance reliability and data-integrity pass.** Cross-filesystem moves
+  retain sources that were skipped, S3 batch deletion reports partial service
+  failures, gzip log reads enforce decompressed-size and line bounds, and AWS
+  clients plus content-host setup tasks now drain cleanly during teardown.
+  Overwrites stage files and complete directory trees before replacing an
+  existing destination; S3, EMR log, and EMR Serverless pagination raises a
+  typed provider error on missing or repeated continuation tokens instead of
+  returning partial data. Keychain updates stage new credentials before
+  switching the config reference, preserving the active credentials when a
+  write fails.
+  Failed source rebuilds restore the prior source, EMR run refreshes clear
+  stale detail state, command-palette failures reach the toast/log surfaces,
+  modal keyboard activation follows the visible safe default, and release/CI
+  gates now enforce documentation contracts alongside the runtime tiers.
+- **S3-compatible secrets use the configured keychain.** Settings persistence
+  stores credentials by reference, removes superseded entries, and rolls back
+  cleanly when config persistence fails.
 - **EMR + UI polish train.** Eight follow-up PRs (#96, #98, #99,
   #100, #102, #103, #104, #105) addressed user-reported issues
   found while exercising the EMR + nav-rail surface:
@@ -92,7 +255,6 @@ will be set at cut time.
     horizontal padding so column 0 is the ribbon, matching EntryRow;
   - filter EMR hub messages by sender (#103) — kill cross-VM
     redraws on the shared MessageHub when sibling VMs fire ``state``
-    or ``selected_id`` echoes;
   - preserve the credit pedigree in the demo banner subtitle
     (#104) — prepend the DEMO chip instead of replacing;
   - Settings NavRow keeps the ``-selected`` highlight (#105) —
@@ -103,13 +265,17 @@ will be set at cut time.
   provider returns ``IsTruncated=True`` without a
   ``NextContinuationToken`` (MinIO has historically shipped this
   edge case). Pattern now matches ``emr_logs.py::list_log_files``.
-- **Resume modal no longer advertises unwired resume-all.** Automatic
-  transfer resume remains deferred, so resume-all is removed; abort all
-  and keep-for-later are wired, while decide-each remains a deferred
-  no-op placeholder.
-- **First-run S3-compatible save failures no longer crash the error
-  handler.** The modal now uses supported Textual notification kwargs in
-  test harnesses and the unified toast taxonomy in production.
+- **Transfer journals describe shipped behavior.** Automatic resume, startup
+  prompting, and remote abort controls remain deferred. Unfinished journal
+  files are retained as local diagnostic evidence; terminal outcomes remove
+  their own journal promptly.
+- **Recovered service failures are durably logged.** S3/local, EMR Serverless,
+  Glue/Iceberg, and Athena view models publish redacted operation diagnostics
+  through the shared VMx message hub while preserving their user-facing error
+  states.
+- **Settings S3-compatible save failures remain recoverable.** The inline form
+  uses the unified toast taxonomy and preserves the active connection when
+  persistence fails.
 - **Non-SSO AWS profiles reach live boto credential validation.** Shared
   credentials, `credential_process`, env, and role-backed profiles no
   longer fall back to local panes as `no AWS credentials` merely because
@@ -125,8 +291,8 @@ will be set at cut time.
   exception text, S3-compatible pane titles / Settings rows / reprs drop
   endpoint userinfo, query strings, and fragments, and the Settings form
   rejects those unsafe endpoint URL shapes plus malformed ports.
-- **S3-compatible credential hardening.** Settings and first-run now share
-  normalized form-to-config mapping, blank optional session tokens resolve
+- **S3-compatible credential hardening.** Settings uses normalized
+  form-to-config mapping, blank optional session tokens resolve
   as absent across static/env/keychain/profile sources, and
   ``S3CompatForm`` / ``ConnectionEntry`` reprs mask static credentials.
 - **Crash reports now log through the configured JSON log sink.** The
@@ -142,7 +308,7 @@ will be set at cut time.
   pager instead of mutating its private token/item storage.
 - **App stdlib warnings now land in the JSON log sink.** The composed app
   opts into an `aws_tui.*` logging bridge so config/keymap fallback,
-  resume-abort, first-run, and AWS client-shutdown warnings are captured
+  resume-abort, and AWS client-shutdown warnings are captured
   with the same structured redaction as direct `LogSink` calls.
 - **Settings focus avoids private Textual imports.** SettingsView now
   locates the first public focusable child in the Connections section
@@ -153,13 +319,20 @@ will be set at cut time.
 
 ### 1.1.4. Docs
 
+- Added current S3, EMR Serverless, Glue/Iceberg, and Athena service guides; a
+  VMx 3.23 compatibility and line-count audit; refreshed consumed-contract and
+  release checklists; and regenerated the four architecture diagrams from the
+  runtime's current ownership and lifecycle boundaries.
+- Added an installation guide, corrected the documentation inventory and
+  implementation-status records, and made `docs-check` reject stale or
+  unexpected committed architecture-diagram assets.
 - ``docs/superpowers/specs/`` — added the demo-mode and
   cross-platform-readiness design specs (in ``fc55c6a``).
 - ``SECURITY.md`` — supported-version table now distinguishes the
   pending 0.8.x line from the latest tagged 0.7.x release;
   ``docs/homebrew-bootstrap.md`` adopts the §3.9 numbered heading
-  mandate; ``docs/recording-todo.md`` retargets to "v0.8.0 docs feel
-  done".
+  mandate; ``docs/recording-todo.md`` tracks the v0.9.0 development
+  documentation captures.
 - README §4 — indexed three previously-orphaned post-tag specs
   (public-release-pipeline, cross-platform-readiness, demo-mode)
   and the maintainer-facing ``docs/RELEASING.md`` +
@@ -177,6 +350,16 @@ will be set at cut time.
 
 ### 1.1.5. Build
 
+- CI, release, Pages, and bootstrap now enforce the lockfile with `--locked`;
+  the declared development graph includes `textual-dev`; workflow and
+  pre-commit actions use verified immutable refs; and wheel/sdist publication
+  rejects repository metadata, local caches, tests, and traversal members
+  before upload.
+- Removed blanket integration-test reruns so failures remain observable,
+  added a stable aggregate `ci gate`, expanded installed-wheel smoke tests,
+  and gated Homebrew publication until the tap is explicitly enabled.
+- Updated `platformdirs` to 4.11.0 and `sqlglot` to 30.14.0, and aligned
+  botocore retry configuration on an explicit total-attempt budget.
 - Dependabot bumps for ``actions/upload-artifact`` (4→7, PR #1) and
   ``astral-sh/setup-uv`` (3→7, PR #2). Follow-up alignment commit
   brought ``release.yml`` to the same versions (``download-artifact``
@@ -195,7 +378,7 @@ will be set at cut time.
 - Pre-commit now includes ShellCheck for repository shell scripts via
   `shellcheck-py`, matching the maintenance verification path.
 
-## 1.2. [0.8.0] - 2026-06-27
+## 1.2. [0.8.0] - Pending
 
 ### 1.2.1. Added
 
@@ -236,8 +419,8 @@ will be set at cut time.
   ``EmrServerlessPage.action_open_application_picker``; with the
   popover now actually visible the keystroke produces the
   expected affordance.
-- **EMR Serverless icon settled back on ``🔥`` FIRE.** PR #83
-  tried ``💥`` after earlier ``⚡`` / ``⚡️`` experiments, but the
+- **EMR Serverless icon settled back on ``U+1F525 FIRE``.** PR #83
+  tried ``U+1F4A5 COLLISION`` after earlier ``U+26A1 HIGH VOLTAGE`` experiments, but the
   collision glyph rendered too small beside the S3 bucket icon. The
   shipped descriptor uses the PR #79 fire glyph: SMP single-codepoint,
   2-cell colour reliably, and full bounding box. Updated at the
@@ -252,9 +435,9 @@ will be set at cut time.
   no-target paths now use ``notifications.error(...)`` /
   ``notifications.advise(...)`` instead of Textual's bare
   ``self.notify`` — the latter paints over the Commands strip
-  and disappears with the wrong glyph / wrong colour / wrong
-  countdown. Errors get the ✖ glyph + ``$danger`` colour + 30 s
-  countdown; advisories get the ⚠ glyph + ``$warning`` colour +
+  and disappears with the wrong icon, colour, and countdown.
+  Errors use the error icon + ``$danger`` colour + 30 s
+  countdown; advisories use the warning icon + ``$warning`` colour +
   8 s countdown. Same routing as every other toast in the app.
 - **HintLegend chips now reflect selection-state disable rules**
   (PR #83, item #5). ``HintAction`` gains an ``enabled: bool``
@@ -279,7 +462,7 @@ will be set at cut time.
 ### 1.2.3. Added (prior entries)
 
 - **EMR Serverless read-only browser** (PR #76, service PR-A). New
-  ``🔥`` nav-rail entry next to S3, gated to AWS-only connections.
+  ``U+1F525 FIRE`` nav-rail entry next to S3, gated to AWS-only connections.
   Applications dropdown, master-detail Job Runs pane + Job Run Detail
   pane with multi-select state-filter chips, three independent
   pollers (apps 30 s / runs 10 s with 6:1 decay when no active runs /
@@ -310,15 +493,15 @@ will be set at cut time.
   "Commands"; the strip is also split into a service-actions row
   (focused-pane block) and a global row, with hamburger margin /
   border alignment tightened in the same PR.
-- **EMR Serverless icon — the ⚡️ ↔ 🔥 ↔ ⚡ ↔ 💥 ↔ 🔥 saga** (PR #77 /
+- **EMR Serverless icon revisions** (PR #77 /
   #79 / #81 / #83). Bare `⚡` (PR #76) rendered as a narrow 1-cell
   text-style stroke in SF Mono / JetBrains Mono / Fira Code,
   mis-aligning the nav-rail's 2-cell emoji column. PR #77 forced
   emoji presentation with `⚡️` (BMP U+26A1 + U+FE0F VS-16);
-  PR #79 briefly tried `🔥` (SMP, reliable 2-cell colour);
+  PR #79 briefly tried `U+1F525 FIRE` (SMP, reliable 2-cell colour);
   PR #81 returned to `⚡️` with VS-16 per user ask; PR #83 picked
-  `💥` (SMP U+1F4A5 COLLISION), then the shipped descriptor returned
-  to `🔥` after collision rendered too small beside the S3 bucket. The
+  `U+1F4A5 COLLISION`, then the shipped descriptor returned
+  to `U+1F525 FIRE` after collision rendered too small beside the S3 bucket. The
   documented icon contract is codified in
   `nav_menu.py::_format_collapsed_prompt` /
   `_format_expanded_prompt` — SMP single-codepoint, no VS-16.
@@ -538,10 +721,10 @@ will be set at cut time.
   handle closes. The module docstring already promised "fsync
   semantics" but the code only relied on a natural close, which
   flushes stdio buffers without forcing the FS journal/metadata
-  to disk. On power loss between a ``mark_completed`` write and
+  to disk. On power loss between a ``mark_finished`` write and
   the OS's background flush (~30s), the journal would lose the
-  terminal marker and the resume modal would replay the whole
-  transfer on relaunch. fsync closes that window for one syscall
+  terminal marker and diagnostic replay would classify the transfer as
+  unfinished. fsync closes that window for one syscall
   per append — negligible against the network I/O the surrounding
   multipart upload pays per part.
 - **(third maintenance loop, pass 9)** ``TransfersOverlay._arm_linger``
@@ -712,8 +895,7 @@ will be set at cut time.
   marked aborted before the re-raise), the for-loop exited and
   any UNREACHED entries had no terminal marker — those journal
   files sat in ``~/.cache/aws-tui/transfers/`` indefinitely and
-  would resurface in the deferred resume modal as phantom
-  pending transfers on next launch. Tracked entries via a
+  would remain as phantom unfinished diagnostics. Tracked entries via a
   ``consumed: set[str]`` that the loop adds to BEFORE awaiting
   ``_run_one_transfer`` (so a raise still counts as consumed —
   ``_run_one_transfer`` already marked that id), and in the
@@ -1089,8 +1271,7 @@ will be set at cut time.
   `aws_session.aclose_all_clients`, `transfers_vm.cancel_all_command`,
   and `log_sink.flush()` — Textual's sync `App.action_quit` was
   called instead. Each leaked aioboto3 sockets, abandoned in-flight
-  copy tasks (left their journal entries as 'crashed' so the next
-  launch's resume modal would surface them), and dropped buffered
+  copy tasks (leaving unfinished journal diagnostics), and dropped buffered
   log records.
 - **(second maintenance loop, passes 1–4)** `S3FS.delete` and
   `S3FS.rename` now wrap their outer `try` with
@@ -1459,14 +1640,11 @@ will be set at cut time.
   reach their configured theme each session. Composition now loads
   the config at startup and falls back to carbon only if the file is
   absent or malformed.
-- **Transfer journal silently destroyed on S3
-  `AbortMultipartUpload` failure.** When the resume modal's "abort
-  all" path hit any S3 error (network, expired creds, throttle, 5xx)
-  the code suppressed the exception and unconditionally purged the
-  journal anyway — so the MPU continued to live on S3 (consuming
-  storage quota) with no local record of it, no recovery path. Now
-  the journal is only purged after a successful abort; failures
-  leave the journal intact for next-session retry.
+- **Historical transfer-recovery claim corrected.** The v0.8 tree never
+  shipped a startup resume/abort modal or remote `AbortMultipartUpload`
+  control. Unfinished journal files remain local diagnostic evidence; remote
+  multipart cleanup is deferred and should be backed by bucket lifecycle
+  policy.
 - **`.content-placeholder` no-connection screen ignored user theme
   overrides.** All four built-in themes declared the placeholder
   background and foreground as hex literals matching their own

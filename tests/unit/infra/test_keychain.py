@@ -68,25 +68,63 @@ class TestKeyring:
         kr.set("svc", "username", "secret")
         spy.assert_called_once_with("svc", "username", "secret")
 
+    def test_get_propagates_backend_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import keyring as keyring_lib
+        import keyring.errors as keyring_errors
+
+        def raise_backend_failure(*_args: Any, **_kwargs: Any) -> None:
+            raise keyring_errors.KeyringError("backend unavailable")
+
+        monkeypatch.setattr(keyring_lib, "get_password", raise_backend_failure)
+        with pytest.raises(keyring_errors.KeyringError, match="backend unavailable"):
+            Keyring().get("svc", "username")
+
     def test_delete_delegates_to_keyring_delete_password(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import keyring as keyring_lib
 
         spy: MagicMock = MagicMock()
+        monkeypatch.setattr(keyring_lib, "get_password", MagicMock(return_value="present"))
         monkeypatch.setattr(keyring_lib, "delete_password", spy)
         kr = Keyring()
         kr.delete("svc", "username")
         spy.assert_called_once_with("svc", "username")
 
-    def test_delete_swallows_password_not_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_delete_missing_password_does_not_call_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import keyring as keyring_lib
+
+        monkeypatch.setattr(keyring_lib, "get_password", MagicMock(return_value=None))
+        delete = MagicMock()
+        monkeypatch.setattr(keyring_lib, "delete_password", delete)
+        Keyring().delete("svc", "absent")
+        delete.assert_not_called()
+
+    def test_delete_propagates_password_delete_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import keyring as keyring_lib
         import keyring.errors as keyring_errors
 
-        def raise_not_found(*_args: Any, **_kwargs: Any) -> None:
-            raise keyring_errors.PasswordDeleteError("not found")
+        monkeypatch.setattr(keyring_lib, "get_password", MagicMock(return_value="present"))
+        monkeypatch.setattr(
+            keyring_lib,
+            "delete_password",
+            MagicMock(side_effect=keyring_errors.PasswordDeleteError("delete failed")),
+        )
+        with pytest.raises(keyring_errors.PasswordDeleteError, match="delete failed"):
+            Keyring().delete("svc", "username")
 
-        monkeypatch.setattr(keyring_lib, "delete_password", raise_not_found)
-        kr = Keyring()
-        # Deleting a non-existent password must not raise.
-        kr.delete("svc", "absent")
+    def test_delete_propagates_backend_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import keyring as keyring_lib
+        import keyring.errors as keyring_errors
+
+        def raise_backend_failure(*_args: Any, **_kwargs: Any) -> None:
+            raise keyring_errors.KeyringError("backend unavailable")
+
+        monkeypatch.setattr(keyring_lib, "get_password", MagicMock(return_value="present"))
+        monkeypatch.setattr(keyring_lib, "delete_password", raise_backend_failure)
+        with pytest.raises(keyring_errors.KeyringError, match="backend unavailable"):
+            Keyring().delete("svc", "username")

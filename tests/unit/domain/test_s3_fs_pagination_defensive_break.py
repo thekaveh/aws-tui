@@ -11,10 +11,9 @@ re-issue the same request forever (the ``if token is not None`` guard
 on the request kwargs skipped the ``ContinuationToken`` field, so
 each iteration produced an identical paged call).
 
-After the fix, both pagination loops break defensively the moment the
-token-extraction step yields a falsy value, even if ``IsTruncated`` is
-``True``. These tests would HANG (and trip the asyncio test timeout)
-under the buggy code, so a passing run is the regression signal.
+After the fix, both pagination loops raise a typed protocol error when
+the token cannot advance, so partial results are never represented as
+complete. These tests would hang under the original buggy code.
 """
 
 from __future__ import annotations
@@ -22,12 +21,12 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from botocore.exceptions import ClientError
 
-from aws_tui.domain.filesystem import PathRef
+from aws_tui.domain.filesystem import PathRef, PermissionDeniedError, ProviderError
 from aws_tui.domain.s3_fs import S3FS
 
 pytestmark = pytest.mark.unit
@@ -50,6 +49,8 @@ class _StubS3Client:
 
     async def list_objects_v2(self, **_kwargs: Any) -> dict[str, Any]:
         self.list_call_count += 1
+        if self.list_call_count > 10:
+            raise AssertionError("pagination did not make forward progress")
         return self._list_response
 
 
@@ -108,7 +109,7 @@ def test_client_passes_verify_tls_to_aioboto3_session() -> None:
     ]
 
 
-async def test_list_pagination_breaks_when_truncated_without_token(
+async def test_list_pagination_rejects_truncated_response_without_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Misbehaving provider: IsTruncated=True, no NextContinuationToken.
@@ -134,18 +135,32 @@ async def test_list_pagination_breaks_when_truncated_without_token(
     # ever re-appears — otherwise the test would hang and the suite
     # would stall on this single case.
     async with asyncio.timeout(5):
-        entries = await fs.list(PathRef(()))
-    # First page returned exactly one file; loop must NOT issue
-    # additional requests despite IsTruncated=True.
-    assert [e.name for e in entries] == ["a.txt"]
-    assert stub.list_call_count == 1, (
-        f"expected the pagination loop to break after the first page, "
-        f"got {stub.list_call_count} list_objects_v2 calls — the "
-        f"misbehaving-provider defensive break is not in place"
+        with pytest.raises(ProviderError, match="continuation token"):
+            await fs.list(PathRef(()))
+    assert stub.list_call_count == 1
+
+
+async def test_list_pagination_rejects_repeated_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _StubS3Client(
+        list_response={
+            "CommonPrefixes": [],
+            "Contents": [],
+            "IsTruncated": True,
+            "NextContinuationToken": "repeat",
+        }
     )
+    _patch_s3fs_client(monkeypatch, stub)
+
+    async with asyncio.timeout(5):
+        with pytest.raises(ProviderError, match="continuation token"):
+            await _build_fs().list(PathRef(()))
+
+    assert stub.list_call_count == 2
 
 
-async def test_delete_pagination_breaks_when_truncated_without_token(
+async def test_delete_pagination_rejects_truncated_response_without_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Same pathological response on the recursive-delete path.
@@ -176,10 +191,214 @@ async def test_delete_pagination_breaks_when_truncated_without_token(
     _patch_s3fs_client(monkeypatch, stub)
     fs = _build_fs()
     async with asyncio.timeout(5):
-        await fs.delete(PathRef.from_posix("/d"))
-    assert stub.list_call_count == 1, (
-        f"expected the recursive-delete loop to break after the first "
-        f"batch, got {stub.list_call_count} list_objects_v2 calls"
+        with pytest.raises(ProviderError, match="continuation token"):
+            await fs.delete(PathRef.from_posix("/d"))
+    assert stub.list_call_count == 1
+    # Reject malformed pagination before applying page side effects.
+    assert stub.delete_objects.await_count == 0
+
+
+async def test_delete_pagination_rejects_repeated_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _StubS3Client(
+        list_response={
+            "Contents": [{"Key": "d/a.txt", "Size": 1}],
+            "IsTruncated": True,
+            "NextContinuationToken": "repeat",
+        }
     )
-    # The first batch was sent to delete_objects exactly once.
+    stub.head_object = AsyncMock(
+        side_effect=ClientError(
+            error_response={"Error": {"Code": "NoSuchKey", "Message": "not found"}},
+            operation_name="HeadObject",
+        )
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+
+    async with asyncio.timeout(5):
+        with pytest.raises(ProviderError, match="continuation token"):
+            await _build_fs().delete(PathRef.from_posix("/d"))
+    assert stub.list_call_count == 2
     assert stub.delete_objects.await_count == 1
+
+
+async def test_bucket_listing_follows_continuation_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _StubS3Client(list_response={})
+    stub.list_buckets = AsyncMock(
+        side_effect=[
+            {"Buckets": [{"Name": "a"}], "ContinuationToken": "next"},
+            {"Buckets": [{"Name": "b"}]},
+        ]
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+
+    entries = await S3FS(session=MagicMock(), bucket=None).list(PathRef(()))
+
+    assert [entry.name for entry in entries] == ["a", "b"]
+    assert stub.list_buckets.await_args_list == [
+        call(MaxBuckets=1000),
+        call(MaxBuckets=1000, ContinuationToken="next"),
+    ]
+
+
+async def test_object_listing_rejects_results_beyond_safety_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import s3_fs
+
+    stub = _StubS3Client(list_response={})
+    stub.list_objects_v2 = AsyncMock(
+        side_effect=[
+            {
+                "Contents": [{"Key": "a.txt", "Size": 1, "LastModified": None, "ETag": '"a"'}],
+                "IsTruncated": True,
+                "NextContinuationToken": "next",
+            },
+            {
+                "Contents": [{"Key": "b.txt", "Size": 1, "LastModified": None, "ETag": '"b"'}],
+                "IsTruncated": False,
+            },
+        ]
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+    monkeypatch.setattr(s3_fs, "_MAX_LISTING_ENTRIES", 1)
+
+    with pytest.raises(ProviderError, match="listing safety limit"):
+        await _build_fs().list(PathRef(()))
+
+
+async def test_bucket_listing_rejects_pagination_beyond_page_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import s3_fs
+
+    stub = _StubS3Client(list_response={})
+    stub.list_buckets = AsyncMock(
+        side_effect=[
+            {"Buckets": [], "ContinuationToken": "page-2"},
+            {"Buckets": [], "ContinuationToken": "page-3"},
+        ]
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+    monkeypatch.setattr(s3_fs, "_MAX_LISTING_PAGES", 1)
+
+    with pytest.raises(ProviderError, match="pagination safety limit"):
+        await S3FS(session=MagicMock(), bucket=None).list(PathRef(()))
+
+    assert stub.list_buckets.await_count == 1
+
+
+async def test_recursive_delete_rejects_pagination_beyond_page_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import s3_fs
+
+    stub = _StubS3Client(list_response={})
+    stub.head_object = AsyncMock(
+        side_effect=ClientError(
+            {"Error": {"Code": "NoSuchKey", "Message": "not found"}},
+            "HeadObject",
+        )
+    )
+    stub.list_objects_v2 = AsyncMock(
+        return_value={
+            "Contents": [{"Key": "d/one"}],
+            "IsTruncated": True,
+            "NextContinuationToken": "next",
+        }
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+    monkeypatch.setattr(s3_fs, "_MAX_LISTING_PAGES", 1)
+
+    with pytest.raises(ProviderError, match=r"delete pagination safety limit.*1 object"):
+        await _build_fs().delete(PathRef(("d",)))
+
+    assert stub.list_objects_v2.await_count == 1
+    assert stub.delete_objects.await_count == 1
+
+
+async def test_recursive_delete_rejects_page_beyond_entry_budget_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import s3_fs
+
+    stub = _StubS3Client(
+        list_response={
+            "Contents": [{"Key": "d/one"}, {"Key": "d/two"}],
+            "IsTruncated": False,
+        }
+    )
+    stub.head_object = AsyncMock(
+        side_effect=ClientError(
+            {"Error": {"Code": "NoSuchKey", "Message": "not found"}},
+            "HeadObject",
+        )
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+    monkeypatch.setattr(s3_fs, "_MAX_LISTING_ENTRIES", 1)
+
+    with pytest.raises(ProviderError, match="delete collection safety limit"):
+        await _build_fs().delete(PathRef(("d",)))
+
+    assert stub.delete_objects.await_count == 0
+
+
+async def test_stat_maps_directory_probe_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _StubS3Client(list_response={})
+    stub.head_object = AsyncMock(
+        side_effect=ClientError(
+            {"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "HeadObject"
+        )
+    )
+    stub.list_objects_v2 = AsyncMock(
+        side_effect=ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "denied"}}, "ListObjectsV2"
+        )
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+
+    with pytest.raises(PermissionDeniedError):
+        await _build_fs().stat(PathRef.from_posix("/private"))
+
+
+async def test_delete_reports_batch_level_object_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _StubS3Client(
+        list_response={
+            "Contents": [{"Key": "d/secret-name.txt", "Size": 1}],
+            "IsTruncated": False,
+        }
+    )
+    stub.head_object = AsyncMock(
+        side_effect=ClientError(
+            error_response={"Error": {"Code": "NoSuchKey", "Message": "not found"}},
+            operation_name="HeadObject",
+        )
+    )
+    stub.delete_objects = AsyncMock(
+        return_value={
+            "Errors": [
+                {
+                    "Key": "d/secret-name.txt",
+                    "Code": "AccessDenied",
+                    "Message": "sensitive provider detail",
+                }
+            ]
+        }
+    )
+    _patch_s3fs_client(monkeypatch, stub)
+
+    with pytest.raises(ProviderError) as exc_info:
+        await _build_fs().delete(PathRef.from_posix("/d"))
+
+    message = str(exc_info.value)
+    assert "1 object" in message
+    assert "AccessDenied" in message
+    assert "secret-name" not in message
+    assert "sensitive provider detail" not in message

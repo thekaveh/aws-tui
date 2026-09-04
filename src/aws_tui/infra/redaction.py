@@ -13,9 +13,11 @@ _SENSITIVE_KEY = re.compile(
     re.IGNORECASE,
 )
 _KEY_VALUE = re.compile(
-    r'(?<![A-Za-z0-9_.-])("?)([A-Za-z0-9_.-]*'
-    r"(?:secret|password|token|credential|access[_-]?key|api[_-]?key|private[_-]?key|signature)"
-    r'[A-Za-z0-9_.-]*)\1(\s*[:=]\s*)("[^"]*"|[^\s,;}]+)',
+    r"(?<![A-Za-z0-9_.-])(?P<key_quote>[\"']?)(?P<key>[A-Za-z0-9_.-]*"
+    r"(?:authorization|secret|password|token|credential|access[_-]?key|api[_-]?key|"
+    r"private[_-]?key|signature)[A-Za-z0-9_.-]*)(?P=key_quote)"
+    r"(?P<separator>\s*[:=]\s*)"
+    r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}]+)",
     re.IGNORECASE,
 )
 _AUTHORIZATION_HEADER = re.compile(
@@ -50,18 +52,27 @@ def redact_mapping(fields: Mapping[str, Any]) -> dict[str, object]:
     return {str(key): redact_value(value, key=str(key)) for key, value in fields.items()}
 
 
+def _redact_key_value(match: re.Match[str]) -> str:
+    key_quote = match.group("key_quote")
+    value = match.group("value")
+    if (
+        match.group("key").casefold() == "authorization"
+        and not key_quote
+        and not value.startswith(("'", '"'))
+    ):
+        # The authorization-header pass already preserves the scheme in the
+        # ordinary ``Authorization: Bearer value`` form.
+        return match.group(0)
+    return f"{key_quote}{match.group('key')}{key_quote}{match.group('separator')}{_REDACTED}"
+
+
 def redact_text(text: str) -> str:
     text = _URL.sub(lambda match: _redact_url(match.group(0)), text)
     text = _AUTHORIZATION_HEADER.sub(
         lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}{_REDACTED}",
         text,
     )
-    return _KEY_VALUE.sub(
-        lambda match: (
-            f"{match.group(1)}{match.group(2)}{match.group(1)}{match.group(3)}{_REDACTED}"
-        ),
-        text,
-    )
+    return _KEY_VALUE.sub(_redact_key_value, text)
 
 
 def safe_endpoint_display(url: str | None) -> str | None:

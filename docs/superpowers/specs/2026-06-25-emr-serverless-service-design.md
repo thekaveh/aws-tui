@@ -49,7 +49,7 @@ The first draft of this design proposed an `EmrServerlessProvider` Protocol "so 
 
 ### 1.1.3. Service registration
 
-`EmrServerlessService.supports(connection)` returns `connection.kind == "aws"`. The ⚡ EMR nav-rail icon **automatically appears only on AWS connections**; on an s3-compatible connection it disappears via the existing `NavMenuVM._rebuild_items()` flow. Registration in `composition.build_app_context`:
+`EmrServerlessService.supports(connection)` returns `connection.kind == "aws"`. The EMR service row appears only on AWS connections; on an s3-compatible connection it disappears via the existing `NavMenuVM._rebuild_items()` flow. Registration in `composition.build_app_context`:
 
 ```python
 from aws_tui.services.emr_serverless.service import EmrServerlessService
@@ -63,23 +63,27 @@ registry.register(cast("Service", emr_service))
 ServiceDescriptor(
     id="emr-serverless",
     label="EMR",
-    icon="🔥",                   # U+1F525 FIRE — SMP single-codepoint, 2 cells, reliable colour
+    icon="\U0001f525",          # U+1F525 FIRE; SMP single-codepoint, 2 cells
 )
 ```
 
-> **Post-ship amendment (PRs #77 / #79 / #81 / #83):** the design's
+> **Historical post-ship amendment (PRs #77 / #79 / #81 / #83):** the design's
 > original `⚡` (bare U+26A1) shipped in PR #76 but rendered as a
 > 1-cell text-style stroke in monospace terminals, mis-aligning the
 > nav-rail's 2-cell emoji column. PR #77 forced emoji presentation
-> with `⚡️` (BMP+VS-16); PR #79 briefly switched to `🔥`; PR #81
-> returned to `⚡️`; PR #83 tried `💥` (SMP single-codepoint) but it
+> with `U+26A1 HIGH VOLTAGE` (BMP+VS-16); PR #79 briefly switched to
+> `U+1F525 FIRE`; PR #81 returned to HIGH VOLTAGE; PR #83 tried
+> `U+1F4A5 COLLISION` (SMP single-codepoint) but it
 > rendered too small beside the S3 bucket icon, so the shipped
-> descriptor returned to `🔥`. The documented "icon contract" for
-> future services: **SMP single-codepoint, no variation selector** —
+> descriptor returned to `U+1F525 FIRE`. The then-current icon convention was
+> **SMP single-codepoint, no variation selector** —
 > pick a glyph that reliably occupies 2 cells in monospace terminals
 > without a VS-16 trick. Symmetric with the rail's literal-object
-> naming: 🪣 = bucket, 🔥 = compute/spark, ⚙️ = gear (kept on BMP+VS-16
-> because it's worked on the user's stack), 🖥️ = computer (same).
+> naming: U+1FAA3 BUCKET = storage, U+1F525 FIRE = compute/Spark,
+> U+2699 GEAR = settings, and U+1F5A5 DESKTOP COMPUTER = EC2. A later
+> navigation redesign replaced service icons with descriptor labels. The
+> current service rail renders `EMR`; `icon` remains reserved descriptor
+> metadata, with Settings as the only rail row that renders its gear icon.
 
 ### 1.1.5. VMx lifecycle
 
@@ -567,8 +571,8 @@ On `ThrottlingException` the affected poller backs off exponentially (5s → 10s
 
 **Integration tier** (full app boot, no network):
 
-- `test_emr_page_mounts_on_aws_connection` — boot with AWS connection, click ⚡ in nav rail, assert `EmrServerlessPage` widget present in `#content-host`.
-- `test_emr_page_hidden_on_s3_compatible_connection` — boot with s3-compatible connection, assert ⚡ NOT in nav rail (`Service.supports` filter works).
+- `test_emr_page_mounts_on_aws_connection` — boot with AWS connection, select `EMR` in the service rail, assert `EmrServerlessPage` widget present in `#content-host`.
+- `test_emr_page_hidden_on_s3_compatible_connection` — boot with s3-compatible connection, assert `EMR` is absent from the service rail (`Service.supports` filter works).
 - `test_cancel_job_shows_confirm_modal_then_calls_boto` — `x` on focused RUNNING row, confirm modal opens with danger styling, Right + Enter, assert `cancel_job_run` called with the right args.
 - `test_submit_modal_clone_prefills_from_focused_run` — `c` on focused completed run, assert each input value matches the source run.
 - `test_stop_app_requires_confirm_start_does_not` — assert ConfirmModal opens for stop, not for start.
@@ -586,7 +590,7 @@ On `ThrottlingException` the affected poller backs off exponentially (5s → 10s
 - `test_emr_log_view` — chips off / chips on / grep active / no-log-configured
 - `test_emr_submit_modal` — vanilla blank / clone pre-filled / invalid-input state
 
-**E2E** — Journey 6 in `tests/e2e/test_journeys.py`: cold-start with valid SSO → select ⚡ EMR → pick first application → cancel a RUNNING run → confirm via modal → assert state transitions to CANCELLING. No-network mode using mocked client.
+**E2E** — Journey 6 in `tests/e2e/test_journeys.py`: cold-start with valid SSO → select EMR → pick first application → cancel a RUNNING run → confirm via modal → assert state transitions to CANCELLING. No-network mode using mocked client.
 
 ### 1.7.2. Decomposition — four shippable PRs
 
@@ -597,11 +601,11 @@ v1 is too big for a single PR. Four pieces, each independently mergeable, each d
 - `EmrServerlessService`, page VM, application picker, job-runs pane, job-run-detail pane (no log surface yet)
 - State filter chips on LEFT pane
 - Auto-refresh (apps 30 s, runs 10/60 s, detail 5 s)
-- Service registered in `composition.py` → ⚡ icon appears
+- Service registered in `composition.py` → `EMR` service row appears
 - Snapshot + integration tests for the static surface
 - Design-language commitments from §3 wired in
 
-**Acceptance:** user can switch to ⚡ EMR, pick an app, browse runs by state, drill into detail. No log, no submit, no cancel. The 80% read path of daily monitoring.
+**Acceptance:** user can switch to EMR, pick an app, browse runs by state, drill into detail. No log, no submit, no cancel. The 80% read path of daily monitoring.
 
 #### 1.7.2.2. PR-B — Log surface + cancel + lifecycle (~3 days, ~1.5k LOC)
 - `LogSource` Protocol + `EmrS3LogSource` impl

@@ -1,12 +1,10 @@
-"""Action registry — string id -> callable.
+"""Registry for configurable app-level actions — string id -> callable.
 
-Every user-visible interaction in aws-tui is named by an action id
-(e.g. ``pane.copy``, ``app.command_palette``). The :class:`ActionRegistry`
-maps those ids to handler callables that perform the actual work, typically
-by calling a VM command. The View layer never invokes a VM command directly
-by attribute access; it always goes through the action registry so the
-input router stays uniform and keymap customization (via
-:class:`KeymapStore`) is free.
+Keyboard and command-palette interactions that participate in the configurable
+app keymap are named by an action id (for example ``pane.copy`` or
+``app.command_palette``). Views may still relay local widget events directly to
+commands on the VM they own; those interactions are outside the global input
+router and keymap.
 
 Handlers may be synchronous (returns ``None``) or asynchronous (returns
 ``Awaitable[None]``). The caller decides whether to ``await`` the result.
@@ -15,11 +13,15 @@ Handlers may be synchronous (returns ``None``) or asynchronous (returns
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TypeAlias
+from typing import Protocol, TypeAlias
 
 #: Handler signature for an action id. Sync returns ``None``; async
 #: returns ``Awaitable[None]`` which the caller may schedule on the loop.
-ActionHandler: TypeAlias = Callable[[], None | Awaitable[None]]
+ActionHandler: TypeAlias = Callable[[], Awaitable[None] | None]
+
+
+class ActionDispatcher(Protocol):
+    def action_dispatch(self, action_id: str) -> Awaitable[None] | None: ...
 
 
 class UnknownAction(Exception):
@@ -49,7 +51,7 @@ class ActionRegistry:
         """Return True if a handler is registered for ``action_id``."""
         return action_id in self._handlers
 
-    def invoke(self, action_id: str) -> None | Awaitable[None]:
+    def invoke(self, action_id: str) -> Awaitable[None] | None:
         """Invoke the handler for ``action_id``.
 
         Returns whatever the handler returned (None or an awaitable).
@@ -66,4 +68,4 @@ class ActionRegistry:
         return tuple(self._handlers)
 
 
-__all__ = ["ActionHandler", "ActionRegistry", "UnknownAction"]
+__all__ = ["ActionDispatcher", "ActionHandler", "ActionRegistry", "UnknownAction"]

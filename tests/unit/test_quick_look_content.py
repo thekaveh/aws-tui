@@ -41,6 +41,25 @@ async def test_first_bytes_passes_through_when_under_limit() -> None:
     assert out == b"hello"
 
 
+@pytest.mark.asyncio
+async def test_first_bytes_closes_source_when_consumer_stops_early() -> None:
+    closed = False
+
+    async def source() -> AsyncIterator[bytes]:
+        nonlocal closed
+        try:
+            yield b"first"
+            yield b"second"
+        finally:
+            closed = True
+
+    bounded = _first_bytes(source(), 64 * 1024)
+    assert await anext(bounded) == b"first"
+    await bounded.aclose()
+
+    assert closed
+
+
 def test_build_content_sets_title_and_mime() -> None:
     content = _build_quick_look_content(_file("notes.txt"), _FakeProvider(b"x"), path="notes.txt")
     assert content.title == "notes.txt"

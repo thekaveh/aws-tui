@@ -25,6 +25,8 @@ from typing import Final
 from aws_tui.infra.redaction import redact_text
 
 _LOG_TAIL_LINES: Final[int] = 1000
+_LOG_TAIL_BYTES: Final[int] = 1024 * 1024
+_LOG_READ_CHUNK: Final[int] = 64 * 1024
 _ACTION_TAIL_LINES: Final[int] = 100
 
 
@@ -161,12 +163,51 @@ class CrashDump:
 
 
 def _tail_text(path: Path, max_lines: int) -> str:
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return ""
-    return "".join(lines[-max_lines:])
+    backups: list[tuple[int, Path]] = []
+    for candidate in path.parent.glob(f"{path.name}.*"):
+        try:
+            generation = int(candidate.suffix[1:])
+        except ValueError:
+            continue
+        backups.append((generation, candidate))
+    candidates = [path] + [candidate for _, candidate in sorted(backups)]
+    chunks: list[list[str]] = []
+    remaining_lines = max_lines
+    remaining_bytes = _LOG_TAIL_BYTES
+    for candidate in candidates:
+        if remaining_lines <= 0 or remaining_bytes <= 0:
+            break
+        try:
+            with candidate.open("rb") as fh:
+                fh.seek(0, 2)
+                position = fh.tell()
+                raw_chunks: list[bytes] = []
+                newline_count = 0
+                bytes_read = 0
+                while (
+                    position > 0
+                    and bytes_read < remaining_bytes
+                    and newline_count <= remaining_lines
+                ):
+                    size = min(_LOG_READ_CHUNK, position, remaining_bytes - bytes_read)
+                    position -= size
+                    fh.seek(position)
+                    raw = fh.read(size)
+                    raw_chunks.append(raw)
+                    bytes_read += len(raw)
+                    newline_count += raw.count(b"\n")
+        except OSError:
+            continue
+        data = b"".join(reversed(raw_chunks))
+        if position > 0 and b"\n" in data:
+            data = data.split(b"\n", 1)[1]
+        lines = data.decode("utf-8", errors="replace").splitlines(keepends=True)
+        selected = lines[-remaining_lines:]
+        if selected:
+            chunks.append(selected)
+            remaining_lines -= len(selected)
+        remaining_bytes -= bytes_read
+    return "".join(line for chunk in reversed(chunks) for line in chunk)
 
 
 def _format_actions(actions: Iterable[str], max_lines: int) -> str:

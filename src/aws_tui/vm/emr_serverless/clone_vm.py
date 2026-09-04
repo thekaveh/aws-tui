@@ -12,13 +12,11 @@ plain Python attributes + ``apply_field`` / ``submit`` / ``cancel``."""
 
 from __future__ import annotations
 
-from typing import Any
-
 from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import JobRunDetail
+from aws_tui.domain.emr_serverless import EmrServerlessClientProtocol, JobRunDetail
 
 # The five editable fields on the modal — kept as a tuple so
 # ``apply_field`` rejects typos up front and the view can iterate
@@ -47,7 +45,7 @@ class JobRunCloneVM:
         self,
         detail: JobRunDetail,
         *,
-        client: Any,
+        client: EmrServerlessClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
@@ -63,7 +61,7 @@ class JobRunCloneVM:
         self._entry_point_arguments: tuple[str, ...] = detail.entry_point_arguments
         self._spark_submit_parameters: str | None = detail.spark_submit_parameters
         # Caller may call :meth:`cancel` for symmetry with the other
-        # modal VMs (Confirm / Resume / FirstRun); the page widget
+        # modal VMs (Confirm / Crash); the page widget
         # itself reads the modal's dismiss value rather than awaiting
         # a VM-side future, so there's no Future to resolve here.
         self._cancelled: bool = False

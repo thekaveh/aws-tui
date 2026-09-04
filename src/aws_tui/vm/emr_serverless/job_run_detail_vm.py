@@ -6,18 +6,21 @@ the page-VM's 5-s poller can refresh while the run is non-terminal."""
 
 from __future__ import annotations
 
-from typing import Any
-
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
+from aws_tui.domain.emr_serverless import (
+    EmrServerlessClientProtocol,
+    JobRunDetail,
+    JobRunState,
+)
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
+from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _TERMINAL_STATES: frozenset[JobRunState] = frozenset(
     {JobRunState.SUCCESS, JobRunState.FAILED, JobRunState.CANCELLED}
@@ -28,7 +31,7 @@ class JobRunDetailVM:
     def __init__(
         self,
         *,
-        client: Any,
+        client: EmrServerlessClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
@@ -53,7 +56,7 @@ class JobRunDetailVM:
         # scoped to THIS VM instance. The detail-pane view subscribes
         # here instead of filtering shared MessageHub events by
         # ``sender_object``.
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
 
     # ── Public surface ──────────────────────────────────────────────────────
 
@@ -100,6 +103,8 @@ class JobRunDetailVM:
         return self._detail is not None and self._detail.state in _TERMINAL_STATES
 
     async def refresh(self) -> None:
+        if self._disposed:
+            return
         if self._application_id is None or self._job_run_id is None:
             self._set_state(PaneState.EMPTY)
             return
@@ -116,7 +121,10 @@ class JobRunDetailVM:
         try:
             d = await self._client.get_job_run(target_app_id, target_run_id)
         except ProviderError as exc:
-            if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
+            if self._disposed or (self._application_id, self._job_run_id) != (
+                target_app_id,
+                target_run_id,
+            ):
                 return  # target changed mid-flight; drop the stale error
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
@@ -126,12 +134,21 @@ class JobRunDetailVM:
             # has. Without this the worker exception is swallowed
             # by Textual's run_worker and the detail pane stays
             # stuck on LOADING.
-            if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
+            if self._disposed or (self._application_id, self._job_run_id) != (
+                target_app_id,
+                target_run_id,
+            ):
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
+            report_unexpected_service_error(
+                self._hub, service="emr-serverless", operation="get_job_run", error=exc
+            )
             self._set_state(PaneState.ERROR)
             return
-        if (self._application_id, self._job_run_id) != (target_app_id, target_run_id):
+        if self._disposed or (self._application_id, self._job_run_id) != (
+            target_app_id,
+            target_run_id,
+        ):
             return  # target changed mid-flight; drop the stale detail
         # Success path — drop any error text carried forward from
         # a prior failed poll (sibling parity with PaneVM._reload).

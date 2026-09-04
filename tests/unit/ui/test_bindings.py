@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
@@ -30,12 +32,39 @@ def test_binding_action_uses_dispatch_form() -> None:
     assert copy.action == "dispatch('pane.copy')"
 
 
+def test_source_and_emr_application_bindings_have_distinct_descriptions() -> None:
+    actions = _registry("app.swap_source", "emr.next_application")
+    resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
+    by_key = {binding.key: binding for binding in resolver.to_textual_bindings()}
+
+    assert by_key["S"].description == "Switch source"
+    assert by_key["A"].description == "Next EMR application"
+
+
+def test_glue_query_handoff_has_a_dedicated_binding_description() -> None:
+    resolver = BindingResolver(
+        keymap=KeymapStore(),
+        actions=_registry("glue.query_in_athena"),
+    )
+    by_key = {binding.key: binding for binding in resolver.to_textual_bindings()}
+
+    assert by_key["Q"].action == "dispatch('glue.query_in_athena')"
+    assert by_key["Q"].description == "Open selected Glue table in Athena"
+
+
 def test_priority_true_except_quit() -> None:
-    actions = _registry("app.quit", "pane.switch_focus")
+    actions = _registry(
+        "app.quit",
+        "pane.switch_focus",
+        "pane.modal_left",
+        "pane.modal_right",
+    )
     resolver = BindingResolver(keymap=KeymapStore(), actions=actions)
     by_key = {b.key: b for b in resolver.to_textual_bindings()}
     assert by_key["q"].priority is False
     assert by_key["tab"].priority is True
+    assert by_key["left"].priority is False
+    assert by_key["right"].priority is False
 
 
 def test_first_key_visible_secondary_hidden() -> None:
@@ -67,22 +96,17 @@ def test_punctuation_keys_translate_to_textual_names() -> None:
 
 
 def test_overlay_keymap_reflects_in_bindings() -> None:
-    keymap = KeymapStore(overlay={"app.quit": "Q"})
+    keymap = KeymapStore(overlay={"app.quit": "X"})
     resolver = BindingResolver(keymap=keymap, actions=_registry("app.quit"))
-    quit_bindings = [b for b in resolver.to_textual_bindings() if b.key == "Q"]
+    quit_bindings = [b for b in resolver.to_textual_bindings() if b.key == "X"]
     # Single key now since overlay replaces wholesale.
     assert len(quit_bindings) == 1
     assert quit_bindings[0].action == "dispatch('app.quit')"
 
 
-def test_resolve_action_id_roundtrip() -> None:
-    resolver = BindingResolver(keymap=KeymapStore(), actions=ActionRegistry())
-    assert resolver.resolve_action_id("q") == "app.quit"
-    assert resolver.resolve_action_id(":") == "app.command_palette"
-    assert resolver.resolve_action_id("nope-no-such-key") is None
-
-
-def test_keys_for_returns_tuple() -> None:
-    resolver = BindingResolver(keymap=KeymapStore(), actions=ActionRegistry())
-    assert resolver.keys_for("app.quit") == ("q", "ctrl+c")
-    assert resolver.keys_for("does.not.exist") == ()
+def test_duplicate_overlay_key_is_rejected_before_binding_materialization() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"'y'.*'glue\.copy_table_ref'.*'pane\.copy'",
+    ):
+        KeymapStore(overlay={"pane.copy": "y"})

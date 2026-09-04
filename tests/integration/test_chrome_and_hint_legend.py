@@ -18,12 +18,32 @@ from textual.widgets import Static
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.ui.widgets.brand_banner import BrandBanner
-from aws_tui.ui.widgets.hint_legend import HintLegend
+from aws_tui.ui.widgets.hint_legend import HintLegend, _fit_actions
 from tests.integration.conftest import AppContextBuilder
 
 
 def _strip_text(host: HintLegend) -> str:
     return " ".join(str(s.render()) for s in host.query(Static))
+
+
+def test_glue_and_athena_selector_actions_are_discoverable(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    ctx = app_context_factory()
+    legend = ctx.root_vm.chrome.hint_legend
+
+    legend.set_current_service("glue")
+    glue = {action.action_id: action for action in legend.actions}
+    assert glue["glue.choose_run_state"].action_label == "run state"
+    assert glue["glue.choose_crawler_state"].action_label == "crawler state"
+    assert glue["glue.copy_table_ref"].action_label == "copy"
+
+    legend.set_current_service("athena")
+    athena = {action.action_id: action for action in legend.actions}
+    assert athena["athena.choose_workgroup"].action_label == "group"
+    assert athena["athena.choose_catalog"].action_label == "catalog"
+    assert athena["athena.choose_database"].action_label == "database"
+    assert athena["athena.insert_table_ref"].action_label == "table"
 
 
 @pytest.mark.asyncio
@@ -37,44 +57,52 @@ async def test_chrome_has_banner_no_statusbar(
         await pilot.pause()
         await pilot.pause()
         assert len(app.query(BrandBanner)) == 1
-        # No StatusBar widget should be mounted.
-        from aws_tui.ui.widgets.status_bar import StatusBar
+        assert not app.query("#status-bar")
 
-        assert len(app.query(StatusBar)) == 0
+
+@pytest.mark.asyncio
+async def test_app_unmount_disposes_table_clipboard_subscription(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    app = AwsTuiApp(app_context_factory())
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app._table_clipboard_sub is not None
+
+    assert app._table_clipboard_sub is None
 
 
 @pytest.mark.asyncio
 async def test_hint_legend_contains_all_expected_action_chips(
     app_context_factory: AppContextBuilder,
 ) -> None:
-    """Every action the user might reach for must be discoverable in
-    the bottom strip."""
+    """The compact row projects visible commands and routes hidden ones to More."""
     ctx = app_context_factory()
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await pilot.pause()
         legend = app.query_one(HintLegend)
-        text = _strip_text(legend)
-        # Action labels from hint_legend_vm _ACTION_LABELS. Post-
-        # batch-3 the parallel "switch X" pair stays consistent:
-        # ``app.swap_source`` → "switch source" (S3) and
-        # ``app.cycle_theme`` → "switch theme" replace the prior
-        # "swap src" / "cycle". User feedback: don't compress one
-        # to "cycle" while leaving the other verbose.
-        for label in (
-            "open",
-            "switch",
-            "copy",
-            "delete",
-            "refresh",
-            "themes",
-            "switch theme",
-            "switch source",
-            "help",
-            "quit",
-        ):
-            assert label in text, f"hint legend missing chip: {label!r}"
+        visible_ids = tuple(chip.action.action_id for chip in legend.query(".hint-chip"))
+        actions = (*legend.vm.actions, *legend.vm.global_actions)
+        expected_ids = tuple(
+            action.action_id for action in _fit_actions(actions, legend.content_region.width)
+        )
+
+        assert visible_ids == expected_ids
+        assert "app.command_palette" in visible_ids
+        assert "app.quit" in visible_ids
+        assert {"app.cycle_theme", "app.help"}.isdisjoint(visible_ids)
+
+        for action_id in ("app.cycle_theme", "app.help"):
+            assert ctx.keymap_store.resolve(action_id)
+            assert app._actions.has(action_id)
+
+        await pilot.press("colon")
+        await pilot.pause()
+        palette_ids = {entry.id for entry in ctx.command_palette_vm.filtered_entries}
+        assert {"app.cycle_theme", "app.help"} <= palette_ids
 
 
 @pytest.mark.asyncio

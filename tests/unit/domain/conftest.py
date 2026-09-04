@@ -15,9 +15,42 @@ from __future__ import annotations
 
 import urllib.request
 from collections.abc import Iterator
+from threading import Event, Thread
+from typing import Protocol
 
 import pytest
 from moto.server import ThreadedMotoServer
+
+_MOTO_START_TIMEOUT_SECONDS = 15.0
+_MOTO_RESET_TIMEOUT_SECONDS = 5.0
+
+
+class _StartableServer(Protocol):
+    def start(self) -> None: ...
+
+
+def _start_moto_server(
+    server: _StartableServer,
+    *,
+    timeout: float = _MOTO_START_TIMEOUT_SECONDS,
+) -> None:
+    """Start Moto without inheriting its unbounded readiness wait."""
+    finished = Event()
+    failures: list[BaseException] = []
+
+    def start() -> None:
+        try:
+            server.start()
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            finished.set()
+
+    Thread(target=start, daemon=True, name="moto-fixture-start").start()
+    if not finished.wait(timeout):
+        raise RuntimeError(f"Moto server did not become ready within {timeout:g} seconds")
+    if failures:
+        raise RuntimeError(f"Moto server startup failed: {failures[0]}") from failures[0]
 
 
 @pytest.fixture(scope="module")
@@ -31,7 +64,7 @@ def moto_server() -> Iterator[str]:
     to ``localhost``, so the original code accidentally worked there.
     """
     server = ThreadedMotoServer(ip_address="127.0.0.1", port=0)
-    server.start()
+    _start_moto_server(server)
     host, port = server.get_host_and_port()
     yield f"http://{host}:{port}"
     server.stop()
@@ -50,7 +83,9 @@ def s3_endpoint(moto_server: str, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    urllib.request.urlopen(
-        urllib.request.Request(f"{moto_server}/moto-api/reset", method="POST")
-    ).read()
+    with urllib.request.urlopen(
+        urllib.request.Request(f"{moto_server}/moto-api/reset", method="POST"),
+        timeout=_MOTO_RESET_TIMEOUT_SECONDS,
+    ) as response:
+        response.read()
     return moto_server

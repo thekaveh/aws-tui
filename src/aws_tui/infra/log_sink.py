@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import threading
 import uuid
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
@@ -25,6 +26,10 @@ _LOGGER_NAME: Final[str] = "aws_tui"
 _FILE_NAME: Final[str] = "aws-tui.log"
 _DEFAULT_MAX_BYTES: Final[int] = 5 * 1024 * 1024  # 5 MiB
 _DEFAULT_BACKUP_COUNT: Final[int] = 5
+_STDLIB_CAPTURE_LOCK: Final[threading.Lock] = threading.Lock()
+_stdlib_capture_count = 0
+_stdlib_baseline_level: int | None = None
+_stdlib_baseline_propagate: bool | None = None
 _STANDARD_LOG_RECORD_ATTRS: Final[frozenset[str]] = frozenset(
     logging.LogRecord("", 0, "", 0, "", (), None).__dict__
 ) | {"asctime", "message"}
@@ -55,6 +60,8 @@ class _JsonLineFormatter(logging.Formatter):
             }
             if stdlib_extra:
                 payload.update(redact_mapping(stdlib_extra))
+        if record.exc_info is not None:
+            payload["traceback"] = redact_text(self.formatException(record.exc_info))
         return json.dumps(payload, default=str, separators=(",", ":"))
 
 
@@ -67,8 +74,7 @@ class _PrivateRotatingFileHandler(RotatingFileHandler):
     shared systems. The parent directory is already chmod'd ``0o700``
     by :func:`ensure_private_dir`; this brings the files themselves in
     line. Best-effort: filesystems without POSIX permission bits
-    silently no-op the chmod (matches the crash-dump posture from the
-    second loop).
+    silently no-op the chmod, matching the crash-dump permission posture.
     """
 
     @staticmethod
@@ -150,15 +156,21 @@ class LogSink:
         self._logger.propagate = False
         self._logger.addHandler(self._handler)
         self._stdlib_logger: logging.Logger | None = None
-        self._stdlib_previous_level: int | None = None
-        self._stdlib_previous_propagate: bool | None = None
+        self._close_lock = threading.Lock()
         if capture_stdlib:
+            global _stdlib_baseline_level
+            global _stdlib_baseline_propagate
+            global _stdlib_capture_count
+
             self._stdlib_logger = logging.getLogger(_LOGGER_NAME)
-            self._stdlib_previous_level = self._stdlib_logger.level
-            self._stdlib_previous_propagate = self._stdlib_logger.propagate
-            self._stdlib_logger.setLevel(logging.DEBUG)
-            self._stdlib_logger.propagate = False
-            self._stdlib_logger.addHandler(self._handler)
+            with _STDLIB_CAPTURE_LOCK:
+                if _stdlib_capture_count == 0:
+                    _stdlib_baseline_level = self._stdlib_logger.level
+                    _stdlib_baseline_propagate = self._stdlib_logger.propagate
+                    self._stdlib_logger.setLevel(logging.DEBUG)
+                    self._stdlib_logger.propagate = False
+                self._stdlib_logger.addHandler(self._handler)
+                _stdlib_capture_count += 1
         self._closed: bool = False
 
     @property
@@ -191,28 +203,38 @@ class LogSink:
 
     def close(self) -> None:
         """Close the handler. Idempotent."""
-        if self._closed:
-            return
-        self._handler.flush()
-        self._logger.removeHandler(self._handler)
-        if self._stdlib_logger is not None:
-            self._stdlib_logger.removeHandler(self._handler)
-            if self._stdlib_previous_level is not None:
-                self._stdlib_logger.setLevel(self._stdlib_previous_level)
-            if self._stdlib_previous_propagate is not None:
-                self._stdlib_logger.propagate = self._stdlib_previous_propagate
-        self._handler.close()
-        # Release the logger from the module-level registry too.
-        # ``Logger.manager.loggerDict`` holds a STRONG reference per
-        # named logger that survives GC of the LogSink wrapper —
-        # the R46 uuid switch only stopped id-reuse collisions, the
-        # registry still grew monotonically across the process
-        # lifetime (test suites cycling sinks, long-running app
-        # sessions). The uuid4 name guarantees no other code
-        # references it, so this del is safe.
-        with contextlib.suppress(KeyError):
-            del logging.Logger.manager.loggerDict[self._logger.name]
-        self._closed = True
+        global _stdlib_baseline_level
+        global _stdlib_baseline_propagate
+        global _stdlib_capture_count
+
+        with self._close_lock:
+            if self._closed:
+                return
+            self._handler.flush()
+            self._logger.removeHandler(self._handler)
+            if self._stdlib_logger is not None:
+                with _STDLIB_CAPTURE_LOCK:
+                    self._stdlib_logger.removeHandler(self._handler)
+                    _stdlib_capture_count -= 1
+                    if _stdlib_capture_count == 0:
+                        if _stdlib_baseline_level is not None:
+                            self._stdlib_logger.setLevel(_stdlib_baseline_level)
+                        if _stdlib_baseline_propagate is not None:
+                            self._stdlib_logger.propagate = _stdlib_baseline_propagate
+                        _stdlib_baseline_level = None
+                        _stdlib_baseline_propagate = None
+            self._handler.close()
+            # Release the logger from the module-level registry too.
+            # ``Logger.manager.loggerDict`` holds a STRONG reference per
+            # named logger that survives GC of the LogSink wrapper —
+            # the R46 uuid switch only stopped id-reuse collisions, the
+            # registry still grew monotonically across the process
+            # lifetime (test suites cycling sinks, long-running app
+            # sessions). The uuid4 name guarantees no other code
+            # references it, so this del is safe.
+            with contextlib.suppress(KeyError):
+                del logging.Logger.manager.loggerDict[self._logger.name]
+            self._closed = True
 
 
 __all__ = ["LogSink"]

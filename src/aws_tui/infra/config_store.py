@@ -12,26 +12,150 @@ leaves the original file untouched.
 from __future__ import annotations
 
 import contextlib
+import errno
+import importlib
+import math
 import os
 import tempfile
+import threading
+import time
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, BinaryIO, Final
 
 import tomli_w
 
+from aws_tui.infra.connection_validation import validate_endpoint_url
 from aws_tui.infra.paths import config_home
 from aws_tui.infra.redaction import safe_endpoint_display
 
 #: The two supported connection kinds.
 VALID_KINDS: Final[frozenset[str]] = frozenset({"aws", "s3-compatible"})
+_DEFAULT_LOCK_TIMEOUT: Final[float] = 5.0
+_LOCK_POLL_INTERVAL: Final[float] = 0.025
 
 
 class ConfigError(Exception):
     """Raised when the on-disk config violates the schema or an operation
     references an unknown connection."""
+
+
+class _ConfigLockTimeout(Exception):
+    """Internal signal that a config transaction lock stayed occupied."""
+
+
+class _ConfigPathLock:
+    """Reentrant process-local guard backed by an OS file lock."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._thread_lock = threading.RLock()
+        self._depth = 0
+        self._file: BinaryIO | None = None
+
+    def acquire(self, timeout: float) -> None:
+        started = time.monotonic()
+        if not self._thread_lock.acquire(timeout=timeout):
+            raise _ConfigLockTimeout
+        try:
+            if self._depth == 0:
+                remaining = max(0.0, timeout - (time.monotonic() - started))
+                self._file = _acquire_os_file_lock(self._path, remaining)
+            self._depth += 1
+        except BaseException:
+            self._thread_lock.release()
+            raise
+
+    def release(self) -> None:
+        self._depth -= 1
+        try:
+            if self._depth == 0 and self._file is not None:
+                _release_os_file_lock(self._file)
+                self._file = None
+        finally:
+            self._thread_lock.release()
+
+    def abandon_after_fork(self) -> None:
+        """Drop this process's inherited descriptor without unlocking it."""
+        if self._file is not None:
+            self._file.close()
+        self._file = None
+        self._depth = 0
+
+
+_PATH_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS: dict[Path, _ConfigPathLock] = {}
+_PATH_LOCKS_PID = os.getpid()
+
+
+def _config_path_lock(path: Path) -> _ConfigPathLock:
+    global _PATH_LOCKS_GUARD, _PATH_LOCKS, _PATH_LOCKS_PID
+
+    current_pid = os.getpid()
+    if current_pid != _PATH_LOCKS_PID:
+        for inherited_lock in _PATH_LOCKS.values():
+            inherited_lock.abandon_after_fork()
+        _PATH_LOCKS_GUARD = threading.Lock()
+        _PATH_LOCKS = {}
+        _PATH_LOCKS_PID = current_pid
+    canonical = path.resolve(strict=False)
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(canonical, _ConfigPathLock(canonical))
+
+
+def _acquire_os_file_lock(path: Path, timeout: float) -> BinaryIO:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError, NotImplementedError):
+        path.parent.chmod(0o700)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    with contextlib.suppress(OSError, NotImplementedError):
+        path.chmod(0o600)
+    file = os.fdopen(fd, "r+b", buffering=0)
+    if os.fstat(fd).st_size == 0:
+        file.write(b"\0")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            _try_os_file_lock(file)
+            return file
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                file.close()
+                raise
+            if time.monotonic() >= deadline:
+                file.close()
+                raise _ConfigLockTimeout from exc
+            time.sleep(min(_LOCK_POLL_INTERVAL, max(0.0, deadline - time.monotonic())))
+
+
+def _try_os_file_lock(file: BinaryIO) -> None:
+    file.seek(0)
+    if os.name == "nt":
+        msvcrt = importlib.import_module("msvcrt")
+        msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _release_os_file_lock(file: BinaryIO) -> None:
+    try:
+        file.seek(0)
+        if os.name == "nt":
+            msvcrt = importlib.import_module("msvcrt")
+            msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+    finally:
+        file.close()
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -113,9 +237,18 @@ class ConfigStore:
     (:meth:`load`) still function normally.
     """
 
-    def __init__(self, *, path: Path | None = None, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        path: Path | None = None,
+        read_only: bool = False,
+        lock_timeout: float = _DEFAULT_LOCK_TIMEOUT,
+    ) -> None:
+        if not math.isfinite(lock_timeout) or lock_timeout < 0:
+            raise ValueError("lock_timeout must be a finite non-negative value")
         self._path: Path = path if path is not None else _default_path()
         self._read_only = read_only
+        self._lock_timeout = lock_timeout
 
     @property
     def path(self) -> Path:
@@ -169,7 +302,7 @@ class ConfigStore:
                     f"[connections.{name}] has invalid kind {kind!r}; "
                     f"expected one of {sorted(VALID_KINDS)}"
                 )
-            connections[name] = ConnectionEntry(
+            entry = ConnectionEntry(
                 name=name,
                 kind=kind,
                 profile=_optional_str_field(body, field="profile", table=f"connections.{name}"),
@@ -202,13 +335,25 @@ class ConfigStore:
                     table=f"connections.{name}",
                 ),
             )
+            _validate_connection_entry(entry)
+            connections[name] = entry
 
         raw_defaults = raw.get("defaults", {})
         if not isinstance(raw_defaults, dict):
             raise ConfigError("[defaults] must be a table")
+        default_connection = _optional_str_field(
+            raw_defaults,
+            field="connection",
+            table="defaults",
+        )
+        default_theme = _optional_str_field(
+            raw_defaults,
+            field="theme",
+            table="defaults",
+        )
         defaults = Defaults(
-            connection=raw_defaults.get("connection"),
-            theme=str(raw_defaults.get("theme", "carbon")),
+            connection=default_connection,
+            theme=default_theme or "carbon",
         )
 
         raw_kb = raw.get("keybindings", {})
@@ -234,6 +379,32 @@ class ConfigStore:
     # Write (atomic)
     # ------------------------------------------------------------------
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Serialize a complete config-related transaction across processes."""
+        if self._read_only:
+            yield
+            return
+
+        lock_path = self._path.with_name(f".{self._path.name}.lock")
+        lock = _config_path_lock(lock_path)
+        try:
+            lock.acquire(self._lock_timeout)
+        except _ConfigLockTimeout as exc:
+            raise ConfigError(
+                f"timed out after {self._lock_timeout:g}s waiting for the config "
+                f"transaction lock at {lock_path}; another aws-tui process may be "
+                "updating settings, so retry after it finishes"
+            ) from exc
+        except OSError as exc:
+            raise ConfigError(
+                f"unable to acquire config transaction lock at {lock_path}: {exc}"
+            ) from exc
+        try:
+            yield
+        finally:
+            lock.release()
+
     def save(self, config: Config) -> None:
         """Atomically write the given config to disk.
 
@@ -247,9 +418,13 @@ class ConfigStore:
         """
         if self._read_only:
             return
+        with self.transaction():
+            self._save_unlocked(config)
+
+    def _save_unlocked(self, config: Config) -> None:
+        """Write ``config`` while the caller owns the transaction lock."""
         for entry in config.connections.values():
-            if entry.kind not in VALID_KINDS:
-                raise ConfigError(f"connection {entry.name!r} has invalid kind {entry.kind!r}")
+            _validate_connection_entry(entry)
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # Defense-in-depth: the config.toml file itself is created with
@@ -275,9 +450,12 @@ class ConfigStore:
         try:
             with os.fdopen(tmp_fd, "wb") as fh:
                 tomli_w.dump(payload, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
             # Path.replace delegates to os.replace, so test patches on
             # `os.replace` still flow through here.
             tmp_path.replace(self._path)
+            _fsync_directory(self._path.parent)
         except BaseException:
             # Catching BaseException (rather than Exception) is
             # intentional: KeyboardInterrupt and SystemExit must also
@@ -345,7 +523,10 @@ class ConfigStore:
         the framing keeps the validation + transformation logic in each
         mutator while pruning the boilerplate.
         """
-        self.save(fn(self.load()))
+        if self._read_only:
+            return
+        with self.transaction():
+            self._save_unlocked(fn(self.load()))
 
     def add_connection(self, entry: ConnectionEntry) -> None:
         """Insert or overwrite ``entry`` and persist."""
@@ -426,6 +607,21 @@ class ConfigStore:
         self._mutate(_apply)
 
 
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def _bool_field(body: dict[str, Any], *, field: str, default: bool, table: str) -> bool:
     value = body.get(field, default)
     if isinstance(value, bool):
@@ -438,6 +634,33 @@ def _optional_str_field(body: dict[str, Any], *, field: str, table: str) -> str 
     if value is None or isinstance(value, str):
         return value
     raise ConfigError(f"[{table}].{field} must be a string")
+
+
+def _validate_connection_entry(entry: ConnectionEntry) -> None:
+    if entry.kind not in VALID_KINDS:
+        raise ConfigError(f"connection {entry.name!r} has invalid kind {entry.kind!r}")
+    if entry.kind != "s3-compatible":
+        return
+
+    endpoint_error = validate_endpoint_url(entry.endpoint_url or "")
+    if endpoint_error is not None:
+        raise ConfigError(f"connection {entry.name!r} endpoint_url {endpoint_error}")
+
+    spec = entry.credentials or ""
+    if spec == "static":
+        if not (entry.access_key_id or "").strip() or not (entry.secret_access_key or "").strip():
+            raise ConfigError(
+                f"connection {entry.name!r} static credentials require nonblank "
+                "access_key_id and secret_access_key"
+            )
+        return
+    for prefix in ("keychain:", "env:", "aws-profile:"):
+        if spec.startswith(prefix) and spec[len(prefix) :].strip():
+            return
+    raise ConfigError(
+        f"connection {entry.name!r} credentials must be static or a nonblank "
+        "keychain:, env:, or aws-profile: reference"
+    )
 
 
 __all__ = [

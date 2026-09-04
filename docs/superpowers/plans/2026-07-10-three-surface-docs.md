@@ -1,4 +1,4 @@
-# Three-Surface Documentation Implementation Plan
+# 1. Three-Surface Documentation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,7 +10,7 @@
 
 **Source spec:** `docs/superpowers/specs/2026-07-10-three-surface-docs-design.md`
 
-## Global Constraints
+## 1.1. Global Constraints
 
 - Repo: `thekaveh/aws-tui` (public). `REPO_URL=https://github.com/thekaveh/aws-tui`, `WIKI_URL=https://github.com/thekaveh/aws-tui/wiki`, `SITE_URL=https://thekaveh.github.io/aws-tui/`.
 - Wiki renders from branch **`master`**, not `main` (gotcha #1).
@@ -33,7 +33,7 @@
 
 ---
 
-## File Structure
+## 1.2. File Structure
 
 **New package `scripts/docs/`** — one responsibility per module:
 - `__init__.py` — package marker.
@@ -53,7 +53,7 @@
 
 ---
 
-## Task 1: Scaffolding, gitignore, and uv docs dependency group
+## 1.3. Task 1: Scaffolding, gitignore, and uv docs dependency group
 
 **Files:**
 - Modify: `.gitignore`
@@ -152,7 +152,7 @@ git commit -m "chore(docs): scaffold three-surface docs package + uv docs group"
 
 ---
 
-## Task 2: `manifest.py` — parse and validate `manifest.yaml`
+## 1.4. Task 2: `manifest.py` — parse and validate `manifest.yaml`
 
 **Files:**
 - Create: `scripts/docs/manifest.py`
@@ -414,7 +414,7 @@ git commit -m "feat(docs): manifest parser + validation"
 
 ---
 
-## Task 3: `links.py` — link discovery + the 3×3 forbidden matrix
+## 1.5. Task 3: `links.py` — link discovery + the 3×3 forbidden matrix
 
 **Files:**
 - Create: `scripts/docs/links.py`
@@ -542,7 +542,7 @@ git commit -m "feat(docs): link discovery + self-containment matrix"
 
 ---
 
-## Task 4: `transforms.py` — source map + per-surface link rewriting
+## 1.6. Task 4: `transforms.py` — source map + per-surface link rewriting
 
 **Files:**
 - Create: `scripts/docs/transforms.py`
@@ -746,7 +746,7 @@ git commit -m "feat(docs): source map + per-surface link rewriting"
 
 ---
 
-## Task 5: `render_diagrams.py` — HTML master → SVG + PNG
+## 1.7. Task 5: `render_diagrams.py` — HTML master → SVG + PNG
 
 **Files:**
 - Create: `scripts/docs/render_diagrams.py`
@@ -936,7 +936,7 @@ git commit -m "feat(docs): diagram master -> SVG + PNG rendering"
 
 ---
 
-## Task 6: `build_docs.py` — render site, wiki, mkdocs.yml + determinism
+## 1.8. Task 6: `build_docs.py` — render site, wiki, mkdocs.yml + determinism
 
 **Files:**
 - Create: `scripts/docs/build_docs.py`
@@ -1345,7 +1345,7 @@ git commit -m "feat(docs): render site + wiki + mkdocs.yml with determinism chec
 
 ---
 
-## Task 7: `check_docs.py` — the CI gate
+## 1.9. Task 7: `check_docs.py` — the CI gate
 
 **Files:**
 - Create: `scripts/docs/check_docs.py`
@@ -1616,7 +1616,7 @@ git commit -m "feat(docs): check_docs CI gate (containment/completeness/placehol
 
 ---
 
-## Task 8: `push_wiki.py` — sync `generated/wiki/` → `aws-tui.wiki.git`
+## 1.10. Task 8: `push_wiki.py` — sync `generated/wiki/` → `aws-tui.wiki.git`
 
 **Files:**
 - Create: `scripts/docs/push_wiki.py`
@@ -1843,7 +1843,7 @@ git commit -m "feat(docs): push_wiki sync to aws-tui.wiki.git (master)"
 
 ---
 
-## Task 9: Canonical content — index, manifest, theme assets, architecture diagram
+## 1.11. Task 9: Canonical content — index, manifest, theme assets, architecture diagram
 
 **Files:**
 - Create: `docs/index.md`
@@ -1991,7 +1991,7 @@ git commit -m "docs: canonical index + manifest + theme assets + architecture di
 
 ---
 
-## Task 10: `Makefile` — docs targets (uv-native)
+## 1.12. Task 10: `Makefile` — docs targets (uv-native)
 
 **Files:**
 - Create: `Makefile`
@@ -2079,7 +2079,7 @@ git commit -m "build(docs): Makefile targets for build/serve/check/wiki"
 
 ---
 
-## Task 11: CI workflows — `docs.yml` (gate) + `pages.yml` (publish)
+## 1.13. Task 11: CI workflows — `docs.yml` (gate) + `pages.yml` (publish)
 
 **Files:**
 - Create: `.github/workflows/docs.yml`
@@ -2229,7 +2229,7 @@ git commit -m "ci(docs): PR gate (docs.yml) + Pages/wiki publish (pages.yml)"
 
 ---
 
-## Task 12: Full integration — green end-to-end locally
+## 1.14. Task 12: Full integration — green end-to-end locally
 
 **Files:**
 - Modify: none (verification + fixups only)
@@ -2295,7 +2295,7 @@ git commit -m "docs: integrate three-surface pipeline — green end-to-end" || e
 
 ---
 
-## Task 13: Phase 2 runbook — external/publish steps (GATED; not run during build)
+## 1.15. Task 13: Phase 2 runbook — external/publish steps (GATED; not run during build)
 
 **Files:**
 - Create: `docs/superpowers/notes/2026-07-10-three-surface-docs-phase2-runbook.md`
@@ -2306,7 +2306,7 @@ git commit -m "docs: integrate three-surface pipeline — green end-to-end" || e
 - [ ] **Step 1: Write the runbook**
 
 Create `docs/superpowers/notes/2026-07-10-three-surface-docs-phase2-runbook.md`:
-```markdown
+````markdown
 # Three-surface docs — Phase 2 publish runbook
 
 Run these AFTER the pipeline is merged to `main`. Each step is outward-facing;
@@ -2321,7 +2321,7 @@ get explicit go-ahead before running it.
 ssh-keygen -t ed25519 -f /tmp/wiki-key -N "" -C "aws-tui-wiki-sync"
 gh repo deploy-key add /tmp/wiki-key.pub --title "aws-tui wiki sync (CI)" --allow-write
 gh secret set WIKI_DEPLOY_KEY < /tmp/wiki-key          # secret holds the key CONTENT
-# local verify (optional) before deleting:
+# 1. local verify (optional) before deleting:
 WIKI_DEPLOY_KEY=/tmp/wiki-key uv run python -m scripts.docs.build_docs --wiki
 WIKI_DEPLOY_KEY=/tmp/wiki-key uv run python -m scripts.docs.push_wiki --push
 rm /tmp/wiki-key /tmp/wiki-key.pub
@@ -2335,9 +2335,9 @@ rm /tmp/wiki-key /tmp/wiki-key.pub
 ```bash
 curl -sSfo /dev/null -w '%{http_code}\n' https://thekaveh.github.io/aws-tui/      # 200
 curl -sSfo /dev/null -w '%{http_code}\n' https://github.com/thekaveh/aws-tui/wiki  # 200
-# in-repo: browse docs/*.md on GitHub (canonical, always current)
+# 1. in-repo: browse docs/*.md on GitHub (canonical, always current)
 ```
-```
+````
 
 - [ ] **Step 2: Commit**
 
@@ -2348,7 +2348,7 @@ git commit -m "docs: Phase 2 publish runbook (gated external steps)"
 
 ---
 
-## Self-Review (completed against the spec)
+## 1.16. Self-Review (completed against the spec)
 
 **Spec coverage:** §1 goal → whole plan. §2 decisions → Task 1 (uv/gitignore), Task 9 (numbering-preserving index/manifest; one diagram; page set), all-three-surfaces (Tasks 6/8/11). §3 architecture → Tasks 6/12. §4 layout → Task 9. §5 manifest → Task 9 Step 5 + Task 2. §6 modules → Tasks 2–8. §7 diagram → Task 9 Step 4/6. §8 tooling → Tasks 1/10. §9 CI → Task 11. §10 tests → each module task's test step. §11 Phase 2 → Task 13. §12 verification → Task 12. §13 gotchas → Global Constraints + inline.
 

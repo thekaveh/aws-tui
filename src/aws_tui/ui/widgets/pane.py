@@ -297,11 +297,15 @@ class Pane(HubSubscriberMixin, Widget):
         # endpoint is offline at app start (MinIO not running, etc.).
         #
         # Deferring to the next refresh tick lets Textual finish
-        # mounting ``pane-body`` first. Matches the pattern every other
+        # mounting ``pane-body`` first. Reconcile chrome as well as the
+        # body after subscribing: a fast setup can update the VM after
+        # ``compose`` captures its initial values but before this mount
+        # callback installs the subscription.
+        #
+        # This matches the pattern every other
         # ``_render_body`` caller in this class uses
         # (``_on_vm_property_changed`` always goes through
         # ``call_after_refresh``).
-        self.call_after_refresh(self._render_body)
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
@@ -312,6 +316,7 @@ class Pane(HubSubscriberMixin, Widget):
             ),
             on_property_changed=self._on_vm_property_changed,
         )
+        self.call_after_refresh(self._refresh_all)
 
     def on_unmount(self) -> None:
         self.unsubscribe_from_vm()

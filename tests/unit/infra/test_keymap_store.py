@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
-import pytest
+import string
+from itertools import combinations
 
-from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
+import pytest
+from textual.binding import BindingsMap
+
+from aws_tui.infra.keymap_store import KeymapStore, UnknownAction, textual_key_name
+
+_APPROVED_ALIAS_PAIRS = (
+    ("pane.quick_look", "pane.toggle_select"),
+    ("auth.authenticate", "pane.select_all"),
+    ("emr.clone", "pane.copy"),
+    ("athena.query", "glue.catalog"),
+    ("athena.history", "glue.jobs"),
+    ("athena.results", "glue.crawlers"),
+)
 
 
 class TestDefaults:
@@ -15,6 +28,31 @@ class TestDefaults:
     def test_resolve_command_palette_default(self) -> None:
         store = KeymapStore()
         assert store.resolve("app.command_palette") == (":", "ctrl+k")
+
+    def test_emr_next_application_has_dedicated_binding(self) -> None:
+        store = KeymapStore()
+        assert store.resolve("app.swap_source") == ("S",)
+        assert store.resolve("emr.next_application") == ("A",)
+
+    def test_glue_views_have_dedicated_number_bindings(self) -> None:
+        store = KeymapStore()
+        assert store.resolve("glue.catalog") == ("1",)
+        assert store.resolve("glue.jobs") == ("2",)
+        assert store.resolve("glue.crawlers") == ("3",)
+        assert store.resolve("glue.time_travel_in_athena") == ("V",)
+
+    def test_glue_query_in_athena_has_a_dedicated_binding(self) -> None:
+        store = KeymapStore()
+        assert store.resolve("glue.query_in_athena") == ("Q",)
+
+    def test_athena_controls_have_dedicated_bindings(self) -> None:
+        store = KeymapStore()
+        assert store.resolve("athena.query") == ("1",)
+        assert store.resolve("athena.history") == ("2",)
+        assert store.resolve("athena.results") == ("3",)
+        assert store.resolve("athena.saved") == ("4",)
+        assert store.resolve("athena.execute") == ("ctrl+enter",)
+        assert store.resolve("athena.cancel") == ("escape",)
 
     def test_vi_navigation_defaults_match_live_app_bindings(self) -> None:
         store = KeymapStore()
@@ -43,7 +81,7 @@ class TestDefaults:
         # Spot-check a handful of known actions from spec §4.2.
         assert "app.quit" in all_bindings
         assert "pane.copy" in all_bindings
-        assert "modal.cancel" in all_bindings
+        assert "modal.cancel" not in all_bindings
         # And the full set should match DEFAULT_BINDINGS exactly when
         # there's no overlay.
         assert set(all_bindings) == set(KeymapStore.DEFAULT_BINDINGS)
@@ -55,8 +93,49 @@ class TestOverlay:
         assert store.resolve("app.quit") == ("ctrl+d",)
 
     def test_overlay_list_keys_replaces_defaults(self) -> None:
-        store = KeymapStore(overlay={"pane.copy": ["c", "y"]})
-        assert store.resolve("pane.copy") == ("c", "y")
+        store = KeymapStore(overlay={"pane.copy": ["c", "ctrl+y"]})
+        assert store.resolve("pane.copy") == ("c", "ctrl+y")
+
+    @pytest.mark.parametrize(
+        "keys",
+        ["", "   ", " q", "q ", "q,y", ["q", ""], ["ctrl+y", " q"]],
+    )
+    def test_overlay_rejects_malformed_key_tokens(self, keys: str | list[str]) -> None:
+        with pytest.raises(ValueError, match="invalid keybinding"):
+            KeymapStore(overlay={"pane.copy": keys})
+
+    def test_empty_key_list_remains_an_intentional_disable(self) -> None:
+        assert KeymapStore(overlay={"pane.copy": []}).resolve("pane.copy") == ()
+
+    def test_approved_alias_allowlist_matches_all_default_collision_pairs(self) -> None:
+        actions_by_key: dict[str, set[str]] = {}
+        for action, keys in KeymapStore.DEFAULT_BINDINGS.items():
+            for key in keys:
+                actions_by_key.setdefault(textual_key_name(key), set()).add(action)
+        default_pairs = frozenset(
+            pair for actions in actions_by_key.values() for pair in combinations(sorted(actions), 2)
+        )
+
+        assert frozenset(_APPROVED_ALIAS_PAIRS) == default_pairs
+        assert default_pairs == KeymapStore.APPROVED_ALIAS_PAIRS
+
+    @pytest.mark.parametrize(("left", "right"), _APPROVED_ALIAS_PAIRS)
+    def test_overlay_can_remap_approved_alias_pair_to_another_key(
+        self,
+        left: str,
+        right: str,
+    ) -> None:
+        store = KeymapStore(overlay={left: "7", right: "7"})
+
+        assert store.resolve(left) == ("7",)
+        assert store.resolve(right) == ("7",)
+
+    def test_overlay_rejects_textual_equivalent_key_names(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"'colon'.*'app\.command_palette'.*'pane\.copy'",
+        ):
+            KeymapStore(overlay={"pane.copy": "colon"})
 
     def test_overlay_does_not_add_unknown_actions(self) -> None:
         # The overlay can override existing actions but adding wholly
@@ -76,3 +155,14 @@ class TestOverlay:
         assert all_bindings["app.quit"] == ("ctrl+d",)
         # Other actions still have their defaults.
         assert all_bindings["pane.copy"] == ("c",)
+
+
+@pytest.mark.parametrize("key", string.punctuation)
+def test_single_ascii_punctuation_matches_public_textual_normalization(key: str) -> None:
+    if key == ",":
+        assert textual_key_name(key) == "comma"
+        assert "comma" in BindingsMap([("comma", "noop")]).key_to_bindings
+        return
+
+    runtime_key = next(iter(BindingsMap([(key, "noop")]).key_to_bindings))
+    assert textual_key_name(key) == runtime_key

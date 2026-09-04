@@ -51,9 +51,43 @@ class FocusSlot(StrEnum):
     NAV_MENU = "nav_menu"
     S3_LEFT = "s3.left"
     S3_RIGHT = "s3.right"
+    EMR_SOURCE = "emr.source"
+    EMR_APPLICATION = "emr.application"
     EMR_RUNS = "emr.runs"
     EMR_DETAIL = "emr.detail"
     EMR_LOGS = "emr.logs"
+    GLUE_SOURCE = "glue.source"
+    GLUE_FILTER = "glue.filter"
+    GLUE_TABS = "glue.tabs"
+    GLUE_PRIMARY = "glue.primary"
+    GLUE_SECONDARY = "glue.secondary"
+    GLUE_DETAIL = "glue.detail"
+    GLUE_ICEBERG_SNAPSHOTS = "glue.iceberg.snapshots"
+    GLUE_ICEBERG_HISTORY = "glue.iceberg.history"
+    GLUE_ICEBERG_MANIFESTS = "glue.iceberg.manifests"
+    GLUE_ICEBERG_FILES = "glue.iceberg.files"
+    GLUE_ICEBERG_PARTITIONS = "glue.iceberg.partitions"
+    GLUE_ICEBERG_REFS = "glue.iceberg.refs"
+    GLUE_ICEBERG_TABLE = "glue.iceberg.table"
+    GLUE_ICEBERG_MORE = "glue.iceberg.more"
+    GLUE_ICEBERG_RETRY = "glue.iceberg.retry"
+    GLUE_ICEBERG_TIME_TRAVEL = "glue.iceberg.time_travel"
+    ATHENA_SOURCE = "athena.source"
+    ATHENA_WORKGROUP = "athena.workgroup"
+    ATHENA_WORKGROUP_MORE = "athena.workgroup.more"
+    ATHENA_CATALOG = "athena.catalog"
+    ATHENA_CATALOG_MORE = "athena.catalog.more"
+    ATHENA_DATABASE = "athena.database"
+    ATHENA_DATABASE_MORE = "athena.database.more"
+    ATHENA_TABS = "athena.tabs"
+    ATHENA_PRIMARY = "athena.primary"
+    ATHENA_SECONDARY = "athena.secondary"
+    ATHENA_CANCEL = "athena.cancel"
+    ATHENA_DETAIL = "athena.detail"
+    ATHENA_HISTORY_MORE = "athena.history.more"
+    ATHENA_SAVED_NAMED_MORE = "athena.saved.named.more"
+    ATHENA_SAVED_PREPARED_MORE = "athena.saved.prepared.more"
+    ATHENA_SAVED_OPEN_EDITOR = "athena.saved.open_editor"
     SETTINGS = "settings"
     MODAL = "modal"
 
@@ -70,10 +104,10 @@ class FocusCoordinatorVM:
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._focus_discriminator: DiscriminatorVM[FocusSlot] = DiscriminatorVM(initial)
-        self._modal_restore_stack: list[FocusSlot] = []
         self._focus_sub: DisposableBase = self._focus_discriminator.active_changed.subscribe(
             on_next=self._emit_changed
         )
+        self._underlying_slot_override: FocusSlot | None = None
         self._disposed = False
         self._inner: ComponentVM = (
             ComponentVM.builder().name("focus_coordinator").services(hub, dispatcher).build()
@@ -119,14 +153,27 @@ class FocusCoordinatorVM:
         if slot is FocusSlot.MODAL:
             self.modal_open()
             return
-        if self.focused_slot is FocusSlot.MODAL:
-            # Implicit close — the caller is overriding the saved slot.
-            # The facade owns restore semantics so VMx internals remain
-            # replaceable across compatible VMx releases.
-            self._modal_restore_stack.clear()
         if self.focused_slot is slot:
             return
+        # VMx 3.23+ intentionally clears saved modal history when an explicit
+        # non-modal key replaces the active key.
         self._focus_discriminator.set_active_key(slot)
+
+    def project_focused_slot(self, slot: FocusSlot) -> None:
+        """Project widget focus without breaking modal precedence."""
+        if self.is_modal:
+            return
+        self.set_focused_slot(slot)
+
+    def set_underlying_slot(self, slot: FocusSlot) -> None:
+        """Change the slot restored after a modal without dismissing it."""
+        if slot is FocusSlot.MODAL:
+            self.modal_open()
+            return
+        if self.is_modal:
+            self._underlying_slot_override = slot
+            return
+        self.set_focused_slot(slot)
 
     def cycle_s3_focus(self, *, reverse: bool = False) -> None:
         """Rotate the S3 focus ring.
@@ -149,23 +196,93 @@ class FocusCoordinatorVM:
         _ = reverse
         self._cycle((FocusSlot.SETTINGS, FocusSlot.NAV_MENU))
 
+    def cycle_focus_ring(
+        self,
+        slots: tuple[FocusSlot, ...],
+        *,
+        reverse: bool = False,
+    ) -> FocusSlot:
+        """Move through a caller-defined logical focus ring.
+
+        The caller owns availability and ordering; the composed VMx
+        discriminator remains the sole owner of the active identity.
+        """
+        if not slots:
+            raise ValueError("focus ring requires at least one slot")
+        if len(set(slots)) != len(slots):
+            raise ValueError("focus ring slots must be unique")
+        try:
+            index = slots.index(self.focused_slot)
+        except ValueError:
+            selected = slots[0]
+        else:
+            step = -1 if reverse else 1
+            selected = slots[(index + step) % len(slots)]
+        self.set_focused_slot(selected)
+        return selected
+
+    def select_nearest_focus_slot(
+        self,
+        slots: tuple[FocusSlot, ...],
+        *,
+        order: tuple[FocusSlot, ...],
+        reference: FocusSlot | None = None,
+    ) -> FocusSlot:
+        """Keep the current slot or select its nearest available neighbor.
+
+        ``order`` supplies relative service order. Slots absent from the
+        current ring are excluded from distance calculations; the disappearing
+        reference is retained long enough to identify its available neighbors.
+        A forward neighbor wins an equal-distance tie.
+        """
+        if not slots:
+            raise ValueError("available focus slots require at least one slot")
+        if len(set(slots)) != len(slots):
+            raise ValueError("available focus slots must be unique")
+        if len(set(order)) != len(order):
+            raise ValueError("focus slot order must be unique")
+        if any(slot not in order for slot in slots):
+            raise ValueError("available focus slots must exist in focus slot order")
+        reference_slot = reference or self.focused_slot
+        if reference_slot in slots:
+            self.set_focused_slot(reference_slot)
+            return reference_slot
+        try:
+            current_order = tuple(slot for slot in order if slot is reference_slot or slot in slots)
+            current_index = current_order.index(reference_slot)
+        except ValueError:
+            selected = slots[0]
+        else:
+            indices = {slot: current_order.index(slot) for slot in slots}
+            selected = min(
+                slots,
+                key=lambda slot: (
+                    abs(indices[slot] - current_index),
+                    indices[slot] < current_index,
+                ),
+            )
+        self.set_focused_slot(selected)
+        return selected
+
     def modal_open(self) -> None:
         """Push the MODAL precedence slot. Saves the prior non-modal
         slot so :meth:`modal_close` can restore it."""
         if self.focused_slot is FocusSlot.MODAL:
             return
-        self._modal_restore_stack.append(self.focused_slot)
-        self._focus_discriminator.set_active_key(FocusSlot.MODAL)
+        self._underlying_slot_override = None
+        self._focus_discriminator.modal_open(FocusSlot.MODAL)
 
     def modal_close(self) -> None:
         """Pop the MODAL precedence slot. Restores the prior
         non-modal slot. No-op when no modal is open."""
         if self.focused_slot is not FocusSlot.MODAL:
             return
-        restore = (
-            self._modal_restore_stack.pop() if self._modal_restore_stack else FocusSlot.NAV_MENU
-        )
-        self._focus_discriminator.set_active_key(restore)
+        if self._underlying_slot_override is not None:
+            target = self._underlying_slot_override
+            self._underlying_slot_override = None
+            self._focus_discriminator.set_active_key(target)
+            return
+        self._focus_discriminator.modal_close()
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -179,8 +296,8 @@ class FocusCoordinatorVM:
         if self._disposed:
             return
         self._disposed = True
+        self._underlying_slot_override = None
         self._focus_sub.dispose()
-        self._modal_restore_stack.clear()
         self._focus_discriminator.dispose()
         self._inner.dispose()
 

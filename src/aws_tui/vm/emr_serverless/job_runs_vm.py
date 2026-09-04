@@ -22,29 +22,36 @@ and PR #100(a) (single ``on_current_changed`` on selection move).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
-from typing import Any
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import (
     ComponentVMOf,
     CompositeVM,
     Message,
     MessageHub,
     PropertyChangedMessage,
-    TokenPagedComposition,
 )
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
+from aws_tui.domain.emr_serverless import (
+    EmrServerlessClientProtocol,
+    JobRunState,
+    JobRunSummary,
+)
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
+from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.paging import BoundedTokenPagedComposition
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _ALL_STATES: frozenset[JobRunState] = frozenset(JobRunState)
+_MAX_JOB_RUN_ITEMS = 1_000
 
 # Pre-terminal states the poller uses to keep the active (60-s)
 # cadence. See ``has_active_runs`` for the rationale; ``CANCELLING``
@@ -111,7 +118,7 @@ class JobRunsVM:
     def __init__(
         self,
         *,
-        client: Any,
+        client: EmrServerlessClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
@@ -121,17 +128,18 @@ class JobRunsVM:
         self._application_id: str | None = None
         self._pager_refresh_existing_count: int = 0
         self._paging_identity: tuple[str | None, str | None] | None = None
-        self._pager: TokenPagedComposition[JobRunItemVM, str] = self._new_pager()
+        self._pager: BoundedTokenPagedComposition[JobRunItemVM, str] = self._new_pager()
         self._has_more_suppressed: bool = False
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
         self._state_filter: frozenset[JobRunState] = _ALL_STATES
         self._disposed: bool = False
+        self._paging_lock = asyncio.Lock()
         # Per-VM Observable (round-3 / PR #103 retirement path): fires
         # the name of the property that just changed, scoped to THIS
         # VM instance. Views can subscribe here instead of filtering
         # ``MessageHub`` events by ``sender_object``.
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         # CompositeVM owns the per-row VMs + the canonical ``current``
         # slot. ``selected_id`` is derived; the composite is NOT
         # exposed in the public surface (round-3 directive §9.bis.11).
@@ -185,7 +193,11 @@ class JobRunsVM:
         """``True`` when at least one more page of runs is available
         for the current application. The pane shows a "load more"
         sentinel row in that case; ``PgDn`` triggers ``load_more``."""
-        return self._pager.current_token is not None and not self._has_more_suppressed
+        return self._pager.has_more and not self._has_more_suppressed
+
+    @property
+    def limit_reached(self) -> bool:
+        return self._pager.limit_reached
 
     @property
     def status(self) -> ConstructionStatus:
@@ -258,6 +270,10 @@ class JobRunsVM:
         self.set_state_filter(frozenset(states))
 
     async def refresh(self) -> None:
+        async with self._paging_lock:
+            await self._refresh_locked()
+
+    async def _refresh_locked(self) -> None:
         """Reset paging and fetch the first page of runs.
 
         Wipes the accumulated cache + next-token, then drains one
@@ -270,7 +286,7 @@ class JobRunsVM:
             self._set_state(PaneState.EMPTY)
             return
         # Capture the target identity BEFORE the await so a
-        # concurrent ``set_application(B)`` (from picker / Shift+S)
+        # concurrent ``set_application(B)`` (from picker / Shift+A)
         # that lands while ``list_job_runs_page`` is in flight
         # doesn't let app A's late response write into the
         # accumulator under app B's identity. The pollers
@@ -302,6 +318,9 @@ class JobRunsVM:
             if self._application_id != target_app_id:
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
+            report_unexpected_service_error(
+                self._hub, service="emr-serverless", operation="list_job_runs", error=exc
+            )
             self._set_state(PaneState.ERROR)
             return
         finally:
@@ -323,6 +342,10 @@ class JobRunsVM:
         self._set_state(PaneState.IDLE if self.runs else PaneState.EMPTY)
 
     async def load_more(self) -> None:
+        async with self._paging_lock:
+            await self._load_more_locked()
+
+    async def _load_more_locked(self) -> None:
         """Fetch the next page using ``next_token`` and append to
         the accumulator. No-op when ``has_more`` is False or no
         application is selected. Errors map the same way as
@@ -373,6 +396,9 @@ class JobRunsVM:
             ):
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
+            report_unexpected_service_error(
+                self._hub, service="emr-serverless", operation="list_job_runs", error=exc
+            )
             self._has_more_suppressed = True
             self._notify("runs")
             return
@@ -416,9 +442,13 @@ class JobRunsVM:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _new_pager(self) -> TokenPagedComposition[JobRunItemVM, str]:
-        return TokenPagedComposition(
-            self._fetch_page,
+    def _new_pager(self) -> BoundedTokenPagedComposition[JobRunItemVM, str]:
+        return BoundedTokenPagedComposition(
+            reject_token_cycles(
+                self._fetch_page,
+                message="EMR Serverless repeated a job-run continuation token",
+            ),
+            max_items=_MAX_JOB_RUN_ITEMS,
             pages_equal=self._pages_equal,
         )
 
@@ -433,6 +463,8 @@ class JobRunsVM:
 
     async def _fetch_page(self, token: str | None) -> tuple[tuple[JobRunItemVM, ...], str | None]:
         target_app_id = self._application_id
+        if target_app_id is None:
+            return (), None
         runs, next_token = await self._client.list_job_runs_page(
             target_app_id,
             start_token=token,

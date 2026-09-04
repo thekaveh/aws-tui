@@ -13,13 +13,16 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from rich.cells import cell_len
 from textual.app import App, ComposeResult
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.ui.widgets import nav_menu as nav_menu_module
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.nav_row import NavRow
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.messages import ConnectionListChangedMessage
 from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
@@ -58,17 +61,88 @@ class _EmrStub:
         return object()
 
 
+class _GlueStub:
+    descriptor = ServiceDescriptor(id="glue", label="Glue", icon="")
+
+    def supports(self, conn: object) -> bool:
+        return True
+
+    def build_vm(self, conn: object) -> object:
+        return object()
+
+
+class _AthenaStub:
+    descriptor = ServiceDescriptor(id="athena", label="Athena", icon="")
+
+    def supports(self, conn: object) -> bool:
+        return True
+
+    def build_vm(self, conn: object) -> object:
+        return object()
+
+
 def _vm_with_services() -> tuple[NavMenuVM, MessageHub[Message]]:
     hub = _hub()
     registry = ServiceRegistry()
     registry.register(_S3Stub())
     registry.register(_EmrStub())
+    registry.register(_GlueStub())
+    registry.register(_AthenaStub())
     vm = NavMenuVM(registry=registry, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     vm.update_connection(
         Connection(name="dev", kind="aws", region="us-east-1", source="config", profile="dev")
     )
     return vm, hub
+
+
+def test_navigation_width_has_one_shared_constant() -> None:
+    assert getattr(nav_menu_module, "NAV_MENU_WIDTH", None) == 12
+    assert f"width: {nav_menu_module.NAV_MENU_WIDTH};" in NavMenu.DEFAULT_CSS
+
+
+@pytest.mark.asyncio
+async def test_navigation_rows_center_every_label_at_stable_width() -> None:
+    vm, hub = _vm_with_services()
+    nav = NavMenu(vm=vm, hub=hub)
+    app = _Host(nav)
+    try:
+        async with app.run_test(size=(40, 20)) as pilot:
+            await pilot.pause()
+
+            rows = list(nav.query(NavRow))
+            assert {row.descriptor_id for row in rows} >= {
+                "s3",
+                "emr-serverless",
+                "glue",
+                "athena",
+                "settings",
+            }
+            assert {row.size.width for row in rows} == {nav.content_size.width}
+            baseline = {
+                row.descriptor_id: (row.size.width, str(row.render()).index(row._label))
+                for row in rows
+            }
+            for row in rows:
+                rendered = str(row.render())
+                label = row._label  # type: ignore[attr-defined]
+                expected_start = (row.size.width - len(label)) // 2
+                assert rendered.index(label) == expected_start
+                assert cell_len(rendered) == row.size.width
+
+            for selected in rows:
+                for row in rows:
+                    row.set_selected(row is selected)
+                await pilot.pause()
+
+                for row in rows:
+                    rendered = str(row.render())
+                    baseline_width, baseline_start = baseline[row.descriptor_id]
+                    assert row.size.width == baseline_width
+                    assert rendered.index(row._label) == baseline_start
+                    assert cell_len(rendered) == baseline_width
+    finally:
+        vm.dispose()
 
 
 class _Host(App[None]):
@@ -247,4 +321,48 @@ async def test_cursor_can_reach_settings_row_via_arrow_keys() -> None:
                 "Arrow-walking down should land on Settings and switch_service_command should fire."
             )
     finally:
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_active_service_stays_selected_when_focus_moves_into_content() -> None:
+    vm, hub = _vm_with_services()
+    coordinator = FocusCoordinatorVM(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        initial=FocusSlot.NAV_MENU,
+    )
+    coordinator.construct()
+    nav = NavMenu(vm=vm, hub=hub, focus_coordinator=coordinator)
+    app = _Host(nav)
+    try:
+        async with app.run_test() as pilot:
+            vm.switch_service_command.execute("athena")
+            await pilot.pause()
+            athena = next(row for row in nav.query(NavRow) if row.descriptor_id == "athena")
+            assert athena.has_class("-selected")
+
+            coordinator.project_focused_slot(FocusSlot.ATHENA_PRIMARY)
+            await pilot.pause()
+
+            assert athena.has_class("-selected")
+            assert sum(row.has_class("-selected") for row in nav.query(NavRow)) == 1
+
+            vm.switch_service_command.execute("settings")
+            await pilot.pause()
+            settings = next(row for row in nav.query(NavRow) if row.descriptor_id == "settings")
+            assert settings.has_class("-selected")
+
+            coordinator.project_focused_slot(FocusSlot.SETTINGS)
+            await pilot.pause()
+            assert settings.has_class("-selected")
+            assert sum(row.has_class("-selected") for row in nav.query(NavRow)) == 1
+
+            coordinator.project_focused_slot(FocusSlot.ATHENA_PRIMARY)
+            await pilot.pause()
+
+            assert settings.has_class("-selected")
+            assert sum(row.has_class("-selected") for row in nav.query(NavRow)) == 1
+    finally:
+        coordinator.dispose()
         vm.dispose()

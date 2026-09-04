@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Stop the local MinIO container.
+# Stop the local Adobe S3Mock container.
 #
-# By default the named volume (aws-tui-dev-minio-data) is preserved, so the
+# By default the named volume (aws-tui-dev-s3mock-data) is preserved, so the
 # next `up.sh` reuses the seeded data. Pass --purge to also remove the
 # volume — re-seeding will then start from scratch.
 
@@ -24,10 +24,10 @@ for arg in "$@"; do
 done
 
 if [ "$PURGE" -eq 1 ]; then
-    echo "==> stopping MinIO + removing data volume (--purge)"
+    echo "==> stopping S3Mock + removing data volume (--purge)"
     docker compose -f scripts/test-services/s3/docker-compose.yml down -v
 else
-    echo "==> stopping MinIO (data volume preserved)"
+    echo "==> stopping S3Mock (data volume preserved)"
     docker compose -f scripts/test-services/s3/docker-compose.yml down
 fi
 

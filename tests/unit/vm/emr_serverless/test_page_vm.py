@@ -2,19 +2,35 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
+
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG, ApplicationState, JobRunState
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
+from aws_tui.domain.emr_serverless import (
+    EMR_BOTO_CONFIG,
+    ApplicationState,
+    ApplicationSummary,
+    JobRunState,
+)
+from aws_tui.domain.filesystem import ProviderUnreachableError
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
+from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 
 
-def _make() -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
-    fake = _InMemoryEmr()
+def _make(
+    *,
+    fake: _InMemoryEmr | None = None,
+    selection_store: ServiceSelectionStore | None = None,
+) -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
+    fake = fake or _InMemoryEmr()
     hub: MessageHub[Message] = MessageHub()
     page = EmrServerlessPageVM(
         client=fake,
@@ -24,6 +40,7 @@ def _make() -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
         connection=Connection(
             name="dev", kind="aws", region="us-east-1", source="config", profile="dev"
         ),
+        selection_store=selection_store,
     )
     page.construct()
     return page, fake
@@ -31,6 +48,8 @@ def _make() -> tuple[EmrServerlessPageVM, _InMemoryEmr]:
 
 def test_page_vm_threads_emr_boto_config_into_logs_client() -> None:
     page, _ = _make()
+    assert page.source.connection_key == ("dev", "us-east-1")
+    assert page.source.label == "dev \u00b7 us-east-1"
     assert page.job_run_logs._client.boto_config is EMR_BOTO_CONFIG  # type: ignore[attr-defined]
 
 
@@ -43,6 +62,35 @@ async def test_setup_loads_applications_and_auto_selects_first() -> None:
     assert {a.id for a in page.applications.applications} == {"a1", "a2"}
     # Auto-select the first app so the LEFT pane has something to load.
     assert page.applications.selected_id in {"a1", "a2"}
+
+
+@pytest.mark.asyncio
+async def test_setup_handles_empty_initial_application_list() -> None:
+    page, _ = _make()
+
+    await page.setup()
+
+    assert page.applications.state is PaneState.EMPTY
+    assert page.applications.selected_id is None
+    assert page.job_runs.application_id is None
+
+
+@pytest.mark.asyncio
+async def test_setup_handles_failed_initial_application_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, fake = _make()
+
+    async def fail_list_applications() -> list[ApplicationSummary]:
+        raise ProviderUnreachableError("network blip")
+
+    monkeypatch.setattr(fake, "list_applications", fail_list_applications)
+
+    await page.setup()
+
+    assert page.applications.state is PaneState.UNREACHABLE
+    assert page.applications.selected_id is None
+    assert page.job_runs.application_id is None
 
 
 @pytest.mark.asyncio
@@ -60,6 +108,106 @@ async def test_select_application_propagates_to_job_runs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stale_application_selection_does_not_retarget_runs() -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    await page.setup()
+
+    await page.select_application("removed")
+
+    assert page.applications.selected_id == "a1"
+    assert page.job_runs.application_id == "a1"
+
+
+@pytest.mark.asyncio
+async def test_selection_actions_are_inert_after_shutdown() -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="one")
+    fake.add_application(app_id="a2", name="two")
+    await page.setup()
+    selected = page.applications.selected_id
+    runs_target = page.job_runs.application_id
+    await page.shutdown()
+
+    await page.select_application("a2" if selected == "a1" else "a1")
+    await page.select_job_run("late-run")
+
+    assert page.applications.selected_id == selected
+    assert page.job_runs.application_id == runs_target
+    assert page.job_run_detail.detail is None
+    page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_successful_application_selection_is_stored_for_the_connection() -> None:
+    store = ServiceSelectionStore()
+    page, fake = _make(selection_store=store)
+    fake.add_application(app_id="a1", name="alpha")
+    fake.add_application(app_id="a2", name="beta")
+
+    await page.setup()
+    await page.select_application("a2")
+
+    assert store.get(SelectionScope("emr-serverless", "dev", "us-east-1"), "application_id") == "a2"
+
+
+@pytest.mark.asyncio
+async def test_setup_restores_stored_application_when_it_still_exists() -> None:
+    store = ServiceSelectionStore()
+    page, fake = _make(selection_store=store)
+    fake.add_application(app_id="a1", name="alpha")
+    fake.add_application(app_id="a2", name="beta")
+    await page.setup()
+    await page.select_application("a2")
+    page.dispose()
+
+    replacement, _ = _make(fake=fake, selection_store=store)
+    await replacement.setup()
+
+    assert replacement.applications.selected_id == "a2"
+
+
+@pytest.mark.asyncio
+async def test_service_reuses_selection_store_across_replacement_pages() -> None:
+    fake = _InMemoryEmr()
+    hub: MessageHub[Message] = MessageHub()
+    service = EmrServerlessService(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        emr_client_factory=lambda _connection: fake,
+        emr_logs_client_factory=lambda _connection: fake.make_logs_client(),
+    )
+    connection = Connection(
+        name="dev", kind="aws", region="us-east-1", source="config", profile="dev"
+    )
+    first = service.build_vm(connection)
+    first.construct()
+    fake.add_application(app_id="a1", name="alpha")
+    fake.add_application(app_id="a2", name="beta")
+    await first.setup()
+    await first.select_application("a2")
+    first.dispose()
+
+    replacement = service.build_vm(connection)
+    replacement.construct()
+    await replacement.setup()
+
+    assert replacement.applications.selected_id == "a2"
+
+
+@pytest.mark.asyncio
+async def test_setup_ignores_stored_application_that_is_no_longer_available() -> None:
+    store = ServiceSelectionStore()
+    page, fake = _make(selection_store=store)
+    fake.add_application(app_id="a1", name="alpha")
+    store.set(SelectionScope("emr-serverless", "dev", "us-east-1"), "application_id", "vanished")
+
+    await page.setup()
+
+    assert page.applications.selected_id == "a1"
+
+
+@pytest.mark.asyncio
 async def test_select_job_run_propagates_to_detail() -> None:
     page, fake = _make()
     fake.add_application(app_id="a1", name="etl")
@@ -70,6 +218,148 @@ async def test_select_job_run_propagates_to_detail() -> None:
     await page.select_job_run("r1")
     assert page.job_run_detail.detail is not None
     assert page.job_run_detail.detail.entry_point == "s3://b/x.py"
+
+
+@pytest.mark.asyncio
+async def test_stale_job_run_selection_does_not_retarget_detail_or_logs() -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_job_run(application_id="a1", job_run_id="r1")
+    fake.add_job_run_detail(
+        application_id="a1",
+        job_run_id="r1",
+        s3_monitoring_log_uri="s3://logs/original",
+    )
+    await page.setup()
+
+    await page.select_job_run("removed")
+
+    assert page.job_runs.selected_id == "r1"
+    assert page.job_run_detail.detail is not None
+    assert page.job_run_detail.detail.job_run_id == "r1"
+    assert page.job_run_logs.job_run_id == "r1"
+
+
+@pytest.mark.asyncio
+async def test_overlapping_run_selections_keep_latest_log_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_job_run(application_id="a1", job_run_id="r1")
+    fake.add_job_run_detail(
+        application_id="a1", job_run_id="r1", s3_monitoring_log_uri="s3://logs/one"
+    )
+    fake.add_job_run(application_id="a1", job_run_id="r2")
+    fake.add_job_run_detail(
+        application_id="a1", job_run_id="r2", s3_monitoring_log_uri="s3://logs/two"
+    )
+    await page.setup()
+    original_get = fake.get_job_run
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def delayed_get(application_id: str, run_id: str):  # type: ignore[no-untyped-def]
+        if run_id == "r1":
+            first_started.set()
+            await release_first.wait()
+        return await original_get(application_id, run_id)
+
+    monkeypatch.setattr(fake, "get_job_run", delayed_get)
+    first = asyncio.create_task(page.select_job_run("r1"))
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    await page.select_job_run("r2")
+    release_first.set()
+    await first
+
+    assert page.job_run_logs.job_run_id == "r2"
+    assert page.job_run_detail.detail is not None
+    assert page.job_run_detail.detail.job_run_id == "r2"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_and_drains_owned_setup_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, fake = _make()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocked_list() -> list[ApplicationSummary]:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(fake, "list_applications", blocked_list)
+    setup = asyncio.create_task(page.setup())
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await page.shutdown()
+    await setup
+
+    assert cancelled.is_set()
+    assert not page._operations.tasks  # type: ignore[attr-defined]
+    page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_and_drains_owned_detail_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, fake = _make()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    page.job_run_detail.set_target("a1", "r1")
+
+    async def blocked_get(_application_id: str, _run_id: str):  # type: ignore[no-untyped-def]
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(fake, "get_job_run", blocked_get)
+    refresh = asyncio.create_task(page.refresh_job_run_detail())
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await page.shutdown()
+    await refresh
+
+    assert cancelled.is_set()
+    assert not page._operations.tasks  # type: ignore[attr-defined]
+    page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_and_drains_owned_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, _ = _make()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocked_load_more() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(page.job_runs, "load_more", blocked_load_more)
+    load_more = asyncio.create_task(page.load_more_job_runs())
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await page.shutdown()
+    await load_more
+
+    assert cancelled.is_set()
+    assert not page._operations.tasks  # type: ignore[attr-defined]
+    page.dispose()
 
 
 @pytest.mark.asyncio
@@ -97,7 +387,7 @@ async def test_dispose_cascades_to_children() -> None:
 
 @pytest.mark.asyncio
 async def test_cycle_application_wraps_at_end_and_cascades() -> None:
-    """Pin Shift+S behaviour: ``cycle_application(1)`` selects the
+    """Pin Shift+A behaviour: ``cycle_application(1)`` selects the
     next app and wraps at the end. The full ``select_application``
     cascade runs so JobRuns + Detail panes refresh in lockstep —
     user feedback: "shift + s … doesn't result in an actual app
@@ -249,3 +539,103 @@ async def test_select_job_run_cascades_to_logs_vm_without_log_uri() -> None:
     await page.setup()
     await page.select_job_run("r1")
     assert page.job_run_logs.state is LogsState.NO_LOG_CONFIG
+
+
+@pytest.mark.asyncio
+async def test_failed_detail_refresh_retargets_logs_away_from_previous_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="app")
+    for run_id in ("r1", "r2"):
+        fake.add_job_run(application_id="a1", job_run_id=run_id)
+        fake.add_job_run_detail(
+            application_id="a1",
+            job_run_id=run_id,
+            s3_monitoring_log_uri=f"s3://logs/{run_id}",
+        )
+    await page.setup()
+    await page.select_job_run("r1")
+    assert page.job_run_logs.job_run_id == "r1"
+
+    original_get_job_run = fake.get_job_run
+
+    async def fail_second_detail(application_id: str, job_run_id: str):  # type: ignore[no-untyped-def]
+        if job_run_id == "r2":
+            raise ProviderUnreachableError("network blip")
+        return await original_get_job_run(application_id, job_run_id)
+
+    monkeypatch.setattr(fake, "get_job_run", fail_second_detail)
+
+    await page.select_job_run("r2")
+
+    assert page.job_run_detail.state is PaneState.UNREACHABLE
+    assert page.job_run_detail.detail is None
+    assert page.job_run_logs.application_id == "a1"
+    assert page.job_run_logs.job_run_id == "r2"
+    assert page.job_run_logs.state is LogsState.NO_LOG_CONFIG
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_uri", [None, "s3://logs/old"])
+async def test_refresh_job_run_detail_synchronizes_changed_log_uri(
+    initial_uri: str | None,
+) -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="app")
+    fake.add_job_run(application_id="a1", job_run_id="r1")
+    fake.add_job_run_detail(
+        application_id="a1",
+        job_run_id="r1",
+        s3_monitoring_log_uri=initial_uri,
+    )
+    await page.setup()
+    detail = fake._details[("a1", "r1")]  # type: ignore[attr-defined]
+    fake._details[("a1", "r1")] = replace(  # type: ignore[attr-defined]
+        detail,
+        s3_monitoring_log_uri="s3://logs/new",
+    )
+
+    await page.refresh_job_run_detail()
+
+    assert page.job_run_logs._log_uri == "s3://logs/new"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_refresh_job_runs_reselects_when_current_run_disappears() -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="app")
+    fake.add_job_run(application_id="a1", job_run_id="r1")
+    fake.add_job_run_detail(application_id="a1", job_run_id="r1")
+    fake.add_job_run(application_id="a1", job_run_id="r2")
+    fake.add_job_run_detail(application_id="a1", job_run_id="r2")
+    await page.setup()
+    await page.select_job_run("r1")
+
+    fake._runs["a1"].pop("r1")  # type: ignore[attr-defined]
+    fake._details.pop(("a1", "r1"))  # type: ignore[attr-defined]
+    await page.refresh_job_runs()
+
+    assert page.job_runs.selected_id == "r2"
+    assert page.job_run_detail.detail is not None
+    assert page.job_run_detail.detail.job_run_id == "r2"
+    assert page.job_run_logs.job_run_id == "r2"
+
+
+@pytest.mark.asyncio
+async def test_refresh_job_runs_clears_detail_and_logs_when_all_runs_disappear() -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="app")
+    fake.add_job_run(application_id="a1", job_run_id="r1")
+    fake.add_job_run_detail(application_id="a1", job_run_id="r1")
+    await page.setup()
+    await page.select_job_run("r1")
+
+    fake._runs["a1"].clear()  # type: ignore[attr-defined]
+    fake._details.clear()  # type: ignore[attr-defined]
+    await page.refresh_job_runs()
+
+    assert page.job_runs.selected_id is None
+    assert page.job_run_detail.detail is None
+    assert page.job_run_logs.application_id is None
+    assert page.job_run_logs.job_run_id is None

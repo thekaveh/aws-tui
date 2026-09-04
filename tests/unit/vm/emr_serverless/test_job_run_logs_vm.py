@@ -115,6 +115,39 @@ async def test_load_preconditions_not_met_returns_without_state_change() -> None
     vm.dispose()
 
 
+async def test_shutdown_cancels_and_drains_blocked_log_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def _list_files(**_kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    async def _blocked_stream(**_kwargs: object):  # type: ignore[return]
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _blocked_stream)
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    load = asyncio.create_task(vm.load())
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await vm.shutdown()
+    await load
+
+    assert cancelled.is_set()
+    assert not vm._operations.tasks  # type: ignore[attr-defined]
+    vm.dispose()
+
+
 async def test_load_while_already_loading_proceeds(monkeypatch: pytest.MonkeyPatch) -> None:
     """A second load() call while state == LOADING must NOT short-circuit.
 
@@ -245,6 +278,18 @@ async def test_load_falls_back_to_driver_stdout_when_no_stderr(
     vm.dispose()
 
 
+def test_select_log_file_key_distinguishes_multiple_executors() -> None:
+    vm = _make()
+    first = LogFile("logs/SPARK_EXECUTOR/1/stderr.gz", LogFileKind.EXECUTOR_STDERR)
+    second = LogFile("logs/SPARK_EXECUTOR/2/stderr.gz", LogFileKind.EXECUTOR_STDERR)
+    vm._available_files = (first, second)
+
+    vm.select_log_file_key(second.key)
+
+    assert vm.current_file is second
+    vm.dispose()
+
+
 async def test_load_no_files_transitions_to_no_files(monkeypatch: pytest.MonkeyPatch) -> None:
     """If list_log_files returns [], state becomes NO_FILES."""
 
@@ -337,6 +382,111 @@ async def test_load_cache_hit_skips_stream_on_second_call(
     assert vm.state is LogsState.READY
     assert stream_call_count == 1  # still 1 — stream not called again
     assert vm.lines == ("ERROR: something exploded",)
+    assert vm.bytes_read == _ONE_CHUNK.bytes_read
+    assert vm.lines_scanned == _ONE_CHUNK.lines_scanned
+    vm.dispose()
+
+
+async def test_explicit_refresh_bypasses_same_size_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream_call_count = 0
+
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    async def _stream_log(**kwargs: object):  # type: ignore[return]
+        nonlocal stream_call_count
+        stream_call_count += 1
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream_log, raising=False)
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+
+    await vm.load()
+    await vm.load(use_cache=False)
+
+    assert stream_call_count == 2
+    vm.dispose()
+
+
+async def test_reload_replaces_selected_file_missing_from_fresh_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listings = iter(([_STDERR_FILE], [_STDOUT_FILE]))
+    streamed_keys: list[str] = []
+
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return next(listings)
+
+    async def _stream_log(**kwargs: object):  # type: ignore[return]
+        streamed_keys.append(cast("LogFile", kwargs["log_file"]).key)
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream_log, raising=False)
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+    await vm.load()
+
+    assert vm.current_file == _STDOUT_FILE
+    assert streamed_keys == [_STDERR_FILE.key, _STDOUT_FILE.key]
+    vm.dispose()
+
+
+async def test_reload_clears_selected_file_when_listing_becomes_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listings = iter(([_STDERR_FILE], []))
+
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return next(listings)
+
+    async def _stream_log(**kwargs: object):  # type: ignore[return]
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream_log, raising=False)
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+    await vm.load()
+
+    assert vm.state is LogsState.NO_FILES
+    assert vm.current_file is None
+    vm.dispose()
+
+
+async def test_reload_restreams_same_key_when_listed_size_grows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grown = LogFile(key=_STDERR_FILE.key, kind=_STDERR_FILE.kind, size=_STDERR_FILE.size + 1)
+    listings = iter(([_STDERR_FILE], [grown]))
+    stream_count = 0
+
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return next(listings)
+
+    async def _stream_log(**kwargs: object):  # type: ignore[return]
+        nonlocal stream_count
+        stream_count += 1
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream_log, raising=False)
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+    await vm.load()
+
+    assert vm.current_file == grown
+    assert stream_count == 2
     vm.dispose()
 
 

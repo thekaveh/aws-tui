@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import botocore.exceptions
 import pytest
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import (
     _EMR_BOTO_CONFIG,
     EMR_BOTO_CONFIG,
@@ -33,7 +34,6 @@ from aws_tui.domain.filesystem import (
     ThrottledError,
     ValidationError,
 )
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
 
 
 def test_application_summary_is_frozen() -> None:
@@ -147,6 +147,9 @@ def _client_error(code: str, op: str = "ListApplications") -> botocore.exception
             ),
             AuthRequiredError,
         ),
+        (botocore.exceptions.SSOTokenLoadError(error_msg="expired"), AuthRequiredError),
+        (botocore.exceptions.UnauthorizedSSOTokenError(), AuthRequiredError),
+        (botocore.exceptions.NoAuthTokenError(), AuthRequiredError),
         (botocore.exceptions.EndpointConnectionError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ConnectTimeoutError(endpoint_url="x"), ProviderUnreachableError),
         (botocore.exceptions.ReadTimeoutError(endpoint_url="x"), ProviderUnreachableError),
@@ -157,6 +160,9 @@ def _client_error(code: str, op: str = "ListApplications") -> botocore.exception
         ),
         (botocore.exceptions.SSLError(endpoint_url="x", error="tls"), ProviderUnreachableError),
         (_client_error("AccessDeniedException"), PermissionDeniedError),
+        (_client_error("ExpiredToken"), AuthRequiredError),
+        (_client_error("InvalidClientTokenId"), AuthRequiredError),
+        (_client_error("UnrecognizedClientException"), AuthRequiredError),
         (_client_error("ThrottlingException"), ThrottledError),
         (_client_error("ResourceNotFoundException"), NotFoundError),
         (_client_error("ValidationException"), ValidationError),
@@ -319,10 +325,86 @@ async def test_list_applications_maps_response_to_records() -> None:
     assert apps[0].id == "00abc"
     assert apps[0].state.value == "STARTED"
     assert apps[1].name == "ad-hoc"
+    stub.list_applications.assert_awaited_once_with(maxResults=50)
 
 
 @pytest.mark.asyncio
-async def test_list_job_runs_filters_by_state_client_side() -> None:
+async def test_list_applications_rejects_repeated_pagination_token() -> None:
+    stub = _StubClient()
+    stub.list_applications.return_value = {"applications": [], "nextToken": "same"}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="repeated an application continuation token"):
+        await client.list_applications()
+    assert stub.list_applications.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_list_applications_rejects_pagination_beyond_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_serverless
+
+    stub = _StubClient()
+    stub.list_applications.side_effect = [
+        {"applications": [], "nextToken": "page-2"},
+        {"applications": []},
+    ]
+    monkeypatch.setattr(emr_serverless, "_MAX_EMR_LISTING_PAGES", 1, raising=False)
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="application pagination safety limit"):
+        await client.list_applications()
+
+    assert stub.list_applications.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_list_applications_rejects_collection_beyond_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_serverless
+
+    stub = _StubClient()
+    stub.list_applications.return_value = _fake_app_response(
+        [
+            {
+                "id": f"app-{index}",
+                "state": "STARTED",
+                "createdAt": datetime(2026, 6, 25, tzinfo=UTC),
+            }
+            for index in range(2)
+        ]
+    )
+    monkeypatch.setattr(emr_serverless, "_MAX_EMR_APPLICATIONS", 1, raising=False)
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="application collection safety limit"):
+        await client.list_applications()
+
+
+@pytest.mark.asyncio
+async def test_bulk_job_runs_rejects_pagination_beyond_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import emr_serverless
+
+    stub = _StubClient()
+    stub.list_job_runs.side_effect = [
+        {"jobRuns": [], "nextToken": "page-2"},
+        {"jobRuns": []},
+    ]
+    monkeypatch.setattr(emr_serverless, "_MAX_EMR_LISTING_PAGES", 1, raising=False)
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="job-run pagination safety limit"):
+        await client.list_job_runs("app-1")
+
+    assert stub.list_job_runs.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_passes_multi_state_filter_to_service() -> None:
     stub = _StubClient()
     stub.list_job_runs.return_value = _fake_run_response(
         [
@@ -355,6 +437,30 @@ async def test_list_job_runs_filters_by_state_client_side() -> None:
     client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
     runs = await client.list_job_runs("00abc", states={JobRunState.SUCCESS, JobRunState.RUNNING})
     assert [r.job_run_id for r in runs] == ["jr1", "jr3"]
+    assert set(stub.list_job_runs.call_args.kwargs["states"]) == {"SUCCESS", "RUNNING"}
+    assert stub.list_job_runs.call_args.kwargs["maxResults"] == 50
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_rejects_repeated_pagination_token() -> None:
+    stub = _StubClient()
+    stub.list_job_runs.return_value = {"jobRuns": [], "nextToken": "same"}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderError, match="repeated a job-run continuation token"):
+        await client.list_job_runs("00abc")
+    assert stub.list_job_runs.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_omits_all_states_filter() -> None:
+    stub = _StubClient()
+    stub.list_job_runs.return_value = {"jobRuns": []}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    await client.list_job_runs("00abc", states=set(JobRunState))
+
+    assert "states" not in stub.list_job_runs.call_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -536,5 +642,5 @@ def test_emr_boto_config_pins_timeout_and_retry_shape() -> None:
     overlapping ``list_*`` calls on a flaky network."""
     assert _EMR_BOTO_CONFIG.connect_timeout == 10
     assert _EMR_BOTO_CONFIG.read_timeout == 60
-    assert _EMR_BOTO_CONFIG.retries == {"max_attempts": 6, "mode": "adaptive"}
+    assert _EMR_BOTO_CONFIG.retries == {"total_max_attempts": 6, "mode": "adaptive"}
     assert EMR_BOTO_CONFIG is _EMR_BOTO_CONFIG

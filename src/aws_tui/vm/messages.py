@@ -12,30 +12,24 @@ to keep the VM layer free of Textual / boto3 imports.
 
 from __future__ import annotations
 
+import traceback
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
-
-#: Reason values for ``AuthExpiredMessage``.
-AuthExpiredReason = Literal["expired", "missing", "load_error"]
+from aws_tui.infra.redaction import redact_text
 
 
 class TransferState(StrEnum):
-    """State machine values per spec §7.5.
-
-    ``PAUSED`` is reachable via the network-failure recovery flow (spec §7.5):
-    ``RUNNING -> PAUSED -> RUNNING (recovered)``. The connectivity watcher that
-    transitions to PAUSED on sustained network failure is not yet wired in
-    v0.7.x; the state remains in the enum so the eventual wiring is additive.
-    """
+    """States emitted by the shipped transfer worker."""
 
     PENDING = "pending"
     RUNNING = "running"
-    PAUSED = "paused"
     COMPLETED = "completed"
+    SKIPPED = "skipped"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -44,8 +38,8 @@ class TransferState(StrEnum):
 class ConnectionChangedMessage:
     """Published by ``RootVM`` after a successful connection switch.
 
-    Subscribers: :class:`NavMenuVM`, :class:`StatusBarVM`, every service
-    content VM, the active :class:`ContentHostVM` swap orchestrator.
+    Subscribers: :class:`NavMenuVM`, service content VMs, and the active
+    :class:`ContentHostVM` swap orchestrator.
     """
 
     connection: Connection
@@ -73,29 +67,10 @@ class ThemeChangedMessage:
 
 
 @dataclass(frozen=True, slots=True)
-class AuthExpiredMessage:
-    """Published by ``infra.AwsSession`` when a 401-equivalent or stale SSO
-    token is detected.
-
-    Subscribers: :class:`ToastStackVM` (soft toast "press a to sso-login"),
-    the failing pane (renders "auth needed" placeholder).
-    """
-
-    connection_name: str
-    reason: AuthExpiredReason
-    sender_name: str = "aws_session"
-
-    @property
-    def sender_object(self) -> object:
-        return self
-
-
-@dataclass(frozen=True, slots=True)
 class TransferProgressMessage:
     """Published by ``domain.CrossFsCopy`` / ``CrossFsMove`` workers.
 
-    Subscribers: :class:`TransferVM` (per-transfer detail), retained
-    :class:`StatusBarVM` (aggregate counter).
+    Subscribers: :class:`TransferVM` (per-transfer detail).
 
     ``source_label`` / ``destination_label`` are optional — included so
     that the first message for a given transfer can carry enough info
@@ -175,16 +150,12 @@ class ConnectionListChangedMessage:
 
 
 @dataclass(frozen=True, slots=True)
-class KeymapChangedMessage:
-    """Published by ``infra.KeymapStore`` after a runtime rebind.
+class PaletteActionFailedMessage:
+    """A command-palette action failed before or during execution."""
 
-    Subscribers: :class:`HintLegendVM` (re-derives chip labels), the view
-    layer's input router.
-    """
-
-    action: str
-    new_keys: tuple[str, ...]
-    sender_name: str = "keymap_store"
+    entry_id: str
+    error_type: str
+    sender_name: str = "command_palette"
 
     @property
     def sender_object(self) -> object:
@@ -192,28 +163,140 @@ class KeymapChangedMessage:
 
 
 @dataclass(frozen=True, slots=True)
-class FocusChangedMessage:
-    """Published by the view layer (via ``RootVM``) whenever focus moves to a
-    different VM.
+class ServiceOperationFailedMessage:
+    """An unexpected service exception recovered into a visible VM state."""
 
-    Subscribers: :class:`HintLegendVM` (swaps the action chips).
-    """
+    service: str
+    operation: str
+    error_type: str
+    safe_error: str
+    safe_traceback: str
+    source: str | None = None
+    region: str | None = None
+    sender_name: str = "service_operation"
 
-    focused_vm_id: str
-    sender_name: str = "root"
+    @classmethod
+    def from_error(
+        cls,
+        *,
+        service: str,
+        operation: str,
+        error: BaseException,
+        source: str | None = None,
+        region: str | None = None,
+    ) -> ServiceOperationFailedMessage:
+        return cls(
+            service=service,
+            operation=operation,
+            error_type=type(error).__name__,
+            safe_error=redact_text(str(error)),
+            safe_traceback=redact_text(
+                "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            ).strip(),
+            source=source,
+            region=region,
+        )
 
     @property
     def sender_object(self) -> object:
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class OpenS3LocationRequest:
+    """Request composition-root navigation to one S3 location.
+
+    The source connection identity is explicit so cross-service navigation
+    cannot silently fall back to another profile or region.
+    """
+
+    connection_name: str
+    region: str
+    uri: str
+    preferred_pane: Literal["left", "right"] = "left"
+    reveal_object: bool = False
+    sender_name: str = "service_navigation"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAthenaTableRequest:
+    """Request Athena navigation for one exact Glue table identity."""
+
+    table_ref: TableRef
+    snapshot_id: int | None = None
+    sender_name: str = "service_navigation"
+
+    def __post_init__(self) -> None:
+        _validate_table_ref(self.table_ref)
+        if self.snapshot_id is not None and (
+            type(self.snapshot_id) is not int or self.snapshot_id < 0
+        ):
+            raise ValueError("snapshot ID is invalid")
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class CopyTableReferenceRequest:
+    """Request copying one exact Glue table identity without navigation."""
+
+    table_ref: TableRef
+    sender_name: str = "service_navigation"
+
+    def __post_init__(self) -> None:
+        _validate_table_ref(self.table_ref)
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class OpenGlueTableRequest:
+    """Request Glue navigation for one exact Athena table identity."""
+
+    table_ref: TableRef
+    sender_name: str = "service_navigation"
+
+    def __post_init__(self) -> None:
+        _validate_table_ref(self.table_ref)
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+def _validate_table_ref(value: object) -> None:
+    if not isinstance(value, TableRef) or type(value) is not TableRef:
+        raise ValueError("table reference is invalid")
+    if not all(
+        type(part) is str and bool(part.strip())
+        for part in (
+            value.catalog_name,
+            value.database_name,
+            value.table_name,
+            value.connection_name,
+            value.region,
+        )
+    ):
+        raise ValueError("table reference is invalid")
+
+
 __all__ = [
-    "AuthExpiredMessage",
-    "AuthExpiredReason",
     "ConnectionChangedMessage",
     "ConnectionListChangedMessage",
-    "FocusChangedMessage",
-    "KeymapChangedMessage",
+    "CopyTableReferenceRequest",
+    "OpenAthenaTableRequest",
+    "OpenGlueTableRequest",
+    "OpenS3LocationRequest",
+    "PaletteActionFailedMessage",
+    "ServiceOperationFailedMessage",
     "ThemeChangedMessage",
     "TransferCancelRequestedMessage",
     "TransferProgressMessage",

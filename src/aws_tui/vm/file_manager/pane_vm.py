@@ -17,6 +17,7 @@ the async ``provider.list()`` call. Subscribers observe via
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -48,6 +49,7 @@ from aws_tui.domain.filesystem import (
 )
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 #: Module-level singleton for the default initial path (root).
 _ROOT_PATH: PathRef = PathRef(())
@@ -62,8 +64,7 @@ class PaneState(StrEnum):
     """Render state surfaced by ``PaneViewModel`` per spec §7.7.
 
     State entry conditions (single source of truth for the state
-    machine — keep in sync with :meth:`PaneVM._reload` and
-    :meth:`PaneVM.set_auth_required`):
+    machine — keep in sync with :meth:`PaneVM._reload`):
 
     - ``IDLE`` — Entries available (success path with non-empty listing,
       or initial construction before the first reload).
@@ -73,9 +74,7 @@ class PaneState(StrEnum):
       root path (treated as an empty bucket / mount point). No
       ``_error_text`` is set on the EMPTY-via-NotFoundError path because
       the user-facing copy is just "empty", not an error.
-    - ``AUTH_REQUIRED`` — ``AuthRequiredError`` during ``list()``, or
-      injected externally by ``RootVM`` after it observes an
-      ``AuthExpiredMessage``.
+    - ``AUTH_REQUIRED`` — ``AuthRequiredError`` during ``list()``.
     - ``FORBIDDEN`` — ``PermissionDeniedError`` during ``list()``.
     - ``UNREACHABLE`` — ``ProviderUnreachableError`` during ``list()``.
     - ``ERROR`` — Generic ``ProviderError``, OR ``NotFoundError`` on a
@@ -228,6 +227,7 @@ class PaneVM:
         self._filter_text: str = ""
         self._state: PaneState = PaneState.IDLE
         self._error_text: str | None = None
+        self._reload_generation: int = 0
         self._is_multiselect_mode: bool = False
 
         self._inner: CompositeVM[ComponentVMOf[EntryState]] = (
@@ -565,6 +565,7 @@ class PaneVM:
         self._inner.destruct()
 
     def dispose(self) -> None:
+        self._reload_generation += 1
         self._open_command.dispose()
         self._ascend_command.dispose()
         self._refresh_command.dispose()
@@ -584,6 +585,7 @@ class PaneVM:
         self._filtered_composite.dispose()
         for child in self._entries:
             child.dispose()
+        self._filtered = ()
         self._entries.clear()
         self._inner.dispose()
 
@@ -733,15 +735,9 @@ class PaneVM:
         with zero diagnostic. The ``finally`` reload is guaranteed
         so the user always sees the post-deletion truth.
 
-        NOTE on outer-worker cancellation: if the caller's worker is
-        cancelled, the inline await below raises CancelledError at
-        the first internal await (after ``_reload`` synchronously
-        flipped state to LOADING), and the pane is briefly stranded
-        on LOADING. This is the documented trade-off for the
-        synchronous post-condition; tests + UI callers depend on
-        ``await delete_marked()`` returning AFTER the reload has
-        repopulated entries. ``r`` re-runs the reload manually on
-        the rare cancel-mid-finally path."""
+        Cancellation is retained while the final reload is shielded
+        and drained. Callers still receive ``CancelledError``, but the
+        pane never remains stranded in ``LOADING``."""
         targets = [e.entry.name for e in self.marked_entries]
         if not targets:
             return
@@ -753,7 +749,26 @@ class PaneVM:
                 except (OSError, ProviderError) as exc:
                     failures.append((name, exc))
         finally:
-            await self._reload()
+            reload_task = asyncio.create_task(self._reload())
+            cancellation: asyncio.CancelledError | None = None
+            while not reload_task.done():
+                try:
+                    await asyncio.shield(reload_task)
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                except BaseException:
+                    break
+            try:
+                reload_task.result()
+            except BaseException as exc:
+                if cancellation is not None:
+                    cancellation.add_note(
+                        f"pane reload failed during cancellation: {type(exc).__name__}: {exc}"
+                    )
+                    raise cancellation from exc
+                raise
+            if cancellation is not None:
+                raise cancellation
         if failures:
             first_name, first_exc = failures[0]
             if len(failures) == 1:
@@ -780,15 +795,13 @@ class PaneVM:
         await self._provider.rename(old_path, new_path)
         await self._reload()
 
-    # ── External error injection ────────────────────────────────────────────
-
-    def set_auth_required(self) -> None:
-        """Called by ``RootVM`` after observing ``AuthExpiredMessage``."""
-        self._set_state(PaneState.AUTH_REQUIRED)
-
     # ── Internal: listing & state ───────────────────────────────────────────
 
     async def _reload(self) -> None:
+        self._reload_generation += 1
+        generation = self._reload_generation
+        provider = self._provider
+        path = self._path
         # Clear the prior error text BEFORE entering LOADING so a
         # retry after a prior failure doesn't render the LOADING
         # placeholder as ``"loading...: <stale error>"`` (see
@@ -800,8 +813,10 @@ class PaneVM:
         self._error_text = None
         self._set_state(PaneState.LOADING)
         try:
-            raw = await self._provider.list(self._path)
+            raw = await provider.list(path)
         except NotFoundError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             # Root listing: an unknown path at root means empty (e.g. an
             # empty bucket); deeper paths surface as ERROR. The root
             # branch intentionally leaves ``_error_text`` UNCHANGED
@@ -818,26 +833,36 @@ class PaneVM:
                 self._set_state(PaneState.ERROR)
             return
         except AuthRequiredError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.AUTH_REQUIRED)
             return
         except PermissionDeniedError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.FORBIDDEN)
             return
         except ProviderUnreachableError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.UNREACHABLE)
             return
         except ProviderError as exc:
+            if not self._reload_is_current(generation, provider, path):
+                return
             self._error_text = _visible_error_text(exc)
             self._replace_entries([])
             self._set_state(PaneState.ERROR)
             return
         except Exception as exc:  # defensive
+            if not self._reload_is_current(generation, provider, path):
+                return
             # Non-ProviderError escape — a programmer bug, an
             # OSError from the socket layer, or any other exception
             # not modelled by the provider taxonomy. Without this
@@ -845,10 +870,19 @@ class PaneVM:
             # ``run_worker`` machinery and the pane is permanently
             # stuck on LOADING with no user path to recovery.
             self._error_text = redact_text(f"unexpected error: {exc}")
+            report_unexpected_service_error(
+                self._hub,
+                service="s3" if self._connection_key is not None else "localfs",
+                operation="list",
+                error=exc,
+                source=self._connection_key[1] if self._connection_key is not None else "local",
+            )
             self._replace_entries([])
             self._set_state(PaneState.ERROR)
             return
 
+        if not self._reload_is_current(generation, provider, path):
+            return
         self._error_text = None
         # Prepend a synthetic ".." parent entry on any non-root path so the
         # user can navigate up via Enter / mouse / single keystroke without
@@ -873,6 +907,18 @@ class PaneVM:
         # IDLE if at least one real entry; EMPTY only if neither real entries
         # nor a ".." row is present (i.e. truly root + empty bucket).
         self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)
+
+    def _reload_is_current(
+        self,
+        generation: int,
+        provider: FileSystemProvider,
+        path: PathRef,
+    ) -> bool:
+        return (
+            generation == self._reload_generation
+            and provider is self._provider
+            and path == self._path
+        )
 
     def _replace_entries(self, new_entries: list[EntryVM]) -> None:
         for child in self._entries:

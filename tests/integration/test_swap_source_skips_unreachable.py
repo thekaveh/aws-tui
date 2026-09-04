@@ -86,4 +86,5 @@ async def test_swap_source_skips_unreachable_connections(tmp_path: Path) -> None
     ctx.quick_look_vm.dispose()
     ctx.command_palette_vm.dispose()
     ctx.root_vm.dispose()
+    ctx.log_sink.close()
     del app  # no run_test so nothing to close

@@ -67,25 +67,21 @@ def test_transfer_vm_cancel_command() -> None:
     vm.dispose()
 
 
-def test_transfer_vm_retry_command_from_failed() -> None:
-    vm = TransferVM(_model(state=TransferState.FAILED), hub=_hub(), dispatcher=NULL_DISPATCHER)
-    vm.construct()
-    assert vm.retry_command.can_execute()
-    vm.retry_command.execute()
-    assert vm.state == TransferState.PENDING
-    vm.dispose()
-
-
-def test_transfer_vm_is_finished_property_covers_three_terminal_states() -> None:
-    """``is_finished`` is True for COMPLETED / FAILED / CANCELLED and
-    False for PENDING / RUNNING / PAUSED — the contract used by the
+def test_transfer_vm_is_finished_property_covers_terminal_states() -> None:
+    """``is_finished`` is True for COMPLETED / SKIPPED / FAILED / CANCELLED and
+    False for PENDING / RUNNING — the contract used by the
     Pass-1 terminal-stickiness guard in ``apply_update``."""
-    for terminal in (TransferState.COMPLETED, TransferState.FAILED, TransferState.CANCELLED):
+    for terminal in (
+        TransferState.COMPLETED,
+        TransferState.SKIPPED,
+        TransferState.FAILED,
+        TransferState.CANCELLED,
+    ):
         vm = TransferVM(_model(state=terminal), hub=_hub(), dispatcher=NULL_DISPATCHER)
         vm.construct()
         assert vm.is_finished, f"{terminal} must be finished"
         vm.dispose()
-    for active in (TransferState.PENDING, TransferState.RUNNING, TransferState.PAUSED):
+    for active in (TransferState.PENDING, TransferState.RUNNING):
         vm = TransferVM(_model(state=active), hub=_hub(), dispatcher=NULL_DISPATCHER)
         vm.construct()
         assert not vm.is_finished, f"{active} must NOT be finished"
@@ -105,8 +101,8 @@ def test_transfer_vm_terminal_state_is_sticky() -> None:
     vm.apply_update(bytes_done=730, bytes_total=1000, state=TransferState.RUNNING)
     # State must STAY cancelled.
     assert vm.state == TransferState.CANCELLED
-    # Also: a non-terminal PAUSED/PENDING must not revive the row.
-    vm.apply_update(bytes_done=730, bytes_total=1000, state=TransferState.PAUSED)
+    # A non-terminal PENDING update must not revive the row either.
+    vm.apply_update(bytes_done=730, bytes_total=1000, state=TransferState.PENDING)
     assert vm.state == TransferState.CANCELLED
     vm.dispose()
 
@@ -125,6 +121,18 @@ def test_transfer_vm_terminal_to_terminal_is_allowed() -> None:
     )
     assert vm.state == TransferState.FAILED
     assert vm.model.error == "boom"
+    vm.dispose()
+
+
+def test_transfers_vm_bounds_finished_history() -> None:
+    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+
+    for index in range(105):
+        vm.register(_model(id=f"t{index}", state=TransferState.COMPLETED))
+
+    assert len(vm.finished) == 100
+    assert vm.finished[0].id == "t5"
     vm.dispose()
 
 
@@ -292,4 +300,22 @@ def test_transfers_register_vm_accepts_prebuilt_transfer_vm() -> None:
     duplicate.construct()
     assert tvms.register_vm(duplicate) is vm  # original wins
     assert sum(1 for t in tvms.transfers if t.id == "custom") == 1
+    tvms.dispose()
+
+
+def test_transfers_register_vm_before_parent_construction_attaches_once() -> None:
+    hub = _hub()
+    tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    child = TransferVM(
+        _model(id="early", state=TransferState.RUNNING),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+
+    tvms.register_vm(child)
+    tvms.construct()
+
+    assert tvms.is_constructed
+    assert child.is_constructed
+    assert tvms.transfers == (child,)
     tvms.dispose()

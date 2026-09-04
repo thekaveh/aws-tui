@@ -94,6 +94,44 @@ def _s3_conn(
 
 
 class TestProbeTokenAws:
+    def test_default_config_path_expands_environment_variables(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("AWS_TEST_ROOT", str(tmp_path))
+        monkeypatch.setenv("AWS_CONFIG_FILE", "$AWS_TEST_ROOT/config")
+
+        session = AwsSession()
+
+        assert session._aws_config_path == tmp_path / "config"
+
+    def test_present_empty_config_override_is_not_treated_as_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("AWS_CONFIG_FILE", "")
+
+        session = AwsSession()
+
+        assert session._aws_config_path == Path()
+
+    def test_default_config_path_honors_standard_aws_override(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        aws_cfg = tmp_path / "shared" / "config"
+        _write_aws_config_with_sso(aws_cfg, profile="dev", sso_session="company-sso")
+        cache_dir = tmp_path / "sso-cache"
+        expires = datetime.now(UTC) + timedelta(hours=1)
+        _write_cache_entry(cache_dir, cache_key=_sha1("company-sso"), expires_at=expires)
+        monkeypatch.setenv("AWS_CONFIG_FILE", str(aws_cfg))
+
+        result = AwsSession(sso_cache_dir=cache_dir).probe_token(_aws_conn())
+
+        assert result.state is TokenState.CONNECTED
+
     def test_valid_token_returns_connected(self, tmp_path: Path) -> None:
         aws_cfg = tmp_path / ".aws" / "config"
         sso_session = "company-sso"
@@ -106,6 +144,23 @@ class TestProbeTokenAws:
         result = session.probe_token(_aws_conn())
         assert result.state is TokenState.CONNECTED
         assert result.expires_at is not None
+
+    def test_bom_prefixed_config_returns_connected(self, tmp_path: Path) -> None:
+        aws_cfg = tmp_path / ".aws" / "config"
+        sso_session = "company-sso"
+        _write_aws_config_with_sso(aws_cfg, profile="dev", sso_session=sso_session)
+        body = aws_cfg.read_text(encoding="utf-8")
+        aws_cfg.write_text(body, encoding="utf-8-sig")
+        cache_dir = tmp_path / "sso-cache"
+        expires = datetime.now(UTC) + timedelta(hours=1)
+        _write_cache_entry(cache_dir, cache_key=_sha1(sso_session), expires_at=expires)
+
+        result = AwsSession(
+            sso_cache_dir=cache_dir,
+            aws_config_path=aws_cfg,
+        ).probe_token(_aws_conn())
+
+        assert result.state is TokenState.CONNECTED
 
     def test_expired_token_returns_expired(self, tmp_path: Path) -> None:
         aws_cfg = tmp_path / ".aws" / "config"
@@ -192,6 +247,70 @@ class TestProbeTokenS3Compatible:
 
 
 class TestClientLifecycle:
+    async def test_enter_failure_deregisters_client(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class FakeCM:
+            async def __aenter__(self) -> Any:
+                raise RuntimeError("enter failed")
+
+            async def __aexit__(self, *_args: Any) -> None:
+                raise AssertionError("unentered client must not be closed")
+
+        class FakeSession:
+            def __init__(self, **_kwargs: Any) -> None:
+                pass
+
+            def client(self, *_args: Any, **_kwargs: Any) -> Any:
+                return FakeCM()
+
+        import aioboto3
+
+        monkeypatch.setattr(aioboto3, "Session", FakeSession)
+        session = AwsSession(sso_cache_dir=tmp_path)
+        cm = await session.client(_aws_conn(), "s3")
+
+        with pytest.raises(RuntimeError, match="enter failed"):
+            await cm.__aenter__()
+        assert session._open_clients == []
+
+    async def test_exit_failure_remains_tracked_for_shutdown_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        exit_attempts = 0
+
+        class FakeCM:
+            async def __aenter__(self) -> Any:
+                return object()
+
+            async def __aexit__(self, *_args: Any) -> None:
+                nonlocal exit_attempts
+                exit_attempts += 1
+                if exit_attempts == 1:
+                    raise RuntimeError("exit failed")
+
+        class FakeSession:
+            def __init__(self, **_kwargs: Any) -> None:
+                pass
+
+            def client(self, *_args: Any, **_kwargs: Any) -> Any:
+                return FakeCM()
+
+        import aioboto3
+
+        monkeypatch.setattr(aioboto3, "Session", FakeSession)
+        session = AwsSession(sso_cache_dir=tmp_path)
+        cm = await session.client(_aws_conn(), "s3")
+        await cm.__aenter__()
+
+        with pytest.raises(RuntimeError, match="exit failed"):
+            await cm.__aexit__(None, None, None)
+        assert session._open_clients == [cm]
+
+        await session.aclose_all_clients()
+        assert exit_attempts == 2
+        assert session._open_clients == []
+
     async def test_aclose_all_clients_awaits_each_opened_client(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

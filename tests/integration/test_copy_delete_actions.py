@@ -14,11 +14,11 @@ from collections.abc import AsyncIterator
 import pytest
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import EntryKind, FileEntry, PathRef
 from aws_tui.ui.widgets.pane import EntryRow, Pane
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from tests.integration.conftest import AppContextBuilder
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:
@@ -90,6 +90,15 @@ async def _wait_until_names(
     return names
 
 
+async def _wait_until_entry_rows(app: AwsTuiApp) -> list[EntryRow]:
+    for _ in range(100):
+        rows = list(app.query(EntryRow))
+        if rows:
+            return rows
+        await asyncio.sleep(0.01)
+    return rows
+
+
 @pytest.mark.asyncio
 async def test_copy_action_with_confirm_does_not_crash(
     app_context_factory: AppContextBuilder,
@@ -101,12 +110,13 @@ async def test_copy_action_with_confirm_does_not_crash(
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
+        await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
 
         # Make sure the panes mounted with entries.
         panes = list(app.query(Pane))
         assert len(panes) == 2
-        rows = list(app.query(EntryRow))
+        rows = await _wait_until_entry_rows(app)
         assert len(rows) > 0
 
         # Press 'c' — this opens ConfirmModal.

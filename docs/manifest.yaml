@@ -1,14 +1,18 @@
-# Single source of truth for the three-surface docs: hierarchy + nav order +
-# published page set. Humans edit ONLY the canonical docs/*.md + this file;
-# generated/site + generated/wiki + mkdocs.yml are regenerated and gitignored.
-surfaces: [repo, site, wiki]
+# Single source of truth for the repository, site, wiki, and package docs:
+# hierarchy + nav order + published page set. Humans edit ONLY the canonical
+# docs/*.md + this file; generated/site + generated/wiki + mkdocs.yml and
+# PYPI.md are generated outputs.
+surfaces: [repo, site, wiki, package]
 numbering: per-doc
+package:
+  source: docs/package-readme.md
+  output: PYPI.md
 sections:
   - { id: overview, title: Overview, source: docs/index.md }
   - id: getting-started
     title: Getting Started
     children:
-      - { id: install, title: Installation, source: docs/homebrew-bootstrap.md }
+      - { id: install, title: Installation, source: docs/install.md }
       - { id: platforms, title: Platforms, source: docs/platforms.md }
       - { id: connections, title: Connections, source: docs/connections.md }
   - id: using
@@ -17,12 +21,23 @@ sections:
       - { id: keybindings, title: Keybindings, source: docs/keybindings.md }
       - { id: cookbook, title: Cookbook, source: docs/cookbook.md }
       - { id: theming, title: Theming, source: docs/theming.md }
+  - id: services
+    title: Service Guides
+    children:
+      - { id: service-s3, title: S3 and Local File Manager, source: docs/services/s3.md }
+      - { id: service-emr, title: EMR Serverless, source: docs/services/emr-serverless.md }
+      - { id: service-glue, title: AWS Glue and Iceberg Metadata, source: docs/services/glue.md }
+      - { id: service-athena, title: Amazon Athena, source: docs/services/athena.md }
   - id: development
     title: Development
     children:
-      - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture] }
+      - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture, operations-flow, deployment, lifecycle] }
       - { id: adding-service, title: Adding a Service, source: docs/adding-a-service.md }
       - { id: contract-ledger, title: Contract Ledger, source: docs/contract-ledger.md }
   - { id: releasing, title: Releasing, source: docs/RELEASING.md }
+  - { id: homebrew-bootstrap, title: Homebrew Bootstrap, source: docs/homebrew-bootstrap.md }
 diagrams:
   - { id: architecture, master: docs/diagrams/architecture.html }
+  - { id: operations-flow, master: docs/diagrams/operations-flow.html }
+  - { id: deployment, master: docs/diagrams/deployment.html }
+  - { id: lifecycle, master: docs/diagrams/lifecycle.html }

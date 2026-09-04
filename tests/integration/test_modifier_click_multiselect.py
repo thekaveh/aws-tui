@@ -8,19 +8,26 @@ Locks in:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Callable
 
 import pytest
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.ui.widgets.pane import Pane
 from tests.integration.conftest import AppContextBuilder
-from tests.unit.domain._in_memory_fs import InMemoryFS
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:
     yield data
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
 
 
 async def _seed_local() -> InMemoryFS:
@@ -44,6 +51,7 @@ async def test_shift_arrow_extends_selection(
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
+        await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
         # Press shift+down twice; expect marked count to climb.
         panes = list(app.query(Pane))
@@ -154,19 +162,28 @@ async def test_modifier_click_marks_the_row(
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
+        await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
         panes = list(app.query(Pane))
         focused = panes[0]
         before = sum(1 for e in focused.vm.filtered_entries if e.is_marked)
 
+        await _wait_until(
+            lambda: any(not row.entry_vm.is_parent_link for row in focused.query(EntryRow))
+        )
         rows = list(focused.query(EntryRow))
         # Click on a real entry row (not the ".." parent link, which
         # the click handler intentionally won't mark).
-        target = next((r for r in rows if not r._entry_vm.is_parent_link), None)  # type: ignore[attr-defined]
+        target = next((row for row in rows if not row.entry_vm.is_parent_link), None)
         assert target is not None, "no markable entry row found"
 
-        await pilot.click(target, control=True)  # Ctrl+Click — universal modifier
-        await pilot.pause()
+        click_landed = await pilot.click(
+            target,
+            offset=(1, 0),
+            control=True,
+        )  # Ctrl+Click — universal modifier
+        assert click_landed, "pilot click did not land on the target entry row"
+        await _wait_until(lambda: target.entry_vm.is_marked)
 
         after = sum(1 for e in focused.vm.filtered_entries if e.is_marked)
         assert after == before + 1, (

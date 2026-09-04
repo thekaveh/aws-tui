@@ -1,42 +1,31 @@
-"""HintLegendVM — derives the bottom contextual hint row.
+"""HintLegendVM — derives the bottom contextual command sequence.
 
-The legend lists action chips (``<key> <label>``) appropriate to the focused
-VM, followed by always-visible app-level fallbacks (theme, help, quit).
-The focused VM identifier flows through :class:`FocusChangedMessage`;
-key labels flow through :class:`KeymapStore` (re-resolved on every rebuild).
-
-The legend is purely a denormalized projection — when no focus message has
-arrived, only the fallback chips are shown.
+The legend lists action chips (``<key> <label>``) for the active service,
+followed by always-visible app-level fallbacks (theme, help, quit). Key labels
+flow through :class:`KeymapStore` and are re-resolved on every rebuild.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from reactivex.abc import DisposableBase
 from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
-from aws_tui.vm.messages import FocusChangedMessage, KeymapChangedMessage
 
-# Always-visible global chips — shown regardless of which service is
-# active and what is selected. Themes / help / quit / etc. — the "app
-# chrome" controls. User feedback after PR #80 asked for these on the
-# RIGHT side of the Commands pane while the service-specific chips
-# (S3 / EMR / etc.) sit on the LEFT.
+# Always-visible global chips follow the service-specific commands.
 _GLOBAL_ACTIONS: tuple[str, ...] = (
+    "app.command_palette",
     "app.themes",
     "app.cycle_theme",
     "app.help",
     "app.quit",
 )
 
-# Per-service chip sets — what the user sees on the LEFT side of the
-# Commands pane depends on which service is active. Refresh stays on
-# every service. PR-B/C will extend the EMR set with the cancel / clone
-# / submit / lifecycle action ids once those handlers ship.
+# Per-service chip sets lead the Commands pane and include the actions
+# available for the active service.
 _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
     "s3": (
         "pane.switch_focus",
@@ -51,7 +40,35 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "pane.descend",
         "pane.refresh",
         "app.swap_source",
+        "emr.next_application",
         "emr.clone",
+    ),
+    "glue": (
+        "glue.catalog",
+        "glue.jobs",
+        "glue.crawlers",
+        "glue.choose_run_state",
+        "glue.choose_crawler_state",
+        "glue.copy_table_ref",
+        "glue.query_in_athena",
+        "glue.time_travel_in_athena",
+        "pane.refresh",
+        "app.swap_source",
+    ),
+    "athena": (
+        "athena.query",
+        "athena.history",
+        "athena.results",
+        "athena.saved",
+        "athena.choose_workgroup",
+        "athena.choose_catalog",
+        "athena.choose_database",
+        "athena.insert_table_ref",
+        "athena.execute",
+        "athena.cancel",
+        "athena.load_more",
+        "pane.refresh",
+        "app.swap_source",
     ),
     # Settings is a static configuration page — no per-item
     # affordances apply. Pre-PR-81 it showed ``pane.refresh`` but
@@ -65,14 +82,14 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
 # tests, and the early boot window before the first nav selection
 # fires). Keeps the existing S3-shaped chip row visible so the
 # bottom legend isn't blank — same set the pre-PR-81 hardcoded
-# ``_FALLBACK_ACTIONS`` exposed minus the globals (which now own
-# their own right-hand column).
+# ``_FALLBACK_ACTIONS`` exposed minus the globals.
 _FALLBACK_SERVICE_ACTIONS: tuple[str, ...] = _SERVICE_ACTIONS["s3"]
 
 # Human-readable labels per action id. Anything not listed falls back to the
 # tail-segment of the action id (e.g. "pane.copy" -> "copy"). Keeping this
 # inline avoids a separate config file and lines up with the spec §4.1 chips.
 _ACTION_LABELS: dict[str, str] = {
+    "app.command_palette": "more",
     "pane.descend": "open",
     "pane.ascend": "up",
     "pane.quick_look": "peek",
@@ -88,26 +105,140 @@ _ACTION_LABELS: dict[str, str] = {
     "pane.enter_multiselect": "multi",
     "app.help": "help",
     "app.themes": "themes",
-    # Both ``app.cycle_theme`` and ``app.swap_source`` semantically
-    # "switch X". User feedback: don't compress one to "cycle" and
-    # leave the other as "swap src" — make both read the same
-    # ("switch") with the noun differing. They sit far apart in the
-    # row so the parallel reads naturally; we don't shorten "switch"
-    # to "cycle" for either to avoid the "cycle theme is confusing"
-    # complaint (cycle theme reads as "cycle a theme attribute" not
-    # "rotate to the next theme").
-    "app.cycle_theme": "switch theme",
-    "app.swap_source": "switch source",
-    # Service-specific label overrides handled by ``_label_for`` (the
-    # user asked for "switch source" → "switch application" when EMR
-    # is active). The generic fallback is now "switch source" for
-    # S3 (was "swap src" pre-this-batch).
+    # Compact chrome labels leave room for the renderer's later
+    # width-aware selection.
+    "app.cycle_theme": "next theme",
+    "app.swap_source": "source",
+    "emr.next_application": "switch app",
     "app.quit": "quit",
     "auth.authenticate": "sign in",
-    "modal.cancel": "cancel",
     "emr.clone": "clone",
     "emr.logs.filter": "filter logs",
+    "glue.catalog": "catalog",
+    "glue.jobs": "jobs",
+    "glue.crawlers": "crawlers",
+    "glue.choose_run_state": "run state",
+    "glue.choose_crawler_state": "crawler state",
+    "glue.copy_table_ref": "copy",
+    "glue.query_in_athena": "Athena",
+    "glue.time_travel_in_athena": "snapshot",
+    "athena.query": "query",
+    "athena.history": "history",
+    "athena.results": "results",
+    "athena.saved": "saved",
+    "athena.choose_workgroup": "group",
+    "athena.choose_catalog": "catalog",
+    "athena.choose_database": "database",
+    "athena.insert_table_ref": "table",
+    "athena.execute": "run",
+    "athena.cancel": "stop",
+    "athena.load_more": "more",
 }
+
+_ACTION_EFFECTS: dict[str, str] = {
+    "app.command_palette": (
+        "Open commands available for the active service. This does not perform an AWS operation."
+    ),
+    "app.themes": "Open the theme picker. This changes presentation only.",
+    "app.cycle_theme": "Switch to the next theme. This changes presentation only.",
+    "app.help": "Open keyboard and workflow help. This does not perform an AWS operation.",
+    "app.quit": "Exit aws-tui after the application's normal shutdown sequence.",
+    "app.swap_source": (
+        "Switch to the next configured source and rebuild the active service context. "
+        "This does not write AWS resources."
+    ),
+    "pane.switch_focus": "Move keyboard focus to the next operational pane.",
+    "pane.descend": "Open the selected item or descend into the selected location.",
+    "pane.copy": "Copy the selected item through the existing transfer workflow.",
+    "pane.delete": "Delete the selected item through the existing confirmation workflow.",
+    "pane.refresh": "Reload the active operational surface from its current source.",
+    "emr.next_application": (
+        "Select the next EMR Serverless application and load its runs. This does not start a job."
+    ),
+    "emr.clone": "Open the clone workflow for the selected EMR Serverless job run.",
+    "glue.catalog": "Show the Glue Catalog view. This performs read-only discovery.",
+    "glue.jobs": "Show Glue jobs and their read-only run history.",
+    "glue.crawlers": "Show Glue crawlers and their read-only state.",
+    "glue.choose_run_state": "Open the Glue job-run state filter.",
+    "glue.choose_crawler_state": "Open the Glue crawler-state filter.",
+    "glue.copy_table_ref": "Copy the selected Glue table's fully qualified SQL identifier.",
+    "glue.query_in_athena": (
+        "Open the selected Glue table in Athena and prefill a bounded read-only SELECT. "
+        "This does not execute the query."
+    ),
+    "glue.time_travel_in_athena": (
+        "Open the selected Iceberg snapshot in Athena and prefill FOR VERSION AS OF SQL. "
+        "This does not execute the query."
+    ),
+    "athena.query": "Show the Athena query editor.",
+    "athena.history": "Show read-only Athena query history.",
+    "athena.results": "Show rows for the current Athena execution.",
+    "athena.saved": "Show saved Athena queries.",
+    "athena.choose_workgroup": "Open the Athena workgroup selector.",
+    "athena.choose_catalog": "Open the Athena catalog selector.",
+    "athena.choose_database": "Open the Athena database selector.",
+    "athena.insert_table_ref": "Insert the same-source copied Glue table at the editor cursor.",
+    "athena.execute": "Execute the validated read-only SQL in the active Athena context.",
+    "athena.cancel": "Stop interrupts query submission or the active app-owned Athena query.",
+    "athena.load_more": "Load the next available page for the active Athena view.",
+}
+
+_ACTION_REQUIREMENTS: dict[str, str] = {
+    "pane.copy": "Requires a copyable selected item.",
+    "pane.delete": "Requires a deletable selected item.",
+    "emr.clone": "Requires a selected cloneable job run.",
+    "glue.copy_table_ref": "Requires a visible selected Glue table.",
+    "glue.query_in_athena": "Requires a visible selected Glue table.",
+    "glue.time_travel_in_athena": "Requires a visible selected snapshot row.",
+    "athena.insert_table_ref": "Requires a copied table from the active Athena source.",
+    "athena.execute": "Requires valid non-empty read-only SQL and an idle query runner.",
+    "athena.cancel": "Requires query submission or an active app-owned Athena query.",
+    "athena.load_more": "Requires another result page in the active Athena view.",
+}
+
+_ACTION_PRIORITIES: dict[str, int] = {
+    "app.command_palette": 0,
+    "app.quit": 0,
+    "athena.execute": 10,
+    "athena.cancel": 10,
+    "glue.query_in_athena": 10,
+    "glue.time_travel_in_athena": 10,
+    "app.swap_source": 20,
+    "pane.refresh": 20,
+    "glue.catalog": 80,
+    "glue.jobs": 80,
+    "glue.crawlers": 80,
+    "athena.query": 80,
+    "athena.history": 80,
+    "athena.results": 80,
+    "athena.saved": 80,
+    "app.themes": 90,
+    "app.cycle_theme": 90,
+    "app.help": 90,
+}
+
+
+def _canonical_shortcut(key: str) -> str:
+    """Return the user-facing form of a configured key sequence."""
+    names = {
+        "ctrl": "Control",
+        "shift": "Shift",
+        "enter": "Enter",
+        "escape": "Escape",
+    }
+    parts = key.split("+")
+    implicit_shift = any(len(part) == 1 and part.isupper() for part in parts)
+    rendered = [names.get(part.lower(), part.upper() if len(part) == 1 else part) for part in parts]
+    if implicit_shift and "Shift" not in rendered:
+        rendered.insert(-1, "Shift")
+    return " + ".join(rendered)
+
+
+def _tooltip_for(action_id: str, key: str, *, enabled: bool) -> str:
+    lines = [f"Shortcut: {_canonical_shortcut(key)}", "", _ACTION_EFFECTS[action_id]]
+    if not enabled and action_id in _ACTION_REQUIREMENTS:
+        lines.extend(("", _ACTION_REQUIREMENTS[action_id]))
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,17 +258,14 @@ class HintAction:
     action_id: str
     key_label: str
     action_label: str
+    tooltip: str
+    priority: int = 50
+    overflow_only: bool = False
     enabled: bool = True
 
 
 class HintLegendVM:
-    """Reactive hint-legend viewmodel.
-
-    Callers register focusable VMs and their action-id sequences via
-    :meth:`register_focusable`; subsequent :class:`FocusChangedMessage` events
-    drive the visible chips. :class:`KeymapChangedMessage` triggers a rebuild
-    so re-bindings show up immediately.
-    """
+    """Reactive service-level hint-legend viewmodel."""
 
     def __init__(
         self,
@@ -149,8 +277,6 @@ class HintLegendVM:
         self._hub: MessageHub[Message] = hub
         self._keymap: KeymapStore = keymap
 
-        self._registry: dict[str, tuple[str, ...]] = {}
-        self._focused_vm_id: str | None = None
         self._current_service_id: str | None = None
         self._actions: tuple[HintAction, ...] = ()
         self._global_actions: tuple[HintAction, ...] = ()
@@ -164,21 +290,20 @@ class HintLegendVM:
         self._inner: ComponentVM = (
             ComponentVM.builder().name("hint_legend").services(hub, dispatcher).build()
         )
-        self._sub: DisposableBase | None = None
 
     # ── Properties ──────────────────────────────────────────────────────────
 
     @property
     def actions(self) -> tuple[HintAction, ...]:
-        """Service-specific chips — LEFT side of the Commands pane.
+        """Service-specific chips shown before the global commands.
 
-        Includes any focused-VM-registered ids and the active
-        service's chip set (S3 / EMR / Settings / fallback)."""
+        Includes the active service's chip set (S3, EMR, Glue, Athena,
+        Settings, or fallback)."""
         return self._actions
 
     @property
     def global_actions(self) -> tuple[HintAction, ...]:
-        """Always-visible globals — RIGHT side of the Commands pane.
+        """Always-visible globals shown after the service commands.
 
         Themes / help / quit / etc. — the app-chrome controls that
         apply regardless of which service is active."""
@@ -206,10 +331,6 @@ class HintLegendVM:
         self._rebuild_actions()
 
     @property
-    def focused_vm_id(self) -> str | None:
-        return self._focused_vm_id
-
-    @property
     def status(self) -> ConstructionStatus:
         return self._inner.status
 
@@ -221,72 +342,22 @@ class HintLegendVM:
 
     def construct(self) -> None:
         self._inner.construct()
-        if self._sub is None:
-            self._sub = self._hub.messages.subscribe(on_next=self._on_message)
         self._rebuild_actions()
 
     def destruct(self) -> None:
-        if self._sub is not None:
-            self._sub.dispose()
-            self._sub = None
         self._inner.destruct()
 
     def dispose(self) -> None:
-        if self._sub is not None:
-            self._sub.dispose()
-            self._sub = None
         self._inner.dispose()
 
-    # ── Registration API ───────────────────────────────────────────────────
-
-    def register_focusable(self, vm_id: str, action_ids: tuple[str, ...]) -> None:
-        """Associate a focusable VM with an ordered tuple of action ids.
-
-        Re-registering replaces the prior tuple. Action ids the keymap doesn't
-        know about are silently dropped at render time.
-        """
-        self._registry[vm_id] = action_ids
-        if self._focused_vm_id == vm_id:
-            self._rebuild_actions()
-
-    def unregister_focusable(self, vm_id: str) -> None:
-        self._registry.pop(vm_id, None)
-        if self._focused_vm_id == vm_id:
-            self._focused_vm_id = None
-            self._rebuild_actions()
-
     # ── Internal ────────────────────────────────────────────────────────────
-
-    def _on_message(self, msg: object) -> None:
-        if isinstance(msg, FocusChangedMessage):
-            if self._focused_vm_id == msg.focused_vm_id:
-                return
-            self._focused_vm_id = msg.focused_vm_id
-            self._rebuild_actions()
-        elif isinstance(msg, KeymapChangedMessage):
-            self._rebuild_actions()
 
     def _rebuild_actions(self) -> None:
         # ── Service-specific (LEFT column) ──────────────────────────
         #
-        # ``seen`` dedups across the focused-pane block, the service
-        # block, and (downstream) the globals — without it a chip
-        # registered both as focused-pane and as a service action
-        # would render twice. The focused-pane registration is
-        # exercised only by tests today (BindingResolver wiring is
-        # deferred per the [[deferred-from-m6]] memo) but kept so
-        # the contract is honest.
+        # ``seen`` deduplicates service actions and globals.
         seen: set[str] = set()
         chips: list[HintAction] = []
-        focused = self._focused_vm_id
-        if focused is not None:
-            for action_id in self._registry.get(focused, ()):
-                if action_id in seen:
-                    continue
-                chip = self._resolve(action_id)
-                if chip is not None:
-                    chips.append(chip)
-                    seen.add(action_id)
         service_set = _SERVICE_ACTIONS.get(
             self._current_service_id or "", _FALLBACK_SERVICE_ACTIONS
         )
@@ -330,21 +401,17 @@ class HintLegendVM:
             action_id=action_id,
             key_label=keys[0],
             action_label=label,
+            tooltip=_tooltip_for(
+                action_id,
+                keys[0],
+                enabled=action_id not in self._disabled_actions,
+            ),
+            priority=_ACTION_PRIORITIES.get(action_id, 50),
+            overflow_only=action_id == "app.command_palette",
             enabled=action_id not in self._disabled_actions,
         )
 
     def _label_for(self, action_id: str) -> str:
-        """Service-aware label lookup.
-
-        User feedback: "I also expect the switch source command to
-        become switch application command [when EMR is active]". The
-        action_id stays ``app.swap_source`` (binding routing is by
-        id), but the chip label flips to ``switch app`` when EMR is
-        the active service. Generic fallback is the ``_ACTION_LABELS``
-        table.
-        """
-        if action_id == "app.swap_source" and self._current_service_id == "emr-serverless":
-            return "switch app"
         return _ACTION_LABELS.get(action_id, action_id.rsplit(".", 1)[-1])
 
 

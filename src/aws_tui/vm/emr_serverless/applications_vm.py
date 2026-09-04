@@ -18,24 +18,29 @@ fingerprint guard added in PR #100(b) becomes redundant.
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
 
 import reactivex as rx
-from reactivex.subject import Subject
 from vmx import ComponentVMOf, CompositeVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_serverless import ApplicationState, ApplicationSummary
+from aws_tui.domain.emr_serverless import (
+    ApplicationState,
+    ApplicationSummary,
+    EmrServerlessClientProtocol,
+)
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
+from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 #: Single source of truth for the user-facing application order.
 #: STARTED first, then transitional (STARTING / STOPPING), then
 #: non-active (CREATING / CREATED / STOPPED), then terminal
-#: (TERMINATED). The picker dropdown and the Shift+S cycle both
+#: (TERMINATED). The picker dropdown and the Shift+A cycle both
 #: consume :attr:`ApplicationsVM.sorted_applications` so the order
 #: the user sees in the dropdown is the same order they cycle
 #: through with the keybinding.
@@ -48,6 +53,14 @@ _APP_STATE_SORT: dict[ApplicationState, int] = {
     ApplicationState.STOPPED: 5,
     ApplicationState.TERMINATED: 6,
 }
+
+
+def _application_sort_key(application: ApplicationSummary) -> tuple[int, str, str]:
+    return (
+        _APP_STATE_SORT.get(application.state, 99),
+        application.name,
+        application.id,
+    )
 
 
 class ApplicationItemVM:
@@ -101,7 +114,7 @@ class ApplicationsVM:
     def __init__(
         self,
         *,
-        client: Any,  # EmrServerlessClient or _InMemoryEmr — see PR-A spec §1
+        client: EmrServerlessClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
@@ -112,11 +125,12 @@ class ApplicationsVM:
         self._state: PaneState = PaneState.LOADING
         self._error_text: str | None = None
         self._disposed: bool = False
+        self._refresh_lock = asyncio.Lock()
         # Per-VM Observable (round-3 / PR #103 retirement path): fires
         # the name of the property that just changed, scoped to THIS
         # VM instance. Views can subscribe here instead of filtering
         # ``MessageHub`` events by ``sender_object``.
-        self._on_property_changed: Subject[str] = Subject()
+        self._on_property_changed = ObserverSafeSubject[str]()
         # CompositeVM holds the per-row inners; auto_construct_on_add lets
         # the composite construct each new row when added post-construct().
         # Selection lives in the composite's ``current`` slot — exposed
@@ -144,15 +158,10 @@ class ApplicationsVM:
         Single source of truth for the user-facing application order:
         STARTED first, then transitional / idle / terminated groups,
         alphabetical within each group. The picker dropdown and the
-        Shift+S cycle both consume this property — listing and
+        Shift+A cycle both consume this property — listing and
         cycling stay in lockstep.
         """
-        return tuple(
-            sorted(
-                self.applications,
-                key=lambda a: (_APP_STATE_SORT.get(a.state, 99), a.name),
-            )
-        )
+        return tuple(sorted(self.applications, key=_application_sort_key))
 
     @property
     def selected_id(self) -> str | None:
@@ -202,6 +211,11 @@ class ApplicationsVM:
         self._notify("selected_id")
 
     async def refresh(self) -> None:
+        """Re-fetch applications without allowing stale responses to win."""
+        async with self._refresh_lock:
+            await self._refresh_serialized()
+
+    async def _refresh_serialized(self) -> None:
         """Re-fetch the application list. Updates ``state``,
         ``applications``, and (if the prior selection went missing)
         ``selected_id``.
@@ -231,9 +245,15 @@ class ApplicationsVM:
             # manual ``r`` re-enters LOADING and re-throws). Same
             # shield JobRunLogsVM.load already has; mirror it here.
             self._error_text = redact_text(f"unexpected error: {exc}")
+            report_unexpected_service_error(
+                self._hub,
+                service="emr-serverless",
+                operation="list_applications",
+                error=exc,
+            )
             self._set_state(PaneState.ERROR)
             return
-        new_apps: tuple[ApplicationSummary, ...] = tuple(apps)
+        new_apps = tuple(sorted(apps, key=_application_sort_key))
         prior_selected_id = self.selected_id
 
         if not self._items_equal(new_apps):

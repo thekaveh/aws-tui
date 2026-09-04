@@ -11,7 +11,7 @@ the parent modal which dispatches by ``button_id``.
 
 from __future__ import annotations
 
-from textual.events import Click
+from textual.events import Click, Key
 from textual.widgets import Static
 
 
@@ -22,6 +22,8 @@ class ModalButton(Static):
     - ``-primary``: the confirm side (accent color).
     - ``-danger``: the destructive variant (theme danger color).
     """
+
+    can_focus = True
 
     # Structural defaults only — every color / border lives in the
     # per-theme ``.tcss`` (see ``ModalButton {...}`` blocks across all 10
@@ -41,18 +43,53 @@ class ModalButton(Static):
         text-style: bold;
         margin: 0 1;
     }
+    ModalButton:focus {
+        text-style: bold underline;
+    }
     """
 
-    def __init__(self, label: str, *, button_id: str, classes: str = "") -> None:
+    def __init__(
+        self,
+        label: str,
+        *,
+        button_id: str,
+        classes: str = "",
+        disabled: bool = False,
+    ) -> None:
         merged = " ".join(c for c in ("modal-button", classes) if c)
         super().__init__(label, classes=merged)
         self.button_id = button_id
+        self.disabled = disabled
+        self.can_focus = not disabled
 
     def on_click(self, _event: Click) -> None:
         # Bubble up — the modal's on_click reads ``button_id`` to act on
         # the press. Textual's event bubbling delivers the event to
         # parent widgets on its way up.
         pass
+
+    def on_key(self, event: Key) -> None:
+        if event.key not in {"enter", "space"}:
+            return
+        event.stop()
+        self.press()
+
+    def press(self) -> None:
+        if self.disabled:
+            return
+        self.post_message(
+            Click(
+                self,
+                0,
+                0,
+                0,
+                0,
+                1,
+                shift=False,
+                meta=False,
+                ctrl=False,
+            )
+        )
 
 
 __all__ = ["ModalButton"]

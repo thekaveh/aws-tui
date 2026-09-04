@@ -7,16 +7,23 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from textual.app import App, ComposeResult
-from textual.containers import Container
+from textual.containers import Container, Horizontal
+from textual.pilot import Pilot
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import ApplicationState, JobRunState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.theme_store import ThemeStore
+from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
+from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
+from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
+from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
-from tests.unit.domain._in_memory_emr import _InMemoryEmr
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _FIXED_TS = datetime(2026, 6, 25, 12, 0, 0, tzinfo=UTC)
 
@@ -74,7 +81,11 @@ def _build_page_vm(client: _InMemoryEmr) -> EmrServerlessPageVM:
         hub=hub,
         dispatcher=NULL_DISPATCHER,
         connection=Connection(
-            name="dev", kind="aws", region="us-east-1", source="config", profile="dev"
+            name="demo-prod",
+            kind="aws",
+            region="us-east-1",
+            source="config",
+            profile="demo-prod",
         ),
     )
     page.construct()
@@ -89,6 +100,7 @@ class EmrPageApp(App[None]):
         self.CSS = _load_css(theme)
         self._theme = theme
         self._page_vm: EmrServerlessPageVM = _build_page_vm(_seeded_fake())
+        self._source_candidates: tuple[ServiceSourceContext, ...] = ()
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -99,6 +111,7 @@ class EmrPageApp(App[None]):
         page = EmrServerlessPage(
             self._page_vm,
             hub=self._page_vm.hub,
+            source_candidates=self._source_candidates,
             id="emr-page",
         )
         await host.mount(page)
@@ -127,4 +140,58 @@ class EmrPageEmptyApp(App[None]):
         await host.mount(page)
 
 
-__all__ = ["EmrPageApp", "EmrPageEmptyApp"]
+class EmrPageOpenPickerApp(EmrPageApp):
+    """Renders populated EMR with the application selector expanded."""
+
+    async def open_picker_with_geometry_check(self, pilot: Pilot) -> None:
+        await pilot.pause()
+        picker = self.query_one(ApplicationPicker)
+        app_box = self.query_one("#emr-app-box")
+        context_row = self.query_one(".emr-context-row", Horizontal)
+        source = self.query_one(ServiceSourceHeader)
+        runs = self.query_one(JobRunsPane)
+        detail = self.query_one(JobRunDetailPane)
+        logs = self.query_one(JobRunLogsPane)
+        host = self.query_one("#content-host")
+        widgets = (picker, app_box, context_row, source, runs, detail, logs, host)
+        closed_regions = tuple(widget.region for widget in widgets)
+
+        picker.toggle_open()
+        await pilot.pause()
+        assert picker.is_open
+        assert tuple(widget.region for widget in widgets) == closed_regions
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not picker.is_open
+        assert tuple(widget.region for widget in widgets) == closed_regions
+
+        picker.toggle_open()
+        await pilot.pause()
+        assert picker.is_open
+        assert tuple(widget.region for widget in widgets) == closed_regions
+
+
+class EmrPageOpenSourcePickerApp(EmrPageApp):
+    """Renders similarly prefixed AWS profiles with the source list expanded."""
+
+    def __init__(self, theme: str) -> None:
+        super().__init__(theme)
+        self._source_candidates = (
+            ServiceSourceContext("demo-prod-east", "demo-prod-east", "us-east-1"),
+            ServiceSourceContext("demo-prod-west", "demo-prod-west", "us-west-2"),
+        )
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._open_source_picker)
+
+    def _open_source_picker(self) -> None:
+        self.query_one(ServiceSourceHeader).open()
+
+
+__all__ = [
+    "EmrPageApp",
+    "EmrPageEmptyApp",
+    "EmrPageOpenPickerApp",
+    "EmrPageOpenSourcePickerApp",
+]

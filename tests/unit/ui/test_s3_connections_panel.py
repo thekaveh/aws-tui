@@ -17,7 +17,7 @@ from aws_tui.ui.widgets.settings.connection_form import (
     ConnectionFormSubmitted,
 )
 from aws_tui.ui.widgets.settings.s3_connections_panel import S3ConnectionsPanel
-from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 
@@ -157,6 +157,42 @@ async def test_edit_preserves_hidden_session_token(tmp_path: Path) -> None:
             await pilot.pause()
 
         assert store.load().connections["sts"].session_token == "TOK"
+    finally:
+        s3_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_edit_accepts_virtual_hosted_r2_connection(tmp_path: Path) -> None:
+    hub = _hub()
+    store = ConfigStore(path=tmp_path / "config.toml")
+    store.add_connection(
+        ConnectionEntry(
+            name="r2-prod",
+            kind="s3-compatible",
+            endpoint_url="https://account.r2.cloudflarestorage.com",
+            region="auto",
+            credentials="static",
+            access_key_id="R2_ACCESS_KEY",
+            secret_access_key="R2_SECRET",
+            force_path_style=False,
+            verify_tls=True,
+        )
+    )
+    resolver = ConnectionResolver(config_store=store)
+    s3_vm = S3ConnectionsVM(
+        resolver=resolver, config_store=store, hub=hub, dispatcher=NULL_DISPATCHER
+    )
+    s3_vm.construct()
+    panel = S3ConnectionsPanel(vm=s3_vm, hub=hub)
+    try:
+        async with _PanelHost(panel).run_test() as pilot:
+            await pilot.pause()
+            form = panel.query_one(ConnectionFormInline)
+            panel._on_edit_clicked("r2-prod")
+
+            assert form._form_vm.errors == {}
+            assert form._form_vm.can_submit is True
+            assert form._form_vm.model.force_path_style is False
     finally:
         s3_vm.dispose()
 

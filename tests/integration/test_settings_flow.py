@@ -5,19 +5,24 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.config_store import ConfigStore
+from aws_tui.infra.keychain import InMemoryKeychain, app_keychain_service
+from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 
 _MINIO_LOCAL_TOML = (
     "[connections.minio-local]\n"
     'kind = "s3-compatible"\n'
     'endpoint_url = "http://127.0.0.1:1"\n'  # unreachable on purpose
     'region = "us-east-1"\n'
+    'credentials = "static"\n'
     'access_key_id = "AKIATEST"\n'
     'secret_access_key = "SECRETTEST"\n'
     "force_path_style = true\n"
@@ -47,10 +52,10 @@ async def _await_boot(pilot: object, app: object) -> None:
     longer reaches the post-mount state. We wait for the
     ``content-mount`` group of workers to drain instead.
 
-    Then we dismiss any boot-chain narration toasts the worker
-    raised — they dock right and would cover Settings-panel click
-    targets the test then exercises. The narration is real-user
-    UX; tests interact post-boot and don't need it.
+    Then we dismiss boot-chain narration and configuration-risk toasts —
+    they dock right and would cover Settings-panel click targets the test
+    then exercises. Their contents have dedicated assertions elsewhere in
+    this module; interaction tests operate after startup notices are cleared.
     """
     await app.workers.wait_for_complete(  # type: ignore[attr-defined]
         list(app.workers._workers)  # type: ignore[attr-defined]
@@ -59,9 +64,27 @@ async def _await_boot(pilot: object, app: object) -> None:
     stack = app.app_ctx.root_vm.chrome.toast_stack  # type: ignore[attr-defined]
     for toast in tuple(stack.toasts):
         tid = toast.model.id
-        if tid.startswith("boot-") or tid.startswith("initial-fallback-"):
+        if (
+            tid.startswith("boot-")
+            or tid.startswith("initial-fallback-")
+            or tid.startswith("config-")
+        ):
             stack.dismiss(tid)
     await pilot.pause()  # type: ignore[attr-defined]
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
+async def _await_content_mount(app: AwsTuiApp, expected_id: str) -> None:
+    await app.workers.wait_for_complete(list(app.workers._workers))
+    setup_task = app.app_ctx.root_vm.content_host._setup_task
+    if setup_task is not None and not setup_task.done():
+        await setup_task
+    await _wait_until(lambda: app.app_ctx.root_vm.content_host.current_id == expected_id)
 
 
 def _dispose(ctx: object) -> None:
@@ -81,6 +104,10 @@ def _dispose(ctx: object) -> None:
     if root is not None and hasattr(root, "dispose"):
         with contextlib.suppress(Exception):
             root.dispose()
+    log_sink = getattr(ctx, "log_sink", None)
+    if log_sink is not None and hasattr(log_sink, "close"):
+        with contextlib.suppress(Exception):
+            log_sink.close()
 
 
 @pytest.mark.asyncio
@@ -93,11 +120,12 @@ async def test_toggle_settings_s3_settings_does_not_crash(tmp_path: Path) -> Non
     swap-in, so the second Settings click tried to re-construct an
     already-Disposed VM. Fix: build a fresh ``SettingsVM`` per mount.
     """
-    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
-    (config_dir / "config.toml").write_text(
-        _MINIO_LOCAL_TOML + '\n[defaults]\nconnection = "minio-local"\n'
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(
+        config_dir=config_dir,
+        cache_dir=tmp_path / "cache",
+        demo=True,
     )
-    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test() as pilot:
@@ -105,13 +133,13 @@ async def test_toggle_settings_s3_settings_does_not_crash(tmp_path: Path) -> Non
             menu = ctx.root_vm.services_menu
             # 1st: settings
             menu.switch_service_command.execute("settings")
-            await pilot.pause()
+            await _await_content_mount(app, "settings")
             # 2nd: back to s3
             menu.switch_service_command.execute("s3")
-            await pilot.pause()
+            await _await_content_mount(app, "s3")
             # 3rd: settings again — this was the crash path.
             menu.switch_service_command.execute("settings")
-            await pilot.pause()
+            await _await_content_mount(app, "settings")
 
             from aws_tui.vm.settings.settings_vm import SettingsVM
 
@@ -213,9 +241,14 @@ async def test_comma_selects_settings_and_swaps_main_area(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
+async def test_add_inline_form_persists_to_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Open Settings → expand inline form → fill + Save → TOML round-trip."""
     config_dir = _prep(tmp_path)
+    keychain = InMemoryKeychain()
+    monkeypatch.setattr("aws_tui.composition.Keyring", lambda: keychain)
     ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
     app = AwsTuiApp(ctx)
     try:
@@ -230,7 +263,7 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
                 ConnectionFormInline,
                 ConnectionFormSubmitted,
             )
-            from aws_tui.vm.chrome.first_run_vm import S3CompatForm
+            from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 
             form = pilot.app.query_one(ConnectionFormInline)
             form.open_for_add()
@@ -262,7 +295,11 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
             form.post_message(
                 ConnectionFormSubmitted(form=form_obj, mode="add", original_name=None)
             )
-            await pilot.pause()
+            await _wait_until(
+                lambda: (
+                    "minio-test" in ConfigStore(path=config_dir / "config.toml").load().connections
+                )
+            )
     finally:
         _dispose(ctx)
 
@@ -270,17 +307,173 @@ async def test_add_inline_form_persists_to_toml(tmp_path: Path) -> None:
     assert "minio-test" in cfg.connections
     entry = cfg.connections["minio-test"]
     assert entry.endpoint_url == "http://localhost:9000"
-    assert entry.credentials == "static"
-    assert entry.session_token == "SESSIONTEST"
+    assert entry.credentials == f"keychain:{app_keychain_service('minio-test')}"
+    assert entry.access_key_id is None
+    assert entry.secret_access_key is None
+    assert entry.session_token is None
+    persisted = (config_dir / "config.toml").read_text(encoding="utf-8")
+    assert "AKIATEST" not in persisted
+    assert "SECRETTEST" not in persisted
+    assert "SESSIONTEST" not in persisted
 
     from aws_tui.infra.connection_resolver import ConnectionResolver
 
     resolved = ConnectionResolver(
-        config_store=ConfigStore(path=config_dir / "config.toml")
+        config_store=ConfigStore(path=config_dir / "config.toml"),
+        keychain=keychain,
     ).resolve("minio-test")
     assert resolved.access_key_id == "AKIATEST"
     assert resolved.secret_access_key == "SECRETTEST"
     assert resolved.session_token == "SESSIONTEST"
+
+
+@pytest.mark.asyncio
+async def test_open_connection_form_owns_tab_traversal(
+    tmp_path: Path,
+) -> None:
+    """App-priority Tab remains inside the visible Settings form."""
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+            await pilot.press("comma")
+            await pilot.pause()
+
+            from textual.widgets import Input
+
+            from aws_tui.ui.widgets.modal_button import ModalButton
+            from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+
+            form = app.query_one(ConnectionFormInline)
+            form.open_for_add()
+            values = {
+                "form-name": "minio-test",
+                "form-endpoint_url": "http://localhost:9000",
+                "form-region": "us-east-1",
+                "form-access_key_id": "AKIATEST",
+                "form-secret_access_key": "SECRETTEST",
+                "form-session_token": "",
+            }
+            for widget_id, value in values.items():
+                app.query_one(f"#{widget_id}", Input).value = value
+            await pilot.pause()
+
+            expected_ids = (
+                "form-endpoint_url",
+                "form-region",
+                "form-access_key_id",
+                "form-secret_access_key",
+                "form-session_token",
+            )
+            for expected_id in expected_ids:
+                await pilot.press("tab")
+                assert app.focused is app.query_one(f"#{expected_id}", Input)
+
+            await pilot.press("tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-cancel-btn"
+            await pilot.press("tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-save-btn"
+            await pilot.press("tab")
+            assert app.focused is app.query_one("#form-name", Input)
+            await pilot.press("shift+tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-save-btn"
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_settings_add_and_inline_form_are_keyboard_accessible(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+            await pilot.press("comma")
+            await _await_content_mount(app, "settings")
+
+            from textual.widgets import Button, Input
+
+            from aws_tui.ui.widgets.modal_button import ModalButton
+            from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+            from aws_tui.ui.widgets.settings_view import SettingsView
+
+            settings = app.query_one(SettingsView)
+            settings_controls = settings._focus_controls()
+            assert {"add-empty", "add-populated"} & {control.id for control in settings_controls}
+
+            initial_focus = settings._section_focus_target()
+            assert initial_focus is not None
+            await _wait_until(lambda: app.focused is initial_focus)
+
+            await pilot.press("tab")
+            assert app._last_action_id == "pane.switch_focus"
+            assert isinstance(app.focused, Button)
+            assert app.focused.id == "add-empty"
+
+            await pilot.press("enter")
+            form = app.query_one(ConnectionFormInline)
+            assert form.has_class("-open")
+            assert app.focused is app.query_one("#form-name", Input)
+
+            await pilot.press("x")
+            assert app.query_one("#form-name", Input).value == "x"
+            await pilot.press("backspace")
+            assert app.query_one("#form-name", Input).value == ""
+
+            await pilot.press("shift+tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-cancel-btn"
+            await pilot.press("enter")
+            assert not form.has_class("-open")
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_settings_edit_and_delete_are_keyboard_accessible(tmp_path: Path) -> None:
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache", demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await _await_boot(pilot, app)
+            await pilot.press("comma")
+            await _await_content_mount(app, "settings")
+
+            from textual.widgets import Button
+
+            from aws_tui.ui.widgets.modal_button import ModalButton
+            from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+            from aws_tui.ui.widgets.settings_view import SettingsView
+
+            await pilot.press("tab", "tab")
+            assert isinstance(app.focused, Button)
+            assert app.focused.id == "edit-0"
+            await pilot.press("enter")
+            form = app.query_one(ConnectionFormInline)
+            assert form.has_class("-open")
+
+            await pilot.press("tab", "tab", "tab", "tab", "tab")
+            assert isinstance(app.focused, ModalButton)
+            assert app.focused.button_id == "form-cancel-btn"
+            await pilot.press("enter")
+            assert not form.has_class("-open")
+
+            app.query_one(SettingsView).focus_default()
+            await pilot.press("tab", "tab")
+            assert isinstance(app.focused, Button)
+            assert app.focused.id == "delete-0"
+            await pilot.press("enter")
+            assert isinstance(app.screen, ConfirmModal)
+            await pilot.press("escape")
+    finally:
+        _dispose(ctx)
 
 
 @pytest.mark.asyncio
@@ -299,6 +492,8 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
             await pilot.pause()
             await pilot.click("#delete-0")
             await pilot.pause()
+            assert isinstance(app.screen, ConfirmModal)
+            assert app.screen.vm.is_open
             # ConfirmModal opens; danger defaults focus to Cancel — press
             # Right then Enter to confirm.
             await pilot.press("right")
@@ -386,7 +581,8 @@ async def test_settings_selection_during_boot_replays_after_boot_mount(
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def _slow_try_connection(conn: object) -> str:
+    async def _slow_try_connection(conn: object, *, timeout: float = 90.0) -> str:
+        del timeout
         started.set()
         await release.wait()
         await app._mount_local_only_dual_pane(  # type: ignore[arg-type]
@@ -445,7 +641,8 @@ async def test_settings_selection_during_boot_mounts_without_waiting_for_boot_ch
     release = asyncio.Event()
     cancelled = asyncio.Event()
 
-    async def _slow_try_connection(conn: object) -> str:
+    async def _slow_try_connection(conn: object, *, timeout: float = 90.0) -> str:
+        del timeout
         started.set()
         try:
             await release.wait()
@@ -512,7 +709,8 @@ async def test_s3_selection_after_local_fallback_retries_initial_connection(
     async def _forbidden_local_mount(*args: object, **kwargs: object) -> None:
         raise AssertionError("successful S3 retry should not preserve local-only fallback")
 
-    async def _fake_try_connection(retry_conn: object) -> str:
+    async def _fake_try_connection(retry_conn: object, *, timeout: float = 90.0) -> str:
+        del timeout
         attempts.append(retry_conn.name)
         return "ok"
 
@@ -530,6 +728,362 @@ async def test_s3_selection_after_local_fallback_retries_initial_connection(
     assert app._chain_resolved_to_local is False
     assert app._chain_initial_conn is None
     assert (conn.kind, conn.name) not in ctx.unreachable_connections
+
+
+@pytest.mark.asyncio
+async def test_s3_selection_propagates_failed_local_fallback_mount(
+    tmp_path: Path,
+) -> None:
+    config_dir = _prep(tmp_path, _MINIO_LOCAL_TOML)
+    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
+    app = AwsTuiApp(ctx)
+    conn = ctx.connection_resolver.resolve("minio-local")
+    app._chain_resolved_to_local = True
+    app._chain_initial_conn = conn
+
+    async def _noop_cancel_transfers() -> None:
+        return None
+
+    async def _failed_try_connection(retry_conn: object, *, timeout: float = 90.0) -> str:
+        del timeout
+        assert retry_conn is conn
+        return "unreachable"
+
+    async def _failed_local_mount(*args: object, **kwargs: object) -> bool:
+        del args, kwargs
+        return False
+
+    app._cancel_transfer_workers_before_content_swap = _noop_cancel_transfers  # type: ignore[method-assign]
+    app._try_connection = _failed_try_connection  # type: ignore[method-assign]
+    app._mount_local_only_dual_pane = _failed_local_mount  # type: ignore[method-assign]
+
+    try:
+        result = await app._mount_service_view("s3")
+    finally:
+        with contextlib.suppress(Exception):
+            _dispose(ctx)
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_local_only_mount_returns_true_only_with_mounted_view(tmp_path: Path) -> None:
+    from aws_tui.ui.widgets.dual_pane import DualPane
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+
+            result = await app._mount_local_only_dual_pane(
+                initial_conn=connection,
+                reason="test",
+            )
+            await pilot.pause()
+
+            assert result is True
+            host = app.query_one("#content-host")
+            mounted = list(host.query(DualPane))
+            assert len(mounted) == 1
+            assert mounted[0].vm is ctx.root_vm.content_host.current
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_local_only_mount_returns_false_without_transfer_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+            monkeypatch.setattr(ctx.registry.get("s3"), "_journal", None)
+
+            result = await app._mount_local_only_dual_pane(
+                initial_conn=connection,
+                reason="test",
+            )
+
+            assert result is False
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_local_only_mount_preserves_content_when_candidate_construction_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+            outgoing = ctx.root_vm.content_host.current
+            assert outgoing is not None
+
+            def fail_construct(_self: DualPaneVM) -> None:
+                raise RuntimeError("candidate construction failed")
+
+            monkeypatch.setattr(DualPaneVM, "construct", fail_construct)
+            result = await app._mount_local_only_dual_pane(
+                initial_conn=connection,
+                reason="test",
+            )
+
+            assert result is False
+            assert ctx.root_vm.content_host.current is outgoing
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_local_only_mount_returns_false_when_widget_mount_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+            host = app.query_one("#content-host")
+            real_mount = host.mount
+
+            def fail_mount(*widgets: object, **kwargs: object) -> object:
+                from aws_tui.ui.widgets.dual_pane import DualPane
+
+                if any(isinstance(widget, DualPane) for widget in widgets):
+                    raise RuntimeError("widget mount failed")
+                return real_mount(*widgets, **kwargs)
+
+            monkeypatch.setattr(host, "mount", fail_mount)
+            result = await app._mount_local_only_dual_pane(
+                initial_conn=connection,
+                reason="test",
+            )
+
+            assert result is False
+            assert len(app.query_one("#content-host").query("#content-mount-error")) == 1
+            assert ctx.root_vm.content_host.current_id == "s3"
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_settings_mount_failure_leaves_error_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.ui.widgets.settings_view import SettingsView
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            connection = ctx.connection_resolver.resolve("demo-dev")
+            await ctx.root_vm.switch_connection_with(connection, TokenState.CONNECTED)
+            host = app.query_one("#content-host")
+            real_mount = host.mount
+            errors: list[tuple[str, dict[str, object]]] = []
+            monkeypatch.setattr(
+                ctx.log_sink,
+                "error",
+                lambda event, **fields: errors.append((event, fields)),
+            )
+
+            def fail_settings(*widgets: object, **kwargs: object) -> object:
+                if any(isinstance(widget, SettingsView) for widget in widgets):
+                    raise RuntimeError("settings mount failed")
+                return real_mount(*widgets, **kwargs)
+
+            monkeypatch.setattr(host, "mount", fail_settings)
+
+            await app._mount_settings_view()
+
+            current_host = app.query_one("#content-host")
+            assert len(current_host.query("#content-mount-error")) == 1, (
+                list(current_host.children),
+                errors,
+            )
+            assert ctx.root_vm.content_host.current_id == "settings"
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_service_mount_failure_leaves_error_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from textual.widgets import Static
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            host = app.query_one("#content-host")
+
+            class FailingReplacement(Static):
+                async def on_mount(self) -> None:
+                    raise RuntimeError("glue mount failed")
+
+            errors: list[tuple[str, dict[str, object]]] = []
+            monkeypatch.setattr(
+                ctx.log_sink,
+                "error",
+                lambda event, **fields: errors.append((event, fields)),
+            )
+            replacement = FailingReplacement("replacement", id="forced-replacement")
+            result = await app._replace_content_widget(
+                host,
+                replacement,
+            )
+            await _wait_until(lambda: len(app.query("#content-host #content-mount-error")) == 1)
+
+            assert result is None
+            recovered_host = app.query_one("#content-host")
+            assert [child.id for child in recovered_host.children] == ["content-mount-error"]
+            assert len(app.query("#forced-replacement")) == 0, errors
+
+            await app._replace_content_widget(
+                recovered_host,
+                Static("working", id="working-replacement"),
+            )
+            assert [child.id for child in app.query_one("#content-host").children] == [
+                "working-replacement"
+            ]
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_initial_service_lifecycle_failure_uses_recovery_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from textual.widgets import Static
+
+    from aws_tui import app as app_module
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+
+    class FailingInitialView(Static):
+        async def on_mount(self) -> None:
+            raise RuntimeError("initial view mount failed")
+
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            monkeypatch.setattr(
+                app_module,
+                "build_service_view",
+                lambda *_args, **_kwargs: FailingInitialView("initial", id="failing-initial-view"),
+            )
+
+            assert await app._mount_initial_service_view() is True
+            await _wait_until(lambda: len(app.query("#content-mount-error")) == 1)
+
+            assert [child.id for child in app.query_one("#content-host").children] == [
+                "content-mount-error"
+            ]
+            assert len(app.query("#failing-initial-view")) == 0
+    finally:
+        _dispose(ctx)
+
+
+@pytest.mark.asyncio
+async def test_delayed_mount_recovery_does_not_overwrite_newer_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from textual.widgets import Static
+
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    app = AwsTuiApp(ctx)
+    recovery_started = asyncio.Event()
+    release_recovery = asyncio.Event()
+    original_recovery = app._recover_content_mount_lifecycle
+
+    async def delayed_recovery(*args: object) -> None:
+        recovery_started.set()
+        await release_recovery.wait()
+        await original_recovery(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(app, "_recover_content_mount_lifecycle", delayed_recovery)
+
+    class FailingReplacement(Static):
+        async def on_mount(self) -> None:
+            raise RuntimeError("delayed mount failure")
+
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _await_boot(pilot, app)
+            await app._replace_content_widget(
+                app.query_one("#content-host"),
+                FailingReplacement("failing", id="delayed-failure"),
+            )
+            await asyncio.wait_for(recovery_started.wait(), timeout=1)
+
+            await app._replace_content_widget(
+                app.query_one("#content-host"),
+                Static("newer", id="newer-content"),
+            )
+            release_recovery.set()
+            await pilot.pause()
+
+            current_host = app.query_one("#content-host")
+            assert [child.id for child in current_host.children] == ["newer-content"]
+            assert len(app.query("#delayed-failure")) == 0
+            assert len(app.query("#content-mount-error")) == 0
+    finally:
+        release_recovery.set()
+        _dispose(ctx)
 
 
 @pytest.mark.asyncio
@@ -669,18 +1223,9 @@ async def test_corrupt_sso_cache_at_startup_falls_back_to_local(tmp_path: Path) 
 async def test_boot_chain_with_mixed_failures_populates_both_panes(tmp_path: Path) -> None:
     """User report: AWS profile + an s3-compatible connection BOTH
     unavailable. After boot, neither pane shows content. After
-    Settings → S3 toggle, the local source appears. The toggle path
-    works because ``content_host.current_id`` is ``"settings"`` so
-    ``set_content`` adopts the new local DualPaneVM. The boot path
-    is broken because the failed s3-compatible attempt during the
-    chain already set ``current_id = "s3"``, and the chain's
-    closing ``_mount_local_only_dual_pane`` call asks for the same
-    ``service_id="s3"`` — the idempotent ``set_content`` early-return
-    short-circuits the swap and the failed S3FS DualPane stays in
-    ``content_host.current``. The DualPane WIDGET gets re-mounted
-    over the host, but it's bound to a stale local-only VM (or no
-    VM at all if the path doesn't even mount the widget) and the
-    panes look empty.
+    Settings → S3 toggle, the local source appears. The boot path must
+    replace the failed S3 content with the local fallback even though both
+    VMs share ``service_id="s3"``.
     """
     import contextlib as _contextlib
 
