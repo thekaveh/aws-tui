@@ -249,6 +249,22 @@ class TestLoad:
         with pytest.raises(ThemeNotFound):
             store.load("carbon")
 
+    def test_symlinked_config_directory_still_loads_themes(self, tmp_path: Path) -> None:
+        """A symlinked config home is the ordinary dotfiles layout, not an attack.
+
+        The symlink guard protects the theme *file*; applying it to the parent
+        directory as well made every theme — built-ins included — fail with
+        "unsafe user overlay" whenever ``~/.config/aws-tui`` was a symlink.
+        """
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real, target_is_directory=True)
+        (real / "theme.tcss").write_text("Screen { background: #123456; }", encoding="utf-8")
+        store = ThemeStore(user_themes_dir=tmp_path / "themes", user_overlay=link / "theme.tcss")
+
+        assert "#123456" in store.load("carbon")
+
     def test_invalid_utf8_overlay_is_rejected(self, tmp_path: Path) -> None:
         overlay = tmp_path / "theme.tcss"
         overlay.write_bytes(b"\xff\xfe")

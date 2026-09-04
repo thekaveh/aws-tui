@@ -204,8 +204,12 @@ def _read_regular_file(directory: Path, filename: str) -> str | None:
 
 
 def _read_regular_file_at(directory: Path, filename: str) -> str:
+    # No ``O_NOFOLLOW`` on the directory: the guard exists to stop the theme
+    # *file* being a symlink to somewhere else, and the caller passes the config
+    # home itself. Refusing a symlinked config directory rejects the ordinary
+    # dotfiles layout and made every theme, built-ins included, fail to load.
     directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    directory_flags |= getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+    directory_flags |= getattr(os, "O_DIRECTORY", 0)
     file_flags = (
         os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0) | os.O_NOFOLLOW
     )
@@ -228,7 +232,9 @@ def _read_regular_file_at(directory: Path, filename: str) -> str:
 def _read_regular_file_portable(directory: Path, filename: str) -> str:
     """Descriptor-identity fallback for platforms without ``dir_fd``."""
     candidate = directory / filename
-    directory_before = directory.stat(follow_symlinks=False)
+    # The directory is resolved through symlinks (see ``_read_regular_file_at``);
+    # only the leaf theme file must not be one.
+    directory_before = directory.stat()
     candidate_before = candidate.stat(follow_symlinks=False)
     if not stat.S_ISDIR(directory_before.st_mode) or not stat.S_ISREG(candidate_before.st_mode):
         raise _UnsafeThemeFile(filename)
@@ -236,7 +242,7 @@ def _read_regular_file_portable(directory: Path, filename: str) -> str:
     file_fd = os.open(candidate, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
     try:
         opened = os.fstat(file_fd)
-        directory_after = directory.stat(follow_symlinks=False)
+        directory_after = directory.stat()
         candidate_after = candidate.stat(follow_symlinks=False)
         identities = (
             _file_identity(directory_before) == _file_identity(directory_after),
