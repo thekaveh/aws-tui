@@ -2126,3 +2126,82 @@ async def test_list_jobs_page_forwards_the_continuation_token() -> None:
     assert [row.name for row in rows] == ["job-on-page-2"]
     assert token == "page-3"
     glue.get_jobs.assert_awaited_once_with(MaxResults=100, NextToken="page-2")
+
+
+async def test_list_job_runs_page_never_sends_an_empty_states_filter() -> None:
+    """An empty selection must omit `States`, even when the service supports it.
+
+    The `bool(states)` operand guards against sending `States: []`, which real
+    Glue rejects. The existing empty-filter test uses a stub WITHOUT the
+    capability in its service model, so the `_supports_request_parameter`
+    operand masked the mutation — `bool(states)` -> True survived. This stub
+    advertises the parameter, so only the emptiness check stands.
+    """
+    client, glue, _, _ = _client()
+    glue.meta = SimpleNamespace(
+        service_model=SimpleNamespace(
+            operation_model=lambda _name: SimpleNamespace(
+                input_shape=SimpleNamespace(
+                    members={
+                        "JobName": object(),
+                        "NextToken": object(),
+                        "MaxResults": object(),
+                        "States": object(),
+                    }
+                )
+            )
+        )
+    )
+    glue.get_job_runs.return_value = {"JobRuns": []}
+
+    await client.list_job_runs_page("daily-etl", states=())
+
+    glue.get_job_runs.assert_awaited_once_with(JobName="daily-etl", MaxResults=200)
+
+
+async def test_list_crawlers_page_without_a_state_filter_returns_every_row() -> None:
+    """`state=None` means unfiltered, not `state == None`.
+
+    Forcing the `is not None` check True filtered every row against `None`, so
+    the crawler list rendered empty whenever no state filter was selected — the
+    pane's default view. The existing tests always pass a state.
+    """
+    client, glue, _, _ = _client()
+    glue.get_crawlers.return_value = {
+        "Crawlers": [
+            _crawler("ready", state="READY"),
+            _crawler("running", state="RUNNING"),
+        ],
+    }
+
+    rows, token = await client.list_crawlers_page()
+
+    assert [row.name for row in rows] == ["ready", "running"], (
+        "the unfiltered crawler list dropped rows"
+    )
+    assert token is None
+
+
+def test_crawler_targets_include_every_target_family() -> None:
+    """Delta Lake targets were the one family with no coverage.
+
+    `CatalogTargets`, `IcebergTargets` and `HudiTargets` were all pinned;
+    dropping the `DeltaTables` extension survived the whole suite, so a
+    crawler's Delta Lake paths silently vanished from the detail pane.
+    """
+    from aws_tui.domain.glue import _crawler_targets
+
+    targets = _crawler_targets(
+        {
+            "S3Targets": [{"Path": "s3://a/b"}],
+            "DeltaTargets": [{"DeltaTables": ["s3://lake/delta1", "s3://lake/delta2"]}],
+            "IcebergTargets": [{"Paths": ["s3://lake/ice1"]}],
+            "HudiTargets": [{"Paths": ["s3://lake/hudi1"]}],
+        }
+    )
+
+    assert "s3://lake/delta1" in targets
+    assert "s3://lake/delta2" in targets
+    assert "s3://lake/ice1" in targets
+    assert "s3://lake/hudi1" in targets
+    assert "s3://a/b" in targets

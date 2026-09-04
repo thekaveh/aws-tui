@@ -1236,3 +1236,43 @@ async def test_runner_rejects_a_ref_mismatched_on_any_single_axis(axis: str) -> 
 
     assert client.result_calls == [], f"result rows were fetched for a foreign {axis}"
     assert client.stop_calls == ["query-1"], f"the foreign-{axis} execution was not stopped"
+
+
+@pytest.mark.asyncio
+async def test_polling_backs_off_exponentially_between_status_checks() -> None:
+    """`GetQueryExecution` must not be busy-polled.
+
+    Removing the `await self.pause(delay)` survived the whole suite because
+    every existing test injects `_no_sleep` and asserts on outcomes, never on
+    the delays themselves. Without the pause, a long-running query is polled
+    in a tight loop for its whole life — throttling risk and API cost. This
+    records the delays and pins the doubling-to-5s schedule.
+    """
+    delays: list[float] = []
+
+    async def recording_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    client = RunnerClient(
+        states=(
+            _detail(QueryState.QUEUED),
+            _detail(QueryState.RUNNING),
+            _detail(QueryState.RUNNING),
+            _detail(QueryState.RUNNING),
+            _detail(QueryState.RUNNING),
+            _detail(QueryState.RUNNING),
+            _detail(QueryState.SUCCEEDED),
+        ),
+        pages={None: ResultPage((COLUMN,), (("1",),), None)},
+    )
+    runner = AthenaQueryRunner(client, ReadOnlySqlPolicy(), sleep=recording_sleep)
+
+    await runner.run(
+        "SELECT snapshot_id FROM x LIMIT 100",
+        CONTEXT,
+        request_token="metadata-1",
+        max_rows=1,
+    )
+
+    assert delays, "the poll loop never paused: GetQueryExecution was busy-polled"
+    assert delays == [0.25, 0.5, 1.0, 2.0, 4.0, 5.0], f"backoff schedule changed: {delays}"

@@ -1829,3 +1829,89 @@ async def test_empty_first_result_page_is_an_empty_table_not_an_error() -> None:
 
     assert page.rows == ()
     assert page.columns == (ResultColumn("event_id", "varchar", "UNKNOWN"),)
+
+
+async def test_a_full_history_page_of_exactly_50_ids_is_accepted() -> None:
+    """The batch cap must be `>`, not `>=`: 50 ids IS a full page.
+
+    `list_query_executions_page` returns pages of exactly `_PAGE_SIZE` (50)
+    ids, and history hydration feeds each page straight into this batch call.
+    Flipping the comparison to `>=` rejected every full page with
+    "Athena history batches support at most 50 ids" — history stopped loading
+    for any workgroup with 50+ executions. No test hydrated a full page.
+    """
+    executions = []
+    for index in range(50):
+        execution = cast(dict[str, object], _query_execution("SUCCEEDED")["QueryExecution"])
+        execution = dict(execution)
+        execution["QueryExecutionId"] = f"q-{index}"
+        executions.append(execution)
+    client, boto, _ = _athena_client(
+        "batch_get_query_execution",
+        {"QueryExecutions": executions, "UnprocessedQueryExecutionIds": []},
+    )
+    ids = [f"q-{index}" for index in range(50)]
+
+    details = await client.get_query_executions(ids)
+
+    assert len(details) == 50
+    boto.batch_get_query_execution.assert_awaited_once_with(QueryExecutionIds=ids)
+
+
+async def test_a_history_batch_of_51_ids_is_still_rejected() -> None:
+    """Positive control for the cap itself."""
+    client, boto, _ = _athena_client()
+
+    with pytest.raises(ValidationError, match="at most 50"):
+        await client.get_query_executions([f"q-{index}" for index in range(51)])
+
+    boto.batch_get_query_execution.assert_not_awaited()
+
+
+async def test_an_unprocessed_batch_id_surfaces_its_actual_error() -> None:
+    """An AccessDenied on one execution must not become "malformed response".
+
+    `_unprocessed_query_execution_error` maps the per-id error code to the
+    typed taxonomy. Neutralising it let the generic
+    `ValidationError: malformed Athena response` replace an actionable
+    permission error — the user loses the one message that explains what to fix.
+    """
+    execution = cast(dict[str, object], _query_execution("SUCCEEDED")["QueryExecution"])
+    client, _boto, _session = _athena_client(
+        "batch_get_query_execution",
+        {
+            "QueryExecutions": [execution],
+            "UnprocessedQueryExecutionIds": [
+                {
+                    "QueryExecutionId": "q-denied",
+                    "ErrorCode": "AccessDeniedException",
+                    "ErrorMessage": "not authorized to view q-denied",
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(PermissionDeniedError):
+        await client.get_query_executions(["q-1", "q-denied"])
+
+
+async def test_a_cancelled_stop_request_propagates_as_cancellation() -> None:
+    """A cancelled stop must not read as a successful stop.
+
+    `stop_query`'s `except BaseException` re-raise exists so a CancelledError
+    from the SDK call propagates instead of falling through to
+    `_retire_app_started_query` — which would tell the UI the query was
+    cancelled when the stop request itself never completed. Replacing the
+    re-raise with `pass` survived the whole suite.
+    """
+    import asyncio
+
+    client, boto, _session = _athena_client(
+        "start_query_execution",
+        {"QueryExecutionId": "q-started"},
+    )
+    boto.stop_query_execution.side_effect = asyncio.CancelledError()
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-123")
+
+    with pytest.raises(asyncio.CancelledError):
+        await client.stop_query("q-started")
