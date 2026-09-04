@@ -134,10 +134,30 @@ def test_is_safe_to_continue_for_known_actions() -> None:
 
 
 def test_is_safe_to_continue_for_writes_and_unknowns() -> None:
+    """The excluded ids must be real ones, or this proves only that
+    unknown strings are unsafe.
+
+    ``pane.delete_marked``, ``dualpane.copy`` and ``pane.rename`` were asserted
+    here and are recorded nowhere in the app — exactly the parallel-vocabulary
+    mistake the sibling test below exists to catch. Adding any real write
+    action to ``SAFE_CONTINUE_ACTIONS`` left this file green.
+    """
     assert CrashReport.is_safe_to_continue(None) is False
-    assert CrashReport.is_safe_to_continue("pane.delete_marked") is False
-    assert CrashReport.is_safe_to_continue("dualpane.copy") is False
-    assert CrashReport.is_safe_to_continue("pane.rename") is False
+    assert CrashReport.is_safe_to_continue("not.an.action") is False
+
+    # The ids ``crash_vm`` documents as deliberately excluded, each verified
+    # against ``AwsTuiApp.record_action`` by the sibling vocabulary test.
+    for action in (
+        "pane.copy",
+        "pane.delete",
+        "athena.execute",
+        "athena.cancel",
+        "emr.clone",
+        "app.open_settings",
+        "app.quit",
+    ):
+        assert CrashReport.is_safe_to_continue(action) is False, action
+        assert action not in SAFE_CONTINUE_ACTIONS, action
 
 
 def test_safe_continue_actions_are_ids_the_app_actually_records() -> None:

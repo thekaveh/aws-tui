@@ -5,8 +5,15 @@ writes to any other (or the same) provider. The two roles are
 symmetric: the same code path runs for local↔local, local↔s3, s3↔s3,
 and any future pair.
 
-For directories, the copy is recursive. Conflict resolution is
-configurable per call:
+For directories, the copy is recursive, but ONLY when the destination
+provider can publish a directory transactionally. ``_require_directory_transaction``
+demands :class:`AtomicNoReplacePublisher`, :class:`AtomicDirectoryPublisher`
+and :class:`ExclusiveDirectoryClaimer`; :class:`LocalFS` implements all three
+and :class:`S3FS` implements none. Copying a directory TO an S3 destination
+therefore raises :class:`ProviderError` before any bytes move, while the
+S3-to-local direction works. See ``docs/services/s3.md`` §1.2.
+
+Conflict resolution is configurable per call:
 
 - ``ERROR``: raise :class:`ConflictError` if a destination file exists.
 - ``OVERWRITE``: replace whatever is at the destination.

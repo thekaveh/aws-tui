@@ -111,7 +111,10 @@ async def test_confirm_modal_renders_request() -> None:
 
 @pytest.mark.asyncio
 async def test_help_modal_renders_active_keymap() -> None:
-    keymap = KeymapStore(overlay={"app.help": "h", "app.command_palette": "p"})
+    # f9/f10 rather than single letters: "h" and "p" occur incidentally in
+    # "this", "open" and "pane", so the old needles were satisfied by the
+    # surrounding prose and the injected keymap was never actually read.
+    keymap = KeymapStore(overlay={"app.help": "f9", "app.command_palette": "f10"})
 
     class _App(App[None]):
         def compose(self) -> ComposeResult:
@@ -123,16 +126,19 @@ async def test_help_modal_renders_active_keymap() -> None:
     app = _App()
     async with app.run_test(size=(100, 36)) as pilot:
         await pilot.pause()
-        rendered = "\n".join(str(row.render()) for row in app.screen.query(".help-row"))
+        rows = [str(row.render()) for row in app.screen.query(".help-row")]
+        rendered = "\n".join(rows)
 
     assert "open Settings" in rendered
     assert "delete selected entry" in rendered
     assert "cycle the focused pane source" in rendered
     assert "extend selection" in rendered
-    assert "h" in rendered
-    assert "open this help overlay" in rendered
-    assert "p" in rendered
-    assert "open the command palette" in rendered
+    # Assert the configured key lands on the row for ITS action, not merely
+    # somewhere in the overlay.
+    help_row = next(row for row in rows if "open this help overlay" in row)
+    palette_row = next(row for row in rows if "open the command palette" in row)
+    assert "f9" in help_row
+    assert "f10" in palette_row
     assert "?  or  :" not in rendered
 
 

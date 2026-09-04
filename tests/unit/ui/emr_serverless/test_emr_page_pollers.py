@@ -94,13 +94,17 @@ def test_poll_runs_decay_counter_is_independent_per_widget() -> None:
     the instance, not the class."""
     page_a, _vm_a, _fake_a = _build_page()
     page_b, _vm_b, _fake_b = _build_page()
-    # Advance A through three ticks; B stays at 0.
-    for _ in range(3):
+    # Advance A to 5. The counts must be chosen so the two hypotheses DIVERGE:
+    # this test used to advance A by 3 and then compare a 4th A-call against a
+    # 1st B-call, which is True under either hypothesis (4 and 1 are both
+    # non-zero mod 6), so a genuinely class-shared counter still passed.
+    for _ in range(5):
         page_a._poll_runs_decay()
-    # A's next call is the 4th → still skipping.
-    assert page_a._poll_runs_decay() is True
-    # B's first call is the 1st → also skipping but counter is its own.
+    # B's FIRST call: its own counter -> 1 -> skip. A shared counter would be
+    # at 6 % 6 == 0 -> refresh, so this assertion separates the two.
     assert page_b._poll_runs_decay() is True
+    # And A's next call is its 6th -> 0 -> refresh, proving A really was at 5.
+    assert page_a._poll_runs_decay() is False
 
 
 # ── _tick_runs (skip when no active runs AND decay says skip) ────────────────

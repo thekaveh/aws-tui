@@ -299,6 +299,54 @@ async def test_rename_file_rejects_existing_virtual_directory(s3_endpoint: str) 
     assert await _drain(await fs.read_stream(PathRef.from_posix("/source"))) == b"source"
 
 
+async def test_delete_refuses_a_name_that_is_both_an_object_and_a_prefix(
+    s3_endpoint: str,
+) -> None:
+    """S3 allows ``logs`` and ``logs/`` to coexist; a delete cannot tell them apart.
+
+    ``list`` surfaces both as separate rows with the same name, and the pane
+    renders them as two independently markable entries. ``PathRef`` carries no
+    kind, so the head_object probe in ``delete`` always resolved to the OBJECT:
+    marking the folder and pressing delete destroyed the same-named file and
+    left the folder standing. Wrong-target data loss, so refuse instead.
+    """
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "logs", b"twelve bytes")
+    await _put(s3_endpoint, "mybkt", "logs/app.log", b"inside the folder")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    listed = await fs.list(PathRef())
+    assert sorted((entry.kind, entry.name) for entry in listed) == [
+        (EntryKind.DIRECTORY, "logs"),
+        (EntryKind.FILE, "logs"),
+    ], "both rows must still be listed; the ambiguity is real, not hidden"
+
+    with pytest.raises(ProviderError, match="ambiguous S3 name"):
+        await fs.delete(PathRef.from_posix("/logs"))
+
+    # Nothing was removed.
+    assert await _drain(await fs.read_stream(PathRef.from_posix("/logs"))) == b"twelve bytes"
+    assert (
+        await _drain(await fs.read_stream(PathRef.from_posix("/logs/app.log")))
+        == b"inside the folder"
+    )
+
+
+async def test_delete_still_removes_unambiguous_files_and_directories(
+    s3_endpoint: str,
+) -> None:
+    """The ambiguity guard must not cost the ordinary delete paths."""
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "plain.txt", b"unambiguous")
+    await _put(s3_endpoint, "mybkt", "folder/child", b"in folder")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    await fs.delete(PathRef.from_posix("/plain.txt"))
+    await fs.delete(PathRef.from_posix("/folder"))
+
+    assert list(await fs.list(PathRef())) == []
+
+
 # ---------------------------------------------------------------------------
 # Error code mapping
 # ---------------------------------------------------------------------------

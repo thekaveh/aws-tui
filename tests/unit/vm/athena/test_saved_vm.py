@@ -315,8 +315,12 @@ async def test_saved_load_more_retry_clears_stale_error(
     await getattr(vm, loader_name)()
 
     assert getattr(vm, state_attribute) is PaneState.ERROR
-    assert (
-        getattr(vm, text_attribute) == "Athena saved query request failed"
+    # The parentheses matter: without them this parses as
+    # ``assert (x == "saved…" if kind == "named" else "prepared…")`` -- an
+    # IfExp whose else-branch is a truthy string literal, so the prepared
+    # parametrization asserted nothing at all.
+    assert getattr(vm, text_attribute) == (
+        "Athena saved query request failed"
         if kind == "named"
         else "Athena prepared statement request failed"
     )

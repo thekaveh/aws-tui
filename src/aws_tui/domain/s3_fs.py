@@ -432,6 +432,12 @@ class S3FS:
         if parsed.etag is None:
             raise ProviderError(f"S3 move source has no ETag: {path.as_posix()}")
 
+    @staticmethod
+    async def _prefix_exists(s3: Any, bucket: str, key: str) -> bool:
+        """Return True if any object lives under ``key/``."""
+        probe = await s3.list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)
+        return bool(probe.get("Contents") or probe.get("CommonPrefixes"))
+
     async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
         if path.is_root:
             raise ProviderError("cannot delete the S3 filesystem provider root")
@@ -461,6 +467,20 @@ class S3FS:
                         raise _map_client_error(exc, key) from exc
 
                 if file_exists:
+                    # S3 permits an object ``k`` and a prefix ``k/`` to coexist,
+                    # and ``list`` surfaces BOTH as separate rows with the same
+                    # name. ``PathRef`` carries no kind, so the head_object
+                    # probe above cannot tell which row the user marked and
+                    # always resolves to the object: marking the FOLDER and
+                    # deleting destroyed the same-named FILE and left the folder
+                    # standing. Refuse rather than guess, as this method already
+                    # does for bucket deletion.
+                    if await self._prefix_exists(s3, bucket, key):
+                        raise ProviderError(
+                            f"ambiguous S3 name: both an object {key!r} and a "
+                            f"prefix {key + '/'!r} exist, and a delete cannot tell "
+                            "them apart — remove one via the AWS console / CLI"
+                        )
                     await s3.delete_object(Bucket=bucket, Key=key)
                     return
 
