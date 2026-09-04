@@ -43,6 +43,22 @@ class _LogFileChip(Static):
         self.key = key
 
 
+def _match_label(vm: JobRunLogsVM) -> str:
+    """Describe matches, distinguishing the display cap from the byte cap.
+
+    The line cap keeps only the most recent ``_MAX_MATCHED_LINES`` matches. It
+    is not the same condition as ``LogsState.TRUNCATED`` (the 100 MB byte cap),
+    so reporting the retained length as the match count told the user their
+    filter matched far fewer lines than it did — and for an error-first filter
+    the dropped head is the originating stack trace.
+    """
+    total = vm.matched_count
+    shown = len(vm.lines)
+    if vm.matches_capped:
+        return f"showing last {shown} of {total} matches"
+    return f"{shown} matches"
+
+
 class JobRunLogsPane(Widget, can_focus=True):
     DEFAULT_CSS: ClassVar[str] = """
     JobRunLogsPane {
@@ -336,7 +352,7 @@ class JobRunLogsPane(Widget, can_focus=True):
             file_label = _format_log_file_label(current) if current else "?"
             text = (
                 f"loading {file_label}: {self._vm.bytes_read} bytes, "
-                f"{self._vm.lines_scanned} lines scanned, {len(self._vm.lines)} matches"
+                f"{self._vm.lines_scanned} lines scanned, {_match_label(self._vm)}"
             )
             self._update_body(body, text, classes="logs-placeholder")
             return
@@ -393,21 +409,16 @@ class JobRunLogsPane(Widget, can_focus=True):
             return
         state = self._vm.state
         if state is LogsState.READY:
-            text = (
-                f"READY · {self._vm.bytes_read / 1024 / 1024:.1f} MB · "
-                f"{len(self._vm.lines)} matches"
-            )
+            text = f"READY · {self._vm.bytes_read / 1024 / 1024:.1f} MB · {_match_label(self._vm)}"
             status.update(text)
         elif state is LogsState.TRUNCATED:
             text = (
-                f"TRUNCATED · {self._vm.bytes_read / 1024 / 1024:.1f} MB · "
-                f"{len(self._vm.lines)} matches"
+                f"TRUNCATED · {self._vm.bytes_read / 1024 / 1024:.1f} MB · {_match_label(self._vm)}"
             )
             status.update(text)
         elif state is LogsState.LOADING:
             text = (
-                f"LOADING · {self._vm.bytes_read / 1024 / 1024:.1f} MB · "
-                f"{len(self._vm.lines)} matches"
+                f"LOADING · {self._vm.bytes_read / 1024 / 1024:.1f} MB · {_match_label(self._vm)}"
             )
             status.update(text)
         else:

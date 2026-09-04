@@ -639,6 +639,32 @@ async def test_load_lines_capped_at_max_matched_lines(monkeypatch: pytest.Monkey
     assert len(vm.lines) == _MAX_MATCHED_LINES
     # The tail is kept — the last line of the second chunk must be present.
     assert vm.lines[-1] == last_line
+    # The retained count is NOT the answer to the user's filter. Reporting
+    # len(lines) as "matches" understated it by every dropped line, and for an
+    # error-first filter the dropped head is the originating stack trace.
+    assert vm.matched_count == over + 1
+    assert vm.matches_capped is True
+    vm.dispose()
+
+
+async def test_matched_count_is_not_capped_when_under_the_display_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    async def _stream(**kwargs: object):  # type: ignore[return]
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream, raising=False)
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+
+    assert vm.matched_count == len(vm.lines)
+    assert vm.matches_capped is False
     vm.dispose()
 
 
