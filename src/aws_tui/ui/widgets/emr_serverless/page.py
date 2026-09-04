@@ -665,13 +665,6 @@ class EmrServerlessPage(Widget):
         """Project an app-coordinated focus slot onto this page."""
         self._project_focus_slot(slot)
 
-    def commit_open_application_picker(self) -> bool:
-        """Commit the highlighted application when its selector is open."""
-        if self._picker is None or not self._picker.has_class("-open"):
-            return False
-        self._picker.action_commit()
-        return True
-
     def _sync_focused_widget(self, focused: Widget) -> None:
         if self._focus_coordinator is None:
             return

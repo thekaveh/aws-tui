@@ -63,14 +63,6 @@ class DualPane(HubSubscriberMixin, Widget):
     def vm(self) -> DualPaneVM:
         return self._vm
 
-    @property
-    def left_widget(self) -> Pane | None:
-        return self._left_widget
-
-    @property
-    def right_widget(self) -> Pane | None:
-        return self._right_widget
-
     def compose(self) -> ComposeResult:
         self._left_widget = Pane(self._vm.left, hub=self._hub, id="pane-left")
         self._right_widget = Pane(self._vm.right, hub=self._hub, id="pane-right")
@@ -136,19 +128,6 @@ class DualPane(HubSubscriberMixin, Widget):
             return
         self._left_widget.set_focused(slot is FocusSlot.S3_LEFT)
         self._right_widget.set_focused(slot is FocusSlot.S3_RIGHT)
-
-    def focus_focused_pane(self) -> None:
-        """Move Textual focus to whichever pane the VM marks active.
-
-        Used by ``AwsTuiApp.action_switch_focus`` when Tab cycles
-        back from the NavMenu into the dual-pane area: the focus
-        should land on the VM-tracked active pane so subsequent
-        keystrokes go where the user expects.
-        """
-        focused = self._vm.focused
-        target = self._left_widget if focused is FocusedPane.LEFT else self._right_widget
-        if target is not None:
-            target.focus()
 
     def focus_left_pane(self) -> None:
         """Make the LEFT pane the visually-active pane and route arrow

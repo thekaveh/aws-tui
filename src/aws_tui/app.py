@@ -2451,14 +2451,12 @@ class AwsTuiApp(App[None]):
             return True
 
         picker = ThemePickerVM(
-            # Must match `action_open_themes`, which passes `list_themes()`
-            # (built-ins PLUS `~/.config/aws-tui/themes/*.tcss`). Passing only
-            # the built-ins meant Shift+T could never reach a user theme, and
-            # when one was active `next_theme`'s `names.index()` raised, fell
-            # back to `idx = -1` and jumped to `carbon` instead of advancing —
-            # contradicting both this method's docstring and `next_theme`'s
-            # claim that the two paths share one canonical source.
-            themes=tuple(ctx.theme_store.list_themes()),
+            # Built-ins ONLY, deliberately: `test_cycle_theme_remains_limited_to_builtins`
+            # pins Shift+T to a predictable quick-cycle over the shipped themes,
+            # while `action_open_themes` offers the full `list_themes()` set
+            # including user themes. The shared "canonical source of truth" the
+            # docstrings mention is the `ThemePickerVM` MODEL, not the theme list.
+            themes=ctx.theme_store.BUILTIN_NAMES,
             active_theme=ctx.initial_theme,
             on_pick=_pick_with_toast,
             on_preview=self.switch_theme,

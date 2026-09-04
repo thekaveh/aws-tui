@@ -201,10 +201,6 @@ class S3FS:
         sub = PathRef(path.segments[1:])
         return bucket, self._key_for(sub)
 
-    @staticmethod
-    def _strip(key: str, prefix: str) -> str:
-        return key[len(prefix) :] if prefix and key.startswith(prefix) else key
-
     # ------------------------------------------------------------------
     # list / stat
     # ------------------------------------------------------------------
