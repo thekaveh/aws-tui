@@ -656,3 +656,32 @@ def test_readme_and_published_index_share_the_product_summary() -> None:
 
     assert summary in _read("README.md")
     assert summary in _read("docs/index.md")
+
+
+def test_every_test_directory_holding_modules_is_an_importable_package() -> None:
+    """A test directory without ``__init__.py`` gets its modules imported twice.
+
+    ``tests/unit/vm/athena/test_page_vm.py`` is imported by package path from
+    four other tiers. While that directory lacked a marker, one pytest session
+    held both ``test_page_vm`` and ``tests.unit.vm.athena.test_page_vm`` — the
+    module body ran twice and its ``PageClient`` was two unrelated classes, so a
+    cross-boundary ``isinstance`` check was silently false. The bug is invisible
+    in test results, which is why it needs a structural guard rather than a
+    behavioural one.
+    """
+    tests_root = REPO_ROOT / "tests"
+    missing = sorted(
+        str(directory.relative_to(REPO_ROOT))
+        for directory in tests_root.rglob("*")
+        if directory.is_dir()
+        and directory.name != "__pycache__"
+        and "__pycache__" not in directory.parts
+        and "__snapshots__" not in directory.parts
+        and any(directory.glob("test_*.py"))
+        and not (directory / "__init__.py").exists()
+    )
+
+    assert missing == [], (
+        "test directories containing modules but no __init__.py; pytest will "
+        f"import their modules twice under two names: {missing}"
+    )
