@@ -114,7 +114,7 @@ class _PrivateRotatingFileHandler(RotatingFileHandler):
 class LogSink:
     """JSON-lines log writer with rotation.
 
-    Default location: ``~/.cache/aws-tui/log/aws-tui.log`` rotated at 5 MiB
+    Default location: ``<cache-dir>/log/aws-tui.log`` rotated at 5 MiB
     across 5 backups. The directory is created on init if missing.
     """
 

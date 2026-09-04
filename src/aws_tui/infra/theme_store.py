@@ -7,9 +7,9 @@ Active theme content is the concatenation of four layers (later wins):
    :attr:`ThemeStore.BUILTIN_NAMES`.
 2. The built-in operational pane hierarchy, appended in the same source so
    it can use the built-in theme tokens.
-3. A user-defined ``~/.config/aws-tui/themes/<name>.tcss`` that
+3. A user-defined ``<config-dir>/themes/<name>.tcss`` that
    completely replaces the built-in if present.
-4. A user overlay ``~/.config/aws-tui/theme.tcss`` appended on top of
+4. A user overlay ``<config-dir>/theme.tcss`` appended on top of
    whichever theme is active.
 """
 

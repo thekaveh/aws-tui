@@ -278,6 +278,17 @@ class TestLoad:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """The validated descriptor is read; the leaf is never opened twice.
+
+        This test used to inject its fault by monkeypatching ``Path.read_text``.
+        Neither reader touches it — both go through ``os.open`` +
+        ``os.fdopen`` — so the hook never fired, the symlink swap it set up
+        never happened, and the assertion held no matter what the code did. It
+        would have passed against an implementation that re-opened by path,
+        which is the single thing its name promises to catch.
+        """
+        if os.open not in os.supports_dir_fd:
+            pytest.skip("dir_fd is not available on this platform")
         user_themes = tmp_path / "themes"
         user_themes.mkdir()
         theme = user_themes / "race.tcss"
@@ -285,17 +296,33 @@ class TestLoad:
         outside = tmp_path / "outside.tcss"
         outside.write_text("/* outside */", encoding="utf-8")
         store = ThemeStore(user_themes_dir=user_themes)
-        original_read_text = Path.read_text
 
-        def replace_before_reopen(path: Path, *args: object, **kwargs: object) -> str:
-            if path == theme.resolve():
+        leaf_opens: list[object] = []
+        original_open = os.open
+
+        def counting_open(
+            path: os.PathLike[str] | str,
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if not str(path).endswith("race.tcss"):
+                return original_open(path, flags, mode, dir_fd=dir_fd)
+            leaf_opens.append(path)
+            descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+            # Swap the path out AFTER the first open succeeds. A second open
+            # would now land on the symlink; the descriptor already validated
+            # must still be the one that supplies the content.
+            if len(leaf_opens) == 1:
                 theme.unlink()
                 theme.symlink_to(outside)
-            return original_read_text(path, *args, **kwargs)
+            return descriptor
 
-        monkeypatch.setattr(Path, "read_text", replace_before_reopen)
+        monkeypatch.setattr(os, "open", counting_open)
 
         assert store.load("race") == "/* original */"
+        assert len(leaf_opens) == 1, f"theme leaf opened {len(leaf_opens)} times"
 
     def test_regular_theme_read_uses_validated_descriptor(
         self,

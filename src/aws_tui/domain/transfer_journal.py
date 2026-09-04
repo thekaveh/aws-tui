@@ -1,7 +1,7 @@
 """Crash-diagnostics journal for long-running transfers.
 
 Each transfer owns one append-only JSONL file at
-``~/.cache/aws-tui/transfers/<id>.jsonl``. The journal records:
+``<cache-dir>/transfers/<id>.jsonl``. The journal records:
 
 - a ``begin`` line with source/destination URIs, total size, and an
   optional S3 multipart ``upload_id`` for future explicit-MPU flows,

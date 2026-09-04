@@ -69,7 +69,7 @@ def _short_traceback(tb_lines: list[str], *, max_lines: int = 5) -> str:
 
 
 class CrashDump:
-    """Writer for ``~/.cache/aws-tui/crash/<ts>.txt`` dumps.
+    """Writer for ``<cache-dir>/crash/<ts>.txt`` dumps.
 
     The class is a thin formatter; it exists as a class (rather than a
     bare function) so tests can inject the base directory and so the

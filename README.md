@@ -110,7 +110,7 @@ workflows, which are unreleased.
   SSO cache reads only; no AWS network call. Non-SSO profiles go straight to
   live boto credential-chain validation.
   Honors `$AWS_DEFAULT_PROFILE` and then `$AWS_PROFILE` between
-  `[defaults].connection` and the first-auto fallback so SSO setups where
+  `[defaults].connection` and the first-connection fallback so SSO setups where
   `[default]` has no creds still pick the right profile.
 - **In-flight transfer journal.** Active transfers write durable `begin`
   records under `<cache-dir>/transfers/<id>.jsonl`; successful, skipped,
@@ -237,7 +237,9 @@ If `aws s3 ls` works on your shell but `aws-tui` shows
 `[default]` in `~/.aws/config` has no creds. Export `$AWS_DEFAULT_PROFILE`
 (or `$AWS_PROFILE`) pointing at the working profile and relaunch. The resolver
 uses `[defaults].connection`, then `AWS_DEFAULT_PROFILE`, then `AWS_PROFILE`,
-then the first auto-discovered profile.
+then the first connection in resolver order — which lists every explicit
+`[connections.*]` entry, s3-compatible ones included, ahead of any
+auto-discovered AWS profile.
 
 ### 1.3.1. First-time launch
 
@@ -332,7 +334,7 @@ preserved when present.
 | Variable | Default | Effect |
 |---|---|---|
 | `AWS_DEFAULT_PROFILE` | unset | Preferred AWS profile at launch when `[defaults].connection` is unset. Takes precedence over `AWS_PROFILE`. |
-| `AWS_PROFILE` | unset | AWS profile fallback after `[defaults].connection` and `AWS_DEFAULT_PROFILE`, before the first auto-discovered profile. |
+| `AWS_PROFILE` | unset | AWS profile fallback after `[defaults].connection` and `AWS_DEFAULT_PROFILE`, before the first connection in resolver order (explicit `[connections.*]` entries precede auto-discovered profiles). |
 | `AWS_DEFAULT_REGION` | unset | Region fallback after an explicit connection region and the selected AWS profile's configured region, before `us-east-1`. |
 | `AWS_CONFIG_FILE` | `~/.aws/config` | Overrides the shared AWS config path used for profile discovery. `~` and environment variables in the value are expanded. |
 | `AWS_SHARED_CREDENTIALS_FILE` | `~/.aws/credentials` | Overrides the shared AWS credentials path used for profile discovery. `~` and environment variables in the value are expanded. |
