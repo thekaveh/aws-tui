@@ -62,7 +62,15 @@ class _JsonLineFormatter(logging.Formatter):
                 payload.update(redact_mapping(stdlib_extra))
         if record.exc_info is not None:
             payload["traceback"] = redact_text(self.formatException(record.exc_info))
-        return json.dumps(payload, default=str, separators=(",", ":"))
+        # Redact the fallback stringification too. `redact_mapping` returns any
+        # non-str/Mapping/Sequence value untouched, and `default=str` then
+        # stringifies it AFTER redaction — so a dataclass or object whose repr
+        # carries a credential reached the durable log verbatim.
+        return json.dumps(
+            payload,
+            default=lambda value: redact_text(str(value)),
+            separators=(",", ":"),
+        )
 
 
 class _PrivateRotatingFileHandler(RotatingFileHandler):

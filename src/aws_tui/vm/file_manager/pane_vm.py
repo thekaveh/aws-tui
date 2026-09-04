@@ -468,6 +468,13 @@ class PaneVM:
         # count comes from here too, so it now matches what is on screen.
         # Marks on hidden rows are retained in state and become active again
         # when the filter is cleared.
+        if self._state is PaneState.LOADING:
+            # `_reload` enters LOADING WITHOUT clearing `_entries` (every error
+            # branch does clear), and the view renders only the placeholder — no
+            # rows at all. The stale marks therefore drove copy/move/delete and
+            # the footer count over a listing the user could not see. Nothing is
+            # actionable mid-reload, so report nothing.
+            return ()
         snapshot = self.filtered_entries
         return tuple(e for e in snapshot if e.is_marked and not e.is_parent_link)
 

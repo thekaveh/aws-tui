@@ -643,3 +643,31 @@ async def test_rename_rejects_names_that_would_become_paths(name: str) -> None:
 
     with pytest.raises(ProviderError, match="single path segment"):
         await pane.make_directory(name)
+
+
+@pytest.mark.asyncio
+async def test_marks_are_inert_while_the_pane_is_loading() -> None:
+    """No destructive operation may act on a listing being replaced.
+
+    ``_reload`` enters ``LOADING`` without clearing ``_entries`` — every error
+    branch does clear — and the view renders only the placeholder, so zero rows
+    are on screen. The stale marks still drove the copy/move/delete predicates,
+    the delete targets and the footer count, so on a slow listing ``d`` acted on
+    an invisible selection.
+    """
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    for index in range(len(pane.entries)):
+        pane.mark_at(index, marked=True)
+    assert pane.marked_entries
+
+    pane._set_state(PaneState.LOADING)
+
+    assert pane.marked_entries == ()
+    assert pane.viewmodel.selection_count == 0
+
+    pane._set_state(PaneState.IDLE)
+
+    # The marks themselves are untouched — they simply do not participate
+    # while the listing is in flight.
+    assert len(pane.marked_entries) == len(pane.entries)

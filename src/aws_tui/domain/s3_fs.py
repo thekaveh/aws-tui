@@ -78,7 +78,14 @@ _DEFAULT_CHUNK_SIZE: int = 8 * 1024 * 1024
 # Multipart bounds from the public S3 API.
 _MAX_MULTIPART_PARTS: int = 10_000
 _MAX_MULTIPART_PART_SIZE: int = 5 * 1024 * 1024 * 1024
-_MAX_OBJECT_SIZE: int = _MAX_MULTIPART_PARTS * _MAX_MULTIPART_PART_SIZE
+# S3's documented per-object ceiling, NOT the multipart arithmetic maximum.
+# `_MAX_MULTIPART_PARTS * _MAX_MULTIPART_PART_SIZE` is 48.8 TiB — what the part
+# limits happen to allow — so the guard admitted objects roughly 10x larger than
+# S3 accepts. An oversized upload then streamed every byte and failed at
+# CompleteMultipartUpload with EntityTooLarge. AWS states the cap as "5 TB";
+# 5 TiB is the conventional reading and is the more permissive of the two, so it
+# cannot reject an upload S3 would have taken.
+_MAX_OBJECT_SIZE: int = 5 * 1024**4
 _MAX_COPY_OBJECT_SIZE: int = 5 * 1024 * 1024 * 1024
 # S3 batch-delete limit.
 _DELETE_BATCH_SIZE: int = 1000
@@ -1179,7 +1186,7 @@ def _multipart_part_size(total_size: int | None) -> int:
     if total_size < 0:
         raise ProviderError("S3 upload total_size cannot be negative")
     if total_size > _MAX_OBJECT_SIZE:
-        raise ProviderError("S3 objects cannot exceed 50 TB (48.8 TiB)")
+        raise ProviderError("S3 objects cannot exceed 5 TiB")
     required = (total_size + _MAX_MULTIPART_PARTS - 1) // _MAX_MULTIPART_PARTS
     mebibyte = 1024 * 1024
     rounded_required = ((required + mebibyte - 1) // mebibyte) * mebibyte
