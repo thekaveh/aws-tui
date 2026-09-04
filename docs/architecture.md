@@ -231,13 +231,13 @@ subscriptions are disposed on unmount, and VM-owned subscriptions are disposed
 with the VM lifecycle.
 
 ## 1.5. Testing pyramid
-| Tier | Count | What it proves |
+| Tier | How to count | What it proves |
 |---|---|---|
-| Unit | Recount with `uv run pytest tests/unit --collect-only -q | tail -1` | VM, domain, infra behavior; isolated local I/O only, with no external services |
-| Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards that reject blank-but-valid output |
-| Integration (in-process) | Recount with `uv run pytest tests/integration --collect-only -q | tail -1` | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
-| E2E | Recount with `uv run pytest tests/e2e --collect-only -q | tail -1` | Pilot-driven user journeys |
-| Integration (S3-compatible) | Recount with `uv run pytest -m integration --collect-only -q | tail -1` | Adobe S3Mock via testcontainers (opt-in, `-m integration`) |
+| Unit | Recount with `uv run pytest tests/unit --collect-only -q \| tail -1` | VM, domain, infra behavior; isolated local I/O only, with no external services |
+| Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' \| wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards that reject blank-but-valid output |
+| Integration (in-process) | Recount with `uv run pytest tests/integration --collect-only -q \| tail -1` | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
+| E2E | Recount with `uv run pytest tests/e2e --collect-only -q \| tail -1` | Pilot-driven user journeys |
+| Integration (S3-compatible) | Recount with `uv run pytest -m integration --collect-only -q \| tail -1` | Adobe S3Mock via testcontainers (opt-in, `-m integration`) |
 
 The default tier total changes as coverage grows. Recount with
 `uv run pytest --collect-only -q | tail -1`; recount snapshot goldens
