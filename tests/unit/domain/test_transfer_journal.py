@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 from pathlib import Path
 
@@ -243,3 +244,29 @@ def test_domain_transfer_journal_does_not_import_infra_layer() -> None:
     source = Path("src/aws_tui/domain/transfer_journal.py").read_text(encoding="utf-8")
     assert "from aws_tui.infra" not in source
     assert "import aws_tui.infra" not in source
+
+
+def test_find_unfinished_skips_an_unreadable_journal(tmp_path: Path) -> None:
+    """An unreadable journal must not abort the whole scan.
+
+    `_iter_jsonl` opens each file lazily during replay, so a journal removed by
+    a second instance between `glob()` and the read — or one failing with
+    EACCES/EIO — raised out of the loop. That contradicts the handler's own
+    documented contract of skipping a bad journal and letting the caller decide.
+    """
+    journal = TransferJournal(base_dir=tmp_path)
+    good = journal.begin(
+        source_uri="s3://bucket/object",
+        destination_uri="file:///tmp/object",
+        bytes_total=1,
+    )
+    unreadable = tmp_path / f"{good[:-4]}beef.jsonl"
+    shutil.copy(tmp_path / f"{good}.jsonl", unreadable)
+    unreadable.chmod(0o000)
+
+    try:
+        entries = journal.find_unfinished()
+    finally:
+        unreadable.chmod(0o600)
+
+    assert [entry.transfer_id for entry in entries] == [good]

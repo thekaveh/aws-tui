@@ -156,9 +156,21 @@ class TransferJournal:
         for path in sorted(self._dir.glob("*.jsonl")):
             try:
                 entry = self._replay(path)
-            except (_JournalReplayError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-                # Corrupt or malformed journal — skip and let the caller
-                # decide whether to purge it manually.
+            except (
+                _JournalReplayError,
+                json.JSONDecodeError,
+                KeyError,
+                TypeError,
+                ValueError,
+                OSError,
+            ):
+                # Corrupt, malformed or UNREADABLE journal — skip and let the
+                # caller decide whether to purge it manually. `_iter_jsonl`
+                # opens the file lazily during replay, so a journal removed by
+                # a second instance between `glob()` and the read, or one that
+                # fails with EACCES/EIO, raised out of this loop and aborted
+                # the whole scan — the opposite of the skip-and-continue
+                # contract this handler documents.
                 continue
             if entry is None or entry.finished or entry.aborted:
                 continue
