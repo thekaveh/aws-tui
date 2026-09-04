@@ -149,6 +149,19 @@ _PLACEHOLDER_FOR_STATE: dict[PaneState, tuple[str, str]] = {
 _COLUMN_HEADER_TEXT: str = f"   {'NAME':<40} {'SIZE':>12}  {'MODIFIED':<18}"
 
 
+def _require_single_segment(name: str) -> None:
+    """Reject a name that would silently become a path.
+
+    ``PathRef.join`` splits on ``/`` by design, so a rename to
+    ``other/moved.txt`` relocates the entry into another directory and the pane
+    reloads showing it as vanished — a move the user never asked for. ``..`` is
+    already refused deeper down by the providers, but rejecting it here gives a
+    clear message instead of a provider error.
+    """
+    if name in {".", ".."} or any(character in name for character in ("/", "\\")):
+        raise ProviderError(f"name must be a single path segment: {name!r}")
+
+
 def _summary_text(*, count: int, marked: int, total_bytes: int, marked_bytes: int) -> str:
     """Build the canonical summary line.
 
@@ -448,7 +461,14 @@ class PaneVM:
         # ".." today, but a future input adapter could regress that
         # invariant; an unfiltered ".." would translate into a
         # meaningless copy/move/delete target downstream.
-        snapshot = tuple(self._entries)
+        # Derive from the FILTERED set, not every loaded entry. A mark on a row
+        # the active filter hides still lives in ``_entries``, so copy/move/
+        # delete acted on entries the pane was not displaying: filter to one
+        # name, press delete, and rows you cannot see are destroyed. The footer
+        # count comes from here too, so it now matches what is on screen.
+        # Marks on hidden rows are retained in state and become active again
+        # when the filter is cleared.
+        snapshot = self.filtered_entries
         return tuple(e for e in snapshot if e.is_marked and not e.is_parent_link)
 
     @property
@@ -790,6 +810,7 @@ class PaneVM:
     async def make_directory(self, name: str) -> None:
         if not name:
             return
+        _require_single_segment(name)
         await self._provider.mkdir(self._path.join(name))
         await self._reload()
 
@@ -797,6 +818,7 @@ class PaneVM:
         target = self._cursor_target()
         if target is None or not new_name:
             return
+        _require_single_segment(new_name)
         old_path = self._path.join(target.entry.name)
         new_path = self._path.join(new_name)
         await self._provider.rename(old_path, new_path)

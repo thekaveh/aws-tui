@@ -595,3 +595,51 @@ async def test_delete_marked_stays_in_the_directory_the_marks_came_from() -> Non
     assert [entry.name for entry in await fs.list(PathRef(("dirA",)))] == []
     # The unmarked files in the directory the pane moved to are untouched.
     assert sorted(entry.name for entry in await fs.list(PathRef(("dirB",)))) == ["f2", "f3"]
+
+
+@pytest.mark.asyncio
+async def test_marked_entries_are_scoped_to_the_visible_filtered_rows() -> None:
+    """Destructive operations must act only on rows the pane is displaying.
+
+    ``marked_entries`` drives copy/move/delete targets, the command predicates
+    and the footer count. Deriving it from every loaded entry meant a mark on a
+    row the active filter hid still participated: filter to one name, press
+    delete, and files the user could not see were destroyed.
+    """
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    for index in range(len(pane.entries)):
+        pane.mark_at(index, marked=True)
+    assert len(pane.marked_entries) == len(pane.entries)
+
+    pane.set_filter_command.execute("a.txt")
+
+    assert [entry.entry.name for entry in pane.filtered_entries] == ["a.txt"]
+    assert [entry.entry.name for entry in pane.marked_entries] == ["a.txt"]
+    # The footer count follows the same property, so it matches the screen.
+    assert pane.viewmodel.selection_count == 1
+
+    pane.set_filter_command.execute("")
+
+    # Marks on hidden rows are retained, not discarded — they simply do not
+    # participate while hidden.
+    assert len(pane.marked_entries) == len(pane.entries)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["other/moved.txt", "a\\b.txt", "..", "."])
+async def test_rename_rejects_names_that_would_become_paths(name: str) -> None:
+    """A rename must not silently relocate the entry.
+
+    ``PathRef.join`` splits on ``/`` by design, so ``other/moved.txt`` moved the
+    file into another directory and the pane reloaded showing it as vanished.
+    """
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    pane.move_cursor_to(0)
+
+    with pytest.raises(ProviderError, match="single path segment"):
+        await pane.rename_cursor(name)
+
+    with pytest.raises(ProviderError, match="single path segment"):
+        await pane.make_directory(name)
