@@ -350,6 +350,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.5. Build
 
+- Recorded the removal of the resume and first-run modal flows.
+  `ResumeModal`, `ResumeVM`, `FirstRunModal` and `FirstRunVM` had been
+  deleted without a Removed entry, while the deferred roadmap continued
+  to describe them as built and merely unwired — presenting work that no
+  longer existed as resumable.
 - Widened the `reactivex` requirement from `>=4,<5` to `>=4,<6` and moved the
   lock to 5.1.0. This changes what a downstream `pip install aws-tui` may
   resolve, so it is an install-surface change, not just a lock bump. The
@@ -1843,13 +1848,15 @@ tracked so the next minor release can pick them up without rediscovery:
   subscriber consumes. Direct VM-method calls handle the action; the
   signal path is preserved for the MVVM-correct subscriber wiring.
 - **Modal-driven flows not yet pushed at runtime:** the `ResumeModal`
-  (transfer-journal resume on relaunch), `FirstRunModal` (welcome
-  flow when no connections are configured), `QuickLook` modal
-  (`preview_requested` consumer), and `CommandPalette` modal
-  (no opening binding) are all built, snapshot-tested, and exported
-  from `composition.py` but not invoked by `AwsTuiApp` runtime
-  wiring. The placeholder `_mount_no_connection_placeholder` text
-  panel covers the no-connection case in v0.7.x.
+  (transfer-journal resume on relaunch) and `FirstRunModal` (welcome
+  flow when no connections are configured) are **no longer present in
+  the tree** — `ResumeModal`, `ResumeVM`, `FirstRunModal` and
+  `FirstRunVM` were removed and would have to be rebuilt rather than
+  wired. The placeholder `_mount_no_connection_placeholder` text panel
+  still covers the no-connection case. Quick Look and the command
+  palette, listed here previously as unwired, **are** wired: Quick Look
+  through `pane.quick_look` and the palette through
+  `app.command_palette`.
 - **`AwsTuiApp._handle_exception` does not push the crash modal** —
   the dump file is written and stderr re-raises through `main()`, but
   the in-app `CrashChoice` modal flow (continue / view trace / quit)
