@@ -35,16 +35,24 @@ async def drain_workers(
     the manager reports no unfinished workers so those descendants are covered.
     """
     workers = app.workers
+    # ``timeout`` budgets the WHOLE drain, not each round. Per-round timeouts
+    # summed past the 60s pytest-timeout ceiling, so a runaway spawn loop died
+    # as an opaque pytest timeout and the diagnostic below was unreachable.
+    deadline = asyncio.get_running_loop().time() + timeout
     for _ in range(_MAX_DRAIN_ROUNDS):
         pending = [worker for worker in list(workers._workers) if not worker.is_finished]
         if not pending:
             return
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            break
         await asyncio.wait_for(
             asyncio.gather(*(worker.wait() for worker in pending), return_exceptions=True),
-            timeout=timeout,
+            timeout=remaining,
         )
-        # ``_remove_worker`` runs from ``Task.add_done_callback``, so yield once
-        # to let the manager drop the workers just awaited before re-checking.
+        # ``Worker._run`` sets its terminal state inside the task, so
+        # ``is_finished`` is already true when ``wait()`` returns; this yield is
+        # only so the manager has dropped them before the diagnostic below.
         await asyncio.sleep(0)
     raise AssertionError(
         f"workers still pending after {_MAX_DRAIN_ROUNDS} drain rounds: "

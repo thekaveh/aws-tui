@@ -20,8 +20,22 @@ _KEY_VALUE = re.compile(
     r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}]+)",
     re.IGNORECASE,
 )
+# Handles BOTH the schemed (``Authorization: Bearer <cred>``) and schemeless
+# (``Authorization: <opaque>``) forms, and accepts ``=`` as well as ``:``.
+# Horizontal-only whitespace matters: ``\s`` would span a newline, letting the
+# value be read as a scheme and the NEXT header's key be eaten as the
+# credential -- which leaked both secrets.
+#
+# The scheme is a CLOSED list rather than "any word". On one line,
+# ``Authorization: OPAQUE next_token: abc`` is genuinely ambiguous, and treating
+# an arbitrary leading word as a scheme resolves it the unsafe way: it preserves
+# the credential and redacts the following field name instead. An unrecognized
+# token is therefore treated as the credential.
 _AUTHORIZATION_HEADER = re.compile(
-    r"(?<![A-Za-z0-9_.-])(Authorization)(\s*:\s*)([A-Za-z][A-Za-z0-9_.+-]*\s+)([^\s,;}]+)",
+    r"(?<![A-Za-z0-9_.-])(Authorization)([^\S\r\n]*[:=][^\S\r\n]*)"
+    r"(?:(Bearer|Basic|Digest|Negotiate|NTLM|Hawk|Mutual|OAuth|AWS|AWS4-HMAC-SHA256)"
+    r"([^\S\r\n]+))?"
+    r"([^\s,;}]+)",
     re.IGNORECASE,
 )
 _URL = re.compile(r"https?://[^\s\"'<>]+")
@@ -52,6 +66,12 @@ def redact_mapping(fields: Mapping[str, Any]) -> dict[str, object]:
     return {str(key): redact_value(value, key=str(key)) for key, value in fields.items()}
 
 
+def _redact_authorization_header(match: re.Match[str]) -> str:
+    key, separator, scheme, scheme_gap, _value = match.groups()
+    prefix = f"{scheme}{scheme_gap}" if scheme else ""
+    return f"{key}{separator}{prefix}{_REDACTED}"
+
+
 def _redact_key_value(match: re.Match[str]) -> str:
     key_quote = match.group("key_quote")
     value = match.group("value")
@@ -59,24 +79,21 @@ def _redact_key_value(match: re.Match[str]) -> str:
         match.group("key").casefold() == "authorization"
         and not key_quote
         and not value.startswith(("'", '"'))
-        and match.string[match.end() :].lstrip().startswith(_REDACTED)
     ):
-        # The authorization-header pass already replaced the credential and
-        # deliberately preserved the scheme, so ``value`` here is just the
-        # scheme token and the redacted credential follows it. That pass
-        # requires a scheme, so a schemeless (``Authorization: <opaque>``) or
-        # ``=``-separated value arrives here intact and must NOT be exempted —
-        # it falls through and gets redacted below.
+        # ``_AUTHORIZATION_HEADER`` has already handled every unquoted
+        # ``Authorization`` value -- schemed, schemeless, ``:`` and ``=`` alike
+        # -- so ``value`` here is either a preserved scheme token or the
+        # redaction itself. Exempting is safe BECAUSE that pass is exhaustive;
+        # do not weaken it without widening this exemption's guard. Quoted
+        # forms and keys that merely contain "authorization" (``x-authorization``)
+        # still fall through and are redacted below.
         return match.group(0)
     return f"{key_quote}{match.group('key')}{key_quote}{match.group('separator')}{_REDACTED}"
 
 
 def redact_text(text: str) -> str:
     text = _URL.sub(lambda match: _redact_url(match.group(0)), text)
-    text = _AUTHORIZATION_HEADER.sub(
-        lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}{_REDACTED}",
-        text,
-    )
+    text = _AUTHORIZATION_HEADER.sub(_redact_authorization_header, text)
     return _KEY_VALUE.sub(_redact_key_value, text)
 
 

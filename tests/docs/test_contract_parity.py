@@ -290,7 +290,7 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
     # sites are exactly what a dependabot bump splits apart.
     harness_image = _s3mock_image_from(_text("tests/integration/conftest.py"))
     assert f"`{harness_image}`" in ledger
-    assert harness_image in _text("scripts/test-services/s3/docker-compose.yml")
+    assert _s3mock_image_from(_text("scripts/test-services/s3/docker-compose.yml")) == harness_image
     assert harness_image in _text("docs/cookbook.md")
 
 

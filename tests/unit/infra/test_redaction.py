@@ -69,8 +69,27 @@ def test_redact_text_covers_authorization_values_without_a_scheme() -> None:
         "Authorization: SECRETOPAQUE",
         "authorization=SECRETOPAQUE",
         "Authorization:SECRETOPAQUE",
+        # A following line must not be read as this value's credential: the
+        # header pattern once spanned the newline, preserved SECRETOPAQUE as a
+        # "scheme", and consumed the next header's key name instead -- leaking
+        # both secrets.
+        "authorization: SECRETOPAQUE\nx-api-key: SECONDSECRET",
+        # Same ambiguity on one line: an unrecognized leading token is the
+        # credential, not a scheme.
+        "Authorization: SECRETOPAQUE next_token: SECONDSECRET",
+        "Authorization: SECRETOPAQUE api_key: SECONDSECRET",
     ):
-        assert "SECRETOPAQUE" not in redact_text(text)
+        redacted = redact_text(text)
+        assert "SECRETOPAQUE" not in redacted, text
+        assert "SECONDSECRET" not in redacted, text
+
+
+def test_redact_text_preserves_only_recognized_authorization_schemes() -> None:
+    assert redact_text("Authorization: Bearer CRED") == "Authorization: Bearer [REDACTED]"
+    assert redact_text("Authorization: Basic CRED") == "Authorization: Basic [REDACTED]"
+    assert "AWS4-HMAC-SHA256" in redact_text("Authorization: AWS4-HMAC-SHA256 Credential=CRED")
+    # An unknown token is treated as the credential, never preserved.
+    assert "NotAScheme" not in redact_text("Authorization: NotAScheme CRED")
 
 
 def test_redact_text_covers_single_quoted_mapping_representations() -> None:

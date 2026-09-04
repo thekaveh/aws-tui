@@ -39,10 +39,11 @@ services:
     volumes:
       - aws-tui-dev-s3mock-data:/containers3root
     healthcheck:
-      # ListBuckets, not /favicon.ico: the static endpoint answers 200 before
-      # the object store is touched, so it reports healthy on a container whose
-      # store is unusable. A real S3 operation exercises the store root.
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/"]
+      # Liveness only. Neither this nor a ListBuckets probe proves the store
+      # root is writable -- both answer 200 against an unwritable volume -- so
+      # this cannot catch a permissions regression. The s3mock-init service
+      # above is what guarantees writability; seed.py is the first real write.
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/favicon.ico"]
       interval: 2s
       timeout: 2s
       retries: 30
