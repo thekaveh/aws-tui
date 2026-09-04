@@ -120,6 +120,10 @@ def _wiki_sidebar(manifest: Manifest) -> str:
 _MKDOCS_TEMPLATE = """\
 site_name: aws-tui
 site_url: https://thekaveh.github.io/aws-tui/
+site_description: >-
+  Cross-platform terminal UI for Amazon S3, EMR Serverless, AWS Glue, Apache
+  Iceberg metadata, and Amazon Athena, built with Textual and the VMx MVVM
+  framework.
 docs_dir: generated/site
 site_dir: site
 use_directory_urls: true
