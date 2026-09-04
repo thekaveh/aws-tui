@@ -674,3 +674,121 @@ def test_select_starter_sql_requires_a_non_negative_integer_snapshot(
 
     with pytest.raises(ValueError, match="snapshot"):
         select_starter_sql(ref, snapshot_id)  # type: ignore[arg-type]
+
+
+# ── Read-only envelope: statements that must never reach Athena ──────────────
+#
+# ``AthenaClient.start_query`` passes ``ReadOnlySqlPolicy.validate``'s return
+# value verbatim as ``QueryString``, so this policy is the sole app-side gate.
+# A mutation sweep found large parts of that gate unpinned: deleting the
+# ``_validate_describe`` call, or dropping ``exp.Into`` / ``exp.Lock`` from the
+# ``forbidden`` tuple, left the entire repo suite green while the statements
+# below became acceptable. Each case here was verified to be accepted under the
+# corresponding mutation and rejected without it.
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # ``DESC`` tokenizes as TokenType.DESC, not DESCRIBE, so it bypasses
+        # validate()'s token fast-path and lands in _validate_describe. Deleting
+        # that one call removed both the write-node rejection and the grammar
+        # check. No test in the repo used the DESC keyword at all.
+        "DESC DROP TABLE t",
+        "DESC DELETE FROM t",
+        "DESC INSERT INTO t VALUES (1)",
+        "DESC UPDATE t SET a = 1",
+        "DESC CREATE TABLE t AS SELECT 1",
+        "DESC ALTER TABLE t ADD COLUMN b int",
+        "DESC SELECT * INTO y FROM t",
+        "DESC START TRANSACTION",
+        # exp.Grant is NOT a member of the forbidden tuple — nor are Revoke,
+        # Commit, Rollback, Use, Set, Cache, Uncache. For this shape the
+        # isinstance check in _validate_describe is the only thing rejecting it.
+        "DESC GRANT SELECT ON t TO u",
+    ],
+)
+def test_describe_prefix_cannot_smuggle_a_write(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # exp.Into — SELECT ... INTO materialises a new table.
+        "SELECT * INTO newtable FROM t",
+        "SELECT a INTO y FROM t",
+        "SELECT * FROM t UNION ALL SELECT * INTO y FROM s",
+        "EXPLAIN SELECT * INTO y FROM t",
+        # exp.Lock — row locks are writes against the engine's state.
+        "SELECT * FROM t FOR UPDATE",
+        "SELECT * FROM t FOR SHARE",
+        "SELECT * FROM (SELECT * FROM t FOR UPDATE) z",
+        "WITH x AS (SELECT * FROM t FOR UPDATE) SELECT x.a FROM x",
+    ],
+)
+def test_select_shaped_writes_are_rejected(sql: str) -> None:
+    """`exp.Into` and `exp.Lock` were the two forbidden entries whose removal is
+    demonstrably exploitable; only `exp.DML` was previously pinned."""
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # The equivalent bound on SHOW DATABASES / SHOW TABLES is pinned; the
+        # other four SHOW forms had no trailing-token test.
+        "SHOW COLUMNS FROM t DROP TABLE x",
+        "SHOW COLUMNS FROM t IN db DROP TABLE x",
+        "SHOW PARTITIONS analytics.events DELETE FROM analytics.events",
+        "SHOW PARTITIONS t DROP TABLE x",
+        "SHOW TBLPROPERTIES t DROP TABLE x",
+        "SHOW TBLPROPERTIES t ('a') DROP TABLE x",
+        "SHOW VIEWS IN db DROP TABLE x",
+    ],
+)
+def test_show_forms_reject_trailing_tokens(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Not named in the forbidden tuple; rejected today only by
+        # _validate_expression's fail-closed default. Pin the outcome so a
+        # future "allow unknown statements" change cannot pass silently.
+        "GRANT SELECT ON t TO u",
+        "REVOKE SELECT ON t FROM u",
+        "COMMIT",
+        "ROLLBACK",
+        "USE db",
+        "SHOW GRANTS",
+        "SHOW ROLES",
+    ],
+)
+def test_unlisted_non_read_only_statements_fail_closed(sql: str) -> None:
+    with pytest.raises(QueryRejectedError):
+        ReadOnlySqlPolicy().validate(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1",
+        "DESC t",
+        "DESC analytics.events",
+        "DESCRIBE analytics.events",
+        "DESCRIBE analytics.events;",
+        "SHOW TABLES",
+        "SHOW COLUMNS FROM t",
+        "SHOW PARTITIONS analytics.events",
+        "EXPLAIN SELECT 1",
+    ],
+)
+def test_legitimate_read_only_statements_are_still_accepted(sql: str) -> None:
+    """Positive control. Without this the tests above would also pass against a
+    policy that simply rejected everything."""
+    assert ReadOnlySqlPolicy().validate(sql)
