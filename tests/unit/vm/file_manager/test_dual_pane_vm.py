@@ -830,3 +830,24 @@ async def test_cancelled_background_refresh_is_not_logged(
         _drain_refresh_exception(task)
 
     assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_dispose_releases_the_transfer_cancel_subscription(
+    tmp_path: Path,
+) -> None:
+    """The cancel subscription must not outlive the VM.
+
+    Same class as ``TransfersVM``: the handler short-circuits on a disposed
+    flag, so a leaked subscription is invisible behaviourally and dropping
+    ``self._cancel_sub.dispose()`` survived the whole repo suite. Assert the
+    disposable's own state.
+    """
+    dp, _ = await _make_dual(tmp_path)
+    subscription = dp._cancel_sub  # type: ignore[attr-defined]
+    assert subscription is not None
+    assert not subscription.is_disposed
+
+    dp.dispose()
+
+    assert subscription.is_disposed, "cancel subscription outlived the VM"

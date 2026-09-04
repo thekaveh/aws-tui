@@ -36,6 +36,12 @@ def _format_size(size: int | None, kind: EntryKind) -> str:
         value /= 1024.0
         if value < 1024.0:
             return f"{value:.1f} {unit}"
+    # The loop divides once per unit it offers, so reaching here means the value
+    # is still in tebibytes; the petabyte label needs its own division. Without
+    # it a 1 PiB entry rendered "1024.0 P". Unreachable through S3, whose
+    # objects cap at 5 TiB (``s3_fs._MAX_OBJECT_SIZE``), but reachable in
+    # principle through LocalFS.
+    value /= 1024.0
     return f"{value:.1f} P"
 
 
