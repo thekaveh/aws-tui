@@ -120,7 +120,7 @@ section; the current tree must not be tagged as v0.8.0.
   `pytest-xdist` development dependency. Connection identity remains in the
   service pane chrome where it is actually rendered.
 - **Independent S3-compatible test harness.** Replaced the vulnerable MinIO
-  community test image with the digest-pinned Adobe S3Mock 5.1.0 release while
+  community test image with the digest-pinned Adobe S3Mock 5.2.0 release while
   preserving the same nine strict provider tests, Compose workflow, seeded
   development data, and product support for user-configured MinIO endpoints.
 - **VMx 3.23 adoption.** Raised the VMx floor to 3.23.0, moved modal focus
@@ -350,6 +350,10 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### 1.1.5. Build
 
+- Widened the `reactivex` requirement from `>=4,<5` to `>=4,<6` and moved the
+  lock to 5.1.0. This changes what a downstream `pip install aws-tui` may
+  resolve, so it is an install-surface change, not just a lock bump. The
+  lowest-supported-dependencies tier still exercises the 4.x floor.
 - CI, release, Pages, and bootstrap now enforce the lockfile with `--locked`;
   the declared development graph includes `textual-dev`; workflow and
   pre-commit actions use verified immutable refs; and wheel/sdist publication
@@ -358,7 +362,8 @@ section; the current tree must not be tagged as v0.8.0.
 - Removed blanket integration-test reruns so failures remain observable,
   added a stable aggregate `ci gate`, expanded installed-wheel smoke tests,
   and gated Homebrew publication until the tap is explicitly enabled.
-- Updated `platformdirs` to 4.11.0 and `sqlglot` to 30.14.0, and aligned
+- Tracked `platformdirs` and `sqlglot` to their current locked versions (see
+  `uv.lock` and the dependency row of `docs/contract-ledger.md`), and aligned
   botocore retry configuration on an explicit total-attempt budget.
 - Dependabot bumps for ``actions/upload-artifact`` (4→7, PR #1) and
   ``astral-sh/setup-uv`` (3→7, PR #2). Follow-up alignment commit

@@ -6,7 +6,7 @@ aws-tui is pre-release. Only the latest tagged release receives security fixes.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.8.x   | pending / unreleased |
+| 0.9.x   | pending / unreleased |
 | 0.7.x   | latest tagged release |
 | < 0.7   | no        |
 

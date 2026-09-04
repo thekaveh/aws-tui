@@ -650,8 +650,8 @@ def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:
 def test_readme_and_published_index_share_the_product_summary() -> None:
     summary = (
         "The application combines a Norton-Commander-style S3 file manager, an EMR\n"
-        "Serverless console, and Unreleased AWS Glue, Amazon Athena, and Iceberg\n"
-        "inspection workflows."
+        "Serverless console, and AWS Glue, Amazon Athena, and Iceberg inspection\n"
+        "workflows, which are unreleased."
     )
 
     assert summary in _read("README.md")
