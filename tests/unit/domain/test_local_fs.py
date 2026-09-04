@@ -1436,3 +1436,33 @@ async def test_permission_denied_on_unreadable_dir(tmp_path: Path) -> None:
     finally:
         # Restore so pytest can clean up tmp_path.
         secret.chmod(stat.S_IRWXU)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
+@pytest.mark.asyncio
+async def test_failed_etag_delete_restores_the_quarantined_original(tmp_path: Path) -> None:
+    """A failed delete must not leave the entry renamed to its hidden claim.
+
+    The ``expected_etag`` path renames the target to
+    ``.<name>.aws-tui-delete-<uuid>`` to claim it. If the removal then fails
+    partway, returning without restoring left the caller's directory gone from
+    the listing and present only as a dotfile, while the operation reported an
+    error. Reachable in production through ``CrossFsMove``, whose source delete
+    passes ``expected_etag``.
+    """
+    payload = tmp_path / "payload"
+    (payload / "sub").mkdir(parents=True)
+    (payload / "sub" / "f.txt").write_text("x", encoding="utf-8")
+    (payload / "sub").chmod(0o500)  # unwritable: rmtree fails inside the tree
+    fs = LocalFS()
+    ref = PathRef((str(payload),))
+    entry = await fs.stat(ref)
+
+    try:
+        with pytest.raises(PermissionDeniedError):
+            await fs.delete(ref, expected_etag=entry.etag)
+
+        assert payload.is_dir(), "the original must be restored"
+        assert [p.name for p in tmp_path.iterdir()] == ["payload"]
+    finally:
+        (payload / "sub").chmod(0o700)
