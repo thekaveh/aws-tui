@@ -1948,3 +1948,78 @@ async def test_a_directory_copy_that_aborts_leaves_no_stage_residue(tmp_path: Pa
     )
     residue = [entry.name for entry in dst_root.iterdir() if entry.name.startswith(".")]
     assert residue == [], f"a failed directory copy left stage residue: {residue}"
+
+
+async def test_move_of_a_nested_tree_removes_every_level_of_the_source(
+    tmp_path: Path,
+) -> None:
+    """A move must not leave a half-deleted source behind.
+
+    `_observe_tree` recurses into child directories so `_delete_observed_tree`
+    can remove the source depth-first after a successful copy. Stopping that
+    recursion (the `kind == DIRECTORY` test, or the `observed.extend(...)` that
+    collects the recursion's result) left the whole repo suite green while the
+    move removed only the top-level files and then failed on the non-empty
+    subdirectory — reporting `ConflictError: directory is not empty` for a move
+    whose copy had already succeeded, with the user's source tree partially
+    destroyed.
+
+    The existing move tests use flat directories, which is why the recursion was
+    unguarded.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    deep = src_root / "tree" / "level1" / "level2"
+    deep.mkdir(parents=True)
+    (src_root / "tree" / "top.txt").write_bytes(b"top")
+    (src_root / "tree" / "level1" / "mid.txt").write_bytes(b"mid")
+    (deep / "leaf.txt").write_bytes(b"leaf")
+    dst_root.mkdir()
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+
+    moved = await CrossFsMove(source=src, destination=dst).move(
+        PathRef.from_posix("/tree"), PathRef.from_posix("/tree")
+    )
+
+    assert moved is True, "move reported failure after succeeding"
+    assert (dst_root / "tree" / "top.txt").read_bytes() == b"top"
+    assert (dst_root / "tree" / "level1" / "mid.txt").read_bytes() == b"mid"
+    assert (dst_root / "tree" / "level1" / "level2" / "leaf.txt").read_bytes() == b"leaf"
+    assert not (src_root / "tree").exists(), (
+        "the source tree was left behind, wholly or partially: "
+        f"{sorted(p.relative_to(src_root).as_posix() for p in src_root.rglob('*'))}"
+    )
+
+
+async def test_merge_move_reports_success_and_clears_the_emptied_source(
+    tmp_path: Path,
+) -> None:
+    """The merge branch returns `moved_all` and removes the emptied source.
+
+    `return moved_all` -> `pass` made a successful merge-move return `None`,
+    which the UI reads as "not moved"; and dropping the
+    `delete_empty_directory(src)` left the emptied source directory on disk.
+    Both survived the whole suite.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    (src_root / "tree").mkdir(parents=True)
+    (src_root / "tree" / "new.txt").write_bytes(b"new")
+    (dst_root / "tree").mkdir(parents=True)
+    (dst_root / "tree" / "existing.txt").write_bytes(b"existing")
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+
+    moved = await CrossFsMove(source=src, destination=dst).move(
+        PathRef.from_posix("/tree"),
+        PathRef.from_posix("/tree"),
+        on_conflict=ConflictResolution.SKIP,
+    )
+
+    assert moved is True, "a successful merge-move did not report success"
+    assert (dst_root / "tree" / "new.txt").read_bytes() == b"new"
+    assert (dst_root / "tree" / "existing.txt").read_bytes() == b"existing"
+    assert not (src_root / "tree").exists(), "the emptied source directory was left behind"
