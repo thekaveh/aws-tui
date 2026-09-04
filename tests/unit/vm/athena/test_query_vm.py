@@ -1587,3 +1587,36 @@ def test_request_token_fixture_is_independently_derived() -> None:
     assert hashlib.sha256(material).hexdigest() == (
         "3a9dabffcee3720f9954443c8a8f719111653bd6650f78c0e8c1de49bec9e370"
     )
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_execution_ref_leaves_an_exportable_snapshot() -> None:
+    """Cancelling a submission that has no ref yet must not strand the VM.
+
+    ``_snapshot_structure_is_valid`` rejects ``state=CANCELLED`` together with
+    ``execution_ref=None``, so setting CANCELLED unconditionally made
+    ``export_snapshot`` raise ``ValueError``. The composition root turns that
+    into "finish the active Athena operation before switching services", so
+    every later Glue/Athena/S3 handoff was refused for an operation that had
+    already finished.
+    """
+    fake = seeded_athena([QueryState.RUNNING])
+    fake.block_start = True
+    fake.ignore_start_cancellation = True
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 1")
+    execution = asyncio.create_task(vm.execute())
+    await fake.start_started.wait()
+
+    cancel = asyncio.create_task(vm.cancel())
+    await asyncio.sleep(0)
+    fake.release_start.set()
+    await cancel
+    await execution
+
+    assert vm.execution_ref is None
+    assert vm.state is None
+    assert not vm.is_submitting
+    assert not vm.is_executing
+    # The real regression: this raised ValueError before the fix.
+    vm.export_snapshot()

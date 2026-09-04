@@ -641,13 +641,22 @@ class AthenaQueryVM:
                 return
             self._lifecycle_transition = True
             self._generation += 1
-            self._owns_active_query = False
-            self._state = QueryState.CANCELLED
-            self._is_submitting = False
-            self._results.clear()
-            self._notify("owns_active_query")
-            self._notify("state")
-            self._notify("is_submitting")
+            if ref is None:
+                # Interrupting a submission that has not yet returned an
+                # execution ref leaves nothing to mark CANCELLED, and
+                # ``state=CANCELLED`` with ``execution_ref=None`` is exactly the
+                # combination ``_snapshot_structure_is_valid`` rejects — which
+                # makes ``export_snapshot`` raise and every later service
+                # handoff refuse with "finish the active Athena operation".
+                self._reset_execution_state()
+            else:
+                self._owns_active_query = False
+                self._state = QueryState.CANCELLED
+                self._is_submitting = False
+                self._results.clear()
+                self._notify("owns_active_query")
+                self._notify("state")
+                self._notify("is_submitting")
             self._execute_command.cancel()
             await self._drain_execution_task()
             await self._stop_pending_cleanup(report_error=True)
