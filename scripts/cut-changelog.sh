@@ -48,6 +48,9 @@ TODAY="$(date +%Y-%m-%d)"
 # NUMBERED_DOCS headings coherent: old `1.1.x` Unreleased subsections
 # become `1.2.x`, old `1.2` releases become `1.3`, etc.
 TMP="$(mktemp)"
+# Without this the temp file is abandoned on every `raise SystemExit`
+# path in the Python helper below.
+trap 'rm -f "$TMP"' EXIT
 python3 - "$VERSION" "$TODAY" "$CHANGELOG" > "$TMP" <<'PY'
 from __future__ import annotations
 
@@ -128,9 +131,11 @@ out.insert(
     f"[{version}]: {compare_root}{marker}{previous_base}...{tag}",
 )
 print("\n".join(out))
-print()
 PY
 
+# mktemp creates 0600; a bare `mv` would carry that onto the changelog and
+# silently make a tracked file owner-only.
+chmod 644 "$TMP"
 mv "$TMP" "$CHANGELOG"
 
 echo "cut [$VERSION] - $TODAY in $CHANGELOG"
