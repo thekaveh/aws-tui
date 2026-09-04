@@ -134,3 +134,50 @@ def test_safe_endpoint_display_drops_userinfo_query_and_fragment() -> None:
     )
 
     assert displayed == "example.com/bucket"
+
+
+def test_redact_text_covers_whitespace_separated_credential_output() -> None:
+    """A key/value pair separated by whitespace alone must still be redacted.
+
+    botocore renders credential-process failures as
+    ``CredentialRetrievalError: … command output: aws_secret_access_key wJalr…``
+    with no ``:`` or ``=`` between the key and its value. The pattern required
+    one of those delimiters, so that string passed through verbatim into the
+    rotating log and into crash dumps. The only thing standing between a failing
+    credential process and a durable plaintext secret was a single
+    ``isinstance(exc, CredentialRetrievalError)`` branch in the Athena client —
+    which no test pinned.
+    """
+    leaked = "wJalrXUtnFEMIK7MDENGbPxRfiCY"
+    for text in (
+        f"aws_secret_access_key {leaked}",
+        f"secret_access_key {leaked}",
+        f"aws_session_token {leaked}",
+        f"command output: aws_secret_access_key {leaked}",
+        "Error when retrieving credentials from custom-process: "
+        f"command output: aws_secret_access_key {leaked}",
+    ):
+        redacted = redact_text(text)
+        assert leaked not in redacted, text
+        assert "[REDACTED]" in redacted, text
+
+
+def test_redact_text_whitespace_separator_does_not_span_a_newline() -> None:
+    """A trailing key must not consume the following line as its value.
+
+    The horizontal-only class matters: plain ``\\s`` would let a key ending one
+    line swallow the next line's content, which both hides ordinary log text and
+    (as an earlier fix on this branch found) can leave a real secret on the
+    following line untouched while reporting a redaction.
+    """
+    redacted = redact_text("api_key\nordinary log line\nsecret_access_key VALUE")
+
+    assert "ordinary log line" in redacted
+    assert "VALUE" not in redacted
+
+
+def test_redact_text_does_not_redact_ordinary_prose_after_a_safe_word() -> None:
+    """Positive control against over-redaction from the widened separator."""
+    assert redact_text("connection established") == "connection established"
+    assert redact_text("listing 5 objects") == "listing 5 objects"
+    assert "us-east-1" in redact_text("region us-east-1 selected")

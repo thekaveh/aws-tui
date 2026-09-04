@@ -16,7 +16,12 @@ _KEY_VALUE = re.compile(
     r"(?<![A-Za-z0-9_.-])(?P<key_quote>[\"']?)(?P<key>[A-Za-z0-9_.-]*"
     r"(?:authorization|secret|password|token|credential|access[_-]?key|api[_-]?key|"
     r"private[_-]?key|signature)[A-Za-z0-9_.-]*)(?P=key_quote)"
-    r"(?P<separator>\s*[:=]\s*)"
+    # Whitespace alone also separates a key from its value: botocore's
+    # CredentialRetrievalError renders credential-process output as
+    # ``aws_secret_access_key wJalr...`` with no delimiter, and that reaches
+    # the rotating log and crash dumps. Horizontal-only, so a key at the end of
+    # one line cannot swallow the next line's content as its value.
+    r"(?P<separator>[^\S\r\n]*[:=][^\S\r\n]*|[^\S\r\n]+)"
     r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}]+)",
     re.IGNORECASE,
 )

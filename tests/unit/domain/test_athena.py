@@ -1676,3 +1676,44 @@ def test_athena_module_exports_public_client_records_and_errors() -> None:
         "ResultConfigurationRequiredError",
         "map_athena_error",
     }
+
+
+def test_credential_retrieval_failure_never_carries_the_process_output() -> None:
+    """botocore renders credential-process output into the exception message.
+
+    `CredentialRetrievalError` is the one credential exception whose `str()`
+    embeds whatever the configured `credential_process` printed — routinely the
+    literal `aws_secret_access_key <secret>`. Every other branch of this mapper
+    passes `str(exc)` through `_sanitize_message`; this one deliberately does
+    not, returning fixed copy instead.
+
+    Nothing pinned that. Removing the branch let the raw output reach
+    `log_sink`'s rotating file and `crash_dump`'s durable dumps. Redaction is
+    now a second line of defence, but the message must not carry the secret in
+    the first place.
+    """
+    leaked = "wJalrXUtnFEMIK7MDENGbPxRfiCY"
+    exc = botocore.exceptions.CredentialRetrievalError(
+        provider="custom-process",
+        error_msg=f"command output: aws_secret_access_key {leaked}",
+    )
+
+    mapped = map_athena_error(exc)
+
+    assert isinstance(mapped, AuthRequiredError)
+    assert leaked not in str(mapped)
+    assert "command output" not in str(mapped)
+    assert str(mapped) == "credential process failed"
+
+
+def test_other_credential_failures_still_report_their_reason() -> None:
+    """Positive control: only the credential-process case is blanked.
+
+    A `NoCredentialsError` must still explain itself, or the guard above could
+    be satisfied by discarding every credential message.
+    """
+    mapped = map_athena_error(botocore.exceptions.NoCredentialsError())
+
+    assert isinstance(mapped, AuthRequiredError)
+    assert str(mapped), "the message was blanked entirely"
+    assert str(mapped) != "credential process failed"
