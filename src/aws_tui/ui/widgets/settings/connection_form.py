@@ -217,6 +217,17 @@ class ConnectionFormInline(Widget):
                         password=secret,
                         id=f"form-{key}",
                     )
+                    # The VM computes an exact message per field. Without a
+                    # slot to render it, an invalid entry showed only a red
+                    # border and a dead Save button — no statement of what was
+                    # wrong or how to fix it. `markup=False`: the messages are
+                    # plain text but may echo user input.
+                    yield Static(
+                        "",
+                        classes="form-error",
+                        id=f"form-error-{key}",
+                        markup=False,
+                    )
             with Horizontal(classes="form-footer"):
                 yield ModalButton("cancel", button_id="form-cancel-btn")
                 yield ModalButton("save", button_id="form-save-btn", classes="-primary")
@@ -397,6 +408,12 @@ class ConnectionFormInline(Widget):
                 inp.add_class("-invalid")
             else:
                 inp.remove_class("-invalid")
+            try:
+                message = self.query_one(f"#form-error-{key}", Static)
+            except Exception:
+                continue
+            message.update(errors.get(key, ""))
+            message.display = key in errors
 
     def _refresh_save_button(self) -> None:
         save_btn: ModalButton | None = None

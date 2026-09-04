@@ -141,8 +141,22 @@ class S3ConnectionsPanel(Widget):
                         markup=False,
                     ),
                     Static(c.region, classes="row-region", markup=False),
-                    _ChipEdit("✎", id=f"edit-{idx}", classes="row-chip-edit"),
-                    _ChipDelete("✕", id=f"delete-{idx}", classes="row-chip-delete"),
+                    # Glyph-only controls need a label: "✕" beside "✎" is not
+                    # self-evidently "delete this connection" rather than
+                    # "close", and one of these is destructive. Every
+                    # comparable control in the tree already carries a tooltip.
+                    _ChipEdit(
+                        "✎",
+                        id=f"edit-{idx}",
+                        classes="row-chip-edit",
+                        tooltip="Edit connection",
+                    ),
+                    _ChipDelete(
+                        "✕",
+                        id=f"delete-{idx}",
+                        classes="row-chip-delete",
+                        tooltip="Delete connection",
+                    ),
                     classes="connection-row",
                     id=f"row-{idx}",
                 )
