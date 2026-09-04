@@ -387,9 +387,13 @@ class AthenaQueryVM:
         if snapshot.state in {QueryState.QUEUED, QueryState.RUNNING}:
             return False
         if snapshot.execution_ref is None:
+            # A submission interrupted before ``start_query`` returned an id is
+            # legitimately CANCELLED with no ref. Any other state without a ref
+            # is incoherent.
+            if snapshot.state not in (None, QueryState.CANCELLED):
+                return False
             if (
-                snapshot.state is not None
-                or snapshot.statistics != _EMPTY_STATISTICS
+                snapshot.statistics != _EMPTY_STATISTICS
                 or snapshot.query_error is not None
                 or snapshot.state_reason is not None
                 or snapshot.output_location is not None
@@ -410,7 +414,20 @@ class AthenaQueryVM:
         if snapshot.state not in _TERMINAL_QUERY_STATES:
             return False
         if snapshot.pane_state is not PaneState.IDLE or snapshot.error_text is not None:
-            return False
+            cancelled_with_reported_stop_failure = (
+                snapshot.state is QueryState.CANCELLED
+                and bool(snapshot.error_text)
+                and snapshot.pane_state
+                in {
+                    PaneState.AUTH_REQUIRED,
+                    PaneState.FORBIDDEN,
+                    PaneState.UNREACHABLE,
+                    PaneState.ERROR,
+                }
+            )
+            if not cancelled_with_reported_stop_failure:
+                return False
+            return snapshot.query_error is None and snapshot.results.execution_id is None
         if snapshot.state is QueryState.SUCCEEDED:
             return (
                 snapshot.query_error is None
@@ -641,22 +658,19 @@ class AthenaQueryVM:
                 return
             self._lifecycle_transition = True
             self._generation += 1
+            self._owns_active_query = False
+            self._state = QueryState.CANCELLED
+            self._is_submitting = False
+            self._results.clear()
             if ref is None:
-                # Interrupting a submission that has not yet returned an
-                # execution ref leaves nothing to mark CANCELLED, and
-                # ``state=CANCELLED`` with ``execution_ref=None`` is exactly the
-                # combination ``_snapshot_structure_is_valid`` rejects — which
-                # makes ``export_snapshot`` raise and every later service
-                # handoff refuse with "finish the active Athena operation".
-                self._reset_execution_state()
-            else:
-                self._owns_active_query = False
-                self._state = QueryState.CANCELLED
-                self._is_submitting = False
-                self._results.clear()
-                self._notify("owns_active_query")
-                self._notify("state")
-                self._notify("is_submitting")
+                # Nothing was ever started, so there is no poll to settle the
+                # pane. Leaving it LOADING showed an indefinite spinner for a
+                # finished operation and made the snapshot unexportable.
+                self._pane_state = PaneState.EMPTY
+                self._notify("pane_state")
+            self._notify("owns_active_query")
+            self._notify("state")
+            self._notify("is_submitting")
             self._execute_command.cancel()
             await self._drain_execution_task()
             await self._stop_pending_cleanup(report_error=True)

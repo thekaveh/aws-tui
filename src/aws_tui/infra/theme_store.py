@@ -186,12 +186,18 @@ def _theme_filename(name: str) -> str | None:
 
 
 def _read_regular_file(directory: Path, filename: str) -> str | None:
-    """Atomically read a direct regular UTF-8 file without following links.
+    """Atomically read ``filename`` as a direct regular UTF-8 file.
 
-    POSIX pins ``directory`` with a descriptor and opens ``filename`` relative
-    to it with ``O_NOFOLLOW``. Platforms without ``dir_fd`` support use one
-    descriptor plus before/opened/after identity checks. Missing files are
-    optional; present but unsafe, unreadable, or invalid UTF-8 files fail.
+    The symlink guard applies to the LEAF only: ``filename`` itself must not be
+    a symlink, so a theme file cannot resolve outside the directory and inline
+    its target into the stylesheet. ``directory`` IS resolved through symlinks —
+    it is the caller's config home, and refusing a symlinked config directory
+    rejects the ordinary dotfiles layout.
+
+    POSIX opens ``filename`` relative to a ``directory`` descriptor with
+    ``O_NOFOLLOW``. Platforms without ``dir_fd`` support use one descriptor plus
+    before/opened/after identity checks. Missing files are optional; present but
+    unsafe, unreadable, or invalid UTF-8 files raise ``_UnsafeThemeFile``.
     """
     try:
         if _HAS_DIR_FD:

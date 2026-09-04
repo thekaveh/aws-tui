@@ -1615,8 +1615,34 @@ async def test_cancel_before_execution_ref_leaves_an_exportable_snapshot() -> No
     await execution
 
     assert vm.execution_ref is None
-    assert vm.state is None
+    # The cancel stays visible: erasing it made the status line read "Ready"
+    # again, with no acknowledgement that the submission was interrupted.
+    assert vm.state is QueryState.CANCELLED
     assert not vm.is_submitting
     assert not vm.is_executing
     # The real regression: this raised ValueError before the fix.
     vm.export_snapshot()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_accepts_a_cancelled_submission_without_an_execution_ref() -> None:
+    """Cancelling before ``start_query`` returns an id is a coherent state.
+
+    Rejecting it forced the cancel path to erase the state instead, which made
+    the status line read "Ready" for an operation the user had just stopped.
+    """
+    vm = make_query_vm(seeded_athena([QueryState.RUNNING]))
+    vm.set_sql("SELECT 1")
+    base = vm.export_snapshot()
+    valid = AthenaQueryVM._snapshot_structure_is_valid
+
+    assert valid(
+        replace(base, state=QueryState.CANCELLED, pane_state=PaneState.EMPTY), base.context
+    )
+    # Any other terminal state without a ref remains incoherent.
+    assert not valid(
+        replace(base, state=QueryState.SUCCEEDED, pane_state=PaneState.EMPTY), base.context
+    )
+    assert not valid(
+        replace(base, state=QueryState.FAILED, pane_state=PaneState.EMPTY), base.context
+    )
