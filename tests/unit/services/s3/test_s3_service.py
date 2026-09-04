@@ -192,3 +192,29 @@ def test_aioboto3_session_factory_rejects_missing_compatible_credentials() -> No
     )
     with pytest.raises(AuthRequiredError, match="requires an access key and secret key"):
         _aioboto3_session_for(connection)
+
+
+def test_missing_aws_profile_raises_a_typed_error_not_a_raw_botocore_one() -> None:
+    """`build_vm` must only ever raise domain errors.
+
+    botocore raises `ProfileNotFound` at Session CONSTRUCTION when the named
+    profile is missing — a renamed or deleted `~/.aws/config` entry. Letting it
+    escape took it out through `build_vm` to the generic handler in `app.py`,
+    which logs only `error_type` and drops the message, so the user got a blank
+    mount with the profile name nowhere. `services/emr_serverless` already
+    guarded the identical call; this is the S3 side catching up.
+    """
+    connection = Connection(
+        name="broken",
+        kind="aws",
+        region="us-east-1",
+        source="explicit",
+        profile="definitely-not-a-real-profile-xyz",
+    )
+
+    with pytest.raises(AuthRequiredError) as excinfo:
+        _aioboto3_session_for(connection)
+
+    message = str(excinfo.value)
+    assert "broken" in message
+    assert "definitely-not-a-real-profile-xyz" in message
