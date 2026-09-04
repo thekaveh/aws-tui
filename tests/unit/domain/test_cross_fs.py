@@ -1865,3 +1865,86 @@ async def test_directory_overwrite_rejects_provider_without_atomic_tree_replace(
             PathRef.from_posix("/target"),
             on_conflict=ConflictResolution.OVERWRITE,
         )
+
+
+@pytest.mark.parametrize("mover", [False, True], ids=["copy", "move"])
+async def test_overwrite_onto_a_non_empty_directory_cleans_up_its_backup(
+    tmp_path: Path, mover: bool
+) -> None:
+    """A directory OVERWRITE must not orphan the previous destination.
+
+    `_cleanup_stage_manifest` walks the manifest deepest-first, so a directory's
+    own children are removed before the directory entry is inspected. A local
+    revision encodes size and mtime/ctime, so comparing the captured revision
+    there could never succeed for a directory that held anything: cleanup always
+    raised "stage changed", the caller surfaced "overwrite committed but backup
+    cleanup failed", and the previous destination content stayed on disk forever
+    under `.<name>.aws-tui-backup-<uuid>`.
+
+    An EMPTY destination directory happened to pass, which is why the existing
+    OVERWRITE tests did not catch it. This one gives the destination a child.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    (src_root / "tree").mkdir(parents=True)
+    (src_root / "tree" / "new.txt").write_bytes(b"new")
+    (dst_root / "tree").mkdir(parents=True)
+    (dst_root / "tree" / "stale.txt").write_bytes(b"stale")
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+    engine = (
+        CrossFsMove(source=src, destination=dst)
+        if mover
+        else CrossFsCopy(source=src, destination=dst)
+    )
+    operation = engine.move if mover else engine.copy
+
+    await operation(
+        PathRef.from_posix("/tree"),
+        PathRef.from_posix("/tree"),
+        on_conflict=ConflictResolution.OVERWRITE,
+    )
+
+    assert (dst_root / "tree" / "new.txt").read_bytes() == b"new"
+    assert not (dst_root / "tree" / "stale.txt").exists(), "OVERWRITE kept a stale file"
+    leftovers = [entry.name for entry in dst_root.iterdir() if entry.name.startswith(".")]
+    assert leftovers == [], f"orphaned backup or stage directories: {leftovers}"
+    if mover:
+        assert not (src_root / "tree").exists(), "move left the source behind"
+
+
+async def test_a_directory_copy_that_aborts_leaves_no_stage_residue(tmp_path: Path) -> None:
+    """The same root cause as the OVERWRITE case, reached a different way.
+
+    When a directory copy fails partway, `_copy_directory_transaction` unwinds
+    through the same `_cleanup_stage_manifest`. While that compared a directory's
+    captured revision, the unwind could not complete: the caller saw a compound
+    `ProviderError: directory stage cleanup failed: …` and
+    `.<name>.aws-tui-stage-<uuid>/payload` stayed on disk permanently. The user
+    is left with hidden residue after every failed folder copy.
+
+    A symlink inside the source is the simplest genuine abort — the engine
+    refuses to copy one — so the error surfaced here should be that refusal
+    alone, not a cleanup failure wrapped around it.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    (src_root / "tree").mkdir(parents=True)
+    (src_root / "tree" / "ok.txt").write_bytes(b"fine")
+    (src_root / "tree" / "link").symlink_to(src_root / "tree" / "ok.txt")
+    dst_root.mkdir()
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+
+    with pytest.raises(ProviderError) as caught:
+        await CrossFsCopy(source=src, destination=dst).copy(
+            PathRef.from_posix("/tree"), PathRef.from_posix("/tree")
+        )
+
+    assert "stage cleanup failed" not in str(caught.value), (
+        f"the abort was masked by a cleanup failure: {caught.value}"
+    )
+    residue = [entry.name for entry in dst_root.iterdir() if entry.name.startswith(".")]
+    assert residue == [], f"a failed directory copy left stage residue: {residue}"
