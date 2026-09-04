@@ -1,6 +1,6 @@
 """Shared constants for snapshot tests.
 
-Each snapshot test parametrizes itself across the ten built-in themes
+Each snapshot test parametrizes itself across every built-in theme
 via ``@pytest.mark.parametrize("theme", THEMES)`` and pins the terminal
 to ``TERMINAL_SIZE``. The M5 plan keeps this tier on Python 3.12 /
 Ubuntu only (rendering-tolerance reasons).
@@ -10,18 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-THEMES = (
-    "carbon",
-    "voidline",
-    "lattice",
-    "amber",
-    "solarized-light",
-    "github-light",
-    "one-light",
-    "nord",
-    "dracula",
-    "gruvbox-dark",
-)
+from aws_tui.infra.theme_store import ThemeStore
+
+#: Derived, never hand-copied. A literal list silently drops a new built-in
+#: theme out of snapshot coverage: the parametrization shrinks, every remaining
+#: case still passes, and nothing reports the gap.
+THEMES = ThemeStore.BUILTIN_NAMES
 
 #: Standard terminal size for every snapshot fixture.
 TERMINAL_SIZE = (120, 40)

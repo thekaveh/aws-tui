@@ -685,3 +685,31 @@ def test_every_test_directory_holding_modules_is_an_importable_package() -> None
         "test directories containing modules but no __init__.py; pytest will "
         f"import their modules twice under two names: {missing}"
     )
+
+
+def test_no_test_module_hand_copies_the_built_in_theme_list() -> None:
+    """Three modules each kept their own literal copy of ``BUILTIN_NAMES``.
+
+    A hand-copied list does not fail when it drifts. Adding a built-in theme
+    just shrinks the parametrization: the remaining cases still pass, the new
+    theme is never rendered, and nothing reports the gap. Every list is now
+    derived from ``ThemeStore.BUILTIN_NAMES``, so pin that.
+    """
+    from aws_tui.infra.theme_store import ThemeStore
+
+    # Two names identify a copy of the list rather than an incidental
+    # single-theme reference (a targeted regression test is legitimate). They
+    # are assembled rather than written out so this guard does not flag itself.
+    sentinels = ("gruvbox" + "-dark", "solarized" + "-light")
+    offenders = []
+    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
+        if "__snapshots__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if all(f'"{name}"' in text for name in sentinels):
+            offenders.append(str(path.relative_to(REPO_ROOT)))
+
+    assert offenders == [], (
+        "test modules embedding a literal copy of ThemeStore.BUILTIN_NAMES "
+        f"({len(ThemeStore.BUILTIN_NAMES)} themes); derive it instead: {offenders}"
+    )
