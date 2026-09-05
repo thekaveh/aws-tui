@@ -2052,3 +2052,94 @@ async def test_a_same_path_transfer_on_one_provider_is_refused_intact(
         )
 
     assert (tmp_path / "f.txt").read_bytes() == b"original"
+
+
+async def test_nested_absent_directory_in_a_merge_is_preflighted_before_bytes_move() -> None:
+    """The fail-before-bytes contract holds for SUBTREES, not just the root.
+
+    When the destination root exists (a merge) but a nested source directory is
+    absent at the destination, the copy must refuse before any byte moves. The
+    existing guard test only covers a fully-absent root.
+
+    Scope honesty: this pins the CONTRACT (refusal with zero mutations), not
+    one specific guard. The nested `_require_directory_transaction` at the
+    merge-preflight site can still be deleted with this test green, because a
+    second capability check downstream also rejects this topology — layered
+    defence. The sweep's report that deleting the nested check lets bytes move
+    used a topology this test does not reproduce; that specific isolation
+    remains filed.
+    """
+
+    class _StripPublishers:
+        """Implements only the base surface; none of the publisher protocols.
+
+        Spelled out method by method on purpose: `runtime_checkable` isinstance
+        is a `hasattr` check on the instance, so `__getattr__` delegation would
+        SATISFY the protocols this fake exists to strip — the first version of
+        this test did exactly that and the copy sailed through.
+        """
+
+        def __init__(self) -> None:
+            self.inner = InMemoryFS()
+            self.mutations: list[str] = []
+
+        async def list(self, path: PathRef) -> list[FileEntry]:
+            return await self.inner.list(path)
+
+        async def stat(self, path: PathRef) -> FileEntry:
+            return await self.inner.stat(path)
+
+        async def mkdir(self, path: PathRef) -> None:
+            self.mutations.append(f"mkdir {path.as_posix()}")
+            await self.inner.mkdir(path)
+
+        async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
+            self.mutations.append(f"delete {path.as_posix()}")
+            await self.inner.delete(path, expected_etag=expected_etag)
+
+        async def delete_empty_directory(self, path: PathRef) -> None:
+            self.mutations.append(f"rmdir {path.as_posix()}")
+            await self.inner.delete_empty_directory(path)
+
+        async def rename(self, src_path: PathRef, dst_path: PathRef) -> None:
+            self.mutations.append(f"rename {src_path.as_posix()}")
+            await self.inner.rename(src_path, dst_path)
+
+        async def read_stream(
+            self, path: PathRef, *, chunk_size: int = 8 * 1024 * 1024
+        ) -> AsyncIterator[bytes]:
+            return await self.inner.read_stream(path, chunk_size=chunk_size)
+
+        async def write_stream(
+            self,
+            path: PathRef,
+            source: AsyncIterator[bytes],
+            *,
+            total_size: int | None = None,
+            progress: object | None = None,
+            overwrite: bool = True,
+        ) -> None:
+            self.mutations.append(f"write {path.as_posix()}")
+            await self.inner.write_stream(
+                path,
+                source,
+                total_size=total_size,
+                progress=progress,  # type: ignore[arg-type]
+                overwrite=overwrite,
+            )
+
+    src = InMemoryFS()
+    await src.mkdir(PathRef.from_posix("/tree"))
+    await src.mkdir(PathRef.from_posix("/tree/nested"))
+    await _put_file(src, PathRef.from_posix("/tree/nested/leaf"), b"payload")
+
+    dst = _StripPublishers()
+    # The ROOT exists at the destination -> merge path; "nested" does not.
+    await dst.inner.mkdir(PathRef.from_posix("/tree"))
+
+    with pytest.raises(ProviderError, match="transactional directory publication"):
+        await CrossFsCopy(source=src, destination=dst).copy(  # type: ignore[arg-type]
+            PathRef.from_posix("/tree"), PathRef.from_posix("/tree")
+        )
+
+    assert dst.mutations == [], f"bytes moved before the preflight refused: {dst.mutations}"

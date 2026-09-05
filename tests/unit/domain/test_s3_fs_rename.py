@@ -613,3 +613,33 @@ async def test_cancellation_during_successful_source_delete_keeps_destination(
         await rename
 
     assert client.delete_object.await_count == 1
+
+
+async def test_delete_empty_directory_conditions_the_marker_delete_on_its_etag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The marker delete must carry `IfMatch`, or a lost-update window opens.
+
+    Between the emptiness probe and the delete, the marker can be recreated —
+    e.g. by another client re-making the folder. The `IfMatch` on the observed
+    ETag makes the delete refuse in that window. Dropping the `if marker_etag`
+    branch survived the whole suite: no test inspected the DeleteObject
+    request's kwargs.
+    """
+    fs = S3FS(session=MagicMock(), bucket="bucket")
+    client = _CopyClient()
+    client.list_objects_v2 = AsyncMock(
+        return_value={"Contents": [{"Key": "empty/", "ETag": '"marker-etag"'}]}
+    )
+
+    @asynccontextmanager
+    async def client_context() -> AsyncIterator[_CopyClient]:
+        yield client
+
+    monkeypatch.setattr(fs, "_client", client_context)
+
+    await fs.delete_empty_directory(PathRef.from_posix("/empty"))
+
+    client.delete_object.assert_awaited_once_with(
+        Bucket="bucket", Key="empty/", IfMatch='"marker-etag"'
+    )

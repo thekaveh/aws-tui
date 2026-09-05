@@ -409,3 +409,34 @@ async def test_listing_a_directory_never_shows_its_own_marker_as_a_row(
     names = [entry.name for entry in entries]
     assert "" not in names, "the directory's own marker rendered as a nameless row"
     assert names == ["real.txt"]
+
+
+async def test_read_stream_of_a_missing_key_fails_before_yielding_a_stream(
+    s3_endpoint: str,
+) -> None:
+    """The NotFound must surface at the `read_stream` call, not at first read.
+
+    The method's own docstring records why the eager `head_object` probe
+    exists: without it, `cross_fs.copy` opens (and partially writes) the
+    destination before discovering the source is missing — an orphan mid-upload
+    on S3, a truncated file locally. Deleting the probe survived the whole
+    suite because every missing-key test iterated the stream, where the lazy
+    GetObject also fails; none asserted that awaiting `read_stream` ITSELF
+    raises, before any destination could have been opened.
+    """
+    await _make_bucket(s3_endpoint, "mybkt")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    with pytest.raises(NotFoundError):
+        await fs.read_stream(PathRef.from_posix("/does-not-exist.txt"))
+
+
+async def test_read_stream_of_a_present_key_still_streams(s3_endpoint: str) -> None:
+    """Positive control: the probe must not break the happy path."""
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "here.txt", b"payload")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    stream = await fs.read_stream(PathRef.from_posix("/here.txt"))
+
+    assert await _drain(stream) == b"payload"
